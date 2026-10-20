@@ -110,6 +110,39 @@ export interface TurnReceipt {
   filesChanged: string[]
   /** Every path changed, including any beyond the cap. */
   filesChangedCount: number
+  /**
+   * Todo items the agent marked completed this turn that claim a check ran (tests, a
+   * build, a browser check) with no passing run of it recorded. At most 10.
+   */
+  todoGaps?: string[]
+  /** Progress against the plan the user accepted, while it is still being carried out. */
+  plan?: PlanProgress
+}
+
+/** How one of an accepted plan's checks stands, across every turn since it was accepted. */
+export interface PlanCheckStatus {
+  /** The check as the plan put it ("pytest", "curl POST /todos"). */
+  step: string
+  /** passed: a run of it passed. failed: it ran and nothing passed. skipped: the user said not to. */
+  status: 'passed' | 'failed' | 'not-run' | 'skipped'
+}
+
+/**
+ * An accepted plan held against what every turn since its acceptance recorded: the
+ * files it said it would change that no turn has, and each of its checks.
+ */
+export interface PlanProgress {
+  title: string
+  /** When the plan was accepted (epoch ms), so later turns can tell files changed since. */
+  acceptedAt?: number
+  filesTotal: number
+  /** Planned files not changed yet, at most 10. */
+  filesPending: string[]
+  /** How many planned files are not changed yet, including any beyond the list. */
+  filesPendingCount: number
+  checks: PlanCheckStatus[]
+  /** Every planned file changed and every check passed. Shown once, then the plan is done. */
+  complete: boolean
 }
 
 export const RECEIPT_MAX_CHECKS = 24
@@ -254,6 +287,9 @@ export function receiptSummary(r: TurnReceipt): string {
   if (r.filesChangedCount > 0) {
     parts.push(`${r.filesChangedCount} file${r.filesChangedCount === 1 ? '' : 's'} changed`)
   }
+  if (r.plan) parts.push(planPhrase(r.plan))
+  const gaps = r.todoGaps?.length ?? 0
+  if (gaps) parts.push(`${gaps} todo${gaps === 1 ? '' : 's'} marked done with nothing recorded`)
   if (!parts.length && r.otherCommands > 0) {
     parts.push(`${r.otherCommands} command${r.otherCommands === 1 ? '' : 's'} ran`)
   }
@@ -261,9 +297,33 @@ export function receiptSummary(r: TurnReceipt): string {
   return line.charAt(0).toUpperCase() + line.slice(1)
 }
 
-/** Whether any check in the receipt failed. */
+/** The plan's progress in a few words: "plan: 9 of 11 files, 1 of 3 checks passed". */
+export function planPhrase(p: PlanProgress): string {
+  if (p.complete) return 'plan complete'
+  const parts: string[] = []
+  if (p.filesTotal) parts.push(`${p.filesTotal - p.filesPendingCount} of ${p.filesTotal} files`)
+  if (p.checks.length) {
+    const passed = p.checks.filter((c) => c.status === 'passed').length
+    parts.push(`${passed} of ${p.checks.length} checks passed`)
+  }
+  return `plan: ${parts.join(', ')}`
+}
+
+const PLAN_CHECK_TEXT: Record<PlanCheckStatus['status'], string> = {
+  passed: 'passed',
+  failed: 'ran, nothing passed',
+  'not-run': 'not run yet',
+  skipped: 'skipped, as you asked'
+}
+
+/** A plan check's status in words. */
+export function planCheckText(c: PlanCheckStatus): string {
+  return PLAN_CHECK_TEXT[c.status]
+}
+
+/** Whether any check in the receipt failed, or a todo claims a check nothing backs. */
 export function receiptHasFailure(r: TurnReceipt): boolean {
-  return r.checks.some((c) => c.ok === false)
+  return r.checks.some((c) => c.ok === false) || (r.todoGaps?.length ?? 0) > 0
 }
 
 /**
@@ -281,6 +341,17 @@ export function formatReceiptLines(r: TurnReceipt): string[] {
   }
   if (r.otherCommands > 0) {
     lines.push(`  plus ${r.otherCommands} other command${r.otherCommands === 1 ? '' : 's'}`)
+  }
+  for (const g of r.todoGaps ?? []) lines.push(`  ! marked done with nothing recorded: ${g}`)
+  if (r.plan && !r.plan.complete) {
+    lines.push(`  plan "${r.plan.title}":`)
+    for (const c of r.plan.checks) {
+      lines.push(`    ${c.status === 'passed' ? '✓' : c.status === 'failed' ? '✗' : '○'} ${c.step} (${planCheckText(c)})`)
+    }
+    if (r.plan.filesPendingCount) {
+      const more = r.plan.filesPendingCount - r.plan.filesPending.length
+      lines.push(`    files not changed yet: ${r.plan.filesPending.join(', ')}${more > 0 ? `, and ${more} more` : ''}`)
+    }
   }
   return lines
 }

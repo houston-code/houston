@@ -27,6 +27,7 @@ import {
 import { providerKeyUrl } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { formatReceiptLines, receiptHasFailure } from '@shared/evidence'
+import { formatReadinessLines, planVerifySteps, readinessOk } from '@shared/planReadiness'
 import type { FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
@@ -1047,6 +1048,14 @@ export function renderPlan(
     for (const step of plan.steps ?? []) lines.push(`  • ${step}`)
   }
   if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.join(', ')}`, 'dim'))
+  const verify = planVerifySteps(plan)
+  if (verify.length) lines.push('', paint(`Checks: ${verify.map(stripControlChars).join('; ')}`, 'dim'))
+  // Houston's own answer to whether those checks can run here, worked out from the
+  // machine (not the agent's text), so it reads in the warning color when they can't.
+  if (plan.readiness?.items.length) {
+    const [head, ...rows] = formatReadinessLines(plan.readiness)
+    lines.push('', paint(head, readinessOk(plan.readiness) ? 'dim' : 'yellow'), ...rows.map((r) => paint(r, 'dim')))
+  }
   if (opts.actions !== false) lines.push('', renderPlanActions(paint))
   return lines.join('\n')
 }

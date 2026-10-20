@@ -222,12 +222,14 @@ function planFromArgs(args: Record<string, unknown>): PlanPayload {
   const overview = typeof args.overview === 'string' && args.overview.trim() ? args.overview : undefined
   const steps = strList(args.steps)
   const files = strList(args.files)
+  const verify = strList(args.verify)
   return {
     title,
     ...(body ? { body } : {}),
     ...(overview ? { overview } : {}),
     ...(steps.length ? { steps } : {}),
-    ...(files.length ? { files } : {})
+    ...(files.length ? { files } : {}),
+    ...(verify.length ? { verify } : {})
   }
 }
 

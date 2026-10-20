@@ -315,6 +315,11 @@ function fmtEvent(e: AgentEvent): string {
   if ('cost' in rest && typeof rest.cost === 'number') {
     rest.cost = Math.round(rest.cost * 1e6) / 1e6
   }
+  // A receipt's plan carries the wall-clock time the plan was accepted; pin the shape,
+  // not the moment.
+  if (e.type === 'receipt' && e.receipt.plan?.acceptedAt !== undefined) {
+    ;(rest as { receipt: unknown }).receipt = { ...e.receipt, plan: { ...e.receipt.plan, acceptedAt: '<time>' } }
+  }
   return Object.keys(rest).length ? `${type} ${stable(rest)}` : type
 }
 

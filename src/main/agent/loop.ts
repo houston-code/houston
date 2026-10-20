@@ -18,8 +18,12 @@ import type {
   ToolCall,
   ToolSchema
 } from '@shared/agent'
+import type { PlanReadiness } from '@shared/planReadiness'
+import type { Todo } from '@shared/todos'
+import type { TurnReceipt } from '@shared/evidence'
 import {
   systemNoteMessage,
+  SYSTEM_NOTE_PREFIX,
   sanitizeApprovalNote,
   MAX_STEER_TEXT,
   MAX_PENDING_STEERS
@@ -115,6 +119,7 @@ import {
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { peekShell } from './shells'
+import { gatherReadinessFacts, planReadiness, readinessNote } from './readiness'
 import { isSensitiveRead } from './sensitive-paths'
 import { runPostEditDiagnostics } from './diagnostics'
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
@@ -174,7 +179,9 @@ import {
   summaryMaxTokens
 } from './compaction'
 import { peekConversation, setCompaction, setPromptSnapshot, takeChildReports } from '../conversations'
-import { buildPinnedMessages, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
+import { buildPinnedMessages, latestTodos, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
+import { todoEvidenceGaps, todoGapNote } from './todoEvidence'
+import { findAcceptedPlan, planProgress, planStillOpen } from './planChecklist'
 import { StallDetector, callSignature, resolveStallThresholds } from './stall'
 import {
   MAX_OUTPUT_CONTINUATIONS,
@@ -269,6 +276,9 @@ async function summarize(
     { signal, onRetry }
   )
 }
+
+/** A receipt with nothing recorded, for a turn that only carries a plan's progress. */
+const EMPTY_RECEIPT: TurnReceipt = { v: 1, checks: [], otherCommands: 0, filesChanged: [], filesChangedCount: 0 }
 
 interface RunState {
   abort: AbortController
@@ -399,6 +409,8 @@ interface RunState {
    * receipt just before the run's `done` (see evidence.ts).
    */
   evidence: EvidenceLedger
+  /** When the user accepted a plan during this run, so later turns can tell what changed since. */
+  planAcceptedAt?: number
   /**
    * The id of the WebContents (renderer window) that started this run, when it was
    * started from the GUI. Recorded so the IPC layer can reject run-control calls
@@ -569,9 +581,10 @@ export function resolvePlan(runId: string, callId: string, decision: PlanDecisio
  * effect of accepting: switching the live run off Plan mode to the chosen edit mode
  * so the very next tool call in this turn is no longer blocked as read-only.
  */
-function planDecisionResult(run: RunState, decision: PlanDecision): string {
+function planDecisionResult(run: RunState, decision: PlanDecision, readiness?: PlanReadiness): string {
   if (decision.kind === 'accept') {
     run.policy = decision.mode
+    run.planAcceptedAt = Date.now()
     const how =
       decision.mode === 'auto-edit'
         ? 'Edits will be applied automatically as you make them.'
@@ -582,10 +595,10 @@ function planDecisionResult(run: RunState, decision: PlanDecision): string {
       return (
         'The user ACCEPTED the plan but EDITED it first, and switched off Plan mode. Carry out ' +
         'EXACTLY the following edited plan. It replaces the plan you presented, so follow it precisely ' +
-        `even where it differs from yours:\n\n${edited}\n\n${how}`
+        `even where it differs from yours:\n\n${edited}\n\n${how}${readinessNote(readiness)}`
       )
     }
-    return `The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. ${how}`
+    return `The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. ${how}${readinessNote(readiness)}`
   }
   if (decision.kind === 'suggest') {
     return (
@@ -1139,8 +1152,42 @@ export async function startRun(
     // last event. A run that ran no checks and changed no files (a question answered)
     // has none.
     const runStart = messages.length
+    // The todo list as the turn found it: items already completed then are never
+    // flagged again, and `seenTodos` tracks the last list todo_write was given.
+    const startTodos = latestTodos(messages)
+    let seenTodos = startTodos
+    const checkTodos = (todos: Todo[]): string[] => {
+      const gaps = todoEvidenceGaps(seenTodos, todos, run.evidence)
+      seenTodos = todos
+      return gaps.map(todoGapNote)
+    }
     beforeEnd = () => {
-      const receipt = run.evidence.receipt(peekShell)
+      const todoGaps = todoEvidenceGaps(startTodos, latestTodos(messages), run.evidence).map((g) => g.item)
+      let receipt = run.evidence.receipt(peekShell, { todoGaps })
+      // The accepted plan's progress, from every turn's receipt since it was accepted.
+      // Only on a turn that did work (or accepted the plan): a question asked later in
+      // the chat gets no receipt for it.
+      const plan = findAcceptedPlan(messages)
+      if (plan) {
+        const acceptedHere = plan.index >= runStart
+        const prior = messages.slice(plan.index + 1).flatMap((m) => (m.receipt ? [m.receipt] : []))
+        if ((receipt || acceptedHere) && planStillOpen(messages, plan, prior, receipt)) {
+          const base = receipt ?? EMPTY_RECEIPT
+          const userText =
+            [...messages.slice(0, runStart)].reverse().find((m) => m.role === 'user' && !m.content.startsWith(SYSTEM_NOTE_PREFIX))
+              ?.content ?? ''
+          receipt = {
+            ...base,
+            plan: planProgress({
+              plan,
+              acceptedAt: acceptedHere ? run.planAcceptedAt : prior.find((r) => r.plan?.acceptedAt)?.plan?.acceptedAt,
+              receipts: [...prior, base],
+              workspace,
+              userText
+            })
+          }
+        }
+      }
       if (!receipt) return
       for (let i = messages.length - 1; i >= runStart; i--) {
         if (messages[i].role !== 'assistant') continue
@@ -1793,6 +1840,7 @@ export async function startRun(
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
       recordEvidence: (e) => recordEvidence(e),
+      checkTodos,
       fileTracker,
       ghExec,
       getSecret: getKey,
@@ -1854,9 +1902,30 @@ export async function startRun(
       // Accepting flips run.policy here so the next tool call this turn isn't blocked.
       presentPlan: (plan) =>
         new Promise<string>((resolve) => {
-          run.planDecisions.set(callId, (decision) => resolve(planDecisionResult(run, decision)))
-          run.pendingPlans.set(callId, plan)
-          emit({ type: 'plan_ready', callId, plan })
+          // Whether the plan's checks can run here, shown with the plan and told to the
+          // agent on accept. File checks and PATH lookups only: nothing runs.
+          const readiness = planReadiness(
+            gatherReadinessFacts(workspace, plan, {
+              network: !isSandboxed()
+                ? 'ungated'
+                : run.shellNetworkGranted && !egressUnavailable
+                  ? 'granted'
+                  : req.unattended === true
+                    ? 'unattended'
+                    : run.shellNetworkDecided
+                      ? 'declined'
+                      : 'ask',
+              browser: !localhostCaptureAvailable
+                ? 'unavailable'
+                : activeBackendId() === 'bubblewrap'
+                  ? 'isolated'
+                  : 'ok'
+            })
+          )
+          const shown = readiness.items.length ? { ...plan, readiness } : plan
+          run.planDecisions.set(callId, (decision) => resolve(planDecisionResult(run, decision, shown.readiness)))
+          run.pendingPlans.set(callId, shown)
+          emit({ type: 'plan_ready', callId, plan: shown })
         }),
       // Both tiers route through runDispatch (hoisted above), which handles the
       // model override, resume, live progress, nesting, per-model billing, the

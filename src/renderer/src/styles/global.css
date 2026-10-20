@@ -4432,6 +4432,14 @@ body.is-resizing .preview-dock__resizer::after {
   max-height: 160px;
   overflow: auto;
 }
+.receipt__gaps ul {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  color: var(--text);
+}
+.receipt__gaps li::marker {
+  color: var(--warn);
+}
 .receipt__label {
   color: var(--text);
 }
@@ -5943,6 +5951,68 @@ body.is-resizing .plan-panel__resizer::after {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
+}
+/* The plan's own list of checks, then Houston's answer to whether they can run here. */
+.plan-panel__verify {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+  padding-top: 14px;
+}
+.plan-panel__verify ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text);
+}
+.plan-readiness {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.plan-readiness--warn {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+}
+.plan-readiness__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  margin: 0 0 8px;
+  color: var(--text);
+}
+.plan-readiness__by {
+  font-weight: 600;
+}
+.plan-readiness__items {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.plan-readiness__item {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+}
+.plan-readiness__item strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.plan-readiness__glyph {
+  width: 1em;
+  flex: 0 0 auto;
+  text-align: center;
+  font-weight: 700;
+}
+.plan-readiness__item--ok .plan-readiness__glyph {
+  color: var(--ok);
+}
+.plan-readiness__item--warn .plan-readiness__glyph {
+  color: var(--warn);
 }
 /* Files: a collapsible disclosure at the end of the scroll body, so a long list
    never competes with the steps for height. Collapsed by default. */

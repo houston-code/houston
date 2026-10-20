@@ -2,8 +2,10 @@ import {
   checkDetail,
   checkGlyph,
   checkKindLabel,
+  planCheckText,
   receiptHasFailure,
   receiptSummary,
+  type PlanProgress,
   type ReceiptCheck,
   type TurnReceipt
 } from '@shared/evidence'
@@ -30,6 +32,17 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
               <CheckRow key={i} check={c} />
             ))}
           </ul>
+        )}
+        {receipt.plan && !receipt.plan.complete && <PlanSection plan={receipt.plan} />}
+        {receipt.todoGaps && receipt.todoGaps.length > 0 && (
+          <div className="receipt__gaps">
+            <span className="receipt__label">Marked done with nothing recorded</span>
+            <ul>
+              {receipt.todoGaps.map((g, i) => (
+                <li key={i}>{g}</li>
+              ))}
+            </ul>
+          </div>
         )}
         {(receipt.checksOmitted ?? 0) > 0 && (
           <p className="receipt__note">
@@ -74,5 +87,37 @@ function CheckRow({ check }: { check: ReceiptCheck }): JSX.Element {
       <code className="receipt__cmd">{check.label}</code>
       {detail && <span className="receipt__detail">{detail}</span>}
     </li>
+  )
+}
+
+/** The accepted plan's checks and the files it named that no turn has changed yet. */
+function PlanSection({ plan }: { plan: PlanProgress }): JSX.Element {
+  const moreFiles = plan.filesPendingCount - plan.filesPending.length
+  return (
+    <div className="receipt__plan">
+      <span className="receipt__label">Plan: {plan.title}</span>
+      {plan.checks.length > 0 && (
+        <ul className="receipt__checks">
+          {plan.checks.map((c, i) => {
+            const state = c.status === 'passed' ? 'ok' : c.status === 'failed' ? 'failed' : 'unknown'
+            return (
+              <li key={i} className={`receipt__check receipt__check--${state}`}>
+                <span className="receipt__glyph" aria-hidden="true">
+                  {state === 'ok' ? '✓' : state === 'failed' ? '✗' : '○'}
+                </span>
+                <span>{c.step}</span>
+                <span className="receipt__detail">{planCheckText(c)}</span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+      {plan.filesPendingCount > 0 && (
+        <p className="receipt__note">
+          Files not changed yet: {plan.filesPending.join(', ')}
+          {moreFiles > 0 ? `, and ${moreFiles} more` : ''}.
+        </p>
+      )}
+    </div>
   )
 }

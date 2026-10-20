@@ -312,6 +312,20 @@ tests pass and the receipt says no tests ran, believe the receipt.
   in the background ended (or that it is still running, for a dev server). A check
   that ran before the turn's last file change says so, since it may not cover the
   final code.
+- **Todo items it can't back.** When the agent marks a todo done that says a check
+  ran ("Backend tests with pytest", "Verify the build") and no passing run of that
+  check is recorded this turn, the receipt lists it as marked done with nothing
+  recorded, and the agent is told at the moment it marks it. The list itself is left
+  as the agent wrote it. Items about writing something ("Write tests for the API")
+  never need a run behind them.
+- **An accepted plan's progress.** After you accept a plan, each turn that works on
+  it shows how far along it is, counting every turn since you accepted it: "plan: 9
+  of 11 files, 1 of 3 checks passed", with the files it named that nothing has
+  changed yet and each of its checks (passed, ran with nothing passing, not run yet).
+  This holds across turns, so "finish the planned implementation" two turns later
+  picks up where it was. It says "plan complete" once, and stops when a newer plan
+  replaces it or the chat moves on to other work. If you ask to skip the checks,
+  they show as skipped.
 - **Outcomes it can't tell.** An HTTP request made without `curl -f` (so an error
   page still exits 0), a test whose exit code is hidden by what follows it
   (`pytest | tail`, `pytest; echo done`), or a page that loaded with nothing on it
@@ -524,7 +538,13 @@ Approval is layered. From most to least restrictive:
 
 - **Plan mode:** read-only. The agent researches and proposes a plan; writes and
   shell commands are blocked. It presents the plan for the user to accept,
-  request changes, or reject.
+  request changes, or reject. The plan lists the checks it will run, and under them
+  Houston shows whether those checks can run on this machine: whether the runtimes
+  are installed, whether the dependencies are, and whether shell commands can reach
+  the network to install them (for example, "choose Allow for run on the install
+  command"). Houston works this out from the machine without running anything, and
+  tells the agent about any problem when you accept, so it can say a check couldn't
+  run instead of claiming it.
 - **Ask every time:** every edit and command needs a click.
 - **Auto-approve edits:** file edits go through automatically; shell commands
   still ask.

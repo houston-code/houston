@@ -12,6 +12,7 @@ import { stripControlChars } from './tui-wrap'
 import { missingKeyHint } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { formatReceiptLines, type TurnReceipt } from '@shared/evidence'
+import { formatReadinessLines } from '@shared/planReadiness'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { createFindingPrinter } from '@shared/reviewFindings'
@@ -807,6 +808,9 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
         if (!opts.json) {
           deps.out(`\n${e.plan.title}\n`)
           if (e.plan.body) deps.out(`${e.plan.body}\n`)
+          if (e.plan.readiness) {
+            for (const line of formatReadinessLines(e.plan.readiness)) deps.err(`· ${stripControlChars(line)}\n`)
+          }
           deps.err('· no interactive reviewer (headless): plan not executed; use --full-auto to make changes\n')
         }
         deps.resolvePlan(e.runId, e.callId, { kind: 'reject' })

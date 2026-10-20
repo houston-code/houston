@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { PlanAcceptMode, PlanDecision, PlanPayload } from '@shared/agent'
+import { readinessOk, type PlanReadiness } from '@shared/planReadiness'
 import { Markdown } from './Markdown'
 import { Icon } from './Icon'
 
@@ -253,6 +254,17 @@ export function PlanPanel({
                 )}
               </>
             )}
+            {plan.verify && plan.verify.length > 0 && (
+              <div className="plan-panel__verify">
+                <p className="plan-panel__section-label">Checks this plan will run</p>
+                <ul>
+                  {plan.verify.map((v, i) => (
+                    <li key={i}>{v}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {plan.readiness && plan.readiness.items.length > 0 && <Readiness readiness={plan.readiness} />}
             {plan.files && plan.files.length > 0 && (
               <details className="plan-panel__files">
                 <summary>
@@ -373,5 +385,35 @@ export function PlanPanel({
         )}
       </footer>
     </aside>
+  )
+}
+
+/**
+ * Houston's answer to whether the plan's checks can run on this machine, worked out
+ * from the machine itself when the plan was presented (see agent/readiness.ts). Set
+ * apart from the plan, which the agent wrote, and shown before the user decides.
+ */
+function Readiness({ readiness }: { readiness: PlanReadiness }): JSX.Element {
+  const ok = readinessOk(readiness)
+  return (
+    <section className={`plan-readiness${ok ? '' : ' plan-readiness--warn'}`} aria-label="Can these checks run here">
+      <p className="plan-readiness__head">
+        <span className="plan-readiness__by">Checked by Houston</span>
+        {ok ? 'These checks can run here.' : "Some of these checks can't run here yet."}
+      </p>
+      <ul className="plan-readiness__items">
+        {readiness.items.map((item, i) => (
+          <li key={i} className={`plan-readiness__item plan-readiness__item--${item.status === 'ok' ? 'ok' : 'warn'}`}>
+            <span className="plan-readiness__glyph" aria-hidden="true">
+              {item.status === 'ok' ? '✓' : '!'}
+            </span>
+            <span className="sr-only">{item.status === 'ok' ? 'Ready: ' : 'Needs attention: '}</span>
+            <span>
+              <strong>{item.need}</strong> {item.detail}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }

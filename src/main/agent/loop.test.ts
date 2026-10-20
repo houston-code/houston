@@ -4792,6 +4792,37 @@ describe('present_plan (Plan mode review)', () => {
     expect(result?.output).not.toMatch(/Invalid arguments/)
   })
 
+  it('shows with the plan whether its checks can run here, and tells the agent on accept', async () => {
+    // A confining host with no shell-network grant yet: an install would run offline.
+    h.sandboxed = true
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'p1',
+              name: 'present_plan',
+              arguments: { title: 'Todo API', plan: '## Steps\n- build it', files: ['requirements.txt'], verify: ['pytest'] }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Starting.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'accept', mode: 'auto-edit' })
+    })
+    const ready = r.events.find((e) => e.type === 'plan_ready') as { plan: PlanPayload } | undefined
+    expect(ready?.plan.verify).toEqual(['pytest'])
+    expect(ready?.plan.readiness?.items).toContainEqual(
+      expect.objectContaining({ need: 'Python packages (requirements.txt)', status: 'needs-network' })
+    )
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'present_plan') as { output: string }
+    expect(result.output).toContain('The user ACCEPTED the plan')
+    expect(result.output).toContain('- Python packages (requirements.txt): The plan creates this list. Installing needs network.')
+  })
+
   it('recovers from an interrupted present_plan: never sends an orphaned tool_use', async () => {
     // A prior run quit while the plan was pending (tool_use persisted, no result),
     // then the user re-sent a message — so a user turn now sits after the dangling
@@ -7419,6 +7450,78 @@ describe('turn receipt', () => {
       delete h.settings.verifyCommand
       Object.assign(h.settings, saved)
     }
+  })
+
+  it('notes a todo marked done that claims a test ran when none did, and lists it on the receipt', async () => {
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        call('t1', 'todo_write', {
+          todos: [
+            { content: 'Write the API', status: 'completed' },
+            { content: 'Backend tests with pytest', status: 'completed' }
+          ]
+        }),
+        say('All tests pass.')
+      ]
+    })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'todo_write') as { output: string }
+    expect(result.output).toContain(
+      '[note: "Backend tests with pytest" is marked completed, but Houston has no passing test run recorded this turn.'
+    )
+    expect(result.output).not.toContain('"Write the API"')
+    expect(r.messages.at(-1)?.receipt?.todoGaps).toEqual(['Backend tests with pytest'])
+  })
+
+  it('does not flag a todo a passing run backs', async () => {
+    h.sandboxed = true
+    h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '12 passed in 0.1s' } })]
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('s1', 'run_shell', { command: 'pytest' }),
+        call('t1', 'todo_write', { todos: [{ content: 'Backend tests with pytest', status: 'completed' }] }),
+        say('Tests pass.')
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'todo_write') as { output: string }
+    expect(result.output).not.toContain('[note:')
+    expect(r.messages.at(-1)?.receipt).not.toHaveProperty('todoGaps')
+  })
+
+  it("carries an accepted plan's progress across turns until it is complete", async () => {
+    h.sandboxed = true
+    h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '2 passed in 0.1s' } })]
+    // Turn 1: the plan is accepted and only part of it is done.
+    const first = await run({
+      policy: 'plan',
+      turns: [
+        call('p1', 'present_plan', { title: 'Todo app', plan: '## Steps\n- write it', files: ['app.py', 'test_app.py'], verify: ['pytest'] }),
+        call('w1', 'write_file', { path: 'app.py', content: 'x = 1\n' }),
+        say('Wrote app.py; tests next.')
+      ],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'accept', mode: 'auto-edit' }),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(first.messages.at(-1)?.receipt?.plan).toMatchObject({
+      title: 'Todo app',
+      filesPending: ['test_app.py'],
+      checks: [{ step: 'pytest', status: 'not-run' }],
+      complete: false
+    })
+    // Turn 2, later: "finish the planned implementation" finds the same plan in the log.
+    const second = await run({
+      policy: 'auto-edit',
+      messages: [...first.messages, { role: 'user', content: 'finish the planned implementation' }],
+      turns: [
+        call('w2', 'write_file', { path: 'test_app.py', content: 'def test_x(): pass\n' }),
+        call('s1', 'run_shell', { command: 'pytest' }),
+        say('Done, tests pass.')
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(second.messages.at(-1)?.receipt?.plan).toMatchObject({ filesPendingCount: 0, complete: true })
   })
 
   it('records only writes that landed', async () => {

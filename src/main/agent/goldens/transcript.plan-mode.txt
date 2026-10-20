@@ -26,4 +26,5 @@ plan_ready {"callId":"c1","plan":{"body":"## Plan\n1. Add greet() to util.ts\n2.
 tool_result {"callId":"c1","name":"present_plan","ok":true,"output":"The user ACCEPTED the plan and switched off Plan mode. Carry out the plan now, step by step. You will be asked to approve each edit."}
 text {"delta":"Starting on step 1."}
 usage {"cost":0.00272,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
+receipt {"receipt":{"checks":[],"filesChanged":[],"filesChangedCount":0,"otherCommands":0,"plan":{"acceptedAt":"<time>","checks":[],"complete":false,"filesPending":["src/util.ts","src/main.ts"],"filesPendingCount":2,"filesTotal":2,"title":"Add greeting"},"v":1}}
 done {"stopReason":"end_turn"}

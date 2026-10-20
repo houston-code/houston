@@ -34,6 +34,35 @@ function renderPanel(props: Partial<React.ComponentProps<typeof PlanPanel>> = {}
   return { onResolve, onClose, panel, ...utils }
 }
 
+describe('PlanPanel checks', () => {
+  it("lists the plan's checks and Houston's answer to whether they can run here", () => {
+    renderPanel({
+      plan: {
+        ...plan,
+        verify: ['pytest', 'view_localhost: add a draft'],
+        readiness: {
+          items: [
+            { need: 'Python', status: 'ok', detail: 'installed.' },
+            { need: 'Python packages (requirements.txt)', status: 'needs-network', detail: 'Installing needs network.' }
+          ]
+        }
+      }
+    })
+    expect(screen.getByText('Checks this plan will run')).toBeTruthy()
+    expect(screen.getByText('view_localhost: add a draft')).toBeTruthy()
+    expect(screen.getByText('Checked by Houston')).toBeTruthy()
+    expect(screen.getByText("Some of these checks can't run here yet.")).toBeTruthy()
+    expect(screen.getByText('Python packages (requirements.txt)')).toBeTruthy()
+    expect(screen.getByText('Needs attention:', { exact: false })).toHaveClass('sr-only')
+  })
+
+  it('shows nothing extra for a plan without checks', () => {
+    renderPanel()
+    expect(screen.queryByText('Checks this plan will run')).toBeNull()
+    expect(screen.queryByText('Checked by Houston')).toBeNull()
+  })
+})
+
 describe('PlanPanel', () => {
   it('renders the title, the full freeform body as markdown, and file chips', () => {
     const { panel } = renderPanel()
