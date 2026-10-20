@@ -7490,6 +7490,40 @@ describe('turn receipt', () => {
     expect(r.messages.at(-1)?.receipt).not.toHaveProperty('todoGaps')
   })
 
+  it("carries an accepted plan's progress across turns until it is complete", async () => {
+    h.sandboxed = true
+    h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '2 passed in 0.1s' } })]
+    // Turn 1: the plan is accepted and only part of it is done.
+    const first = await run({
+      policy: 'plan',
+      turns: [
+        call('p1', 'present_plan', { title: 'Todo app', plan: '## Steps\n- write it', files: ['app.py', 'test_app.py'], verify: ['pytest'] }),
+        call('w1', 'write_file', { path: 'app.py', content: 'x = 1\n' }),
+        say('Wrote app.py; tests next.')
+      ],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'accept', mode: 'auto-edit' }),
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(first.messages.at(-1)?.receipt?.plan).toMatchObject({
+      title: 'Todo app',
+      filesPending: ['test_app.py'],
+      checks: [{ step: 'pytest', status: 'not-run' }],
+      complete: false
+    })
+    // Turn 2, later: "finish the planned implementation" finds the same plan in the log.
+    const second = await run({
+      policy: 'auto-edit',
+      messages: [...first.messages, { role: 'user', content: 'finish the planned implementation' }],
+      turns: [
+        call('w2', 'write_file', { path: 'test_app.py', content: 'def test_x(): pass\n' }),
+        call('s1', 'run_shell', { command: 'pytest' }),
+        say('Done, tests pass.')
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    expect(second.messages.at(-1)?.receipt?.plan).toMatchObject({ filesPendingCount: 0, complete: true })
+  })
+
   it('records only writes that landed', async () => {
     const r = await run({
       policy: 'ask',

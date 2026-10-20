@@ -203,3 +203,36 @@ describe('todo gaps in the receipt', () => {
     expect(receiptHasFailure(r)).toBe(true)
   })
 })
+
+describe('plan progress in the receipt', () => {
+  const plan = {
+    title: 'Todo app',
+    filesTotal: 11,
+    filesPending: ['web/App.jsx', 'web/api.js'],
+    filesPendingCount: 2,
+    checks: [
+      { step: 'pytest', status: 'passed' as const },
+      { step: 'npm run build', status: 'failed' as const },
+      { step: 'add a todo in the browser', status: 'not-run' as const }
+    ],
+    complete: false
+  }
+
+  it('sums it up and lists each check and the files still to change', () => {
+    const r = receipt({ plan, filesChanged: ['app.py'], filesChangedCount: 1 })
+    expect(receiptSummary(r)).toBe('No tests ran · 1 file changed · plan: 9 of 11 files, 1 of 3 checks passed')
+    expect(formatReceiptLines(r).slice(1)).toEqual([
+      '  plan "Todo app":',
+      '    ✓ pytest (passed)',
+      '    ✗ npm run build (ran, nothing passed)',
+      '    ○ add a todo in the browser (not run yet)',
+      '    files not changed yet: web/App.jsx, web/api.js'
+    ])
+  })
+
+  it('says once that the plan is complete', () => {
+    const r = receipt({ plan: { ...plan, complete: true } })
+    expect(receiptSummary(r)).toBe('Plan complete')
+    expect(formatReceiptLines(r)).toEqual(['Recorded by Houston: Plan complete'])
+  })
+})

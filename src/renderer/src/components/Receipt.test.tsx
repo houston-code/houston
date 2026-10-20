@@ -72,3 +72,26 @@ describe('Receipt todo gaps', () => {
     expect(container.querySelector('.receipt--failed')).not.toBeNull()
   })
 })
+
+describe('Receipt plan progress', () => {
+  it("lists the plan's checks and the files it named that no turn has changed", () => {
+    render(
+      <Receipt
+        receipt={receipt({
+          plan: {
+            title: 'Todo app',
+            filesTotal: 3,
+            filesPending: ['web/App.jsx'],
+            filesPendingCount: 1,
+            checks: [{ step: 'pytest', status: 'not-run' }],
+            complete: false
+          }
+        })}
+      />
+    )
+    fireEvent.click(screen.getByText('Recorded by Houston'))
+    expect(screen.getByText('Plan: Todo app')).toBeInTheDocument()
+    expect(screen.getByText('not run yet')).toBeInTheDocument()
+    expect(screen.getByText('Files not changed yet: web/App.jsx.')).toBeInTheDocument()
+  })
+})
