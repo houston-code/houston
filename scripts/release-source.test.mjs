@@ -184,6 +184,7 @@ describe('releaseProblems', () => {
     baseIsAncestor: true,
     changedFiles: [...RELEASE_FILES],
     jsonOk: true,
+    skipped: [],
     later: [],
     tagCommit: null,
     notes: [],
@@ -209,6 +210,12 @@ describe('releaseProblems', () => {
 
   it('refuses notes that fail the summary check', () => {
     expect(run({ notes: ['the summary must be a complete sentence'] })).toMatch(/release notes: the summary must be/)
+  })
+
+  it('refuses changes merged to the line while the release PR was open, which would not ship', () => {
+    expect(run({ skipped: ['#66'] })).toMatch(/merged after v0\.9\.0 was cut that its release PR doesn't include \(#66\).*Update pending release/)
+    // Once tagged, a re-run is about the shipped commit, not the line.
+    expect(run({ skipped: ['#66'], tagCommit: 'r' })).toBe('')
   })
 
   it('refuses unannounced changes after the release PR until it is tagged, and a tag on another commit', () => {
@@ -481,6 +488,17 @@ describe('release-source CLI', () => {
       const r = shipBad(65, {})
       expect(r.stderr).toBe('')
       expect(out(r)).toMatchObject({ version: '0.9.2', latest: 'true' })
+    })
+
+    it('refuses a release PR merged while behind the line, which would leave a fix unshipped', () => {
+      // v0.9.2 is cut at the line's tip, a fix (#66) then merges to the line, and the release
+      // PR merges without being updated: #66 is on the line but not in the release commit.
+      sh('checkout', '-q', '-B', 'behind', s.m1)
+      pr(66, 'backport/0.9/pr-66', 'behind', feature(66))
+      const merge = pr(67, 'release-pr/v0.9.2', 'behind', releaseCommit('0.9.2', s.m1), s.m1)
+      const r = withLine(merge, () => run('source', { VERSION: '0.9.2' }))
+      expect(r.status).toBe(1)
+      expect(r.stderr).toMatch(/merged after v0\.9\.2 was cut that its release PR doesn't include \(#66\)/)
     })
 
     it('explains a squash-merged release PR', () => {

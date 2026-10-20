@@ -175,6 +175,7 @@ you do, the abandoned version stays pending, but it blocks nothing else.
 | The release PR was squash-merged | revert that commit on the line, then merge the release PR again with **Create a merge commit** |
 | The release PR changes anything but the version and `CHANGELOG.md` (including dependency changes in `package.json`), or was rebased or updated from the line | **Update pending release** |
 | Changes merged to the line after the release PR | **Update pending release**, so the notes announce them |
+| Changes merged to the line while the release PR was open, which it doesn't include (it was merged while behind the line) | **Update pending release**, so they ship with this version |
 | The notes' summary fails the check | fix it in the release PR; if it has merged, **Update pending release** |
 | The version's tag already names a different commit | investigate: someone moved or created the tag by hand |
 
