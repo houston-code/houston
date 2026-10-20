@@ -35,7 +35,7 @@ on:
           - Update pending release
         default: Next minor version
       version:
-        description: 'Version this run prepares, X.Y.Z. It must match the choice above.'
+        description: 'Version, for example 0.10.0. It must match your choice above.'
         type: string
         required: true
 
