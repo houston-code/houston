@@ -544,16 +544,71 @@ describe('Composer + attachment menu', () => {
   // Steering: mid-run, a distinct action from the queue. The queue sends after the
   // run; a steer reaches the model before its next step.
   describe('steer', () => {
-    it('offers a Steer button while running with text, and not otherwise', () => {
+    it('always offers Steer while running (enabled, even when empty), and not otherwise', () => {
       const props = baseProps({ running: true, onSteer: vi.fn() })
       const { rerender } = render(<Composer {...props} />)
-      // Empty while running: no steer button (nothing to steer).
-      expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull()
-      type('use YAML instead')
-      expect(screen.getByRole('button', { name: 'Steer' })).toBeInTheDocument()
-      // Not running: the steer button never shows, even with text.
+      // Steer is the default mid-run, so it's always there and never greyed out.
+      expect(screen.getByRole('button', { name: 'Steer' })).toBeEnabled()
+      // With nothing typed it just focuses the box.
+      fireEvent.click(screen.getByRole('button', { name: 'Steer' }))
+      expect(props.onSteer).not.toHaveBeenCalled()
+      expect(document.activeElement).toBe(screen.getByRole('textbox'))
+      // Not running: the steer button never shows.
       rerender(<Composer {...baseProps({ running: false, onSteer: props.onSteer })} />)
       expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull()
+    })
+
+    it('puts Steer in the default (last) send spot, after Queue', () => {
+      render(<Composer {...baseProps({ running: true, onSteer: vi.fn() })} />)
+      const names = screen.getAllByRole('button').map((b) => b.getAttribute('aria-label'))
+      expect(names.indexOf('Queue')).toBeLessThan(names.indexOf('Steer'))
+      expect(names.indexOf('Steer')).toBeLessThan(names.indexOf('Stop'))
+    })
+
+    it('explains both keys in the placeholder while running', () => {
+      render(<Composer {...baseProps({ running: true, onSteer: vi.fn() })} />)
+      expect(screen.getByRole('textbox')).toHaveAttribute(
+        'placeholder',
+        expect.stringMatching(/^↵ steers now, (⌘|Ctrl)\+↵ queues for after this run\.$/)
+      )
+    })
+
+    it('Enter steers while running', () => {
+      const props = baseProps({ running: true, onSteer: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('no, use the existing logger')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(props.onSteer).toHaveBeenCalledWith('no, use the existing logger')
+      expect(props.onSend).not.toHaveBeenCalled()
+      expect(input.value).toBe('')
+    })
+
+    it('Mod+Enter queues while running', () => {
+      const props = baseProps({ running: true, onSteer: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('also update the README')
+      // jsdom isn't a Mac, so the modifier is Ctrl here.
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+      expect(props.onSend).toHaveBeenCalledWith('also update the README', undefined)
+      expect(props.onSteer).not.toHaveBeenCalled()
+    })
+
+    it('Enter still saves a # rule mid-run instead of steering it', () => {
+      const props = baseProps({ running: true, onSteer: vi.fn(), onSaveMemory: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('# always run the linter')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(props.onSteer).not.toHaveBeenCalled()
+      expect(screen.getByRole('group', { name: 'Remember instruction' })).toBeInTheDocument()
+    })
+
+    it('Enter still sends normally when not running', () => {
+      const props = baseProps({ running: false, onSteer: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('explain this repo')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(props.onSend).toHaveBeenCalledWith('explain this repo', undefined)
+      expect(props.onSteer).not.toHaveBeenCalled()
     })
 
     it('has no Steer affordance when the handler is absent', () => {
@@ -581,7 +636,7 @@ describe('Composer + attachment menu', () => {
       expect(props.onCommand).toHaveBeenCalledWith(expect.objectContaining({ name: 'plan' }), '')
     })
 
-    it('leaves the queue (Enter / the send button) untouched while running', () => {
+    it('the Queue button queues while running', () => {
       const props = baseProps({ running: true, onSteer: vi.fn() })
       render(<Composer {...props} />)
       type('a follow-up for later')

@@ -10,6 +10,7 @@ import {
   type KeyboardEvent
 } from 'react'
 import { Icon, type IconName } from './Icon'
+import { isMacPlatform } from '../lib/shortcuts'
 import { ComposerPrBar } from './ComposerPrBar'
 import type { WorkingTreeStats } from '../hooks/useWorkingTreeStats'
 import { loadComposerDraft, saveComposerDraft } from '../lib/composerDraft'
@@ -104,6 +105,15 @@ const KIND_ICON: Record<ContextKind, IconName> = {
   folder: 'folder',
   diff: 'diff',
   link: 'link'
+}
+
+/**
+ * While a run is going, Enter steers (the agent reads the message before its next
+ * step) and Mod+Enter queues it for after the run, matching the terminal client where
+ * Enter mid-run steers. Exported for the placeholder test.
+ */
+export function runningPlaceholder(mac: boolean): string {
+  return `↵ steers now, ${mac ? '⌘' : 'Ctrl'}+↵ queues for after this run.`
 }
 
 /** One row in the `+` attachment menu. */
@@ -695,9 +705,14 @@ export function Composer({
   const steer = (): void => {
     const trimmed = text.trim()
     if (!trimmed || !onSteer || disabled) return
-    // A command is run, not steered: as steering it reached the model as text.
+    // A command is run, and a `#` line is saved as a rule, not steered: as steering
+    // either would reach the model as plain text.
     const parsed = parseSlashCommand(trimmed)
     if (parsed && resolveCommand(commands, parsed.name)) {
+      submit()
+      return
+    }
+    if (onSaveMemory && parseMemoryCapture(trimmed)) {
       submit()
       return
     }
@@ -806,7 +821,11 @@ export function Composer({
     }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      submit()
+      // Mid-run, Enter steers the running turn and Mod+Enter queues for after it.
+      // Steering carries text only, so a message with no text (images alone) queues.
+      const mod = isMacPlatform() ? e.metaKey : e.ctrlKey
+      if (running && onSteer && !mod && text.trim()) steer()
+      else submit()
     }
   }
 
@@ -966,11 +985,14 @@ export function Composer({
         <textarea
           ref={ref}
           className="composer__input"
+          data-tour="composer"
           placeholder={
             disabled
               ? disabledReason ?? 'Pick a model and project folder to start…'
               : running
-                ? 'Queue a follow-up…  (sent when the current run finishes)'
+                ? onSteer
+                  ? runningPlaceholder(isMacPlatform())
+                  : 'Queue a follow-up…  (sent when the current run finishes)'
                 : 'Ask Houston…  (@ file, / command, or + to attach)'
           }
           value={text}
@@ -1019,28 +1041,31 @@ export function Composer({
           <div className="composer__bar-right">
             {running ? (
               <>
-                {onSteer && text.trim() && (
-                  <button
-                    type="button"
-                    className="composer__send composer__steer"
-                    aria-label="Steer"
-                    title="Steer the running turn: the agent reads this before its next step"
-                    onClick={steer}
-                    disabled={sendDisabled}
-                  >
-                    <Icon name="steer" size={16} />
-                  </button>
-                )}
+                {/* Queue is the secondary action mid-run (Mod+Enter); Steer is the
+                    default (Enter), so it takes the filled send spot and is always
+                    shown. With nothing typed, Steer just puts the cursor in the box. */}
                 <button
                   type="button"
-                  className="composer__send"
+                  className="composer__send composer__queue"
                   aria-label="Queue"
-                  title="Queue this message (it’s sent when the current run finishes)"
+                  title={`Queue (${isMacPlatform() ? '⌘' : 'Ctrl'}+↵): sent when this run finishes`}
                   onClick={submit}
                   disabled={sendDisabled}
                 >
                   <Icon name="send" size={16} />
                 </button>
+                {onSteer && (
+                  <button
+                    type="button"
+                    className="composer__send composer__steer"
+                    aria-label="Steer"
+                    title="Steer (↵): the agent reads this before its next step"
+                    onClick={() => (text.trim() ? steer() : ref.current?.focus())}
+                    disabled={disabled}
+                  >
+                    <Icon name="steer" size={16} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="composer__stop"

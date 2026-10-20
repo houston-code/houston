@@ -96,8 +96,17 @@ describe('relevantTips', () => {
   it('offers the pre-send tips on an empty, ready chat', () => {
     expect(relevantTips({ readyToSend: true, afterEdit: false, touring: false })).toEqual([
       'approval',
-      'worktree'
+      'worktree',
+      'context'
     ])
+  })
+
+  it('never shows the steer tip on its own (the mid-run placeholder covers it)', () => {
+    for (const readyToSend of [true, false]) {
+      for (const afterEdit of [true, false]) {
+        expect(relevantTips({ readyToSend, afterEdit, touring: false })).not.toContain('steer')
+      }
+    }
   })
 
   it('offers undo first after an edit', () => {

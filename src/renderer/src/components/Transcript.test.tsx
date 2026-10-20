@@ -465,3 +465,17 @@ describe('Transcript: handoff banner link', () => {
     expect(onOpenConversation).toHaveBeenCalledWith('p')
   })
 })
+
+describe('steered messages', () => {
+  it('labels a message steered into a running turn', () => {
+    renderTranscript([userItem({ text: 'use the existing logger instead', steered: true })])
+    expect(screen.getByText('Steered')).toBeInTheDocument()
+    expect(screen.getByText('use the existing logger instead').closest('.msg')).toHaveClass('msg--steered')
+  })
+
+  it('leaves an ordinary message unlabelled', () => {
+    renderTranscript([userItem()])
+    expect(screen.queryByText('Steered')).not.toBeInTheDocument()
+  })
+})
+

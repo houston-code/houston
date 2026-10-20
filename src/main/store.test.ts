@@ -887,7 +887,7 @@ describe('settings migration — onboarding (v10)', () => {
     writeSettings({ schemaVersion: 9, providers: [openaiProvider(['gpt-5.5'])] })
     const { getSettings } = await loadStore()
     expect(getSettings().onboarding).toEqual({
-      seenTips: ['approval', 'worktree', 'changes', 'revert']
+      seenTips: ['approval', 'worktree', 'context', 'steer', 'changes', 'revert']
     })
   })
 
@@ -895,7 +895,7 @@ describe('settings migration — onboarding (v10)', () => {
     markDesktopHasRun()
     writeSettings({ providers: [openaiProvider(['gpt-5.5'])] })
     const { getSettings } = await loadStore()
-    expect(getSettings().onboarding?.seenTips).toHaveLength(4)
+    expect(getSettings().onboarding?.seenTips).toHaveLength(6)
   })
 
   it('treats a terminal-only profile as new to the desktop app (tips stay unseen)', async () => {

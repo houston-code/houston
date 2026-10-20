@@ -28,6 +28,7 @@ export type ShortcutId =
   | 'prev-chat'
   | 'cycle-mode'
   | 'send-message'
+  | 'queue-message'
   | 'insert-newline'
   | 'edit-last-message'
   | 'history-recall'
@@ -187,7 +188,14 @@ export const SHORTCUTS: ShortcutDef[] = [
   {
     id: 'send-message',
     chords: [{ key: 'Enter' }],
-    label: 'Send message',
+    label: 'Send message (while it works: steer the running turn)',
+    category: 'Chat',
+    scope: 'composer'
+  },
+  {
+    id: 'queue-message',
+    chords: [{ key: 'Enter', mod: true }],
+    label: 'Queue a message for after the running turn',
     category: 'Chat',
     scope: 'composer'
   },

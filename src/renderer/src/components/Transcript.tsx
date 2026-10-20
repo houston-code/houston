@@ -89,12 +89,14 @@ function UserBubble({
   text,
   images,
   isSummary,
-  invokedAs
+  invokedAs,
+  steered
 }: {
   text: string
   images?: ImageAttachment[]
   isSummary?: boolean
   invokedAs?: PromptInvocation
+  steered?: boolean
 }): JSX.Element {
   // The compaction summary is model-authored markdown, not user input. Render it as
   // a labeled, full-width block with its body parsed as markdown rather than the
@@ -112,7 +114,12 @@ function UserBubble({
   }
   if (invokedAs && !images?.length) return <InvokedBubble text={text} invokedAs={invokedAs} />
   return (
-    <div className="msg msg--user">
+    <div className={`msg msg--user${steered ? ' msg--steered' : ''}`}>
+      {steered && (
+        <div className="msg__steered-label">
+          <Icon name="steer" size={12} /> Steered
+        </div>
+      )}
       {text.trim() !== '' && <CopyButton text={text} className="msg__copy--user" />}
       <div className="msg__body">
         {images && images.length > 0 && (
@@ -339,6 +346,7 @@ export function Transcript({
                     images={node.item.images}
                     isSummary={node.item.isSummary}
                     invokedAs={node.item.invokedAs}
+                    steered={node.item.steered}
                   />
                 )
               case 'assistant':

@@ -1996,6 +1996,23 @@ body.is-resizing {
   display: flex;
   justify-content: flex-end;
 }
+/* A message steered into a running turn: labelled, with an accent edge, so it reads
+   as a course correction to the run in progress rather than a new turn. */
+.msg--steered {
+  flex-direction: column;
+  align-items: flex-end;
+}
+.msg--user.msg--steered .msg__body {
+  border-color: var(--accent);
+}
+.msg__steered-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--accent);
+}
 .msg--user .msg__body {
   max-width: 86%;
   background: var(--bg-input);
@@ -4292,16 +4309,17 @@ body.is-resizing .preview-dock__resizer::after {
   opacity: 0.4;
   cursor: default;
 }
-/* Steer sits next to the filled Queue button; outlined so the two mid-run send
-   actions are told apart at a glance (Queue = for after, Steer = into the run now). */
-.composer__steer {
+/* Mid-run, Steer is the default (Enter) and takes the filled send style; Queue
+   (Mod+Enter) sits before it, outlined, so the two are told apart at a glance
+   (Steer = into the run now, Queue = for after it). */
+.composer__queue {
   background: transparent;
   color: var(--accent-fill);
   border: 1px solid var(--accent-fill);
   box-shadow: none;
 }
-.composer__steer:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--accent-fill) 12%, transparent);
+.composer__queue:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-fill) 14%, transparent);
 }
 .composer__stop {
   display: inline-flex;
