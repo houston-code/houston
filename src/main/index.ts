@@ -9,6 +9,7 @@ import { loadWindowState, saveWindowState, pickStartupBounds } from './window-st
 import { registerIpc } from './ipc'
 import { buildAppMenu } from './menu'
 import { killAllShells } from './agent/shells'
+import { startShellLedger } from './agent/shellLedger'
 import { attachPreviewHost, destroyAllPreviewPanes } from './preview'
 import { killAllTerminals } from './terminal'
 import { clearCheckpoints } from './agent/checkpoints'
@@ -58,6 +59,16 @@ if (process.platform === 'darwin') {
 // Electron's per-user profile dir. They read it via the userData seam instead of
 // importing electron, so the standalone CLI can wire the same path Electron-free.
 setUserDataDir(app.getPath('userData'))
+
+// Record the agent's background shells in the profile, and stop any that an earlier
+// Houston process left running when it exited without its will-quit cleanup (a crash
+// or a force-quit), so their dev servers stop holding ports.
+void startShellLedger(app.getPath('userData')).then((pgids) => {
+  if (pgids.length) log.info(`stopped ${pgids.length} background shell group(s) left by an earlier session`)
+})
+// A last-chance stop for exits that skip will-quit (a direct process.exit); it runs
+// synchronously, which killAllShells is.
+process.once('exit', () => killAllShells())
 
 // Verify outbound TLS against the OS certificate store too, before any provider call.
 // Without it, a network that re-signs TLS with a root CA installed in the Windows store

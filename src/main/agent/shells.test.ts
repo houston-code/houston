@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import { spawn, type ChildProcess } from 'node:child_process'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { bindShellLedger, resetShellLedger } from './shellLedger'
 import {
   killShell,
   listShells,
@@ -121,6 +125,31 @@ describe('background shell registry', () => {
     expect(seen.length).toBeGreaterThanOrEqual(2)
     off()
   })
+})
+
+describe('background shell ledger', () => {
+  it.skipIf(process.platform === 'win32')(
+    'records a running shell in the crash-safe ledger and drops it once its group is gone',
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'houston-shells-ledger-'))
+      bindShellLedger(dir)
+      try {
+        // Detached, as the sandbox backends spawn background shells: the child leads its group.
+        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true })
+        const id = registerShell('node server', child)
+        const files = readdirSync(dir)
+        expect(files).toHaveLength(1)
+        const body = JSON.parse(readFileSync(join(dir, files[0]), 'utf8'))
+        expect(body.shells).toEqual([{ pgid: child.pid, startedAt: expect.any(Number) }])
+        expect(killShell(id)).toBe('killed')
+        await onClose(child)
+        expect(readdirSync(dir)).toEqual([])
+      } finally {
+        resetShellLedger()
+        rmSync(dir, { recursive: true, force: true })
+      }
+    }
+  )
 })
 
 describe('unreadSlice (rolling-buffer offsets)', () => {

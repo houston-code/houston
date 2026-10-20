@@ -228,7 +228,8 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Background processes.** `run_shell` can start long-running commands (dev
   servers, watchers) in the background and return immediately; the agent polls
   them with `read_shell_output` and stops them with `kill_shell`. They're killed
-  when the app quits.
+  when the app quits. If Houston exits without that cleanup (a crash or a force-quit),
+  the next launch stops the ones it left running (macOS and Linux).
 - **Persistent shell session.** Foreground `run_shell` commands share a session
   within a turn: `cd` and exported environment variables carry over to later
   commands (e.g. `cd build` then `make`, or activate a virtualenv once and reuse
