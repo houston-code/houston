@@ -399,6 +399,10 @@ function stripRedirection(token: string): string | null {
  * and `..` are normalized, but symlinks are not walked (that is the sandbox's job).
  */
 function isWithinRoots(target: string, roots: string[]): boolean {
+  // A path this host can't read as absolute (`C:\x` or `\\host\share` on macOS or
+  // Linux) is not inside anything here. resolve() would join it onto the process's
+  // working directory, so the answer would depend on where Houston was started.
+  if (!isAbsolute(target)) return false
   const t = resolve(target)
   for (const root of roots) {
     const rel = relative(resolve(root), t)

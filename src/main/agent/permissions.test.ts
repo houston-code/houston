@@ -411,6 +411,21 @@ describe('shellReferencesExternalPath', () => {
     expect(ext('dir \\\\server\\share')).toBe(true)
   })
 
+  it('flags Windows paths the same wherever Houston was started', () => {
+    // On macOS and Linux these aren't absolute, so they must not be joined onto the
+    // working directory: started in a temp folder, they would read as scratch files, and
+    // started in the workspace, as files inside it.
+    for (const cwd of [tmpdir(), '/work/project']) {
+      const spy = vi.spyOn(process, 'cwd').mockReturnValue(cwd)
+      try {
+        expect(ext('type C:\\Users\\me\\secret.txt'), cwd).toBe(true)
+        expect(ext('dir \\\\server\\share'), cwd).toBe(true)
+      } finally {
+        spy.mockRestore()
+      }
+    }
+  })
+
   it('flags backslash relative climbs', () => {
     expect(ext('type ..\\..\\outside')).toBe(true)
     // A backslash path that stays inside does not escape.
