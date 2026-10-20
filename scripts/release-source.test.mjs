@@ -328,7 +328,9 @@ describe('release-source CLI', () => {
       // moved on by one backport since the cut.
       point('release/0.9', s.b59)
       sh('checkout', '-q', '-B', 'open-pr', s.b58)
-      releaseCommit('0.9.1', s.b58)()
+      // A different draft from the merged 0.9.1 release commit: otherwise both commits can be
+      // byte-identical (same parent, tree, message and second) and git sees one commit.
+      releaseCommit('0.9.1', s.b58, { summary: 'Ships the reviewed draft of version 0.9.1.' })()
       write('CHANGELOG.md', '# Changelog\n\n## v0.9.1\n\nEdited in review.\n')
       commit('Tighten the notes')
       point('release-pr/v0.9.1', sh('rev-parse', 'HEAD'))
