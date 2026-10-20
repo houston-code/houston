@@ -87,7 +87,7 @@ describe('readLicenseText', () => {
 describe('renderEntry', () => {
   it('includes name, version, license and homepage', () => {
     const md = renderEntry({ name: 'foo', version: '1.2.3', license: 'MIT', homepage: 'https://f' })
-    expect(md).toContain('### foo — 1.2.3')
+    expect(md).toContain('### foo: 1.2.3')
     expect(md).toContain('- License: MIT')
     expect(md).toContain('- Homepage: https://f')
   })

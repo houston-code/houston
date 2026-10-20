@@ -2,6 +2,7 @@ import { build } from 'esbuild'
 import { chmodSync, readFileSync } from 'node:fs'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { coveredPackageDirs, uncoveredMessage, uncoveredPackageDirs } from './bundled-packages.mjs'
 
 /**
  * Bundle the standalone CLI (src/cli/index.ts) into a single self-contained
@@ -34,6 +35,10 @@ const result = await build({
   banner: { js: '#!/usr/bin/env node' },
   define: { __HOUSTON_VERSION__: JSON.stringify(pkg.version) },
   alias: { '@shared': resolve(root, 'src/shared') },
+  // debug's optional `require('supports-color')` (inside a try/catch) would otherwise inline
+  // whatever copy dev tooling happened to install. Left external, it resolves to nothing on
+  // a bare server and debug falls back to basic colors, as it does in the packaged app.
+  external: ['supports-color'],
   logLevel: 'info'
 })
 
@@ -45,6 +50,18 @@ if (offenders.length > 0) {
     `Electron reached the CLI bundle graph via:\n  ${offenders.join('\n  ')}\n` +
       'The standalone CLI must not depend on electron — wire the capability through a seam instead.'
   )
+  process.exit(1)
+}
+
+// Same attribution guard as the electron-vite builds: the CLI ships as a release asset,
+// so every package inlined into it must be covered by the notices and the license gate.
+const uncovered = uncoveredMessage(
+  'CLI',
+  uncoveredPackageDirs(Object.keys(result.metafile.inputs).map((p) => resolve(root, p)), coveredPackageDirs(root)),
+  root
+)
+if (uncovered) {
+  console.error(uncovered)
   process.exit(1)
 }
 

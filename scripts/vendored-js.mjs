@@ -1,4 +1,4 @@
-// JavaScript bundles vendored into the packaged app from devDependencies.
+// JavaScript from devDependencies that ships inside the packaged app anyway.
 //
 // Mermaid (inline diagrams) ships as a single prebuilt file, dist/mermaid.min.js,
 // copied into out/main/vendor at build time (see electron.vite.config.ts). Installing
@@ -7,12 +7,20 @@
 // mermaid AND its dependencies, so for attribution (generate-notices.mjs) and license
 // policy (license-gate.mjs) the package and its full dependency subtree count as
 // shipped, exactly like the production closure.
+//
+// The renderer build also inlines devDependencies it imports (react, react-dom) into its
+// own bundle. Those are listed in BUNDLED_DEV_PACKAGES and covered the same way. The
+// build enforces that list: scripts/bundled-packages.mjs fails any build whose output
+// inlines a package outside the production closure and these subtrees.
 
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 /** Packages whose prebuilt bundle is copied into the app; their subtrees ship. */
 export const VENDORED_JS_PACKAGES = ['mermaid']
+
+/** devDependencies the bundlers inline into shipped code; their subtrees ship too. */
+export const BUNDLED_DEV_PACKAGES = ['react', 'react-dom']
 
 /**
  * The installed directory Node would resolve `name` to from `fromDir`: the nearest
@@ -31,12 +39,12 @@ export function resolvePackageDir(name, fromDir, root, exists = existsSync) {
 }
 
 /**
- * Absolute dirs of each vendored package and everything it depends on
+ * Absolute dirs of each vendored or bundled package and everything it depends on
  * (dependencies and installed optionalDependencies), resolved the way Node resolves
  * them. Missing packages are skipped: an optional dependency for another platform is
  * simply not installed.
  */
-export function vendoredJsDirs(root, { packages = VENDORED_JS_PACKAGES, exists = existsSync, read = readFileSync } = {}) {
+export function vendoredJsDirs(root, { packages = [...VENDORED_JS_PACKAGES, ...BUNDLED_DEV_PACKAGES], exists = existsSync, read = readFileSync } = {}) {
   const seen = new Set()
   const queue = []
   for (const name of packages) {
