@@ -15,6 +15,7 @@ import {
   runWithBackend,
   spawnWithBackend,
   sandboxEnv,
+  OFFLINE_FAIL_FAST_ENV,
   signalProcessTree,
   windowsKillCommands
 } from './shared'
@@ -236,6 +237,57 @@ describe('sandboxEnv', () => {
     expect(env.HOME).toBe('/Users/me')
     expect(env.npm_config_cache).toBe(`${pkgCacheDir({ TMPDIR: '/tmp' })}${sep}npm`)
   })
+
+  describe('offline fail-fast', () => {
+    const base = { PATH: '/usr/bin', HOME: '/Users/me', TMPDIR: '/tmp' }
+
+    it('cuts npm, pip, and cargo retries when the sandbox blocks the network', () => {
+      const env = sandboxEnv(base, { offline: true })
+      expect(env.npm_config_fetch_retries).toBe('0')
+      expect(env.PIP_RETRIES).toBe('1') // one retry: its warning is the only line naming the network error
+      expect(env.PIP_TIMEOUT).toBe('5')
+      expect(env.CARGO_NET_RETRY).toBe('0')
+    })
+
+    it('leaves npm retry timeouts alone (a max below npm\'s default min makes npm refuse to run)', () => {
+      const env = sandboxEnv(base, { offline: true })
+      expect(env.npm_config_fetch_retry_maxtimeout).toBeUndefined()
+      expect(env.npm_config_fetch_retry_mintimeout).toBeUndefined()
+    })
+
+    it('changes nothing about retries when network is available (the default)', () => {
+      for (const env of [sandboxEnv(base), sandboxEnv(base, { offline: false })]) {
+        for (const name of Object.keys(OFFLINE_FAIL_FAST_ENV)) expect(env[name]).toBeUndefined()
+      }
+    })
+
+    it('keeps a user-exported retry setting when network is available', () => {
+      const env = sandboxEnv({ ...base, PIP_RETRIES: '10', npm_config_fetch_retries: '4' })
+      expect(env.PIP_RETRIES).toBe('10')
+      expect(env.npm_config_fetch_retries).toBe('4')
+    })
+
+    it('overrides a user-exported retry setting offline, where retrying cannot help', () => {
+      const env = sandboxEnv({ ...base, PIP_RETRIES: '10', npm_config_fetch_retries: '4' }, { offline: true })
+      expect(env.PIP_RETRIES).toBe('1')
+      expect(env.npm_config_fetch_retries).toBe('0')
+    })
+  })
+
+  describe('Python bytecode cache', () => {
+    const base = { PATH: '/usr/bin', HOME: '/Users/me', TMPDIR: '/tmp' }
+
+    it("points it into the writable cache on macOS (Apple's python3 defaults under ~/Library/Caches)", () => {
+      const env = sandboxEnv(base, { platform: 'darwin' })
+      expect(env.PYTHONPYCACHEPREFIX).toBe(`${pkgCacheDir({ TMPDIR: '/tmp' })}${sep}pycache`)
+      expect(env.PYTHONPYCACHEPREFIX).not.toMatch(/Users[/\\]me/)
+    })
+
+    it('leaves it alone elsewhere, where __pycache__ sits beside the source', () => {
+      expect(sandboxEnv(base, { platform: 'linux' }).PYTHONPYCACHEPREFIX).toBeUndefined()
+      expect(sandboxEnv(base, { platform: 'win32' }).PYTHONPYCACHEPREFIX).toBeUndefined()
+    })
+  })
 })
 
 describe('clampToolResult', () => {
@@ -396,6 +448,23 @@ describe('runWithBackend — honest sandboxed flag', () => {
     expect((await p).sandboxed).toBe(false)
   })
 
+  it('adds the offline fail-fast env only when a confining backend blocks the network', () => {
+    const envFor = (sandboxed: boolean, allowNetwork: boolean): NodeJS.ProcessEnv => {
+      const spawn = fakeSpawn(makeFakeChild())
+      runWithBackend(fakeBackend(sandboxed), baseOpts({ allowNetwork, env: { PATH: '/usr/bin' } }), {
+        spawn,
+        signalTree: vi.fn(),
+        drainMs: 20
+      })
+      return spawn.calls[0].options.env
+    }
+    expect(envFor(true, false).npm_config_fetch_retries).toBe('0')
+    // Network granted: retries stay at the tools' own defaults.
+    expect(envFor(true, true).npm_config_fetch_retries).toBeUndefined()
+    // A backend that can't block the network: the command really has it, so no change.
+    expect(envFor(false, false).npm_config_fetch_retries).toBeUndefined()
+  })
+
   it('launches the backend-provided file and spawns detached', () => {
     const child = makeFakeChild()
     const spawn = fakeSpawn(child)
@@ -515,6 +584,44 @@ describe('signalProcessTree', () => {
     } finally {
       spy.mockRestore()
     }
+  })
+})
+
+describe('spawnWithBackend — offline fail-fast env', () => {
+  const printRetries = (confinesNetwork: boolean): SandboxBackend => ({
+    id: confinesNetwork ? 'seatbelt' : 'none',
+    sandboxed: confinesNetwork,
+    confinesNetwork,
+    supportsSession: true,
+    shellSyntax: 'posix',
+    buildLaunch: () => ({
+      file: process.execPath,
+      args: ['-e', 'process.stdout.write(process.env.npm_config_fetch_retries ?? "unset")'],
+      detached: false,
+      windowsHide: true,
+      supportsSession: true
+    })
+  })
+
+  async function retriesSeen(confinesNetwork: boolean, allowNetwork: boolean): Promise<string> {
+    const { child } = spawnWithBackend(printRetries(confinesNetwork), {
+      command: 'noop',
+      cwd: process.cwd(),
+      workspace: process.cwd(),
+      allowNetwork,
+      // A controlled base env: `npm test` exports npm_config_* vars of its own.
+      env: { PATH: process.env.PATH }
+    })
+    let out = ''
+    child.stdout?.on('data', (c: Buffer) => (out += c.toString()))
+    await new Promise<void>((resolve) => child.once('close', () => resolve()))
+    return out
+  }
+
+  it('reaches a background shell only when its network is blocked', async () => {
+    expect(await retriesSeen(true, false)).toBe('0')
+    expect(await retriesSeen(true, true)).toBe('unset')
+    expect(await retriesSeen(false, false)).toBe('unset')
   })
 })
 

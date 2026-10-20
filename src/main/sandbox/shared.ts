@@ -180,6 +180,34 @@ export function pkgCacheDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
+ * Package-manager retry settings for a command whose network the sandbox blocks.
+ * Offline, every request fails at once and retrying with backoff only adds waiting:
+ * npm spends about 70s per request (two retries, 10s then 60s apart) and cargo about
+ * 15s before printing the same error. pip keeps ONE retry on purpose: it prints the
+ * connection error only in the retry warning (with none it reports just "No matching
+ * distribution found"), and that line is what tells the agent the network is the
+ * cause. npm's retry timeouts stay untouched: a max below the default 10s min makes
+ * npm refuse to run, and with no retries they never apply.
+ */
+export const OFFLINE_FAIL_FAST_ENV: Readonly<Record<string, string>> = {
+  npm_config_fetch_retries: '0',
+  PIP_RETRIES: '1',
+  PIP_TIMEOUT: '5',
+  CARGO_NET_RETRY: '0'
+}
+
+export interface SandboxEnvOptions {
+  /**
+   * The command runs with its network blocked by the sandbox (no grant, on a backend
+   * that enforces the gate). Adds {@link OFFLINE_FAIL_FAST_ENV}; with network granted,
+   * or on a backend that can't block it, nothing about retries changes.
+   */
+  offline?: boolean
+  /** Host platform; injectable for tests. */
+  platform?: NodeJS.Platform
+}
+
+/**
  * Environment for a sandboxed command: the augmented PATH plus package-manager
  * cache redirects into {@link pkgCacheDir}. Only the cache *write* location moves —
  * real HOME config (`~/.npmrc` auth tokens, `~/.gitconfig`) stays readable, since
@@ -192,8 +220,12 @@ export function pkgCacheDir(env: NodeJS.ProcessEnv = process.env): string {
  * `PATH` we augment and the cache redirects are set explicitly below, so they're
  * unaffected by the strip.
  */
-export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+export function sandboxEnv(
+  baseEnv: NodeJS.ProcessEnv = process.env,
+  opts: SandboxEnvOptions = {}
+): NodeJS.ProcessEnv {
   const cache = pkgCacheDir(baseEnv)
+  const platform = opts.platform ?? process.platform
   return {
     ...sanitizeChildEnv(baseEnv),
     PATH: augmentPath(baseEnv),
@@ -224,7 +256,13 @@ export function sandboxEnv(baseEnv: NodeJS.ProcessEnv = process.env): NodeJS.Pro
     // properties` can still set it per command.
     GRADLE_USER_HOME: join(cache, 'gradle'),
     DENO_DIR: join(cache, 'deno'),
-    BUN_INSTALL_CACHE_DIR: join(cache, 'bun')
+    BUN_INSTALL_CACHE_DIR: join(cache, 'bun'),
+    // Apple's /usr/bin/python3 puts bytecode under ~/Library/Caches/com.apple.python,
+    // so even `python3 -m py_compile` dies with PermissionError under the sandbox.
+    // macOS only: elsewhere Python writes `__pycache__` next to the source (writable
+    // in the project) and silently skips it where it can't.
+    ...(platform === 'darwin' ? { PYTHONPYCACHEPREFIX: join(cache, 'pycache') } : {}),
+    ...(opts.offline ? OFFLINE_FAIL_FAST_ENV : {})
   }
 }
 
@@ -436,6 +474,11 @@ const KILL_GRACE_MS = 3_000
  *  before the call settles. Bounds how long a wedged/orphaned pipe can stall us. */
 const STDIO_DRAIN_MS = 250
 
+/** Whether `backend` actually blocks this launch's network (no grant + an enforcing backend). */
+function runsOffline(backend: SandboxBackend, allowNetwork: boolean): boolean {
+  return !allowNetwork && backend.confinesNetwork
+}
+
 /**
  * Spawn a backend-wrapped command WITHOUT awaiting it — used for background shells
  * the caller polls later. Same env augmentation as {@link runWithBackend}; the
@@ -458,7 +501,7 @@ export function spawnWithBackend(
     cwd: opts.cwd,
     // Launch-specific overrides (proxy env vars, forwarder switches) win over the
     // shared sandbox env — the backend knows how its transport must be addressed.
-    env: { ...sandboxEnv(baseEnv), ...launch.env },
+    env: { ...sandboxEnv(baseEnv, { offline: runsOffline(backend, opts.allowNetwork) }), ...launch.env },
     detached: launch.detached,
     windowsHide: launch.windowsHide
   })
@@ -509,7 +552,7 @@ export function runWithBackend(
     // wrapper and leaves orphaned grandchildren alive.
     const child = spawnFn(launch.file, launch.args, {
       cwd: opts.cwd,
-      env: { ...sandboxEnv(baseEnv), ...launch.env },
+      env: { ...sandboxEnv(baseEnv, { offline: runsOffline(backend, opts.allowNetwork) }), ...launch.env },
       detached: launch.detached,
       windowsHide: launch.windowsHide
     })

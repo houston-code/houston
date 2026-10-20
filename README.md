@@ -507,6 +507,9 @@ Houston -p "Add a unit test for utils/date.ts and run the suite" --cwd . --full-
 # gate shell commands but approve them when the run asks (instead of denying)
 Houston -p "Fix the lint errors" --approval auto-edit --on-approval allow
 
+# same, and let those shell commands reach the network (e.g. to install deps)
+Houston -p "Add zod and use it in api.ts" --approval auto-edit --on-approval allow --allow-shell-network
+
 # CI guard: exit non-zero if the run needs anything the policy doesn't auto-approve
 Houston -p "Summarize open TODOs" --on-approval fail
 
@@ -524,8 +527,9 @@ Houston -i   # /resume picks up the same conversation
 Flags: `--cwd <dir>` (project folder, default the current directory),
 `--provider <id>` / `--model <id>` (default your selected model), `--approval
 <plan|ask|auto-edit|full-auto>` (default `plan`), `--on-approval
-<allow|deny|fail>` (below), `--json`, `--continue` (resume the most recent
-session in the folder), `--resume <id>` (resume a specific one).
+<allow|deny|fail>` (below), `--allow-shell-network` (below), `--json`,
+`--continue` (resume the most recent session in the folder), `--resume <id>`
+(resume a specific one).
 Assistant text streams to stdout, tool activity (plus a one-line token/cost
 total, failed tools, and an early-stop notice if the run hits a step/output
 limit) to stderr, and the exit code says how the run ended (below). It
@@ -600,6 +604,16 @@ auto-approves), `allow` approves it, and `fail` refuses it and exits non-zero so
 a script can tell the run needed more than it was granted. The default is
 `deny`, except under `full-auto` (which already opts into everything) where it
 is `allow`; an unrecognized value is treated as `deny`.
+
+**Shell network.** Shell commands run in a sandbox with network off until the run
+is granted it, because the sandbox can read your whole filesystem.
+Interactively that grant is "Allow for run" on a shell command (or, under full
+auto, a one-time consent). `--on-approval allow` approves each command the way
+plain "Allow" does, so under `ask` or `auto-edit` those commands still run
+offline. Pass `--allow-shell-network` to grant shell network for the run under
+any policy; granted traffic still goes through the egress allowlist. Under
+`full-auto`, `--on-approval allow` (its default) also answers the one-time
+consent with yes.
 
 ## Interactive terminal
 
@@ -912,7 +926,8 @@ the agent loop and UI never depend on a specific provider.
 - **Tool execution is sandboxed.** `run_shell` runs under `sandbox-exec` with a
   generated profile: deny-by-default, filesystem reads allowed, writes restricted
   to the project + temp dirs, network denied until you grant it (a one-time
-  consent in *full auto*, or "Allow for run" on a shell approval). Granted
+  consent in *full auto*, "Allow for run" on a shell approval, or
+  `--allow-shell-network` on a headless run). Granted
   network is confined to a per-domain egress allowlist on macOS and Linux:
   direct sockets stay blocked and traffic flows through a local proxy that
   permits package registries, VCS hosts, and domains you add in Settings (see

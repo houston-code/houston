@@ -30,6 +30,7 @@ import {
   formatRunLog,
   networkBlockHint,
   NETWORK_BLOCKED_HINT,
+  HEADLESS_NETWORK_BLOCKED_HINT,
   egressBlockHint,
   EGRESS_BLOCKED_HINT,
   sandboxWriteBlockHint,
@@ -2945,6 +2946,17 @@ describe('networkBlockHint', () => {
     expect(networkBlockHint(false, failed, 'error: test "foo" failed: expected 1 got 2')).toBe('')
   })
 
+  it('points a headless run at --allow-shell-network, since it has no approval prompt', () => {
+    expect(networkBlockHint(false, failed, dnsErr, true)).toBe(HEADLESS_NETWORK_BLOCKED_HINT)
+    expect(HEADLESS_NETWORK_BLOCKED_HINT).toContain('--allow-shell-network')
+    expect(HEADLESS_NETWORK_BLOCKED_HINT).not.toContain('Allow for run')
+    // The same gates as the interactive hint: granted network, success, or an
+    // unrelated failure stay silent.
+    expect(networkBlockHint(true, failed, dnsErr, true)).toBe('')
+    expect(networkBlockHint(false, { exitCode: 0 }, dnsErr, true)).toBe('')
+    expect(networkBlockHint(false, failed, 'error: test "foo" failed', true)).toBe('')
+  })
+
   it('matches common runtimes (npm ENOTFOUND, curl connect, killed proc)', () => {
     expect(networkBlockHint(false, failed, 'npm error code ENOTFOUND')).toBe(NETWORK_BLOCKED_HINT)
     expect(networkBlockHint(false, failed, 'curl: (7) Failed to connect to example.com')).toBe(
@@ -2953,6 +2965,70 @@ describe('networkBlockHint', () => {
     expect(networkBlockHint(false, { exitCode: null }, 'dial tcp: lookup api: no route to host')).toBe(
       NETWORK_BLOCKED_HINT
     )
+  })
+
+  // Real output, captured on macOS by running each tool under Houston's no-network
+  // Seatbelt profile (network denied, resolver mach services denied).
+  describe('real offline output', () => {
+    const offline: Record<string, string> = {
+      // pip with PIP_RETRIES=1 (what sandboxEnv sets offline): one urllib3 retry
+      // warning carries the resolver error, then pip's generic "no distribution".
+      pip: [
+        "WARNING: Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NewConnectionError('<pip._vendor.urllib3.connection.HTTPSConnection object at 0x102915d60>: Failed to establish a new connection: [Errno 8] nodename nor servname provided, or not known')': /simple/fastapi/",
+        'ERROR: Could not find a version that satisfies the requirement fastapi==0.115.4 (from versions: none)',
+        'ERROR: No matching distribution found for fastapi==0.115.4'
+      ].join('\n'),
+      npm: [
+        'npm error code ENOTFOUND',
+        'npm error syscall getaddrinfo',
+        'npm error errno ENOTFOUND',
+        'npm error network request to https://registry.npmjs.org/react failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org',
+        'npm error network This is a problem related to network connectivity.',
+        'npm error network In most cases you are behind a proxy or have bad network settings.'
+      ].join('\n'),
+      'curl (DNS)': 'curl: (6) Could not resolve host: pypi.org',
+      'curl (connect)': "curl: (7) Failed to connect to 1.1.1.1 port 443 after 1 ms: Couldn't connect to server",
+      'git (https)':
+        "fatal: unable to access 'https://github.com/octocat/Hello-World.git/': Could not resolve host: github.com",
+      'git (ssh)': [
+        'ssh: Could not resolve hostname github.com: -65563',
+        'fatal: Could not read from remote repository.'
+      ].join('\n'),
+      cargo: [
+        'error: failed to get `serde` as a dependency of package `x v0.1.0`',
+        '',
+        'Caused by:',
+        '  [6] Couldn\'t resolve host name (Could not resolve host: index.crates.io)'
+      ].join('\n'),
+      go: 'go: module github.com/google/uuid: Get "https://proxy.golang.org/github.com/google/uuid/@v/list": dial tcp: lookup proxy.golang.org: no such host',
+      'python urllib':
+        'urllib.error.URLError: <urlopen error [Errno 8] nodename nor servname provided, or not known>',
+      'python requests':
+        "requests.exceptions.ConnectionError: HTTPSConnectionPool(host='example.com', port=443): Max retries exceeded with url: / (Caused by NewConnectionError('<urllib3.connection.HTTPSConnection object at 0x105648940>: Failed to establish a new connection: [Errno 8] nodename nor servname provided, or not known'))",
+      'node fetch': 'TypeError: fetch failed Error: getaddrinfo ENOTFOUND example.com'
+    }
+
+    for (const [tool, output] of Object.entries(offline)) {
+      it(`hints on ${tool}`, () => {
+        expect(networkBlockHint(false, { exitCode: 1 }, output)).toBe(NETWORK_BLOCKED_HINT)
+      })
+    }
+
+    it('claims these as network failures, not sandbox write or op denials', () => {
+      for (const output of Object.values(offline)) {
+        expect(sandboxWriteBlockHint({ exitCode: 1 }, output)).toBe('')
+        expect(sandboxOpDeniedHint({ exitCode: 1 }, output)).toBe('')
+      }
+    })
+
+    it("does not read pip's bare no-distribution error as a network failure", () => {
+      // Without the retry warning (PIP_RETRIES=0 logs the connection error at debug
+      // level only) nothing says why, which is why sandboxEnv keeps one retry.
+      const bare =
+        'ERROR: Could not find a version that satisfies the requirement fastapi==0.115.4 (from versions: none)\n' +
+        'ERROR: No matching distribution found for fastapi==0.115.4'
+      expect(networkBlockHint(false, { exitCode: 1 }, bare)).toBe('')
+    })
   })
 })
 

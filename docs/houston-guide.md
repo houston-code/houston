@@ -33,7 +33,10 @@ ships as a desktop app and as terminal clients.
   `--full-auto`), with `fail` also exiting non-zero so a script can tell the run
   hit a permission wall. Nobody can answer a question either, so a headless run
   doesn't offer the agent `ask_user`: it is told no user is available, makes the
-  call itself, and states its assumptions in the final answer.
+  call itself, and states its assumptions in the final answer. Approving a shell
+  command with `--on-approval allow` is plain "Allow", so it runs without network;
+  pass `--allow-shell-network` to let shell commands reach the network for the run
+  (see "Shell sandbox and network").
   - **Prompt from stdin.** `-p -` reads the prompt from stdin, and so does a `-p`
     with no value when input is piped in (`cat task.md | houston -p --json`). The
     standalone CLI also reads a piped prompt with no `-p` at all.
@@ -858,11 +861,22 @@ implied by full auto: the sandbox can read your whole filesystem, so blanket
 outbound access plus full auto would be a one-command read-and-exfiltrate. Shell
 reaches the network only after a conscious per-run grant, either the one-time
 **shell-network consent** (full auto) or "Allow for run" on a shell command
-(ask / auto-edit). A command that needs the network (cloning, installing
-dependencies, `gh`, `curl`) is not impossible, it just needs that grant;
-declining runs the command offline instead of blocking it. Package-manager caches
-(npm, pip, yarn) are auto-redirected to a writable temp dir, so dependency
-installs need no cache workaround once network is on. **Additional folders**
+(ask / auto-edit). Plain "Allow" and "Always allow" run that one command offline,
+and until the run has the grant, each shell approval prompt says so. A command
+that needs the network (cloning, installing dependencies, `gh`, `curl`) is not
+impossible, it just needs that grant; declining runs the command offline instead
+of blocking it. A headless run (`-p`) has no prompt to grant it from, so the grant
+is a flag: `--allow-shell-network` lets shell commands reach the network for that
+run under any policy, and is not remembered for the next one. Without it, shell
+runs offline, except under `--full-auto`, where `--on-approval allow` (its
+default) also answers the shell-network consent. `--on-approval allow` alone never
+grants it under ask or auto-edit, since it approves each command the way plain
+"Allow" does. Offline, npm, pip, and cargo skip their usual retries, so an
+install that needs the network fails in about a second instead of a minute or
+more. Package-manager caches (npm, pip, yarn) are auto-redirected to a writable
+temp dir, so dependency installs need no cache workaround once network is on. On
+macOS, Python's bytecode cache goes there too, since the system `python3` keeps it
+under `~/Library/Caches`, which the sandbox can't write. **Additional folders**
 (Settings) can be added to the file tools' allowed roots and the shell sandbox to
 work across more than one repo.
 

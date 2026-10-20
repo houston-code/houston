@@ -671,4 +671,39 @@ describe('ToolGroup', () => {
     )
     expect(screen.queryByLabelText('Reason for denying, sent to the agent')).not.toBeInTheDocument()
   })
+
+  // "Allow" runs a shell command offline until the run has a shell-network grant;
+  // only "Allow for run" grants it, so the card has to say so before the user picks.
+  it('tells the user a shell command runs offline and which choice grants network', () => {
+    const onApprove = vi.fn()
+    render(
+      <ToolGroup
+        items={[
+          tool({
+            id: 'call-12',
+            name: 'run_shell',
+            status: 'awaiting-approval',
+            shellOffline: true,
+            args: { command: 'pip install fastapi' }
+          })
+        ]}
+        onApprove={onApprove}
+      />
+    )
+    const note = screen.getByText(/Runs without network/)
+    expect(note).toHaveTextContent('Runs without network. Choose "Allow for run" to also allow network for this run.')
+    expect(note.textContent).not.toContain('\u2014')
+    fireEvent.click(screen.getByRole('button', { name: 'Allow for run' }))
+    expect(onApprove).toHaveBeenCalledWith('call-12', 'always')
+  })
+
+  it('shows no offline note once the run can reach the network', () => {
+    render(
+      <ToolGroup
+        items={[tool({ id: 'call-13', name: 'run_shell', status: 'awaiting-approval', args: {} })]}
+        onApprove={vi.fn()}
+      />
+    )
+    expect(screen.queryByText(/Runs without network/)).not.toBeInTheDocument()
+  })
 })

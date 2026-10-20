@@ -74,6 +74,11 @@ export interface ToolItem {
    */
   shellNetwork?: boolean
   /**
+   * True on a shell prompt whose command runs offline unless the user picks "Allow for
+   * run" (the run has no shell-network grant yet), so the card can say so up front.
+   */
+  shellOffline?: boolean
+  /**
    * True on a credential/secret-file read prompt (see isSensitivePath): a read that,
    * unusually, is asking — even in full-auto — so the card can explain why.
    */
@@ -266,6 +271,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.preview ? { preview: e.preview } : {}),
           toolKind: e.kind,
           shellNetwork: e.shellNetwork === true,
+          shellOffline: e.shellOffline === true,
           sensitiveRead: e.sensitiveRead === true,
           sensitiveWrite: e.sensitiveWrite === true,
           status: 'awaiting-approval'
@@ -282,6 +288,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.preview ? { preview: e.preview } : {}),
           toolKind: e.kind,
           ...(e.shellNetwork ? { shellNetwork: true } : {}),
+          ...(e.shellOffline ? { shellOffline: true } : {}),
           ...(e.sensitiveRead ? { sensitiveRead: true } : {}),
           ...(e.sensitiveWrite ? { sensitiveWrite: true } : {}),
           status: 'awaiting-approval'

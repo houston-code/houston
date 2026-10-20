@@ -89,6 +89,9 @@ Options:
   --approval <policy>   plan | ask | auto-edit | full-auto
   --on-approval <mode>  (-p) approval prompts with no human: allow | deny | fail
                         (default: deny, or allow under full-auto)
+  --allow-shell-network (-p) let shell commands reach the network this run
+                        (default: offline, except under full-auto with
+                        --on-approval allow)
   --json                (-p) machine-readable: one JSON event per line, then a
                         final {"type":"result",...} summary line
   --effort <level>      (-p) reasoning effort for this run: off | low | medium | high | xhigh

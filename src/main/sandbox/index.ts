@@ -45,6 +45,7 @@ export {
   augmentPath,
   pkgCacheDir,
   sandboxEnv,
+  OFFLINE_FAIL_FAST_ENV,
   killProcessTree,
   signalProcessTree,
   planKill,

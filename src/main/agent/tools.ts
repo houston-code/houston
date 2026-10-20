@@ -125,6 +125,11 @@ export interface ToolContext {
    * background shell so the tasks indicator can open the run that spawned it.
    */
   conversationId?: string
+  /**
+   * Nobody is attending the run (headless `-p`), so nobody can pick "Allow for run":
+   * a network-blocked failure points at `--allow-shell-network` instead.
+   */
+  unattended?: boolean
   /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
   getSecret?: (id: string) => string | null
   /**
@@ -1112,9 +1117,13 @@ const globTool: ToolDef = {
  * and TLS errors as the common tools (git/gh, curl, npm/pip, language runtimes)
  * surface them. Used only to *explain* an already-failed command, so a loose
  * match is fine: it never changes what runs.
+ *
+ * macOS's resolver reports a blocked lookup as EAI_NONAME ("nodename nor servname
+ * provided, or not known"), with no "getaddrinfo" in the text, and pip/requests
+ * wrap it in urllib3's "Failed to establish a new connection", so both are listed.
  */
 const NETWORK_ERROR_RE =
-  /could ?n.?t resolve host|name (?:or service not known|resolution)|temporary failure in name resolution|getaddrinfo|network is (?:unreachable|down)|no route to host|connection (?:refused|reset|timed out)|failed to connect|dial tcp|operation not permitted.*(?:socket|connect)|socket.*operation not permitted|tls handshake|enotfound|econnrefused|eai_again/i
+  /could ?n.?t resolve host|name (?:or service not known|resolution)|temporary failure in name resolution|getaddrinfo|nodename nor servname|failed to establish a new connection|network is (?:unreachable|down)|no route to host|connection (?:refused|reset|timed out)|failed to connect|dial tcp|operation not permitted.*(?:socket|connect)|socket.*operation not permitted|tls handshake|enotfound|econnrefused|eai_again/i
 
 /** The hint appended to a network-looking failure that ran without network access. */
 export const NETWORK_BLOCKED_HINT =
@@ -1123,7 +1132,19 @@ export const NETWORK_BLOCKED_HINT =
   'prompt, or switch the run to full-auto, to grant network for the rest of the run, then retry.]'
 
 /**
- * Return {@link NETWORK_BLOCKED_HINT} when a *failed* shell command that ran
+ * {@link NETWORK_BLOCKED_HINT} for a headless run, which has no approval prompt to
+ * answer: the grant is a flag the user passes when they re-run, so the agent can't
+ * get network mid-run and should say how instead of retrying.
+ */
+export const HEADLESS_NETWORK_BLOCKED_HINT =
+  '[note: this command ran in the sandbox WITHOUT network access. If it failed because it needs the network ' +
+  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible, but this headless run cannot be granted ' +
+  'network now: do not retry it. Tell the user to re-run with --allow-shell-network to let shell commands reach ' +
+  'the network.]'
+
+/**
+ * Return {@link NETWORK_BLOCKED_HINT} (or, for a headless run,
+ * {@link HEADLESS_NETWORK_BLOCKED_HINT}) when a *failed* shell command that ran
  * without network looks like it failed *because* of the missing network — so the
  * agent explains the fix instead of reporting the action as impossible. Returns
  * '' when network was allowed, the command succeeded, or the failure is unrelated.
@@ -1131,12 +1152,14 @@ export const NETWORK_BLOCKED_HINT =
 export function networkBlockHint(
   allowNetwork: boolean,
   result: { exitCode: number | null; timedOut?: boolean },
-  output: string
+  output: string,
+  unattended = false
 ): string {
   if (allowNetwork) return ''
   const failed = result.timedOut === true || result.exitCode === null || result.exitCode !== 0
   if (!failed) return ''
-  return NETWORK_ERROR_RE.test(output) ? NETWORK_BLOCKED_HINT : ''
+  if (!NETWORK_ERROR_RE.test(output)) return ''
+  return unattended ? HEADLESS_NETWORK_BLOCKED_HINT : NETWORK_BLOCKED_HINT
 }
 
 /**
@@ -1386,7 +1409,7 @@ const runShell: ToolDef = {
     // granted), else a sandbox write-denied failure (e.g. a package manager's
     // cache write to ~/.npm). The first two are disjoint by construction.
     const egressHint = egressBlockHint(ctx.allowNetwork, ctx.egressProxy !== undefined, result, body)
-    const netHint = egressHint || networkBlockHint(ctx.allowNetwork, result, body)
+    const netHint = egressHint || networkBlockHint(ctx.allowNetwork, result, body, ctx.unattended === true)
     if (netHint) parts.push(netHint)
     else {
       const writeHint = sandboxWriteBlockHint(result, body)
