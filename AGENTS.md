@@ -228,3 +228,10 @@ tree merging would actually produce. A deliberate removal is acknowledged with t
 `src/main/ci-workflow.test.ts` pins that the job is wired correctly. See
 [CONTRIBUTING.md](CONTRIBUTING.md#how-a-pr-gets-merged) for how the required checks fit
 together.
+
+**Releases ship from release lines.** `release/X.Y` branches and `release-pr/vX.Y.Z`
+branches belong to the release workflows: never push to them directly, never rebase-merge
+into a line, and don't name other branches that way. A fix for a released version lands on
+`main` first and is backported by PR. The rules live in `scripts/release-source.mjs` (with
+`scripts/release-source.test.mjs` exercising them on a real repository);
+[docs/RELEASING.md](docs/RELEASING.md) describes the process.

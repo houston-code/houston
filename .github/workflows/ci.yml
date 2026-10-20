@@ -27,8 +27,20 @@ on:
   # that is tested is the tree that lands) while doing the sequencing itself.
   merge_group:
   # Release - prepare calls this workflow as its verification gate, so a release is cut only
-  # from a tree that passes exactly what a PR must pass.
+  # from a tree that passes exactly what a PR must pass. It passes the exact commit the
+  # release is cut from (`ref`: for a patch, a release line's commit, not main's), and
+  # `release: true` skips the packaging and SBOM jobs, because prepare runs release-publish's
+  # own versions of them (release-build.yml, sbom-conformance.yml) in publish's order.
   workflow_call:
+    inputs:
+      ref:
+        description: Commit to test (defaults to the run's own commit).
+        type: string
+        default: ''
+      release:
+        description: Called from release-prepare, which packages through release-build.yml.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -60,6 +72,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
       - uses: ./.github/actions/setup-node
         with:
           install: full
@@ -140,6 +153,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
       - uses: ./.github/actions/setup-node
         with:
           electron-cache: headers
@@ -174,7 +188,7 @@ jobs:
     timeout-minutes: 45
     # Not on push:[main]. The merge-queue candidate already ran this on the exact tree
     # that landed, so a second macOS/Windows pass after the merge would only repeat it.
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' && !inputs.release
     # Windows defaults `run:` steps to PowerShell; force bash for the whole matrix so a
     # bash step can't silently behave differently on the Windows leg.
     defaults:
@@ -215,6 +229,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
       - uses: ./.github/actions/setup-node
         with:
           install: full
@@ -327,7 +342,7 @@ jobs:
   # dependency change that drops the shipped SBOMs below the bar fails the PR that made it
   # rather than the next release.
   sbom-conformance:
-    if: github.event_name != 'push'
+    if: github.event_name != 'push' && !inputs.release
     uses: ./.github/workflows/sbom-conformance.yml
 
   # Lints the workflows themselves: actionlint (syntax, expressions, and shellcheck over every
@@ -342,6 +357,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
       - name: Install actionlint
         env:
           VERSION: 1.7.12
@@ -379,7 +395,7 @@ jobs:
   # red `build` that kept the PR blocked after the newer run went green.
   build:
     needs: [package, sbom-conformance, workflow-lint]
-    if: ${{ !cancelled() && github.event_name != 'push' }}
+    if: ${{ !cancelled() && github.event_name != 'push' && !inputs.release }}
     timeout-minutes: 5
     runs-on: ubuntu-24.04
     steps:
@@ -442,10 +458,46 @@ jobs:
           # with work that landed while this branch was open, so it needs real history,
           # not the default depth-1 checkout.
           fetch-depth: 0
-      - name: Check this merge does not revert work already on main
+      # Against the PR's own base: main, or a release line for a backport or release PR.
+      - name: Check this merge does not revert work already on its base branch
         env:
           ALLOW_REVERT: ${{ contains(github.event.pull_request.labels.*.name, 'intentional-revert') && '1' || '' }}
+          BASE: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          git fetch --no-tags --depth=100 origin main
-          node scripts/merge-revert-guard.mjs origin/main HEAD
+          git fetch --no-tags --depth=100 origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
+          node scripts/merge-revert-guard.mjs "origin/$BASE" HEAD
+
+  # Release PRs (release-pr/vX.Y.Z, opened by release-prepare.yml): the notes' one-sentence
+  # summary must pass, and the PR may change nothing but the version and CHANGELOG. Release
+  # - publish refuses either problem too; this shows it on the PR, while it can still be
+  # fixed by editing the notes, instead of after the merge.
+  release-notes:
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-pr/v')
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # HEAD is the PR merged into its base; HEAD^1 is the base, so the diff is the PR.
+          fetch-depth: 2
+      - uses: ./.github/actions/setup-node
+        with:
+          cache: 'false'
+      - name: Check the release notes and what the release PR changes
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          version="${HEAD_REF#release-pr/v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$HEAD_REF is not a release-pr/vX.Y.Z branch."
+            exit 1
+          fi
+          extra=$(git diff --name-only HEAD^1 HEAD | grep -v -x -E 'CHANGELOG\.md|package\.json|package-lock\.json' || true)
+          if [ -n "$extra" ]; then
+            echo "::error::A release PR may change only the version and CHANGELOG.md, but it changes: $extra"
+            exit 1
+          fi
+          node scripts/check-changelog-summary.mjs "$version"

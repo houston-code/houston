@@ -313,6 +313,24 @@ Version updates wait out a 7-day `cooldown` (set in `.github/dependabot.yml`) be
 Dependabot proposes them, so a malicious release that gets yanked within days never reaches
 the queue. Security updates skip the cooldown.
 
+### Fixing a released version
+
+Every release ships from a release line, `release/X.Y`. A fix for a released (or about to be
+released) version lands on `main` first, then is backported to its line in a PR:
+
+```bash
+git fetch origin
+git switch -c backport/0.9/pr-123 origin/release/0.9
+git cherry-pick -x -m 1 <merge commit of #123>
+gh pr create --base release/0.9 --title "Backport #123 to 0.9: <original title>"
+```
+
+Release lines have no merge queue: if the PR is behind, use **Update branch**, then merge with
+**Create a merge commit** or **Squash and merge**, never **Rebase and merge**. Branch names
+`release/<digits>...` and `release-pr/...` are reserved for the release tooling. A maintainer
+then ships the fix with Release - prepare and Release - publish;
+[docs/RELEASING.md](docs/RELEASING.md) describes the whole process.
+
 ## Licensing of contributions
 
 Houston is licensed under the [Apache License 2.0](LICENSE). Unless you say otherwise

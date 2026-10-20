@@ -100,7 +100,7 @@ describe('release signing is kept away from dependency code', () => {
     expect(checksums).toContain('id-token: write')
     expect(checksums).not.toMatch(/npm (ci|install)/)
     expect(checksums).not.toMatch(/install: (full|no-scripts|production)/)
-    for (const name of ['draft', 'build-mac', 'build-other', 'finalize']) {
+    for (const name of ['source', 'draft', 'build-mac', 'build-other', 'mac-feed', 'finalize', 'sync-main']) {
       expect(job(name)).not.toContain('id-token')
     }
   })
@@ -114,22 +114,35 @@ describe('release signing is kept away from dependency code', () => {
 })
 
 describe('release build order', () => {
-  it('creates the draft once, before any leg', () => {
-    expect(job('draft')).toContain('node scripts/release-draft.mjs ensure houston-code/houston "$tag" "$GITHUB_SHA"')
+  it('creates the draft once, for the release commit, before any leg', () => {
+    expect(job('draft')).toContain('node scripts/release-draft.mjs ensure houston-code/houston "v$VERSION" "$SHA"')
+    expect(job('draft')).toContain('SHA: ${{ needs.source.outputs.sha }}')
     for (const name of ['build-mac', 'build-other']) {
-      expect(job(name)).toContain('needs: [native-scan, sbom-conformance, approve, draft]')
+      expect(job(name)).toContain('needs: [source, native-scan, sbom-conformance, approve, draft]')
       // A dry run skips `draft`; the legs must still run.
       expect(job(name)).toContain('if: ${{ !failure() && !cancelled() }}')
       expect(job(name)).toContain('uses: ./.github/workflows/release-build.yml')
+      // Every leg builds R, signed.
+      expect(job(name)).toContain('ref: ${{ needs.source.outputs.sha }}')
+      expect(job(name)).toContain('version: ${{ needs.source.outputs.version }}')
+      expect(job(name)).toContain('sign: true')
     }
   })
 
-  it('runs the macOS legs one at a time, arm64 first, so the Intel leg can merge its feed', () => {
+  it('builds both macOS legs in parallel and merges their update feeds afterwards', () => {
     const mac = job('build-mac')
-    expect(mac).toContain('max-parallel: 1')
-    expect(mac.indexOf('os: macos-15\n')).toBeGreaterThan(-1)
-    expect(mac.indexOf('os: macos-15\n')).toBeLessThan(mac.indexOf('os: macos-15-intel'))
-    expect(mac).toMatch(/os: macos-15-intel\n(.*\n){3} {12}mac_x64_manual: true/)
+    expect(mac).not.toContain('max-parallel')
+    expect(mac).toContain('os: macos-15\n')
+    expect(mac).toContain('os: macos-15-intel')
+    const feed = job('mac-feed')
+    expect(feed).toContain('needs: [source, build-mac]')
+    expect(feed).toContain('pattern: mac-feed-*')
+    expect(feed).toContain(
+      'node scripts/merge-mac-update-yml.mjs \\\n            feeds/mac-feed-darwin-arm64/latest-mac.yml feeds/mac-feed-darwin-x64/latest-mac.yml'
+    )
+    expect(feed).toContain('gh release upload "v$VERSION" merged/latest-mac.yml')
+    // The feed reaches the draft before anything is checksummed or published.
+    expect(job('checksums')).toContain('needs: [source, build-mac, build-other, mac-feed]')
   })
 
   it('builds Windows and Linux in parallel, outside the macOS ordering', () => {
@@ -149,8 +162,8 @@ describe('release build order', () => {
 
 describe('release-publish SHA256SUMS manifest', () => {
   it('runs after every build leg and before finalize publishes', () => {
-    expect(checksumsJob).toContain('needs: [build-mac, build-other]')
-    expect(workflow).toContain('\n  finalize:\n    needs: [build-mac, build-other, checksums]\n')
+    expect(checksumsJob).toContain('needs: [source, build-mac, build-other, mac-feed]')
+    expect(workflow).toContain('\n  finalize:\n    needs: [source, build-mac, build-other, mac-feed, checksums]\n')
   })
 
   it('never runs on a dry run', () => {
@@ -179,26 +192,83 @@ describe('release-publish SHA256SUMS manifest', () => {
 })
 
 describe('release-publish source commit', () => {
-  // Every job that checks out code must build, attest, and tag the commit the run was
-  // dispatched on. A fresh `main` drifts across the serialized legs, and the SLSA provenance
-  // (scripts/slsa-provenance.mjs) records GITHUB_SHA regardless of what was checked out.
+  // The workflow runs from main, but every job that builds, scans, attests or tags works on R,
+  // the release PR's own commit that `source` found on the release line. A branch tip would
+  // drift across the legs, and the notes would no longer describe what ships.
   it('never checks out a moving branch ref', () => {
     expect(workflow).not.toMatch(/^\s*ref:\s*main\s*$/m)
-  })
-
-  it('pins the draft, checksums and finalize checkouts, and the build leg, to github.sha', () => {
-    const pinned = workflow.match(/^\s*ref: \$\{\{ github\.sha \}\}\s*$/gm) ?? []
-    expect(pinned).toHaveLength(3)
-    expect(leg.match(/^\s*ref: \$\{\{ github\.sha \}\}\s*$/gm) ?? []).toHaveLength(1)
     expect(leg).not.toMatch(/^\s*ref:\s*main\s*$/m)
   })
 
-  it('refuses to publish under a version tag that names a different commit', () => {
-    const start = workflow.indexOf('- name: Tag source repo at released commit')
+  it('finds and verifies R first, from main only, and every other job waits for it', () => {
+    const source = job('source')
+    expect(source).toContain('if [ "$GITHUB_REF" != refs/heads/main ]; then')
+    expect(source).toContain('node scripts/release-source.mjs source')
+    // Piped into tee: without pipefail a refusal would pass with an empty release commit.
+    expect(source).toContain('set -euo pipefail')
+    expect(source.indexOf('set -euo pipefail')).toBeLessThan(source.indexOf('| tee -a "$GITHUB_OUTPUT"'))
+    expect(source).toContain('VERSION: ${{ inputs.version }}')
+    expect(source).not.toContain('secrets.')
+    expect(source).not.toContain('environment:')
+    for (const name of ['native-scan', 'sbom-conformance', 'approve']) {
+      expect(job(name)).toMatch(/^ {4}needs: source$/m)
+    }
+  })
+
+  it('scans R, and builds R in every leg while the draft script comes from the pipeline', () => {
+    for (const name of ['native-scan', 'sbom-conformance']) {
+      expect(job(name)).toContain('ref: ${{ needs.source.outputs.sha }}')
+    }
+    expect(leg).toContain('ref: ${{ inputs.ref }}')
+    // An empty ref would silently fall back to building main.
+    expect(leg).toContain('if ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then')
+    expect(leg.indexOf('- name: Require the release commit')).toBeLessThan(leg.indexOf('ref: ${{ inputs.ref }}'))
+    expect(leg).toMatch(/ref: \$\{\{ github\.sha \}\}\n {10}path: \.pipeline\n {10}sparse-checkout: scripts/)
+    expect(leg).toContain('node .pipeline/scripts/release-draft.mjs ensure houston-code/houston "v$VERSION" "$REF"')
+  })
+
+  it('tags R, refusing a version tag that names a different commit', () => {
+    const start = workflow.indexOf('- name: Tag the release commit')
     const step = workflow.slice(start, workflow.indexOf('\n      - ', start + 1))
     expect(step).toContain('git rev-parse "$tag^{commit}"')
-    expect(step).toContain('"$GITHUB_SHA"')
+    expect(step).toContain('if [ "$tagged" != "$SHA" ]; then')
     expect(step).toContain('exit 1')
+    expect(step).toContain('git tag "$tag" "$SHA"')
+  })
+
+  it("publishes R's own notes and records R in the provenance", () => {
+    expect(job('finalize')).toContain('git show "$SHA:CHANGELOG.md" > release-changelog.md')
+    expect(job('checksums')).toContain('RELEASE_SOURCE_SHA="$SHA" RELEASE_SOURCE_REF="refs/tags/$tag"')
+  })
+})
+
+describe('release-publish latest flag', () => {
+  it('sets make_latest explicitly from source, so an older-line patch never takes the feed', () => {
+    const finalize = job('finalize')
+    expect(finalize).toContain('LATEST: ${{ needs.source.outputs.latest }}')
+    expect(finalize).toContain('-f make_latest="$LATEST"')
+    // A draft edit without tag_name renames the draft's tag to untagged-<hash>.
+    expect(finalize).toContain('-f tag_name="$tag" -F draft=false')
+    expect(finalize).not.toMatch(/--latest\b/)
+  })
+})
+
+describe('release-publish sync to main', () => {
+  it('runs after a real publish, with the release PAT confined to one step', () => {
+    const sync = job('sync-main')
+    expect(sync).toContain('needs: [source, finalize]')
+    expect(sync).toContain('if: ${{ !inputs.dry_run }}')
+    expect(sync).toContain('environment: release-pr')
+    expect(sync.match(/secrets\.RELEASE_PR_TOKEN/g)).toHaveLength(1)
+    expect(sync).toContain('persist-credentials: false')
+  })
+
+  it('places the notes in version order and queues the PR through auto-merge', () => {
+    const sync = job('sync-main')
+    expect(sync).toContain('changelog-upsert.mjs" "$VERSION"')
+    expect(sync).toContain('gh pr merge --auto --merge "$url"')
+    // Only an X.Y.0 release moves main's version, and never backwards.
+    expect(sync).toContain('if [ "${VERSION##*.}" = 0 ]; then')
   })
 })
 
@@ -219,13 +289,13 @@ describe('release-publish Download table', () => {
   it('builds the table from the draft before the tag is pushed', () => {
     const table = finalize.indexOf('node scripts/release-downloads.mjs houston-code/houston "$tag"')
     expect(table).toBeGreaterThan(-1)
-    expect(table).toBeLessThan(finalize.indexOf('- name: Tag source repo at released commit'))
+    expect(table).toBeLessThan(finalize.indexOf('- name: Tag the release commit'))
   })
 
   it('publishes the table followed by the changelog notes', () => {
     expect(finalize).toContain('cat release-notes.md')
-    expect(finalize).toContain('--notes-file release-body.md')
-    expect(finalize).not.toContain('--notes-file release-notes.md')
+    expect(finalize).toContain('-F body=@release-body.md')
+    expect(finalize).not.toContain('body=@release-notes.md')
   })
 })
 
@@ -269,7 +339,7 @@ describe('release legs verify before they upload', () => {
   it('never lets electron-builder publish', () => {
     // Its publisher uploads as it builds, before any check below has run.
     expect(leg).not.toContain('--publish always')
-    expect(leg).toMatch(/DIST: \$\{\{ inputs\.dist \}\}\n {8}run: bash scripts\/dist-with-retry\.sh "\$DIST"\n/)
+    expect(leg).toContain('run: bash .pipeline/scripts/dist-with-retry.sh "$DIST"\n')
     expect(distScript).toContain('npm run "$dist" -- --publish never')
     expect(distScript).not.toMatch(/--publish (always|onTag|onTagOrDraft)/)
   })
@@ -288,16 +358,19 @@ describe('release legs verify before they upload', () => {
     expect(upload).toBeLessThan(at('- name: Check the release is still a single draft'))
   })
 
-  it('uploads exactly one update feed per leg, last, merging the Intel feed into arm64', () => {
+  it('uploads exactly one update feed per non-macOS leg, last, and hands macOS feeds to mac-feed', () => {
     const start = at("- name: Upload this leg's installers to the draft")
     const step = leg.slice(start, leg.indexOf('\n      - ', start + 1))
     expect(step).toContain('if: ${{ !inputs.dry_run }}')
-    expect(step).toContain('node scripts/merge-mac-update-yml.mjs arm64-feed/latest-mac.yml release/latest-mac.yml')
     expect(step).toContain('feeds=(release/latest*.yml)')
     expect(step).toContain('if [ "${#feeds[@]}" -ne 1 ]; then')
     expect(step.indexOf('gh release upload "$tag" "${files[@]}"')).toBeLessThan(
       step.indexOf('gh release upload "$tag" "${feeds[@]}"')
     )
+    // A macOS leg's feed lists only its own arch; uploading it would clobber the other's.
+    expect(step).toContain('macos*) echo "Leaving ${feeds[0]} to the mac-feed job." ;;')
+    const save = at('- name: Save the macOS update feed for the mac-feed job')
+    expect(leg.slice(save, leg.indexOf('\n      - ', save + 1))).toContain('name: mac-feed-${{ inputs.sbom_label }}')
   })
 })
 
@@ -325,7 +398,12 @@ describe('release legs receive the macOS signing secrets', () => {
     expect(job('build-other')).not.toMatch(/CSC_LINK|APPLE_ID/)
   })
 
-  it('still reads them in the leg only on macOS', () => {
-    expect(leg).toContain("CSC_LINK: ${{ startsWith(inputs.os, 'macos') && secrets.CSC_LINK || '' }}")
+  it('still reads them in the leg only on macOS, and only when signing', () => {
+    for (const name of MAC_SECRETS) {
+      expect(leg).toContain(`${name}: \${{ inputs.sign && startsWith(inputs.os, 'macos') && secrets.${name} || '' }}`)
+    }
+    // Unsigned (release-prepare): no keychain probing, and no signature to verify.
+    expect(leg).toContain("CSC_IDENTITY_AUTO_DISCOVERY: ${{ inputs.sign && 'true' || 'false' }}")
+    expect(leg).toContain("if: startsWith(inputs.os, 'macos') && inputs.sign")
   })
 })

@@ -1,19 +1,35 @@
 name: Release - publish
 
-# Manual trigger — run AFTER the `release/vX.Y.Z` PR from "Release - prepare" has merged to
-# main. Builds the full matrix (macOS arm64 and x64, Windows x64, Linux x64) and publishes a
-# GitHub Release, which is what electron-updater reads. The `draft` job creates the release
-# as a draft (scripts/release-draft.mjs), every build leg (release-build.yml) uploads into it,
-# the `checksums` job signs everything, then the finalize job attaches the CHANGELOG notes,
-# un-drafts it, and marks it `latest` so the updater picks it up.
+# Manual trigger, always from main, with the version to ship. That version's release PR (from
+# "Release - prepare") must have merged into its release line, release/X.Y. The `source` job
+# finds that merge and takes the release PR's own commit, R: the commit prepare tested plus the
+# version bump and the CHANGELOG section. Every job then builds, signs and tags exactly R, so
+# nothing merged after the release PR can ship under its version, and the notes describe what
+# ships. docs/RELEASING.md describes the whole process.
+#
+# Builds the full matrix (macOS arm64 and x64, Windows x64, Linux x64) and publishes a GitHub
+# Release, which is what electron-updater reads. The `draft` job creates the release as a draft
+# (scripts/release-draft.mjs), every build leg (release-build.yml) uploads into it, `mac-feed`
+# merges the two macOS update feeds, the `checksums` job signs everything, then `finalize` tags
+# R, attaches the CHANGELOG notes, un-drafts the release, and marks it `latest` when it is the
+# highest release. `sync-main` then opens the PR that brings its notes (and, for X.Y.0, its
+# version) to main.
+#
+# The workflow files and the release orchestration scripts come from main (this run's commit);
+# everything that is built and shipped comes from R. So a fix to the pipeline applies to a
+# retry without changing what ships.
 #
 # The repo is public, so the app fetches updates with no embedded token and the release is
 # published here alongside the source. The workflow's own GITHUB_TOKEN carries the
-# contents:write needed to create and upload it; no PAT is involved.
+# contents:write needed to create and upload it.
 
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: 'Version to publish, X.Y.Z: a prepared version whose release PR has merged'
+        type: string
+        required: true
       dry_run:
         description: 'Build artifacts but do NOT publish a release'
         type: boolean
@@ -27,13 +43,56 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Vulnerability gates. Run BEFORE the build (the build legs `need` them), so a known-vulnerable
-  # production closure or Electron runtime aborts the release before anything is built or
-  # published, rather than failing mid-matrix after some legs already uploaded. The called
-  # workflow's `deps` job scans the npm closure the release ships; its `scan` job scans the
-  # native runtime. The same jobs run daily, so a finding rarely first appears here.
+  # Finds and verifies the release commit (scripts/release-source.mjs `source`): the latest
+  # merge of release-pr/v<version> on release/X.Y, whose second parent is R. Refuses when the
+  # release PR changed anything but the version and CHANGELOG, when changes were merged to the
+  # line after it (they'd ship unannounced), when the notes' summary fails, or when the tag
+  # already names another commit. Every other job needs it, so a bad request fails in seconds,
+  # before the scans, the approval prompt, or anything that can read the signing environment.
+  source:
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      sha: ${{ steps.source.outputs.sha }}
+      line: ${{ steps.source.outputs.line }}
+      latest: ${{ steps.source.outputs.latest }}
+    steps:
+      - name: Require a run from main
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Run Release - publish from main. The version input picks the release; the branch selector only picks which copy of the workflow runs."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-node
+        with:
+          cache: 'false'
+      - name: Find and verify the release commit
+        id: source
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          # pipefail: the default shell has none, and a refusal must fail the step, not leave
+          # every later job with an empty release commit.
+          set -euo pipefail
+          git fetch --quiet --tags origin '+refs/heads/release/*:refs/remotes/origin/release/*'
+          node scripts/release-source.mjs source | tee -a "$GITHUB_OUTPUT"
+
+  # Vulnerability gates, on R. Run BEFORE the build (the build legs `need` them), so a
+  # known-vulnerable production closure or Electron runtime aborts the release before anything
+  # is built or published, rather than failing mid-matrix after some legs already uploaded. The
+  # called workflow's `deps` job scans the npm closure the release ships; its `scan` job scans
+  # the native runtime. release-prepare runs the same gates on the same commit.
   native-scan:
+    needs: source
     uses: ./.github/workflows/native-vuln-scan.yml
+    with:
+      ref: ${{ needs.source.outputs.sha }}
     permissions:
       contents: read
       security-events: write
@@ -42,10 +101,14 @@ jobs:
       # whose `if` is false, and refuses to start the whole run if one asks for more.
       issues: write
 
-  # SBOM conformance gate: NTIA / CISA FSCT3 / CycloneDX / Google-EO must all pass before we
-  # build or publish anything (the build legs `need` it), so a release can't ship a regressed SBOM.
+  # SBOM conformance gate, on R: NTIA / CISA FSCT3 / CycloneDX / Google-EO must all pass before
+  # we build or publish anything (the build legs `need` it), so a release can't ship a
+  # regressed SBOM.
   sbom-conformance:
+    needs: source
     uses: ./.github/workflows/sbom-conformance.yml
+    with:
+      ref: ${{ needs.source.outputs.sha }}
 
   # The single human approval for a release. The `release-approval` environment carries the
   # required reviewer; this job holds no secrets and does nothing but pass the gate. The
@@ -53,6 +116,7 @@ jobs:
   # `release` instead gates each leg separately: four platforms, four approvals.) Runs
   # alongside the scans, so the approval can be given while they run.
   approve:
+    needs: source
     timeout-minutes: 5
     runs-on: ubuntu-24.04
     environment: release-approval
@@ -60,11 +124,12 @@ jobs:
       - run: echo "Release approval gate passed."
 
   # Create the draft release once, before any leg runs (or reuse the one a previous attempt
-  # made), so legs that build in parallel never race to create it. Each leg still runs
+  # made), so legs that build in parallel never race to create it. A reused draft made for a
+  # different commit (an earlier cut of this version) is emptied first. Each leg still runs
   # `release-draft.mjs ensure` (a reuse by then) and `check`, so a duplicate from any source
   # stops the run. Skipped on a dry run, which publishes nothing.
   draft:
-    needs: [native-scan, sbom-conformance, approve]
+    needs: [source, native-scan, sbom-conformance, approve]
     if: ${{ !inputs.dry_run }}
     timeout-minutes: 5
     runs-on: ubuntu-24.04
@@ -81,36 +146,31 @@ jobs:
       - name: Ensure a single draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          node scripts/release-draft.mjs ensure houston-code/houston "$tag" "$GITHUB_SHA"
+          VERSION: ${{ needs.source.outputs.version }}
+          SHA: ${{ needs.source.outputs.sha }}
+        run: node scripts/release-draft.mjs ensure houston-code/houston "v$VERSION" "$SHA"
 
-  # The build legs (release-build.yml). The two macOS legs run one after another because the
-  # Intel leg merges its files into the update feed the arm64 leg published; Windows and Linux
-  # are independent of both and of each other, so they build in parallel alongside them.
+  # The four build legs (release-build.yml), all in parallel, all building R. The two macOS
+  # legs used to run one after another so the Intel leg could merge its files into the arm64
+  # update feed; each now saves its feed and `mac-feed` merges them once both are done. The
+  # macOS and other legs stay separate jobs so only the macOS caller passes Apple credentials.
   #
   # `!failure() && !cancelled()` rather than the default: on a dry run `draft` is skipped, and
   # a skipped dependency would otherwise skip the legs too.
   build-mac:
-    needs: [native-scan, sbom-conformance, approve, draft]
+    needs: [source, native-scan, sbom-conformance, approve, draft]
     if: ${{ !failure() && !cancelled() }}
     permissions:
-      contents: write
+      contents: write # the legs upload their installers into the draft release
     strategy:
       # A real publish stops at the first failed leg: the release can't be finalized without
-      # every platform. A dry run keeps going, so one run reports every platform's failure
-      # (release-prepare does the same).
+      # every platform. A dry run keeps going, so one run reports every platform's failure.
       fail-fast: ${{ !inputs.dry_run }}
-      # arm64 MUST run first: it uploads the single `latest-mac.yml` update feed. The Intel
-      # leg then uploads only its .dmg/.zip INTO that draft and merges its files into the
-      # arm64 feed, never publishing its own latest-mac.yml, which would clobber arm64's and
-      # break the updater (electron-builder#5592).
-      max-parallel: 1
       matrix:
         include:
           # macos-15-intel replaces the retired macos-13 image (shut down 2025-12-04); GitHub
           # sunsets x64 macOS after macos-15 (~Fall 2027). Keep the Intel label in lockstep
-          # with ci.yml's `package` matrix / release-prepare.
+          # with ci.yml's `package` matrix and release-prepare.
           # sbom_app / sbom_label: the packaged-app dir this leg produces + the platform tag for
           # its deep binary SBOM (scripts/binary-sbom.mjs). Each leg emits its OWN
           # sbom.binary.<label>.* so the hashes match the binaries a user of THAT platform
@@ -120,19 +180,19 @@ jobs:
             dist: dist:mac
             sbom_app: release/mac-arm64/Houston.app
             sbom_label: darwin-arm64
-            mac_x64_manual: false
           - os: macos-15-intel
             dist: dist:mac:x64
             sbom_app: release/mac/Houston.app
             sbom_label: darwin-x64
-            mac_x64_manual: true
     uses: ./.github/workflows/release-build.yml
     with:
       os: ${{ matrix.os }}
       dist: ${{ matrix.dist }}
       sbom_app: ${{ matrix.sbom_app }}
       sbom_label: ${{ matrix.sbom_label }}
-      mac_x64_manual: ${{ matrix.mac_x64_manual }}
+      ref: ${{ needs.source.outputs.sha }}
+      version: ${{ needs.source.outputs.version }}
+      sign: true
       dry_run: ${{ inputs.dry_run }}
     # Named explicitly, not `secrets: inherit`, so the leg never sees the repo's other
     # secrets (the model API keys). This job has no environment, so these read empty here;
@@ -145,10 +205,10 @@ jobs:
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
   build-other:
-    needs: [native-scan, sbom-conformance, approve, draft]
+    needs: [source, native-scan, sbom-conformance, approve, draft]
     if: ${{ !failure() && !cancelled() }}
     permissions:
-      contents: write
+      contents: write # the legs upload their installers into the draft release
     strategy:
       fail-fast: ${{ !inputs.dry_run }}
       matrix:
@@ -170,12 +230,61 @@ jobs:
       dist: ${{ matrix.dist }}
       sbom_app: ${{ matrix.sbom_app }}
       sbom_label: ${{ matrix.sbom_label }}
+      ref: ${{ needs.source.outputs.sha }}
+      version: ${{ needs.source.outputs.version }}
+      sign: true
       dry_run: ${{ inputs.dry_run }}
 
-  # Signs the release and builds its manifests, once every build leg has uploaded. This is the
-  # ONLY job that holds the signing identity (cosign's OIDC token) and the GPG release key, and
-  # it installs no dependencies: nothing here runs third-party package code, unlike the build
-  # legs, which run `npm ci` and the build.
+  # The single latest-mac.yml that auto-updates BOTH macOS arches (MacUpdater self-selects per
+  # arch from its `files` list), merged from the feed each macOS leg saved. Uploaded after both
+  # legs' installers, so the feed never names a file that is not on the draft. A dry run merges
+  # too, and keeps the result as an artifact, so the merge itself is exercised.
+  mac-feed:
+    needs: [source, build-mac]
+    if: ${{ !failure() && !cancelled() }}
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # uploads the merged feed into the draft release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      # js-yaml for the merge script; no lifecycle scripts, no cache.
+      - uses: ./.github/actions/setup-node
+        with:
+          install: no-scripts
+          cache: 'false'
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: mac-feed-*
+          path: feeds
+      - name: Merge the macOS update feeds
+        run: |
+          mkdir -p merged
+          node scripts/merge-mac-update-yml.mjs \
+            feeds/mac-feed-darwin-arm64/latest-mac.yml feeds/mac-feed-darwin-x64/latest-mac.yml \
+            > merged/latest-mac.yml
+          cat merged/latest-mac.yml
+      - name: Upload the merged feed to the draft
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.source.outputs.version }}
+        run: gh release upload "v$VERSION" merged/latest-mac.yml -R houston-code/houston --clobber
+      - if: ${{ inputs.dry_run }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-dryrun-latest-mac
+          retention-days: 14
+          path: merged/latest-mac.yml
+          if-no-files-found: error
+
+  # Signs the release and builds its manifests, once every build leg and the macOS feed have
+  # uploaded. This is the ONLY job that holds the signing identity (cosign's OIDC token) and
+  # the GPG release key, and it installs no dependencies: nothing here runs third-party package
+  # code, unlike the build legs, which run `npm ci` and the build.
   #
   # It works from the files as downloaded FROM THE DRAFT, so everything it signs and hashes is
   # exactly the bytes a user gets. scripts/release-checksums.mjs picks the assets and fails if
@@ -192,8 +301,8 @@ jobs:
   #   - SHA256SUMS: the whole-release manifest, covering every platform.
   #   - SLSA v1.0 build provenance: ONE in-toto statement whose subjects are every file in
   #     SHA256SUMS (scripts/slsa-provenance.mjs --subjects), signed keyless into
-  #     provenance.slsa.bundle. verify-blob-attestation accepts any file whose SHA-256 is one
-  #     of the subjects:
+  #     provenance.slsa.bundle. It names R as the source commit. verify-blob-attestation
+  #     accepts any file whose SHA-256 is one of the subjects:
   #       cosign verify-blob-attestation <file> --bundle provenance.slsa.bundle --type slsaprovenance1 \
   #         --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
   #         --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
@@ -201,17 +310,21 @@ jobs:
   # None of this gates electron-updater, which verifies sha512 from latest*.yml over HTTPS;
   # the signatures are for a person or a packaging pipeline verifying a download.
   checksums:
-    needs: [build-mac, build-other]
+    needs: [source, build-mac, build-other, mac-feed]
     if: ${{ !inputs.dry_run }}
     timeout-minutes: 20
     runs-on: ubuntu-24.04
     # GPG_PRIVATE_KEY / GPG_PASSPHRASE live in the `release` environment, readable only by
-    # jobs that declare it and only on protected branches.
+    # jobs that declare it and only on main.
     environment: release
     permissions:
       contents: write
       # cosign keyless signing needs an OIDC token for Fulcio.
       id-token: write
+    env:
+      VERSION: ${{ needs.source.outputs.version }}
+      SHA: ${{ needs.source.outputs.sha }}
+      LINE: ${{ needs.source.outputs.line }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -229,7 +342,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="v$(node -p "require('./package.json').version")"
+          tag="v$VERSION"
           node scripts/release-checksums.mjs houston-code/houston "$tag" > checksummed.txt
           names=()
           while IFS= read -r n; do names+=("$n"); done < checksummed.txt
@@ -245,7 +358,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          tag="v$(node -p "require('./package.json').version")"
+          tag="v$VERSION"
           bundles=()
           while IFS= read -r name; do
             cosign sign-blob --yes "assets/$name" --bundle "assets/$name.cosign.bundle"
@@ -267,7 +380,7 @@ jobs:
             echo "::warning::GPG_PRIVATE_KEY not set: skipping GPG signing (the release still publishes, cosign-signed; add the GPG_PRIVATE_KEY + GPG_PASSPHRASE secrets to enable it)."
             exit 0
           fi
-          tag="v$(node -p "require('./package.json').version")"
+          tag="v$VERSION"
           GNUPGHOME="$(mktemp -d)"; export GNUPGHOME
           chmod 700 "$GNUPGHOME"
           echo 'allow-loopback-pinentry' > "$GNUPGHOME/gpg-agent.conf"
@@ -283,13 +396,16 @@ jobs:
           done
           # houston-signing-key.asc is the committed public key at the released commit, so a
           # downloader can verify with no keyserver.
+          git fetch --quiet --no-tags origin "+refs/heads/$LINE:refs/remotes/origin/$LINE"
+          git show "$SHA:houston-signing-key.asc" > houston-signing-key.asc
           gh release upload "$tag" "${sigs[@]}" houston-signing-key.asc -R houston-code/houston --clobber
       - name: Attest the release (SLSA provenance, one statement)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          tag="v$(node -p "require('./package.json').version")"
-          node scripts/slsa-provenance.mjs --subjects SHA256SUMS > provenance-statement.json
+          tag="v$VERSION"
+          RELEASE_SOURCE_SHA="$SHA" RELEASE_SOURCE_REF="refs/tags/$tag" \
+            node scripts/slsa-provenance.mjs --subjects SHA256SUMS > provenance-statement.json
           cosign attest-blob --yes --statement provenance-statement.json --bundle provenance.slsa.bundle
           # Prove the bundle verifies for a listed download before publishing it.
           first="$(awk 'NR==1 {print $2}' SHA256SUMS)"
@@ -300,28 +416,33 @@ jobs:
           gh release upload "$tag" provenance.slsa.bundle -R houston-code/houston --clobber
 
   finalize:
-    needs: [build-mac, build-other, checksums]
+    needs: [source, build-mac, build-other, mac-feed, checksums]
     if: ${{ !inputs.dry_run }}
     timeout-minutes: 10
     runs-on: ubuntu-24.04
     permissions:
-      # Tag the repo at the released commit so the next release's note range starts here.
+      # Tag R and publish the release.
       contents: write
+    env:
+      VERSION: ${{ needs.source.outputs.version }}
+      SHA: ${{ needs.source.outputs.sha }}
+      LINE: ${{ needs.source.outputs.line }}
+      LATEST: ${{ needs.source.outputs.latest }}
     steps:
-      # Same commit the build legs packaged and attested, so the tag marks what actually
-      # shipped rather than whatever main has become by the end of the run.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1  # zizmor: ignore[artipacked] pushes with this token
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1  # zizmor: ignore[artipacked] pushes the tag with this token
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract version + this release's notes
-        id: meta
+      - uses: ./.github/actions/setup-node
+        with:
+          cache: 'false'
+      - name: Extract this release's notes from the release commit
         run: |
-          version=$(node -p "require('./package.json').version")
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          # Pull just this version's section out of CHANGELOG.md to use as the Release body.
-          VERSION="$version" node scripts/extract-changelog-section.mjs > release-notes.md
+          git fetch --quiet --no-tags origin "+refs/heads/$LINE:refs/remotes/origin/$LINE"
+          git show "$SHA:CHANGELOG.md" > release-changelog.md
+          # Pull just this version's section out of R's CHANGELOG.md to use as the Release body.
+          node scripts/extract-changelog-section.mjs release-changelog.md > release-notes.md
       # GitHub lists release files flat, so the notes open with a per-platform table linking
       # each installer (scripts/release-downloads.mjs, built from the draft's real asset
       # names). Runs before tagging so a missing installer stops the release with nothing
@@ -329,7 +450,6 @@ jobs:
       - name: Put the Download table above the notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           tag="v$VERSION"
           {
@@ -338,32 +458,112 @@ jobs:
             cat release-notes.md
           } > release-body.md
           cat release-body.md
-      - name: Tag source repo at released commit
-        env:
-          VERSION: ${{ steps.meta.outputs.version }}
+      - name: Tag the release commit
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           tag="v$VERSION"
-          if git rev-parse "$tag" >/dev/null 2>&1; then
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
             # A re-run may find its own tag; a tag on any other commit means the release
             # would publish assets built from one commit under a tag naming another.
             tagged="$(git rev-parse "$tag^{commit}")"
-            if [ "$tagged" != "$GITHUB_SHA" ]; then
-              echo "::error::Tag $tag already points at $tagged, not the built commit $GITHUB_SHA."
+            if [ "$tagged" != "$SHA" ]; then
+              echo "::error::Tag $tag already points at $tagged, not the release commit $SHA."
               exit 1
             fi
-            echo "Tag $tag already exists at the built commit; skipping."
+            echo "Tag $tag already names the release commit; skipping."
           else
-            git tag "$tag"
-            git push origin "$tag"
+            git tag "$tag" "$SHA"
+            git push origin "refs/tags/$tag"
           fi
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          VERSION: ${{ steps.meta.outputs.version }}
         run: |
           tag="v$VERSION"
-          # The build legs filled this draft; attach the notes, un-draft, mark latest.
-          gh release edit "$tag" -R houston-code/houston \
-            --draft=false --latest --notes-file release-body.md
+          id="$(node scripts/release-draft.mjs id houston-code/houston "$tag")"
+          # The build legs filled this draft; attach the notes and un-draft it in one edit.
+          # make_latest is set explicitly: only the highest release is latest, so a patch to an
+          # older line never takes the update feed from a newer one.
+          # tag_name is resent: a draft edit without it renames the draft's tag to
+          # untagged-<hash> (scripts/release-draft.mjs retargetArgs has the history).
+          gh api -X PATCH "repos/houston-code/houston/releases/$id" \
+            -f tag_name="$tag" -F draft=false -f make_latest="$LATEST" -F body=@release-body.md --silent
+          echo "Published $tag (latest: $LATEST)."
+
+  # Brings the release to main: its CHANGELOG section (placed in version order), and for an
+  # X.Y.0 release the version in package.json and package-lock.json. Opened with the release
+  # PAT (a PR opened by GITHUB_TOKEN would run no checks) and queued with auto-merge, so it
+  # lands through the merge queue once CI passes.
+  sync-main:
+    needs: [source, finalize]
+    if: ${{ !inputs.dry_run }}
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    # RELEASE_PR_TOKEN lives in the `release-pr` environment (deployment branches: main only).
+    environment: release-pr
+    env:
+      VERSION: ${{ needs.source.outputs.version }}
+      SHA: ${{ needs.source.outputs.sha }}
+      LINE: ${{ needs.source.outputs.line }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-node
+        with:
+          cache: 'false'
+      - name: Bring the notes and version to main
+        id: sync
+        run: |
+          set -euo pipefail
+          git fetch --quiet --no-tags origin '+refs/heads/main:refs/remotes/origin/main' \
+            "+refs/heads/$LINE:refs/remotes/origin/$LINE"
+          # The release scripts from this run, before switching the work tree to main's tip.
+          cp -R scripts "$RUNNER_TEMP/release-scripts"
+          git switch --quiet -c "release-sync/v$VERSION" origin/main
+          git show "$SHA:CHANGELOG.md" > "$RUNNER_TEMP/release-changelog.md"
+          VERSION="$VERSION" node "$RUNNER_TEMP/release-scripts/extract-changelog-section.mjs" \
+            "$RUNNER_TEMP/release-changelog.md" > "$RUNNER_TEMP/section-body.md"
+          heading=$(grep -m1 -E "^## v$VERSION( |$)" "$RUNNER_TEMP/release-changelog.md")
+          { echo "$heading"; echo; cat "$RUNNER_TEMP/section-body.md"; } > "$RUNNER_TEMP/section.md"
+          node "$RUNNER_TEMP/release-scripts/changelog-upsert.mjs" "$VERSION" "$RUNNER_TEMP/section.md" CHANGELOG.md
+          # X.Y.0 moves main's version forward; a patch leaves it alone.
+          if [ "${VERSION##*.}" = 0 ]; then
+            behind=$(node -e "import('$RUNNER_TEMP/release-scripts/release-source.mjs').then(m => console.log(m.compareVersions(require('./package.json').version, process.argv[1]) < 0))" "$VERSION")
+            if [ "$behind" = true ]; then
+              npm version "$VERSION" --no-git-tag-version --allow-same-version --ignore-scripts
+            fi
+          fi
+          if git diff --quiet; then
+            echo "main already has the v$VERSION notes and version; nothing to sync."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md package.json package-lock.json
+          git commit -qm "chore(release): sync v$VERSION notes to main"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+      # The PAT is scoped to this one step: never persisted to .git/config, never in the
+      # environment of the step above.
+      - name: Open the sync PR and queue it
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::RELEASE_PR_TOKEN is not set in the release-pr environment; cannot open the sync PR."
+            exit 1
+          fi
+          branch="release-sync/v$VERSION"
+          git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$branch"
+          url=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$branch" --state open --json url --jq '.[0].url')
+          if [ -z "$url" ]; then
+            url=$(gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$branch" \
+              --title "chore(release): sync v$VERSION notes to main" \
+              --body "Brings the published v$VERSION release notes to main's CHANGELOG.md (and, for an X.Y.0 release, the version). Opened by Release - publish.")
+          fi
+          gh pr merge --auto --merge "$url"
+          echo "Sync PR: $url"

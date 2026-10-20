@@ -22,7 +22,11 @@ export function buildPredicate(env = process.env) {
   const server = env.GITHUB_SERVER_URL || 'https://github.com'
   const repo = env.GITHUB_REPOSITORY || ''
   const ref = env.GITHUB_REF || ''
-  const sha = env.GITHUB_SHA || ''
+  // The workflow runs from main, but the release is built from its own commit on a release
+  // line (release-publish.yml's `source` job). The resolved dependency names that commit and
+  // the tag that will name it; the builder stays the workflow at the ref it ran from.
+  const sourceRef = env.RELEASE_SOURCE_REF || ref
+  const sha = env.RELEASE_SOURCE_SHA || env.GITHUB_SHA || ''
   const repoUrl = `${server}/${repo}`
   const workflowPath = '.github/workflows/release-publish.yml'
   return {
@@ -37,7 +41,7 @@ export function buildPredicate(env = process.env) {
           runner_environment: 'github-hosted'
         }
       },
-      resolvedDependencies: [{ uri: `git+${repoUrl}@${ref}`, digest: { gitCommit: sha } }]
+      resolvedDependencies: [{ uri: `git+${repoUrl}@${sourceRef}`, digest: { gitCommit: sha } }]
     },
     runDetails: {
       builder: { id: `${repoUrl}/${workflowPath}@${ref}` },

@@ -31,6 +31,13 @@ name: Vulnerability scan
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        # The commit to check. The release workflows pass the release commit (a release line's,
+        # not main's); every other run checks its own commit.
+        description: 'Commit to check (defaults to the run''s own commit)'
+        type: string
+        default: ''
   workflow_dispatch:
   schedule:
     # Daily, 06:00 UTC.
@@ -56,6 +63,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
         with:
           # Pin a Syft that supports SPDX 3.0 output; the action default is too old.
@@ -86,6 +94,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
       - uses: ./.github/actions/setup-node
         with:
           cache: 'false'

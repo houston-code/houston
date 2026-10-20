@@ -9,6 +9,13 @@ name: SBOM conformance
 
 on:
   workflow_call:
+    inputs:
+      ref:
+        # The commit to check. The release workflows pass the release commit (a release line's,
+        # not main's); every other run checks its own commit.
+        description: 'Commit to check (defaults to the run''s own commit)'
+        type: string
+        default: ''
   # Also dispatchable on its own so the full checker suite can be verified end-to-end in CI
   # without opening a PR or cutting a release.
   workflow_dispatch:
@@ -31,6 +38,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
       # Production install: the enrichment reads each package's installed manifest (supplier +
       # copyright). Must match how sbom.yml / release-publish build the shipped SBOMs.
       - uses: ./.github/actions/setup-node
