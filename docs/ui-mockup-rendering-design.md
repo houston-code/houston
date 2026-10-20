@@ -1,7 +1,8 @@
 # Rendering UI mockups and app screenshots (design)
 
 Status: phase 1 built (`show_images`, the gallery, the full-size viewer, and the
-media store). Phases 2 to 5 are proposed, not built. Companion to
+media store), plus the prompt line and `render-ui` skill from phase 4. The rest is
+proposed, not built. Companion to
 [inline-visuals-design.md](inline-visuals-design.md): that doc covers diagrams the
 model writes into a reply (Mermaid, SVG, small HTML widgets). This one covers
 **pictures of a user interface**: "render how this feature will look", answered with

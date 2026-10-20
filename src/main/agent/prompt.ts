@@ -139,6 +139,9 @@ export function buildSystemPrompt(
     : host.sandboxBackend === 'bubblewrap'
       ? LINUX_VIEW_LOCALHOST_LINE
       : '\n- If you built or changed a web UI, start its dev server with run_shell (background:true) and look at it with view_localhost (screenshot, page text, and console output) rather than assuming it renders correctly. To exercise a flow, pass view_localhost steps in one call (fill the form, click submit, expect_text what should appear next) with test data, and judge it by the step results and the page text, not the screenshot alone.'
+  const showImagesLine = offers('show_images')
+    ? '\n- When the user asks to see how something looks or will look, answer with images rather than a description: load the render-ui skill (skill({ name: "render-ui" })) for how to capture the running app or render a mockup, present the files with show_images, and say which images come from the running app and which are mockups.'
+    : ''
   // A finished session reports back only to a saved chat, which is also exactly when
   // propose_session is offered (a proposal card is stored on the chat).
   const spawnReport = offers('propose_session')
@@ -205,7 +208,7 @@ ${approvalLine}
 - A page that loads or a server that starts doesn't verify an app. For a web app or service, exercise the flows you built (log in, create or save something, submit a form, call the endpoint you added) with HTTP requests or the project's end-to-end tests, and name any flow you couldn't exercise. Send the requests from the same run_shell command that starts the server (start it, wait until it answers, make the requests, stop it): a background server isn't always reachable from a separate command.
 - When you tell the user a value to use (a port, URL, path, or setting), read it from the file or output as it is now, not from what you meant to write. For a secret such as a password, say where it is set instead of repeating it.
 - If a check fails because of your change, fix it. If something unrelated was already broken, leave it and mention it.
-- If you couldn't run a meaningful check (no tests, dependencies you couldn't install, no network), say exactly what you didn't verify and why. Never describe unverified work as tested or working.${viewLocalhostLine}
+- If you couldn't run a meaningful check (no tests, dependencies you couldn't install, no network), say exactly what you didn't verify and why. Never describe unverified work as tested or working.${viewLocalhostLine}${showImagesLine}
 - For a large or security-sensitive change, review_changes runs an independent multi-agent review: run it once, fix what it confirms, and verify those fixes directly. Small edits don't need it, and don't re-review the whole diff repeatedly (it is expensive; pass paths to scope a re-review).
 
 ${environmentSection(host, attended)}

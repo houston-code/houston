@@ -995,9 +995,39 @@ export async function startRun(
     // gates tool calls live — only the prose the model already saw is fixed.
     const planMode = req.approvalPolicy === 'plan'
     const agents = await loadAgents(workspace)
+    // Backend-dependent tools appear only when the host wired their backend at
+    // startup: view_localhost screenshots via an offscreen browser only the Electron
+    // shell wires, and spawn_session and the schedule tools need the spawn and
+    // scheduler backends (the desktop shell and the terminal entries wire both).
+    const localhostCaptureAvailable = isCaptureBackendConfigured()
+    const spawnAvailable = isSpawnBackendConfigured()
+    const schedulerAvailable = isSchedulerConfigured()
+    // The built-in tools this run offers (present_plan only in plan mode). The
+    // prompt is built from the same list, so it never names a tool the model
+    // can't call.
+    const builtinSchemas = builtinToolset({
+      localhostCapture: localhostCaptureAvailable,
+      // The gallery is drawn only by the desktop app, the one host that wires the
+      // localhost capture backend; in a terminal show_images would be a path list.
+      imageGallery: localhostCaptureAvailable,
+      spawn: spawnAvailable,
+      // A proposal card lives on a persisted chat (its state is stored there), so a
+      // one-shot run with no conversation can't offer one.
+      proposals: conversationId !== undefined,
+      scheduler: schedulerAvailable,
+      planMode,
+      // Nobody can answer a question on an unattended run; the prompt built from
+      // this list then says so instead of naming ask_user.
+      askUser: req.unattended !== true
+    }).map((t) => t.schema)
     // Merge Houston's built-in skills (e.g. houston-guide) with the workspace's
-    // own for the agent runtime; `/skills` still lists only the workspace's.
-    const skills = withBuiltinSkills(await loadSkills(workspace))
+    // own for the agent runtime; `/skills` still lists only the workspace's. A
+    // built-in tied to a tool this run doesn't offer (render-ui needs show_images)
+    // is left out.
+    const skills = withBuiltinSkills(
+      await loadSkills(workspace),
+      builtinSchemas.map((s) => s.name)
+    )
     // Local plugins (.houston/plugins/*.js) register observational lifecycle
     // hooks. They are executable JS run in-process and `vm` is not a security
     // boundary, so they are NEVER auto-run for an opened repo — only when the user
@@ -1039,31 +1069,6 @@ export async function startRun(
       async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
     )
     if (freshSnapshot && conversationId) setPromptSnapshot(conversationId, promptSnapshot)
-    // Backend-dependent tools appear only when the host wired their backend at
-    // startup: view_localhost screenshots via an offscreen browser only the Electron
-    // shell wires, and spawn_session and the schedule tools need the spawn and
-    // scheduler backends (the desktop shell and the terminal entries wire both).
-    const localhostCaptureAvailable = isCaptureBackendConfigured()
-    const spawnAvailable = isSpawnBackendConfigured()
-    const schedulerAvailable = isSchedulerConfigured()
-    // The built-in tools this run offers (present_plan only in plan mode). The
-    // prompt is built from the same list, so it never names a tool the model
-    // can't call.
-    const builtinSchemas = builtinToolset({
-      localhostCapture: localhostCaptureAvailable,
-      // The gallery is drawn only by the desktop app, the one host that wires the
-      // localhost capture backend; in a terminal show_images would be a path list.
-      imageGallery: localhostCaptureAvailable,
-      spawn: spawnAvailable,
-      // A proposal card lives on a persisted chat (its state is stored there), so a
-      // one-shot run with no conversation can't offer one.
-      proposals: conversationId !== undefined,
-      scheduler: schedulerAvailable,
-      planMode,
-      // Nobody can answer a question on an unattended run; the prompt built from
-      // this list then says so instead of naming ask_user.
-      askUser: req.unattended !== true
-    }).map((t) => t.schema)
     let system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,

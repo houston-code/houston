@@ -2,6 +2,7 @@ import { promises as fs, realpathSync } from 'node:fs'
 import { isAbsolute, join, relative, sep } from 'node:path'
 import { parseFrontmatter } from '@shared/frontmatter'
 import { HOUSTON_GUIDE } from './guide-content'
+import { RENDER_UI_SKILL } from './render-ui-skill'
 
 /**
  * Skills: reusable instruction bundles in `.houston/skills/<name>/SKILL.md`. Each
@@ -39,6 +40,12 @@ export interface Skill {
    * serves this directly instead of reading `path` from the workspace.
    */
   body?: string
+  /**
+   * Built-in skills only: tools the run must offer for this skill to be listed. A
+   * skill whose instructions lean on a desktop-only tool would only mislead a run
+   * that can't call it.
+   */
+  requiresTools?: readonly string[]
 }
 
 /**
@@ -93,17 +100,31 @@ export const BUILTIN_SKILLS: Skill[] = [
       "How Houston itself works: its slash commands, skills, subagents, hooks, plugins, MCP servers, approval modes and permission rules, plan mode, sandboxing, GitHub tools, settings, and its license. Load this to answer any question about Houston's own features or licensing.",
     path: '(built-in)',
     body: HOUSTON_GUIDE
+  },
+  {
+    name: 'render-ui',
+    description:
+      'How to show the user how a UI looks or will look: capture the running app (web, Electron, mobile simulator) or render a mockup from the project\'s own styles, cover the states that matter, check each image, and present them with show_images.',
+    path: '(built-in)',
+    body: RENDER_UI_SKILL,
+    requiresTools: ['show_images']
   }
 ]
 
 /**
  * Merge Houston's built-in skills with a workspace's loaded skills for the agent
  * runtime. Built-ins win a name collision, so a workspace can't shadow (or
- * silently override) `houston-guide`.
+ * silently override) `houston-guide`. With `offeredTools`, a built-in whose
+ * `requiresTools` the run doesn't offer is left out; its name stays reserved all the
+ * same, so a workspace skill can't step into the gap under a trusted name.
  */
-export function withBuiltinSkills(workspaceSkills: Skill[]): Skill[] {
+export function withBuiltinSkills(workspaceSkills: Skill[], offeredTools?: readonly string[]): Skill[] {
   const reserved = new Set(BUILTIN_SKILLS.map((s) => s.name.toLowerCase()))
-  const merged = [...BUILTIN_SKILLS, ...workspaceSkills.filter((s) => !reserved.has(s.name.toLowerCase()))]
+  const offered = offeredTools ? new Set(offeredTools) : null
+  const builtins = BUILTIN_SKILLS.filter(
+    (s) => !offered || !s.requiresTools || s.requiresTools.every((t) => offered.has(t))
+  )
+  const merged = [...builtins, ...workspaceSkills.filter((s) => !reserved.has(s.name.toLowerCase()))]
   merged.sort((a, b) => a.name.localeCompare(b.name))
   return merged
 }

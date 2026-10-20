@@ -193,6 +193,14 @@ describe('buildSystemPrompt', () => {
     expect(noCapture).toContain('- For a large or security-sensitive change, review_changes')
   })
 
+  it('points at render-ui and show_images only where show_images is offered', () => {
+    expect(buildSystemPrompt('/tmp/x')).toContain('load the render-ui skill')
+    const noGallery = promptFor(toolNames({ imageGallery: false }))
+    expect(noGallery).not.toContain('render-ui')
+    expect(noGallery).not.toContain('show_images')
+    expect(noGallery).toContain('Never describe unverified work as tested or working.')
+  })
+
   it('lists spawn_session by default but omits it when no spawn backend is wired', () => {
     expect(buildSystemPrompt('/tmp/x')).toContain('spawn_session')
     const noSpawn = promptFor(toolNames({ spawn: false }))

@@ -674,7 +674,9 @@ with front-matter `name` and `description` and a body of instructions. Only the
 name and description are shown to the agent up front (cheap); the agent loads the
 full body on demand by calling the `skill` tool when a task matches. This is
 progressive disclosure: skills stay out of the way until they are needed. Houston
-also ships this guide as a built-in `houston-guide` skill.
+also ships two built-in skills: this guide as `houston-guide`, and, in the desktop
+app, `render-ui`, which the agent follows when you ask to see how something looks or
+will look (screenshots of the running app, or a mockup, shown with `show_images`).
 
 A skill can bundle more than its SKILL.md. Any other files in the skill directory
 (a `references/` folder, a template, a helper script) are listed at the end of the
