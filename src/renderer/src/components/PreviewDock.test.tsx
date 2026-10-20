@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, onTestFinished } from 'vitest'
 import type { PreviewServer } from '@shared/preview'
 import { PreviewDock } from './PreviewDock'
 
@@ -20,7 +20,6 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', FakeResizeObserver)
   window.api = api as unknown as typeof window.api
 })
-afterEach(() => vi.unstubAllGlobals())
 
 const noop = (): void => {}
 
@@ -62,8 +61,16 @@ describe('PreviewDock', () => {
   })
 
   it('opens and copies the full URL, scheme included', async () => {
+    // Only the clipboard is swapped, and only for this test: replacing the whole
+    // navigator (or unstubbing every global after it) also pulls the ResizeObserver
+    // stub out from under a dock that is still mounted.
     const writeText = vi.fn(() => Promise.resolve())
-    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    const had = Object.getOwnPropertyDescriptor(navigator, 'clipboard')
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    onTestFinished(() => {
+      if (had) Object.defineProperty(navigator, 'clipboard', had)
+      else delete (navigator as { clipboard?: unknown }).clipboard
+    })
     renderDock({ servers: [running('a', 'http://localhost:5175/')] })
     fireEvent.click(screen.getByLabelText('Open localhost:5175 in browser'))
     expect(api.openPreviewExternal).toHaveBeenCalledWith('http://localhost:5175/')

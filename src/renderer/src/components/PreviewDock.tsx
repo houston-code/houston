@@ -36,6 +36,7 @@ export function PreviewDock({
   const [chosen, setChosen] = useState<Record<string, string>>({})
   // The pane whose URL was just copied, for a moment of "Copied" feedback.
   const [copied, setCopied] = useState<string | null>(null)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dockRef = useRef<HTMLDivElement>(null)
 
   const { panes, hiddenCount, startingCount } = selectPreviewPanes(servers, manualUrls, MAX_PREVIEW_PANES, chosen)
@@ -86,6 +87,13 @@ export function PreviewDock({
 
   // Tear every native pane down when the dock unmounts (closed).
   useEffect(() => () => window.api.syncPreviewPanes([], false), [])
+  // Don't let the "Copied" reset fire into a dock that has closed.
+  useEffect(
+    () => () => {
+      if (copiedTimer.current) clearTimeout(copiedTimer.current)
+    },
+    []
+  )
 
   const addManual = useCallback(() => {
     const url = normalizeManualUrl(draft)
@@ -184,7 +192,8 @@ export function PreviewDock({
                         void copyText(pane.url).then((ok) => {
                           if (!ok) return
                           setCopied(pane.id)
-                          setTimeout(() => setCopied((c) => (c === pane.id ? null : c)), 1500)
+                          if (copiedTimer.current) clearTimeout(copiedTimer.current)
+                          copiedTimer.current = setTimeout(() => setCopied(null), 1500)
                         })
                       }
                     >
