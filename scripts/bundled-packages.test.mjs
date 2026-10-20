@@ -92,6 +92,19 @@ describe('productionPackageDirs', () => {
     expect([...productionPackageDirs(ROOT, () => listing)]).toEqual(['/repo/node_modules/a', '/repo/node_modules/a/node_modules/b'])
   })
 
+  it('starts npm through a shell only on Windows, where it is npm.cmd', () => {
+    const shells = []
+    const exec = (_cmd, _args, opts) => (shells.push(opts.shell), listing)
+    productionPackageDirs(ROOT, exec, 'win32')
+    productionPackageDirs(ROOT, exec, 'linux')
+    expect(shells).toEqual([true, false])
+  })
+
+  it('reads Windows npm ls output, CRLF line endings included', () => {
+    const out = 'C:\\repo\r\nC:\\repo\\node_modules\\a\r\n'
+    expect([...productionPackageDirs('C:\\repo', () => out, 'win32')]).toEqual(['C:\\repo\\node_modules\\a'])
+  })
+
   it('uses what npm ls printed when it exits non-zero on a tree warning, and rethrows when it printed nothing', () => {
     const warn = () => {
       throw Object.assign(new Error('ELSPROBLEMS'), { stdout: listing })

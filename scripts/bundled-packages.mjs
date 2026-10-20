@@ -60,10 +60,17 @@ export function uncoveredPackageDirs(ids, covered, canonical = canonicalDefault)
 }
 
 /** Installed dirs of the production closure, as the notices generator reads them. */
-export function productionPackageDirs(root, exec = execFileSync) {
+export function productionPackageDirs(root, exec = execFileSync, platform = process.platform) {
   let out
   try {
-    out = exec('npm', ['ls', '--omit=dev', '--all', '--parseable'], { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    // On Windows npm is npm.cmd, which Node only starts through a shell. The arguments
+    // are fixed literals, so the shell sees nothing caller-controlled.
+    out = exec('npm', ['ls', '--omit=dev', '--all', '--parseable'], {
+      cwd: root,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      shell: platform === 'win32'
+    })
   } catch (err) {
     // npm ls exits non-zero on tree warnings (extraneous, missing peers) but still prints.
     out = err && typeof err.stdout === 'string' ? err.stdout : ''
