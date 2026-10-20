@@ -100,8 +100,12 @@ export interface TuiOptions {
   cwd: string
   providerId?: string
   model?: string
-  /** Starting approval policy; switchable at runtime with `/approval`. Defaults to 'ask'. */
-  approvalPolicy: ApprovalPolicy
+  /**
+   * Starting approval policy from `--approval`/`--full-auto`; switchable at runtime with
+   * `/approval`. Absent: the saved mode from settings (what the desktop app last used, or
+   * a fresh install's default), so both clients start the same way.
+   */
+  approvalPolicy?: ApprovalPolicy
   /** Colorize output. index.ts sets this from TTY + NO_COLOR detection. */
   color: boolean
   /**
@@ -137,7 +141,7 @@ export function parseTuiArgs(
   let cwd = defaultCwd
   let providerId: string | undefined
   let model: string | undefined
-  let approvalPolicy: ApprovalPolicy = 'ask'
+  let approvalPolicy: ApprovalPolicy | undefined
   let continueSession = false
   let resumeId: string | undefined
 
@@ -177,7 +181,7 @@ export function parseTuiArgs(
     cwd,
     providerId,
     model,
-    approvalPolicy,
+    ...(approvalPolicy ? { approvalPolicy } : {}),
     color: true,
     ...(continueSession ? { continueSession } : {}),
     ...(resumeId ? { resumeId } : {})
@@ -2476,7 +2480,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     model = resolved.model
   }
 
-  let policy = opts.approvalPolicy
+  let policy = opts.approvalPolicy ?? deps.getSettings().approvalPolicy ?? 'ask'
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
   // Prints whatever assistant text the running turn is still holding back (markdown

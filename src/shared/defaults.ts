@@ -1,5 +1,5 @@
 import type { ReasoningEffort } from './agent'
-import type { AppSettings, ProviderConfig, SelectedModel } from './types'
+import type { AppSettings, ApprovalPolicy, ProviderConfig, SelectedModel } from './types'
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
@@ -285,6 +285,17 @@ export function reconcileSelectedModel(
   // The selected model was removed. Re-point within the same provider, guarding against
   // a `defaultModel` that pointed at the just-removed id.
   return { providerId: provider.id, model: pickDefaultModel(provider) ?? provider.models[0].id }
+}
+
+/**
+ * The approval mode a fresh install starts in. Where the OS sandbox confines shell
+ * commands to the project, full-auto runs edits and commands without asking: network,
+ * MCP, commands that reach outside the project, and commands that can throw away work
+ * still ask in every mode. Without a sandbox every command would run unconfined, so a
+ * fresh install there starts in ask. Existing installs keep the mode they saved.
+ */
+export function freshInstallApprovalPolicy(sandboxed: boolean): ApprovalPolicy {
+  return sandboxed ? 'full-auto' : 'ask'
 }
 
 export function defaultSettings(): AppSettings {

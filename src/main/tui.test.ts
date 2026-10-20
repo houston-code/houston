@@ -128,9 +128,10 @@ describe('parseTuiArgs', () => {
     expect(parseTuiArgs(['--tui'], '/d')).not.toBeNull()
   })
 
-  it('defaults cwd and approval=ask', () => {
+  it('defaults cwd and leaves the approval mode to settings', () => {
     const o = parseTuiArgs(['-i'], '/here')
-    expect(o).toMatchObject({ cwd: '/here', approvalPolicy: 'ask', color: true })
+    expect(o).toMatchObject({ cwd: '/here', color: true })
+    expect(o?.approvalPolicy).toBeUndefined()
   })
 
   it('parses cwd / provider / model / approval', () => {
@@ -148,7 +149,7 @@ describe('parseTuiArgs', () => {
 
   it('--full-auto sets the policy, invalid --approval is ignored', () => {
     expect(parseTuiArgs(['-i', '--full-auto'], '/d')?.approvalPolicy).toBe('full-auto')
-    expect(parseTuiArgs(['-i', '--approval', 'bogus'], '/d')?.approvalPolicy).toBe('ask')
+    expect(parseTuiArgs(['-i', '--approval', 'bogus'], '/d')?.approvalPolicy).toBeUndefined()
   })
 
   it('defaultInteractive treats a bare invocation as interactive', () => {
@@ -1280,6 +1281,26 @@ describe('runTui', () => {
       { role: 'assistant', content: 'reply' },
       { role: 'user', content: 'two' }
     ])
+  })
+
+  it('starts in the saved approval mode when no flag picks one', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      approvalPolicy: 'full-auto'
+    })
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui({ cwd: '/proj', color: false }, d)
+    expect(rec.runs[0].policy).toBe('full-auto')
+  })
+
+  it('a flag-chosen approval mode wins over the saved one', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {
+      approvalPolicy: 'full-auto'
+    })
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui({ cwd: '/proj', color: false, approvalPolicy: 'ask' }, d)
+    expect(rec.runs[0].policy).toBe('ask')
   })
 
   it('/approval switches the policy used by the next run', async () => {

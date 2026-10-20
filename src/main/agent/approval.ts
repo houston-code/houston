@@ -88,6 +88,12 @@ export interface ApprovalInputs {
    * secret file (see writesSensitivePath / shellWritesSensitivePath). Defaults to false.
    */
   sensitiveWrite?: boolean
+  /**
+   * Whether this shell command can throw away work in the project (see
+   * shellDiscardsWork: `git reset --hard`, `git clean -f`, `rm -r` of source, a forced
+   * push). Defaults to false.
+   */
+  shellDiscardsWork?: boolean
 }
 
 /**
@@ -125,6 +131,12 @@ export interface ApprovalInputs {
  * way. Such files are rarely edited and only the user can restore one an agent
  * overwrote, so even full-auto asks first; an `allow` rule or "allow for run" on the
  * prompt opts out.
+ *
+ * A shell command that can throw away work in the project (`shellDiscardsWork`) asks in
+ * every mode too. The sandbox keeps a command inside the project, but the project is what
+ * `git reset --hard` or `rm -r src` destroys, and shell side effects aren't checkpointed.
+ * Only an explicit `allow` rule skips it: "Allow for run" and full-auto don't, and on a
+ * host without a sandbox neither does the unconfined-shell consent.
  */
 export function decideApproval(inputs: ApprovalInputs): {
   mustApprove: boolean
@@ -135,14 +147,17 @@ export function decideApproval(inputs: ApprovalInputs): {
   if (kind === 'shell' && !shellSandboxed) {
     // An `ask` rule (any tier) wins over the per-run unconfined-shell consent;
     // `unsandboxedShell` stays true so the prompt still carries the unconfined banner.
-    if (ruleAction === 'ask') return { mustApprove: true, unsandboxedShell: true }
+    // So does a command that discards work: consent to run unconfined isn't consent to
+    // reset the project.
+    if (ruleAction === 'ask' || inputs.shellDiscardsWork) return { mustApprove: true, unsandboxedShell: true }
     return { mustApprove: !shellUnsandboxedOverride, unsandboxedShell: true }
   }
   if (ruleAction === 'allow') return { mustApprove: false, unsandboxedShell: false }
   if (ruleAction === 'ask') return { mustApprove: true, unsandboxedShell: false }
   // A workspace-escaping shell command always prompts (a generic override or
   // full-auto doesn't cover it); only an explicit allow-rule, handled above, can.
-  if (kind === 'shell' && inputs.shellEscapesWorkspace) {
+  // The same goes for one that can throw away work in the project.
+  if (kind === 'shell' && (inputs.shellEscapesWorkspace || inputs.shellDiscardsWork)) {
     return { mustApprove: true, unsandboxedShell: false }
   }
   // A read of a credential file always prompts too — unless the user already granted

@@ -4,6 +4,7 @@ import { writeFileAtomicSync } from './atomic-write'
 import { getUserDataDir } from './userData'
 import type {
   AppSettings,
+  ApprovalPolicy,
   FolderTrust,
   FolderTrustState,
   McpServerConfig,
@@ -55,6 +56,24 @@ let hasKeyFn: ((id: string) => boolean) | null = null
 /** Bind the credential-presence check. Call once during startup, before any read. */
 export function configureHasKey(fn: (id: string) => boolean): void {
   hasKeyFn = fn
+}
+
+/**
+ * Injected approval mode for a fresh install (no settings file yet), from the live
+ * sandbox status: see freshInstallApprovalPolicy. A seam because the sandbox backend is
+ * the shell's to probe. Unwired, a fresh install starts in the shared default (ask).
+ */
+let freshApprovalPolicyFn: (() => ApprovalPolicy) | null = null
+
+/** Bind the fresh-install approval mode. Call once during startup, before any read. */
+export function configureFreshInstallApprovalPolicy(fn: () => ApprovalPolicy): void {
+  freshApprovalPolicyFn = fn
+}
+
+/** Settings for an install that has never written a settings file. */
+function freshInstallSettings(): AppSettings {
+  const base = defaultSettings()
+  return freshApprovalPolicyFn ? { ...base, approvalPolicy: freshApprovalPolicyFn() } : base
 }
 
 function hasKey(id: string): boolean {
@@ -278,7 +297,9 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
  */
 function loadFromDisk(): { settings: AppSettings; upgraded: boolean } {
   const path = settingsPath()
-  if (!existsSync(path)) return { settings: defaultSettings(), upgraded: false }
+  // Only a missing file is a fresh install. An unreadable one belongs to an existing
+  // install, which gets the plain defaults rather than the fresh-install mode.
+  if (!existsSync(path)) return { settings: freshInstallSettings(), upgraded: false }
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<AppSettings>
     const fromVersion = typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 0

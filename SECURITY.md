@@ -84,6 +84,17 @@ not eliminate it. Egress bodies over TLS are not inspected (the proxy sees hostn
 content), an allowlisted collaborative host still accepts authenticated writes, and on
 Windows (no OS sandbox) the allowlist cannot be enforced.
 
+The sandbox protects everything outside the project, not the project itself, and shell
+side effects aren't checkpointed. So a shell command that can throw away work in the
+project (`git reset --hard`, a forced `git clean`, `git checkout -- .`, `rm -r` of
+anything but build output and dependencies, `find … -delete`, deleting a branch or
+stash, a forced or deleting `git push`) **asks in every mode**, full auto and "Allow
+for run" included; only an explicit `allow` rule for the command skips it. The check
+reads words as bash builds them (inside `$(…)`, backticks, `bash -c`, `eval`, and
+across line continuations), but like the workspace-escape check it is a static
+tripwire: a command assembled from variables isn't seen. A new install starts in full
+auto only where the OS sandbox confines shell commands, and in ask elsewhere.
+
 Text that outsiders write and Houston's tools pull into the agent's context (fetched web
 pages, web search results, GitHub issue and pull request titles, bodies, comments, and
 diffs, GitHub Actions run, job, step, and check names and failed-step logs, and MCP tool
