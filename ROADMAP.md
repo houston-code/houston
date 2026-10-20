@@ -264,10 +264,6 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   user-configured shell command, beyond the built-in
   live-activity status bar.
 
-- **Tool-result image thumbnails.** When the agent `read_file`s an image, the
-  model sees it but the transcript shows a text marker; render a thumbnail in the
-  tool card too.
-
 - **IDE integration.** VS Code / JetBrains extensions. Out of scope for a
   standalone desktop app, but listed for completeness.
 
