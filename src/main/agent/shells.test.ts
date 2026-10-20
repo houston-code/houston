@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bindShellLedger, resetShellLedger } from './shellLedger'
 import {
+  backgroundShellGroups,
   killShell,
+  listPreviewServers,
   listShells,
   onShellsChanged,
   readShellOutput,
@@ -150,6 +152,29 @@ describe('background shell ledger', () => {
       }
     }
   )
+})
+
+describe('dev-server URLs', () => {
+  it('keeps every URL a combined dev script prints, the one labeled Local: first', async () => {
+    const child = node(
+      "console.log('[server] listening on http://localhost:3001'); setTimeout(() => console.log('[client]   Local:   http://localhost:5175/'), 50)"
+    )
+    const id = registerShell('npm run dev', child)
+    await onClose(child)
+    const server = listPreviewServers().find((s) => s.id === id)
+    expect(server?.url).toBe('http://localhost:5175/')
+    expect(server?.urls).toEqual(['http://localhost:5175/', 'http://localhost:3001/'])
+    expect(backgroundShellGroups().has(child.pid as number)).toBe(true)
+  })
+
+  it('reports each URL to read_shell_output once, and all of them on a full read', async () => {
+    const child = node("console.log('Local: http://localhost:4000/')")
+    const id = registerShell('serve', child)
+    await onClose(child)
+    expect(readShellOutput(id).newUrls).toEqual(['http://localhost:4000/'])
+    expect(readShellOutput(id).newUrls).toEqual([])
+    expect(readShellOutput(id, { full: true }).newUrls).toEqual(['http://localhost:4000/'])
+  })
 })
 
 describe('unreadSlice (rolling-buffer offsets)', () => {

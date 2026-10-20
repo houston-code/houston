@@ -115,6 +115,7 @@ import {
 } from './subagentSessions'
 import { reviewWorkspaceChanges } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
+import { listenersOnPort } from './portOwner'
 import {
   acceptedProposalCalls,
   forkableHistory,
@@ -1851,6 +1852,7 @@ export async function startRun(
       // Undefined on the CLI (no backend wired) so the view_localhost guard reads
       // cleanly; the tool is already filtered out of the schema set above.
       captureLocalhost: localhostCaptureAvailable ? captureLocalhost : undefined,
+      portListeners: (port) => listenersOnPort(port),
       // The recall tool reads the full, un-compacted log. Return a shallow copy so a
       // tool can't reassign the loop's `messages` array through this handle (push/splice/
       // reorder). The ChatMessage objects are shared by reference, so callers must treat

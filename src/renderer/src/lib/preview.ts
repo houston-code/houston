@@ -15,6 +15,8 @@ export interface PreviewPaneItem {
   /** What to show as the row's heading (the server command, or the URL for a manual entry). */
   label: string
   kind: 'server' | 'manual'
+  /** Every URL the server printed, when more than one (the pane can switch between them). */
+  urls?: string[]
 }
 
 export interface PreviewSelection {
@@ -81,17 +83,29 @@ export function normalizeManualUrl(raw: string): string | null {
 export function selectPreviewPanes(
   servers: PreviewServer[],
   manualUrls: string[],
-  cap: number = MAX_PREVIEW_PANES
+  cap: number = MAX_PREVIEW_PANES,
+  chosen: Readonly<Record<string, string>> = {}
 ): PreviewSelection {
   const seen = new Set<string>()
   const all: PreviewPaneItem[] = []
 
   for (const s of servers) {
     if (!s.running || !s.url) continue
-    const key = canonical(s.url)
+    // One pane per server, showing the URL the user picked from those it printed, or
+    // else the one its output labeled `Local:` (the dev page, not an API beside it).
+    const urls = s.urls?.length ? s.urls : [s.url]
+    const pick = chosen[s.id]
+    const url = pick && urls.includes(pick) ? pick : s.url
+    const key = canonical(url)
     if (seen.has(key)) continue
     seen.add(key)
-    all.push({ id: `server:${s.id}`, url: s.url, label: s.command, kind: 'server' })
+    all.push({
+      id: `server:${s.id}`,
+      url,
+      label: s.command,
+      kind: 'server',
+      ...(urls.length > 1 ? { urls } : {})
+    })
   }
 
   for (const raw of manualUrls) {

@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from '@testing-library/react'
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { PreviewServer } from '@shared/preview'
 import { PreviewDock } from './PreviewDock'
 
@@ -20,6 +20,7 @@ beforeEach(() => {
   vi.stubGlobal('ResizeObserver', FakeResizeObserver)
   window.api = api as unknown as typeof window.api
 })
+afterEach(() => vi.unstubAllGlobals())
 
 const noop = (): void => {}
 
@@ -50,13 +51,47 @@ describe('PreviewDock', () => {
   it('renders a pane for a server that reported a URL, with working actions', () => {
     renderDock({ servers: [running('a', 'http://localhost:3000/')] })
     expect(screen.getByText('npm run dev')).toBeInTheDocument()
-    expect(screen.getByText('localhost:3000')).toBeInTheDocument()
+    // The whole URL, scheme included: what shows is what the arrow opens.
+    expect(screen.getByText('http://localhost:3000/')).toBeInTheDocument()
 
     fireEvent.click(screen.getByLabelText('Reload localhost:3000'))
     expect(api.reloadPreviewPane).toHaveBeenCalledWith('server:a')
 
     fireEvent.click(screen.getByLabelText('Open localhost:3000 in browser'))
     expect(api.openPreviewExternal).toHaveBeenCalledWith('http://localhost:3000/')
+  })
+
+  it('opens and copies the full URL, scheme included', async () => {
+    const writeText = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('navigator', { clipboard: { writeText } })
+    renderDock({ servers: [running('a', 'http://localhost:5175/')] })
+    fireEvent.click(screen.getByLabelText('Open localhost:5175 in browser'))
+    expect(api.openPreviewExternal).toHaveBeenCalledWith('http://localhost:5175/')
+    // Whatever the pane holds, the external open is always an absolute http(s) URL.
+    const [opened] = api.openPreviewExternal.mock.calls[0] as unknown as [string]
+    expect(opened).toMatch(/^https?:\/\//)
+    fireEvent.click(screen.getByLabelText('Copy http://localhost:5175/'))
+    expect(writeText).toHaveBeenCalledWith('http://localhost:5175/')
+    expect(await screen.findByLabelText('Copied http://localhost:5175/')).toBeInTheDocument()
+  })
+
+  it('lets a server that printed several URLs switch between them, starting on the Local: one', () => {
+    const server: PreviewServer = {
+      id: 'a',
+      command: 'npm run dev',
+      running: true,
+      url: 'http://localhost:5175/',
+      urls: ['http://localhost:5175/', 'http://localhost:3001/']
+    }
+    renderDock({ servers: [server] })
+    const picker = screen.getByLabelText('Address shown for npm run dev') as HTMLSelectElement
+    expect(picker.value).toBe('http://localhost:5175/')
+    expect([...picker.options].map((o) => o.value)).toEqual(['http://localhost:5175/', 'http://localhost:3001/'])
+    fireEvent.change(picker, { target: { value: 'http://localhost:3001/' } })
+    const specs = api.syncPreviewPanes.mock.calls.at(-1)?.[0] as Array<{ id: string; url: string }>
+    expect(specs).toEqual([expect.objectContaining({ id: 'server:a', url: 'http://localhost:3001/' })])
+    fireEvent.click(screen.getByLabelText('Open localhost:3001 in browser'))
+    expect(api.openPreviewExternal).toHaveBeenCalledWith('http://localhost:3001/')
   })
 
   it('positions the native views via syncPreviewPanes, hidden while occluded', () => {
@@ -84,10 +119,10 @@ describe('PreviewDock', () => {
     fireEvent.change(input, { target: { value: '4321' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add' }))
 
-    expect(screen.getByText('localhost:4321')).toBeInTheDocument()
-    const bar = screen.getByText('localhost:4321').closest('.preview-pane__bar') as HTMLElement
+    expect(screen.getByText('http://localhost:4321/')).toBeInTheDocument()
+    const bar = screen.getByText('http://localhost:4321/').closest('.preview-pane__bar') as HTMLElement
     fireEvent.click(within(bar).getByLabelText('Remove localhost:4321'))
-    expect(screen.queryByText('localhost:4321')).not.toBeInTheDocument()
+    expect(screen.queryByText('http://localhost:4321/')).not.toBeInTheDocument()
   })
 
   it('flags an invalid manual URL instead of adding it', () => {

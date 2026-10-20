@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { PreviewServer, PreviewPaneSpec } from '@shared/preview'
 import { MAX_PREVIEW_PANES } from '@shared/preview'
 import { normalizeManualUrl, selectPreviewPanes } from '../lib/preview'
+import { copyText } from '../lib/clipboard'
 
 /**
  * The Preview dock: a resizable right-hand panel that shows the dev servers the
@@ -31,9 +32,13 @@ export function PreviewDock({
   const [manualUrls, setManualUrls] = useState<string[]>([])
   const [draft, setDraft] = useState('')
   const [draftError, setDraftError] = useState(false)
+  // Which of a server's printed URLs each pane shows, when the user switched it.
+  const [chosen, setChosen] = useState<Record<string, string>>({})
+  // The pane whose URL was just copied, for a moment of "Copied" feedback.
+  const [copied, setCopied] = useState<string | null>(null)
   const dockRef = useRef<HTMLDivElement>(null)
 
-  const { panes, hiddenCount, startingCount } = selectPreviewPanes(servers, manualUrls)
+  const { panes, hiddenCount, startingCount } = selectPreviewPanes(servers, manualUrls, MAX_PREVIEW_PANES, chosen)
 
   // Placeholder elements keyed by pane id; the native view is positioned over each.
   const slots = useRef(new Map<string, HTMLDivElement>())
@@ -142,14 +147,50 @@ export function PreviewDock({
             } catch {
               /* keep the raw URL */
             }
+            const serverId = pane.id.startsWith('server:') ? pane.id.slice('server:'.length) : null
             return (
               <div key={pane.id} className="preview-pane">
                 <div className="preview-pane__bar">
                   <span className="preview-pane__label" title={pane.label}>
                     {pane.label}
                   </span>
-                  <span className="preview-pane__host">{hostport}</span>
+                  {/* The whole URL, scheme included, so what shows is what the arrow opens
+                      and what a copy pastes into a browser. */}
+                  {pane.urls && serverId ? (
+                    <select
+                      className="preview-pane__host preview-pane__host--select"
+                      aria-label={`Address shown for ${pane.label}`}
+                      title="This server printed more than one address"
+                      value={pane.url}
+                      onChange={(e) => setChosen((prev) => ({ ...prev, [serverId]: e.target.value }))}
+                    >
+                      {pane.urls.map((u) => (
+                        <option key={u} value={u}>
+                          {u}
+                        </option>
+                      ))}
+                    </select>
+                  ) : pane.kind === 'manual' ? null : (
+                    // A manual pane's label already is its URL.
+                    <span className="preview-pane__host" title={pane.url}>
+                      {pane.url}
+                    </span>
+                  )}
                   <span className="preview-pane__actions">
+                    <button
+                      type="button"
+                      title={copied === pane.id ? 'Copied' : 'Copy URL'}
+                      aria-label={copied === pane.id ? `Copied ${pane.url}` : `Copy ${pane.url}`}
+                      onClick={() =>
+                        void copyText(pane.url).then((ok) => {
+                          if (!ok) return
+                          setCopied(pane.id)
+                          setTimeout(() => setCopied((c) => (c === pane.id ? null : c)), 1500)
+                        })
+                      }
+                    >
+                      {copied === pane.id ? '✓' : '⧉'}
+                    </button>
                     <button
                       type="button"
                       title="Reload"

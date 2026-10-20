@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import type { BackgroundShellInfo } from '@shared/agent'
 import { killProcessTree } from '../sandbox'
-import { detectLocalUrl } from './loopback'
+import { detectLocalUrls, type FoundUrl } from './loopback'
 import { writeShellLedger, type LedgerEntry } from './shellLedger'
 import type { PreviewServer } from '@shared/preview'
 
@@ -16,11 +16,13 @@ import type { PreviewServer } from '@shared/preview'
  * Live process groups are also written to a crash-safe ledger (see shellLedger.ts),
  * so a later launch can stop servers an exit that skipped killAllShells left behind.
  *
- * Each shell's output is also sniffed for the loopback URL a dev server announces
- * on startup (see detectLocalUrl); the first match is exposed as `previewUrl` and
- * powers the renderer's Preview dock. The `onShellsChanged` listeners fire when a
- * shell appears, first reveals a URL, or exits, so both the background-tasks
- * indicator and the Preview dock refresh live without polling.
+ * Each shell's output is also sniffed for the loopback URLs a dev server announces
+ * on startup (see detectLocalUrls). One script often starts several servers (a client
+ * and its API under `concurrently`), so every URL is kept, the page labeled `Local:`
+ * first; they power the renderer's Preview dock and are reported to the agent by
+ * read_shell_output. The `onShellsChanged` listeners fire when a shell appears,
+ * reveals a new URL, or exits, so both the background-tasks indicator and the
+ * Preview dock refresh live without polling.
  */
 
 interface Shell {
@@ -41,8 +43,40 @@ interface Shell {
   exitedAt: number | null
   /** Conversation whose agent run spawned this shell (for renderer navigation). */
   conversationId?: string
-  /** First loopback URL the server printed (e.g. http://localhost:5173), if any. */
-  previewUrl?: string
+  /**
+   * Loopback URLs the shell printed (e.g. http://localhost:5173/), the ones labeled
+   * as the local page first, then in the order they appeared. Capped.
+   */
+  previewUrls: string[]
+  /** How many leading entries of {@link previewUrls} are labeled `Local:`. */
+  announcedCount: number
+  /** URLs read_shell_output has already reported to the agent. */
+  reportedUrls: Set<string>
+}
+
+/** Most URLs kept per shell: a dev script starts a few servers, not dozens. */
+const MAX_URLS = 8
+
+/**
+ * Fold newly printed URLs into a shell's list, keeping the `Local:` ones ahead of the
+ * rest. Returns whether the list changed (so the Preview dock should refresh).
+ */
+function addPreviewUrls(shell: Shell, found: FoundUrl[]): boolean {
+  let changed = false
+  for (const f of found) {
+    const at = shell.previewUrls.indexOf(f.url)
+    if (at >= 0) {
+      // Seen before but only now labeled as the local page: move it up front.
+      if (!f.announced || at < shell.announcedCount) continue
+      shell.previewUrls.splice(at, 1)
+    } else if (shell.previewUrls.length >= MAX_URLS) {
+      continue
+    }
+    if (f.announced) shell.previewUrls.splice(shell.announcedCount++, 0, f.url)
+    else shell.previewUrls.push(f.url)
+    changed = true
+  }
+  return changed
 }
 
 /** Keep at most this many trailing bytes per stream (rolling window). */
@@ -124,19 +158,18 @@ export function registerShell(
     running: true,
     startedAt: Date.now(),
     exitedAt: null,
+    previewUrls: [],
+    announcedCount: 0,
+    reportedUrls: new Set(),
     ...(conversationId ? { conversationId } : {})
   }
-  // Sniff a freshly arrived chunk for the dev server's loopback URL until one is
-  // found. Most servers print it on a single line early on, so scanning the chunk
-  // (not the whole rolling buffer) is enough and bounded. A first match is a
-  // registry change (the Preview dock can now show the pane), so notify.
+  // Sniff each freshly arrived chunk for the loopback URLs the servers announce.
+  // Servers print them on a line of their own early on, so scanning the chunk (not
+  // the whole rolling buffer) is enough and bounded. A new URL is a registry change
+  // (the Preview dock can show or switch the pane), so notify.
   const sniff = (chunk: string): void => {
-    if (shell.previewUrl) return
-    const url = detectLocalUrl(chunk)
-    if (url) {
-      shell.previewUrl = url
-      notifyShellsChanged()
-    }
+    if (shell.previewUrls.length >= MAX_URLS && shell.announcedCount > 0) return
+    if (addPreviewUrls(shell, detectLocalUrls(chunk))) notifyShellsChanged()
   }
   // One decoder per stream: a multibyte character split across two pipe chunks
   // would otherwise decode as two replacement characters.
@@ -179,6 +212,8 @@ export interface ShellOutput {
   exitCode: number | null
   stdout: string
   stderr: string
+  /** Loopback URLs the shell printed that no earlier read reported, `Local:` ones first. */
+  newUrls: string[]
 }
 
 /**
@@ -187,12 +222,15 @@ export interface ShellOutput {
  */
 export function readShellOutput(id: string, opts: { full?: boolean } = {}): ShellOutput {
   const s = shells.get(id)
-  if (!s) return { found: false, running: false, exitCode: null, stdout: '', stderr: '' }
+  if (!s) return { found: false, running: false, exitCode: null, stdout: '', stderr: '', newUrls: [] }
   const stdout = opts.full ? s.stdout : unreadSlice(s.stdout, s.stdoutProduced, s.readStdout)
   const stderr = opts.full ? s.stderr : unreadSlice(s.stderr, s.stderrProduced, s.readStderr)
   s.readStdout = s.stdoutProduced
   s.readStderr = s.stderrProduced
-  return { found: true, running: s.running, exitCode: s.exitCode, stdout, stderr }
+  // A full re-read restates every URL; an incremental one only those not yet reported.
+  const newUrls = opts.full ? [...s.previewUrls] : s.previewUrls.filter((u) => !s.reportedUrls.has(u))
+  for (const u of newUrls) s.reportedUrls.add(u)
+  return { found: true, running: s.running, exitCode: s.exitCode, stdout, stderr, newUrls }
 }
 
 /**
@@ -246,6 +284,13 @@ export function killShell(id: string): KillShellResult {
   return 'already-exited'
 }
 
+/** The process groups of every background shell this run of Houston started. */
+export function backgroundShellGroups(): Set<number> {
+  const out = new Set<number>()
+  for (const s of shells.values()) if (s.child.pid !== undefined) out.add(s.child.pid)
+  return out
+}
+
 export function listShells(): BackgroundShellInfo[] {
   return [...shells.values()].map((s) => ({
     id: s.id,
@@ -269,7 +314,7 @@ export function listPreviewServers(): PreviewServer[] {
     id: s.id,
     command: s.command,
     running: s.running,
-    ...(s.previewUrl ? { url: s.previewUrl } : {})
+    ...(s.previewUrls.length ? { url: s.previewUrls[0], urls: [...s.previewUrls] } : {})
   }))
 }
 

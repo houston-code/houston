@@ -1282,6 +1282,46 @@ describe('view_localhost', () => {
     expect(out).toContain('ERROR: boom')
   })
 
+  it('notes when the port is served by a process outside the workspace', async () => {
+    const out = await getTool('view_localhost')!.execute(
+      { url: 'http://localhost:5173' },
+      {
+        ...ctx,
+        attachImage: () => {},
+        captureLocalhost: fakeCapture(),
+        portListeners: async () => [{ pid: 9410, pgid: 8907, command: 'node', cwd: '/elsewhere/frontend' }]
+      }
+    )
+    expect(out).toMatch(/Loaded http:\/\/localhost:5173\/.*\n\[note: port 5173 is served by "node" \(pid 9410\)/)
+    expect(out).toContain('a folder named "frontend" outside this workspace')
+  })
+
+  it('adds no note for a server running inside the workspace, or when the lookup fails', async () => {
+    const inside = await getTool('view_localhost')!.execute(
+      { url: 'http://localhost:5173' },
+      {
+        ...ctx,
+        attachImage: () => {},
+        captureLocalhost: fakeCapture(),
+        portListeners: async () => [{ pid: 1, pgid: 1, command: 'node', cwd: join(ctx.workspace, 'client') }]
+      }
+    )
+    expect(inside).not.toContain('[note: port')
+    const failed = await getTool('view_localhost')!.execute(
+      { url: 'http://localhost:5173' },
+      {
+        ...ctx,
+        attachImage: () => {},
+        captureLocalhost: fakeCapture(),
+        portListeners: async () => {
+          throw new Error('lsof missing')
+        }
+      }
+    )
+    expect(failed).toContain('Loaded http://localhost:5173/')
+    expect(failed).not.toContain('[note: port')
+  })
+
   it('notes a selector that matched nothing', async () => {
     const out = await getTool('view_localhost')!.execute(
       { url: 'http://localhost:3000', selector: '.missing' },
@@ -2065,6 +2105,18 @@ describe('background shell tools', () => {
     // Let it finish before cleanup: a shell still running in the workspace holds it as
     // its cwd, and Windows won't remove the directory under it.
     await vi.waitFor(() => expect(readShellOutput(id!).running).toBe(false), { timeout: 10_000 })
+  })
+
+  it('read_shell_output states the local URLs the shell printed, once each', async () => {
+    const script =
+      "console.log('api listening on http://localhost:3001'); console.log('  Local:   http://localhost:5175/')"
+    const out = await run('run_shell', { command: `node -e "${script}"`, background: true })
+    const id = /Started background shell (\w+)/.exec(out)?.[1] as string
+    await vi.waitFor(() => expect(readShellOutput(id, { full: true }).running).toBe(false), { timeout: 10_000 })
+    const first = await run('read_shell_output', { shell_id: id, full: true })
+    // The page labeled Local: first, then the other server it started.
+    expect(first).toContain('[local URLs it printed: http://localhost:5175/, http://localhost:3001/.')
+    expect(await run('read_shell_output', { shell_id: id })).not.toContain('local URL')
   })
 
   it('read_shell_output reports an unknown id', async () => {
