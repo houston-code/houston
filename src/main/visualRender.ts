@@ -80,21 +80,28 @@ export const HTML_VISUAL_CSP = [
  * Runs before the model's own script. WebRTC can send data out over ICE without a
  * request any CSP or proxy sees, so its constructors are removed and pinned; with
  * frame-src and worker-src 'none' the page has no fresh realm to recover them from.
- * Then report the document height to the chat so the frame can size to it.
+ * Then report the document height to the chat so the frame can size to it, measured
+ * from the root element's box: scrollHeight never reports less than the frame's
+ * current height, so a short visual could never shrink its frame.
  */
 export const HTML_VISUAL_RUNTIME = `<script>(() => {
   for (const k of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel', 'RTCSessionDescription', 'RTCIceCandidate']) {
     try { Object.defineProperty(window, k, { value: undefined, writable: false, configurable: false }) } catch {}
   }
-  const report = () => parent.postMessage({ houstonVisual: 'resize', height: Math.ceil(document.documentElement.scrollHeight) }, '*')
+  const report = () => parent.postMessage({ houstonVisual: 'resize', height: Math.ceil(document.documentElement.getBoundingClientRect().height) }, '*')
   addEventListener('load', report)
   addEventListener('DOMContentLoaded', () => new ResizeObserver(report).observe(document.documentElement))
 })()</script>`
 
-/** The served document: doctype kept first, then the prefetch-off meta and the runtime. */
+/**
+ * The served document: a doctype first (the model's, or a standard one when the
+ * snippet has none, since quirks mode stretches the root to the frame and the frame
+ * could never shrink to fit), then the prefetch-off meta and the runtime.
+ */
 export function htmlVisualDocument(html: string): string {
   const doctype = /^\uFEFF?\s*<!doctype[^>]*>/i.exec(html)
-  const at = doctype ? doctype[0].length : 0
+  if (!doctype) return `<!doctype html>${PREFETCH_OFF_META}${HTML_VISUAL_RUNTIME}${html}`
+  const at = doctype[0].length
   return html.slice(0, at) + PREFETCH_OFF_META + HTML_VISUAL_RUNTIME + html.slice(at)
 }
 

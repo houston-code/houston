@@ -24,13 +24,17 @@ const ID = '0123456789abcdef0123456789abcdef'
 describe('HTML visual documents', () => {
   it('put the prefetch-off meta and the runtime first, after any doctype', () => {
     expect(htmlVisualDocument('<!DOCTYPE html><p>x</p>')).toBe(`<!DOCTYPE html>${PREFETCH_OFF_META}${HTML_VISUAL_RUNTIME}<p>x</p>`)
-    expect(htmlVisualDocument('<p>x</p>').startsWith(PREFETCH_OFF_META + HTML_VISUAL_RUNTIME)).toBe(true)
+    // A snippet with no doctype gets one, so it renders in standards mode and its frame can shrink to fit.
+    expect(htmlVisualDocument('<p>x</p>')).toBe(`<!doctype html>${PREFETCH_OFF_META}${HTML_VISUAL_RUNTIME}<p>x</p>`)
   })
 
   it('remove WebRTC before the page can use it, and report only a height', () => {
     expect(HTML_VISUAL_RUNTIME).toContain("'RTCPeerConnection'")
     expect(HTML_VISUAL_RUNTIME).toContain('configurable: false')
     expect(HTML_VISUAL_RUNTIME).toContain("houstonVisual: 'resize'")
+    // Measured from the root's box so a visual shorter than its frame can shrink it.
+    expect(HTML_VISUAL_RUNTIME).toContain('getBoundingClientRect().height')
+    expect(HTML_VISUAL_RUNTIME).not.toContain('scrollHeight')
   })
 
   it('are served with a CSP that refuses every kind of request', () => {
