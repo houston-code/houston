@@ -512,7 +512,7 @@ export interface AppSettings {
    * from the secrets store on every read, never persisted.
    */
   searchKeyStatus?: Record<string, boolean>
-  /** How hard the model should think before answering (default `off`). */
+  /** How hard the model should think before answering (default DEFAULT_REASONING_EFFORT). */
   reasoningEffort?: ReasoningEffort
   /** How to request the reasoning summary, OpenAI Responses (default `auto`). */
   reasoningSummary?: ReasoningSummary

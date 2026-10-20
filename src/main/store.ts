@@ -24,6 +24,7 @@ import {
   pruneDefaultModels,
   renameBuiltInProviderLabels,
   DEFAULT_COMPACTION_THRESHOLD,
+  DEFAULT_REASONING_EFFORT,
   defaultSettings,
   reconcileSelectedModel,
   SETTINGS_SCHEMA_VERSION,
@@ -249,6 +250,13 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   if (fromVersion < 12) providers = backfillDefaultModels(providers, ['claude-haiku-5-5'])
   // v13: Gemini 4 Argon. Scoped; gemini-3.1-pro-preview, which it replaces in the seed, still serves.
   if (fromVersion < 13) providers = backfillDefaultModels(providers, ['gemini-4-argon'])
+  // v14: the reasoning default moved from off to DEFAULT_REASONING_EFFORT. Every earlier
+  // install wrote `off` into its settings as the default, indistinguishable from a choice,
+  // so it moves once; a level other than off was picked deliberately and is kept. Anyone
+  // who wants off again sets it after this, and later versions don't revisit it.
+  if (fromVersion < 14 && upgraded.reasoningEffort === 'off') {
+    upgraded.reasoningEffort = DEFAULT_REASONING_EFFORT
+  }
   const merged: AppSettings = {
     ...base,
     ...upgraded,

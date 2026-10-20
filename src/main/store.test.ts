@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { McpServerConfig, PermissionRule } from '@shared/types'
 import { REDACTED_HEADER_VALUE, mcpHeaderScope, providerHeaderScope } from '@shared/types'
-import { SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
+import { DEFAULT_REASONING_EFFORT, SETTINGS_SCHEMA_VERSION } from '@shared/defaults'
 
 /**
  * Migration behaviour for the settings store. `getSettings()` runs `migrate()` on the
@@ -335,6 +335,34 @@ describe('settings migration — retired Gemini models (v6)', () => {
       'gemini-3.8-flash',
       'gemini-4-argon'
     ])
+  })
+})
+
+describe('settings migration — reasoning default (v14)', () => {
+  it('moves the old stamped off default to the new default once', async () => {
+    // Every pre-v14 install wrote reasoningEffort: 'off' as the default.
+    writeSettings({ schemaVersion: 13, reasoningEffort: 'off' })
+    const { getSettings } = await loadStore()
+    expect(getSettings().reasoningEffort).toBe(DEFAULT_REASONING_EFFORT)
+    expect(DEFAULT_REASONING_EFFORT).toBe('high')
+  })
+
+  it('keeps a level other than off, which was chosen deliberately', async () => {
+    writeSettings({ schemaVersion: 13, reasoningEffort: 'low' })
+    const { getSettings } = await loadStore()
+    expect(getSettings().reasoningEffort).toBe('low')
+  })
+
+  it('leaves off alone once the install is past v14', async () => {
+    // Someone who turns reasoning off after the migration keeps it off.
+    writeSettings({ schemaVersion: SETTINGS_SCHEMA_VERSION, reasoningEffort: 'off' })
+    const { getSettings } = await loadStore()
+    expect(getSettings().reasoningEffort).toBe('off')
+  })
+
+  it('starts a fresh install at the default', async () => {
+    const { getSettings } = await loadStore()
+    expect(getSettings().reasoningEffort).toBe(DEFAULT_REASONING_EFFORT)
   })
 })
 

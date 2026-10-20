@@ -61,6 +61,7 @@ import { contextWindowFor, contextPercent, accumulateModelUsage } from '@shared/
 import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
+import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { assertNever } from '@shared/assert'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
 import type { ProposalState } from '@shared/agent'
@@ -3031,7 +3032,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'reasoning') {
-        const current = deps.getSettings().reasoningEffort ?? 'off'
+        const current = deps.getSettings().reasoningEffort ?? DEFAULT_REASONING_EFFORT
         if (!result.effort) {
           deps.io.out(`${renderReasoningStatus(current, activeModelReasons(deps, providerId, model), paint)}\n`)
           continue

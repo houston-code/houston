@@ -378,8 +378,11 @@ every terminal supports them; the bell works everywhere.
 Houston says so plainly when the model you are on does not, since a setting that
 silently does nothing looks like a bug rather than a fact about the model.
 
-More thinking costs more tokens and takes longer, which is why it is off by
-default.
+It starts at `high`, since coding and long multi-step work gain the most from
+deeper thinking. More thinking costs more tokens and takes longer per step, so
+turn it down (`/reasoning medium`, `low`, or `off`) for quick questions or to save
+money. The desktop app has the same setting in the reasoning menu next to the
+model picker.
 
 ## What a session cost (/cost)
 
