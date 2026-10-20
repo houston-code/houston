@@ -118,6 +118,7 @@ vi.mock('./promptSnapshot', async (importActual) => ({
 // goldens off the real conversation store.
 vi.mock('../conversations', () => ({
   getConversation: () => null,
+  peekConversation: () => null,
   setCompaction: () => {},
   setPromptSnapshot: () => {},
   takeChildReports: () => []

@@ -163,9 +163,13 @@ export async function serveMockupRequest(
   }
   let body: Buffer
   try {
-    const st = await fs.stat(abs)
+    // Judge the file the path really reaches: a harmless-looking name can be a
+    // symlink to the project's .env, which resolveInRoots allows (it stays inside).
+    const real = await fs.realpath(abs)
+    if (isSensitivePath(relative(root, real))) return notFound
+    const st = await fs.stat(real)
     if (!st.isFile() || st.size > MAX_SERVED_BYTES) return notFound
-    body = await readFile(abs)
+    body = await readFile(real)
   } catch {
     return notFound
   }

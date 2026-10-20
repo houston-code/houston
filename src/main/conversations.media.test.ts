@@ -191,6 +191,17 @@ describe('conversation media store', () => {
     expect(getConversation(fork.id)!.messages[0].images![0].data).toBe(PNG)
   })
 
+  it('peeks at metadata without loading any image bytes', async () => {
+    const { createConversation, setMessages, peekConversation } = await import('./conversations')
+    const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(conv.id, messagesWithImages())
+    const peek = peekConversation(conv.id)!
+    expect(peek.workspace).toBe('/ws')
+    const img = peek.messages[0].images![0] as unknown as Record<string, unknown>
+    expect(img.data).toBeUndefined()
+    expect(img.mediaRef).toMatch(/\.png$/)
+  })
+
   it('keeps the media folder out of the conversation list', async () => {
     const { createConversation, setMessages, listConversations } = await import('./conversations')
     const conv = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })

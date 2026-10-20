@@ -209,6 +209,15 @@ export function getConversation(id: string): Conversation | null {
 }
 
 /**
+ * A conversation for reading its metadata (title, workspace, prompt snapshot,
+ * compaction state) without loading any attachment bytes: images stay as media
+ * references. Never hand the result to a provider or back to the store.
+ */
+export function peekConversation(id: string): Conversation | null {
+  return read(id)
+}
+
+/**
  * Duplicate a conversation into a new one with a fresh id, a "(fork)" title, and a
  * copy of the full message log — so the user can branch off and explore a
  * different direction without disturbing the original. Returns the new

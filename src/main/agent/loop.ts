@@ -173,7 +173,7 @@ import {
   summarizationSystemPrompt,
   summaryMaxTokens
 } from './compaction'
-import { getConversation, setCompaction, setPromptSnapshot, takeChildReports } from '../conversations'
+import { peekConversation, setCompaction, setPromptSnapshot, takeChildReports } from '../conversations'
 import { buildPinnedMessages, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
 import { StallDetector, callSignature, resolveStallThresholds } from './stall'
 import {
@@ -1066,7 +1066,7 @@ export async function startRun(
     // retaken only when the local date changes. githubContext is a pure PATH probe
     // (no network), so the run start never triggers unapproved egress.
     const { snapshot: promptSnapshot, fresh: freshSnapshot } = await resolvePromptSnapshot(
-      conversationId ? getConversation(conversationId)?.promptSnapshot : undefined,
+      conversationId ? peekConversation(conversationId)?.promptSnapshot : undefined,
       localDateStamp(new Date()),
       async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
     )
@@ -2083,7 +2083,7 @@ export async function startRun(
     // must never kill a run.
     if (conversationId) {
       try {
-        const persisted = getConversation(conversationId)?.compaction
+        const persisted = peekConversation(conversationId)?.compaction
         if (persisted && isValidCompactionState(persisted, messages)) {
           cut = persisted.cut
           if (cut > 0) {

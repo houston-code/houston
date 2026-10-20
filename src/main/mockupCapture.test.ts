@@ -101,6 +101,15 @@ describe('serveMockupRequest', () => {
     }
   })
 
+  it('refuses a harmless-looking symlink inside the root that points at a credential file', async () => {
+    if (process.platform === 'win32') return
+    writeFileSync(join(root, '.env'), 'API_KEY=sk-live-123')
+    symlinkSync(join(root, '.env'), join(root, 'mockups', 'notes.txt'))
+    const res = await serveMockupRequest(url('mockups/notes.txt'), lookup)
+    expect(res.status).toBe(404)
+    expect(String(res.body)).not.toContain('sk-live')
+  })
+
   it('refuses a symlink that leads out of the root', async () => {
     if (process.platform === 'win32') return
     symlinkSync(join(outside, 'id_rsa'), join(root, 'mockups', 'key.css'))
