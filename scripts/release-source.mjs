@@ -236,6 +236,8 @@ export function versionOnlyChange(file, before, after) {
  *   baseIsAncestor the recorded base is an ancestor of R
  *   changedFiles   files that differ between the base and R
  *   jsonOk         package.json / package-lock.json differ only in their version fields
+ *   skipped        changes merged to the line after the cut but before the release merge,
+ *                  which the release commit doesn't contain (PR numbers, or short SHAs)
  *   later          commits on the line after the release merge (PR numbers, or short SHAs)
  *   tagCommit      the commit v<version> already names, or null
  *   notes          problems with R's CHANGELOG section for <version>
@@ -274,6 +276,12 @@ export function releaseProblems(version, line, release) {
   for (const p of release.notes) problems.push(`release notes: ${p}. Fix the v${version} section in the release PR.`)
   if (release.tagCommit && release.tagCommit !== release.sha) {
     problems.push(`v${version} already names ${release.tagCommit}, not the release commit ${release.sha}.`)
+  }
+  if (!release.tagCommit && release.skipped.length) {
+    problems.push(
+      `${line} has changes merged after v${version} was cut that its release PR doesn't include (${release.skipped.join(', ')}). ` +
+        `They wouldn't ship, and the notes don't mention them: run "Release - prepare" with "Update pending release" and ${version}.`,
+    )
   }
   if (!release.tagCommit && release.later.length) {
     problems.push(
@@ -331,6 +339,12 @@ function bypassProblems(line, commits) {
     `${line} has commits that didn't come in through a PR merge or squash (${bad.map((c) => `${c.sha.slice(0, 9)} "${c.subject}"`).join(', ')}). ` +
       'Revert them on the line and bring the change in through a PR merged with "Create a merge commit" or "Squash and merge".',
   ]
+}
+
+/** A first-parent commit as its PR number (`#57`), or a short SHA when it has none. */
+function commitLabel(commit) {
+  const n = prNumberFromSubject(commit.subject)
+  return n === null ? commit.sha.slice(0, 9) : `#${n}`
 }
 
 /** The latest release merge for `version` on `line`, or null. */
@@ -472,10 +486,10 @@ function source(env) {
       baseIsAncestor: Boolean(base) && tryGit('merge-base', '--is-ancestor', base, sha) !== null,
       changedFiles,
       jsonOk,
-      later: firstParent(`${merge}..${remote(line)}`).map((c) => {
-        const n = prNumberFromSubject(c.subject)
-        return n === null ? c.sha.slice(0, 9) : `#${n}`
-      }),
+      // Merged to the line while the release PR was open, without updating it: in the line's
+      // history but not in R. Pending versions own everything merged to their line.
+      skipped: base ? firstParent(`${base}..${merge}^1`).map(commitLabel) : [],
+      later: firstParent(`${merge}..${remote(line)}`).map(commitLabel),
       tagCommit: tryGit('rev-parse', '--verify', '--quiet', `refs/tags/v${version}^{commit}`),
       notes: changelogProblems(show(sha, 'CHANGELOG.md'), version),
     })
