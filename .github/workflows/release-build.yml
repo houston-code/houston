@@ -171,7 +171,16 @@ jobs:
           DIST: ${{ inputs.dist }}
         # The retry wrapper is pipeline (it re-runs `npm run dist:*` on a known macOS flake), so
         # it comes from .pipeline: releases older than the script can still be rebuilt.
-        run: bash .pipeline/scripts/dist-with-retry.sh "$DIST"
+        #
+        # An empty CSC_LINK is not "no certificate" to electron-builder: it resolves the empty
+        # path to the workspace and fails ("not a file"). So every signing variable that is
+        # empty is unset first, and an unsigned build (release-prepare's, and the Windows and
+        # Linux legs) runs exactly like PR CI's packaging, which never sets them.
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name}" ]; then unset "$name"; fi
+          done
+          bash .pipeline/scripts/dist-with-retry.sh "$DIST"
       - name: Verify code signature + notarization
         if: startsWith(inputs.os, 'macos') && inputs.sign
         run: |
