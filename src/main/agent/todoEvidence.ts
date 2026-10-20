@@ -64,6 +64,16 @@ const NEED_TEXT: Record<RequiredCheck, string> = {
   any: 'check'
 }
 
+/**
+ * The checks a plan's verification step stands for. Unlike a todo item, every step is
+ * a check by definition, so one that names no particular kind ("add a todo and see it
+ * listed") needs a passing check of any kind.
+ */
+export function checksNamedBy(step: string): RequiredCheck[] {
+  const kinds = NEEDS.filter(([re]) => re.test(step)).map(([, k]) => k)
+  return kinds.length ? [...new Set(kinds)] : ['any']
+}
+
 /** An item marked completed this turn with nothing recorded behind it. */
 export interface TodoGap {
   item: string

@@ -20,8 +20,10 @@ import type {
 } from '@shared/agent'
 import type { PlanReadiness } from '@shared/planReadiness'
 import type { Todo } from '@shared/todos'
+import type { TurnReceipt } from '@shared/evidence'
 import {
   systemNoteMessage,
+  SYSTEM_NOTE_PREFIX,
   sanitizeApprovalNote,
   MAX_STEER_TEXT,
   MAX_PENDING_STEERS
@@ -178,6 +180,7 @@ import {
 import { getConversation, setCompaction, setPromptSnapshot, takeChildReports } from '../conversations'
 import { buildPinnedMessages, latestTodos, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
 import { todoEvidenceGaps, todoGapNote } from './todoEvidence'
+import { findAcceptedPlan, planProgress, planStillOpen } from './planChecklist'
 import { StallDetector, callSignature, resolveStallThresholds } from './stall'
 import {
   MAX_OUTPUT_CONTINUATIONS,
@@ -272,6 +275,9 @@ async function summarize(
     { signal, onRetry }
   )
 }
+
+/** A receipt with nothing recorded, for a turn that only carries a plan's progress. */
+const EMPTY_RECEIPT: TurnReceipt = { v: 1, checks: [], otherCommands: 0, filesChanged: [], filesChangedCount: 0 }
 
 interface RunState {
   abort: AbortController
@@ -402,6 +408,8 @@ interface RunState {
    * receipt just before the run's `done` (see evidence.ts).
    */
   evidence: EvidenceLedger
+  /** When the user accepted a plan during this run, so later turns can tell what changed since. */
+  planAcceptedAt?: number
   /**
    * The id of the WebContents (renderer window) that started this run, when it was
    * started from the GUI. Recorded so the IPC layer can reject run-control calls
@@ -575,6 +583,7 @@ export function resolvePlan(runId: string, callId: string, decision: PlanDecisio
 function planDecisionResult(run: RunState, decision: PlanDecision, readiness?: PlanReadiness): string {
   if (decision.kind === 'accept') {
     run.policy = decision.mode
+    run.planAcceptedAt = Date.now()
     const how =
       decision.mode === 'auto-edit'
         ? 'Edits will be applied automatically as you make them.'
@@ -1144,7 +1153,31 @@ export async function startRun(
     }
     beforeEnd = () => {
       const todoGaps = todoEvidenceGaps(startTodos, latestTodos(messages), run.evidence).map((g) => g.item)
-      const receipt = run.evidence.receipt(peekShell, { todoGaps })
+      let receipt = run.evidence.receipt(peekShell, { todoGaps })
+      // The accepted plan's progress, from every turn's receipt since it was accepted.
+      // Only on a turn that did work (or accepted the plan): a question asked later in
+      // the chat gets no receipt for it.
+      const plan = findAcceptedPlan(messages)
+      if (plan) {
+        const acceptedHere = plan.index >= runStart
+        const prior = messages.slice(plan.index + 1).flatMap((m) => (m.receipt ? [m.receipt] : []))
+        if ((receipt || acceptedHere) && planStillOpen(messages, plan, prior, receipt)) {
+          const base = receipt ?? EMPTY_RECEIPT
+          const userText =
+            [...messages.slice(0, runStart)].reverse().find((m) => m.role === 'user' && !m.content.startsWith(SYSTEM_NOTE_PREFIX))
+              ?.content ?? ''
+          receipt = {
+            ...base,
+            plan: planProgress({
+              plan,
+              acceptedAt: acceptedHere ? run.planAcceptedAt : prior.find((r) => r.plan?.acceptedAt)?.plan?.acceptedAt,
+              receipts: [...prior, base],
+              workspace,
+              userText
+            })
+          }
+        }
+      }
       if (!receipt) return
       for (let i = messages.length - 1; i >= runStart; i--) {
         if (messages[i].role !== 'assistant') continue

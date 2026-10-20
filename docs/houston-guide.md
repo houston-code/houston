@@ -318,6 +318,14 @@ tests pass and the receipt says no tests ran, believe the receipt.
   recorded, and the agent is told at the moment it marks it. The list itself is left
   as the agent wrote it. Items about writing something ("Write tests for the API")
   never need a run behind them.
+- **An accepted plan's progress.** After you accept a plan, each turn that works on
+  it shows how far along it is, counting every turn since you accepted it: "plan: 9
+  of 11 files, 1 of 3 checks passed", with the files it named that nothing has
+  changed yet and each of its checks (passed, ran with nothing passing, not run yet).
+  This holds across turns, so "finish the planned implementation" two turns later
+  picks up where it was. It says "plan complete" once, and stops when a newer plan
+  replaces it or the chat moves on to other work. If you ask to skip the checks,
+  they show as skipped.
 - **Outcomes it can't tell.** An HTTP request made without `curl -f` (so an error
   page still exits 0), a test whose exit code is hidden by what follows it
   (`pytest | tail`, `pytest; echo done`), or a page that loaded with nothing on it
