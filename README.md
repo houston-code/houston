@@ -41,8 +41,11 @@ Open source under the [Apache License 2.0](LICENSE).
   do the work, not just describe it. When a turn is all
   reads (e.g. open five files at once), they run **concurrently**; anything that
   writes, runs a command, or needs approval stays sequential. Edits are matched
-  **resiliently** — if the model's snippet drifts from the file by indentation or
-  whitespace, Houston still locates and applies it instead of failing.
+  **resiliently**: if the model's snippet drifts from the file by indentation or
+  whitespace, Houston still locates and applies it instead of failing, and shows the
+  model the lines it actually changed. Reads come back **line-numbered**, and the
+  agent must have read a file, unchanged since, before it overwrites or edits it, so
+  an edit you make in your editor mid-turn is never clobbered.
   `search_files` ships with a bundled **ripgrep**, so fast content search works
   out of the box without anything installed on your PATH (it falls back to a
   built-in scan if the binary is ever unavailable).

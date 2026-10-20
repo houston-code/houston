@@ -61,6 +61,7 @@ import {
   builtinToolset,
   getTool,
   resolveInRoots,
+  staleWriteRefusal,
   type DispatchAgentOptions,
   type ToolDef,
   type ToolContext,
@@ -69,7 +70,9 @@ import {
 import { previewWrite } from './writePreview'
 import {
   ReadCache,
+  fileTrackerForRun,
   isCacheableRead,
+  pathsSeenInHistory,
   readDeps,
   statPath,
   writePaths,
@@ -1727,6 +1730,7 @@ export async function startRun(
       ...(req.unattended === true ? { unattended: true } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
+      fileTracker,
       ghExec,
       getSecret: getKey,
       collectSecrets: () => knownSecrets,
@@ -2064,6 +2068,15 @@ export async function startRun(
     // from the checkpoint target list so the two stay in lockstep.
     const patchPaths = (patch: string): string[] =>
       writeTargets('apply_patch', { patch }).map((t) => t.path)
+    // What the agent has read and written, so write_file/edit_file/multi_edit can
+    // refuse to change a file it hasn't seen, or one that changed on disk since it
+    // last did (the user editing mid-run, a shell command, a subagent). Carried
+    // across this conversation's turns, but only for files whose read or write is
+    // still in the history the model is shown: a rewound, compacted, or evicted read
+    // no longer counts as seen. See FileReadTracker.
+    const visibleFilePaths = (): Set<string> =>
+      pathsSeenInHistory(messages.slice(Math.max(cut, evictBefore)), resolvePath, patchPaths)
+    const fileTracker = fileTrackerForRun(conversationId, visibleFilePaths())
     // Invalidate cached reads after a mutating tool call. A write invalidates the
     // paths it touched (or everything, if those paths can't be determined); shell —
     // and anything else non-read that changes state — clears the cache wholesale.
@@ -2162,6 +2175,7 @@ export async function startRun(
       evictBefore = boundary
       lastInputTokens = 0
       persistContextState()
+      fileTracker.retainOnly(visibleFilePaths())
       return true
     }
 
@@ -2222,6 +2236,8 @@ export async function startRun(
         // Persist so the next run resumes from this summary instead of paying a
         // fresh summarization of the same head.
         persistContextState()
+        // Files known only from the summarized head are no longer seen.
+        fileTracker.retainOnly(visibleFilePaths())
         emit({ type: 'compaction', summarized: compactedNow })
         return 'ok'
       } catch {
@@ -3166,6 +3182,14 @@ export async function startRun(
             execArgs === call.arguments
               ? ruleAction
               : matchRule(permissionRules, call.name, permissionSubject(call.name, execArgs), roots)
+          // A write over a file the agent hasn't read (or that changed since) is
+          // refused by the tool itself; checking here as well means the user is never
+          // asked to approve a call that is about to fail. The tool re-checks when it
+          // runs, which also catches an edit made while the approval prompt was open.
+          const staleRefusal =
+            !pre.blocked && !rewriteError && execRuleAction !== 'deny' && tool.kind === 'write'
+              ? await staleWriteRefusal(call.name, execArgs, roots, fileTracker)
+              : null
 
           if (pre.blocked) {
             output = `Blocked by a PreToolUse hook:\n${pre.message || '(no output)'}`
@@ -3188,6 +3212,9 @@ export async function startRun(
             output = byManaged
               ? "A PreToolUse hook rewrote the input, and the rewritten input is denied by your organization's managed policy."
               : 'A PreToolUse hook rewrote the input, and the rewritten input is denied by a permission rule.'
+            ok = false
+          } else if (staleRefusal) {
+            output = `Error: ${staleRefusal}`
             ok = false
           } else {
             // A permission rule can force-allow or force-ask; otherwise the policy
@@ -3433,6 +3460,20 @@ export async function startRun(
                   })
                 } catch {
                   // Formatting is best-effort; never fail the tool over it.
+                }
+              }
+              // A PostToolUse hook or the formatter may have rewritten what the tool
+              // wrote. Those are changes made on the agent's behalf, not someone
+              // else's edits, so re-record the files rather than refuse the next edit
+              // as stale.
+              if (ok && tool.kind === 'write' && (settings.formatOnSave || hasMatchingHook(call.name))) {
+                for (const t of writeTargets(call.name, execArgs)) {
+                  if (t.deleted) continue
+                  try {
+                    await fileTracker.refresh(resolvePath(t.path))
+                  } catch {
+                    // A path that won't resolve was never recorded; nothing to refresh.
+                  }
                 }
               }
               // Snapshot each file's final content (after any hook/formatter)

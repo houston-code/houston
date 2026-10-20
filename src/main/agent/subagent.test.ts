@@ -364,6 +364,40 @@ describe('runSubAgent', () => {
       expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('hello from subagent')
     })
 
+    it('makes a writable subagent read a file before it edits it', async () => {
+      writeFileSync(join(ws, 'existing.txt'), 'original\n')
+      const provider = scriptedProvider([
+        [
+          { type: 'tool_call', call: { id: 'e1', name: 'edit_file', arguments: { path: 'existing.txt', old_string: 'original', new_string: 'blind' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'existing.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'e2', name: 'edit_file', arguments: { path: 'existing.txt', old_string: 'original', new_string: 'informed' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Edited.' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+      let transcript: ChatMessage[] = []
+      await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'edit existing.txt',
+        signal: new AbortController().signal,
+        writable: true,
+        roots: [ws],
+        onTranscript: (m) => {
+          transcript = m
+        }
+      })
+      expect(transcript.find((m) => m.toolCallId === 'e1')!.content).toMatch(/You have not read existing\.txt yet/)
+      expect(readFileSync(join(ws, 'existing.txt'), 'utf8')).toBe('informed\n')
+    })
+
     it('records edits in the dispatching turn checkpoint when checkpointRunId is set', async () => {
       writeFileSync(join(ws, 'existing.txt'), 'before-sub')
       const patch = [

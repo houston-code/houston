@@ -3,8 +3,11 @@ import { promises as realFs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  FileReadTracker,
   ReadCache,
   cacheKey,
+  fileTrackerForRun,
+  pathsSeenInHistory,
   canonicalArgs,
   isCacheableRead,
   readDeps,
@@ -413,5 +416,122 @@ describe('writePaths / writeTouchesUnknownPaths', () => {
   it('flags a malformed apply_patch (no paths) for broad invalidation', () => {
     const got = writePaths('apply_patch', { patch: 'garbage' }, resolve, patchPaths)
     expect(writeTouchesUnknownPaths(got)).toBe(true)
+  })
+})
+
+describe('FileReadTracker', () => {
+  it('reports a file it never saw as unread', () => {
+    expect(new FileReadTracker().check('/w/a.ts', 'x')).toBe('unread')
+  })
+
+  it('passes a file whose bytes match its last read or write, and flags one that changed', () => {
+    const t = new FileReadTracker()
+    t.noteRead('/w/a.ts', Buffer.from('v1'))
+    expect(t.check('/w/a.ts', Buffer.from('v1'))).toBeNull()
+    expect(t.check('/w/a.ts', 'v1')).toBeNull() // a string digests as its UTF-8 bytes
+    expect(t.check('/w/a.ts', 'v2')).toBe('changed')
+    t.noteWrite('/w/a.ts', 'v2')
+    expect(t.check('/w/a.ts', 'v2')).toBeNull()
+  })
+
+  it('forgets a path, and keeps only the paths it is told to', () => {
+    const t = new FileReadTracker()
+    t.noteRead('/w/a', 'a')
+    t.noteRead('/w/b', 'b')
+    t.forget('/w/a')
+    expect(t.has('/w/a')).toBe(false)
+    t.noteRead('/w/c', 'c')
+    t.retainOnly(new Set(['/w/c']))
+    expect([t.has('/w/b'), t.has('/w/c')]).toEqual([false, true])
+  })
+
+  it('drops the stalest record once over its cap', () => {
+    const t = new FileReadTracker({ maxEntries: 2 })
+    t.noteRead('/w/a', 'a')
+    t.noteRead('/w/b', 'b')
+    t.noteRead('/w/a', 'a') // touching a makes b the stalest
+    t.noteRead('/w/c', 'c')
+    expect([t.has('/w/a'), t.has('/w/b'), t.has('/w/c')]).toEqual([true, false, true])
+    expect(t.size).toBe(2)
+  })
+
+  describe('refresh', () => {
+    let dir: string
+    beforeEach(async () => {
+      dir = await realFs.mkdtemp(join(tmpdir(), 'houston-tracker-'))
+    })
+    afterEach(async () => {
+      await realFs.rm(dir, { recursive: true, force: true })
+    })
+
+    it('re-records a tracked file from disk (a formatter ran after the write)', async () => {
+      const f = join(dir, 'a.ts')
+      const t = new FileReadTracker()
+      t.noteWrite(f, 'ugly')
+      await realFs.writeFile(f, 'pretty')
+      expect(t.check(f, 'pretty')).toBe('changed')
+      await t.refresh(f)
+      expect(t.check(f, 'pretty')).toBeNull()
+    })
+
+    it('leaves an untracked file untracked, and forgets one that vanished', async () => {
+      const f = join(dir, 'b.ts')
+      await realFs.writeFile(f, 'x')
+      const t = new FileReadTracker()
+      await t.refresh(f)
+      expect(t.has(f)).toBe(false)
+      t.noteRead(join(dir, 'gone.ts'), 'y')
+      await t.refresh(join(dir, 'gone.ts'))
+      expect(t.has(join(dir, 'gone.ts'))).toBe(false)
+    })
+  })
+})
+
+describe('fileTrackerForRun', () => {
+  it('carries a conversation’s records into its next run', () => {
+    const first = fileTrackerForRun('conv-carry', new Set())
+    first.noteRead('/w/a.ts', 'a')
+    const next = fileTrackerForRun('conv-carry', new Set(['/w/a.ts']))
+    expect(next.check('/w/a.ts', 'a')).toBeNull()
+  })
+
+  it('drops records whose read is no longer in the visible history', () => {
+    fileTrackerForRun('conv-prune', new Set()).noteRead('/w/a.ts', 'a')
+    // The read was rewound, compacted, or evicted away: the model can't see it now.
+    expect(fileTrackerForRun('conv-prune', new Set()).check('/w/a.ts', 'a')).toBe('unread')
+  })
+
+  it('keeps conversations apart, and gives a headless run a tracker of its own', () => {
+    fileTrackerForRun('conv-x', new Set()).noteRead('/w/a.ts', 'a')
+    expect(fileTrackerForRun('conv-y', new Set(['/w/a.ts'])).check('/w/a.ts', 'a')).toBe('unread')
+    expect(fileTrackerForRun(undefined, new Set(['/w/a.ts'])).check('/w/a.ts', 'a')).toBe('unread')
+  })
+})
+
+describe('pathsSeenInHistory', () => {
+  const resolvePath = (rel: string): string => {
+    if (rel.startsWith('..')) throw new Error('escapes')
+    return `/w/${rel}`
+  }
+  const patchPaths = (patch: string): string[] => (patch === 'P' ? ['p1.ts', 'p2.ts'] : [])
+
+  it('collects the files read or written, and nothing a non-file tool named', () => {
+    const seen = pathsSeenInHistory(
+      [
+        { toolCalls: [{ name: 'read_file', arguments: { path: 'a.ts' } }] },
+        {},
+        {
+          toolCalls: [
+            { name: 'edit_file', arguments: { path: 'b.ts' } },
+            { name: 'apply_patch', arguments: { patch: 'P' } },
+            { name: 'list_dir', arguments: { path: 'src' } },
+            { name: 'read_file', arguments: { path: '../outside' } }
+          ]
+        }
+      ],
+      resolvePath,
+      patchPaths
+    )
+    expect([...seen].sort()).toEqual(['/w/a.ts', '/w/b.ts', '/w/p1.ts', '/w/p2.ts'])
   })
 })

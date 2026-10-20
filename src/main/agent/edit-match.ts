@@ -24,14 +24,55 @@
  * The uniqueness contract is preserved: a single match unless `replace_all`. CRLF
  * and a leading BOM are preserved. Pure and deterministic — unit-tested without a
  * filesystem.
+ *
+ * Two recoveries sit around the cascade. When `old_string` matches nowhere as
+ * written but every line of it carries a `read_file` line-number prefix, the
+ * prefixes are taken to be copied by mistake and the cascade is retried without
+ * them (see {@link stripLineNumbers}). When nothing matches at all, the error names
+ * the closest region of the file, numbered, so the model can correct its
+ * `old_string` without re-reading the whole file.
  */
 
+import { displayLines, numberLines, numberWidth, stripLineNumbers } from './line-numbers'
+
 export type EditStrategy = 'exact' | 'line-trimmed' | 'block-anchor'
+
+/** Where one replacement landed, in the line numbers of the edited content. */
+export interface EditRegion {
+  /** 1-based line the replacement starts on. */
+  startLine: number
+  /** Lines the replacement occupies; 0 when it deleted text without adding any. */
+  lineCount: number
+  /** Lines the replacement added (negative: removed), which shifts every later line. */
+  lineDelta: number
+}
 
 export interface EditResult {
   content: string
   strategy: EditStrategy
   replacements: number
+  /** Each replacement's position in `content`, in file order. */
+  regions: EditRegion[]
+  /**
+   * Set when `old_string` matched only after removing copied line-number prefixes;
+   * `'old'` when just `old_string` carried them, `'both'` when `new_string` did too.
+   */
+  strippedLineNumbers?: 'old' | 'both'
+}
+
+/**
+ * `old_string` matched nothing. Carries whether the message names a closest region,
+ * so a caller that applies several edits in memory can say which state its line
+ * numbers describe.
+ */
+export class EditNotFoundError extends Error {
+  constructor(
+    message: string,
+    readonly hasCandidate: boolean
+  ) {
+    super(message)
+    this.name = 'EditNotFoundError'
+  }
 }
 
 interface Span {
@@ -195,29 +236,44 @@ function spliceRaw(raw: string, replacements: Replacement[]): string {
   return out + raw.slice(prevRaw)
 }
 
-/**
- * Locate `oldString` in `content` via the matcher cascade and replace it with
- * `newString`. Throws a clear error if the text isn't found or is ambiguous
- * (multiple matches without `replaceAll`).
- */
-export function resolveEdit(
-  content: string,
-  oldString: string,
-  newString: string,
-  replaceAll = false
-): EditResult {
-  if (oldString === '') throw new Error('old_string must not be empty.')
-  if (oldString === newString)
-    throw new Error(
-      'old_string and new_string are identical, so the edit would make no change. Make the replacement text differ from the original.'
-    )
+/** The file text a match runs against: BOM split off, line endings normalized to LF. */
+interface Prepared {
+  hasBom: boolean
+  /** The content without its BOM, line endings as on disk. */
+  raw: string
+  crlf: boolean
+  /** `raw` with CRLF normalized to LF; every span offset is into this. */
+  body: string
+}
 
+function prepare(content: string): Prepared {
   const hasBom = content.charCodeAt(0) === 0xfeff
   const raw = hasBom ? content.slice(1) : content
   // Match in normalized-LF space so CRLF separators are never split across a span
   // boundary, but splice back into RAW so untouched lines keep their original endings.
   const crlf = raw.includes('\r\n')
-  const body = crlf ? raw.replace(/\r\n/g, '\n') : raw
+  return { hasBom, raw, crlf, body: crlf ? raw.replace(/\r\n/g, '\n') : raw }
+}
+
+/** Number of `\n` in `s[from, to)`. */
+function countNewlines(s: string, from = 0, to = s.length): number {
+  let n = 0
+  for (let i = from; i < to; i++) if (s.charCodeAt(i) === 10) n++
+  return n
+}
+
+/**
+ * Run the matcher cascade for one `oldString`/`newString` pair. Returns the edit, or
+ * null when no strategy locates the text. Throws when a strategy finds it more than
+ * once without `replaceAll`: an ambiguous match is an answer, not a miss.
+ */
+function locate(
+  p: Prepared,
+  oldString: string,
+  newString: string,
+  replaceAll: boolean
+): Omit<EditResult, 'strippedLineNumbers'> | null {
+  const { body, crlf } = p
   const oldLf = crlf ? oldString.replace(/\r\n/g, '\n') : oldString
   const newLf = crlf ? newString.replace(/\r\n/g, '\n') : newString
 
@@ -229,13 +285,11 @@ export function resolveEdit(
   const newHadTrailingNewline = newLf.endsWith('\n')
   const newLines = (newHadTrailingNewline ? newLf.slice(0, -1) : newLf).split('\n')
 
-  // Re-assemble replacement lines back into the file's dominant line ending; the rest
-  // of the file is preserved verbatim (see spliceRaw), so a mixed-ending file isn't
-  // rewritten. Passing `newLines` straight through reproduces `newString` exactly.
-  const encode = (lines: string[]): string => {
-    const joined = lines.join('\n') + (newHadTrailingNewline ? '\n' : '')
-    return crlf ? joined.replace(/\n/g, '\r\n') : joined
-  }
+  // The replacement in LF form; passing `newLines` straight through reproduces
+  // `newString` exactly. Re-encoded into the file's dominant line ending when spliced,
+  // and the rest of the file is preserved verbatim (see spliceRaw), so a mixed-ending
+  // file isn't rewritten.
+  const joinLf = (lines: string[]): string => lines.join('\n') + (newHadTrailingNewline ? '\n' : '')
 
   for (const strategy of STRATEGIES) {
     let spans: Span[]
@@ -258,18 +312,167 @@ export function resolveEdit(
       )
     }
 
-    const replacements: Replacement[] = spans.map((s) => ({
+    // Fuzzy spans carry the file block's indent; re-base the replacement onto it.
+    const texts = spans.map((s) => joinLf(s.indent !== undefined ? reindent(newLines, oldBase, s.indent) : newLines))
+    const replacements: Replacement[] = spans.map((s, i) => ({
       start: s.start,
       end: s.end,
-      // Fuzzy spans carry the file block's indent; re-base the replacement onto it.
-      text: s.indent !== undefined ? encode(reindent(newLines, oldBase, s.indent)) : encode(newLines)
+      text: crlf ? texts[i].replace(/\n/g, '\r\n') : texts[i]
     }))
-    const next = spliceRaw(raw, replacements)
+    // Spans are left to right and non-overlapping, so each one's start line in the
+    // edited content is its start line in the original plus what earlier ones added.
+    const regions: EditRegion[] = []
+    let shift = 0
+    let cursor = 0
+    let linesBefore = 0
+    spans.forEach((s, i) => {
+      linesBefore += countNewlines(body, cursor, s.start)
+      cursor = s.start
+      const text = texts[i]
+      const added = countNewlines(text)
+      const lineDelta = added - countNewlines(body, s.start, s.end)
+      regions.push({
+        startLine: 1 + linesBefore + shift,
+        lineCount: text === '' ? 0 : added + (text.endsWith('\n') ? 0 : 1),
+        lineDelta
+      })
+      shift += lineDelta
+    })
+    const next = spliceRaw(p.raw, replacements)
     return {
-      content: hasBom ? '\uFEFF' + next : next,
+      content: p.hasBom ? '﻿' + next : next,
       strategy,
-      replacements: spans.length
+      replacements: spans.length,
+      regions
     }
   }
-  throw new Error('old_string was not found in the file.')
+  return null
+}
+
+/**
+ * Locate `oldString` in `content` via the matcher cascade and replace it with
+ * `newString`. Throws a clear error if the text isn't found or is ambiguous
+ * (multiple matches without `replaceAll`). A miss is an {@link EditNotFoundError}
+ * naming the closest region, when one is close enough to be worth showing and
+ * `showCandidate` isn't false (a caller editing a credential file turns it off, so
+ * a deliberately wrong old_string can't read the file out through the error).
+ */
+export function resolveEdit(
+  content: string,
+  oldString: string,
+  newString: string,
+  replaceAll = false,
+  opts: { showCandidate?: boolean } = {}
+): EditResult {
+  if (oldString === '') throw new Error('old_string must not be empty.')
+  if (oldString === newString) throw identicalError()
+
+  const p = prepare(content)
+  const hit = locate(p, oldString, newString, replaceAll)
+  if (hit) return hit
+
+  // Not found as written. If every line carries a read_file prefix, the model copied
+  // the numbers along with the text: retry without them. new_string is stripped only
+  // in that case, and only when all of its lines are numbered too, so a replacement
+  // that merely starts with numbers is written as given.
+  const strippedOld = stripLineNumbers(oldString, { consecutive: true })
+  if (strippedOld !== null && strippedOld.trim() !== '') {
+    const strippedNew = stripLineNumbers(newString)
+    const retryNew = strippedNew ?? newString
+    if (strippedOld === retryNew) throw identicalError()
+    const retry = locate(p, strippedOld, retryNew, replaceAll)
+    if (retry) return { ...retry, strippedLineNumbers: strippedNew !== null ? 'both' : 'old' }
+  }
+  if (opts.showCandidate === false) {
+    throw new EditNotFoundError(
+      'old_string was not found in the file. Its closest region is not shown because the file may hold credentials; read it with read_file to see its current content.',
+      false
+    )
+  }
+  throw notFoundError(p.body, strippedOld !== null && strippedOld.trim() !== '' ? strippedOld : oldString)
+}
+
+function identicalError(): Error {
+  return new Error(
+    'old_string and new_string are identical, so the edit would make no change. Make the replacement text differ from the original.'
+  )
+}
+
+/** Lines of a candidate region shown in a not-found error before it is cut short. */
+const MAX_CANDIDATE_LINES = 40
+/** How similar (0..1) a region must be to `old_string` to be offered as the one meant. */
+const MIN_CANDIDATE_SIMILARITY = 0.4
+/** Line comparisons the closest-region scan may spend before narrowing what it compares. */
+const MAX_CANDIDATE_COMPARISONS = 2_000_000
+
+function notFoundError(body: string, oldString: string): EditNotFoundError {
+  const lines = displayLines(body)
+  const needle = displayLines(oldString.replace(/\r\n/g, '\n'))
+  const best = closestRegion(lines, needle)
+  if (!best || best.score < MIN_CANDIDATE_SIMILARITY) {
+    return new EditNotFoundError(
+      'old_string was not found in the file, and no part of the file is close to it. Read the file again to see its current content.',
+      false
+    )
+  }
+  const from = best.start + 1
+  const to = best.start + best.length
+  const shownTo = Math.min(to, from + MAX_CANDIDATE_LINES - 1)
+  const listing = numberLines(lines, from, shownTo, numberWidth(lines.length))
+  const cut = shownTo < to ? `\n[${to - shownTo} more line${to - shownTo === 1 ? '' : 's'} not shown]` : ''
+  const range = from === to ? `line ${from}` : `lines ${from}-${to}`
+  return new EditNotFoundError(
+    `old_string was not found in the file. The closest match is ${range} (${Math.round(best.score * 100)}% similar):\n${listing}${cut}\nIf this is the text you meant, retry with old_string copied from it exactly, without the line-number prefixes.`,
+    true
+  )
+}
+
+/** A line's comparable tokens: identifier/number runs and punctuation runs. */
+function tokens(line: string): Set<string> {
+  return new Set(line.trim().match(/[\p{L}\p{N}_$]+|[^\s\p{L}\p{N}_$]+/gu) ?? [])
+}
+
+/** Similarity of two lines in 0..1: 1 when equal ignoring outer whitespace, else token-set Dice. */
+function lineSimilarity(a: string, ta: Set<string>, b: string, tb: Set<string>): number {
+  if (a.trim() === b.trim()) return 1
+  if (ta.size === 0 || tb.size === 0) return 0
+  let shared = 0
+  for (const t of ta) if (tb.has(t)) shared++
+  return (2 * shared) / (ta.size + tb.size)
+}
+
+/**
+ * The window of the file most like `needle`, line by line: every run of
+ * `needle.length` consecutive lines is scored by its mean per-line similarity, and
+ * the first best wins. Blank lines at either end of the needle are ignored, since
+ * they say nothing about where it belongs. On a very large file the needle is cut to
+ * its leading lines so the scan stays bounded; its head still finds the region.
+ */
+function closestRegion(
+  lines: string[],
+  rawNeedle: string[]
+): { start: number; length: number; score: number } | null {
+  let lo = 0
+  let hi = rawNeedle.length
+  while (lo < hi && rawNeedle[lo].trim() === '') lo++
+  while (hi > lo && rawNeedle[hi - 1].trim() === '') hi--
+  let needle = rawNeedle.slice(lo, hi)
+  if (needle.length === 0 || lines.length === 0) return null
+  const fullLength = Math.min(needle.length, lines.length)
+  const budget = Math.max(1, Math.floor(MAX_CANDIDATE_COMPARISONS / lines.length))
+  needle = needle.slice(0, Math.min(fullLength, budget))
+
+  const fileTokens = lines.map(tokens)
+  const needleTokens = needle.map(tokens)
+  let best: { start: number; length: number; score: number } | null = null
+  for (let i = 0; i + needle.length <= lines.length; i++) {
+    let sum = 0
+    for (let j = 0; j < needle.length; j++) {
+      sum += lineSimilarity(lines[i + j], fileTokens[i + j], needle[j], needleTokens[j])
+    }
+    const score = sum / needle.length
+    if (!best || score > best.score) best = { start: i, length: fullLength, score }
+  }
+  if (best && best.start + best.length > lines.length) best.length = lines.length - best.start
+  return best
 }

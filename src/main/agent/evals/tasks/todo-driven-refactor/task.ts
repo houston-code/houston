@@ -19,8 +19,9 @@ export const task: EvalTask = {
         ]
       })
     ),
+    turn(callTool('c2', 'read_file', { path: 'validate.mjs' })),
     turn(
-      callTool('c2', 'edit_file', {
+      callTool('c3', 'edit_file', {
         path: 'validate.mjs',
         old_string: "  if (!user.name) return 'name required'\n  return null",
         new_string: [
@@ -32,7 +33,7 @@ export const task: EvalTask = {
       })
     ),
     turn(
-      callTool('c3', 'todo_write', {
+      callTool('c4', 'todo_write', {
         todos: [
           { content: 'Require an email', status: 'completed' },
           { content: 'Reject a non-positive age', status: 'completed' }

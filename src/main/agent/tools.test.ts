@@ -42,8 +42,10 @@ import {
   presentFetchedDocument,
   backgroundsItself,
   BACKGROUND_AMPERSAND_ERROR,
+  staleWriteRefusal,
   type ToolContext
 } from './tools'
+import { FileReadTracker } from './readCache'
 import type { FetchedDocument } from './webfetch'
 import type { GhResult } from './github'
 import { readShellOutput, registerShell } from './shells'
@@ -67,6 +69,9 @@ afterEach(() => {
 
 const run = (name: string, args: Record<string, unknown>): Promise<string> =>
   getTool(name)!.execute(args, ctx)
+
+/** A workspace file's content straight from disk, for checking what a write left. */
+const fileText = (rel: string): string => readFileSync(join(workspace, rel), 'utf8')
 
 describe('tool registry', () => {
   it('exposes the expected tools', () => {
@@ -502,13 +507,13 @@ describe('git tools', () => {
 describe('write/read/edit', () => {
   it('writes then reads a file back', async () => {
     await run('write_file', { path: 'a/b.txt', content: 'hello' })
-    expect(await run('read_file', { path: 'a/b.txt' })).toBe('hello')
+    expect(await run('read_file', { path: 'a/b.txt' })).toBe('1\thello')
   })
 
   it('edits an exact string', async () => {
     await run('write_file', { path: 'x.txt', content: 'one two three' })
     await run('edit_file', { path: 'x.txt', old_string: 'two', new_string: 'TWO' })
-    expect(await run('read_file', { path: 'x.txt' })).toBe('one TWO three')
+    expect(fileText('x.txt')).toBe('one TWO three')
   })
 
   it('rejects an edit when old_string is missing', async () => {
@@ -524,7 +529,7 @@ describe('write/read/edit', () => {
       /occurs 3 times/
     )
     await run('edit_file', { path: 'x.txt', old_string: 'a', new_string: 'b', replace_all: true })
-    expect(await run('read_file', { path: 'x.txt' })).toBe('b b b')
+    expect(fileText('x.txt')).toBe('b b b')
   })
 })
 
@@ -547,7 +552,7 @@ describe('read_file on binary', () => {
 
   it('still reads ordinary text, including unicode', async () => {
     await run('write_file', { path: 'u.txt', content: 'héllo 世界' })
-    expect(await run('read_file', { path: 'u.txt' })).toBe('héllo 世界')
+    expect(await run('read_file', { path: 'u.txt' })).toBe('1\théllo 世界')
   })
 })
 
@@ -714,7 +719,7 @@ describe('multi_edit', () => {
         { old_string: 'three', new_string: '3' }
       ]
     })
-    expect(await run('read_file', { path: 'm.txt' })).toBe('1 two 3')
+    expect(fileText('m.txt')).toBe('1 two 3')
   })
 
   it('sees the result of earlier edits in later ones', async () => {
@@ -726,13 +731,13 @@ describe('multi_edit', () => {
         { old_string: 'ab', new_string: 'abc' }
       ]
     })
-    expect(await run('read_file', { path: 'm.txt' })).toBe('abc')
+    expect(fileText('m.txt')).toBe('abc')
   })
 
   it('honours replace_all per edit', async () => {
     await run('write_file', { path: 'm.txt', content: 'x x x' })
     await run('multi_edit', { path: 'm.txt', edits: [{ old_string: 'x', new_string: 'y', replace_all: true }] })
-    expect(await run('read_file', { path: 'm.txt' })).toBe('y y y')
+    expect(fileText('m.txt')).toBe('y y y')
   })
 
   it('is atomic: a failing edit writes nothing', async () => {
@@ -746,7 +751,7 @@ describe('multi_edit', () => {
         ]
       })
     ).rejects.toThrow(/edit 2: old_string was not found/)
-    expect(await run('read_file', { path: 'm.txt' })).toBe('hello world')
+    expect(fileText('m.txt')).toBe('hello world')
   })
 
   it('rejects an ambiguous edit without replace_all', async () => {
@@ -939,9 +944,9 @@ describe('apply_patch', () => {
       )
     })
     expect(out).toMatch(/1 added, 1 updated, 1 deleted/)
-    expect(await run('read_file', { path: 'new.ts' })).toBe('export const x = 1\n')
-    expect(await run('read_file', { path: 'keep.ts' })).toBe('const a = 1\nconst b = 3\n')
-    await expect(run('read_file', { path: 'old.ts' })).rejects.toThrow()
+    expect(fileText('new.ts')).toBe('export const x = 1\n')
+    expect(fileText('keep.ts')).toBe('const a = 1\nconst b = 3\n')
+    expect(existsSync(join(workspace, 'old.ts'))).toBe(false)
   })
 
   it('renames a file with Move to', async () => {
@@ -949,8 +954,8 @@ describe('apply_patch', () => {
     await run('apply_patch', {
       patch: patch('*** Update File: a.ts', '*** Move to: b.ts', ' hello', '-world', '+there')
     })
-    await expect(run('read_file', { path: 'a.ts' })).rejects.toThrow()
-    expect(await run('read_file', { path: 'b.ts' })).toBe('hello\nthere\n')
+    expect(existsSync(join(workspace, 'a.ts'))).toBe(false)
+    expect(fileText('b.ts')).toBe('hello\nthere\n')
   })
 
   it.skipIf(process.platform === 'win32')('keeps the file mode across a Move to', async () => {
@@ -981,7 +986,7 @@ describe('apply_patch', () => {
       })
     ).rejects.toThrow(/more than one operation/)
     // Rejected in the compute phase, so the file is untouched (no partial write).
-    expect(await run('read_file', { path: 'dup.ts' })).toBe('foo\nbar\n')
+    expect(fileText('dup.ts')).toBe('foo\nbar\n')
   })
 
   it('is atomic: a failing op writes nothing', async () => {
@@ -997,7 +1002,7 @@ describe('apply_patch', () => {
       })
     ).rejects.toThrow(/does not exist/)
     // k.ts untouched, no partial write
-    expect(await run('read_file', { path: 'k.ts' })).toBe('value')
+    expect(fileText('k.ts')).toBe('value')
   })
 
   it('refuses to add over an existing file and points to Update File', async () => {
@@ -1012,7 +1017,7 @@ describe('apply_patch', () => {
     await run('apply_patch', {
       patch: patch('*** Update File: d.ts', ' function f() {', '-  return 1', '+  return 2', ' }')
     })
-    expect(await run('read_file', { path: 'd.ts' })).toBe('function f() {\n  return 2\n}\n')
+    expect(fileText('d.ts')).toBe('function f() {\n  return 2\n}\n')
   })
 
   it('rejects a path that escapes the roots', async () => {
@@ -1076,19 +1081,16 @@ describe('read_file ranges', () => {
 
   it('reads a line slice with offset and limit', async () => {
     const out = await run('read_file', { path: 'big.txt', offset: 2, limit: 2 })
-    expect(out).toContain('[lines 2-3 of 5]')
-    expect(out).toContain('l2\nl3')
-    expect(out).not.toContain('l4')
+    expect(out).toBe('[lines 2-3 of 5]\n2\tl2\n3\tl3')
   })
 
   it('reads from an offset to the end when limit is omitted', async () => {
     const out = await run('read_file', { path: 'big.txt', offset: 4 })
-    expect(out).toContain('[lines 4-5 of 5]')
-    expect(out.trimEnd().endsWith('l4\nl5')).toBe(true)
+    expect(out).toBe('[lines 4-5 of 5]\n4\tl4\n5\tl5')
   })
 
   it('reads the whole file when no range is given', async () => {
-    expect(await run('read_file', { path: 'big.txt' })).toBe('l1\nl2\nl3\nl4\nl5')
+    expect(await run('read_file', { path: 'big.txt' })).toBe('1\tl1\n2\tl2\n3\tl3\n4\tl4\n5\tl5')
   })
 
   it('reports an empty range when the offset is past end-of-file', async () => {
@@ -1101,6 +1103,339 @@ describe('read_file ranges', () => {
     expect(await run('read_file', { path: 'big.txt', offset: 2, limit: 0 })).toContain(
       '[no lines in range'
     )
+  })
+})
+
+describe('read_file line numbers', () => {
+  it('pads every number to the width of the last line, then a tab', async () => {
+    writeFileSync(join(workspace, 'n.txt'), Array.from({ length: 12 }, (_, i) => `row ${i + 1}`).join('\n') + '\n')
+    const out = await run('read_file', { path: 'n.txt' })
+    const rows = out.split('\n')
+    expect(rows).toHaveLength(12) // the final newline ends line 12; it is not a 13th line
+    expect(rows[0]).toBe(' 1\trow 1')
+    expect(rows[11]).toBe('12\trow 12')
+  })
+
+  it('keeps the width of the whole file in a slice, so numbers line up across reads', async () => {
+    writeFileSync(join(workspace, 'n.txt'), Array.from({ length: 120 }, (_, i) => `r${i + 1}`).join('\n'))
+    expect(await run('read_file', { path: 'n.txt', offset: 2, limit: 2 })).toBe(
+      '[lines 2-3 of 120]\n  2\tr2\n  3\tr3'
+    )
+  })
+
+  it('numbers blank lines and keeps a CRLF line ending on its line', async () => {
+    writeFileSync(join(workspace, 'b.txt'), 'a\r\n\r\nc\r\n')
+    expect(await run('read_file', { path: 'b.txt' })).toBe('1\ta\r\n2\t\r\n3\tc\r')
+  })
+
+  it('reports an empty file instead of a numbered blank line', async () => {
+    writeFileSync(join(workspace, 'e.txt'), '')
+    expect(await run('read_file', { path: 'e.txt' })).toBe('[empty file]')
+    expect(await run('read_file', { path: 'e.txt', offset: 1 })).toBe('[empty file]')
+  })
+
+  it('cuts a long read at a whole line and says where to continue', async () => {
+    const line = 'x'.repeat(999)
+    writeFileSync(join(workspace, 'long.txt'), Array.from({ length: 300 }, () => line).join('\n'))
+    const out = await run('read_file', { path: 'long.txt' })
+    const rows = out.split('\n')
+    const notice = rows.pop()!
+    // Each row is "NNN\t" + 999 chars; 99 of them fit in 100k chars, a 100th would not.
+    expect(rows).toHaveLength(99)
+    expect(rows.every((r) => r.endsWith(line))).toBe(true)
+    expect(notice).toBe('[truncated at 100000 chars: showing lines 1-99 of 300. Continue with offset 100.]')
+    const next = await run('read_file', { path: 'long.txt', offset: 100 })
+    expect(next.startsWith('[lines 100-198 of 300]\n100\t')).toBe(true)
+  })
+
+  it('cuts a single line longer than the whole budget rather than showing nothing', async () => {
+    writeFileSync(join(workspace, 'min.js'), `${'y'.repeat(150_000)}\nnext\n`)
+    const out = await run('read_file', { path: 'min.js' })
+    expect(out.startsWith('1\tyyy')).toBe(true)
+    expect(out).toContain('[truncated: line 1 is 150000 chars, cut at 100000. The file has 2 lines; the next one is 2.')
+  })
+})
+
+describe('stale-write guard', () => {
+  let tracker: FileReadTracker
+  beforeEach(() => {
+    tracker = new FileReadTracker()
+    ctx = { workspace, allowNetwork: false, fileTracker: tracker }
+  })
+  const put = (rel: string, text: string): void => writeFileSync(join(workspace, rel), text)
+
+  it('lets write_file create a new file without a read', async () => {
+    await run('write_file', { path: 'fresh/new.txt', content: 'hi\n' })
+    expect(fileText('fresh/new.txt')).toBe('hi\n')
+  })
+
+  it('refuses write_file over an existing file the run has not read, and leaves it alone', async () => {
+    put('a.txt', 'user content\n')
+    await expect(run('write_file', { path: 'a.txt', content: 'clobber' })).rejects.toThrow(
+      /a\.txt already exists and you have not read it yet\. Read it with read_file first/
+    )
+    expect(fileText('a.txt')).toBe('user content\n')
+  })
+
+  it('allows write_file after a read, including a partial one', async () => {
+    put('a.txt', 'one\ntwo\nthree\n')
+    await run('read_file', { path: 'a.txt', offset: 2, limit: 1 })
+    await run('write_file', { path: 'a.txt', content: 'replaced\n' })
+    expect(fileText('a.txt')).toBe('replaced\n')
+  })
+
+  it('refuses write_file when the file changed on disk after the read', async () => {
+    put('a.txt', 'v1\n')
+    await run('read_file', { path: 'a.txt' })
+    put('a.txt', 'v2 from the user\n')
+    await expect(run('write_file', { path: 'a.txt', content: 'agent\n' })).rejects.toThrow(
+      /a\.txt has changed on disk since you last read or wrote it.*Read it again with read_file/
+    )
+    expect(fileText('a.txt')).toBe('v2 from the user\n')
+    // Reading again picks up the user's version and unblocks the write.
+    await run('read_file', { path: 'a.txt' })
+    await run('write_file', { path: 'a.txt', content: 'agent\n' })
+    expect(fileText('a.txt')).toBe('agent\n')
+  })
+
+  it('does not count a touch that leaves the content alone as a change', async () => {
+    put('a.txt', 'same\n')
+    await run('read_file', { path: 'a.txt' })
+    const later = new Date(Date.now() + 60_000)
+    utimesSync(join(workspace, 'a.txt'), later, later)
+    await run('edit_file', { path: 'a.txt', old_string: 'same', new_string: 'new' })
+    expect(fileText('a.txt')).toBe('new\n')
+  })
+
+  it('refuses edit_file and multi_edit on an unread file, and says to read it first', async () => {
+    put('e.txt', 'alpha beta\n')
+    await expect(run('edit_file', { path: 'e.txt', old_string: 'alpha', new_string: 'A' })).rejects.toThrow(
+      /You have not read e\.txt yet\. Read it with read_file first/
+    )
+    await expect(
+      run('multi_edit', { path: 'e.txt', edits: [{ old_string: 'beta', new_string: 'B' }] })
+    ).rejects.toThrow(/You have not read e\.txt yet/)
+    expect(fileText('e.txt')).toBe('alpha beta\n')
+  })
+
+  it('refuses edit_file and multi_edit when the file changed since the read', async () => {
+    put('e.txt', 'alpha beta\n')
+    await run('read_file', { path: 'e.txt' })
+    put('e.txt', 'alpha beta gamma\n')
+    await expect(run('edit_file', { path: 'e.txt', old_string: 'alpha', new_string: 'A' })).rejects.toThrow(
+      /e\.txt has changed on disk/
+    )
+    await expect(
+      run('multi_edit', { path: 'e.txt', edits: [{ old_string: 'beta', new_string: 'B' }] })
+    ).rejects.toThrow(/e\.txt has changed on disk/)
+    expect(fileText('e.txt')).toBe('alpha beta gamma\n')
+  })
+
+  it("counts the run's own writes as seen, so consecutive edits need no re-read", async () => {
+    put('e.txt', 'a b c\n')
+    await run('read_file', { path: 'e.txt' })
+    await run('edit_file', { path: 'e.txt', old_string: 'a', new_string: 'A' })
+    await run('multi_edit', { path: 'e.txt', edits: [{ old_string: 'b', new_string: 'B' }] })
+    await run('write_file', { path: 'e.txt', content: 'rewritten\n' })
+    await run('edit_file', { path: 'e.txt', old_string: 'rewritten', new_string: 'done' })
+    expect(fileText('e.txt')).toBe('done\n')
+  })
+
+  it('records what apply_patch and notebook_edit wrote', async () => {
+    put('p.txt', 'one\ntwo\n')
+    await run('apply_patch', {
+      patch: ['*** Begin Patch', '*** Update File: p.txt', ' one', '-two', '+TWO', '*** Add File: q.txt', '+new', '*** End Patch'].join('\n')
+    })
+    // apply_patch locates its hunks by context, so it isn't guarded, but what it
+    // wrote counts as seen: the follow-up edits need no re-read.
+    await run('edit_file', { path: 'p.txt', old_string: 'TWO', new_string: '2' })
+    await run('edit_file', { path: 'q.txt', old_string: 'new', new_string: 'newer' })
+    expect(fileText('p.txt')).toBe('one\n2\n')
+    expect(fileText('q.txt')).toBe('newer\n')
+  })
+
+  it('forgets a file apply_patch deleted, so a later file at that path must be read', async () => {
+    put('gone.txt', 'x\n')
+    await run('read_file', { path: 'gone.txt' })
+    await run('apply_patch', { patch: ['*** Begin Patch', '*** Delete File: gone.txt', '*** End Patch'].join('\n') })
+    expect(tracker.has(join(workspace, 'gone.txt'))).toBe(false)
+    put('gone.txt', 'someone else made this\n')
+    await expect(run('write_file', { path: 'gone.txt', content: 'y' })).rejects.toThrow(/not read it yet/)
+  })
+
+  it('counts an image read as seen, so the refusal can always be cleared', async () => {
+    writeFileSync(join(workspace, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+    await run('read_file', { path: 'logo.png' })
+    await run('write_file', { path: 'logo.png', content: 'replaced' })
+    expect(fileText('logo.png')).toBe('replaced')
+  })
+
+  it('enforces nothing without a tracker (hosts that drive the tools directly)', async () => {
+    ctx = { workspace, allowNetwork: false }
+    put('a.txt', 'x\n')
+    await run('write_file', { path: 'a.txt', content: 'y\n' })
+    expect(fileText('a.txt')).toBe('y\n')
+  })
+
+  it('staleWriteRefusal predicts the refusal before the call runs', async () => {
+    put('a.txt', 'x\n')
+    const roots = [workspace]
+    expect(await staleWriteRefusal('write_file', { path: 'a.txt', content: 'y' }, roots, tracker)).toMatch(
+      /not read it yet/
+    )
+    expect(await staleWriteRefusal('edit_file', { path: 'a.txt' }, roots, tracker)).toMatch(/You have not read a\.txt/)
+    // New files, unguarded tools, unresolvable paths, and no tracker all pass.
+    expect(await staleWriteRefusal('write_file', { path: 'new.txt', content: 'y' }, roots, tracker)).toBeNull()
+    expect(await staleWriteRefusal('apply_patch', { patch: '' }, roots, tracker)).toBeNull()
+    expect(await staleWriteRefusal('write_file', { path: '../../etc/x' }, roots, tracker)).toBeNull()
+    expect(await staleWriteRefusal('write_file', { path: 'a.txt' }, roots, undefined)).toBeNull()
+    await run('read_file', { path: 'a.txt' })
+    expect(await staleWriteRefusal('write_file', { path: 'a.txt', content: 'y' }, roots, tracker)).toBeNull()
+    put('a.txt', 'changed\n')
+    expect(await staleWriteRefusal('multi_edit', { path: 'a.txt' }, roots, tracker)).toMatch(/changed on disk/)
+  })
+})
+
+describe('edit feedback', () => {
+  it('says nothing more after an exact match', async () => {
+    writeFileSync(join(workspace, 'f.ts'), 'const a = 1\n')
+    expect(await run('edit_file', { path: 'f.ts', old_string: 'a = 1', new_string: 'a = 2' })).toBe(
+      'Edited f.ts (1 replacement).'
+    )
+  })
+
+  it('shows the region as written after a fuzzy match, numbered, with context', async () => {
+    writeFileSync(
+      join(workspace, 'f.ts'),
+      ['function f() {', '  const a = 1', '  const b = 2', '  return a + b', '}', 'f()', ''].join('\n')
+    )
+    const out = await run('edit_file', {
+      path: 'f.ts',
+      // One interior line is misremembered, so this only lands via block-anchor.
+      old_string: 'function f() {\n  const a = 1\n  const b = 99\n  return a + b',
+      new_string: 'function f() {\n  const a = 1\n  const b = 3\n  return a * b'
+    })
+    expect(out).toBe(
+      [
+        'Edited f.ts (1 replacement) [matched via block-anchor]. Because old_string did not match exactly, check the result as written (lines 1-4):',
+        '1\tfunction f() {',
+        '2\t  const a = 1',
+        '3\t  const b = 3',
+        '4\t  return a * b',
+        '5\t}',
+        '6\tf()'
+      ].join('\n')
+    )
+  })
+
+  it('elides the middle of a long edited region', async () => {
+    const block = Array.from({ length: 40 }, (_, i) => `v${i}`)
+    writeFileSync(join(workspace, 'big.ts'), ['head', ...block, 'tail', ''].join('\n'))
+    const out = await run('edit_file', {
+      path: 'big.ts',
+      old_string: block.map((l) => `  ${l}`).join('\n'), // indented, so line-trimmed
+      new_string: block.map((l) => `  ${l.toUpperCase()}`).join('\n')
+    })
+    const rows = out.split('\n').slice(1)
+    // Lines 1-42 with context: the first 20, a marker, the last 5.
+    expect(rows).toHaveLength(26)
+    expect(rows[0]).toBe(' 1\thead')
+    expect(rows[19]).toBe('20\tV18')
+    expect(rows[20]).toBe('[17 lines not shown]')
+    expect(rows[25]).toBe('42\ttail')
+  })
+
+  it('strips line numbers copied from read_file and shows where the edit landed', async () => {
+    writeFileSync(join(workspace, 'f.ts'), 'a\nb\nc\nd\n')
+    const out = await run('edit_file', { path: 'f.ts', old_string: '2\tb\n3\tc', new_string: '2\tB\n3\tC' })
+    expect(fileText('f.ts')).toBe('a\nB\nC\nd\n')
+    expect(out).toContain('line-number prefixes were removed from old_string and new_string before matching')
+    expect(out).toContain('(lines 2-3):\n1\ta\n2\tB\n3\tC\n4\td')
+  })
+
+  it('names the closest region, numbered, when old_string is not found', async () => {
+    writeFileSync(
+      join(workspace, 'f.ts'),
+      ['import x from "x"', '', 'export function total(items) {', '  return items.reduce((s, i) => s + i.price, 0)', '}', ''].join('\n')
+    )
+    await expect(
+      run('edit_file', {
+        path: 'f.ts',
+        old_string: 'export function total(items) {\n  return items.reduce((s, i) => s + i.cost, 0)',
+        new_string: 'x'
+      })
+    ).rejects.toThrow(
+      /old_string was not found in the file\. The closest match is lines 3-4 \(\d+% similar\):\n3\texport function total\(items\) \{\n4\t {2}return items\.reduce\(\(s, i\) => s \+ i\.price, 0\)\nIf this is the text you meant/
+    )
+  })
+
+  it('numbers multi_edit snippets against the file as finally written', async () => {
+    writeFileSync(join(workspace, 'm.ts'), ['  alpha', 'beta', 'gamma', 'delta', ''].join('\n'))
+    const out = await run('multi_edit', {
+      path: 'm.ts',
+      edits: [
+        // Lands on line 4 via line-trimmed (the file's line has no indent).
+        { old_string: '    delta', new_string: '    DELTA' },
+        // Exact, and adds two lines above it, which moves edit 1's region to line 6.
+        { old_string: 'beta', new_string: 'beta\nb2\nb3' }
+      ]
+    })
+    expect(fileText('m.ts')).toBe('  alpha\nbeta\nb2\nb3\ngamma\nDELTA\n')
+    expect(out).toBe(
+      [
+        'Edited m.ts (2 edits).',
+        'Edit 1 [matched via line-trimmed]: old_string did not match exactly, so check the result as written (line 6):',
+        '4\tb3',
+        '5\tgamma',
+        '6\tDELTA'
+      ].join('\n')
+    )
+  })
+
+  it('says which state a later multi_edit miss is numbered against', async () => {
+    writeFileSync(join(workspace, 'm.ts'), 'one\ntwo\nthree\n')
+    await expect(
+      run('multi_edit', {
+        path: 'm.ts',
+        edits: [
+          { old_string: 'one', new_string: 'zero\none' },
+          { old_string: 'three!', new_string: 'x\ny' }
+        ]
+      })
+    ).rejects.toThrow(/edit 2: old_string was not found in the file\. The closest match is line 4.*count edit 1 as already applied; nothing was written/s)
+    expect(fileText('m.ts')).toBe('one\ntwo\nthree\n')
+  })
+
+  it('never reads a credential file out through a miss or a fuzzy-match snippet', async () => {
+    writeFileSync(join(workspace, '.env'), 'API_KEY=abc123\nDB_PASSWORD=hunter2\n')
+    const miss = run('edit_file', { path: '.env', old_string: 'API_KEY=wrong', new_string: 'x' })
+    await expect(miss).rejects.toThrow(/closest region is not shown because the file may hold credentials/)
+    await expect(miss).rejects.not.toThrow(/abc123|hunter2/)
+    const patched = run('apply_patch', {
+      patch: ['*** Begin Patch', '*** Update File: .env', '-API_KEY=wrong', '+API_KEY=x', '*** End Patch'].join('\n')
+    })
+    await expect(patched).rejects.toThrow(/closest region is not shown/)
+    await expect(patched).rejects.not.toThrow(/abc123|hunter2/)
+    // A fuzzy match still lands, but its feedback names the lines without showing them.
+    const fuzzy = await run('edit_file', { path: '.env', old_string: '   API_KEY=abc123', new_string: 'API_KEY=rotated' })
+    expect(fuzzy).toMatch(/\[matched via line-trimmed\].*check the result \(line 1\) with read_file\. The edited lines are not shown/)
+    expect(fuzzy).not.toMatch(/hunter2|rotated/)
+    const multi = await run('multi_edit', {
+      path: '.env',
+      edits: [{ old_string: '  DB_PASSWORD=hunter2', new_string: 'DB_PASSWORD=new' }]
+    })
+    expect(multi).toContain('The edited lines are not shown')
+    expect(multi).not.toMatch(/API_KEY|DB_PASSWORD=/)
+    expect(fileText('.env')).toBe('API_KEY=rotated\nDB_PASSWORD=new\n')
+  })
+
+  it('names the file and hunk when an apply_patch hunk does not match', async () => {
+    writeFileSync(join(workspace, 'p.ts'), 'const a = 1\nconst b = 2\n')
+    await expect(
+      run('apply_patch', {
+        patch: ['*** Begin Patch', '*** Update File: p.ts', ' const a = 1', '-const b = 3', '+const b = 4', '*** End Patch'].join('\n')
+      })
+    ).rejects.toThrow(/Update File: p\.ts, hunk 1: old_string was not found in the file\. The closest match is lines 1-2/)
   })
 })
 
@@ -3323,7 +3658,7 @@ describe('symlink confinement (file tools run outside the sandbox)', () => {
   it('still allows a symlink that resolves to a location INSIDE the workspace', async () => {
     writeFileSync(join(workspace, 'real.txt'), 'inside')
     symlinkSync(join(workspace, 'real.txt'), join(workspace, 'inside-link'))
-    expect(await run('read_file', { path: 'inside-link' })).toBe('inside')
+    expect(await run('read_file', { path: 'inside-link' })).toBe('1\tinside')
     await run('write_file', { path: 'inside-link', content: 'updated' })
     expect(readFileSync(join(workspace, 'real.txt'), 'utf8')).toBe('updated')
   })

@@ -18,11 +18,11 @@ messages (3):
 1. user: "What do my notes say?"
 2. assistant: ""
      -> calls read_file#c1 {"path":"notes.txt"}
-3. tool[read_file#c1]: "remember the milk\n"
+3. tool[read_file#c1]: "1\tremember the milk"
 --- events ---
 usage {"cost":0.0028,"inputTokens":1200,"model":"claude-sonnet-5","outputTokens":40}
 tool_start {"args":{"path":"notes.txt"},"callId":"c1","kind":"read","name":"read_file"}
-tool_result {"callId":"c1","name":"read_file","ok":true,"output":"remember the milk\n"}
+tool_result {"callId":"c1","name":"read_file","ok":true,"output":"1\tremember the milk"}
 text {"delta":"The notes say: "}
 text {"delta":"remember the milk."}
 usage {"cost":0.00272,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}

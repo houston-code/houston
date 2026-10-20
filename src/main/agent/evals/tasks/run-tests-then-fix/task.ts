@@ -13,14 +13,15 @@ export const task: EvalTask = {
   verify: { cmd: 'node', args: ['test.mjs'] },
   script: [
     turn(callTool('c1', 'run_shell', { command: 'node test.mjs' })),
+    turn(callTool('c2', 'read_file', { path: 'port.mjs' })),
     turn(
-      callTool('c2', 'edit_file', {
+      callTool('c3', 'edit_file', {
         path: 'port.mjs',
         old_string: '  return raw ?? 8080',
         new_string: '  return raw === undefined || raw === null ? 8080 : Number(raw)'
       })
     ),
-    turn(callTool('c3', 'run_shell', { command: 'node test.mjs' })),
+    turn(callTool('c4', 'run_shell', { command: 'node test.mjs' })),
     turn(say('`parsePort()` now coerces to a number, and the test passes.'))
   ]
 }

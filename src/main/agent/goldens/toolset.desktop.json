@@ -1,7 +1,7 @@
 [
   {
     "name": "read_file",
-    "description": "Read a file within the project. For text files, returns the text (pass offset/limit, 1-based line numbers, to read just a slice of a large file). Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly. Jupyter notebooks (.ipynb) are returned as numbered cells with their source and a summary of their outputs; edit those cells with notebook_edit. Files that are not text are reported as binary rather than returned as garbled bytes.",
+    "description": "Read a file within the project. Text comes back with each line prefixed by its line number and a tab (e.g. \"  12\\tconst x = 1\"); the prefix is not part of the file, so leave it out of edit_file and multi_edit strings. Pass offset/limit (1-based line numbers) to read just a slice of a large file; output that runs too long is cut at a whole line, with a note giving the offset to continue from. Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly. Jupyter notebooks (.ipynb) are returned as numbered cells with their source and a summary of their outputs; edit those cells with notebook_edit. Files that are not text are reported as binary rather than returned as garbled bytes.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -26,7 +26,7 @@
   },
   {
     "name": "write_file",
-    "description": "Create or overwrite a text file within the project with the given content. Creates parent directories as needed.",
+    "description": "Create a text file within the project, or replace an existing one, with the given content. Creates parent directories as needed. To overwrite an existing file you must have read it with read_file first, and the write is refused if the file changed on disk since you last read or wrote it. To change part of an existing file, prefer edit_file.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -48,7 +48,7 @@
   },
   {
     "name": "edit_file",
-    "description": "Replace a string in a file with a new string. The old string is matched verbatim first; if that fails it is matched ignoring each line's indentation/whitespace (so minor drift does not lose the edit). By default the old string must resolve to exactly one match; set replace_all to replace every occurrence.",
+    "description": "Replace a string in a file with a new string. Read the file with read_file first (a range around the change is enough); the edit is refused if the file changed on disk since you last read or wrote it. The old string is matched verbatim first; if that fails it is matched ignoring each line's indentation/whitespace (so minor drift does not lose the edit), and the result then shows the edited lines, numbered, so you can check where it landed. If nothing matches, the error shows the closest region of the file. By default the old string must resolve to exactly one match; set replace_all to replace every occurrence.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -58,7 +58,7 @@
         },
         "old_string": {
           "type": "string",
-          "description": "The exact text to replace."
+          "description": "The exact text to replace, as it appears in the file (without read_file's line-number prefixes)."
         },
         "new_string": {
           "type": "string",
@@ -79,7 +79,7 @@
   },
   {
     "name": "multi_edit",
-    "description": "Apply several exact-string replacements to a single file in one atomic operation. The edits are applied in order (each later edit sees the result of the earlier ones), and the file is only written if every edit succeeds. Each edit follows the same rules as edit_file: old_string must occur exactly once unless replace_all is set. Prefer this over multiple edit_file calls when changing several places in the same file.",
+    "description": "Apply several exact-string replacements to a single file in one atomic operation. The edits are applied in order (each later edit sees the result of the earlier ones), and the file is only written if every edit succeeds. Each edit follows the same rules as edit_file: the file must have been read with read_file first and not changed on disk since, and old_string must occur exactly once unless replace_all is set. Prefer this over multiple edit_file calls when changing several places in the same file.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -95,7 +95,7 @@
             "properties": {
               "old_string": {
                 "type": "string",
-                "description": "The exact text to replace."
+                "description": "The exact text to replace, as it appears in the file (without read_file's line-number prefixes)."
               },
               "new_string": {
                 "type": "string",
