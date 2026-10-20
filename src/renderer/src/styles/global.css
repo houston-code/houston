@@ -2889,7 +2889,9 @@ button.finding__head:focus-visible,
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: fill;
+  /* Two images of different shapes keep their proportions, top-aligned, rather than one being stretched. */
+  object-fit: contain;
+  object-position: top;
 }
 .image-viewer__compare-line {
   position: absolute;

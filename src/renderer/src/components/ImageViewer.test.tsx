@@ -153,6 +153,13 @@ describe('ImageViewer actions', () => {
     expect(onSave).toHaveBeenCalledWith(IMAGES[1])
   })
 
+  it('says so when copying or saving fails outright', async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error('EACCES'))
+    render(<ImageViewer images={IMAGES} initialIndex={0} onClose={vi.fn()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Save image…' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't save the image.")
+  })
+
   it('shows a file in the Files panel, or says why it cannot', () => {
     const onShowInFiles = vi.fn().mockReturnValueOnce(null).mockReturnValueOnce('That file is outside the project folder.')
     render(<ImageViewer images={IMAGES} initialIndex={0} onClose={vi.fn()} onShowInFiles={onShowInFiles} />)

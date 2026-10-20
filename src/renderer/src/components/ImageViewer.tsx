@@ -5,6 +5,8 @@ import { stepIndex, type ViewerImage } from '../lib/imageViewer'
 /** What an action reports back: a short note for the status line, or an error. */
 export type ViewerActionResult = { ok: true; message: string } | { ok: false; message: string } | null
 
+const failed = (what: 'copy' | 'save'): ViewerActionResult => ({ ok: false, message: `Couldn't ${what} the image.` })
+
 /**
  * Full-window viewer for one set of images: the current image as large as the
  * window allows, its label and caption, and arrows (or ←/→) to step through the
@@ -127,12 +129,12 @@ export function ImageViewer({
             </button>
           )}
           {onCopy && (
-            <button type="button" className="btn btn--sm" onClick={() => void onCopy(image).then(report)}>
+            <button type="button" className="btn btn--sm" onClick={() => void onCopy(image).then(report, () => report(failed('copy')))}>
               Copy image
             </button>
           )}
           {onSave && (
-            <button type="button" className="btn btn--sm" onClick={() => void onSave(image).then(report)}>
+            <button type="button" className="btn btn--sm" onClick={() => void onSave(image).then(report, () => report(failed('save')))}>
               Save image…
             </button>
           )}
