@@ -848,8 +848,9 @@ macOS arm64, macOS x64 (Intel), and Windows x64, each packaging on its own runne
 macOS legs also smoke-test the packaged app with Playwright. Each leg uploads its build as
 an inspection-only artifact (`houston-linux-x64` / `houston-mac-arm64` / `houston-mac-x64`
 / `houston-win-x64`, 3-day retention), so you can grab a PR's build from the **Actions**
-tab without building locally. The same matrix gates a release in `release-prepare.yml`,
-and `release-publish.yml` builds and publishes the Release artifacts.
+tab without building locally. A release is checked the same way before its release PR opens
+(`release-prepare.yml`) and then built, signed and published (`release-publish.yml`);
+[docs/RELEASING.md](docs/RELEASING.md) describes the process.
 
 ## Updates
 

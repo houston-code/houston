@@ -1,10 +1,21 @@
 name: Release - build leg
 
-# One platform leg of a release, called by release-publish.yml: build and package the app
-# (macOS legs are code-signed and notarized by electron-builder), verify it (signature and
-# notarization, the packaged-app e2e on macOS, this platform's binary SBOM and its
-# vulnerability policy), and only then upload its installers and update feed into the draft. The Linux leg also builds the standalone CLI, the lockfile SBOMs and
-# the release VEX, and attaches them.
+# One platform leg of a release: build and package the app (macOS legs are code-signed and
+# notarized by electron-builder when `sign` is on), verify it (signature and notarization, the
+# packaged-app e2e on macOS, this platform's binary SBOM and its vulnerability policy), and
+# only then upload its installers and update feed into the draft. The Linux leg also builds
+# the standalone CLI, the lockfile SBOMs and the release VEX, and attaches them.
+#
+# Two callers, the same steps in the same order:
+#   release-publish.yml  sign: true,  dry_run as chosen: the real release.
+#   release-prepare.yml  sign: false, dry_run: true: the same checks, before the release PR
+#                        is opened, so publish finds nothing new except signing problems.
+#
+# It builds `ref`, the release commit. Two pipeline scripts run from the workflow's own commit,
+# checked out under .pipeline/: release-draft.mjs (which only talks to the GitHub API about
+# the draft) and dist-with-retry.sh (which only re-runs the build on a known macOS flake), so
+# a fix to either applies to a retry, and an older release that predates them still builds.
+# Everything that produces or checks a shipped file comes from `ref`.
 #
 # NOTHING HERE SIGNS with cosign or GPG, and the job cannot mint an OIDC token. This job runs
 # `npm ci` and the build, which execute third-party dependency code; the keyless signing
@@ -32,10 +43,18 @@ on:
         description: Platform tag for this leg's binary SBOM, e.g. darwin-arm64.
         required: true
         type: string
-      mac_x64_manual:
-        description: Intel mac only. Merge into the arm64 update feed instead of publishing its own.
+      ref:
+        description: The commit to build (the release commit).
+        required: true
+        type: string
+      version:
+        description: The version being built, X.Y.Z (already checked against package.json at `ref`).
+        required: true
+        type: string
+      sign:
+        description: Code-sign and notarize the macOS legs. Off in release-prepare.
         required: false
-        default: false
+        default: true
         type: boolean
       dry_run:
         description: Build artifacts but publish nothing.
@@ -67,9 +86,10 @@ jobs:
     timeout-minutes: 40
     # The macOS signing credentials (Apple notarization and the Developer ID .p12) live in
     # the `release` environment, not as repository secrets, so they are unreadable by any job
-    # that does not declare it. The environment restricts deployment to protected branches,
-    # so a fork or a feature branch cannot reach them even by editing this file. It has no
-    # required reviewer: the human approval is release-publish's `approve` job.
+    # that does not declare it. The environment admits only runs on main, so a fork or a
+    # feature branch cannot reach them even by editing this file. It has no required
+    # reviewer: the human approval is release-publish's `approve` job. release-prepare's
+    # unsigned legs run here too, but with `sign: false` no step ever receives the values.
     environment: release
     permissions:
       # electron-builder and gh upload into the draft release in this repo.
@@ -81,16 +101,30 @@ jobs:
       run:
         shell: bash
     steps:
-      # Build the commit this run was dispatched on (github.sha), never a fresh `main`. The
-      # legs run for up to ~40 min each (the macOS pair one after another), after the approval
-      # wait, and main keeps moving under the merge queue meanwhile: checking out `main` here
-      # let each platform build a different commit while the SLSA provenance
-      # (scripts/slsa-provenance.mjs reads GITHUB_SHA) named yet another. The `release`
-      # environment only admits runs on main, so github.sha is always a main commit.
+      # An empty `ref` would make the checkout below fall back to the run's own commit (main)
+      # and quietly build the wrong tree; anything but a full commit SHA stops the leg.
+      - name: Require the release commit
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          if ! [[ "$REF" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::release-build needs the release commit's full SHA as ref, got '$REF'."
+            exit 1
+          fi
+      # Build the release commit, never a branch tip: every leg and every check builds the same
+      # commit, and it is the one the release notes describe (the caller's `source` or `plan`
+      # job pinned it).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref }}
+      # The workflow's own commit, for the release-draft script only (see the header).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+          path: .pipeline
+          sparse-checkout: scripts
       # No npm download cache: a release builds from a clean download, so no cache entry
       # written by another run can flow into signed, shipped artifacts.
       - uses: ./.github/actions/setup-node
@@ -108,9 +142,9 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          node scripts/release-draft.mjs ensure houston-code/houston "$tag" "$GITHUB_SHA"
+          VERSION: ${{ inputs.version }}
+          REF: ${{ inputs.ref }}
+        run: node .pipeline/scripts/release-draft.mjs ensure houston-code/houston "v$VERSION" "$REF"
       # Build only. Nothing reaches the draft until this leg's checks below have passed
       # (signature + notarization, the packaged-app e2e, the binary SBOM and its vulnerability
       # policy), so a failed leg leaves no half-uploaded installers behind. The explicit
@@ -126,15 +160,20 @@ jobs:
           # with an Apple cert and fail. An empty value on non-mac legs = signing skipped there
           # (Windows/Linux stay unsigned until they get their own certs). electron-builder v26
           # auto-notarizes when APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID are set.
-          CSC_LINK: ${{ startsWith(inputs.os, 'macos') && secrets.CSC_LINK || '' }}
-          CSC_KEY_PASSWORD: ${{ startsWith(inputs.os, 'macos') && secrets.CSC_KEY_PASSWORD || '' }}
-          APPLE_ID: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_ID || '' }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ startsWith(inputs.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
+          # `sign: false` (release-prepare) passes none of them and stops electron-builder from
+          # probing the keychain, so the unsigned build behaves like a fresh runner's.
+          CSC_LINK: ${{ inputs.sign && startsWith(inputs.os, 'macos') && secrets.CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ inputs.sign && startsWith(inputs.os, 'macos') && secrets.CSC_KEY_PASSWORD || '' }}
+          APPLE_ID: ${{ inputs.sign && startsWith(inputs.os, 'macos') && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ inputs.sign && startsWith(inputs.os, 'macos') && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.sign && startsWith(inputs.os, 'macos') && secrets.APPLE_TEAM_ID || '' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ inputs.sign && 'true' || 'false' }}
           DIST: ${{ inputs.dist }}
-        run: bash scripts/dist-with-retry.sh "$DIST"
+        # The retry wrapper is pipeline (it re-runs `npm run dist:*` on a known macOS flake), so
+        # it comes from .pipeline: releases older than the script can still be rebuilt.
+        run: bash .pipeline/scripts/dist-with-retry.sh "$DIST"
       - name: Verify code signature + notarization
-        if: startsWith(inputs.os, 'macos')
+        if: startsWith(inputs.os, 'macos') && inputs.sign
         run: |
           app=$(find release -maxdepth 2 -name 'Houston.app' -type d | head -1)
           if [ -z "$app" ]; then echo "::error::no packaged Houston.app found in release/"; exit 1; fi
@@ -245,52 +284,55 @@ jobs:
             --vex-in .github/vex/houston.openvex.json --vex-out release-vex/houston.openvex.json \
             --release "$(node -p "require('./package.json').version")"
       # Upload this leg's installers and update feed, now that every check above passed. The
-      # same files electron-builder's own publisher used to upload: installers, their blockmaps (the
-      # updaters' differential downloads), and the one latest*.yml feed this platform reads.
+      # same files electron-builder's own publisher used to upload: installers, their blockmaps
+      # (the updaters' differential downloads), and the one latest*.yml feed this platform reads.
       #
-      # Intel mac: its own latest-mac.yml lists only x64, and publishing it would clobber the
-      # arm64 feed (electron-builder#5592). Instead MERGE this build's x64 files INTO the feed
-      # the arm64 leg already uploaded, so one latest-mac.yml auto-updates BOTH arches
-      # (MacUpdater self-selects per arch from the `files` list). release-publish's `build-mac`
-      # job runs the arm64 leg first. The feed goes up last, so it never names a file that is
-      # not on the draft yet.
+      # macOS: both legs build in parallel and each produces a latest-mac.yml listing only its
+      # own arch, so neither uploads it (one would clobber the other, electron-builder#5592).
+      # release-publish's `mac-feed` job merges the two into the single feed that auto-updates
+      # both arches, from the artifacts saved below. The other platforms' feeds go up last, so
+      # a feed never names a file that is not on the draft yet.
       - name: Upload this leg's installers to the draft
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          MAC_X64_MANUAL: ${{ inputs.mac_x64_manual }}
+          VERSION: ${{ inputs.version }}
+          OS: ${{ inputs.os }}
         run: |
           set -euo pipefail
-          tag="v$(node -p "require('./package.json').version")"
+          tag="v$VERSION"
           shopt -s nullglob
           files=(release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb release/*.blockmap)
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::no installers found in release/"
             exit 1
           fi
-          if [ "$MAC_X64_MANUAL" = "true" ]; then
-            mkdir -p arm64-feed merged-feed
-            gh release download "$tag" -R houston-code/houston -p latest-mac.yml -D arm64-feed --clobber
-            node scripts/merge-mac-update-yml.mjs arm64-feed/latest-mac.yml release/latest-mac.yml > merged-feed/latest-mac.yml
-            feeds=(merged-feed/latest-mac.yml)
-          else
-            feeds=(release/latest*.yml)
-          fi
+          feeds=(release/latest*.yml)
           if [ "${#feeds[@]}" -ne 1 ]; then
             echo "::error::expected exactly one update feed, found ${#feeds[@]}: ${feeds[*]:-none}"
             exit 1
           fi
-          printf 'uploading %s\n' "${files[@]}" "${feeds[@]}"
+          printf 'uploading %s\n' "${files[@]}"
           gh release upload "$tag" "${files[@]}" -R houston-code/houston --clobber
-          gh release upload "$tag" "${feeds[@]}" -R houston-code/houston --clobber
+          case "$OS" in
+            macos*) echo "Leaving ${feeds[0]} to the mac-feed job." ;;
+            *) gh release upload "$tag" "${feeds[@]}" -R houston-code/houston --clobber ;;
+          esac
+      - name: Save the macOS update feed for the mac-feed job
+        if: startsWith(inputs.os, 'macos')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-feed-${{ inputs.sbom_label }}
+          retention-days: 7
+          path: release/latest-mac.yml
+          if-no-files-found: error
       # The uploads above must have landed in the existing draft, not made another one.
       - name: Check the release is still a single draft
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="v$(node -p "require('./package.json').version")"
-          node scripts/release-draft.mjs check houston-code/houston "$tag"
+          VERSION: ${{ inputs.version }}
+        run: node .pipeline/scripts/release-draft.mjs check houston-code/houston "v$VERSION"
       # Fail the release if the macOS artifact isn't properly Developer-ID-signed AND
       # notarized. codesign --verify + `stapler validate` are deterministic, offline checks
       # and GATE the release. `spctl --assess` (the full Gatekeeper policy assessment) is
@@ -300,8 +342,9 @@ jobs:
         if: ${{ inputs.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
         run: |
-          tag="v$(node -p "require('./package.json').version")"
+          tag="v$VERSION"
           # Upload the bundle, its checksum, and the attribution notices together:
           # the bundle inlines MIT/Apache-licensed dependencies, so the notices must
           # travel with the redistributed code (the .cjs ships no node_modules). The
@@ -328,8 +371,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SBOM_LABEL: ${{ inputs.sbom_label }}
+          VERSION: ${{ inputs.version }}
         run: |
-          tag="v$(node -p "require('./package.json').version")"
+          tag="v$VERSION"
           gh release upload "$tag" \
             "sbom.binary.${SBOM_LABEL}.cyclonedx.json" "sbom.binary.${SBOM_LABEL}.spdx.json" \
             -R houston-code/houston --clobber

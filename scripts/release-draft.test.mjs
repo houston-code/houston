@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planReleaseDraft, retargetArgs, waitUntilListed } from './release-draft.mjs'
+import { needsReset, planReleaseDraft, retargetArgs, waitUntilListed } from './release-draft.mjs'
 
 describe('planReleaseDraft', () => {
   it('creates when no release has the tag', () => {
@@ -94,5 +94,21 @@ describe('retargetArgs', () => {
       '-f', 'target_commitish=abc123',
       '--silent',
     ])
+  })
+})
+
+describe('needsReset', () => {
+  it('keeps a draft made for this commit (a re-run of the same release)', () => {
+    expect(needsReset({ id: 1, draft: true, target_commitish: 'abc' }, 'abc')).toBe(false)
+  })
+
+  it('empties a draft made for another commit (an earlier cut of the same version)', () => {
+    expect(needsReset({ id: 1, draft: true, target_commitish: 'old' }, 'abc')).toBe(true)
+    expect(needsReset({ id: 1, draft: true, target_commitish: 'main' }, 'abc')).toBe(true)
+  })
+
+  it('never touches a published release or a missing one', () => {
+    expect(needsReset({ id: 1, draft: false, target_commitish: 'old' }, 'abc')).toBe(false)
+    expect(needsReset(undefined, 'abc')).toBe(false)
   })
 })

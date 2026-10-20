@@ -9,11 +9,14 @@
 // Creating the draft up front means electron-builder always finds it and never creates one.
 //
 //   ensure <repo> <tag> <sha>  create the draft if none exists, reuse a single existing
-//                              draft (a re-run), and fail on anything else
+//                              draft (a re-run), and fail on anything else. A reused draft
+//                              made for a different commit (an earlier cut of the same
+//                              version) is emptied first, so builds of two commits never mix.
 //   check  <repo> <tag>        fail unless exactly one draft exists for the tag
+//   id     <repo> <tag>        print the id of the single draft for the tag
 //
-// The pure `planReleaseDraft(releases, tag)` and `waitUntilListed(...)` are unit-tested
-// without any I/O.
+// The pure `planReleaseDraft(releases, tag)`, `needsReset(release, sha)` and
+// `waitUntilListed(...)` are unit-tested without any I/O.
 
 import { execFileSync } from 'node:child_process'
 import { resolve } from 'node:path'
@@ -42,6 +45,15 @@ export function planReleaseDraft(releases, tag) {
     }
   }
   return { action: 'reuse', id: only.id }
+}
+
+/**
+ * Whether a reused draft holds assets built from a different commit than `sha`: an earlier
+ * cut of the same version that failed to publish before "Update pending release" re-cut it.
+ * Its assets must go before this run uploads, or the release could mix two builds.
+ */
+export function needsReset(release, sha) {
+  return Boolean(release?.draft) && release.target_commitish !== sha
 }
 
 /**
@@ -99,7 +111,7 @@ function listReleases(repo) {
     '--paginate',
     `repos/${repo}/releases?per_page=100`,
     '--jq',
-    '.[] | {id, tag_name, draft}',
+    '.[] | {id, tag_name, draft, target_commitish}',
   ])
   return out
     .split('\n')
@@ -114,22 +126,33 @@ function fail(message) {
 
 async function main(argv) {
   const [mode, repo, tag, sha] = argv
-  if (!repo || !tag || (mode === 'ensure' && !sha) || (mode !== 'ensure' && mode !== 'check')) {
+  if (!repo || !tag || (mode === 'ensure' && !sha) || !['ensure', 'check', 'id'].includes(mode)) {
     console.error('usage: node scripts/release-draft.mjs ensure <owner/repo> <tag> <sha>')
     console.error('       node scripts/release-draft.mjs check  <owner/repo> <tag>')
+    console.error('       node scripts/release-draft.mjs id     <owner/repo> <tag>')
     process.exit(2)
   }
 
-  const plan = planReleaseDraft(listReleases(repo), tag)
+  const releases = listReleases(repo)
+  const plan = planReleaseDraft(releases, tag)
   if (plan.action === 'error') fail(plan.message)
 
-  if (mode === 'check') {
+  if (mode === 'check' || mode === 'id') {
     if (plan.action !== 'reuse') fail(`no draft release exists for ${tag}.`)
-    console.log(`One draft release for ${tag} (${plan.id}).`)
+    console.log(mode === 'id' ? String(plan.id) : `One draft release for ${tag} (${plan.id}).`)
     return
   }
 
   if (plan.action === 'reuse') {
+    const existing = releases.find((r) => r.id === plan.id)
+    if (needsReset(existing, sha)) {
+      // Built from another commit: delete its assets before this run uploads any.
+      const assets = gh(['api', '--paginate', `repos/${repo}/releases/${plan.id}/assets?per_page=100`, '--jq', '.[].id'])
+        .split('\n')
+        .filter((line) => line.trim())
+      for (const id of assets) gh(['api', '-X', 'DELETE', `repos/${repo}/releases/assets/${id}`, '--silent'])
+      console.log(`The ${tag} draft was built from ${existing.target_commitish}; removed its ${assets.length} asset(s).`)
+    }
     // The draft may be left from an earlier, failed run, pointing at that run's commit.
     // Retarget it at the commit this run builds, so the release's target_commitish names
     // what actually shipped (finalize tags this same commit).

@@ -24,6 +24,15 @@ describe('buildPredicate (SLSA v1.0)', () => {
     expect(dep.digest.gitCommit).toBe('abc123def456')
   })
 
+  it('records the release commit, not the workflow commit, when the release names one', () => {
+    const predicate = buildPredicate({ ...env, RELEASE_SOURCE_SHA: 'r1r1r1', RELEASE_SOURCE_REF: 'refs/tags/v0.9.1' })
+    const dep = predicate.buildDefinition.resolvedDependencies[0]
+    expect(dep.uri).toBe('git+https://github.com/houston-code/houston@refs/tags/v0.9.1')
+    expect(dep.digest.gitCommit).toBe('r1r1r1')
+    // The builder is still the workflow at the ref it ran from.
+    expect(predicate.runDetails.builder.id).toMatch(/release-publish\.yml@refs\/heads\/main$/)
+  })
+
   it('records the run invocation id (run + attempt)', () => {
     expect(buildPredicate(env).runDetails.metadata.invocationId).toBe(
       'https://github.com/houston-code/houston/actions/runs/42/attempts/2'

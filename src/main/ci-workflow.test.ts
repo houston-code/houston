@@ -37,20 +37,22 @@ describe('CI revert guard', () => {
     expect(revertGuardJob).toContain("if: github.event_name == 'pull_request'")
   })
 
-  it('checks the merge result against main, not the PR branch in isolation', () => {
+  it('checks the merge result against the PR base, not the PR branch in isolation', () => {
     // actions/checkout on a pull_request event lands on refs/pull/N/merge — this PR
-    // already merged into main — so HEAD is the tree that merging would produce.
-    // Comparing origin/main..HEAD is therefore the real before/after.
-    expect(revertGuardJob).toMatch(/merge-revert-guard\.mjs origin\/main HEAD/)
+    // already merged into its base — so HEAD is the tree that merging would produce.
+    // Comparing origin/<base>..HEAD is therefore the real before/after. The base is main, or
+    // a release line for a backport or release PR, which a main comparison would misjudge.
+    expect(revertGuardJob).toContain('BASE: ${{ github.base_ref }}')
+    expect(revertGuardJob).toContain('node scripts/merge-revert-guard.mjs "origin/$BASE" HEAD')
   })
 
-  it('fetches enough history for the guard to see recent work on main', () => {
+  it('fetches enough history for the guard to see recent work on the base', () => {
     // The guard scans main's recent commits (WINDOW in merge-revert-guard.mjs) to tell a
     // deliberate removal from one that collides with work landed while the branch was
     // open. A depth-1 checkout would make that scan silently empty, and an empty scan
     // means the guard finds nothing and passes everything.
     expect(revertGuardJob).toContain('fetch-depth: 0')
-    expect(revertGuardJob).toMatch(/git fetch .*origin main/)
+    expect(revertGuardJob).toContain('git fetch --no-tags --depth=100 origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"')
   })
 
   it('honors the intentional-revert label as the documented override', () => {
@@ -264,13 +266,27 @@ describe('CI is the release gate', () => {
     expect(workflow).toMatch(/^ {2}workflow_call:$/m)
   })
 
-  it('is what release-prepare verifies the release tree with', () => {
+  it('is what release-prepare verifies the release tree with, on the exact commit it cuts', () => {
     const prepare = readFileSync(
       resolve(dirname(fileURLToPath(import.meta.url)), '../../.github/workflows/release-prepare.yml'),
       'utf8'
     )
-    expect(prepare).toMatch(/\n {2}verify:\n {4}uses: \.\/\.github\/workflows\/ci\.yml\n/)
-    expect(prepare).toContain('needs: [verify]')
+    expect(prepare).toMatch(/\n {2}verify:\n {4}needs: plan\n {4}if: .*\n {4}uses: \.\/\.github\/workflows\/ci\.yml\n/)
+    expect(prepare).toContain('needs: [plan, native-scan, sbom-conformance, verify, build]')
+    // Called that way, CI tests `ref` and leaves packaging and SBOMs to publish's own jobs.
+    for (const name of ['test', 'linux-sandbox', 'package', 'workflow-lint']) {
+      expect(job(name), name).toContain('ref: ${{ inputs.ref || github.sha }}')
+    }
+    expect(job('package')).toContain("if: github.event_name != 'push' && !inputs.release")
+    expect(workflow).toContain("  sbom-conformance:\n    if: github.event_name != 'push' && !inputs.release\n")
+  })
+
+  it('checks a release PR\'s notes and that it changes only the version and CHANGELOG', () => {
+    const notes = job('release-notes')
+    expect(notes).toContain("if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'release-pr/v')")
+    expect(notes).toContain('HEAD_REF: ${{ github.head_ref }}')
+    expect(notes).toContain('node scripts/check-changelog-summary.mjs "$version"')
+    expect(notes).toContain("grep -v -x -E 'CHANGELOG\\.md|package\\.json|package-lock\\.json'")
   })
 })
 
