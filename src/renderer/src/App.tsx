@@ -29,7 +29,7 @@ import {
   type PromptInvocation
 } from '@shared/promptInvocation'
 import { resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
-import { pickDefaultModel } from '@shared/models'
+import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import {
   branchNameError,
   canCreateWorktree,
@@ -89,7 +89,7 @@ import { GitInitBanner } from './components/GitInitBanner'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { GetStarted } from './components/GetStarted'
-import { ConnectModel } from './components/ConnectModel'
+import { ConnectModel, providerShortName } from './components/ConnectModel'
 import { TipHost } from './components/TipHost'
 import { useOnboarding } from './hooks/useOnboarding'
 import {
@@ -827,16 +827,24 @@ export default function App(): JSX.Element {
 
   // The get-started "Connect a model" step succeeded: select that provider's default
   // model, so the step ticks off and the composer is ready without a trip to the picker.
-  const onModelConnected = useCallback(async (fresh: AppSettings, providerId: string) => {
-    setConnectOpen(false)
-    const prov = fresh.providers.find((p) => p.id === providerId)
-    const model = prov ? (pickDefaultModel(prov) ?? prov.models[0]?.id) : undefined
-    if (!model) {
-      setSettings(fresh)
-      return
-    }
-    setSettings(await window.api.saveSettings({ ...fresh, selected: { providerId, model } }))
-  }, [])
+  const onModelConnected = useCallback(
+    async (fresh: AppSettings, providerId: string, picked?: string) => {
+      setConnectOpen(false)
+      const prov = fresh.providers.find((p) => p.id === providerId)
+      // A model the user picked (from a reopened step 1) wins; else the provider's default.
+      const model = prov
+        ? prov.models.some((m) => m.id === picked)
+          ? picked
+          : (pickDefaultModel(prov) ?? prov.models[0]?.id)
+        : undefined
+      if (!model) {
+        setSettings(fresh)
+        return
+      }
+      setSettings(await window.api.saveSettings({ ...fresh, selected: { providerId, model } }))
+    },
+    []
+  )
 
   const onChangePolicy = useCallback(
     async (policy: ApprovalPolicy) => {
@@ -1892,12 +1900,18 @@ export default function App(): JSX.Element {
             {showChecklist && connectOpen ? (
               <ConnectModel
                 settings={settings}
-                onConnected={(fresh, id) => void onModelConnected(fresh, id)}
+                onConnected={(fresh, id, model) => void onModelConnected(fresh, id, model)}
                 onBack={() => setConnectOpen(false)}
               />
             ) : showChecklist ? (
               <GetStarted
                 facts={checklistFacts}
+                modelSummary={
+                  selectedProvider && settings.selected
+                    ? `${providerShortName(selectedProvider)} · ${modelDisplayName(selectedProvider.kind, settings.selected.model)}`
+                    : undefined
+                }
+                folderSummary={workspace ? baseName(workspace) : undefined}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
                 onSkip={() => {

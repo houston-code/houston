@@ -1,5 +1,6 @@
 import { useState, type KeyboardEvent } from 'react'
 import type { AppSettings, ProviderConfig } from '@shared/types'
+import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 
 /**
@@ -7,6 +8,10 @@ import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice
  * a key, and have it verified with a live model listing before the step ticks off.
  * A local host (Ollama, LM Studio) needs no key; it's checked by listing its models.
  * Everything else about providers stays in Settings; this covers the first key only.
+ *
+ * Opened again from a finished step 1 (the checklist's Change button), it starts on
+ * what's already set: the selected provider, a "Key saved" line instead of an empty
+ * key box (Replace key brings the box back), and a model picker.
  */
 
 /** Where to get a key, per built-in cloud provider. */
@@ -25,6 +30,25 @@ const TILE_LABEL: Record<string, string> = {
   lmstudio: 'LM Studio'
 }
 
+/** A provider's short name, as on its tile ("Anthropic"), for summaries like step 1's. */
+export function providerShortName(p: Pick<ProviderConfig, 'id' | 'label'>): string {
+  return TILE_LABEL[p.id] ?? p.label
+}
+
+/** Usable as-is: no key needed or one is stored, and it has models to pick from. */
+function isReady(p: ProviderConfig): boolean {
+  return (!p.requiresKey || p.hasKey) && p.models.length > 0
+}
+
+/** The model to preselect: the current selection on that provider, else its default. */
+function initialModel(settings: AppSettings, p: ProviderConfig | undefined): string {
+  if (!p) return ''
+  if (settings.selected?.providerId === p.id && p.models.some((m) => m.id === settings.selected?.model)) {
+    return settings.selected.model
+  }
+  return pickDefaultModel(p) ?? p.models[0]?.id ?? ''
+}
+
 const LOCAL_HINT: Record<string, string> = {
   ollama: 'Start Ollama and pull a model (for example, ollama pull llama3.1), then check again.',
   lmstudio: 'Open LM Studio, load a model, and start its local server, then check again.'
@@ -41,8 +65,11 @@ export function ipcErrorMessage(e: unknown): string {
 
 export interface ConnectModelProps {
   settings: AppSettings
-  /** Called with the refreshed settings and the provider once it's usable. */
-  onConnected: (fresh: AppSettings, providerId: string) => void
+  /**
+   * Called once a provider is usable, with fresh settings. `model` is set when the user
+   * picked one (an already-connected provider); otherwise the app selects the default.
+   */
+  onConnected: (fresh: AppSettings, providerId: string, model?: string) => void
   onBack: () => void
 }
 
@@ -50,7 +77,18 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
   const tiles = Object.keys(TILE_LABEL)
     .map((id) => settings.providers.find((p) => p.id === id))
     .filter((p): p is ProviderConfig => !!p)
-  const [providerId, setProviderId] = useState(tiles[0]?.id ?? '')
+  // Start on the selected provider, so reopening step 1 shows what's set.
+  const [providerId, setProviderId] = useState(
+    tiles.some((p) => p.id === settings.selected?.providerId)
+      ? (settings.selected?.providerId ?? '')
+      : (tiles[0]?.id ?? '')
+  )
+  // A ready provider shows its saved state and a model picker; "Replace key" (or
+  // "Check again" for a local host) switches back to the connect form.
+  const [replacing, setReplacing] = useState(false)
+  const [model, setModel] = useState(() =>
+    initialModel(settings, tiles.find((p) => p.id === providerId))
+  )
   const [key, setKey] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -62,12 +100,28 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
 
   const provider = tiles.find((p) => p.id === providerId)
   const local = provider ? !provider.requiresKey : false
+  const showReady = provider !== undefined && isReady(provider) && !replacing
 
   const choose = (id: string): void => {
     setProviderId(id)
+    setReplacing(false)
+    setModel(initialModel(settings, tiles.find((p) => p.id === id)))
     setError(null)
     setUnverified(null)
     setStorageBlocked(null)
+  }
+
+  /** Keep the provider as it is and switch to the picked model. */
+  const applyModel = async (): Promise<void> => {
+    if (!model) return
+    setBusy(true)
+    try {
+      onConnected(await window.api.getSettings(), providerId, model)
+    } catch (e) {
+      setError(`Couldn't switch models: ${ipcErrorMessage(e)}`)
+    } finally {
+      setBusy(false)
+    }
   }
 
   // Radio-group keys: arrows move the selection (and focus) between tiles, wrapping,
@@ -101,7 +155,10 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
   const storeKey = async (value: string): Promise<void> => {
     await window.api.setKey(providerId, value)
     setKey('')
-    onConnected(await window.api.getSettings(), providerId)
+    // Replacing the key of a provider that already worked keeps the picked model;
+    // a first connection lets the app choose the provider's default.
+    const wasReady = provider !== undefined && isReady(provider)
+    onConnected(await window.api.getSettings(), providerId, wasReady && model ? model : undefined)
   }
 
   const connectCloud = async (): Promise<void> => {
@@ -194,6 +251,14 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
             onClick={() => choose(p.id)}
           >
             {TILE_LABEL[p.id]}
+            {isReady(p) && (
+              <>
+                <span className="connect-model__tile-ok" aria-hidden="true">
+                  {' '}✓
+                </span>
+                <span className="sr-only"> (connected)</span>
+              </>
+            )}
           </button>
         ))}
       </div>
@@ -201,10 +266,42 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
       <form
         onSubmit={(e) => {
           e.preventDefault()
-          void (local ? connectLocal() : connectCloud())
+          void (showReady ? applyModel() : local ? connectLocal() : connectCloud())
         }}
       >
-        {!local && (
+        {showReady && provider && (
+          <>
+            <div className="connect-model__saved">
+              <span className="connect-model__saved-ok" aria-hidden="true">
+                ✓
+              </span>
+              <span className="connect-model__saved-text">
+                {local
+                  ? `${providerShortName(provider)} is running with ${provider.models.length} model${provider.models.length === 1 ? '' : 's'}`
+                  : `Key saved for ${providerShortName(provider)}`}
+              </span>
+              <button type="button" className="connect-model__link" onClick={() => setReplacing(true)}>
+                {local ? 'Check again' : 'Replace key'}
+              </button>
+            </div>
+            <label className="connect-model__label" htmlFor="connect-model-model">
+              Model
+            </label>
+            <select
+              id="connect-model-model"
+              className="control control--select connect-model__model"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+            >
+              {provider.models.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.label ?? modelDisplayName(provider.kind, m.id)}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
+        {!showReady && !local && (
           <>
             <label className="connect-model__label" htmlFor="connect-model-key">
               API key
@@ -234,7 +331,7 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
             </p>
           </>
         )}
-        {local && (
+        {!showReady && local && (
           <p className="connect-model__note">
             Houston will look for {provider?.label.replace(/^Local\W+/, '')} at{' '}
             <code>{provider?.baseUrl}</code>.
@@ -258,7 +355,7 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
             </button>
           )}
           <button type="submit" className="btn btn--sm btn--accent" disabled={busy}>
-            {busy ? 'Checking…' : local ? 'Check connection' : 'Connect'}
+            {showReady ? 'Use this model' : busy ? 'Checking…' : local ? 'Check connection' : 'Connect'}
           </button>
         </div>
       </form>
