@@ -110,6 +110,11 @@ export interface TurnReceipt {
   filesChanged: string[]
   /** Every path changed, including any beyond the cap. */
   filesChangedCount: number
+  /**
+   * Todo items the agent marked completed this turn that claim a check ran (tests, a
+   * build, a browser check) with no passing run of it recorded. At most 10.
+   */
+  todoGaps?: string[]
 }
 
 export const RECEIPT_MAX_CHECKS = 24
@@ -254,6 +259,8 @@ export function receiptSummary(r: TurnReceipt): string {
   if (r.filesChangedCount > 0) {
     parts.push(`${r.filesChangedCount} file${r.filesChangedCount === 1 ? '' : 's'} changed`)
   }
+  const gaps = r.todoGaps?.length ?? 0
+  if (gaps) parts.push(`${gaps} todo${gaps === 1 ? '' : 's'} marked done with nothing recorded`)
   if (!parts.length && r.otherCommands > 0) {
     parts.push(`${r.otherCommands} command${r.otherCommands === 1 ? '' : 's'} ran`)
   }
@@ -261,9 +268,9 @@ export function receiptSummary(r: TurnReceipt): string {
   return line.charAt(0).toUpperCase() + line.slice(1)
 }
 
-/** Whether any check in the receipt failed. */
+/** Whether any check in the receipt failed, or a todo claims a check nothing backs. */
 export function receiptHasFailure(r: TurnReceipt): boolean {
-  return r.checks.some((c) => c.ok === false)
+  return r.checks.some((c) => c.ok === false) || (r.todoGaps?.length ?? 0) > 0
 }
 
 /**
@@ -282,5 +289,6 @@ export function formatReceiptLines(r: TurnReceipt): string[] {
   if (r.otherCommands > 0) {
     lines.push(`  plus ${r.otherCommands} other command${r.otherCommands === 1 ? '' : 's'}`)
   }
+  for (const g of r.todoGaps ?? []) lines.push(`  ! marked done with nothing recorded: ${g}`)
   return lines
 }

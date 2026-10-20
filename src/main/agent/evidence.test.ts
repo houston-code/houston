@@ -444,3 +444,27 @@ describe('EvidenceLedger attribution and order', () => {
     expect(checks.find((c) => c.kind === 'build')).not.toHaveProperty('beforeLastWrite')
   })
 })
+
+describe('EvidenceLedger.passed and todo gaps', () => {
+  it('answers whether a check of a kind passed', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('npm install'))
+    l.recordShell(shell('pytest', { exitCode: 1 }))
+    l.recordShell(shell('npm run build'))
+    expect(l.passed('build')).toBe(true)
+    expect(l.passed('test')).toBe(false)
+    expect(l.passed('any')).toBe(true)
+    const installOnly = new EvidenceLedger()
+    installOnly.recordShell(shell('npm install'))
+    expect(installOnly.passed('any')).toBe(false)
+  })
+
+  it('makes a receipt for todo gaps alone, capped and cleaned', () => {
+    const l = new EvidenceLedger()
+    expect(l.receipt(undefined, { todoGaps: [] })).toBeNull()
+    const r = l.receipt(undefined, { todoGaps: Array.from({ length: 12 }, (_, i) => `Run tests ${i}\u001b[2J`) })!
+    expect(r.todoGaps).toHaveLength(10)
+    expect(r.todoGaps?.[0]).toBe('Run tests 0[2J')
+    expect(r.checks).toEqual([])
+  })
+})

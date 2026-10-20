@@ -312,6 +312,12 @@ tests pass and the receipt says no tests ran, believe the receipt.
   in the background ended (or that it is still running, for a dev server). A check
   that ran before the turn's last file change says so, since it may not cover the
   final code.
+- **Todo items it can't back.** When the agent marks a todo done that says a check
+  ran ("Backend tests with pytest", "Verify the build") and no passing run of that
+  check is recorded this turn, the receipt lists it as marked done with nothing
+  recorded, and the agent is told at the moment it marks it. The list itself is left
+  as the agent wrote it. Items about writing something ("Write tests for the API")
+  never need a run behind them.
 - **Outcomes it can't tell.** An HTTP request made without `curl -f` (so an error
   page still exits 0), a test whose exit code is hidden by what follows it
   (`pytest | tail`, `pytest; echo done`), or a page that loaded with nothing on it

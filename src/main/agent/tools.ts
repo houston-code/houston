@@ -13,7 +13,7 @@ import type {
   ToolSchema
 } from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
-import { formatTodoList, formatTodoSummary, parseTodos } from '@shared/todos'
+import { formatTodoList, formatTodoSummary, parseTodos, type Todo } from '@shared/todos'
 import { missingRuntime, missingRuntimeHint } from '@shared/runtimes'
 import type { BlockedReason } from '@shared/evidence'
 import {
@@ -210,6 +210,12 @@ export interface ToolContext {
    * structured fact behind it, and the model has no way to call it.
    */
   recordEvidence?: (e: EvidenceDraft) => void
+  /**
+   * Hold a new todo list against what ran this turn (injected by the loop): returns a
+   * note for each item just marked completed that claims a check no passing run backs.
+   * todo_write appends them to its result; the list itself is accepted as written.
+   */
+  checkTodos?: (todos: Todo[]) => string[]
   /** Run a `gh` subcommand (injected by the loop; falls back to PATH resolution). */
   ghExec?: GhExec
   /** Ask the user a structured question and resolve with their answer (injected by the loop). */
@@ -2116,10 +2122,12 @@ const todoWrite: ToolDef = {
       ['todos']
     )
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const todos = parseTodos(args.todos)
     const summary = formatTodoSummary(todos)
-    return todos.length ? `${summary}\n${formatTodoList(todos)}` : summary
+    const base = todos.length ? `${summary}\n${formatTodoList(todos)}` : summary
+    const notes = ctx.checkTodos?.(todos) ?? []
+    return notes.length ? `${base}\n${notes.join('\n')}` : base
   }
 }
 
