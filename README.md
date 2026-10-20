@@ -937,9 +937,14 @@ the agent loop and UI never depend on a specific provider.
 - **File tools are contained** to the workspace in code — any path that resolves
   outside the project root is rejected.
 - **Human in the loop.** Writes and shell commands require approval unless you
-  opt into a more autonomous policy. Network egress (`web_fetch`, `web_search`,
-  `view_localhost`) always prompts on first use — even in *full auto* — since it
-  leaves the machine; choose *allow-for-the-run* to stop further prompts that run.
+  opt into a more autonomous policy. A new install starts in *full auto* only where
+  the OS sandbox confines shell commands (macOS, Linux with bubblewrap), and in *ask*
+  elsewhere; an existing install keeps its saved mode. Network egress (`web_fetch`,
+  `web_search`, `view_localhost`) always prompts on first use, even in *full auto*,
+  since it leaves the machine; choose *allow-for-the-run* to stop further prompts that
+  run. A shell command that can throw away work in the project (`git reset --hard`, a
+  forced `git clean`, `rm -r` of source, a forced or deleting push) asks in every mode,
+  since the sandbox protects everything but the project itself.
   `view_localhost` is restricted to loopback addresses and loads untrusted page
   content in a sandboxed, isolated, no-Node window; its main frame can't be
   navigated or redirected off loopback, and its requests can't reach
@@ -956,8 +961,8 @@ the agent loop and UI never depend on a specific provider.
   to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
 
 Coding agents run model-authored commands. Treat *full auto* + network with the
-same caution you'd treat running untrusted code, and prefer the default
-*ask*/*auto-edit* policies.
+same caution you'd treat running untrusted code, and switch to *ask* or *auto-edit*
+for a project you don't trust.
 
 ## Signing & notarization
 

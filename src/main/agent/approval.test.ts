@@ -214,6 +214,49 @@ describe('decideApproval', () => {
     })
   })
 
+  describe('shell command that discards work (shellDiscardsWork=true)', () => {
+    it('prompts under full-auto, which would otherwise auto-approve', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', policy: 'full-auto', shellDiscardsWork: true }))
+          .mustApprove
+      ).toBe(true)
+    })
+
+    it('prompts despite a generic override (Allow for run)', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', override: true, shellDiscardsWork: true })).mustApprove
+      ).toBe(true)
+    })
+
+    it('prompts on an unconfined host even after the unconfined-shell consent', () => {
+      expect(
+        decideApproval(
+          base({
+            kind: 'shell',
+            policy: 'full-auto',
+            shellSandboxed: false,
+            shellUnsandboxedOverride: true,
+            shellDiscardsWork: true
+          })
+        )
+      ).toEqual({ mustApprove: true, unsandboxedShell: true })
+    })
+
+    it('an explicit allow rule still allows it on a confining host', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', ruleAction: 'allow', shellDiscardsWork: true }))
+          .mustApprove
+      ).toBe(false)
+    })
+
+    it('a command that keeps the work is unaffected (auto-approves under full-auto)', () => {
+      expect(
+        decideApproval(base({ kind: 'shell', policy: 'full-auto', shellDiscardsWork: false }))
+          .mustApprove
+      ).toBe(false)
+    })
+  })
+
   describe('workspace-escaping shell command (shellEscapesWorkspace=true)', () => {
     it('prompts under full-auto, which would otherwise auto-approve', () => {
       expect(

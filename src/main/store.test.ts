@@ -366,6 +366,33 @@ describe('settings migration — reasoning default (v14)', () => {
   })
 })
 
+describe('fresh-install approval mode', () => {
+  it('starts a fresh install in the configured mode', async () => {
+    const store = await loadStore()
+    store.configureFreshInstallApprovalPolicy(() => 'full-auto')
+    expect(store.getSettings().approvalPolicy).toBe('full-auto')
+  })
+
+  it('keeps the mode an existing install saved', async () => {
+    writeSettings({ schemaVersion: SETTINGS_SCHEMA_VERSION, approvalPolicy: 'ask' })
+    const store = await loadStore()
+    store.configureFreshInstallApprovalPolicy(() => 'full-auto')
+    expect(store.getSettings().approvalPolicy).toBe('ask')
+  })
+
+  it('gives an unreadable settings file the plain default, not the fresh-install mode', async () => {
+    writeFileSync(join(state.userData, 'settings.json'), '{not json', 'utf8')
+    const store = await loadStore()
+    store.configureFreshInstallApprovalPolicy(() => 'full-auto')
+    expect(store.getSettings().approvalPolicy).toBe('ask')
+  })
+
+  it('falls back to ask when nothing configured it', async () => {
+    const store = await loadStore()
+    expect(store.getSettings().approvalPolicy).toBe('ask')
+  })
+})
+
 describe('settings migration — window-relative compaction threshold (v5)', () => {
   it('drops the old stamped fixed default so upgraded installs get automatic sizing', async () => {
     // Pre-v5 versions wrote compactionThreshold: 100_000 into every settings.json,

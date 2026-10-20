@@ -26,6 +26,15 @@ The macOS and Linux backends give us one specific primitive:
 It is path-scoped, write-oriented, per-process, needs no admin, and is cheap to set up
 per command. Seatbelt and bubblewrap both provide exactly that.
 
+What it does not protect is the project itself: a confined command can still reset,
+clean, or delete files inside it, and shell side effects aren't checkpointed. That gap
+is closed at the approval layer instead. A command that can throw away work there
+(`git reset --hard`, a forced `git clean`, `rm -r` of source, a forced or deleting
+push; `shellDiscardsWork` in
+[`src/main/agent/permissions.ts`](../src/main/agent/permissions.ts)) asks in every
+mode, full auto included, which is what lets a new install start in full auto where
+one of these backends is active.
+
 A command may also signal the processes it started (children and grandchildren), because
 build tools stop their own workers: Next.js, webpack, and jest-worker fail with
 `kill EPERM` otherwise. It may not signal anything outside its own sandbox: not the

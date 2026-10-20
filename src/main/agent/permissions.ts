@@ -611,6 +611,224 @@ export function shellWritesSensitivePath(command: string): boolean {
 }
 
 /**
+ * Programs that run another command given in their arguments (`sudo git …`, `xargs rm
+ * -rf`, `timeout 60 git clean -fdx`). Their own options and values sit in front of that
+ * command, so {@link wordsDiscardWork} looks for a known discarding program after them.
+ */
+const RUNS_A_COMMAND = new Set([
+  ...COMMAND_PREFIXES,
+  'xargs',
+  'timeout',
+  'doas',
+  'stdbuf',
+  'ionice',
+  'caffeinate'
+])
+
+/** Programs {@link wordsDiscardWork} knows can throw away work in the project. */
+const DISCARDING_PROGRAMS = new Set(['git', 'rm', 'find', 'shred'])
+
+/** Shell keywords that can sit in front of a command word (`then git reset --hard`). */
+const LEADING_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{', '(', 'time'])
+
+/**
+ * Directories a clean rebuild or reinstall recreates, which `rm -r` may remove without
+ * asking. The unambiguous names count at any depth (`packages/app/node_modules`); the
+ * generic ones (`build`, `dist`, …) only at the top of the project, since a nested
+ * `src/build` is as likely to be source as output.
+ */
+const REGENERATED_ANYWHERE = new Set([
+  'node_modules',
+  '__pycache__',
+  '.pytest_cache',
+  '.mypy_cache',
+  '.ruff_cache',
+  '.next',
+  '.nuxt',
+  '.turbo',
+  '.parcel-cache'
+])
+const REGENERATED_AT_TOP = new Set(['dist', 'build', 'out', 'target', 'coverage', '.cache'])
+
+/** Whether `rm -r` of `operand` only removes a directory a rebuild recreates. */
+function isRegeneratedDir(operand: string): boolean {
+  // A glob, variable, brace, or tilde could expand to anything.
+  if (/[*?[\]{}$~`]/.test(operand)) return false
+  let p = operand
+  while (p.startsWith('./')) p = p.slice(2)
+  p = p.replace(/\/+$/, '')
+  if (p === '' || p.startsWith('/') || p.startsWith('-')) return false
+  const segments = p.split('/')
+  if (segments.some((seg) => seg === '' || seg === '.' || seg === '..')) return false
+  const last = segments[segments.length - 1]!
+  return REGENERATED_ANYWHERE.has(last) || (segments.length === 1 && REGENERATED_AT_TOP.has(last))
+}
+
+/** A short option cluster (`-fdx`) or the long form, for flag `letter` / `long`. */
+function hasFlag(args: string[], letter: string, long?: string): boolean {
+  return args.some(
+    (a) => (long !== undefined && (a === long || a.startsWith(`${long}=`))) || (/^-[A-Za-z]+$/.test(a) && a.includes(letter))
+  )
+}
+
+/**
+ * Whether `rm` with these arguments deletes a directory tree that isn't build output.
+ * A recursive `rm` with no operands counts: under `xargs` its paths arrive on stdin,
+ * unseen, and on its own it removes nothing, so asking costs nothing.
+ */
+function rmDiscardsWork(args: string[]): boolean {
+  let recursive = false
+  let endOfOptions = false
+  const operands: string[] = []
+  for (const a of args) {
+    if (!endOfOptions && a === '--') endOfOptions = true
+    else if (!endOfOptions && a.startsWith('--')) recursive ||= a === '--recursive'
+    else if (!endOfOptions && /^-[A-Za-z]+$/.test(a)) recursive ||= /[rR]/.test(a)
+    else operands.push(a)
+  }
+  return recursive && (operands.length === 0 || operands.some((op) => !isRegeneratedDir(op)))
+}
+
+/** Whether `find` with these arguments deletes what it finds (`-delete`, `-exec rm`). */
+function findDiscardsWork(args: string[]): boolean {
+  return args.some((a, i) => {
+    if (a === '-delete') return true
+    if (!['-exec', '-execdir', '-ok', '-okdir'].includes(a)) return false
+    const program = args[i + 1]
+    return program !== undefined && ['rm', 'shred'].includes(program.slice(program.lastIndexOf('/') + 1))
+  })
+}
+
+/**
+ * Whether a `git` invocation (the words after `git`) discards uncommitted work, deletes
+ * a branch or stash, or rewrites a remote or history in a way the reflog can't undo for
+ * the user: `reset --hard`, a forced `clean`, `checkout -- …`/`checkout .`, `restore` of
+ * the working tree, a forced `switch`, `stash drop`/`clear`, `branch -D`, a forced or
+ * deleting `push`, `filter-branch`/`filter-repo`, `reflog expire`/`delete`, a forced
+ * `worktree remove`, and a forced `rm`.
+ */
+function gitDiscardsWork(words: string[]): boolean {
+  let i = 0
+  // Global options before the subcommand; these four take their value as the next word.
+  while (i < words.length && words[i]!.startsWith('-')) {
+    i += ['-C', '-c', '--git-dir', '--work-tree', '--namespace'].includes(words[i]!) ? 2 : 1
+  }
+  const sub = words[i]
+  const args = words.slice(i + 1)
+  switch (sub) {
+    case 'reset':
+      return args.includes('--hard')
+    case 'clean':
+      return hasFlag(args, 'f', '--force') && !hasFlag(args, 'n', '--dry-run')
+    case 'checkout':
+      return args.includes('--') || args.includes('.') || hasFlag(args, 'f', '--force')
+    case 'restore': {
+      const staged = hasFlag(args, 'S', '--staged')
+      const worktree = hasFlag(args, 'W', '--worktree')
+      return !staged || worktree
+    }
+    case 'switch':
+      return hasFlag(args, 'f', '--force') || args.includes('--discard-changes')
+    case 'stash':
+      return args[0] === 'drop' || args[0] === 'clear'
+    case 'branch':
+      return hasFlag(args, 'D') || (hasFlag(args, 'd', '--delete') && hasFlag(args, 'f', '--force'))
+    case 'push':
+      return (
+        hasFlag(args, 'f', '--force') ||
+        hasFlag(args, 'd', '--delete') ||
+        args.some(
+          (a) =>
+            a.startsWith('--force-with-lease') ||
+            a.startsWith('--force-if-includes') ||
+            a === '--mirror' ||
+            a === '--prune' ||
+            (!a.startsWith('-') && (a.startsWith('+') || a.startsWith(':')))
+        )
+      )
+    case 'filter-branch':
+    case 'filter-repo':
+      return true
+    case 'reflog':
+      return args[0] === 'expire' || args[0] === 'delete'
+    case 'worktree':
+      return args[0] === 'remove' && hasFlag(args.slice(1), 'f', '--force')
+    case 'rm':
+      return hasFlag(args, 'f', '--force')
+    default:
+      return false
+  }
+}
+
+/** Whether one simple command (its words as bash builds them) discards work. */
+function wordsDiscardWork(words: string[]): boolean {
+  let i = 0
+  while (
+    i < words.length &&
+    (LEADING_KEYWORDS.has(words[i]!) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i]!))
+  ) {
+    i++
+  }
+  const word = words[i]
+  if (word === undefined) return false
+  const program = word.slice(word.lastIndexOf('/') + 1)
+  if (RUNS_A_COMMAND.has(program)) {
+    // The wrapped command starts at some later word; try each known discarding program.
+    for (let k = i + 1; k < words.length; k++) {
+      const w = words[k]!
+      if (DISCARDING_PROGRAMS.has(w.slice(w.lastIndexOf('/') + 1)) && wordsDiscardWork(words.slice(k))) return true
+    }
+    return false
+  }
+  const args = words.slice(i + 1)
+  switch (program) {
+    case 'git':
+      return gitDiscardsWork(args)
+    case 'rm':
+      return rmDiscardsWork(args)
+    case 'find':
+      return findDiscardsWork(args)
+    case 'shred':
+      return true
+    default:
+      return false
+  }
+}
+
+/** {@link shellDiscardsWork} for a command string nested `depth` shells deep. */
+function commandDiscardsWork(command: string, depth: number): boolean {
+  // Too deep to read: over-flagging only asks.
+  const commands = depth <= MAX_NESTED_SHELL_DEPTH ? shellRunCommands(command) : null
+  if (commands === null) return true
+  for (const words of commands) {
+    if (wordsDiscardWork(words)) return true
+    const nested = nestedCommandString(words)
+    if (nested !== null && commandDiscardsWork(nested, depth + 1)) return true
+  }
+  return false
+}
+
+/**
+ * Whether a `run_shell` command can throw away work in the project that a checkpoint
+ * can't bring back: uncommitted changes (`git reset --hard`, `git clean -f`, `git
+ * checkout -- .`, `git restore`), a directory tree (`rm -r` of anything but build
+ * output and dependencies, `find … -delete`), a branch or stash, or a remote's history
+ * (a forced or deleting `git push`). The sandbox confines a command to the project, but
+ * the project is exactly what these destroy, and shell side effects aren't
+ * checkpointed, so they ask in every approval mode.
+ *
+ * Words are read as bash builds them, inside `$(…)`, backticks, and strings handed to a
+ * shell (`bash -c`, `eval`), and with line continuations joined as well as written, so
+ * quoting or splitting a word can't hide one. Like {@link shellReferencesExternalPath}
+ * it is a static tripwire: a command assembled from variables isn't seen.
+ */
+export function shellDiscardsWork(command: string): boolean {
+  if (commandDiscardsWork(command, 0)) return true
+  const joined = joinLineContinuations(command)
+  return joined !== command && commandDiscardsWork(joined, 0)
+}
+
+/**
  * Whether a tool call creates, overwrites, or removes a credential / secret file: a
  * write tool targeting one (see writesSensitivePath) or a `run_shell` command that
  * writes one (see {@link shellWritesSensitivePath}). The one definition shared by the

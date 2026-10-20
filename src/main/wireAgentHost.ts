@@ -1,6 +1,7 @@
 import { configureAgentHost } from './agentHost'
 import {
   addPermissionRule,
+  configureFreshInstallApprovalPolicy,
   configureHasKey,
   configureHeaderSecrets,
   configureMcpOAuthPresence,
@@ -23,6 +24,8 @@ import {
 import { configureLogRedactor } from './logger'
 import { configureTitleRedaction } from './conversations'
 import { redactSecrets } from './agent/redact'
+import { isSandboxed } from './sandbox'
+import { freshInstallApprovalPolicy } from '@shared/defaults'
 
 /**
  * Bind the agent engine's host accessors (see `agentHost.ts`) plus the store's
@@ -37,6 +40,8 @@ import { redactSecrets } from './agent/redact'
  */
 export function wireAgentHost(): void {
   configureHasKey(hasKey)
+  // A fresh install starts in full-auto only where the sandbox confines shell commands.
+  configureFreshInstallApprovalPolicy(() => freshInstallApprovalPolicy(isSandboxed()))
   // safeStorage is the desktop's only key store, so the environment never shadows a
   // stored key here (unlike the CLI) — always report no shadow.
   configureSetKey((id, key) => {

@@ -4081,6 +4081,31 @@ describe('permission gates: batched sensitive reads and subagent calls', () => {
     expect(existsSync(join(ws, 'escaped-copy.txt'))).toBe(false)
   })
 
+  // The same for a command that can throw away work: consent to a writable dispatch is
+  // consent to edit the project, not to delete a source tree.
+  it("prompts for a writable subagent's command that discards work", async () => {
+    h.sandboxed = true
+    writeFileSync(join(ws, 'keep.txt'), 'keep me\n')
+    const requests: ChatMessage[][] = []
+    const r = await run({
+      policy: 'full-auto',
+      provider: recording(
+        [
+          callTurn({ id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'tidy', prompt: 'go' } }),
+          callTurn({ id: 's1', name: 'run_shell', arguments: { command: 'rm -rf src keep.txt' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        requests
+      ),
+      onApproval: (_id, decide) => decide('deny')
+    })
+    const approvals = approvalsOf(r)
+    expect(approvals.map((a) => a.callId)).toEqual(['d1.shell.1'])
+    expect(toolMessageFor(requests, 's1')).toContain('Denied by the user.')
+    expect(existsSync(join(ws, 'keep.txt'))).toBe(true)
+  })
+
   // Consent to a writable dispatch is consent to edit the project, not to overwrite a
   // credential file only the user can restore: same prompt as the main loop's.
   it("prompts for a writable subagent's write to .env, flagged as a sensitive write", async () => {
@@ -5554,6 +5579,52 @@ describe('egress hardening', () => {
       }
       expect(res.ok).toBe(false)
       expect(res.output).toContain('credential')
+    })
+  })
+
+  describe('commands that discard work', () => {
+    beforeEach(() => {
+      shellNetPerCall.length = 0
+      h.sandboxed = true
+    })
+
+    it('asks in full-auto on a confining host, and a denial keeps it from running', async () => {
+      h.probeTools = [probeRunShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (id, decide) => decide(id === 'x3' ? 'deny' : 'allow'),
+        turns: [
+          // x1 pauses once for the run's shell-network consent; x2 then runs unasked.
+          [runShellCall('x1', 'npm test'), { type: 'done', stopReason: 'tool_use' }],
+          [runShellCall('x2', 'npm run build'), { type: 'done', stopReason: 'tool_use' }],
+          [runShellCall('x3', 'git reset --hard'), { type: 'done', stopReason: 'tool_use' }],
+          // Build output and dependencies are fair game.
+          [runShellCall('x4', 'rm -rf node_modules dist'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['x1', 'x3'])
+      expect(shellNetPerCall.map((c) => c.command)).toEqual(['npm test', 'npm run build', 'rm -rf node_modules dist'])
+    })
+
+    it('an explicit allow rule lets a known destructive command through', async () => {
+      h.probeTools = [probeRunShell()]
+      h.settings.permissionRules = [{ action: 'allow', tool: 'run_shell', match: 'git reset --hard' }]
+      try {
+        const r = await run({
+          policy: 'full-auto',
+          onApproval: (_id, decide) => decide('allow'),
+          turns: [
+            [runShellCall('x1', 'npm test'), { type: 'done', stopReason: 'tool_use' }],
+            [runShellCall('x2', 'git reset --hard'), { type: 'done', stopReason: 'tool_use' }],
+            [{ type: 'done', stopReason: 'end_turn' }]
+          ]
+        })
+        expect(approvalCallIds(r)).toEqual(['x1'])
+        expect(shellNetPerCall.map((c) => c.command)).toContain('git reset --hard')
+      } finally {
+        h.settings.permissionRules = []
+      }
     })
   })
 

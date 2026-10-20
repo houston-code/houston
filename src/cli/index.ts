@@ -5,6 +5,7 @@ import { readAllStdin, runTuiEntry, runHeadlessEntry, stdinIsPiped } from '../ma
 import { configureAgentHost } from '../main/agentHost'
 import {
   addPermissionRule,
+  configureFreshInstallApprovalPolicy,
   configureHasKey,
   configureHeaderSecrets,
   configureMcpOAuthPresence,
@@ -14,6 +15,8 @@ import {
   saveSettings
 } from '../main/store'
 import { setUserDataDir } from '../main/userData'
+import { isSandboxed } from '../main/sandbox'
+import { freshInstallApprovalPolicy } from '@shared/defaults'
 import { configureLogRedactor, log } from '../main/logger'
 import { configureTitleRedaction } from '../main/conversations'
 import { redactSecrets } from '../main/agent/redact'
@@ -136,6 +139,8 @@ export function wireCliHost(): void {
   // Before any provider call: a TLS-inspecting network's root CA lives in the OS store.
   trustSystemCertificates()
   configureHasKey((id) => cliHasKey(id))
+  // A fresh install starts in full-auto only where the sandbox confines shell commands.
+  configureFreshInstallApprovalPolicy(() => freshInstallApprovalPolicy(isSandboxed()))
   // In-session key writes (the TUI's /login flow) land in cli-credentials.json,
   // the same store `houston providers set-key` uses.
   configureSetKey((id, key) => cliSetKey(id, key))

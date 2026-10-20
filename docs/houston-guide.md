@@ -474,6 +474,25 @@ Approval is layered. From most to least restrictive:
   into, copies over, edits in place, or removes one (`> .env`, `cp .env.example .env`,
   `sed -i … .env`, `rm .env`). Templates such as `.env.example` don't count.
 
+**Throwing away work** asks in every mode, full auto included. The sandbox keeps
+commands inside the project, but the project is what these destroy, and undo doesn't
+cover shell commands: `git reset --hard`, a forced `git clean`, `git checkout -- .`
+or `git restore` of your changes, `rm -r` of anything but build output and
+dependencies (`node_modules`, `dist`, `build`, `target`, `__pycache__` and the like
+are fine), `find … -delete`, deleting a branch or a stash, rewriting history, and a
+forced or deleting `git push`. Quoting a word, splitting it across lines, or running
+it through `bash -c` doesn't hide one. "Allow for run" doesn't stop these asking; an
+`allow` permission rule for that exact command does (the "Always allow" choice on the
+prompt saves one).
+
+**Which mode a new install starts in.** Where the sandbox confines shell commands
+(macOS, and Linux with bubblewrap), a new install starts in **Full auto**; where it
+can't (Windows, or Linux without bubblewrap), every command would run unconfined, so
+it starts in **Ask every time**. An existing install keeps the mode it last used. The
+desktop app and the terminal start in the same saved mode; `--approval` or
+`--full-auto` overrides it for one terminal session, and a headless run starts in plan
+unless told otherwise.
+
 **Reading the diff.** A file edit shows a real diff before you approve it: the
 changed part with a few lines of context (long untouched stretches are folded away
 with a note saying how many), line numbers in the gutter, the changed words picked

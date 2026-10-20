@@ -92,7 +92,8 @@ import {
   permissionSubject,
   persistedRules,
   isSensitiveWrite,
-  shellReferencesExternalPath
+  shellReferencesExternalPath,
+  shellDiscardsWork
 } from './permissions'
 import {
   grantConversationNetworkHost,
@@ -1424,6 +1425,13 @@ export async function startRun(
           name === 'run_shell' &&
           typeof gateArgs.command === 'string' &&
           shellReferencesExternalPath(gateArgs.command, roots)
+        // A command that can throw away work in the project asks too: the dispatch is
+        // consent to edit, not to reset the tree or delete what the user hasn't committed.
+        const discardsWork =
+          kind === 'shell' &&
+          name === 'run_shell' &&
+          typeof gateArgs.command === 'string' &&
+          shellDiscardsWork(gateArgs.command)
         const sensitiveWrite = isSensitiveWrite(kind, name, gateArgs)
         const mustApprove =
           kind === 'read'
@@ -1437,7 +1445,7 @@ export async function startRun(
                 sensitiveRead
               }).mustApprove
             : ruleAction === 'ask' ||
-              (shellEscapesWorkspace && ruleAction !== 'allow') ||
+              ((shellEscapesWorkspace || discardsWork) && ruleAction !== 'allow') ||
               (sensitiveWrite && ruleAction !== 'allow' && !run.override.has(kind))
         if (!mustApprove) return runCall()
         return promptGatedCall({
@@ -3145,6 +3153,14 @@ export async function startRun(
               call.name === 'run_shell' &&
               typeof execArgs.command === 'string' &&
               shellReferencesExternalPath(execArgs.command, roots)
+            // A command that can throw away work in the project (git reset --hard, rm -r of
+            // source, a forced push) asks in every mode: shell side effects aren't
+            // checkpointed, so only the user can say the loss is fine.
+            const discardsWork =
+              tool.kind === 'shell' &&
+              call.name === 'run_shell' &&
+              typeof execArgs.command === 'string' &&
+              shellDiscardsWork(execArgs.command)
             // Reading a credential/secret file prompts even in full-auto (see
             // isSensitivePath): reads normally never prompt, so this is the one gate
             // that keeps a committed `.env` or private key from flowing into the
@@ -3168,6 +3184,7 @@ export async function startRun(
               shellSandboxed: isSandboxed(),
               shellUnsandboxedOverride: run.shellUnsandboxedOverride,
               shellEscapesWorkspace,
+              shellDiscardsWork: discardsWork,
               sensitiveRead,
               sensitiveWrite
             })

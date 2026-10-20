@@ -10,6 +10,7 @@ import {
   patchSubjectPaths,
   permissionSubject,
   persistedRules,
+  shellDiscardsWork,
   shellReferencesExternalPath,
   shellRulePatterns,
   shellWritesSensitivePath,
@@ -173,6 +174,129 @@ describe('shellWritesSensitivePath', () => {
     expect(w('npm test > out.log 2>&1')).toBe(false)
     expect(w('cmd >&2')).toBe(false)
     expect(w('test -f .env || echo missing')).toBe(false)
+  })
+})
+
+describe('shellDiscardsWork', () => {
+  it.each([
+    'git reset --hard',
+    'git reset --hard HEAD~1',
+    'git clean -fdx',
+    'git clean -xdf',
+    'git clean --force -d',
+    'git checkout -- .',
+    'git checkout .',
+    'git checkout HEAD -- src/app.ts',
+    'git checkout -f main',
+    'git restore src/app.ts',
+    'git restore --source=HEAD --staged --worktree .',
+    'git switch --discard-changes main',
+    'git switch -f main',
+    'git stash drop',
+    'git stash clear',
+    'git branch -D feature',
+    'git branch --delete --force feature',
+    'git push --force',
+    'git push -f origin main',
+    'git push --force-with-lease origin main',
+    'git push origin +main',
+    'git push origin :old-branch',
+    'git push --delete origin old-branch',
+    'git push --mirror',
+    'git filter-branch --tree-filter "rm x" HEAD',
+    'git filter-repo --path secrets --invert-paths',
+    'git reflog expire --expire=now --all',
+    'git worktree remove --force ../wt',
+    'git rm -rf src',
+    'git -C sub reset --hard',
+    'git -c core.pager=cat clean -fd',
+    'rm -rf src',
+    'rm -r docs',
+    'rm -R lib',
+    'rm --recursive --force app',
+    'rm -rf node_modules src',
+    'rm -rf ./*',
+    'rm -rf $DIR',
+    'rm -rf ~/project',
+    'rm -rf packages/app/build',
+    'rm -rf ../sibling',
+    'find . -name "*.ts" -delete',
+    'find . -type f -exec rm {} +',
+    'shred -u notes.txt'
+  ])('flags %s', (command) => {
+    expect(shellDiscardsWork(command)).toBe(true)
+  })
+
+  it.each([
+    'git reset --soft HEAD~1',
+    'git reset HEAD file.ts',
+    'git clean -n',
+    'git clean -nfd',
+    'git checkout main',
+    'git checkout -b feature',
+    'git restore --staged src/app.ts',
+    'git switch main',
+    'git stash',
+    'git stash pop',
+    'git branch -d merged-branch',
+    'git push',
+    'git push -u origin feature',
+    'git push origin HEAD:main',
+    'git commit -m "git reset --hard is dangerous"',
+    'git status && git diff',
+    'git rm --cached secrets.txt',
+    'rm notes.txt',
+    'rm -f build.log',
+    'rm -rf node_modules',
+    'rm -rf dist build coverage',
+    'rm -rf ./node_modules/ .next',
+    'rm -rf packages/app/node_modules',
+    'rm -rf src/__pycache__',
+    'find . -name "*.ts"',
+    'find . -type f -exec grep -l TODO {} +',
+    "echo 'rm -rf src'",
+    'echo git reset --hard',
+    'npm test'
+  ])('does not flag %s', (command) => {
+    expect(shellDiscardsWork(command)).toBe(false)
+  })
+
+  it('reads each command in a chain, pipeline, or block', () => {
+    expect(shellDiscardsWork('npm test && git reset --hard')).toBe(true)
+    expect(shellDiscardsWork('git status; git clean -fdx')).toBe(true)
+    expect(shellDiscardsWork('git ls-files -z | xargs -0 rm -rf')).toBe(true)
+    expect(shellDiscardsWork('if true; then git reset --hard; fi')).toBe(true)
+    expect(shellDiscardsWork('for d in a b; do rm -rf "$d"; done')).toBe(true)
+    expect(shellDiscardsWork('(cd sub && git clean -fd)')).toBe(true)
+  })
+
+  it('sees through wrappers, assignments, and a program path', () => {
+    expect(shellDiscardsWork('sudo git reset --hard')).toBe(true)
+    expect(shellDiscardsWork('env GIT_DIR=.git git clean -f')).toBe(true)
+    expect(shellDiscardsWork('timeout 30 rm -rf src')).toBe(true)
+    expect(shellDiscardsWork('FORCE=1 rm -rf lib')).toBe(true)
+    expect(shellDiscardsWork('/usr/bin/git reset --hard')).toBe(true)
+  })
+
+  it('reads words as bash builds them, so quoting cannot hide a command', () => {
+    expect(shellDiscardsWork('"git" reset --hard')).toBe(true)
+    expect(shellDiscardsWork("git reset '--hard'")).toBe(true)
+    expect(shellDiscardsWork('g"i"t clean -f"d"x')).toBe(true)
+    expect(shellDiscardsWork('r\\m -rf src')).toBe(true)
+  })
+
+  it('reads commands run by a nested shell or a substitution', () => {
+    expect(shellDiscardsWork("bash -c 'git reset --hard'")).toBe(true)
+    expect(shellDiscardsWork('sh -lc "rm -rf src"')).toBe(true)
+    expect(shellDiscardsWork("eval 'git clean -fdx'")).toBe(true)
+    expect(shellDiscardsWork('echo $(git stash clear)')).toBe(true)
+    expect(shellDiscardsWork('echo "`rm -rf lib`"')).toBe(true)
+  })
+
+  it('joins line continuations, so splitting a word across lines cannot hide it', () => {
+    expect(shellDiscardsWork('git reset \\\n--hard')).toBe(true)
+    expect(shellDiscardsWork('git reset --ha\\\nrd')).toBe(true)
+    expect(shellDiscardsWork('r\\\nm -rf src')).toBe(true)
   })
 })
 

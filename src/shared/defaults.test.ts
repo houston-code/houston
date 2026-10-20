@@ -6,6 +6,7 @@ import {
   backfillDefaultModels,
   defaultProviders,
   defaultSettings,
+  freshInstallApprovalPolicy,
   pruneDefaultModels,
   reconcileSelectedModel,
   resolveShellOutputBudget,
@@ -41,6 +42,17 @@ describe('resolveShellOutputBudget', () => {
   it('falls back to the default for 0 or negative (which would truncate everything)', () => {
     expect(resolveShellOutputBudget({ shellOutputMaxBytes: 0 })).toBe(DEFAULT_SHELL_OUTPUT_MAX_BYTES)
     expect(resolveShellOutputBudget({ shellOutputMaxBytes: -5 })).toBe(DEFAULT_SHELL_OUTPUT_MAX_BYTES)
+  })
+})
+
+describe('freshInstallApprovalPolicy', () => {
+  it('starts in full-auto only where the sandbox confines shell commands', () => {
+    expect(freshInstallApprovalPolicy(true)).toBe('full-auto')
+    expect(freshInstallApprovalPolicy(false)).toBe('ask')
+  })
+
+  it('leaves the shared default at ask, for installs nothing has configured', () => {
+    expect(defaultSettings().approvalPolicy).toBe('ask')
   })
 })
 
