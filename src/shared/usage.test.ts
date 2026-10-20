@@ -12,8 +12,10 @@ import {
   resolvePricing,
   resolveToolSupport,
   sessionUsageFromConversation,
-  turnCostUsd
+  turnCostUsd,
+  unattributedUsage
 } from './usage'
+import type { ModelUsage } from './agent'
 
 describe('formatTokens', () => {
   it('shows small counts verbatim', () => {
@@ -589,5 +591,40 @@ describe('sessionUsageFromConversation', () => {
   it('maps a pre-upgrade conversation without inventing fields', () => {
     const s = sessionUsageFromConversation({ inputTokens: 100, outputTokens: 50, cost: 0 })
     expect(s).toEqual({ context: 100, output: 50, cost: 0, cacheRead: undefined, perModel: undefined })
+  })
+})
+
+describe('unattributedUsage', () => {
+  const m = (model: string, over: Partial<ModelUsage> = {}): ModelUsage => ({
+    model,
+    inputTokens: 100,
+    outputTokens: 50,
+    cost: 0.01,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    ...over
+  })
+
+  it('is null when there is no breakdown, or the rows add up (allowing float drift)', () => {
+    expect(unattributedUsage({ context: 1, output: 50, cost: 0.01 })).toBeNull()
+    expect(unattributedUsage({ context: 1, output: 50, cost: 0.01, perModel: [] })).toBeNull()
+    expect(unattributedUsage({ context: 1, output: 100, cost: 0.1 + 0.2, perModel: [m('a', { cost: 0.1 }), m('b', { cost: 0.2 })] })).toBeNull()
+  })
+
+  it('returns the shortfall as one "Earlier models" row', () => {
+    const row = unattributedUsage({
+      context: 121_596,
+      output: 117_527,
+      cost: 30.1120243,
+      cacheRead: 724_768,
+      perModel: [m('claude-haiku-4-5', { outputTokens: 691, cost: 0.2279633, cacheReadTokens: 724_768 })]
+    })
+    expect(row).toMatchObject({ model: 'Earlier models', inputTokens: 0, outputTokens: 116_836, cacheReadTokens: 0 })
+    expect(row?.cost).toBeCloseTo(29.884061, 5)
+  })
+
+  it('never reports a negative amount when a row exceeds the total', () => {
+    const row = unattributedUsage({ context: 1, output: 10_000, cost: 0.001, perModel: [m('a', { cost: 0.5 })] })
+    expect(row).toMatchObject({ outputTokens: 9_950, cost: 0 })
   })
 })

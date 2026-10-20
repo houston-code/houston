@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { formatTokens, formatUsd, type SessionUsage } from '@shared/usage'
+import { EARLIER_MODELS_LABEL, formatTokens, formatUsd, unattributedUsage, type SessionUsage } from '@shared/usage'
 
 /**
  * The context/usage chip in the control bar, and — when there's more than one
@@ -29,7 +29,10 @@ export function CostBreakdown({
 
   // A breakdown is only worth a click when there's something the inline chip does
   // not already show: more than one model, or cache reads.
-  const rows = usage.perModel ?? []
+  // Plus one row for whatever the per-model tallies don't cover (usage recorded before
+  // Houston kept them), so the rows add up to the total printed under them.
+  const earlier = unattributedUsage(usage)
+  const rows = [...(usage.perModel ?? []), ...(earlier ? [earlier] : [])]
   const hasDetail = rows.length > 1 || (usage.cacheRead ?? 0) > 0
 
   // Close on an outside click or Esc, the way every other transient panel does.
@@ -106,11 +109,18 @@ export function CostBreakdown({
             <span>Cost</span>
           </div>
           {rows.map((m) => (
-            <div key={m.model} className="usage-panel__row">
-              <span className="usage-panel__model" title={m.model}>
+            <div key={m === earlier ? 'earlier-models' : m.model} className="usage-panel__row">
+              <span
+                className="usage-panel__model"
+                title={
+                  m === earlier
+                    ? `${EARLIER_MODELS_LABEL}: usage this conversation recorded before Houston kept a per-model breakdown`
+                    : m.model
+                }
+              >
                 {m.model}
               </span>
-              <span>{formatTokens(m.inputTokens)}</span>
+              <span>{m === earlier ? '–' : formatTokens(m.inputTokens)}</span>
               <span>{formatTokens(m.outputTokens)}</span>
               <span>{m.cacheReadTokens > 0 ? formatTokens(m.cacheReadTokens) : '–'}</span>
               <span>{m.cost > 0 ? formatUsd(m.cost) : '–'}</span>
