@@ -374,7 +374,7 @@ function plan(env) {
   let summary
   if (p.mode === 'minor' || p.mode === 'major') {
     sha = env.MAIN_SHA
-    summary = `Cutting v${p.version} (next ${p.mode}) from main into a new ${p.line}.`
+    summary = `Cutting v${p.version} (next ${p.mode}) from main into a new ${p.line} branch.`
   } else if (p.mode === 'line-only') {
     sha = git('rev-parse', `refs/tags/${p.fromTag}^{commit}`)
     summary = `Created ${p.line} at ${p.fromTag}. Merge your fixes into it, then run "Patch a release" with ${p.version} again.`
