@@ -1631,7 +1631,15 @@ const runShell: ToolDef = {
         signal: ctx.signal
       })
       const id = registerShell(command, child, ctx.conversationId)
-      ctx.recordEvidence?.({ kind: 'shell', command, background: true, exitCode: null, timedOut: false, output: '' })
+      ctx.recordEvidence?.({
+        kind: 'shell',
+        command,
+        background: true,
+        shellId: id,
+        exitCode: null,
+        timedOut: false,
+        output: ''
+      })
       const started = `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).`
       return sandboxAvailable() ? started : `${started}\n${UNSANDBOXED_SHELL_NOTE}`
     }
@@ -1980,6 +1988,16 @@ const viewLocalhost: ToolDef = {
       selector,
       ...(steps.length ? { steps } : {}),
       signal: ctx.signal
+    })
+
+    // For the receipt: each step's outcome with what kind of step it was, so a flow
+    // that only clicked through is told apart from one that checked the page.
+    ctx.recordEvidence?.({
+      kind: 'browser',
+      url: cap.finalUrl || url,
+      ...(cap.loadError ? { loadError: cap.loadError } : {}),
+      steps: (cap.steps ?? []).map((r, i) => ({ step: r.step, ok: r.ok, action: steps[i]?.action ?? 'wait' })),
+      planned: steps.length
     })
 
     const lines: string[] = []

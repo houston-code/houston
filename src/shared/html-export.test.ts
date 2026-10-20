@@ -37,6 +37,33 @@ describe('escapeHtml', () => {
   })
 })
 
+describe('conversationToHtml receipts', () => {
+  const receipt = {
+    v: 1 as const,
+    checks: [{ kind: 'test' as const, label: 'pytest <script>alert(1)</script>', ok: false, exitCode: 1, runs: 1 }],
+    otherCommands: 0,
+    filesChanged: ['app.py'],
+    filesChangedCount: 1
+  }
+
+  it('shows what Houston recorded under the turn, escaped', () => {
+    const html = conversationToHtml(
+      makeConversation({ messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'All tests pass.', receipt }] })
+    )
+    expect(html).toContain('<pre class="turn__receipt">Recorded by Houston: Test command failed · 1 file changed')
+    expect(html).toContain('pytest &lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(html).not.toContain('<script>alert(1)')
+  })
+
+  it('keeps the receipt out of the embedded data an import reads', () => {
+    const html = conversationToHtml(
+      makeConversation({ messages: [{ role: 'assistant', content: 'done', receipt }] })
+    )
+    const data = html.slice(html.indexOf(HTML_DATA_OPEN_TAG), html.indexOf('</template>'))
+    expect(data).not.toContain('receipt')
+  })
+})
+
 describe('conversationToHtml', () => {
   it('includes the title and message content', () => {
     const html = conversationToHtml(makeConversation())

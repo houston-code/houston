@@ -233,6 +233,22 @@ export function readShellOutput(id: string, opts: { full?: boolean } = {}): Shel
   return { found: true, running: s.running, exitCode: s.exitCode, stdout, stderr, newUrls }
 }
 
+/** How much of a background shell's output {@link peekShell} returns: the tail, where a summary is. */
+const PEEK_TAIL_CHARS = 16_000
+
+/**
+ * A background shell's state without reading it: whether it is still running, its exit
+ * code, and the tail of what it printed. Unlike {@link readShellOutput} it moves no read
+ * cursor, so the turn's receipt can look at a shell without hiding new output from the
+ * agent's next read_shell_output. Undefined for an unknown id.
+ */
+export function peekShell(id: string): { running: boolean; exitCode: number | null; output: string } | undefined {
+  const s = shells.get(id)
+  if (!s) return undefined
+  const output = [s.stdout, s.stderr].filter(Boolean).join('\n')
+  return { running: s.running, exitCode: s.exitCode, output: output.slice(-PEEK_TAIL_CHARS) }
+}
+
 /**
  * Whether the process group a background shell led still has live members after the
  * shell itself exited. Background shells are spawned `detached` (see the sandbox

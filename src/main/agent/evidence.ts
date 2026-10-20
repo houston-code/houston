@@ -6,6 +6,7 @@ import {
   type BlockedReason,
   type CheckKind,
   type ReceiptCheck,
+  type StepCounts,
   type TestCounts,
   type TurnReceipt,
   type UnknownReason
@@ -31,6 +32,8 @@ export interface ShellEvidence {
   kind: 'shell'
   command: string
   background: boolean
+  /** The registry id of a background shell, so its outcome can be read when the turn ends. */
+  shellId?: string
   /** Null when the process was killed (or, for a background start, not yet known). */
   exitCode: number | null
   timedOut: boolean
@@ -40,8 +43,32 @@ export interface ShellEvidence {
   blocked?: BlockedReason
 }
 
-/** Anything a tool can record. More kinds join as more tools report. */
-export type EvidenceDraft = ShellEvidence
+/** The interaction steps view_localhost runs, as far as the receipt cares. */
+export type BrowserAction = 'fill' | 'click' | 'dblclick' | 'press' | 'wait_for' | 'expect_text' | 'wait'
+
+/** What view_localhost reports after it loads a page and runs its steps. */
+export interface BrowserEvidence {
+  kind: 'browser'
+  /** The page's final URL. Shown as origin and path only; a query can carry a token. */
+  url: string
+  /** A non-fatal load problem the capture reported (HTTP error, refused, timeout). */
+  loadError?: string
+  /** Each step that ran, in order (it stops at the first failure). */
+  steps: { step: string; ok: boolean; action: BrowserAction }[]
+  /** How many steps were asked for, so the ones never reached count as not run. */
+  planned: number
+}
+
+/** Anything a tool can record. */
+export type EvidenceDraft = ShellEvidence | BrowserEvidence
+
+/** What the background-shell registry says about a shell when the turn ends. */
+export interface ShellPeek {
+  running: boolean
+  exitCode: number | null
+  /** The tail of what it printed, scanned for test counts. */
+  output: string
+}
 
 // ---------------------------------------------------------------------------
 // Command classification
@@ -509,8 +536,11 @@ function withSkipped(passed: number, failed: number, skipped: number): TestCount
 // ---------------------------------------------------------------------------
 
 /** One check as recorded, before it's folded into the receipt. */
-interface CheckRecord extends Omit<ReceiptCheck, 'runs'> {
-  key: string
+interface CheckRecord extends Omit<ReceiptCheck, 'runs' | 'beforeLastWrite'> {
+  /** When it ran, in the ledger's own order. */
+  seq: number
+  /** A background shell still to be settled when the receipt is built. */
+  pending?: { shellId: string; command: string; cls: CommandClass }
 }
 
 /**
@@ -521,19 +551,28 @@ interface CheckRecord extends Omit<ReceiptCheck, 'runs'> {
 // eslint-disable-next-line no-control-regex -- removing control characters is the point
 const CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g
 
-/** Collapse whitespace, drop control characters, and cap the length of a command for display. */
-function displayLabel(command: string): string {
-  const flat = command.replace(/\s+/g, ' ').replace(CONTROL_CHARS, '').trim()
-  return flat.length > RECEIPT_LABEL_MAX ? `${flat.slice(0, RECEIPT_LABEL_MAX - 1)}…` : flat
+/** Collapse whitespace, drop control characters, and cap the length of a text for display. */
+function displayLabel(text: string, max = RECEIPT_LABEL_MAX): string {
+  const flat = text.replace(/\s+/g, ' ').replace(CONTROL_CHARS, '').trim()
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
+}
+
+/** A page URL for display: origin and path, never the query or fragment (they can carry a token). */
+function pageLabel(url: string): string {
+  try {
+    const u = new URL(url)
+    return displayLabel(`${u.origin}${u.pathname}`)
+  } catch {
+    return displayLabel(url.split(/[?#]/)[0])
+  }
 }
 
 /** Whether a shell run passed, failed, or can't be told, and why. */
 function outcome(
-  e: ShellEvidence,
+  e: Pick<ShellEvidence, 'exitCode' | 'timedOut'>,
   cls: CommandClass,
   counts: TestCounts | undefined
 ): { ok: boolean | null; unknown?: UnknownReason } {
-  if (e.background) return { ok: null, unknown: 'background' }
   if (e.timedOut || e.exitCode === null) return { ok: false }
   if (counts) {
     // The runner's summary is the stronger signal: `pytest; echo done` exits 0 with
@@ -547,41 +586,113 @@ function outcome(
   return { ok: true }
 }
 
+const ACTIONS: ReadonlySet<BrowserAction> = new Set(['fill', 'click', 'dblclick', 'press'])
+const ASSERTIONS: ReadonlySet<BrowserAction> = new Set(['expect_text', 'wait_for'])
+
+/**
+ * Whether a browser check passed. Every step passing isn't enough: clicking through
+ * a flow proves it didn't crash, not that it worked, the way a curl without --fail
+ * proves a server answered, not that it answered well. It passes only when a check of
+ * the page (expect_text, wait_for) passed after the last action on it.
+ */
+function browserOutcome(e: BrowserEvidence): { ok: boolean | null; unknown?: UnknownReason; steps: StepCounts } {
+  const passed = e.steps.filter((s) => s.ok).length
+  const failed = e.steps.find((s) => !s.ok)
+  const steps: StepCounts = {
+    total: e.planned,
+    passed,
+    notRun: Math.max(0, e.planned - e.steps.length),
+    ...(failed ? { firstFailure: displayLabel(failed.step, 80) } : {}),
+    ...(e.loadError ? { loadError: displayLabel(e.loadError, 80) } : {})
+  }
+  if (e.loadError || failed || steps.notRun > 0) return { ok: false, steps }
+  let lastAction = -1
+  let lastAssertion = -1
+  e.steps.forEach((s, i) => {
+    if (ACTIONS.has(s.action)) lastAction = i
+    if (ASSERTIONS.has(s.action)) lastAssertion = i
+  })
+  return lastAssertion > lastAction ? { ok: true, steps } : { ok: null, unknown: 'not-asserted', steps }
+}
+
+/** The kinds a later file change can make out of date: they check the code. */
+const CHECKS_CODE: ReadonlySet<CheckKind> = new Set(['test', 'typecheck', 'build', 'lint', 'http', 'browser', 'verify'])
+
 /**
  * What one run did, as the loop and its tools saw it. Lives on the run's state for
  * as long as the run does; only the receipt it produces is persisted.
  */
 export class EvidenceLedger {
-  /** Checks keyed by kind + command; re-inserted on each run so the order is most recent last. */
+  private seq = 0
+  /** Checks keyed by kind + label; re-inserted on each run so the order is most recent last. */
   private readonly checks = new Map<string, { record: CheckRecord; runs: number }>()
   private otherCommands = 0
   private readonly files = new Set<string>()
+  private lastWriteSeq = -1
+
+  /** Record what a tool reported. Commands must already be redacted. `by` names a subagent. */
+  record(e: EvidenceDraft, by?: string): void {
+    if (e.kind === 'browser') this.recordBrowser(e, by)
+    else this.recordShell(e, by)
+  }
 
   /** Record a shell command run_shell executed. `command` must already be redacted. */
-  recordShell(e: ShellEvidence): void {
+  recordShell(e: ShellEvidence, by?: string): void {
     const cls = classifyCommand(e.command, e.background)
     if (!cls.kind) {
       this.otherCommands++
       return
     }
-    const counts = cls.kind === 'test' && !e.background ? parseTestCounts(e.output) : undefined
-    const { ok, unknown } = outcome(e, cls, counts)
     const label = displayLabel(e.command)
-    const key = `${cls.kind}\u0000${label}`
-    const record: CheckRecord = {
-      key,
-      kind: cls.kind,
-      label,
+    const base = { kind: cls.kind, label, ...(by ? { by: displayLabel(by, 60) } : {}) }
+    if (e.background) {
+      this.put({
+        ...base,
+        ok: null,
+        unknown: 'background',
+        background: true,
+        seq: this.seq++,
+        ...(e.shellId ? { pending: { shellId: e.shellId, command: e.command, cls } } : {})
+      })
+      return
+    }
+    const counts = cls.kind === 'test' ? parseTestCounts(e.output) : undefined
+    const { ok, unknown } = outcome(e, cls, counts)
+    this.put({
+      ...base,
       ok,
       ...(unknown ? { unknown } : {}),
-      ...(e.background ? { background: true } : { exitCode: e.exitCode }),
+      exitCode: e.exitCode,
       ...(e.timedOut ? { timedOut: true } : {}),
       ...(counts ? { counts } : {}),
-      ...(e.blocked && ok !== true ? { blocked: e.blocked } : {})
-    }
-    const prior = this.checks.get(key)
-    this.checks.delete(key)
-    this.checks.set(key, { record, runs: (prior?.runs ?? 0) + 1 })
+      ...(e.blocked && ok !== true ? { blocked: e.blocked } : {}),
+      seq: this.seq++
+    })
+  }
+
+  /** Record a page view_localhost loaded and the steps it ran there. */
+  recordBrowser(e: BrowserEvidence, by?: string): void {
+    const { ok, unknown, steps } = browserOutcome(e)
+    this.put({
+      kind: 'browser',
+      label: pageLabel(e.url),
+      ok,
+      ...(unknown ? { unknown } : {}),
+      steps,
+      ...(by ? { by: displayLabel(by, 60) } : {}),
+      seq: this.seq++
+    })
+  }
+
+  /** Record the user's verify-on-stop command, which Houston runs itself. Already redacted. */
+  recordGate(command: string, passed: boolean): void {
+    this.put({
+      kind: classifyCommand(command).kind ?? 'verify',
+      label: displayLabel(command),
+      ok: passed,
+      gate: true,
+      seq: this.seq++
+    })
   }
 
   /**
@@ -590,24 +701,39 @@ export class EvidenceLedger {
    * path in another root keeps its full form.
    */
   recordFiles(workspace: string, paths: string[]): void {
+    let any = false
     for (const p of paths) {
       if (!p) continue
       const rel = relative(workspace, resolve(workspace, p))
       const shown = rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : p
       this.files.add(shown.replace(CONTROL_CHARS, ''))
+      any = true
     }
+    if (any) this.lastWriteSeq = this.seq++
+  }
+
+  private put(record: CheckRecord): void {
+    const key = `${record.kind}\u0000${record.label}`
+    const prior = this.checks.get(key)
+    this.checks.delete(key)
+    this.checks.set(key, { record, runs: (prior?.runs ?? 0) + 1 })
   }
 
   /**
    * The receipt for the run so far, or null when there is nothing worth showing: no
    * command of a receipt kind ran and no file changed (a question answered, a
-   * `git log` read).
+   * `git log` read). `peek` reads a background shell's state from the registry, so a
+   * dev server still up or a backgrounded test run that finished is reported as such.
    */
-  receipt(): TurnReceipt | null {
+  receipt(peek?: (shellId: string) => ShellPeek | undefined): TurnReceipt | null {
     if (this.checks.size === 0 && this.files.size === 0) return null
     const all = [...this.checks.values()].map(({ record, runs }): ReceiptCheck => {
-      const { key: _key, ...check } = record
-      return { ...check, runs }
+      const { seq, pending: _pending, ...check } = this.settle(record, peek)
+      return {
+        ...check,
+        ...(CHECKS_CODE.has(check.kind) && seq < this.lastWriteSeq ? { beforeLastWrite: true as const } : {}),
+        runs
+      }
     })
     const checks = all.slice(-RECEIPT_MAX_CHECKS)
     const files = [...this.files]
@@ -618,6 +744,24 @@ export class EvidenceLedger {
       otherCommands: this.otherCommands,
       filesChanged: files.slice(0, RECEIPT_MAX_FILES),
       filesChangedCount: files.length
+    }
+  }
+
+  /** A background record as of now: still running, or finished with an exit code. */
+  private settle(record: CheckRecord, peek?: (shellId: string) => ShellPeek | undefined): CheckRecord {
+    if (!record.pending || !peek) return record
+    const state = peek(record.pending.shellId)
+    if (!state) return record
+    if (state.running) return { ...record, unknown: 'still-running' }
+    const { unknown: _unknown, ...rest } = record
+    const counts = record.kind === 'test' ? parseTestCounts(state.output) : undefined
+    const settled = outcome({ exitCode: state.exitCode, timedOut: false }, record.pending.cls, counts)
+    return {
+      ...rest,
+      ok: settled.ok,
+      ...(settled.unknown ? { unknown: settled.unknown } : {}),
+      exitCode: state.exitCode,
+      ...(counts ? { counts } : {})
     }
   }
 }

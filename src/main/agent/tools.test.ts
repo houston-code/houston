@@ -1734,6 +1734,43 @@ describe('view_localhost', () => {
     expect(out).toContain('(2 later steps not run)')
   })
 
+  it('reports each step with its kind to the ledger, so a click-through is told from a check', async () => {
+    const seen: EvidenceDraft[] = []
+    await getTool('view_localhost')!.execute(
+      {
+        url: 'http://localhost:3000/?session=abc',
+        steps: [
+          { action: 'fill', selector: '#new', value: 'Buy milk' },
+          { action: 'expect_text', value: 'Buy milk' },
+          { action: 'click', selector: '#c' }
+        ]
+      },
+      {
+        ...ctx,
+        attachImage: () => {},
+        recordEvidence: (e) => seen.push(e),
+        captureLocalhost: fakeCapture({
+          finalUrl: 'http://localhost:3000/?session=abc',
+          steps: [
+            { step: 'fill "#new"', ok: true },
+            { step: 'expect text "Buy milk"', ok: true }
+          ]
+        })
+      }
+    )
+    expect(seen).toEqual([
+      {
+        kind: 'browser',
+        url: 'http://localhost:3000/?session=abc',
+        steps: [
+          { step: 'fill "#new"', ok: true, action: 'fill' },
+          { step: 'expect text "Buy milk"', ok: true, action: 'expect_text' }
+        ],
+        planned: 3
+      }
+    ])
+  })
+
   it('rejects malformed steps before opening anything', async () => {
     let opened = false
     await expect(
@@ -2471,7 +2508,15 @@ describe('run_shell evidence', () => {
     const seen = recorded()
     const out = await run('run_shell', { command: 'echo hi', background: true })
     expect(seen).toEqual([
-      { kind: 'shell', command: 'echo hi', background: true, exitCode: null, timedOut: false, output: '' }
+      {
+        kind: 'shell',
+        command: 'echo hi',
+        background: true,
+        shellId: expect.any(String),
+        exitCode: null,
+        timedOut: false,
+        output: ''
+      }
     ])
     const id = /Started background shell (\w+)/.exec(out)?.[1]
     await vi.waitFor(() => expect(readShellOutput(id!).running).toBe(false), { timeout: 10_000 })

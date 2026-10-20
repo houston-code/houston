@@ -7402,6 +7402,25 @@ describe('turn receipt', () => {
     expect(r.messages.find((m) => m.receipt)?.receipt?.filesChanged).toEqual(['a.txt'])
   })
 
+  it('puts the verify command Houston ran at the stop on the receipt', async () => {
+    h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+    const saved = { ...h.settings }
+    Object.assign(h.settings, { verifyOnStop: true, verifyCommand: 'npm run typecheck' })
+    try {
+      const r = await run({
+        policy: 'full-auto',
+        turns: [call('w1', 'write_file', { path: 'a.ts', content: 'export {}' }), say('Done.')]
+      })
+      expect(r.messages.at(-1)?.receipt?.checks).toEqual([
+        { kind: 'typecheck', label: 'npm run typecheck', ok: true, gate: true, runs: 1 }
+      ])
+    } finally {
+      delete h.settings.verifyOnStop
+      delete h.settings.verifyCommand
+      Object.assign(h.settings, saved)
+    }
+  })
+
   it('records only writes that landed', async () => {
     const r = await run({
       policy: 'ask',

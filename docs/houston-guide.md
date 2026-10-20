@@ -303,14 +303,24 @@ tests pass and the receipt says no tests ran, believe the receipt.
   and, for most test runners (pytest, vitest, jest, mocha, node:test, cargo,
   unittest), the passed and failed counts from the runner's own summary. Other
   commands (`ls`, `git status`) are only counted. Click the line to expand it.
-- **Outcomes it can't tell.** A command started in the background, an HTTP
-  request made without `curl -f` (so an error page still exits 0), or a test whose
-  exit code is hidden by what follows it (`pytest | tail`, `pytest; echo done`) is
-  shown as unknown rather than passed.
+- **Browser checks.** A page the agent looked at with view_localhost is listed with
+  how its steps went. It counts as passed only when a check of the page
+  (`expect_text` or `wait_for`) passed after the last click or keypress: clicking
+  through a flow shows it didn't break, not that it did the right thing.
+- **Also listed.** Commands a writable subagent ran (marked with who ran them), your
+  verify command when Houston runs it at the end of a turn, and how a command started
+  in the background ended (or that it is still running, for a dev server). A check
+  that ran before the turn's last file change says so, since it may not cover the
+  final code.
+- **Outcomes it can't tell.** An HTTP request made without `curl -f` (so an error
+  page still exits 0), a test whose exit code is hidden by what follows it
+  (`pytest | tail`, `pytest; echo done`), or a page that loaded with nothing on it
+  checked is shown as unknown rather than passed.
 - **Where it lives.** It is saved with the conversation and shown again when you
   reopen it. It never goes to the model. Importing a conversation doesn't bring
   receipts along, since Houston didn't record those runs. The terminal client and
-  headless mode print it too, and `--json` includes it in the result line.
+  headless mode print it too, `--json` includes it in the result line, and an HTML
+  export shows it under the turn.
 - **What it costs.** Nothing: no extra model calls and no extra commands. It only
   reads what already ran.
 
