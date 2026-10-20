@@ -213,7 +213,7 @@ export function FilesPanel({
             <h2 className="changes-panel__title">Files</h2>
             <p className="changes-panel__scope">
               {workspace
-                ? `Every file in ${baseName(workspace)} . Click a folder to expand it, or a file to preview it.`
+                ? `Every file in ${baseName(workspace)}. Click a folder to expand it, or a file to preview it.`
                 : 'Files in this project.'}
             </p>
           </div>

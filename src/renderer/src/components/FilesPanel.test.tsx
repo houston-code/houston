@@ -45,6 +45,14 @@ describe('FilesPanel', () => {
     expect(screen.getByText('README.md')).toBeInTheDocument()
   })
 
+  it('names the workspace folder in the subtitle', async () => {
+    installApi({ '': [] })
+    render(<FilesPanel workspace="/repo" onClose={vi.fn()} />)
+    expect(
+      screen.getByText('Every file in repo. Click a folder to expand it, or a file to preview it.')
+    ).toBeInTheDocument()
+  })
+
   it('lazily loads a folder when expanded, then collapses it', async () => {
     const api = installApi({
       '': [dir('src', 'src')],
