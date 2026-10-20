@@ -133,6 +133,10 @@ export function describeTool(item: ToolItem): ToolDescription {
       const title = str(a.title)
       return { verb: 'Show', target: title ? `${title} (${count})` : count, mono: false }
     }
+    case 'render_mockup': {
+      const n = Array.isArray(a.variants) ? a.variants.length : 1
+      return { verb: 'Render', target: `${str(a.file) ?? 'mockup'} (${n} variant${n === 1 ? '' : 's'})`, mono: false }
+    }
     case 'view_localhost':
       return { verb: 'View', target: str(a.url) ?? '', mono: true }
     case 'web_search':

@@ -241,6 +241,7 @@ function emitTitleChanged(sender: WebContents, conversationId: string, title: st
 /** Bind the run/queue orchestrator's output to a specific renderer. */
 function makeIo(sender: WebContents): DrainIO {
   return {
+    imageGallery: true,
     emit: (conversationId, e) => emitEvent(sender, conversationId, e),
     emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items),
     emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title)
@@ -262,6 +263,7 @@ function makeBroadcastIo(): DrainIO {
     }
   }
   return {
+    imageGallery: true,
     emit: (conversationId, e) => {
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))

@@ -87,6 +87,48 @@ describe('show_images gallery row', () => {
   })
 })
 
+describe('render_mockup gallery row', () => {
+  const mockupRow = (over: Partial<ToolItem> = {}): ToolItem =>
+    tool({
+      id: 'm',
+      name: 'render_mockup',
+      status: 'done',
+      args: { file: 'mockups/settings.html', variants: ['desktop-light', { preset: 'mobile', colorScheme: 'dark', label: 'Phone' }] },
+      images: [
+        { mediaType: 'image/png', data: 'AAAA' },
+        { mediaType: 'image/png', data: 'BBBB' }
+      ],
+      ...over
+    })
+
+  it('labels each render by its variant and marks the set as a mockup', () => {
+    renderWithViewer([mockupRow()])
+    expect(screen.getByRole('region', { name: 'Mockup: mockups/settings.html' })).toBeInTheDocument()
+    expect(screen.getByText('Mockup from code')).toBeInTheDocument()
+    expect(screen.getByText('Desktop, light')).toBeInTheDocument()
+    expect(screen.getByText('Phone')).toBeInTheDocument()
+    expect(screen.getByText('Render')).toBeInTheDocument()
+    expect(screen.getByText('mockups/settings.html (2 variants)')).toBeInTheDocument()
+  })
+
+  it('opens the viewer with a caption and no file to open', () => {
+    const { open } = renderWithViewer([mockupRow()])
+    fireEvent.click(screen.getByRole('button', { name: 'Open Phone full size' }))
+    const [images, index] = open.mock.calls[0]
+    expect(index).toBe(1)
+    expect(images[1]).toEqual({
+      src: 'data:image/png;base64,BBBB',
+      label: 'Phone',
+      caption: 'settings.html at 390×844, dark color scheme.'
+    })
+  })
+
+  it('draws no gallery for a failed render', () => {
+    renderWithViewer([mockupRow({ status: 'error', images: undefined, output: 'Error: No such file' })])
+    expect(screen.queryByRole('region')).not.toBeInTheDocument()
+  })
+})
+
 describe('tool-card screenshots', () => {
   it('open the viewer when clicked', () => {
     const { open } = renderWithViewer([

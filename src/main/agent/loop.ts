@@ -129,6 +129,7 @@ import {
 } from './subagentSessions'
 import { reviewWorkspaceChanges } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
+import { isMockupBackendConfigured, mockupBackend } from './mockupRender'
 import { listenersOnPort } from './portOwner'
 import {
   acceptedProposalCalls,
@@ -1007,9 +1008,10 @@ export async function startRun(
     // can't call.
     const builtinSchemas = builtinToolset({
       localhostCapture: localhostCaptureAvailable,
-      // The gallery is drawn only by the desktop app, the one host that wires the
-      // localhost capture backend; in a terminal show_images would be a path list.
-      imageGallery: localhostCaptureAvailable,
+      // Only the desktop app draws image results as a gallery; in a terminal client
+      // show_images and render_mockup would be a list of file names.
+      imageGallery: req.imageGallery === true,
+      mockupRender: isMockupBackendConfigured(),
       spawn: spawnAvailable,
       // A proposal card lives on a persisted chat (its state is stored there), so a
       // one-shot run with no conversation can't offer one.
@@ -1946,6 +1948,7 @@ export async function startRun(
       // Undefined on the CLI (no backend wired) so the view_localhost guard reads
       // cleanly; the tool is already filtered out of the schema set above.
       captureLocalhost: localhostCaptureAvailable ? captureLocalhost : undefined,
+      renderMockup: mockupBackend() ?? undefined,
       portListeners: (port) => listenersOnPort(port),
       // The recall tool reads the full, un-compacted log. Return a shallow copy so a
       // tool can't reassign the loop's `messages` array through this handle (push/splice/

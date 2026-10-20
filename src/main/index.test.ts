@@ -16,11 +16,13 @@ const getPath = vi.fn(() => '/tmp/houston-test-userdata')
 // Return undefined so the scrollbar-default guard falls through to setUserDefault.
 const getUserDefault = vi.fn(() => undefined)
 const setUserDefault = vi.fn()
+const registerSchemesAsPrivileged = vi.fn()
 
 vi.mock('electron', () => ({
   app: { setName, whenReady, on, getName: vi.fn(), getPath },
   shell: { openExternal: vi.fn() },
   systemPreferences: { getUserDefault, setUserDefault },
+  protocol: { registerSchemesAsPrivileged },
   BrowserWindow: vi.fn()
 }))
 
@@ -55,6 +57,17 @@ describe('main entry app identity', () => {
       getPath.mock.invocationCallOrder[0]
     )
     expect(getPath.mock.invocationCallOrder[0]).toBeLessThan(
+      whenReady.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('registers the render_mockup page scheme before whenReady, as Electron requires', async () => {
+    await import('./index')
+
+    expect(registerSchemesAsPrivileged).toHaveBeenCalledWith([
+      expect.objectContaining({ scheme: 'houston-mockup', privileges: expect.objectContaining({ standard: true, secure: true }) })
+    ])
+    expect(registerSchemesAsPrivileged.mock.invocationCallOrder[0]).toBeLessThan(
       whenReady.mock.invocationCallOrder[0]
     )
   })

@@ -1,19 +1,28 @@
-import type { GalleryArgs } from '@shared/gallery'
 import { useImageViewer, type ViewerImage } from '../lib/imageViewer'
 
 /**
- * A show_images result: an optional title, the image count, and a grid of labelled
- * tiles. Clicking a tile opens the full-size viewer at that image, stepping through
- * the rest of the set from there.
+ * A show_images or render_mockup result: an optional title and source badge, the
+ * image count, and a grid of labelled tiles. Clicking a tile opens the full-size
+ * viewer at that image, stepping through the rest of the set from there.
  */
-export function ImageGallery({ gallery, images }: { gallery: GalleryArgs; images: ViewerImage[] }): JSX.Element {
+export function ImageGallery({
+  title,
+  badge,
+  images
+}: {
+  title?: string
+  /** Where the images came from, e.g. "Mockup from code", set by the tool, never the model. */
+  badge?: string
+  images: ViewerImage[]
+}): JSX.Element {
   const viewer = useImageViewer()
   const count = `${images.length} image${images.length === 1 ? '' : 's'}`
   return (
-    <section className="image-gallery" aria-label={gallery.title ?? 'Images'}>
+    <section className="image-gallery" aria-label={title ?? 'Images'}>
       <div className="image-gallery__bar">
-        {gallery.title && <span className="image-gallery__title">{gallery.title}</span>}
+        {title && <span className="image-gallery__title">{title}</span>}
         <span className="image-gallery__count">{count}</span>
+        {badge && <span className="image-gallery__badge">{badge}</span>}
       </div>
       <ul className={`image-gallery__grid${images.length === 1 ? ' image-gallery__grid--single' : ''}`}>
         {images.map((img, i) => (

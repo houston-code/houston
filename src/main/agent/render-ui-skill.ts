@@ -41,10 +41,16 @@ app in a booted simulator.
 
 **Android emulator.** \`adb exec-out screencap -p > <file>.png\`.
 
-**Mockup from code.** Write a self-contained HTML page that links or inlines the
+**Mockup from code.** Write an HTML page inside the project that links or inlines the
 project's real stylesheet and theme tokens, and reuses real class names and copy
-where they exist. Render it with a headless browser script (Playwright's chromium)
-at the sizes and color schemes that matter. Keep it free of network requests.
+where they exist. If render_mockup is available, render it with that: it needs no
+server or browser install, takes presets like desktop, tablet, and mobile in light or
+dark, and shows the result as a gallery labelled as a mockup, so you don't call
+show_images after it. The page can load its own CSS, fonts, images, and scripts from
+the project but nothing from the network, so don't link fonts or libraries from a CDN.
+To show several states from one file, have the page read \`location.search\` and pass a
+query per variant (for example "?state=empty"). Without render_mockup, render the page
+with a headless browser script (Playwright's chromium) and show the files.
 
 Installing a browser for Playwright downloads it, which needs network access the
 user may have to approve. Use what the project already has before adding anything.
@@ -60,7 +66,7 @@ before and after of the same state at the same size.
 Look at every image before you present it: a blank page, an error overlay, a
 half-loaded state, or a cropped element means the capture failed, so fix it and
 recapture. Then call show_images with a title and a short label per image, and a
-caption where one helps.
+caption where one helps (render_mockup results are already shown).
 
 In your reply, say plainly which images come from the running app and which are
 mockups, and what a mockup leaves out (fake data, controls that aren't wired up).

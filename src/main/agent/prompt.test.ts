@@ -8,6 +8,7 @@ function toolNames(over: Partial<BuiltinToolsetOptions> = {}): string[] {
   return builtinToolset({
     localhostCapture: true,
     imageGallery: true,
+    mockupRender: true,
     spawn: true,
     scheduler: true,
     planMode: false,

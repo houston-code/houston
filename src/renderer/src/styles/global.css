@@ -2757,6 +2757,15 @@ button.finding__head:focus-visible,
   font-size: 11.5px;
   color: var(--text-dim);
 }
+.image-gallery__badge {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+  white-space: nowrap;
+}
 .image-gallery__grid {
   list-style: none;
   margin: 0;

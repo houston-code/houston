@@ -830,6 +830,12 @@ an occurrence missed while Houston was closed fires once at the next launch.
   keys, and open the file in its default app. It only reads image files (PNG,
   JPEG, GIF, or WebP, up to 5 MB each, 12 per gallery) inside the project, so it
   never asks for approval.
+- **`render_mockup`** (desktop app) turns an HTML mockup file in the project into
+  screenshots without a dev server, in the sizes and themes asked for (desktop,
+  tablet, or mobile, light or dark, or a custom size), and shows them as a gallery
+  marked "Mockup from code". The page runs in a hidden, locked-down browser: it can
+  load its own files from the project folder, but nothing from the network or from
+  elsewhere on your computer. It writes nothing, so it never asks for approval.
 - **`view_localhost`** (desktop app) loads a page from a dev server running on
   your computer in a hidden browser and shows the agent a screenshot plus the
   page's visible text and console output. It can also run steps first (fill a

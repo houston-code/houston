@@ -67,6 +67,22 @@ describe('runAndDrain', () => {
     }))
   })
 
+  it('offers gallery tools to every run of a client that draws galleries, queued follow-ups included', async () => {
+    const cid = 'conv-gallery'
+    addToQueue({ conversationId: cid, userText: 'A', providerId: 'anthropic', model: 'm1', approvalPolicy: 'ask' })
+    endRunsWith({ done: 'end_turn' })
+    await runAndDrain({ ...io(), imageGallery: true }, cid, runReq(cid))
+    await settle()
+    expect(h.startRun).toHaveBeenCalledTimes(2)
+    expect(h.startRun.mock.calls.map((c) => c[0].imageGallery)).toEqual([true, true])
+  })
+
+  it('leaves the gallery flag off for a client that draws none', async () => {
+    endRunsWith({ done: 'end_turn' })
+    await runAndDrain(io(), 'conv-plain', runReq('conv-plain'))
+    expect(h.startRun.mock.calls[0][0].imageGallery).toBeUndefined()
+  })
+
   it('flushes the queue as one combined turn after a natural completion', async () => {
     const cid = 'conv-natural'
     addToQueue({ conversationId: cid, userText: 'A', providerId: 'anthropic', model: 'm1', approvalPolicy: 'ask' })

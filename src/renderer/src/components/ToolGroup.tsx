@@ -2,6 +2,7 @@ import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
+import { RENDER_MOCKUP_NAME, parseMockupArgsSafe } from '@shared/mockup'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shared/sweep'
 import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
@@ -11,7 +12,7 @@ import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
 import { ImageGallery } from './ImageGallery'
-import { galleryViewerImages, useImageViewer, type ViewerImage } from '../lib/imageViewer'
+import { galleryViewerImages, mockupViewerImages, useImageViewer, type ViewerImage } from '../lib/imageViewer'
 
 const KIND_ICON: Record<string, string> = {
   read: '○',
@@ -34,6 +35,7 @@ const TOOL_ICON: Record<string, string> = {
   web_fetch: '@',
   view_localhost: '▣',
   show_images: '▦',
+  render_mockup: '▦',
   web_search: '⌕',
   todo_write: '☰',
   spawn_session: '⧉',
@@ -227,7 +229,12 @@ function ToolRow({
   const sweep = item.name === 'pr_sweep' ? parseSweepItemsSafe(item.args?.items) : []
   const isSweep = item.name === 'pr_sweep' && sweep.length > 0
   const gallery = item.name === SHOW_IMAGES_NAME ? parseGalleryArgsSafe(item.args) : null
-  const galleryImages = gallery ? galleryViewerImages(gallery, item.images) : []
+  const mockup = item.name === RENDER_MOCKUP_NAME ? parseMockupArgsSafe(item.args) : null
+  const galleryImages = gallery
+    ? galleryViewerImages(gallery, item.images)
+    : mockup
+      ? mockupViewerImages(mockup, item.images)
+      : []
   const isGallery = galleryImages.length > 0
   const viewer = useImageViewer()
   const previews = previewsFor(item)
@@ -367,7 +374,13 @@ function ToolRow({
       )}
       {open && output && !isTodo && !isSweep && <pre className="tool-row__output">{output}</pre>}
 
-      {isGallery && gallery && <ImageGallery gallery={gallery} images={galleryImages} />}
+      {isGallery && (
+        <ImageGallery
+          title={gallery?.title ?? (mockup ? `Mockup: ${mockup.file}` : undefined)}
+          badge={mockup ? 'Mockup from code' : undefined}
+          images={galleryImages}
+        />
+      )}
 
       {!isGallery && item.images && item.images.length > 0 && (
         <div className="tool-row__images">

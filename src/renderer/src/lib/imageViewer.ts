@@ -1,6 +1,7 @@
 import { createContext, useContext } from 'react'
 import { imageDataUrl, type ImageAttachment } from '@shared/images'
-import type { GalleryArgs } from '@shared/gallery'
+import { fileNameOf, type GalleryArgs } from '@shared/gallery'
+import type { MockupArgs } from '@shared/mockup'
 
 /**
  * The full-size image viewer. Any transcript row can open it (a show_images
@@ -47,5 +48,19 @@ export function galleryViewerImages(gallery: GalleryArgs, images: ImageAttachmen
     label: g.label,
     ...(g.caption ? { caption: g.caption } : {}),
     path: g.path
+  }))
+}
+
+/**
+ * Pair a render_mockup call's variants with the screenshots it attached, one per
+ * variant in order; a count mismatch returns nothing, as for galleries. The images
+ * carry no path: they were never files, only renders of the mockup.
+ */
+export function mockupViewerImages(mockup: MockupArgs, images: ImageAttachment[] | undefined): ViewerImage[] {
+  if (!images || images.length !== mockup.variants.length) return []
+  return mockup.variants.map((v, i) => ({
+    src: imageDataUrl(images[i]),
+    label: v.label,
+    caption: `${fileNameOf(mockup.file)} at ${v.width}×${v.height}, ${v.colorScheme} color scheme.`
   }))
 }

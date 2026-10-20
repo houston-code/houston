@@ -124,6 +124,7 @@ export function buildSystemPrompt(
   tools: readonly string[] = builtinToolset({
     localhostCapture: true,
     imageGallery: true,
+    mockupRender: true,
     spawn: true,
     scheduler: true,
     planMode: planMode === true

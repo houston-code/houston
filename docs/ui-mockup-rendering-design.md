@@ -1,8 +1,16 @@
 # Rendering UI mockups and app screenshots (design)
 
 Status: phase 1 built (`show_images`, the gallery, the full-size viewer, and the
-media store), plus the prompt line and `render-ui` skill from phase 4. The rest is
-proposed, not built. Companion to
+media store), phase 3 built (`render_mockup`), and the prompt line and `render-ui`
+skill from phase 4. Phase 2 (`view_localhost` variants), the compare view, and the
+CLI file links are proposed, not built.
+
+Verified for `render_mockup` in the real app with a hostile page: fetch, image,
+beacon, WebSocket, `file:` reads, path traversal, iframes outside the root, popups,
+geolocation, and dialogs are all blocked or dismissed, and a local listener received
+nothing. WebRTC is the one channel the CSP does not cover: on a plain session it sent
+STUN packets to the listener; on the mockup session it produced no candidates and no
+packets. DNS prefetch is turned off by header but was not observed directly. Companion to
 [inline-visuals-design.md](inline-visuals-design.md): that doc covers diagrams the
 model writes into a reply (Mermaid, SVG, small HTML widgets). This one covers
 **pictures of a user interface**: "render how this feature will look", answered with

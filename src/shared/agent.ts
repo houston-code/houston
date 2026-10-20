@@ -621,6 +621,12 @@ export interface AgentRunRequest {
   allowShellNetwork?: boolean
   /** Per-run setting overrides (headless flags). Applied to this run only, never persisted. */
   overrides?: RunSettingsOverrides
+  /**
+   * The client draws image results (show_images, render_mockup) as a gallery the
+   * user can open full size. Only the desktop app sets it; elsewhere those tools
+   * are not offered, since a terminal would show only a list of file names.
+   */
+  imageGallery?: boolean
 }
 
 /**
