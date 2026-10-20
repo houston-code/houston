@@ -4,6 +4,7 @@ import { StringDecoder } from 'node:string_decoder'
 import type { BackgroundShellInfo } from '@shared/agent'
 import { killProcessTree } from '../sandbox'
 import { detectLocalUrl } from './loopback'
+import { writeShellLedger, type LedgerEntry } from './shellLedger'
 import type { PreviewServer } from '@shared/preview'
 
 /**
@@ -11,6 +12,9 @@ import type { PreviewServer } from '@shared/preview'
  * Each keeps a rolling output buffer the agent can poll with `read_shell_output`
  * and terminate with `kill_shell`. Shells persist across tool calls until killed
  * or the app quits (see killAllShells, wired on app shutdown).
+ *
+ * Live process groups are also written to a crash-safe ledger (see shellLedger.ts),
+ * so a later launch can stop servers an exit that skipped killAllShells left behind.
  *
  * Each shell's output is also sniffed for the loopback URL a dev server announces
  * on startup (see detectLocalUrl); the first match is exposed as `previewUrl` and
@@ -64,6 +68,21 @@ export function onShellsChanged(fn: (shells: BackgroundShellInfo[]) => void): ()
 function notifyShellsChanged(): void {
   const list = listShells()
   for (const fn of changedListeners) fn(list)
+}
+
+/**
+ * Rewrite this process's ledger with every group that still has a live member: a
+ * running shell, or an exited one whose backgrounded server still runs. Dropping
+ * emptied groups at each write is what lets the reaper rule out a recycled group id.
+ */
+function persistLedger(): void {
+  const entries: LedgerEntry[] = []
+  for (const s of shells.values()) {
+    const pid = s.child.pid
+    if (pid === undefined) continue
+    if (s.running || groupHasLiveMembers(pid)) entries.push({ pgid: pid, startedAt: s.startedAt })
+  }
+  writeShellLedger(entries)
 }
 
 function appendCapped(buf: string, chunk: string): string {
@@ -139,14 +158,17 @@ export function registerShell(
     shell.running = false
     shell.exitCode = code
     shell.exitedAt = Date.now()
+    persistLedger()
     notifyShellsChanged()
   })
   child.on('error', () => {
     shell.running = false
     shell.exitedAt = Date.now()
+    persistLedger()
     notifyShellsChanged()
   })
   shells.set(id, shell)
+  persistLedger()
   notifyShellsChanged()
   return id
 }
@@ -218,6 +240,7 @@ export function killShell(id: string): KillShellResult {
   }
   if (groupHasLiveMembers(s.child.pid)) {
     killProcessTree(s.child)
+    persistLedger()
     return 'killed-leftovers'
   }
   return 'already-exited'
@@ -256,5 +279,6 @@ export function killAllShells(): void {
     if (s.running || groupHasLiveMembers(s.child.pid)) killProcessTree(s.child)
   }
   shells.clear()
+  writeShellLedger([])
   notifyShellsChanged()
 }

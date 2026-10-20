@@ -18,6 +18,7 @@ import { configureLogRedactor, log } from '../main/logger'
 import { configureTitleRedaction } from '../main/conversations'
 import { redactSecrets } from '../main/agent/redact'
 import { resolveUserDataDir } from './paths'
+import { startShellLedger } from '../main/agent/shellLedger'
 import {
   cliCollectSecrets,
   cliGetHeaders,
@@ -130,6 +131,8 @@ Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 /** Wire the Node-side host capabilities. Must run before any settings read. */
 export function wireCliHost(): void {
   setUserDataDir(resolveUserDataDir())
+  // Record background shells in the profile and stop any a crashed session left running.
+  void startShellLedger(resolveUserDataDir())
   // Before any provider call: a TLS-inspecting network's root CA lives in the OS store.
   trustSystemCertificates()
   configureHasKey((id) => cliHasKey(id))
