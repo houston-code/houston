@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import { RECEIPT_LABEL_MAX, RECEIPT_MAX_CHECKS, RECEIPT_MAX_FILES } from '@shared/evidence'
-import { classifyCommand, EvidenceLedger, parseTestCounts, type ShellEvidence } from './evidence'
+import { classifyCommand, EvidenceLedger, parseTestCounts, type BrowserEvidence, type ShellEvidence } from './evidence'
 
 const shell = (command: string, over: Partial<ShellEvidence> = {}): ShellEvidence => ({
   kind: 'shell',
@@ -325,5 +325,122 @@ describe('EvidenceLedger', () => {
     const r = l.receipt()!
     expect(r.filesChanged).toHaveLength(RECEIPT_MAX_FILES)
     expect(r.filesChangedCount).toBe(RECEIPT_MAX_FILES + 5)
+  })
+})
+
+describe('EvidenceLedger browser checks', () => {
+  const page = (steps: Array<[string, boolean, BrowserEvidence['steps'][number]['action']]>, over: Partial<BrowserEvidence> = {}): BrowserEvidence => ({
+    kind: 'browser',
+    url: 'http://localhost:5173/todos?token=secret#x',
+    steps: steps.map(([step, ok, action]) => ({ step, ok, action })),
+    planned: steps.length,
+    ...over
+  })
+
+  it('passes a flow only when a check of the page came after the last action', () => {
+    const l = new EvidenceLedger()
+    l.recordBrowser(
+      page([
+        ['fill "#new"', true, 'fill'],
+        ['press Enter', true, 'press'],
+        ['expect text "Buy milk"', true, 'expect_text']
+      ])
+    )
+    expect(l.receipt()!.checks[0]).toEqual({
+      kind: 'browser',
+      label: 'http://localhost:5173/todos',
+      ok: true,
+      steps: { total: 3, passed: 3, notRun: 0 },
+      runs: 1
+    })
+  })
+
+  it('does not pass a flow that only clicked through, or a page that only loaded', () => {
+    const clicked = new EvidenceLedger()
+    clicked.recordBrowser(page([['expect text "Todos"', true, 'expect_text'], ['click ".delete"', true, 'click']]))
+    expect(clicked.receipt()!.checks[0]).toMatchObject({ ok: null, unknown: 'not-asserted' })
+    const loaded = new EvidenceLedger()
+    loaded.recordBrowser(page([]))
+    expect(loaded.receipt()!.checks[0]).toMatchObject({ ok: null, unknown: 'not-asserted', steps: { total: 0 } })
+  })
+
+  it('fails on a failed step, saying which one and how many never ran', () => {
+    const l = new EvidenceLedger()
+    l.recordBrowser(
+      page([['fill "#new"', true, 'fill'], ['click "#add"', false, 'click']], { planned: 4 })
+    )
+    expect(l.receipt()!.checks[0]).toMatchObject({
+      ok: false,
+      steps: { total: 4, passed: 1, notRun: 2, firstFailure: 'click "#add"' }
+    })
+  })
+
+  it('fails a page that did not load', () => {
+    const l = new EvidenceLedger()
+    l.recordBrowser(page([], { loadError: 'net::ERR_CONNECTION_REFUSED' }))
+    expect(l.receipt()!.checks[0]).toMatchObject({ ok: false, steps: { loadError: 'net::ERR_CONNECTION_REFUSED' } })
+  })
+})
+
+describe('EvidenceLedger background shells', () => {
+  const started = (command: string): ShellEvidence =>
+    shell(command, { background: true, shellId: 'sh1', exitCode: null })
+
+  it('reports a server still up when the turn ends', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(started('npm run dev'))
+    const r = l.receipt(() => ({ running: true, exitCode: null, output: 'ready' }))!
+    expect(r.checks[0]).toMatchObject({ kind: 'server', ok: null, unknown: 'still-running', background: true })
+  })
+
+  it('reads a backgrounded test run that finished, counts and all', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(started('npm test'))
+    const r = l.receipt(() => ({ running: false, exitCode: 1, output: '      Tests  1 failed | 4 passed (5)' }))!
+    expect(r.checks[0]).toEqual({
+      kind: 'test',
+      label: 'npm test',
+      ok: false,
+      exitCode: 1,
+      counts: { passed: 4, failed: 1 },
+      background: true,
+      runs: 1
+    })
+  })
+
+  it('leaves a start unknown when the registry no longer knows the shell', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(started('npm run dev'))
+    expect(l.receipt(() => undefined)!.checks[0]).toMatchObject({ ok: null, unknown: 'background' })
+  })
+})
+
+describe('EvidenceLedger attribution and order', () => {
+  it('credits a subagent with what it ran', () => {
+    const l = new EvidenceLedger()
+    l.record(shell('pytest', { output: '3 passed in 0.1s' }), 'test-writer')
+    expect(l.receipt()!.checks[0]).toMatchObject({ ok: true, by: 'test-writer' })
+  })
+
+  it('records the verify command by what it does, or as a verify command', () => {
+    const l = new EvidenceLedger()
+    l.recordGate('npm test', false)
+    l.recordGate('./scripts/check-all.sh', true)
+    expect(l.receipt()!.checks).toEqual([
+      { kind: 'test', label: 'npm test', ok: false, gate: true, runs: 1 },
+      { kind: 'verify', label: './scripts/check-all.sh', ok: true, gate: true, runs: 1 }
+    ])
+  })
+
+  it('marks a check that ran before the last file change, and only checks of code', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('npm install'))
+    l.recordShell(shell('npm test', { output: '# pass 2\n# fail 0' }))
+    l.recordFiles('/ws', ['src/a.ts'])
+    l.recordShell(shell('npm run build'))
+    const checks = l.receipt()!.checks
+    expect(checks.find((c) => c.kind === 'test')).toMatchObject({ beforeLastWrite: true })
+    expect(checks.find((c) => c.kind === 'install')).not.toHaveProperty('beforeLastWrite')
+    expect(checks.find((c) => c.kind === 'build')).not.toHaveProperty('beforeLastWrite')
   })
 })

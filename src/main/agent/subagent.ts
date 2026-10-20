@@ -20,6 +20,7 @@ import { runQuarantineExtraction } from './untrusted'
 import { providerStreamError, withProviderRetry } from './retry'
 import { recordOriginal, recordResult, writeTargets } from './checkpoints'
 import type { ShellSession } from './shell-session'
+import type { EvidenceDraft } from './evidence'
 import { isSandboxed } from '../sandbox'
 import { isSensitiveRead } from './sensitive-paths'
 import { isSensitiveWrite } from './permissions'
@@ -249,6 +250,14 @@ export interface SubAgentOptions {
     args: Record<string, unknown>,
     run: () => Promise<string>
   ) => Promise<string>
+  /**
+   * Report what the subagent's tools executed to the dispatching run's evidence ledger
+   * (its shell commands' real exit codes), so the parent turn's receipt covers delegated
+   * work. Wired by the loop for the writable tier; absent, nothing is recorded.
+   */
+  recordEvidence?: (e: EvidenceDraft) => void
+  /** Report the paths the subagent's write tools changed, for the same receipt. */
+  recordFiles?: (paths: string[]) => void
   /** Persistent shell state for run_shell (writable tier). */
   shellSession?: ShellSession
   /** Cap on a single shell command's output kept in a tool result. */
@@ -346,6 +355,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     fileTracker: new FileReadTracker(),
     ...(opts.shellSession ? { shellSession: opts.shellSession } : {}),
     ...(opts.shellOutputMaxBytes ? { shellOutputMaxBytes: opts.shellOutputMaxBytes } : {}),
+    ...(opts.recordEvidence ? { recordEvidence: opts.recordEvidence } : {}),
     // Network-tool plumbing (web_search key lookup, egress credential masking) —
     // only meaningful when the network tools are offered at all.
     ...(opts.network?.getSecret ? { getSecret: opts.network.getSecret } : {}),
@@ -601,6 +611,10 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
           const out = await tool.execute(call.arguments, toolCtx)
           for (const t of targets) {
             await recordResult(cpRunId!, roots, t.path, { expectAbsent: t.deleted })
+          }
+          // Reached only when the write landed (a failed one throws above).
+          if (tool.kind === 'write' && opts.recordFiles) {
+            opts.recordFiles(writeTargets(call.name, call.arguments).map((t) => t.path))
           }
           return out
         }

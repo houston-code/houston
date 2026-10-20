@@ -13,6 +13,7 @@
  */
 
 import type { ChatMessage, Conversation, ToolCall } from './agent'
+import { formatReceiptLines } from './evidence'
 
 /** Id of the `<template>` that holds the importable conversation JSON. */
 export const HTML_DATA_ELEMENT_ID = 'houston-conversation'
@@ -91,6 +92,11 @@ function renderMessage(msg: ChatMessage): string {
     for (const call of msg.toolCalls) parts.push(renderToolCall(call))
     parts.push('</div>')
   }
+  // What Houston recorded running that turn, shown as its own block under the message.
+  // Not in the embedded data (see portableMessage): an import never carries a receipt.
+  if (msg.receipt) {
+    parts.push(`<pre class="turn__receipt">${escapeHtml(formatReceiptLines(msg.receipt).join('\n'))}</pre>`)
+  }
   parts.push('</section>')
   return parts.join('')
 }
@@ -150,6 +156,16 @@ const STYLES = `
   .turn__tool { font-size: 0.8rem; color: #777; margin-bottom: 0.5rem; }
   .turn__body { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
   .turn__toolcalls { margin-top: 0.75rem; }
+  .turn__receipt {
+    margin: 0.75rem 0 0;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid #d9c9a8;
+    border-radius: 6px;
+    font: 0.8rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #555;
+  }
   .toolcall { border-left: 3px solid #c8c8cc; padding-left: 0.75rem; margin-top: 0.75rem; }
   .toolcall__name { font-weight: 600; font-size: 0.85rem; margin-bottom: 0.25rem; }
   .toolcall__args, .turn__body {
@@ -174,6 +190,7 @@ const STYLES = `
     .turn__role { color: #aaa; }
     .toolcall__args, .turn--tool { background: #18181a; }
     .meta { color: #999; }
+    .turn__receipt { border-color: #5a5040; color: #bbb; }
   }
 `.trim()
 

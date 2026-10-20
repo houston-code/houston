@@ -113,7 +113,8 @@ import {
   overrideForConversation
 } from './overrides'
 import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
-import { EvidenceLedger } from './evidence'
+import { EvidenceLedger, type EvidenceDraft } from './evidence'
+import { peekShell } from './shells'
 import { isSensitiveRead } from './sensitive-paths'
 import { runPostEditDiagnostics } from './diagnostics'
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
@@ -1129,7 +1130,7 @@ export async function startRun(
     // has none.
     const runStart = messages.length
     beforeEnd = () => {
-      const receipt = run.evidence.receipt()
+      const receipt = run.evidence.receipt(peekShell)
       if (!receipt) return
       for (let i = messages.length - 1; i >= runStart; i--) {
         if (messages[i].role !== 'assistant') continue
@@ -1149,6 +1150,16 @@ export async function startRun(
     const knownSecrets = collectSecrets()
     const redact = createSecretRedactor(knownSecrets)
     scrubError = redact
+    // What tools report for the turn's receipt. Model-written text it keeps (a command,
+    // a page URL, a step's description) is masked like any other text the run keeps; a
+    // command's output is only scanned for a test summary and never stored.
+    const recordEvidence = (e: EvidenceDraft, by?: string): void =>
+      run.evidence.record(
+        e.kind === 'shell'
+          ? { ...e, command: redact(e.command) }
+          : { ...e, url: redact(e.url), steps: e.steps.map((st) => ({ ...st, step: redact(st.step) })) },
+        by
+      )
 
     // Surface a hook's `systemMessage` directive as a user-facing transcript notice.
     // Emit-only by design: it never lands in `messages`, so the model never sees it
@@ -1646,7 +1657,11 @@ export async function startRun(
               checkpointRunId: runId,
               shellSession: createShellSession(workspace),
               shellOutputMaxBytes: resolveShellOutputBudget(settings),
-              gateUnconfinedShell
+              gateUnconfinedShell,
+              // Delegated commands and edits belong on this turn's receipt, credited
+              // to the agent that ran them.
+              recordEvidence: (e: EvidenceDraft) => recordEvidence(e, opts.agent ?? 'a subagent'),
+              recordFiles: (paths: string[]) => run.evidence.recordFiles(workspace, paths)
             }
           : {}),
         // Permission rules + the sensitive-read prompt on every local call, either tier.
@@ -1767,9 +1782,7 @@ export async function startRun(
       ...(req.unattended === true ? { unattended: true } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
-      // The command is masked like any other text the run keeps; the output is only
-      // scanned for a test summary and never stored.
-      recordEvidence: (e) => run.evidence.recordShell({ ...e, command: redact(e.command) }),
+      recordEvidence: (e) => recordEvidence(e),
       fileTracker,
       ghExec,
       getSecret: getKey,
@@ -2885,6 +2898,7 @@ export async function startRun(
             return
           }
           emit({ type: 'verification', passed: result.passed })
+          run.evidence.recordGate(redact(settings.verifyCommand!), result.passed)
           if (!result.passed) {
             // Push the failure feedback as a system note so the model sees it next
             // turn and the transcript shows it as Houston's, not the user's; then loop.

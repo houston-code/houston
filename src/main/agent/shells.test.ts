@@ -12,6 +12,7 @@ import {
   onShellsChanged,
   readShellOutput,
   registerShell,
+  peekShell,
   unreadSlice
 } from './shells'
 
@@ -52,6 +53,16 @@ describe('background shell registry', () => {
     const id = registerShell('node split', child)
     await onClose(child)
     expect(readShellOutput(id).stdout).toBe('café\n')
+  })
+
+  it('peeks at a shell without hiding its output from the next read', async () => {
+    const child = node('process.stdout.write("# pass 2\\n# fail 0\\n"); process.exit(0)')
+    const id = registerShell('node test.mjs', child)
+    await onClose(child)
+    expect(peekShell(id)).toEqual({ running: false, exitCode: 0, output: '# pass 2\n# fail 0\n' })
+    // The agent's own read still gets everything: the peek moved no cursor.
+    expect(readShellOutput(id).stdout).toBe('# pass 2\n# fail 0\n')
+    expect(peekShell('does-not-exist')).toBeUndefined()
   })
 
   it('reports not-found for an unknown id', () => {

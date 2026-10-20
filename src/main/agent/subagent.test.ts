@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import { createSecretRedactor } from './redact'
 import { runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
+import type { EvidenceDraft } from './evidence'
 import { checkpointFileCount, restoreCheckpoint, clearCheckpoints } from './checkpoints'
 
 let ws: string
@@ -470,6 +471,35 @@ describe('runSubAgent', () => {
         tools: ['read_file', 'edit_file', 'bogus']
       })
       expect(seen.tools).toEqual(['read_file', 'edit_file'])
+    })
+
+    it('reports what it ran and changed to the dispatching run', async () => {
+      const provider = scriptedProvider([
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'x' } } },
+          { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'node -e "process.exit(3)"' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+      const evidence: EvidenceDraft[] = []
+      const files: string[][] = []
+      await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'write and run',
+        signal: new AbortController().signal,
+        writable: true,
+        roots: [ws],
+        shellSandboxed: true,
+        recordEvidence: (e) => evidence.push(e),
+        recordFiles: (p) => files.push(p)
+      })
+      expect(files).toEqual([['out.txt']])
+      expect(evidence).toEqual([
+        expect.objectContaining({ kind: 'shell', command: 'node -e "process.exit(3)"', exitCode: 3, background: false })
+      ])
     })
 
     it('fails closed: refuses run_shell on a host with no OS sandbox', async () => {

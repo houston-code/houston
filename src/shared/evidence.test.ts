@@ -149,3 +149,43 @@ describe('receiptHasFailure', () => {
     expect(receiptHasFailure(receipt({ checks: [check({ ok: false })] }))).toBe(true)
   })
 })
+
+describe('wording for browser checks, background runs, and who ran what', () => {
+  it('describes a browser check by its steps', () => {
+    expect(checkDetail(check({ kind: 'browser', label: 'http://localhost:5173/', steps: { total: 3, passed: 3, notRun: 0 } }))).toBe(
+      '3 of 3 steps passed'
+    )
+    expect(
+      checkDetail(
+        check({ kind: 'browser', ok: false, steps: { total: 4, passed: 1, notRun: 2, firstFailure: 'click "#add"' } })
+      )
+    ).toBe('1 of 4 steps passed, failed at click "#add", 2 not run')
+    expect(
+      checkDetail(check({ kind: 'browser', ok: null, unknown: 'not-asserted', steps: { total: 0, passed: 0, notRun: 0 } }))
+    ).toBe('loaded, nothing on the page was checked')
+    expect(
+      checkDetail(check({ kind: 'browser', ok: false, steps: { total: 0, passed: 0, notRun: 0, loadError: 'ERR_CONNECTION_REFUSED' } }))
+    ).toBe('the page did not load: ERR_CONNECTION_REFUSED')
+  })
+
+  it('names browser outcomes in the summary', () => {
+    const r = (c: Partial<ReceiptCheck>): string =>
+      receiptSummary(receipt({ checks: [check({ kind: 'browser', steps: { total: 1, passed: 1, notRun: 0 }, ...c })] }))
+    expect(r({})).toBe('Browser check passed')
+    expect(r({ ok: false })).toBe('Browser check failed')
+    expect(r({ ok: null, unknown: 'not-asserted' })).toBe('Browser: nothing on the page was checked')
+  })
+
+  it('says a server is still running, and how a background run ended', () => {
+    expect(
+      receiptSummary(receipt({ checks: [check({ kind: 'server', ok: null, unknown: 'still-running', background: true })] }))
+    ).toBe('Server running')
+    expect(checkDetail(check({ ok: false, exitCode: 1, background: true }))).toBe('exit 1, ran in the background')
+  })
+
+  it('credits a subagent, marks the verify command, and flags a check older than the last edit', () => {
+    expect(checkDetail(check({ by: 'test-writer' }))).toBe('exit 0, run by test-writer')
+    expect(checkDetail(check({ gate: true, exitCode: undefined }))).toBe('your verify command')
+    expect(checkDetail(check({ beforeLastWrite: true }))).toBe('exit 0, ran before the last file change')
+  })
+})

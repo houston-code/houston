@@ -14,7 +14,17 @@
  */
 
 /** What a command was for, as far as the receipt is concerned. */
-export type CheckKind = 'test' | 'typecheck' | 'build' | 'lint' | 'http' | 'install' | 'server'
+export type CheckKind =
+  | 'test'
+  | 'typecheck'
+  | 'build'
+  | 'lint'
+  | 'http'
+  | 'browser'
+  | 'install'
+  | 'server'
+  /** The user's own verify-on-stop command, when its command says nothing more specific. */
+  | 'verify'
 
 /**
  * Why a command failed, when the sandbox or the host made it fail: the same causes
@@ -31,7 +41,27 @@ export interface TestCounts {
 }
 
 /** Why a check's outcome can't be told from what was recorded. */
-export type UnknownReason = 'background' | 'exit-not-attributable' | 'http-status-unchecked'
+export type UnknownReason =
+  /** Started with background:true and gone from the registry before the turn ended. */
+  | 'background'
+  /** Started with background:true and still running when the turn ended. */
+  | 'still-running'
+  | 'exit-not-attributable'
+  | 'http-status-unchecked'
+  /** A browser check that loaded the page (and maybe acted on it) but checked nothing on it. */
+  | 'not-asserted'
+
+/** How a browser check's interaction steps went. */
+export interface StepCounts {
+  total: number
+  passed: number
+  /** Steps after the first failure, which never ran. */
+  notRun: number
+  /** The first failed step, described without any value it typed. */
+  firstFailure?: string
+  /** A page load problem (an HTTP error, a refused connection), when there was one. */
+  loadError?: string
+}
 
 /** One command that bears on whether the work was checked, as of its last run this turn. */
 export interface ReceiptCheck {
@@ -50,8 +80,19 @@ export interface ReceiptCheck {
   timedOut?: boolean
   counts?: TestCounts
   blocked?: BlockedReason
-  /** Started with background:true; its outcome isn't known when the turn ends. */
+  /** Started with background:true. */
   background?: boolean
+  /** For a browser check: how its steps went. */
+  steps?: StepCounts
+  /** Who ran it, when it wasn't the agent itself (a subagent's name). */
+  by?: string
+  /** The user's verify-on-stop command, run by Houston at the end of the turn. */
+  gate?: true
+  /**
+   * It ran before the turn's last file change, so it may not cover the final code.
+   * Informational: a later edit to a README makes an earlier test run no less real.
+   */
+  beforeLastWrite?: true
   /** How many times this same command ran this turn. The fields above describe the last. */
   runs: number
 }
@@ -81,8 +122,10 @@ const KIND_LABEL: Record<CheckKind, string> = {
   build: 'build',
   lint: 'lint',
   http: 'HTTP',
+  browser: 'browser',
   install: 'install',
-  server: 'server'
+  server: 'server',
+  verify: 'verify command'
 }
 
 /** The short name a client shows for a check's kind. */
@@ -105,17 +148,33 @@ function countsText(c: TestCounts): string {
   return parts.join(', ')
 }
 
+function stepsText(s: StepCounts): string {
+  if (s.loadError) return `the page did not load: ${s.loadError}`
+  if (s.total === 0) return 'loaded'
+  const parts = [`${s.passed} of ${s.total} steps passed`]
+  if (s.firstFailure) parts.push(`failed at ${s.firstFailure}`)
+  if (s.notRun) parts.push(`${s.notRun} not run`)
+  return parts.join(', ')
+}
+
 /** The detail a client shows after a check's command: what its last run came to. */
 export function checkDetail(c: ReceiptCheck): string {
   const parts: string[] = []
-  if (c.ok === null && c.unknown === 'background') parts.push('started in the background')
+  if (c.steps) parts.push(stepsText(c.steps))
+  else if (c.unknown === 'background') parts.push('started in the background')
+  else if (c.unknown === 'still-running') parts.push('still running')
   else if (c.timedOut) parts.push('timed out')
   else if (c.counts) parts.push(countsText(c.counts))
   else if (c.exitCode === null) parts.push('killed')
   else if (c.exitCode !== undefined) parts.push(`exit ${c.exitCode}`)
   if (c.unknown === 'exit-not-attributable') parts.push('exit code is from another part of the command')
   if (c.unknown === 'http-status-unchecked') parts.push('HTTP status not checked')
+  if (c.unknown === 'not-asserted') parts.push('nothing on the page was checked')
   if (c.blocked) parts.push(BLOCKED_TEXT[c.blocked])
+  if (c.background && c.exitCode !== undefined) parts.push('ran in the background')
+  if (c.gate) parts.push('your verify command')
+  if (c.by) parts.push(`run by ${c.by}`)
+  if (c.beforeLastWrite) parts.push('ran before the last file change')
   if (c.runs > 1) parts.push(`ran ${c.runs} times, last run shown`)
   return parts.join(', ')
 }
@@ -158,18 +217,23 @@ function testsPhrase(r: TurnReceipt): string | null {
     const why = t.blocked ? ` (${BLOCKED_TEXT[t.blocked]})` : ''
     return `test command failed${why}`
   }
-  return t.unknown === 'background' ? 'tests started in the background' : 'test result unknown'
+  if (t.unknown === 'background') return 'tests started in the background'
+  if (t.unknown === 'still-running') return 'tests still running'
+  return 'test result unknown'
 }
 
 function otherPhrase(c: ReceiptCheck): string {
   const name = KIND_LABEL[c.kind]
-  if (c.ok === true) return `${name} passed`
+  if (c.ok === true) return c.kind === 'browser' ? 'browser check passed' : `${name} passed`
   if (c.ok === false) {
+    if (c.kind === 'browser') return 'browser check failed'
     const why = c.timedOut ? ' (timed out)' : c.blocked ? ` (${BLOCKED_TEXT[c.blocked]})` : ''
     return `${name} failed${why}`
   }
   if (c.unknown === 'background') return c.kind === 'server' ? 'server started' : `${name} started in the background`
+  if (c.unknown === 'still-running') return c.kind === 'server' ? 'server running' : `${name} still running`
   if (c.unknown === 'http-status-unchecked') return 'HTTP requests sent, status not checked'
+  if (c.unknown === 'not-asserted') return 'browser: nothing on the page was checked'
   return `${name} result unknown`
 }
 
@@ -182,7 +246,7 @@ export function receiptSummary(r: TurnReceipt): string {
   const parts: string[] = []
   const tests = testsPhrase(r)
   if (tests) parts.push(tests)
-  const kinds: CheckKind[] = ['typecheck', 'build', 'lint', 'install', 'server', 'http']
+  const kinds: CheckKind[] = ['typecheck', 'build', 'lint', 'verify', 'install', 'server', 'http', 'browser']
   for (const kind of kinds) {
     const last = lastOf(r, kind)
     if (last) parts.push(otherPhrase(last))
