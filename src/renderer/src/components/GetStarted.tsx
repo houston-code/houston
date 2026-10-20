@@ -16,6 +16,8 @@ export interface GetStartedProps {
   facts: ChecklistFacts
   /** What step 1 connected, e.g. "Anthropic · Claude Sonnet 5.5", shown once it's done. */
   modelSummary?: string
+  /** The folder step 2 opened, e.g. "my-app", shown once it's done. */
+  folderSummary?: string
   onConnectModel: () => void
   onChooseFolder: () => void
   onSkip: () => void
@@ -24,6 +26,7 @@ export interface GetStartedProps {
 export function GetStarted({
   facts,
   modelSummary,
+  folderSummary,
   onConnectModel,
   onChooseFolder,
   onSkip
@@ -32,6 +35,12 @@ export function GetStarted({
   const action: Partial<Record<ChecklistStep, { label: string; run: () => void }>> = {
     model: { label: 'Connect', run: onConnectModel },
     folder: { label: 'Choose folder', run: onChooseFolder }
+  }
+  // While setup is open, a finished step can be revisited: it shows what it set and a
+  // Change button that reopens the same action (Connect panel, folder picker).
+  const change: Partial<Record<ChecklistStep, { summary?: string; label: string; run: () => void }>> = {
+    model: { summary: modelSummary, label: 'Change model', run: onConnectModel },
+    folder: { summary: folderSummary, label: 'Change folder', run: onChooseFolder }
   }
 
   return (
@@ -49,6 +58,7 @@ export function GetStarted({
           const done = view.done[step.id]
           const current = view.current === step.id
           const act = action[step.id]
+          const redo = done ? change[step.id] : undefined
           return (
             <li
               key={step.id}
@@ -64,9 +74,7 @@ export function GetStarted({
                   {done && <span className="sr-only"> (done)</span>}
                 </span>
                 {!done && <span className="get-started__hint">{step.hint}</span>}
-                {done && step.id === 'model' && modelSummary && (
-                  <span className="get-started__hint">{modelSummary}</span>
-                )}
+                {redo?.summary && <span className="get-started__hint">{redo.summary}</span>}
               </span>
               {act && !done && (
                 <button
@@ -77,14 +85,8 @@ export function GetStarted({
                   {act.label}
                 </button>
               )}
-              {done && step.id === 'model' && (
-                // Back to step 1 while setup is still open: switch model or provider.
-                <button
-                  type="button"
-                  className="btn btn--sm"
-                  aria-label="Change model"
-                  onClick={onConnectModel}
-                >
+              {redo && (
+                <button type="button" className="btn btn--sm" aria-label={redo.label} onClick={redo.run}>
                   Change
                 </button>
               )}

@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ChecklistFacts } from '@shared/onboarding'
 import { GetStarted } from './GetStarted'
 
-function setup(facts: Partial<ChecklistFacts> = {}, modelSummary?: string) {
+function setup(facts: Partial<ChecklistFacts> = {}, modelSummary?: string, folderSummary?: string) {
   const props = {
     facts: { modelReady: false, hasWorkspace: false, hasConversation: false, ...facts },
     modelSummary,
+    folderSummary,
     onConnectModel: vi.fn(),
     onChooseFolder: vi.fn(),
     onSkip: vi.fn()
@@ -62,14 +63,23 @@ describe('GetStarted', () => {
     expect(p.onConnectModel).toHaveBeenCalledTimes(1)
   })
 
-  it('offers Change only on step 1, and only once it is done', () => {
+  it('offers Change only on finished steps', () => {
     setup()
-    expect(screen.queryByRole('button', { name: 'Change model' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /^Change/ })).not.toBeInTheDocument()
   })
 
-  it('keeps Change available after the folder step is done too', () => {
-    setup({ modelReady: true, hasWorkspace: true }, 'OpenAI · GPT 6.1 Sol')
-    expect(screen.getAllByRole('button', { name: /Change/ })).toHaveLength(1)
+  it('lets a finished step 2 be changed too, showing the folder', () => {
+    const p = setup({ modelReady: true, hasWorkspace: true }, 'OpenAI · GPT 6.1 Sol', 'my-app')
+    expect(screen.getByText('my-app')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Change model' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder' }))
+    expect(p.onChooseFolder).toHaveBeenCalledTimes(1)
+  })
+
+  it('a folder opened before a model still shows its Change while step 1 waits', () => {
+    const p = setup({ hasWorkspace: true }, undefined, 'my-app')
+    expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Change folder' }))
+    expect(p.onChooseFolder).toHaveBeenCalledTimes(1)
   })
 })

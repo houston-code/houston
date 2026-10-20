@@ -1900,6 +1900,7 @@ export default function App(): JSX.Element {
                     ? `${providerShortName(selectedProvider)} · ${modelDisplayName(selectedProvider.kind, settings.selected.model)}`
                     : undefined
                 }
+                folderSummary={workspace ? baseName(workspace) : undefined}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
                 onSkip={() => {

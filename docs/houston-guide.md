@@ -1089,9 +1089,10 @@ connect a model (paste an API key for Anthropic, OpenAI, or Gemini, which is che
 with a live model listing before it is saved, or point at a local Ollama or LM Studio
 server), open a project folder, and send a first task. Each step ticks itself off from
 the app's real state, and **Skip setup** hides the checklist for good. While the
-checklist is open, a finished "Connect a model" step shows what it connected and has a
-**Change** button: it reopens the panel with the saved key (**Replace key** to swap it)
-and a model picker, so you can switch model or provider before your first task.
+checklist is open, each finished step shows what it set and has a **Change** button.
+On "Connect a model" it reopens the panel with the saved key (**Replace key** to swap
+it) and a model picker; on "Open a project folder" it reopens the folder picker. So you
+can switch model, provider, or folder before your first task.
 
 A few one-time tips then point at controls the first time they matter: the approval
 mode and the **New worktree** toggle before the first message, and **Revert** and
