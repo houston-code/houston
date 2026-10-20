@@ -52,7 +52,8 @@ import {
   spawnSandboxed,
   type EgressProxyEndpoints
 } from '../sandbox'
-import { killShell, readShellOutput, registerShell } from './shells'
+import { backgroundShellGroups, killShell, readShellOutput, registerShell } from './shells'
+import { foreignListenerNote, urlPort, type PortListener } from './portOwner'
 import { runInSession, type ShellSession } from './shell-session'
 import {
   presentUntrusted,
@@ -188,6 +189,11 @@ export interface ToolContext {
   attachDocument?: (doc: DocumentAttachment) => void
   /** Screenshot + console-capture a loopback URL (injected by the loop; Electron-backed). */
   captureLocalhost?: (input: CaptureInput) => Promise<LocalhostCapture>
+  /**
+   * The processes listening on a local port (injected by the loop, see portOwner.ts), so
+   * view_localhost can say when the page came from a server outside the workspace.
+   */
+  portListeners?: (port: number) => Promise<PortListener[]>
   /** Persistent shell state (cwd + exported env) shared across run_shell calls in a run. */
   shellSession?: ShellSession
   /** Max bytes of a single shell command's output kept in a tool result (context guard). */
@@ -1458,6 +1464,15 @@ const readShellOutputTool: ToolDef = {
     const parts: string[] = []
     const body = clampToolResult(segments.join('\n'), ctx.shellOutputMaxBytes)
     if (body) parts.push(body)
+    // The addresses the servers actually bound, stated outright: a dev server whose
+    // port is taken moves to another one, and checking the configured port then
+    // reaches whatever else is listening there.
+    if (r.newUrls.length) {
+      parts.push(
+        `[local URL${r.newUrls.length === 1 ? '' : 's'} it printed: ${r.newUrls.join(', ')}. ` +
+          'Use these rather than an assumed port.]'
+      )
+    }
     parts.push(r.running ? '[still running]' : `[exited with code ${r.exitCode ?? 'killed'}]`)
     return parts.join('\n')
   }
@@ -1665,6 +1680,17 @@ const viewLocalhost: ToolDef = {
     if (!ctx.captureLocalhost) throw new Error('view_localhost is not available in this context.')
     const selector = str(args, 'selector') || undefined
     const steps = parseSteps(args.steps)
+    // Who serves the port, looked up while the page loads: a stale or other project's
+    // server on the usual port renders a different app with nothing on the page to say so.
+    const port = urlPort(url)
+    const ownerNote =
+      port !== null && ctx.portListeners
+        ? ctx.portListeners(port).then(
+            (listeners) =>
+              foreignListenerNote(port, listeners, ctx.roots ?? [ctx.workspace], backgroundShellGroups()),
+            () => null
+          )
+        : Promise.resolve(null)
     const cap = await ctx.captureLocalhost({
       url,
       selector,
@@ -1674,6 +1700,8 @@ const viewLocalhost: ToolDef = {
 
     const lines: string[] = []
     lines.push(`Loaded ${cap.finalUrl}${cap.title ? `: "${cap.title}"` : ''} (${cap.width}×${cap.height})`)
+    const note = await ownerNote
+    if (note) lines.push(note)
     if (cap.loadError) {
       lines.push(`[load warning: ${cap.loadError}]`)
       const hint = sandboxedLoopbackHint(cap.loadError, activeBackendId(), {

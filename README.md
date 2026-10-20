@@ -73,10 +73,12 @@ Open source under the [Apache License 2.0](LICENSE).
   go through `web_fetch` — and, being local network egress, it always prompts for
   approval like `web_fetch`. Pass a `selector` to capture just one element.
 - **Live preview panel.** When the agent starts a dev server (a background
-  `run_shell`), Houston detects the loopback URL it prints and offers a **Preview**
-  panel — a resizable right-hand dock that renders the running page live and
-  interactively, right beside the chat. Multiple servers stack top-to-bottom (up to
-  three), each with reload and open-in-browser controls; you can also add a
+  `run_shell`), Houston detects the loopback URLs it prints and offers a **Preview**
+  panel: a resizable right-hand dock that renders the running page live and
+  interactively, right beside the chat. A script that starts several servers (a
+  client and its API) shows the page it labels `Local:`, with a picker for the
+  others. Multiple servers stack top-to-bottom (up to three), each showing its full
+  URL with reload, copy, and open-in-browser controls; you can also add a
   `localhost` URL or port by hand. The pages render in isolated, sandboxed,
   loopback-pinned views with the same network guards as `view_localhost`, so
   untrusted dev-server output can't reach your network.

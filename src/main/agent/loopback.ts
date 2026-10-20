@@ -83,30 +83,62 @@ function trimUrlTail(raw: string): string {
   return raw.replace(/[.,;:!?)\]}'"]+$/, '')
 }
 
+/** Remove terminal escape sequences (SGR colors, cursor moves, OSC titles and links). */
+function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]/g, '')
+}
+
+/** A loopback URL found in process output. */
+export interface FoundUrl {
+  url: string
+  /**
+   * Printed on a line that labels it the local address (`Local: http://…`, as Vite,
+   * Next.js, and Create React App announce the dev page), so it's the page to show
+   * rather than an API or websocket server started alongside it.
+   */
+  announced: boolean
+}
+
 /**
- * Find the first loopback dev-server URL printed in a chunk of process output, or
- * undefined. Dev servers announce themselves with lines like `Local:
- * http://localhost:5173/` or `running at http://0.0.0.0:8000` — we scan for any
- * http(s) URL and keep the first whose host is loopback. A server bound to
- * `0.0.0.0`/`::` is rewritten to `127.0.0.1`/`[::1]` because browsers can't always
- * connect to the unspecified address; the chosen port is preserved.
+ * Every loopback dev-server URL printed in a chunk of process output, in order and
+ * without repeats. Dev servers announce themselves with lines like `Local:
+ * http://localhost:5173/` or `running at http://0.0.0.0:8000`; we scan for any http(s)
+ * URL and keep those whose host is loopback. A server bound to `0.0.0.0`/`::` is
+ * rewritten to `127.0.0.1`/`[::1]` because browsers can't always connect to the
+ * unspecified address; the chosen port is preserved. One script often starts several
+ * (a client and its API under `concurrently`), so all of them are returned.
  */
-export function detectLocalUrl(text: string): string | undefined {
-  const matches = text.match(/https?:\/\/[^\s'"<>`]+/gi)
-  if (!matches) return undefined
-  for (const candidate of matches) {
-    let url: URL
-    try {
-      url = new URL(trimUrlTail(candidate))
-    } catch {
-      continue
+export function detectLocalUrls(text: string): FoundUrl[] {
+  const out: FoundUrl[] = []
+  // Colored output (FORCE_COLOR, or a server that colors regardless) splits the URL
+  // with escape codes, as Vite's bold port does: `http://localhost:\x1b[1m5173\x1b[22m/`.
+  for (const line of stripAnsi(text).split('\n')) {
+    const matches = line.match(/https?:\/\/[^\s'"<>`]+/gi)
+    if (!matches) continue
+    const announced = /\blocal:/i.test(line)
+    for (const candidate of matches) {
+      let url: URL
+      try {
+        url = new URL(trimUrlTail(candidate))
+      } catch {
+        continue
+      }
+      if (!isLoopbackHost(url.hostname)) continue
+      // Rewrite "listen on all interfaces" addresses to a concrete loopback the
+      // browser can actually reach, keeping the port.
+      if (url.hostname === '0.0.0.0') url.hostname = '127.0.0.1'
+      else if (url.hostname === '::' || url.hostname === '[::]') url.hostname = '[::1]'
+      const href = url.toString()
+      const seen = out.find((f) => f.url === href)
+      if (seen) seen.announced ||= announced
+      else out.push({ url: href, announced })
     }
-    if (!isLoopbackHost(url.hostname)) continue
-    // Rewrite "listen on all interfaces" addresses to a concrete loopback the
-    // browser can actually reach, keeping the port.
-    if (url.hostname === '0.0.0.0') url.hostname = '127.0.0.1'
-    else if (url.hostname === '::' || url.hostname === '[::]') url.hostname = '[::1]'
-    return url.toString()
   }
-  return undefined
+  return out
+}
+
+/** The first loopback dev-server URL printed in a chunk of output, or undefined. */
+export function detectLocalUrl(text: string): string | undefined {
+  return detectLocalUrls(text)[0]?.url
 }

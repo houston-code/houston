@@ -11,8 +11,10 @@ export interface PreviewServer {
   command: string
   /** False once the process has exited. */
   running: boolean
-  /** The loopback URL detected in the server's output, if one was found yet. */
+  /** The loopback URL to show: the one its output labeled `Local:`, else the first printed. */
   url?: string
+  /** Every loopback URL detected in its output, `url` first (a script can start several servers). */
+  urls?: string[]
 }
 
 /** Integer rectangle in the window's content coordinate space (device-independent px). */

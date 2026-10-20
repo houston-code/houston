@@ -57,6 +57,19 @@ describe('selectPreviewPanes', () => {
     expect(startingCount).toBe(1)
   })
 
+  it('shows the URL a server labeled Local:, carries its alternatives, and honors a pick', () => {
+    const s = server({ id: 'a', url: 'http://localhost:5175/', urls: ['http://localhost:5175/', 'http://localhost:3001/'] })
+    expect(selectPreviewPanes([s], []).panes[0]).toMatchObject({
+      url: 'http://localhost:5175/',
+      urls: ['http://localhost:5175/', 'http://localhost:3001/']
+    })
+    expect(selectPreviewPanes([s], [], 3, { a: 'http://localhost:3001/' }).panes[0].url).toBe('http://localhost:3001/')
+    // A pick the server never printed (it restarted elsewhere) falls back to its own URL.
+    expect(selectPreviewPanes([s], [], 3, { a: 'http://localhost:9/' }).panes[0].url).toBe('http://localhost:5175/')
+    // A single URL needs no switcher.
+    expect(selectPreviewPanes([server({ id: 'b', url: 'http://localhost:4000/' })], []).panes[0].urls).toBeUndefined()
+  })
+
   it('appends manual URLs after servers and dedupes by URL', () => {
     const { panes } = selectPreviewPanes(
       [server({ id: 'a', url: 'http://localhost:3000/' })],

@@ -3223,6 +3223,15 @@ body.is-resizing .preview-dock__resizer::after {
   text-overflow: ellipsis;
   flex: 1;
 }
+/* A server that printed several addresses gets a picker in place of the URL text. */
+.preview-pane__host--select {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: transparent;
+  font-size: inherit;
+  padding: 0 2px;
+}
 .preview-pane__actions {
   display: inline-flex;
   gap: 2px;
