@@ -6,7 +6,8 @@ import {
   configureMcpOAuthPresence,
   configureSetKey,
   getProvider,
-  getSettings
+  getSettings,
+  setModelUnavailable
 } from './store'
 import {
   collectSecretValues,
@@ -59,6 +60,7 @@ export function wireAgentHost(): void {
     getSecretHeaders,
     collectSecrets: collectSecretValues,
     getMcpOAuth: getMcpOAuthTokens,
-    setMcpOAuth: setMcpOAuthTokens
+    setMcpOAuth: setMcpOAuthTokens,
+    setModelUnavailable
   })
 }

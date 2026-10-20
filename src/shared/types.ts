@@ -126,6 +126,12 @@ export interface ModelOption {
    * update reads as "New" in the picker.
    */
   addedAt?: string
+  /**
+   * When a request for this model last came back "not found" from its provider
+   * (`YYYY-MM-DD`): an id that was mistyped, retired, or isn't open to this key. Cleared
+   * the next time the model answers a request. The pickers flag it.
+   */
+  unavailableAt?: string
 }
 
 /** A configured model provider. Safe to send to the renderer. */

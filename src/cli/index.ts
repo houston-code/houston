@@ -11,7 +11,8 @@ import {
   configureSetKey,
   getProvider,
   getSettings,
-  saveSettings
+  saveSettings,
+  setModelUnavailable
 } from '../main/store'
 import { setUserDataDir } from '../main/userData'
 import { configureLogRedactor, log } from '../main/logger'
@@ -162,7 +163,8 @@ export function wireCliHost(): void {
     getSecretHeaders: (scope) => cliGetHeaders(scope),
     collectSecrets: () => cliCollectSecrets(),
     getMcpOAuth: (serverId) => cliGetMcpOAuth(serverId),
-    setMcpOAuth: (serverId, tokens) => cliSetMcpOAuth(serverId, tokens)
+    setMcpOAuth: (serverId, tokens) => cliSetMcpOAuth(serverId, tokens),
+    setModelUnavailable
   })
 }
 

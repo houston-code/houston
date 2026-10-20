@@ -120,6 +120,23 @@ export function isToolsUnsupportedError(err: unknown): boolean {
   return /not support tool|tool (?:use|calling|s) (?:is |are )?not supported/.test(msg)
 }
 
+/**
+ * Whether a provider error means "this model id doesn't exist here, or this key can't
+ * use it": a 404 that names the model or carries a model-not-found code. Anthropic
+ * answers `not_found_error` with "model: <id>", OpenAI `model_not_found`, Gemini
+ * "models/<id> is not found", Ollama `model "<id>" not found`. A bare 404 that names
+ * neither (a wrong base URL, a proxy path) is deliberately not one: telling the user
+ * to pick another model would send them the wrong way.
+ */
+export function isModelNotFoundError(err: unknown, model: string): boolean {
+  const status = (err as { status?: unknown })?.status
+  const msg = String((err as { message?: unknown })?.message ?? err)
+  const is404 = status === 404 || (status === undefined && /^\s*404\b/.test(msg))
+  if (!is404) return false
+  if (model && msg.includes(model)) return true
+  return /not_found_error|model_not_found|\bmodel\b[^.]{0,80}\b(?:not found|does not exist)/i.test(msg)
+}
+
 /** Exponential backoff with full jitter, in ms. `rand` is injectable for tests. */
 export function backoffDelayMs(
   attempt: number,

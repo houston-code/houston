@@ -1062,6 +1062,24 @@ describe('runTui', () => {
     expect(t.text()).toContain('Bye.')
   })
 
+  it('/model marks a model its provider answered "not found" for', async () => {
+    const { d } = deps([], {
+      providers: [
+        {
+          id: 'anthropic',
+          requiresKey: true,
+          hasKey: true,
+          models: [{ id: 'claude' }, { id: 'claude-haiku-4-3', unavailableAt: '2026-10-20' }],
+          defaultModel: 'claude'
+        }
+      ] as unknown as AppSettings['providers']
+    })
+    const t = fakeIo(['/model', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('anthropic: claude, claude-haiku-4-3 (not found)')
+  })
+
   it('prints one end-of-turn cost summary, not a line per model round', async () => {
     const { d } = deps([
       { runId: 'x', type: 'text', delta: 'working' },

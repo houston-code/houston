@@ -50,6 +50,11 @@ export interface AgentHost {
   getMcpOAuth?(serverId: string): McpOAuthTokens | null
   /** Persist an MCP server's OAuth token set; `null` signs the server out. */
   setMcpOAuth?(serverId: string, tokens: McpOAuthTokens | null): void
+  /**
+   * Flag (or clear) a model its provider answered "not found" for, so the model
+   * pickers can mark it. Optional: a host that can't write settings just doesn't flag.
+   */
+  setModelUnavailable?(providerId: string, modelId: string, unavailable: boolean): void
 }
 
 let host: AgentHost | null = null
@@ -83,6 +88,15 @@ export function getSettings(): AppSettings {
 
 export function addPermissionRule(rule: PermissionRule): AppSettings {
   return requireHost().addPermissionRule(rule)
+}
+
+/** See {@link AgentHost.setModelUnavailable}. Best effort: never fails the run. */
+export function setModelUnavailable(providerId: string, modelId: string, unavailable: boolean): void {
+  try {
+    requireHost().setModelUnavailable?.(providerId, modelId, unavailable)
+  } catch {
+    // A settings write that fails must not turn a clear error into a crash.
+  }
 }
 
 export function getKey(providerId: string): string | null {

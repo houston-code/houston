@@ -479,6 +479,33 @@ export function updateSettings(patch: Partial<AppSettings>): AppSettings {
 }
 
 /**
+ * Flag a model its provider answered "not found" for (`unavailable`), or clear the flag
+ * once it answers again. A no-op when the model isn't in that provider's list (a
+ * run-only override) or the flag already matches, so a turn never rewrites settings
+ * for nothing.
+ */
+export function setModelUnavailable(
+  providerId: string,
+  modelId: string,
+  unavailable: boolean,
+  today: Date = new Date()
+): void {
+  const current = getSettings()
+  const provider = current.providers.find((p) => p.id === providerId)
+  const model = provider?.models.find((m) => m.id === modelId)
+  if (!provider || !model || !!model.unavailableAt === unavailable) return
+  const next = unavailable
+    ? { ...model, unavailableAt: today.toISOString().slice(0, 10) }
+    : (({ unavailableAt: _cleared, ...rest }) => rest)(model)
+  saveSettings({
+    ...current,
+    providers: current.providers.map((p) =>
+      p.id === providerId ? { ...p, models: p.models.map((m) => (m.id === modelId ? next : m)) } : p
+    )
+  })
+}
+
+/**
  * Persist a permission rule from an in-prompt "Always allow" / "Always deny" choice.
  * Prepended so it wins over the user's existing (often broader) rules, and deduped so
  * repeated clicks don't pile up identical rules. Returns the updated settings (or the

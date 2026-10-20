@@ -3,6 +3,7 @@ import {
   abortableSleep,
   backoffDelayMs,
   describeProviderError,
+  isModelNotFoundError,
   isRetryableError,
   isToolsUnsupportedError,
   MAX_PROVIDER_RETRIES,
@@ -17,6 +18,41 @@ import {
 function apiError(status: number, message = 'boom', headers?: Record<string, string>): Error {
   return Object.assign(new Error(message), { status, ...(headers ? { headers } : {}) })
 }
+
+describe('isModelNotFoundError', () => {
+  it("recognizes each provider's 404 for a model it doesn't serve", () => {
+    const anthropic = apiError(
+      404,
+      '404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-haiku-4-3"},"request_id":"req_1"}'
+    )
+    expect(isModelNotFoundError(anthropic, 'claude-haiku-4-3')).toBe(true)
+    const openai = apiError(404, '404 The model `gpt-9` does not exist or you do not have access to it.')
+    expect(isModelNotFoundError(openai, 'gpt-9')).toBe(true)
+    const gemini = apiError(
+      404,
+      'models/gemini-0-flash is not found for API version v1beta, or is not supported for generateContent.'
+    )
+    expect(isModelNotFoundError(gemini, 'gemini-0-flash')).toBe(true)
+    const ollama = apiError(404, 'model "qwen9" not found, try pulling it first')
+    expect(isModelNotFoundError(ollama, 'qwen9')).toBe(true)
+  })
+
+  it('recognizes a model-not-found code even when the message spells the id differently', () => {
+    expect(isModelNotFoundError(apiError(404, '{"code":"model_not_found"}'), 'my-model')).toBe(true)
+  })
+
+  it('reads a status embedded in the message when the error carries none', () => {
+    expect(isModelNotFoundError(new Error('404 model: claude-x not found'), 'claude-x')).toBe(true)
+  })
+
+  it('is false for a bare 404 that names no model (a wrong base URL), and for other statuses', () => {
+    expect(isModelNotFoundError(apiError(404, '404 Not Found'), 'claude-x')).toBe(false)
+    expect(isModelNotFoundError(apiError(404, '<html>Cannot POST /v1/chat</html>'), 'claude-x')).toBe(false)
+    expect(isModelNotFoundError(apiError(400, 'model: claude-x is invalid'), 'claude-x')).toBe(false)
+    expect(isModelNotFoundError(apiError(401, 'invalid x-api-key'), 'claude-x')).toBe(false)
+    expect(isModelNotFoundError(new Error('fetch failed'), 'claude-x')).toBe(false)
+  })
+})
 
 describe('isToolsUnsupportedError', () => {
   it('matches the Ollama "does not support tools" 400', () => {
