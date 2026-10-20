@@ -13,6 +13,7 @@ import {
   type PressKey,
   type Rect
 } from './agent/viewlocalhost'
+import { markHelperWindow } from './helperWindows'
 
 /**
  * Electron-backed `open` factory for the `view_localhost` agent tool — the real
@@ -320,6 +321,7 @@ async function openElectronWindow(opts: {
       backgroundThrottling: false
     }
   })
+  markHelperWindow(win)
   const wc = win.webContents
   // Offscreen windows only paint into their bitmap when given a frame rate.
   wc.setFrameRate(30)

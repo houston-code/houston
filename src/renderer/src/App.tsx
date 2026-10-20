@@ -93,6 +93,7 @@ import { ConnectModel, providerShortName } from './components/ConnectModel'
 import { TipHost } from './components/TipHost'
 import { ImageViewer } from './components/ImageViewer'
 import { ImageViewerContext, workspaceRelativePath, type ImageViewerApi, type ViewerImage } from './lib/imageViewer'
+import { VisualsContext } from './lib/visuals'
 import { useOnboarding } from './hooks/useOnboarding'
 import {
   markTipsSeen,
@@ -185,6 +186,8 @@ export default function App(): JSX.Element {
   const [helpOpen, setHelpOpen] = useState(false)
   // The full-size image viewer (a show_images gallery or a tool-card screenshot).
   const [viewer, setViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null)
+  // Inline visuals in replies: running interactive HTML is the user's opt-in.
+  const visualsSettings = useMemo(() => ({ html: settings?.htmlVisuals === true }), [settings?.htmlVisuals])
   const imageViewerApi = useMemo<ImageViewerApi>(
     () => ({ open: (images, index) => setViewer(images.length ? { images, index } : null) }),
     []
@@ -1827,6 +1830,7 @@ export default function App(): JSX.Element {
 
   return (
     <ImageViewerContext.Provider value={imageViewerApi}>
+    <VisualsContext.Provider value={visualsSettings}>
     <div
       className="app"
       ref={appRef}
@@ -2254,6 +2258,7 @@ export default function App(): JSX.Element {
         />
       )}
     </div>
+    </VisualsContext.Provider>
     </ImageViewerContext.Provider>
   )
 }

@@ -129,6 +129,7 @@ import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps, sideChatV
 import { setSchedulerBackend } from './agent/scheduler'
 import { appendUserTurn } from './agent/userTurn'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
+import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 
 /** Longest pasted key accepted by testKey; real provider keys are far shorter. */
 const MAX_TEST_KEY_LENGTH = 4096
@@ -520,6 +521,19 @@ export function registerIpc(): void {
     if (result.canceled || result.filePaths.length === 0) return []
     return result.filePaths.slice(0, MAX_ATTACHMENT_FILES).map(readPickedFile)
   })
+
+  // Inline visuals: Mermaid renders in the main process's locked-down window (never
+  // in the app renderer); HTML visuals are registered for their sandboxed frames only
+  // while the user has them turned on.
+  wireHtmlVisualProtocol()
+  ipcMain.handle(IPC.visualMermaid, async (_event, source: unknown, theme: unknown) => {
+    const req = parseMermaidRequest(source, theme)
+    if (!req) return { error: 'The diagram is empty or too large to render.' }
+    return renderMermaid(req.source, req.theme)
+  })
+  ipcMain.handle(IPC.visualRegisterHtml, (_event, html: unknown): string | null =>
+    getSettings().htmlVisuals === true ? registerHtmlVisual(html) : null
+  )
 
   // Image viewer: copy the shown image to the clipboard. The renderer only ever holds
   // image data URLs it was sent, but this is still an IPC boundary, so the payload is

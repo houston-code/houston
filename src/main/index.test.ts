@@ -63,11 +63,13 @@ describe('main entry app identity', () => {
     )
   })
 
-  it('registers the render_mockup page scheme before whenReady, as Electron requires', async () => {
+  it('registers every private scheme in one call before whenReady, as Electron requires', async () => {
     await import('./index')
 
+    expect(registerSchemesAsPrivileged).toHaveBeenCalledTimes(1)
     expect(registerSchemesAsPrivileged).toHaveBeenCalledWith([
-      expect.objectContaining({ scheme: 'houston-mockup', privileges: expect.objectContaining({ standard: true, secure: true }) })
+      expect.objectContaining({ scheme: 'houston-mockup', privileges: expect.objectContaining({ standard: true, secure: true }) }),
+      expect.objectContaining({ scheme: 'houston-visual', privileges: expect.objectContaining({ standard: true, secure: true }) })
     ])
     expect(registerSchemesAsPrivileged.mock.invocationCallOrder[0]).toBeLessThan(
       whenReady.mock.invocationCallOrder[0]

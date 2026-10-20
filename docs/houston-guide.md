@@ -338,6 +338,25 @@ tests pass and the receipt says no tests ran, believe the receipt.
 - **What it costs.** Nothing: no extra model calls and no extra commands. It only
   reads what already ran.
 
+## Diagrams and visuals in replies
+
+In the desktop app, the agent can answer with pictures as well as text. A
+` ```mermaid ` block in a reply (a flowchart, sequence, state, or entity diagram) is
+drawn as a diagram, and an ` ```svg ` block as an image; each has a Rendered/Code
+switch, so the source is always one click away. Diagrams follow the app's light or
+dark theme, and one that doesn't parse shows the error above its source. Mermaid runs
+in a separate hidden window that can't reach the network, never in the app itself,
+and the result is shown as an image, so nothing in it can run.
+
+Interactive visuals are off by default. Turn on "Run interactive visuals in the chat"
+in Settings (Appearance) to let an ` ```html visual ` block run: a small chart with
+controls or a widget to try, in a sandboxed frame with no access to the app, no
+network, no forms, popups, or navigation, and its own process, so a misbehaving one
+can't freeze the chat. With it on, plain ` ```html ` blocks also get a Preview button.
+At most three run at once; the rest wait behind a Run button.
+
+In the terminal these blocks stay code, with a line pointing at the desktop app.
+
 ## Editing files while it works
 
 You can keep working in your own editor while a turn runs. Before the agent

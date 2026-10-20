@@ -200,7 +200,7 @@ function AssistantMessage({
       )}
       {(text || !reasoning) && (
         <div className="msg__body">
-          <Markdown text={text} />
+          <Markdown text={text} visuals />
           {streaming && <span className="md-cursor" />}
         </div>
       )}

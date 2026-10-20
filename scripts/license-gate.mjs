@@ -16,7 +16,8 @@
 //     repo's tree, so no exception can allow them.
 //
 //  2. SHIP ALLOWLIST (default-deny for everything that ships): every package in
-//     the production closure (`npm ls --omit=dev`) plus the vendored CLI binaries
+//     the production closure (`npm ls --omit=dev`) plus the vendored CLI binaries and
+//     the dependency subtrees of vendored JavaScript bundles (vendored-js.mjs)
 //     must satisfy the permissive allowlist below. Anything else — GPL/LGPL/MPL,
 //     an unrecognized spelling, a missing license field — fails until it is either
 //     added to the allowlist (a reviewed policy change) or granted a named
@@ -43,6 +44,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { VENDORED_BINARIES, normalizeLicense, readLicenseText } from './generate-notices.mjs'
+import { vendoredJsDirs } from './vendored-js.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ROOT = resolve(__dirname, '..')
@@ -299,7 +301,9 @@ function closureDirs(omitDev) {
 }
 
 function collectEntries() {
-  const prodDirs = closureDirs(true)
+  // Vendored JS bundles (mermaid) come from devDependencies but ship, so their
+  // subtrees are held to the production policy.
+  const prodDirs = new Set([...closureDirs(true), ...vendoredJsDirs(ROOT)])
   const allDirs = closureDirs(false)
   const byKey = new Map()
   for (const dir of allDirs) {

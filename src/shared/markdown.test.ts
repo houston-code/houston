@@ -124,12 +124,24 @@ describe('parseMarkdown blocks', () => {
 
   it('parses a fenced code block with a language and preserves contents verbatim', () => {
     const blocks = parseMarkdown('```ts\nconst x = 1\n# not a heading\n```')
-    expect(blocks[0]).toEqual({ type: 'code', lang: 'ts', value: 'const x = 1\n# not a heading' })
+    expect(blocks[0]).toEqual({ type: 'code', lang: 'ts', value: 'const x = 1\n# not a heading', info: 'ts', closed: true })
+  })
+
+  it('keeps the whole info string and marks the fence closed', () => {
+    const [b] = parseMarkdown('```html  visual \n<p>x</p>\n```')
+    expect(b).toMatchObject({ type: 'code', lang: 'html', info: 'html  visual', closed: true })
+    const [t] = parseMarkdown('~~~mermaid\nflowchart LR\n~~~')
+    expect(t).toMatchObject({ lang: 'mermaid', closed: true })
+  })
+
+  it('treats a shorter inner fence as content, so a nested block stays open until its own fence', () => {
+    const [b] = parseMarkdown('````md\n```svg\n<svg/>\n```\n````')
+    expect(b).toMatchObject({ lang: 'md', closed: true, value: '```svg\n<svg/>\n```' })
   })
 
   it('parses an unfinished fence to end of input', () => {
     const blocks = parseMarkdown('```\nstill code')
-    expect(blocks[0]).toEqual({ type: 'code', lang: '', value: 'still code' })
+    expect(blocks[0]).toEqual({ type: 'code', lang: '', value: 'still code', info: '', closed: false })
   })
 
   it('parses an unordered list', () => {

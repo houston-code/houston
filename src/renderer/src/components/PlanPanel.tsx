@@ -231,13 +231,13 @@ export function PlanPanel({
           <>
             {plan.body ? (
               <div className="plan-panel__markdown">
-                <Markdown text={effectiveBody} />
+                <Markdown text={effectiveBody} visuals />
               </div>
             ) : (
               <>
                 {plan.overview && (
                   <div className="plan-panel__overview">
-                    <Markdown text={plan.overview} />
+                    <Markdown text={plan.overview} visuals />
                   </div>
                 )}
                 {plan.steps && plan.steps.length > 0 && (

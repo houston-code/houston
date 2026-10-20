@@ -414,3 +414,23 @@ describe('buildSystemPrompt', () => {
     })
   })
 })
+
+describe('inline visuals line', () => {
+  const desktop = (visuals?: { html: boolean }): string =>
+    buildSystemPrompt('/tmp/x', undefined, undefined, false, undefined, undefined, undefined, undefined, undefined, undefined, visuals)
+
+  it('teaches mermaid and svg where the client draws them', () => {
+    const p = desktop({ html: false })
+    expect(p).toContain('a ```mermaid block')
+    expect(p).toContain('a ```svg block')
+    expect(p).not.toContain('html visual')
+  })
+
+  it('mentions interactive HTML only when the user turned it on', () => {
+    expect(desktop({ html: true })).toContain('a ```html visual block')
+  })
+
+  it('says nothing about visuals to a terminal client', () => {
+    expect(desktop(undefined)).not.toContain('```mermaid')
+  })
+})

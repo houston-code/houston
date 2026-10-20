@@ -2176,6 +2176,18 @@ export function SettingsModal({
                       <option value="light">Light</option>
                     </select>
                   </label>
+                  <label className="field field--checkbox">
+                    <input
+                      type="checkbox"
+                      checked={settings.htmlVisuals ?? false}
+                      onChange={(e) => setSettings((s) => ({ ...s, htmlVisuals: e.target.checked }))}
+                    />
+                    <span>
+                      Run interactive visuals in the chat. When the agent writes an HTML visual (a small
+                      chart or control you can interact with), run it in a sandboxed frame with no network
+                      access. Diagrams and images show either way. Off by default.
+                    </span>
+                  </label>
                 </SettingsSection>
 
                 <SettingsSection title="Notifications">
