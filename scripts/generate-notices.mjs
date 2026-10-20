@@ -16,7 +16,7 @@
 // production dependencies, and commit the regenerated THIRD-PARTY-NOTICES.md.
 
 import { execFileSync } from 'node:child_process'
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join, dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { vendoredJsDirs } from './vendored-js.mjs'
@@ -67,18 +67,28 @@ export function homepageOf(pkg) {
   return ''
 }
 
-const LICENSE_FILES = [
-  'LICENSE', 'LICENSE.md', 'LICENSE.txt', 'LICENCE', 'LICENCE.md',
-  'License', 'License.md', 'license', 'license.md', 'COPYING', 'NOTICE'
-]
+// Matched without regard to case, in this order. The filesystem must not decide: macOS
+// ignores case and Linux doesn't, so a package shipping `license.txt` would otherwise get
+// its text on one and not the other, and the file would differ by where it was generated.
+const LICENSE_FILES = ['license', 'license.md', 'license.txt', 'licence', 'licence.md', 'copying', 'notice']
+
+function listDir(dir) {
+  try {
+    return readdirSync(dir)
+  } catch {
+    return []
+  }
+}
 
 /** Read the first license/notice file found in a package dir, or null. */
-export function readLicenseText(dir, { exists = existsSync, read = readFileSync } = {}) {
-  for (const f of LICENSE_FILES) {
-    const p = join(dir, f)
-    if (exists(p)) {
+export function readLicenseText(dir, { list = listDir, read = readFileSync } = {}) {
+  // Sorted so that, where both exist, `LICENSE` is read before `license` on every platform.
+  const files = [...list(dir)].sort()
+  for (const want of LICENSE_FILES) {
+    for (const f of files) {
+      if (f.toLowerCase() !== want) continue
       try {
-        const t = read(p, 'utf8').trim()
+        const t = read(join(dir, f), 'utf8').trim()
         if (t) return t
       } catch {
         // Unreadable; try the next candidate.

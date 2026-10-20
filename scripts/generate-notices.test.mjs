@@ -52,24 +52,35 @@ describe('homepageOf', () => {
 describe('readLicenseText', () => {
   const dir = '/pkg'
   it('returns the first non-empty license file found', () => {
-    const exists = (p) => p === join(dir, 'LICENSE')
     const read = () => '  MIT License\n(c) X  '
-    expect(readLicenseText(dir, { exists, read })).toBe('MIT License\n(c) X')
+    expect(readLicenseText(dir, { list: () => ['index.js', 'LICENSE'], read })).toBe('MIT License\n(c) X')
   })
 
   it('skips an empty file and keeps looking', () => {
     const seen = []
-    const exists = (p) => p === join(dir, 'LICENSE') || p === join(dir, 'COPYING')
     const read = (p) => {
       seen.push(p)
       return p.endsWith('COPYING') ? 'real text' : '   '
     }
-    expect(readLicenseText(dir, { exists, read })).toBe('real text')
+    expect(readLicenseText(dir, { list: () => ['COPYING', 'LICENSE'], read })).toBe('real text')
     expect(seen).toContain(join(dir, 'LICENSE'))
   })
 
+  it('finds a license file whatever its case, on any filesystem', () => {
+    for (const name of ['license.txt', 'License.txt', 'LICENSE.TXT', 'Licence', 'license.MD']) {
+      expect(readLicenseText(dir, { list: () => [name], read: (p) => p }), name).toBe(join(dir, name))
+    }
+  })
+
+  it('prefers the plain license file to a .txt one, and the upper-case name on a tie', () => {
+    const read = (p) => p
+    expect(readLicenseText(dir, { list: () => ['license.txt', 'License'], read })).toBe(join(dir, 'License'))
+    expect(readLicenseText(dir, { list: () => ['license', 'LICENSE'], read })).toBe(join(dir, 'LICENSE'))
+  })
+
   it('returns null when no license file exists', () => {
-    expect(readLicenseText(dir, { exists: () => false, read: () => '' })).toBeNull()
+    expect(readLicenseText(dir, { list: () => ['README.md'], read: () => '' })).toBeNull()
+    expect(readLicenseText('/does/not/exist')).toBeNull()
   })
 })
 
