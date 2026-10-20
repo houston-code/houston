@@ -12,7 +12,8 @@ import {
   configureSetKey,
   getProvider,
   getSettings,
-  saveSettings
+  saveSettings,
+  setModelUnavailable
 } from '../main/store'
 import { setUserDataDir } from '../main/userData'
 import { isSandboxed } from '../main/sandbox'
@@ -167,7 +168,8 @@ export function wireCliHost(): void {
     getSecretHeaders: (scope) => cliGetHeaders(scope),
     collectSecrets: () => cliCollectSecrets(),
     getMcpOAuth: (serverId) => cliGetMcpOAuth(serverId),
-    setMcpOAuth: (serverId, tokens) => cliSetMcpOAuth(serverId, tokens)
+    setMcpOAuth: (serverId, tokens) => cliSetMcpOAuth(serverId, tokens),
+    setModelUnavailable
   })
 }
 

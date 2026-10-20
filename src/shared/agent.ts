@@ -1108,5 +1108,15 @@ export type AgentEvent =
       perModel?: ModelUsage[]
     }
   | { runId: string; type: 'done'; stopReason: StopReason }
-  | { runId: string; type: 'error'; message: string }
+  | {
+      runId: string
+      type: 'error'
+      message: string
+      /**
+       * Set when the run failed because the provider doesn't serve this model id. The
+       * loop has already flagged it in settings (`ModelOption.unavailableAt`); a client
+       * holding its own copy of settings re-reads them so its picker shows the flag.
+       */
+      modelUnavailable?: { providerId: string; model: string }
+    }
 

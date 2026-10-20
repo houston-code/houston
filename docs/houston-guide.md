@@ -77,6 +77,12 @@ by the OS keychain and never touch the renderer. The selection is shared across
 clients: picking a model in the desktop app or switching with `/model` in the
 terminal saves it as the default for future sessions.
 
+If a provider answers that it doesn't serve a model (the id is mistyped, the model
+was retired, or your key can't use it), the turn ends with a message saying so
+instead of the raw error, and the model is marked "Not found" in the picker
+("(not found)" in `/model`) until it answers a request again. Pick another model
+and retry.
+
 ### Claude through your cloud account
 
 If your Claude access runs through a cloud account rather than an Anthropic API
@@ -161,7 +167,8 @@ appeared is discarded before Houston switches, so a fallback never splices two
 models' output together, and it tells you in the transcript when a reply came
 from a fallback. A request that failed for its own reasons (a bad key, a
 malformed request) is not retried on another model, since it would fail there
-too. Leave the list unset to have a failing model simply end the turn.
+too. A model the provider doesn't serve does move on to the next one. Leave the
+list unset to have a failing model simply end the turn.
 
 ## Slash commands
 

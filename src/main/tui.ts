@@ -3875,7 +3875,9 @@ function handleInfoCommand(
     for (const p of settings.providers) {
       const ready = !p.requiresKey || p.hasKey
       const flag = ready ? '' : paint(' (no key)', 'yellow')
-      const models = p.models.map((m) => m.id).join(', ') || paint('none', 'dim')
+      const models =
+        p.models.map((m) => (m.unavailableAt ? `${m.id} ${paint('(not found)', 'yellow')}` : m.id)).join(', ') ||
+        paint('none', 'dim')
       deps.io.out(`  ${paint(p.id, 'cyan')}${flag}: ${models}\n`)
     }
     if (settings.providers.some((p) => p.requiresKey && !p.hasKey)) {

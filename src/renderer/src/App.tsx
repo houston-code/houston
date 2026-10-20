@@ -279,6 +279,17 @@ export default function App(): JSX.Element {
     if (!chat.running) void refreshConversations()
   }, [chat.running, refreshConversations])
 
+  // A run that failed because its provider doesn't serve the model has flagged that model
+  // in settings; re-read just the provider lists so the picker shows the flag right away.
+  useEffect(() => {
+    return window.api.onAgentEvent((e) => {
+      if (e.type !== 'error' || !e.modelUnavailable) return
+      void window.api.getSettings().then((fresh) => {
+        setSettings((s) => (s ? { ...s, providers: fresh.providers } : s))
+      })
+    })
+  }, [])
+
   // A model-generated title lands a few seconds into the first run — patch it straight into
   // the list (and the header, which derives from it) rather than waiting for a refetch.
   useEffect(() => {

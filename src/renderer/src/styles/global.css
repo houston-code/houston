@@ -910,6 +910,17 @@ body.is-resizing {
   font-weight: 700;
   vertical-align: 1px;
 }
+/* A model its provider answered "not found" for (ModelOption.unavailableAt). */
+.model-menu__unavailable {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--warn);
+  border-radius: 3px;
+  color: var(--warn);
+  font-size: 9.5px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
 /* One line naming the providers with no models yet, instead of an empty group each. */
 .model-menu__footnote {
   padding: 6px 9px 3px;

@@ -72,6 +72,8 @@ const h = vi.hoisted(() => ({
   // Rules captured from the addPermissionRule mock, so tests can assert what an
   // "Always allow/deny" decision persisted.
   addedRules: [] as unknown[],
+  // Calls to the setModelUnavailable host mock (a model flagged / cleared "not found").
+  unavailableCalls: [] as Array<{ providerId: string; model: string; unavailable: boolean }>,
   // A stub verification runner the verify-gate mock delegates to, so tests can
   // script pass/fail/abort per pass without spawning a real shell. Null means the
   // real runner (unused in these tests). `verifyRuns` records each invocation.
@@ -128,7 +130,10 @@ vi.mock('../agentHost', () => ({
       builtIn: true
     },
   getKey: () => null,
-  collectSecrets: () => h.secrets
+  collectSecrets: () => h.secrets,
+  setModelUnavailable: (providerId: string, model: string, unavailable: boolean) => {
+    h.unavailableCalls.push({ providerId, model, unavailable })
+  }
 }))
 // The admin managed policy normally reads a fixed root-owned system path; in tests
 // we inject its rules through the hoisted holder instead of touching the real path.
@@ -261,6 +266,7 @@ beforeEach(() => {
   h.pluginEvents = []
   h.pluginThrowOn = null
   h.addedRules = []
+  h.unavailableCalls = []
   h.secrets = []
   h.verifyRunner = null
   h.verifyRuns = []
@@ -1299,6 +1305,73 @@ describe('startRun', () => {
     expect(msg).toContain("doesn't support tool calling")
     expect(msg).toContain('qwen2.5-coder')
     expect(msg).not.toContain('registry.ollama.ai') // the opaque raw string is replaced
+  })
+
+  describe('a model the provider does not serve', () => {
+    const notFound = {
+      type: 'error' as const,
+      message: '404 {"type":"error","error":{"type":"not_found_error","message":"model: claude-test"}}',
+      status: 404
+    }
+
+    it('explains it, flags the model, and does not retry', async () => {
+      const r = await run({ turns: [[notFound]] })
+      expect(types(r)).not.toContain('retry')
+      const last = r.events.at(-1) as { type: string; message: string; modelUnavailable?: unknown }
+      expect(last.type).toBe('error')
+      expect(last.message).toContain('doesn\'t recognize the model "claude-test"')
+      expect(last.message).toContain('Pick another model and retry')
+      expect(last.message).not.toContain('not_found_error') // the raw 404 body is replaced
+      expect(last.modelUnavailable).toEqual({ providerId: 'anthropic', model: 'claude-test' })
+      expect(h.unavailableCalls).toEqual([{ providerId: 'anthropic', model: 'claude-test', unavailable: true }])
+    })
+
+    it('hops to the next model in the chain, which can still serve the turn', async () => {
+      h.extraConfigs.fb = {
+        id: 'fb',
+        kind: 'anthropic',
+        label: 'Backup',
+        models: [{ id: 'm2' }],
+        requiresKey: false,
+        hasKey: true,
+        builtIn: false
+      }
+      h.extraClients.fb = scripted([[{ type: 'text', text: 'from backup' }, { type: 'done', stopReason: 'end_turn' }]])
+      h.settings.fallbackModels = [{ providerId: 'fb', model: 'm2' }]
+      const r = await run({ turns: [[notFound]] })
+      const hop = r.events.find((e) => e.type === 'model_fallback') as { reason: string } | undefined
+      expect(hop?.reason).toContain('"claude-test" isn\'t available')
+      expect(types(r).at(-1)).toBe('done')
+      expect(h.unavailableCalls).toEqual([{ providerId: 'anthropic', model: 'claude-test', unavailable: true }])
+    })
+
+    it('treats a bare 404 that names no model as an ordinary error', async () => {
+      const r = await run({ turns: [[{ type: 'error', message: '404 Not Found', status: 404 }]] })
+      const last = r.events.at(-1) as { type: string; message: string; modelUnavailable?: unknown }
+      expect(last.type).toBe('error')
+      expect(last.message).toContain('404 Not Found')
+      expect(last.modelUnavailable).toBeUndefined()
+      expect(h.unavailableCalls).toEqual([])
+    })
+
+    it('clears the flag once the model answers again', async () => {
+      const prev = h.settings.providers
+      h.settings.providers = [
+        { id: 'anthropic', kind: 'anthropic', label: 'A', models: [{ id: 'claude-test', unavailableAt: '2026-10-20' }] }
+      ]
+      try {
+        const r = await run({ turns: [[{ type: 'text', text: 'hi' }, { type: 'done', stopReason: 'end_turn' }]] })
+        expect(types(r).at(-1)).toBe('done')
+        expect(h.unavailableCalls).toEqual([{ providerId: 'anthropic', model: 'claude-test', unavailable: false }])
+      } finally {
+        h.settings.providers = prev
+      }
+    })
+
+    it('leaves settings alone when a model that was never flagged answers', async () => {
+      await run({ turns: [[{ type: 'text', text: 'hi' }, { type: 'done', stopReason: 'end_turn' }]] })
+      expect(h.unavailableCalls).toEqual([])
+    })
   })
 
   it('recovers from a context-overflow error by force-compacting older turns', async () => {

@@ -347,9 +347,11 @@ export function ModelPicker({
                   const chips = capChips(m)
                   const price = priceOf(m)
                   const fresh = isNew(m, today)
+                  const missing = !!m.unavailableAt
                   const name = modelName(provider.kind, m)
                   const spoken = [
                     name,
+                    missing && `not found by ${provider.label}`,
                     win && `${win} context`,
                     ...chips.map((c) => c.spoken),
                     price?.spoken,
@@ -380,6 +382,15 @@ export function ModelPicker({
                         {fresh && (
                           <span className="model-menu__new" aria-hidden="true">
                             New
+                          </span>
+                        )}
+                        {missing && (
+                          <span
+                            className="model-menu__unavailable"
+                            aria-hidden="true"
+                            title={`${provider.label} answered "not found" for this model on ${m.unavailableAt}. It may be mistyped, retired, or not available to your key.`}
+                          >
+                            Not found
                           </span>
                         )}
                       </span>

@@ -214,6 +214,27 @@ describe('ModelPicker', () => {
     expect(screen.getAllByText('New')).toHaveLength(2)
   })
 
+  it('flags a model its provider answered "not found" for, in the label and aloud', () => {
+    const settings = {
+      providers: [
+        provider({
+          id: 'anthropic',
+          kind: 'anthropic',
+          label: 'Anthropic (Claude)',
+          models: [{ id: 'claude-haiku-4-5' }, { id: 'claude-haiku-4-3', unavailableAt: '2026-10-20' }]
+        })
+      ]
+    } as unknown as AppSettings
+    renderPicker({ settings, selected: null })
+    fireEvent.click(screen.getByRole('combobox'))
+    const flagged = screen.getAllByRole('option').filter((o) => /not found by/.test(o.getAttribute('aria-label') ?? ''))
+    expect(flagged).toHaveLength(1)
+    expect(flagged[0].getAttribute('aria-label')).toMatch(/, not found by Anthropic \(Claude\)/)
+    const badge = within(flagged[0]).getByText('Not found')
+    expect(badge.getAttribute('title')).toContain('2026-10-20')
+    expect(screen.getAllByText('Not found')).toHaveLength(1)
+  })
+
   it('marks a price that rises for long prompts, and reads the higher rate aloud', () => {
     const settings = {
       providers: [provider({ id: 'anthropic', kind: 'anthropic', label: 'Anthropic (Claude)', models: [{ id: 'claude-haiku-5-5' }] })]

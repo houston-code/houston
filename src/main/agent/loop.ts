@@ -39,7 +39,14 @@ import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaul
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
 import { hostPlatform, installHost } from './installHost'
 import { resolveContextWindow, turnCostUsd } from '@shared/usage'
-import { addPermissionRule, collectSecrets, getKey, getProvider, getSettings } from '../agentHost'
+import {
+  addPermissionRule,
+  collectSecrets,
+  getKey,
+  getProvider,
+  getSettings,
+  setModelUnavailable
+} from '../agentHost'
 import { createSecretRedactor } from './redact'
 import { runQuarantineExtraction } from './untrusted'
 import { createProvider } from '../providers'
@@ -76,6 +83,7 @@ import { coerceToolArgs, validateToolArgs, validationError } from './argValidati
 import {
   abortableSleep,
   describeProviderError,
+  isModelNotFoundError,
   isRetryableError,
   isToolsUnsupportedError,
   MAX_PROVIDER_RETRIES,
@@ -912,6 +920,14 @@ export async function startRun(
 
     // This run's own overrides (headless flags) laid over the saved settings.
     const settings = applyRunOverrides(getSettings(), req.overrides)
+    // Models flagged "not found" (`unavailableAt`), as the run started plus any it
+    // flags itself; one that then answers has its flag cleared (see the stream loop).
+    const modelKey = (providerId: string, model: string): string => `${providerId}\0${model}`
+    const flaggedModels = new Set(
+      (settings.providers ?? []).flatMap((p) =>
+        p.models.filter((m) => m.unavailableAt).map((m) => modelKey(p.id, m.id))
+      )
+    )
     const rules = await loadProjectRules(workspace)
     // Permission-rule precedence, highest first (first match wins):
     //   1. Admin managed policy — org-distributed, root-owned; deny/ask only.
@@ -2506,6 +2522,10 @@ export async function startRun(
               throw providerStreamError(ev)
             }
           }
+          // It answered, so a "not found" flag from an earlier failure no longer holds.
+          if (flaggedModels.delete(modelKey(route.providerId, route.model))) {
+            setModelUnavailable(route.providerId, route.model, false)
+          }
           break streaming // turn completed successfully
         } catch (e) {
           if (abort.signal.aborted) {
@@ -2552,6 +2572,29 @@ export async function startRun(
                 "The conversation is too large for this model's context window, even after " +
                 'compacting older messages. Start a new conversation, remove large attachments, ' +
                 'or switch to a model with a larger context window.'
+            })
+            return
+          }
+          // The provider doesn't serve this model id: mistyped, retired, or not open to
+          // this key. The raw 404 reads like a crash, so say what happened and flag the
+          // model so the pickers mark it. Unlike a malformed request, this is a property
+          // of the model alone, so the next model in the chain can still serve the turn.
+          if (!emitted && isModelNotFoundError(e, route.model)) {
+            const missing = route
+            setModelUnavailable(missing.providerId, missing.model, true)
+            flaggedModels.add(modelKey(missing.providerId, missing.model))
+            if (hopToFallback(`"${missing.model}" isn't available from its provider`)) {
+              sendMessages = buildWindow()
+              attempt = -1 // fresh transient-retry budget for the new model
+              continue streaming
+            }
+            const providerName = getProvider(missing.providerId)?.label ?? missing.providerId
+            emit({
+              type: 'error',
+              message:
+                `${providerName} doesn't recognize the model "${missing.model}": it may be mistyped, ` +
+                'retired, or not available to this key. Pick another model and retry.',
+              modelUnavailable: { providerId: missing.providerId, model: missing.model }
             })
             return
           }

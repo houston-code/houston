@@ -542,6 +542,46 @@ describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
   })
 })
 
+describe('setModelUnavailable — a model its provider answered "not found" for', () => {
+  const seed = (): void =>
+    writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o', 'gpt-9'])], permissionRules: [] })
+  // Migration backfills the default lineup too, so look at the two seeded models only.
+  const models = (s: { providers: { id: string; models: { id: string }[] }[] }): unknown[] =>
+    (s.providers.find((p) => p.id === 'openai')?.models ?? []).filter((m) => m.id === 'gpt-4o' || m.id === 'gpt-9')
+
+  it('flags the model with the date and persists it, leaving the others alone', async () => {
+    seed()
+    const { setModelUnavailable, getSettings } = await loadStore()
+    setModelUnavailable('openai', 'gpt-9', true, new Date('2026-10-20T12:00:00Z'))
+    expect(models(getSettings())).toEqual([{ id: 'gpt-4o' }, { id: 'gpt-9', unavailableAt: '2026-10-20' }])
+    vi.resetModules()
+    const reloaded = await loadStore()
+    expect(models(reloaded.getSettings())).toEqual([{ id: 'gpt-4o' }, { id: 'gpt-9', unavailableAt: '2026-10-20' }])
+  })
+
+  it('clears the flag', async () => {
+    seed()
+    const { setModelUnavailable, getSettings } = await loadStore()
+    setModelUnavailable('openai', 'gpt-9', true)
+    setModelUnavailable('openai', 'gpt-9', false)
+    expect(models(getSettings())).toEqual([{ id: 'gpt-4o' }, { id: 'gpt-9' }])
+  })
+
+  it('writes nothing for a model or provider that is not configured, or a flag that already matches', async () => {
+    seed()
+    const store = await loadStore()
+    const listener = vi.fn()
+    store.onSettingsSaved(listener)
+    store.setModelUnavailable('openai', 'not-listed', true)
+    store.setModelUnavailable('nope', 'gpt-9', true)
+    store.setModelUnavailable('openai', 'gpt-9', false)
+    expect(listener).not.toHaveBeenCalled()
+    store.setModelUnavailable('openai', 'gpt-9', true)
+    store.setModelUnavailable('openai', 'gpt-9', true)
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('recent workspaces — existence pruning', () => {
   it('rememberWorkspace fronts the path, dedupes, and keeps live entries in order', async () => {
     const a = mkdtempSync(join(tmpdir(), 'ws-a-'))
