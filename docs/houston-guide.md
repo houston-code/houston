@@ -1171,7 +1171,11 @@ On a first launch the welcome screen shows a three-step **Get started** checklis
 connect a model (paste an API key for Anthropic, OpenAI, or Gemini, which is checked
 with a live model listing before it is saved, or point at a local Ollama or LM Studio
 server), open a project folder, and send a first task. Each step ticks itself off from
-the app's real state, and **Skip setup** hides the checklist for good. While the
+the app's real state, and the checklist goes away for good once the first task is sent.
+When only that step is left, the cursor moves into the message box (which glows) and
+the step suggests a first task: "Explain how this project is organized." for a folder
+with files, or "Build a simple to-do list web page in this folder." for an empty one.
+While the
 checklist is open, each finished step shows what it set and has a **Change** button.
 On "Connect a model" it reopens the panel with the saved key (**Replace key** to swap
 it) and a model picker; on "Open a project folder" it reopens the folder picker. So you
@@ -1179,7 +1183,7 @@ can switch model, provider, or folder before your first task.
 
 A few one-time tips then point at controls the first time they matter: the approval
 mode, the **New worktree** toggle, and the message box (`@` files, `/` commands, `#`
-rules) before the first message, and **Revert** and **Changes** after the first turn
+rules) a couple of seconds before the first message (you can keep typing meanwhile), and **Revert** and **Changes** after the first turn
 that edits files. **Skip tips** or Esc dismisses them. **Take the tour** also covers
 steering (see "Typing while it works").
 If you used Houston before this feature, nothing appears on its own. Anyone can play

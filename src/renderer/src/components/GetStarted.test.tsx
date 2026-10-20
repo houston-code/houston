@@ -9,8 +9,7 @@ function setup(facts: Partial<ChecklistFacts> = {}, modelSummary?: string, folde
     modelSummary,
     folderSummary,
     onConnectModel: vi.fn(),
-    onChooseFolder: vi.fn(),
-    onSkip: vi.fn()
+    onChooseFolder: vi.fn()
   }
   render(<GetStarted {...props} />)
   return props
@@ -50,10 +49,23 @@ describe('GetStarted', () => {
     expect(screen.queryByRole('button', { name: /Connect|Choose folder/ })).not.toBeInTheDocument()
   })
 
-  it('can be skipped', () => {
-    const p = setup()
-    fireEvent.click(screen.getByRole('button', { name: 'Skip setup' }))
-    expect(p.onSkip).toHaveBeenCalledTimes(1)
+  it('has no way to skip setup: sending the first task is what finishes it', () => {
+    setup()
+    expect(screen.queryByRole('button', { name: /Skip/ })).not.toBeInTheDocument()
+  })
+
+  it('tells step 3 where to act, with an example suited to the folder', () => {
+    render(
+      <GetStarted
+        facts={{ modelReady: true, hasWorkspace: true, hasConversation: false }}
+        taskExample="Build a simple to-do list web page in this folder."
+        onConnectModel={vi.fn()}
+        onChooseFolder={vi.fn()}
+      />
+    )
+    expect(
+      screen.getByText(/Type it in the message box below and press ↵\. For example: .Build a simple to-do list web page in this folder\../)
+    ).toBeInTheDocument()
   })
 
   it('lets a finished step 1 be changed, showing what it connected', () => {

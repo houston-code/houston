@@ -9,7 +9,7 @@ import { checklistView, type ChecklistFacts, type ChecklistStep } from '@shared/
 const STEPS: { id: ChecklistStep; title: string; hint: string }[] = [
   { id: 'model', title: 'Connect a model', hint: 'Add an API key or use a local model.' },
   { id: 'folder', title: 'Open a project folder', hint: 'Houston works inside the folder you choose.' },
-  { id: 'task', title: 'Send your first task', hint: 'Try "Explain how this project is organized."' }
+  { id: 'task', title: 'Send your first task', hint: 'Type it in the message box below and press ↵.' }
 ]
 
 export interface GetStartedProps {
@@ -18,18 +18,19 @@ export interface GetStartedProps {
   modelSummary?: string
   /** The folder step 2 opened, e.g. "my-app", shown once it's done. */
   folderSummary?: string
+  /** An example first task suited to the folder, appended to step 3's hint. */
+  taskExample?: string
   onConnectModel: () => void
   onChooseFolder: () => void
-  onSkip: () => void
 }
 
 export function GetStarted({
   facts,
   modelSummary,
   folderSummary,
+  taskExample,
   onConnectModel,
-  onChooseFolder,
-  onSkip
+  onChooseFolder
 }: GetStartedProps): JSX.Element {
   const view = checklistView(facts)
   const action: Partial<Record<ChecklistStep, { label: string; run: () => void }>> = {
@@ -73,7 +74,12 @@ export function GetStarted({
                   {step.title}
                   {done && <span className="sr-only"> (done)</span>}
                 </span>
-                {!done && <span className="get-started__hint">{step.hint}</span>}
+                {!done && (
+                  <span className="get-started__hint">
+                    {step.hint}
+                    {step.id === 'task' && taskExample && <> For example: &ldquo;{taskExample}&rdquo;</>}
+                  </span>
+                )}
                 {redo?.summary && <span className="get-started__hint">{redo.summary}</span>}
               </span>
               {act && !done && (
@@ -94,11 +100,6 @@ export function GetStarted({
           )
         })}
       </ol>
-      <div className="get-started__foot">
-        <button type="button" className="get-started__skip" onClick={onSkip}>
-          Skip setup
-        </button>
-      </div>
     </section>
   )
 }

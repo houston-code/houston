@@ -543,6 +543,17 @@ describe('Composer + attachment menu', () => {
 
   // Steering: mid-run, a distinct action from the queue. The queue sends after the
   // run; a steer reaches the model before its next step.
+  describe('attention (first-run step 3)', () => {
+    it('moves the cursor into the box and adds the glow when it turns on', () => {
+      const props = baseProps({ disabled: true })
+      const { rerender, container } = render(<Composer {...props} />)
+      expect(container.querySelector('.composer--attention')).toBeNull()
+      rerender(<Composer {...baseProps({ disabled: false, attention: true })} />)
+      expect(document.activeElement).toBe(screen.getByRole('textbox'))
+      expect(container.querySelector('.composer--attention')).not.toBeNull()
+    })
+  })
+
   describe('steer', () => {
     it('always offers Steer while running (enabled, even when empty), and not otherwise', () => {
       const props = baseProps({ running: true, onSteer: vi.fn() })

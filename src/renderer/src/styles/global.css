@@ -1808,12 +1808,6 @@ body.is-resizing {
   font-size: 12px;
   color: var(--text-dim);
 }
-.get-started__foot {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 6px;
-}
-.get-started__skip,
 .coachmark__skip {
   border: 0;
   background: none;
@@ -1823,7 +1817,6 @@ body.is-resizing {
   color: var(--text-dim);
   cursor: pointer;
 }
-.get-started__skip:hover,
 .coachmark__skip:hover {
   color: var(--text);
 }
@@ -1952,7 +1945,6 @@ body.is-resizing {
   outline: 2px solid var(--accent) !important;
   outline-offset: 2px;
 }
-.get-started__skip:focus-visible,
 .coachmark__skip:focus-visible,
 .connect-model__tile:focus-visible {
   outline: none;
@@ -4169,6 +4161,16 @@ body.is-resizing .preview-dock__resizer::after {
   flex-shrink: 0;
   padding: 10px var(--chat-gap) 16px;
   width: 100%;
+}
+/* First-run step 3: the message box is the next step, so it glows. */
+.composer--attention .composer__card {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+/* While a tip is up, the checklist steps back so there's one thing to read. */
+body:has(.coachmark) .get-started {
+  opacity: 0.55;
+  transition: opacity 0.15s;
 }
 /* One rounded card holds the field, any attachments, and the action bar; the send
    button lives inside it (no separate external button). */

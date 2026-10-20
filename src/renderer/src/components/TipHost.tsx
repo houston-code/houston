@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { pickTip, TIP_IDS, type TipId } from '@shared/onboarding'
 import { Coachmark, tipAnchor } from './Coachmark'
+import { useDelayedFlag } from '../hooks/useDelayedFlag'
 
 /**
  * Chooses and shows the next coachmark: the first relevant, unseen tip whose anchor
@@ -13,6 +14,7 @@ export function TipHost({
   seen,
   suppressed,
   touring,
+  delayMs = 0,
   onSeen,
   onTourEnd
 }: {
@@ -21,6 +23,12 @@ export function TipHost({
   /** A modal or panel is open: hold tips until it closes. */
   suppressed: boolean
   touring: boolean
+  /**
+   * Wait this long after tips become relevant before showing them, so they arrive as
+   * a follow-up rather than in the same instant (focus stays where it is meanwhile).
+   * A requested tour is never delayed.
+   */
+  delayMs?: number
   onSeen: (ids: readonly TipId[]) => void
   onTourEnd: () => void
 }): JSX.Element | null {
@@ -30,7 +38,9 @@ export function TipHost({
   // Only watch the DOM while some relevant tip is still unseen; once onboarding is
   // done, an empty new chat (where tips are "relevant") costs nothing.
   const seenSet = new Set(seen ?? [])
-  const active = !suppressed && relevant.some((id) => !seenSet.has(id))
+  const settled = useDelayedFlag(relevant.length > 0, delayMs)
+  const active =
+    !suppressed && (touring || delayMs === 0 || settled) && relevant.some((id) => !seenSet.has(id))
 
   // A new set of relevant tips starts a new run (and a fresh "1 of N" counter).
   useEffect(() => setStepped([]), [relevantKey])
