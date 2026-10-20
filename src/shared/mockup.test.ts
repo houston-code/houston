@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_MOCKUP_VARIANTS, parseMockupArgs, parseMockupArgsSafe } from './mockup'
+import { MAX_MOCKUP_VARIANTS, parseMockupArgs, parseMockupArgsSafe, parseVariantList, parseVariantListSafe } from './mockup'
 
 describe('parseMockupArgs', () => {
   it('defaults to one desktop, light render', () => {
@@ -64,5 +64,23 @@ describe('parseMockupArgs', () => {
     expect(parseMockupArgsSafe(undefined)).toBeNull()
     expect(parseMockupArgsSafe({ file: 'x.png' })).toBeNull()
     expect(parseMockupArgsSafe({ file: 'x.html' })?.variants).toHaveLength(1)
+  })
+})
+
+describe('parseVariantList', () => {
+  it('refuses a per-variant query where the URL carries its own', () => {
+    expect(() => parseVariantList([{ query: '?a' }], { fullPage: false, allowQuery: false })).toThrow('put it in the URL')
+    expect(parseVariantList([{ query: '?a' }], { fullPage: false, allowQuery: true })[0].query).toBe('?a')
+  })
+
+  it('applies the full-page default to every variant that does not set it', () => {
+    const vs = parseVariantList(['desktop', { preset: 'mobile', fullPage: false }], { fullPage: true, allowQuery: false })
+    expect(vs.map((v) => v.fullPage)).toEqual([true, false])
+  })
+
+  it('has a safe variant that treats a missing list as none', () => {
+    expect(parseVariantListSafe(undefined, { fullPage: false, allowQuery: false })).toBeNull()
+    expect(parseVariantListSafe(['tv'], { fullPage: false, allowQuery: false })).toBeNull()
+    expect(parseVariantListSafe(['mobile'], { fullPage: false, allowQuery: false })).toHaveLength(1)
   })
 })

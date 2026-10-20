@@ -1,10 +1,12 @@
 import { BrowserWindow, session, type Session, type WebContents } from 'electron'
 import { isLoopbackHost } from './agent/loopback'
 import { hardenUntrustedSession } from './hardenedSession'
+import { attachCdp, cdpFullPage, cdpScreenshot, emulateViewport, type Cdp } from './cdp'
 import {
   setCaptureBackend,
   VIEWPORT,
   type CaptureDeps,
+  type CaptureEmulation,
   type CaptureStep,
   type CaptureSession,
   type ConsoleEntry,
@@ -263,14 +265,14 @@ function selectorRectScript(selector: string): string {
 }
 
 /** Round a rect to integer pixels and clamp it inside the viewport for capturePage. */
-function roundRect(rect: Rect): Rect {
+function roundRect(rect: Rect, viewport: { width: number; height: number } = VIEWPORT): Rect {
   const x = Math.max(0, Math.floor(rect.x))
   const y = Math.max(0, Math.floor(rect.y))
   return {
     x,
     y,
-    width: Math.max(1, Math.min(Math.ceil(rect.width), VIEWPORT.width - x)),
-    height: Math.max(1, Math.min(Math.ceil(rect.height), VIEWPORT.height - y))
+    width: Math.max(1, Math.min(Math.ceil(rect.width), viewport.width - x)),
+    height: Math.max(1, Math.min(Math.ceil(rect.height), viewport.height - y))
   }
 }
 
@@ -296,7 +298,11 @@ function captureSession(): Session {
   return ses
 }
 
-async function openElectronWindow(opts: { width: number; height: number }): Promise<CaptureSession> {
+async function openElectronWindow(opts: {
+  width: number
+  height: number
+  emulate?: CaptureEmulation
+}): Promise<CaptureSession> {
   const win = new BrowserWindow({
     show: false,
     width: opts.width,
@@ -347,6 +353,23 @@ async function openElectronWindow(opts: { width: number; height: number }): Prom
     entries.push({ level: consoleLevelName(lvl), text: String(txt) })
   })
 
+  // A variant forces its color scheme (a plain capture follows the OS theme) and
+  // device type through the DevTools protocol, set on a blank page before the real
+  // one loads so the first paint already uses them (see cdp.ts).
+  let cdp: Cdp | null = null
+  if (opts.emulate) {
+    try {
+      await win.loadURL('about:blank')
+      cdp = attachCdp(wc)
+      await emulateViewport(cdp, { width: opts.width, height: opts.height, ...opts.emulate })
+    } catch (err) {
+      // The caller only closes a session it got back, so don't leave the window behind.
+      cdp?.detach()
+      if (!win.isDestroyed()) win.destroy()
+      throw err
+    }
+  }
+
   return {
     load(url) {
       return new Promise((resolve, reject) => {
@@ -380,8 +403,26 @@ async function openElectronWindow(opts: { width: number; height: number }): Prom
       }
     },
     async screenshot(rect) {
-      const image = rect ? await wc.capturePage(roundRect(rect)) : await wc.capturePage()
+      // An emulated page must be captured through the protocol, which renders it at
+      // the emulated size; capturePage would grab the window's own bitmap.
+      if (cdp) {
+        if (!rect) return cdpScreenshot(cdp)
+        // The protocol clips in page coordinates; the rect is relative to the
+        // viewport, which a step may have scrolled (scrollIntoView before a click).
+        const scroll = (await wc.executeJavaScript('({ x: window.scrollX, y: window.scrollY })', true)) as {
+          x: number
+          y: number
+        }
+        const r = roundRect(rect, opts)
+        return cdpScreenshot(cdp, { ...r, x: r.x + scroll.x, y: r.y + scroll.y })
+      }
+      const image = rect ? await wc.capturePage(roundRect(rect, opts)) : await wc.capturePage()
       return image.toPNG()
+    },
+    async screenshotFullPage(maxHeight) {
+      // The page has loaded by now, so attaching here is safe even without emulation.
+      cdp ??= attachCdp(wc)
+      return cdpFullPage(cdp, opts.width, opts.height, maxHeight)
     },
     consoleEntries: () => entries,
     async runStep(step) {
@@ -441,6 +482,7 @@ async function openElectronWindow(opts: { width: number; height: number }): Prom
     },
     typedSecrets: () => typedSecrets,
     close: () => {
+      cdp?.detach()
       if (!win.isDestroyed()) win.destroy()
     }
   }

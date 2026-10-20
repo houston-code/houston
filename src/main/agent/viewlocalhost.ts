@@ -23,6 +23,7 @@
 // dock (preview.ts) and the background-shell URL detector; re-export them so this
 // module's existing tests (and any importer) keep their stable entry point.
 import { isLoopbackHost, isBlockedSubresourceHost, validateLocalhostUrl } from './loopback'
+import { MAX_FULL_PAGE_HEIGHT, type ColorScheme, type MockupVariant } from '@shared/mockup'
 
 export { isLoopbackHost, isBlockedSubresourceHost, validateLocalhostUrl }
 
@@ -124,8 +125,24 @@ export interface CaptureInput {
   selector?: string
   /** Interactions to run after the page loads and before the screenshot. */
   steps?: CaptureStep[]
+  /**
+   * Viewports and color schemes to capture, each from a fresh page load. With
+   * steps there may be only one, so a flow (a form post, a purchase) never runs twice.
+   */
+  variants?: MockupVariant[]
   /** Cancels the capture (wired to the run's abort signal). */
   signal?: AbortSignal
+}
+
+/** One variant's screenshot, when the call asked for variants. */
+export interface VariantCapture {
+  label: string
+  png: Buffer
+  width: number
+  height: number
+  loadError?: string
+  /** True when a full-page capture was cut at MAX_FULL_PAGE_HEIGHT. */
+  truncated?: boolean
 }
 
 export interface LocalhostCapture {
@@ -151,6 +168,11 @@ export interface LocalhostCapture {
   pageText?: string
   /** True when {@link pageText} was cut to {@link MAX_PAGE_TEXT_CHARS}. */
   pageTextTruncated?: boolean
+  /**
+   * Every variant's screenshot, in order, when the call asked for variants. The
+   * top-level fields then describe the first variant, and `console` covers them all.
+   */
+  variants?: VariantCapture[]
 }
 
 /** Stands in for a password field's value anywhere the capture reports page output. */
@@ -203,6 +225,8 @@ export interface CaptureSession {
   rectForSelector(selector: string): Promise<Rect | null>
   /** Capture the full viewport (no rect) or a sub-rect, as PNG bytes. */
   screenshot(rect?: Rect): Promise<Buffer>
+  /** Capture the whole page height, up to `maxHeight` CSS pixels. */
+  screenshotFullPage(maxHeight: number): Promise<{ png: Buffer; height: number; truncated: boolean }>
   consoleEntries(): ConsoleEntry[]
   /** Run one interaction step in the loaded page. Never throws for a page-level failure. */
   runStep(step: CaptureStep): Promise<{ ok: true } | { ok: false; error: string }>
@@ -213,8 +237,14 @@ export interface CaptureSession {
   close(): void
 }
 
+/** Device emulation for a variant: forced color scheme, and touch device semantics. */
+export interface CaptureEmulation {
+  colorScheme: ColorScheme
+  mobile: boolean
+}
+
 export interface CaptureDeps {
-  open: (opts: { width: number; height: number }) => Promise<CaptureSession>
+  open: (opts: { width: number; height: number; emulate?: CaptureEmulation }) => Promise<CaptureSession>
 }
 
 function throwIfAborted(signal?: AbortSignal): void {
@@ -306,6 +336,7 @@ export async function captureLocalhost(
 ): Promise<LocalhostCapture> {
   const url = validateLocalhostUrl(input.url)
   throwIfAborted(input.signal)
+  if (input.variants?.length) return captureVariants(url, input, input.variants, deps)
 
   const session = await deps.open({ width: VIEWPORT.width, height: VIEWPORT.height })
   try {
@@ -341,6 +372,90 @@ export async function captureLocalhost(
     }
   } finally {
     session.close()
+  }
+}
+
+/**
+ * Capture each variant from its own fresh page load, in its own viewport and color
+ * scheme. Steps (only allowed with a single variant) run before that variant's
+ * screenshot. Page text, title, and URL come from the first variant; console output
+ * is collected across all of them.
+ */
+async function captureVariants(
+  url: URL,
+  input: CaptureInput,
+  variants: MockupVariant[],
+  deps: CaptureDeps
+): Promise<LocalhostCapture> {
+  if (input.steps?.length && variants.length > 1) {
+    throw new Error('steps can run with only one variant, so a flow never runs twice; split the call.')
+  }
+  const captures: VariantCapture[] = []
+  const consoleEntries: ConsoleEntry[] = []
+  let first: Omit<LocalhostCapture, 'png' | 'console' | 'width' | 'height' | 'variants'> | undefined
+  for (const v of variants) {
+    throwIfAborted(input.signal)
+    const session = await deps.open({
+      width: v.width,
+      height: v.height,
+      emulate: { colorScheme: v.colorScheme, mobile: v.mobile }
+    })
+    try {
+      const { loadError } = await loadWithDeadline(session, url.toString(), LOAD_TIMEOUT_MS, input.signal)
+      throwIfAborted(input.signal)
+      const steps = input.steps?.length ? await runSteps(session, input.steps, input.signal) : undefined
+      let rect: Rect | undefined
+      let selectorMissed = false
+      if (input.selector) {
+        const found = await session.rectForSelector(input.selector)
+        if (found) rect = found
+        else selectorMissed = true
+      }
+      let shot: { png: Buffer; width: number; height: number; truncated?: boolean }
+      if (v.fullPage && !rect) {
+        const full = await session.screenshotFullPage(MAX_FULL_PAGE_HEIGHT)
+        shot = { png: full.png, width: v.width, height: full.height, ...(full.truncated ? { truncated: true } : {}) }
+      } else {
+        shot = {
+          png: await session.screenshot(rect),
+          width: rect ? rect.width : v.width,
+          height: rect ? rect.height : v.height
+        }
+      }
+      captures.push({ label: v.label, ...shot, ...(loadError ? { loadError } : {}) })
+      const secrets = session.typedSecrets()
+      consoleEntries.push(...session.consoleEntries().map((e) => ({ ...e, text: scrubTypedPasswords(e.text, secrets) })))
+      if (!first) {
+        const raw = await session.pageText()
+        const page = raw === null ? undefined : formatPageText(raw, secrets)
+        first = {
+          title: session.title(),
+          finalUrl: session.url() || url.toString(),
+          ...(loadError ? { loadError } : {}),
+          ...(selectorMissed ? { selectorMissed: true } : {}),
+          ...(steps ? { steps } : {}),
+          ...(page ? { pageText: page.text, ...(page.truncated ? { pageTextTruncated: true } : {}) } : {})
+        }
+      }
+    } finally {
+      session.close()
+    }
+  }
+  // Variants load the same page, so most console lines repeat; keep one of each.
+  const seen = new Set<string>()
+  const uniqueConsole = consoleEntries.filter((e) => {
+    const key = `${e.level}\u0000${e.text}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  return {
+    ...first!,
+    png: captures[0].png,
+    width: captures[0].width,
+    height: captures[0].height,
+    console: formatConsole(uniqueConsole),
+    variants: captures
   }
 }
 

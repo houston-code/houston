@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 import { imageDataUrl, type ImageAttachment } from '@shared/images'
 import { fileNameOf, type GalleryArgs } from '@shared/gallery'
-import type { MockupArgs } from '@shared/mockup'
+import type { MockupArgs, MockupVariant } from '@shared/mockup'
 
 /**
  * The full-size image viewer. Any transcript row can open it (a show_images
@@ -52,15 +52,25 @@ export function galleryViewerImages(gallery: GalleryArgs, images: ImageAttachmen
 }
 
 /**
- * Pair a render_mockup call's variants with the screenshots it attached, one per
- * variant in order; a count mismatch returns nothing, as for galleries. The images
- * carry no path: they were never files, only renders of the mockup.
+ * Pair a call's viewport variants with the screenshots it attached, one per variant
+ * in order (render_mockup, or view_localhost with variants); a count mismatch
+ * returns nothing, as for galleries. The images carry no path: they were never
+ * files, only captures. `subject` names what was captured, for the caption.
  */
-export function mockupViewerImages(mockup: MockupArgs, images: ImageAttachment[] | undefined): ViewerImage[] {
-  if (!images || images.length !== mockup.variants.length) return []
-  return mockup.variants.map((v, i) => ({
+export function variantViewerImages(
+  variants: MockupVariant[],
+  images: ImageAttachment[] | undefined,
+  subject: string
+): ViewerImage[] {
+  if (!images || images.length !== variants.length) return []
+  return variants.map((v, i) => ({
     src: imageDataUrl(images[i]),
     label: v.label,
-    caption: `${fileNameOf(mockup.file)} at ${v.width}×${v.height}, ${v.colorScheme} color scheme.`
+    caption: `${subject} at ${v.width}×${v.height}, ${v.colorScheme} color scheme.`
   }))
+}
+
+/** A render_mockup call's screenshots, captioned with the mockup's file name. */
+export function mockupViewerImages(mockup: MockupArgs, images: ImageAttachment[] | undefined): ViewerImage[] {
+  return variantViewerImages(mockup.variants, images, fileNameOf(mockup.file))
 }

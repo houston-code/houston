@@ -1,9 +1,9 @@
 # Rendering UI mockups and app screenshots (design)
 
 Status: phase 1 built (`show_images`, the gallery, the full-size viewer, and the
-media store), phase 3 built (`render_mockup`), and the prompt line and `render-ui`
-skill from phase 4. Phase 2 (`view_localhost` variants), the compare view, and the
-CLI file links are proposed, not built.
+media store), phase 2 built (`view_localhost` variants), phase 3 built
+(`render_mockup`), and the prompt line and `render-ui` skill from phase 4. The compare
+view and the CLI file links are proposed, not built.
 
 Verified for `render_mockup` in the real app with a hostile page: fetch, image,
 beacon, WebSocket, `file:` reads, path traversal, iframes outside the root, popups,

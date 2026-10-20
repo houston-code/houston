@@ -6,6 +6,7 @@ import { MAX_FULL_PAGE_HEIGHT, type MockupVariant } from '@shared/mockup'
 import { resolveInRoots } from './agent/tools'
 import { isSensitivePath } from './agent/sensitive-paths'
 import { setMockupBackend, type MockupRender, type MockupRenderInput } from './agent/mockupRender'
+import { attachCdp, cdpFullPage, cdpScreenshot, emulateViewport, type Cdp } from './cdp'
 
 /**
  * Electron backend for the `render_mockup` tool: renders a project HTML file in an
@@ -36,8 +37,6 @@ const LOAD_TIMEOUT_MS = 15_000
 const PAINT_SETTLE_MS = 400
 /** Largest single file the scheme serves (a mockup's CSS, font, or image). */
 const MAX_SERVED_BYTES = 25 * 1024 * 1024
-/** Longest any one DevTools command may take before the render is abandoned. */
-const CDP_TIMEOUT_MS = 10_000
 /** Nothing listens here: anything that tries to use the proxy gets refused. */
 const DEAD_PROXY = 'http://127.0.0.1:9'
 
@@ -275,37 +274,26 @@ async function renderMockupElectron(input: MockupRenderInput): Promise<MockupRen
     if (!win.isDestroyed()) win.destroy()
   }
   input.signal?.addEventListener('abort', onAbort, { once: true })
-  const dbg = wc.debugger
+  let cdp: Cdp | null = null
   const out: MockupRender[] = []
   try {
     throwIfAborted()
-    // The DevTools protocol needs a document to attach to: attached to a window
-    // that has never loaded, its first command hangs and the next one crashes the
-    // app. A blank page first gives it one.
+    // The DevTools protocol needs a document to attach to (see cdp.ts).
     await win.loadURL('about:blank')
-    dbg.attach('1.3')
-    const cdp = (method: string, params?: object): Promise<unknown> => {
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`The renderer did not answer ${method} within ${CDP_TIMEOUT_MS}ms.`)),
-          CDP_TIMEOUT_MS
-        )
-      })
-      return Promise.race([dbg.sendCommand(method, params), timeout]).finally(() => clearTimeout(timer))
-    }
+    const session = attachCdp(wc)
+    cdp = session
     // A hidden window has nobody to answer alert/confirm/prompt: dismiss them and
     // note it on the console so the agent sees why.
-    dbg.on('message', (_event, method, params: { type?: string; message?: string }) => {
+    session.on((method, params) => {
       if (method !== 'Page.javascriptDialogOpening') return
-      entries.push(`LOG: [${params.type ?? 'dialog'} dismissed] ${params.message ?? ''}`)
-      void dbg.sendCommand('Page.handleJavaScriptDialog', { accept: false }).catch(() => {})
+      entries.push(`LOG: [${String(params.type ?? 'dialog')} dismissed] ${String(params.message ?? '')}`)
+      void session.send('Page.handleJavaScriptDialog', { accept: false }).catch(() => {})
     })
-    await cdp('Page.enable')
+    await session.send('Page.enable')
     for (const v of input.variants) {
       throwIfAborted()
       entries = []
-      out.push(await renderVariant(win, cdp, v, mockupUrl(token, input.root, input.file, v.query), () => entries, input.signal))
+      out.push(await renderVariant(win, session, v, mockupUrl(token, input.root, input.file, v.query), () => entries, input.signal))
     }
     return out
   } catch (err) {
@@ -314,33 +302,21 @@ async function renderMockupElectron(input: MockupRenderInput): Promise<MockupRen
   } finally {
     input.signal?.removeEventListener('abort', onAbort)
     roots.delete(token)
-    try {
-      if (dbg.isAttached()) dbg.detach()
-    } catch {
-      /* the window is already gone */
-    }
+    cdp?.detach()
     if (!win.isDestroyed()) win.destroy()
   }
 }
 
 async function renderVariant(
   win: BrowserWindow,
-  cdp: (method: string, params?: object) => Promise<unknown>,
+  cdp: Cdp,
   v: MockupVariant,
   url: string,
   consoleNow: () => string[],
   signal: AbortSignal | undefined
 ): Promise<MockupRender> {
   win.setContentSize(v.width, v.height)
-  await cdp('Emulation.setDeviceMetricsOverride', {
-    width: v.width,
-    height: v.height,
-    deviceScaleFactor: 1,
-    mobile: v.mobile
-  })
-  await cdp('Emulation.setEmulatedMedia', {
-    features: [{ name: 'prefers-color-scheme', value: v.colorScheme }]
-  })
+  await emulateViewport(cdp, v)
   const loadError = await new Promise<string | undefined>((resolve, reject) => {
     const wc = win.webContents
     let done = false
@@ -373,26 +349,16 @@ async function renderVariant(
   })
   await sleep(PAINT_SETTLE_MS)
 
-  let height = v.height
-  let truncated = false
-  if (v.fullPage) {
-    const metrics = (await cdp('Page.getLayoutMetrics')) as { cssContentSize?: { height: number } }
-    const content = Math.ceil(metrics.cssContentSize?.height ?? v.height)
-    height = Math.max(v.height, Math.min(content, MAX_FULL_PAGE_HEIGHT))
-    truncated = content > MAX_FULL_PAGE_HEIGHT
-  }
-  const shot = (await cdp('Page.captureScreenshot', {
-    format: 'png',
-    captureBeyondViewport: v.fullPage,
-    ...(v.fullPage ? { clip: { x: 0, y: 0, width: v.width, height, scale: 1 } } : {})
-  })) as { data: string }
+  const shot = v.fullPage
+    ? await cdpFullPage(cdp, v.width, v.height, MAX_FULL_PAGE_HEIGHT)
+    : { png: await cdpScreenshot(cdp), height: v.height, truncated: false }
   return {
-    png: Buffer.from(shot.data, 'base64'),
+    png: shot.png,
     width: v.width,
-    height,
+    height: shot.height,
     console: consoleNow().slice(0, 100),
     ...(loadError ? { loadError } : {}),
-    ...(truncated ? { truncated } : {})
+    ...(shot.truncated ? { truncated: true } : {})
   }
 }
 

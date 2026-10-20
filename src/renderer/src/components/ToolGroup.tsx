@@ -2,7 +2,7 @@ import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
-import { RENDER_MOCKUP_NAME, parseMockupArgsSafe } from '@shared/mockup'
+import { RENDER_MOCKUP_NAME, parseMockupArgsSafe, parseVariantListSafe } from '@shared/mockup'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shared/sweep'
 import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
@@ -12,7 +12,13 @@ import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
 import { ImageGallery } from './ImageGallery'
-import { galleryViewerImages, mockupViewerImages, useImageViewer, type ViewerImage } from '../lib/imageViewer'
+import {
+  galleryViewerImages,
+  mockupViewerImages,
+  useImageViewer,
+  variantViewerImages,
+  type ViewerImage
+} from '../lib/imageViewer'
 
 const KIND_ICON: Record<string, string> = {
   read: '○',
@@ -230,11 +236,18 @@ function ToolRow({
   const isSweep = item.name === 'pr_sweep' && sweep.length > 0
   const gallery = item.name === SHOW_IMAGES_NAME ? parseGalleryArgsSafe(item.args) : null
   const mockup = item.name === RENDER_MOCKUP_NAME ? parseMockupArgsSafe(item.args) : null
+  // view_localhost with variants: a gallery of the running app in each viewport.
+  const liveUrl = item.name === 'view_localhost' && typeof item.args?.url === 'string' ? item.args.url : ''
+  const liveVariants = liveUrl
+    ? parseVariantListSafe(item.args?.variants, { fullPage: false, allowQuery: false })
+    : null
   const galleryImages = gallery
     ? galleryViewerImages(gallery, item.images)
     : mockup
       ? mockupViewerImages(mockup, item.images)
-      : []
+      : liveVariants
+        ? variantViewerImages(liveVariants, item.images, liveUrl)
+        : []
   const isGallery = galleryImages.length > 0
   const viewer = useImageViewer()
   const previews = previewsFor(item)
@@ -376,8 +389,8 @@ function ToolRow({
 
       {isGallery && (
         <ImageGallery
-          title={gallery?.title ?? (mockup ? `Mockup: ${mockup.file}` : undefined)}
-          badge={mockup ? 'Mockup from code' : undefined}
+          title={gallery?.title ?? (mockup ? `Mockup: ${mockup.file}` : liveVariants ? liveUrl : undefined)}
+          badge={mockup ? 'Mockup from code' : liveVariants ? 'Running app' : undefined}
           images={galleryImages}
         />
       )}

@@ -862,6 +862,9 @@ an occurrence missed while Houston was closed fires once at the next launch.
   field, click or double-click, press a key such as Enter or Escape, wait for an
   element, check that some text is or isn't shown), so the agent can try a flow
   such as logging in or submitting a form and get a pass or fail for each step.
+  It can also capture the page in several viewports or color schemes in one call
+  (desktop, tablet, or mobile, light or dark, or the full page height), shown as a
+  gallery marked "Running app"; steps then run with only one of them.
   Each call starts from a fresh page load, so a flow runs within one call. Text
   typed into a password field is never shown back to the agent. Every call asks
   for approval. A call with steps
