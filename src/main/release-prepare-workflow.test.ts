@@ -71,6 +71,24 @@ describe('release-prepare release-PR token', () => {
     expect(job('line-only')).not.toContain('environment:')
   })
 
+  it('rolls back only the branches this run created when the step fails, and disarms once the PR exists', () => {
+    // Creating the line, pushing the branch and opening the PR are separate calls; a failure
+    // between them must not leave a line or branch behind that blocks re-running the same inputs.
+    const open = step('Open release PR')
+    expect(open).toContain('trap rollback EXIT')
+    expect(open).toContain('GH_TOKEN="$PUSH_TOKEN" gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$ref" --silent')
+    // The trap is armed before anything is created.
+    expect(open.indexOf('trap rollback EXIT')).toBeLessThan(open.indexOf('-f ref="refs/heads/$LINE"'))
+    // Only what this run created: the line when it created it, the branch only if it didn't exist.
+    expect(open).toMatch(/-f ref="refs\/heads\/\$LINE" -f sha="\$SHA" --silent\n\s+created\+=\("\$LINE"\)/)
+    expect(open).toContain('if [ "$exists" -eq 2 ]; then created+=("$branch"); fi')
+    // A failure to check whether the branch exists stops before anything is created.
+    expect(open).toContain('if [ "$exists" -ne 0 ] && [ "$exists" -ne 2 ]; then')
+    // Starts empty, and is emptied again (disarmed) after the PR is updated or opened.
+    expect(open.match(/\n\s+created=\(\)\n/g)).toHaveLength(3)
+    expect(open.lastIndexOf('created=()')).toBeGreaterThan(open.indexOf('url=$(gh pr create'))
+  })
+
   it("reopens an open release PR on update, since a GITHUB_TOKEN push won't re-run its checks", () => {
     // Closing and reopening with the PAT fires `reopened`, which ci.yml runs on, so the checks
     // cover the new commit; the PR keeps its number and conversation.

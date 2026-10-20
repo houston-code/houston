@@ -287,11 +287,42 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="release-pr/v$VERSION"
+
+          # All or nothing: if anything below fails, delete the branches THIS run created (the
+          # release line, the release branch), and nothing that existed before it, so a failed
+          # prepare leaves the repository as it found it and the same inputs can be re-run. A
+          # successful run disarms this once the PR exists.
+          created=()
+          rollback() {
+            local status=$?
+            [ "$status" -eq 0 ] && return
+            local ref
+            for ref in ${created[@]+"${created[@]}"}; do
+              if GH_TOKEN="$PUSH_TOKEN" gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/$ref" --silent; then
+                echo "::warning::Rolled back: deleted $ref, which this run created."
+              else
+                echo "::error::Couldn't delete $ref, which this run created. Delete it by hand before running Release - prepare again."
+              fi
+            done
+          }
+          trap rollback EXIT
+
+          # Whether the release branch already exists (an update of an open release PR), so a
+          # rollback never deletes one this run didn't create. 2 means "no such branch"; any
+          # other failure stops here, before anything is created.
+          exists=0
+          git ls-remote --exit-code --heads "https://github.com/${GITHUB_REPOSITORY}.git" "refs/heads/$branch" >/dev/null || exists=$?
+          if [ "$exists" -ne 0 ] && [ "$exists" -ne 2 ]; then
+            echo "::error::Couldn't check whether $branch exists (git ls-remote exited $exists)."
+            exit 1
+          fi
+
           if [ "$CREATE_LINE" = "true" ]; then
             echo "Creating $LINE at $SHA"
             GH_TOKEN="$PUSH_TOKEN" gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/heads/$LINE" -f sha="$SHA" --silent
+            created+=("$LINE")
           fi
-          branch="release-pr/v$VERSION"
           git switch --quiet -c "$branch"
           git add package.json package-lock.json CHANGELOG.md
           # The trailer records the commit this release was cut from; Release - publish checks
@@ -299,6 +330,7 @@ jobs:
           git commit -qm "release: v$VERSION" -m "Release-Base: $SHA"
           # --force: "Update pending release" replaces an open release PR's branch.
           git push --quiet --force "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/$branch"
+          if [ "$exists" -eq 2 ]; then created+=("$branch"); fi
           open=$(gh pr list -R "$GITHUB_REPOSITORY" --head "$branch" --base "$LINE" --state open --json number --jq '.[0].number')
           if [ -n "$open" ]; then
             gh pr close "$open" -R "$GITHUB_REPOSITORY"
@@ -306,6 +338,7 @@ jobs:
             gh pr comment "$open" -R "$GITHUB_REPOSITORY" \
               --body "Updated: re-cut from \`$SHA\` (the tip of \`$LINE\`), with regenerated notes. Any edits made to the notes in this PR were replaced: check the summary again."
             echo "Updated release PR #$open for v$VERSION." >> "$GITHUB_STEP_SUMMARY"
+            created=()
             exit 0
           fi
           url=$(gh pr create -R "$GITHUB_REPOSITORY" --base "$LINE" --head "$branch" --label release \
@@ -325,4 +358,6 @@ jobs:
           Merge this PR with **Create a merge commit** (not squash or rebase). Then run **Release - publish** with version \`$VERSION\`. It builds, signs, tags and publishes exactly this PR's commit.
           EOF
           )")
+          # The PR exists: nothing to roll back from here on.
+          created=()
           echo "Opened $url" >> "$GITHUB_STEP_SUMMARY"

@@ -71,6 +71,10 @@ PR when everything passes:
 There is no approval, signing or notarization in Release - prepare, so Release - publish
 should only ever find problems with signing.
 
+A failed Release - prepare leaves nothing behind: if its last step fails after creating the
+release line or the release branch, it deletes the ones that run created, so you can run it
+again with the same inputs.
+
 ### Release - publish
 
 Run it with the version whose release PR has merged. Leave **dry_run** off to publish; turn it
