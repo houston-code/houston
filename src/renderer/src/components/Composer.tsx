@@ -152,6 +152,7 @@ export function Composer({
   disabled,
   disabledReason,
   running,
+  attention,
   workspace,
   commands,
   vision = true,
@@ -172,6 +173,11 @@ export function Composer({
   /** Why the composer is disabled, shown as the placeholder (e.g. missing API key). */
   disabledReason?: string
   running: boolean
+  /**
+   * Draw the eye here: first-run setup is down to "send your first task". Turning on
+   * moves the cursor into the field and the box takes an accent glow.
+   */
+  attention?: boolean
   workspace: string | null
   commands: Command[]
   /** Whether the selected model accepts image inputs; gates the paste/drop affordance. */
@@ -282,6 +288,11 @@ export function Composer({
     // Mount only; `disabled` is read for the initial decision.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // First-run step 3: put the cursor here as soon as the box becomes the next step.
+  useEffect(() => {
+    if (attention && !disabled) ref.current?.focus()
+  }, [attention, disabled])
 
   // Clear the notice timer on unmount so a pending fade can't fire into a gone tree.
   useEffect(() => () => clearNoticeTimer(), [])
@@ -832,7 +843,7 @@ export function Composer({
   const sendDisabled = disabled || (!text.trim() && images.length === 0 && context.length === 0)
 
   return (
-    <div className="composer">
+    <div className={`composer${attention ? ' composer--attention' : ''}`}>
       <div className="composer__card" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
         {memoryDraft && (
           <div className="memory-bar" role="group" aria-label="Remember instruction">

@@ -157,3 +157,31 @@ describe('message-box tips', () => {
     el.remove()
   })
 })
+
+describe('TipHost delay', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('holds contextual tips back for delayMs, without taking focus', () => {
+    vi.useFakeTimers()
+    const done = anchors(['approval'])
+    const input = document.createElement('textarea')
+    document.body.appendChild(input)
+    input.focus()
+    render(<TipHost {...props({ relevant: ['approval'], delayMs: 2000 })} />)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(2000))
+    expect(screen.getByRole('dialog', { name: 'You stay in control' })).toBeInTheDocument()
+    // The user can keep typing: the tip never moves focus out of the message box.
+    expect(document.activeElement).toBe(input)
+    input.remove()
+    done()
+  })
+
+  it('never delays a requested tour', () => {
+    const done = anchors(['approval'])
+    render(<TipHost {...props({ relevant: ['approval'], delayMs: 2000, touring: true })} />)
+    expect(screen.getByRole('dialog', { name: 'You stay in control' })).toBeInTheDocument()
+    done()
+  })
+})
+

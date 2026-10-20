@@ -5,6 +5,8 @@ import {
   existingInstallOnboarding,
   markTipsSeen,
   checklistVisible,
+  firstTaskExample,
+  folderKind,
   pickTip,
   relevantTips,
   restartTips,
@@ -181,3 +183,19 @@ describe('checklistVisible', () => {
     expect(checklistVisible({ checklistDone: true }, facts(), true)).toBe(false)
   })
 })
+
+describe('folderKind / firstTaskExample', () => {
+  it('treats a folder with only hidden entries as empty', () => {
+    expect(folderKind([])).toBe('empty')
+    expect(folderKind([{ name: '.git' }, { name: '.DS_Store' }])).toBe('empty')
+    expect(folderKind([{ name: '.git' }, { name: 'src' }])).toBe('has-files')
+    expect(folderKind(null)).toBe('unknown')
+  })
+
+  it('suggests building something in an empty folder and a first look in a project', () => {
+    expect(firstTaskExample('empty')).toBe('Build a simple to-do list web page in this folder.')
+    expect(firstTaskExample('has-files')).toBe('Explain how this project is organized.')
+    expect(firstTaskExample('unknown')).toBe('Look around this folder and suggest a good first task.')
+  })
+})
+
