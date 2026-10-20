@@ -101,7 +101,7 @@ export function formatSweepSummary(mode: SweepMode, items: SweepItem[]): string 
   if (open) bits.push(`${open} PR open`)
   if (active) bits.push(`${active} in progress`)
   if (failed) bits.push(`${failed} failed`)
-  return `PR sweep (${mode}): ${items.length} item${items.length === 1 ? '' : 's'} — ${bits.join(', ')}.`
+  return `PR sweep (${mode}): ${items.length} item${items.length === 1 ? '' : 's'} (${bits.join(', ')}).`
 }
 
 const MARK: Record<SweepItemStatus, string> = {
@@ -118,7 +118,7 @@ export function formatSweepList(items: SweepItem[]): string {
   return items
     .map((it) => {
       const extra = [it.branch, it.pr].filter(Boolean).join(' ')
-      const note = it.note ? ` — ${it.note}` : ''
+      const note = it.note ? `: ${it.note}` : ''
       return `${MARK[it.status]} ${it.task}${extra ? ` (${extra})` : ''}${note}`
     })
     .join('\n')

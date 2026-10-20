@@ -68,7 +68,7 @@ describe('formatSweepSummary', () => {
       { task: 'd', status: 'failed' }
     ]
     expect(formatSweepSummary('process', items)).toBe(
-      'PR sweep (process): 4 items — 1 done, 1 PR open, 1 in progress, 1 failed.'
+      'PR sweep (process): 4 items (1 done, 1 PR open, 1 in progress, 1 failed).'
     )
   })
 })
@@ -80,7 +80,7 @@ describe('formatSweepList', () => {
       { task: 'Broken one', status: 'failed', note: 'tests fail' }
     ]
     expect(formatSweepList(items)).toBe(
-      '[PR] Fix auth (feat/auth #12)\n[!] Broken one — tests fail'
+      '[PR] Fix auth (feat/auth #12)\n[!] Broken one: tests fail'
     )
   })
 })
