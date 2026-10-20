@@ -2360,7 +2360,7 @@ export async function startRun(
       // iteration is still in the window the model lands with.
       if (run.steering.length) {
         const steers = run.steering.splice(0)
-        for (const content of steers) messages.push({ role: 'user', content })
+        for (const content of steers) messages.push({ role: 'user', content, steered: true })
         // Emit BEFORE persist. The live renderer needs the `steered` event to draw
         // the bubble, but `persist` clears the re-adopt replay buffer — so emitting
         // AFTER it left the steered event in the buffer even though the steer was

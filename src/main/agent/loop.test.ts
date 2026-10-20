@@ -6701,6 +6701,9 @@ describe('steerRun', () => {
     // …and it is an ordinary user turn, not a system note dressed as one.
     const steer = second.find((m) => m.content === 'stop, use YAML instead')
     expect(steer?.content.startsWith(SYSTEM_NOTE_PREFIX)).toBe(false)
+    // Marked as steered on the conversation itself, so a reloaded chat can still label
+    // it (the provider adapters drop the mark; see invocation-leak.test.ts).
+    expect(steer?.steered).toBe(true)
   })
 
   it('announces the steer where it lands, not where it was typed', async () => {

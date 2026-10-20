@@ -39,7 +39,7 @@ export interface UserItem {
   /**
    * A course correction steered into a running turn (rather than sent as its own
    * turn). Labelled in the transcript so it's clear it changed the run in progress.
-   * Live only: a reloaded conversation shows it as an ordinary message.
+   * Set live from the `steered` event and, on reload, from the saved message.
    */
   steered?: boolean
 }
@@ -641,6 +641,7 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
           text: m.content,
           ...(m.images?.length ? { images: m.images } : {}),
           ...(invokedAs ? { invokedAs } : {}),
+          ...(m.steered === true ? { steered: true } : {}),
           ...(m.content.startsWith(COMPACTION_SUMMARY_PREFIX) ? { isSummary: true } : {})
         })
       }
