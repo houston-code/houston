@@ -4611,6 +4611,51 @@ describe('loop control — adaptive budget', () => {
     expect(r.messages.filter((m) => m.role === 'tool')).toHaveLength(7)
   })
 
+  /** A provider that reads `pick(n)` on its n-th turn and never finishes on its own. */
+  function endlessReader(pick: (n: number) => string): Provider {
+    let n = 0
+    return {
+      async *streamChat() {
+        n++
+        yield {
+          type: 'tool_call',
+          call: { id: `r${n}`, name: 'read_file', arguments: { path: pick(n) } }
+        }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+  }
+
+  it('extends a turn that keeps finding new things, without writing', async () => {
+    for (let i = 1; i <= 40; i++) writeFileSync(join(ws, `n${i}.txt`), `note ${i}\n`)
+    const r = await withSettings(
+      { maxIterations: 12, maxIterationsCeiling: 30, autoExtendTurns: true },
+      () => run({ provider: endlessReader((n) => `n${n}.txt`), policy: 'full-auto' })
+    )
+    const notices = r.events.filter((e) => e.type === 'notice') as { message: string }[]
+    expect(notices.map((n) => n.message)).toEqual([
+      expect.stringContaining('up to 24 steps'),
+      expect.stringContaining('up to 30 steps')
+    ])
+    // Iterations 0..28 ran their read; the 30th (final) step drops its call.
+    expect(r.messages.filter((m) => m.role === 'tool')).toHaveLength(29)
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('max-steps')
+  })
+
+  it('does not extend a turn that cycles through calls it already made', async () => {
+    // Alternating two reads never trips the stall detector (no call repeats twice in a
+    // row), and after the first pass neither read finds anything new.
+    writeFileSync(join(ws, 'a.txt'), 'a')
+    writeFileSync(join(ws, 'b.txt'), 'b')
+    const r = await withSettings(
+      { maxIterations: 12, maxIterationsCeiling: 30, autoExtendTurns: true, stallDetection: false },
+      () => run({ provider: endlessReader((n) => (n % 2 ? 'a.txt' : 'b.txt')), policy: 'full-auto' })
+    )
+    expect(r.events.some((e) => e.type === 'notice')).toBe(false)
+    expect(r.messages.filter((m) => m.role === 'tool')).toHaveLength(11)
+  })
+
   it('does not count non-file write tools (scheduling) as progress', async () => {
     h.probeTools = [
       {

@@ -1334,8 +1334,8 @@ export function SettingsModal({
                     />
                     <span>
                       Keep going while the turn is making progress: when it reaches the step cap
-                      while still writing files (and not looping), grant another round of steps
-                      instead of stopping.
+                      while still editing files or finding out something new (and not looping),
+                      grant another round of steps instead of stopping.
                     </span>
                   </label>
                   {autoExtendTurnsEnabled(settings) && (

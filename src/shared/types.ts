@@ -544,9 +544,10 @@ export interface AppSettings {
   maxIterations?: number
   /**
    * Let a turn that is still making progress (successful file edits in several of
-   * its recent steps, no stall) run past `maxIterations` in `maxIterations`-sized
-   * chunks instead of being told to wrap up. Unset: on, unless `maxIterations` is set
-   * (an explicit cap stays a hard stop until opted in). See autoExtendTurnsEnabled.
+   * its recent steps, or new reads/commands in most of them, and no stall) run past
+   * `maxIterations` in `maxIterations`-sized chunks instead of being told to wrap up.
+   * Unset: on, unless `maxIterations` is set (an explicit cap stays a hard stop until
+   * opted in). See autoExtendTurnsEnabled.
    */
   autoExtendTurns?: boolean
   /**

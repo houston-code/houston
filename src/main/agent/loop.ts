@@ -159,7 +159,7 @@ import {
 } from './compaction'
 import { getConversation, setCompaction, setPromptSnapshot, takeChildReports } from '../conversations'
 import { buildPinnedMessages, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
-import { StallDetector, resolveStallThresholds } from './stall'
+import { StallDetector, callSignature, resolveStallThresholds } from './stall'
 import {
   MAX_OUTPUT_CONTINUATIONS,
   continuationNote,
@@ -173,6 +173,7 @@ import {
   resolveExtensionLimits,
   shouldExtend,
   PROGRESS_TOOLS,
+  isDiscoveryTool,
   extensionNotice,
   shouldLand,
   landingReminder,
@@ -2057,13 +2058,19 @@ export async function startRun(
     })
     let cumulativeCostUsd = 0
     let landed = false
-    // A run that is still landing file writes gets more room instead of a wrap-up
-    // (see shouldExtend): `budget.maxIterations` grows in place, up to a hard ceiling.
+    // A run that is still landing file writes, or still finding things out, gets more
+    // room instead of a wrap-up (see shouldExtend): `budget.maxIterations` grows in
+    // place, up to a hard ceiling.
     const extension = resolveExtensionLimits(budget, {
       autoExtend: autoExtendTurnsEnabled(settings),
       ceiling: settings.maxIterationsCeiling
     })
     const writeIterations = new Set<number>()
+    // Iterations that made a successful discovery call the run hadn't made before, and
+    // the signatures of every such call so far: a repeat (re-reading the same file,
+    // re-running the same command) finds out nothing new.
+    const discoveryIterations = new Set<number>()
+    const discoveryCalls = new Set<string>()
 
     // A run_shell that failed on a missing runtime (node, python3, …) gets a
     // one-click install card in the GUI, once per runtime per run.
@@ -2322,7 +2329,13 @@ export async function startRun(
       // would otherwise trigger. Announced as a notice only (never in `messages`).
       {
         const ext = shouldExtend(
-          { iteration: iter, writeIterations, lastStallNudge, alreadyLanded: landed },
+          {
+            iteration: iter,
+            writeIterations,
+            discoveryIterations,
+            lastStallNudge,
+            alreadyLanded: landed
+          },
           budget,
           extension
         )
@@ -2853,6 +2866,13 @@ export async function startRun(
         if (!r.ok) iterErrors.push(r.output)
         if (r.ok && kind === 'write') filesModified = true
         if (r.ok && PROGRESS_TOOLS.has(r.call.name)) writeIterations.add(iter)
+        if (r.ok && isDiscoveryTool(r.call.name, kind)) {
+          const sig = callSignature(r.call)
+          if (!discoveryCalls.has(sig)) {
+            discoveryCalls.add(sig)
+            discoveryIterations.add(iter)
+          }
+        }
         // Persist after each append so a mid-turn abort return (which skips the
         // trailing onMessages) still leaves completed results in the saved log.
         persist(messages)
