@@ -184,3 +184,13 @@ function matchSgrAt(s: string, i: number): string | null {
   const m = SGR.exec(s)
   return m && m.index === i ? m[0] : null
 }
+
+/**
+ * An OSC 8 hyperlink: `text` shown, `url` opened on a click (cmd/ctrl-click in most
+ * terminals; ones without OSC 8 just show the text). Only for links WE build to a
+ * known target, like osc52Copy; `text` and `url` must already be free of control
+ * characters, or a crafted label could end the link early and inject its own.
+ */
+export function osc8Link(url: string, text: string): string {
+  return `\x1b]8;;${url}\x1b\\${text}\x1b]8;;\x1b\\`
+}

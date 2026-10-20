@@ -496,7 +496,7 @@
   },
   {
     "name": "show_images",
-    "description": "Show image files to the user as a gallery in the chat, each with a short label and an optional caption; the user can open any of them full size. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.",
+    "description": "Show image files to the user, each with a short label and an optional caption: as a gallery they can open full size in the desktop app, or as clickable file links in the terminal. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -521,6 +521,10 @@
               "caption": {
                 "type": "string",
                 "description": "Optional sentence shown with the image in the full-size viewer."
+              },
+              "compareWith": {
+                "type": "string",
+                "description": "Optional path to another image to compare this one against, such as the same screen before a change; the viewer shows the two with a slider."
               }
             },
             "required": [

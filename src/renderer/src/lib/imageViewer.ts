@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react'
 import { imageDataUrl, type ImageAttachment } from '@shared/images'
-import { fileNameOf, type GalleryArgs } from '@shared/gallery'
+import { fileNameOf, galleryFiles, type GalleryArgs } from '@shared/gallery'
 import type { MockupArgs, MockupVariant } from '@shared/mockup'
 
 /**
@@ -16,6 +16,8 @@ export interface ViewerImage {
   caption?: string
   /** The file the image came from, when there is one, for "Open file". */
   path?: string
+  /** An image to compare this one against, shown with a slider. */
+  compare?: { src: string; label: string }
 }
 
 export interface ImageViewerApi {
@@ -42,12 +44,14 @@ export function stepIndex(index: number, delta: number, count: number): number {
  * nothing is returned rather than labels landing on the wrong pictures.
  */
 export function galleryViewerImages(gallery: GalleryArgs, images: ImageAttachment[] | undefined): ViewerImage[] {
-  if (!images || images.length !== gallery.images.length) return []
+  if (!images || images.length !== galleryFiles(gallery).length) return []
+  let nextCompare = gallery.images.length
   return gallery.images.map((g, i) => ({
     src: imageDataUrl(images[i]),
     label: g.label,
     ...(g.caption ? { caption: g.caption } : {}),
-    path: g.path
+    path: g.path,
+    ...(g.compareWith ? { compare: { src: imageDataUrl(images[nextCompare++]), label: fileNameOf(g.compareWith) } } : {})
   }))
 }
 
@@ -73,4 +77,20 @@ export function variantViewerImages(
 /** A render_mockup call's screenshots, captioned with the mockup's file name. */
 export function mockupViewerImages(mockup: MockupArgs, images: ImageAttachment[] | undefined): ViewerImage[] {
   return variantViewerImages(mockup.variants, images, fileNameOf(mockup.file))
+}
+
+/**
+ * A gallery path as the Files panel addresses it (relative to the project, forward
+ * slashes), or null when it lies outside the project folder (an added root).
+ */
+export function workspaceRelativePath(path: string, workspace: string): string | null {
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const p = norm(path)
+  const absolute = p.startsWith('/') || /^[A-Za-z]:\//.test(p)
+  if (!absolute) {
+    const rel = p.replace(/^(\.\/)+/, '')
+    return rel && rel !== '..' && !rel.startsWith('../') ? rel : null
+  }
+  const root = norm(workspace)
+  return p.startsWith(`${root}/`) ? p.slice(root.length + 1) : null
 }

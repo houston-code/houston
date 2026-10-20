@@ -79,6 +79,11 @@ const api = {
   pickAttachmentFiles: (): Promise<PickedFile[]> => ipcRenderer.invoke(IPC.attachmentPickFiles),
   /** Composer "+" menu: read the system clipboard (text + optional image). */
   readClipboard: (): Promise<ClipboardContent> => ipcRenderer.invoke(IPC.clipboardRead),
+  /** Image viewer: put an image (a data: URL) on the system clipboard. */
+  copyImage: (dataUrl: string): Promise<boolean> => ipcRenderer.invoke(IPC.imageCopy, dataUrl),
+  /** Image viewer: save an image (a data: URL) to a file the user picks; resolves with the path, or null if cancelled. */
+  saveImage: (dataUrl: string, label: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.imageSave, dataUrl, label),
   listCommands: (workspace: string): Promise<Command[]> =>
     ipcRenderer.invoke(IPC.commandsList, workspace),
   /** The workspace's skills (.houston/skills), name + description, for /skills. */

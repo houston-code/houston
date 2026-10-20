@@ -92,7 +92,7 @@ import { GetStarted } from './components/GetStarted'
 import { ConnectModel, providerShortName } from './components/ConnectModel'
 import { TipHost } from './components/TipHost'
 import { ImageViewer } from './components/ImageViewer'
-import { ImageViewerContext, type ImageViewerApi, type ViewerImage } from './lib/imageViewer'
+import { ImageViewerContext, workspaceRelativePath, type ImageViewerApi, type ViewerImage } from './lib/imageViewer'
 import { useOnboarding } from './hooks/useOnboarding'
 import {
   markTipsSeen,
@@ -176,6 +176,8 @@ export default function App(): JSX.Element {
   const [doctorOpen, setDoctorOpen] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
+  // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
+  const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
   const [sideChatOpen, setSideChatOpen] = useState(false)
   // The open chat's decisions on its propose_session cards (keyed by call id).
   const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
@@ -2178,7 +2180,16 @@ export default function App(): JSX.Element {
 
         {doctorOpen && <DoctorModal workspace={workspace} onClose={() => setDoctorOpen(false)} />}
 
-        {filesOpen && <FilesPanel workspace={workspace} onClose={() => setFilesOpen(false)} />}
+        {filesOpen && (
+          <FilesPanel
+            workspace={workspace}
+            initialPath={filesTarget}
+            onClose={() => {
+              setFilesOpen(false)
+              setFilesTarget(undefined)
+            }}
+          />
+        )}
 
         {scorecardOpen && <Scorecard onClose={() => setScorecardOpen(false)} />}
 
@@ -2222,6 +2233,23 @@ export default function App(): JSX.Element {
             if (!workspace) return 'No project folder is open.'
             const res = await window.api.openWorkspacePath(workspace, path)
             return res.ok ? null : (res.error ?? "Couldn't open that file.")
+          }}
+          onShowInFiles={(path) => {
+            const rel = workspace ? workspaceRelativePath(path, workspace) : null
+            if (!rel) return 'That file is outside the project folder.'
+            setViewer(null)
+            setFilesTarget(rel)
+            setFilesOpen(true)
+            return null
+          }}
+          onCopy={async (img) =>
+            (await window.api.copyImage(img.src))
+              ? { ok: true, message: 'Copied' }
+              : { ok: false, message: "Couldn't copy the image." }
+          }
+          onSave={async (img) => {
+            const saved = await window.api.saveImage(img.src, img.label)
+            return saved ? { ok: true, message: `Saved to ${saved.split(/[\\/]/).pop()}` } : null
           }}
         />
       )}

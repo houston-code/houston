@@ -93,12 +93,20 @@ function TreeRow({
  * snappy) on the left, an in-app preview of the selected file on the right, and a
  * filter box that switches to a flat fuzzy search.
  */
+/** A path as the tree keys it: forward slashes, no leading "./" or "/". */
+export function normalizeRelPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/^\/+/, '').replace(/\/+$/, '')
+}
+
 export function FilesPanel({
   workspace,
-  onClose
+  onClose,
+  initialPath
 }: {
   workspace: string | null
   onClose: () => void
+  /** A workspace-relative file to reveal on open: its folders expanded, the file selected and previewed. */
+  initialPath?: string
 }): JSX.Element {
   // Children keyed by directory path ('' is the workspace root). Presence of a key
   // means "loaded" — undefined is still-loading, [] is a genuinely empty folder.
@@ -124,14 +132,31 @@ export function FilesPanel({
     setLoadingRoot(true)
     try {
       const kids = await window.api.listWorkspaceDir(workspace, '')
-      setChildrenByDir({ '': kids })
-      setExpanded(new Set())
+      const loaded: Record<string, FileEntry[]> = { '': kids }
+      const open = new Set<string>()
+      // Reveal a requested file: load and expand each folder above it, then select it.
+      const target = initialPath ? normalizeRelPath(initialPath) : ''
+      if (target) {
+        const parts = target.split('/')
+        for (let i = 1; i < parts.length; i++) {
+          const dir = parts.slice(0, i).join('/')
+          try {
+            loaded[dir] = await window.api.listWorkspaceDir(workspace, dir)
+            open.add(dir)
+          } catch {
+            break
+          }
+        }
+        setSelected(target)
+      }
+      setChildrenByDir(loaded)
+      setExpanded(open)
     } catch (e) {
       setError((e as Error).message)
     } finally {
       setLoadingRoot(false)
     }
-  }, [workspace])
+  }, [workspace, initialPath])
 
   useEffect(() => {
     void reload()

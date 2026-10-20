@@ -117,13 +117,11 @@ export function isSensitiveRead(kind: ToolKind, args: Record<string, unknown>): 
   // images, but a path naming a credential store still prompts, as read_file does.
   return (
     Array.isArray(args.images) &&
-    args.images.some(
-      (img) =>
-        typeof img === 'object' &&
-        img !== null &&
-        typeof (img as Record<string, unknown>).path === 'string' &&
-        isSensitivePath((img as Record<string, unknown>).path as string)
-    )
+    args.images.some((img) => {
+      if (typeof img !== 'object' || img === null) return false
+      const o = img as Record<string, unknown>
+      return [o.path, o.compareWith].some((p) => typeof p === 'string' && isSensitivePath(p))
+    })
   )
 }
 

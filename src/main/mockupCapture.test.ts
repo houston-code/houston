@@ -14,7 +14,9 @@ const {
   isAllowedMockupRequest,
   mockupHeaders,
   mockupUrl,
-  serveMockupRequest
+  serveMockupRequest,
+  withPrefetchOff,
+  PREFETCH_OFF_META
 } = await import('./mockupCapture')
 
 const TOKEN = '0123456789abcdef0123456789abcdef'
@@ -154,5 +156,22 @@ describe('response details', () => {
     expect(MOCKUP_CSP).toContain("form-action 'none'")
     expect(MOCKUP_CSP).not.toMatch(/https?:/)
     expect(mockupHeaders('text/plain')['x-content-type-options']).toBe('nosniff')
+  })
+})
+
+describe('DNS prefetch', () => {
+  it('turns prefetching off at the very start of every HTML document it serves', async () => {
+    writeFileSync(join(root, 'mockups', 'p.html'), '<!DOCTYPE html><link rel="dns-prefetch" href="//leak.example">')
+    const res = await serveMockupRequest(url('mockups/p.html'), lookup)
+    expect(String(res.body)).toBe(`<!DOCTYPE html>${PREFETCH_OFF_META}<link rel="dns-prefetch" href="//leak.example">`)
+  })
+
+  it('handles a page with no doctype or with a byte-order mark, and leaves non-HTML alone', async () => {
+    expect(withPrefetchOff(Buffer.from('<p>hi')).toString()).toBe(`${PREFETCH_OFF_META}<p>hi`)
+    expect(withPrefetchOff(Buffer.from('\uFEFF  <!doctype html ><p>')).toString()).toBe(
+      `\uFEFF  <!doctype html >${PREFETCH_OFF_META}<p>`
+    )
+    const css = await serveMockupRequest(url('mockups/assets/app.css'), lookup)
+    expect(String(css.body)).toBe('body{color:red}')
   })
 })

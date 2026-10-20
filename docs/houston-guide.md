@@ -844,12 +844,16 @@ an occurrence missed while Houston was closed fires once at the next launch.
   transcript.
 - **`pr_sweep`** tracks batch pull-request work (author new PRs from a task list,
   or process a batch of existing open PRs).
-- **`show_images`** (desktop app) shows you image files the agent produced, such
-  as screenshots of an app or rendered mockups, as a captioned gallery in the
-  chat. Click any image to open it full size, step through the set with the arrow
-  keys, and open the file in its default app. It only reads image files (PNG,
-  JPEG, GIF, or WebP, up to 5 MB each, 12 per gallery) inside the project, so it
-  never asks for approval.
+- **`show_images`** shows you image files the agent produced, such as screenshots
+  of an app or rendered mockups. In the desktop app they appear as a captioned
+  gallery: click any image to open it full size, step through the set with the
+  arrow keys, compare it with a "before" image using a slider when the agent paired
+  one, copy it, save it, show it in the Files panel, or open the file in its
+  default app. In the terminal each image is a clickable link to its file. It only
+  reads image files (PNG, JPEG, GIF, or WebP, up to 5 MB each, 12 per gallery)
+  inside the project, so it never asks for approval. Images go to the model scaled
+  down to at most 1568 pixels on their long side; the chat keeps the full-size
+  originals.
 - **`render_mockup`** (desktop app) turns an HTML mockup file in the project into
   screenshots without a dev server, in the sizes and themes asked for (desktop,
   tablet, or mobile, light or dark, or a custom size), and shows them as a gallery

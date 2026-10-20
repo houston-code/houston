@@ -135,6 +135,7 @@ import {
 import { reviewWorkspaceChanges } from './review'
 import { captureLocalhost, isCaptureBackendConfigured } from './viewlocalhost'
 import { isMockupBackendConfigured, mockupBackend } from './mockupRender'
+import { withModelImages } from './modelImages'
 import { listenersOnPort } from './portOwner'
 import {
   acceptedProposalCalls,
@@ -1024,6 +1025,7 @@ export async function startRun(
       // Only the desktop app draws image results as a gallery; in a terminal client
       // show_images and render_mockup would be a list of file names.
       imageGallery: req.imageGallery === true,
+      imageLinks: req.imageLinks === true,
       mockupRender: isMockupBackendConfigured(),
       spawn: spawnAvailable,
       // A proposal card lives on a persisted chat (its state is stored there), so a
@@ -2631,10 +2633,12 @@ export async function startRun(
         let shownReasoning = 0
         const attemptMark = run.transcript.length
         try {
+          // Images go out at the model's size; the log keeps the originals.
+          const outgoing = await withModelImages(sendMessages)
           for await (const ev of route.provider.streamChat({
             model: route.model,
             system,
-            messages: sendMessages,
+            messages: outgoing,
             tools,
             reasoningEffort,
             reasoningCapable: route.reasoningCapable,

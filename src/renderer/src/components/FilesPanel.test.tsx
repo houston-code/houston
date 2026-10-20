@@ -1,7 +1,7 @@
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { FileEntry, FilePreview } from '@shared/files'
-import { FilesPanel } from './FilesPanel'
+import { FilesPanel, normalizeRelPath } from './FilesPanel'
 
 /**
  * Install a fake `window.api` whose listWorkspaceDir resolves to the children of
@@ -131,5 +131,26 @@ describe('FilesPanel', () => {
     await waitFor(() => expect(screen.getByText('README.md')).toBeInTheDocument())
     fireEvent.click(container.querySelector('.drawer-overlay')!)
     expect(onClose).toHaveBeenCalled()
+  })
+})
+
+describe('FilesPanel opened at a file', () => {
+  it('expands the folders above the file and previews it', async () => {
+    const api = installApi({
+      '': [dir('e2e', 'e2e')],
+      e2e: [dir('screens', 'e2e/screens')],
+      'e2e/screens': [file('home.png', 'e2e/screens/home.png')]
+    })
+    render(<FilesPanel workspace="/repo" onClose={vi.fn()} initialPath="./e2e/screens/home.png" />)
+    expect(await screen.findByText('home.png')).toBeInTheDocument()
+    expect(api.listWorkspaceDir).toHaveBeenCalledWith('/repo', 'e2e')
+    expect(api.listWorkspaceDir).toHaveBeenCalledWith('/repo', 'e2e/screens')
+    await waitFor(() => expect(api.readWorkspaceFile).toHaveBeenCalledWith('/repo', 'e2e/screens/home.png'))
+  })
+
+  it('normalizes the paths it is given', () => {
+    expect(normalizeRelPath('./a/b.png')).toBe('a/b.png')
+    expect(normalizeRelPath('a\\b.png')).toBe('a/b.png')
+    expect(normalizeRelPath('/a/')).toBe('a')
   })
 })

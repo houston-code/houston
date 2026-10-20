@@ -71,7 +71,10 @@ import type { ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
-import { truncateVisible, stripControlChars, osc52Copy } from './tui-wrap'
+import { truncateVisible, stripControlChars, osc52Copy, osc8Link } from './tui-wrap'
+import { isAbsolute, resolve as resolvePath } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
 import { SHARE_MESSAGE } from '@shared/share'
 import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
 import { renderPreviewView } from './tui-diff'
@@ -473,6 +476,30 @@ export const VERBOSE_LINES = 40
  * `verbose` opens successes up too, and `/output` recovers any result in full
  * from the persisted log afterwards.
  */
+/**
+ * A show_images result in the terminal: the gallery's title, then each image as a
+ * clickable link to its file (the tool already confirmed every file is an image
+ * inside the project). Labels and paths come from the model, so control characters
+ * are stripped before they go inside the link. Null when the args don't parse.
+ */
+export function renderImageLinks(args: Record<string, unknown> | undefined, cwd: string, paint: Painter): string | null {
+  const gallery = parseGalleryArgsSafe(args)
+  if (!gallery) return null
+  const link = (path: string): string => {
+    const shown = stripControlChars(path)
+    const url = pathToFileURL(isAbsolute(shown) ? shown : resolvePath(cwd, shown)).href
+    return osc8Link(url, paint(shown, 'cyan'))
+  }
+  const n = gallery.images.length
+  const title = gallery.title ? `${stripControlChars(gallery.title)}: ` : ''
+  const lines = [paint(`  ▦ ${title}${n} image${n === 1 ? '' : 's'} (click a path to open it)`, 'dim')]
+  for (const img of gallery.images) {
+    const compare = img.compareWith ? paint(' compared with ', 'dim') + link(img.compareWith) : ''
+    lines.push(`    ${stripControlChars(img.label)}  ${link(img.path)}${compare}`)
+  }
+  return lines.join('\n')
+}
+
 export function renderToolResult(
   name: string,
   ok: boolean,
@@ -3381,7 +3408,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       providerId,
       model,
       approvalPolicy: policy,
-      messages
+      messages,
+      // show_images results print as clickable file links (see renderImageLinks).
+      imageLinks: true
     }
     // Serialize interactive prompts (approvals/questions) so two readLine calls
     // never overlap on the single input stream.
@@ -3496,6 +3525,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             )
             toolArgs.delete(e.callId)
             break
+          }
+          // A gallery is a desktop view; here each image is a clickable link to its file.
+          if (e.name === SHOW_IMAGES_NAME && e.ok) {
+            const links = renderImageLinks(toolArgs.get(e.callId), opts.cwd, paint)
+            if (links) {
+              deps.io.out(`${links}\n`)
+              toolArgs.delete(e.callId)
+              break
+            }
           }
           const line = renderToolResult(e.name, e.ok, e.output, paint, { verbose })
           if (line) deps.io.out(`${line}\n`)

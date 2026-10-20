@@ -390,7 +390,7 @@ function ToolRow({
       {isGallery && (
         <ImageGallery
           title={gallery?.title ?? (mockup ? `Mockup: ${mockup.file}` : liveVariants ? liveUrl : undefined)}
-          badge={mockup ? 'Mockup from code' : liveVariants ? 'Running app' : undefined}
+          badge={mockup ? 'Mockup from code' : liveVariants ? 'Running app' : 'Image files'}
           images={galleryImages}
         />
       )}

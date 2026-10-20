@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { extname, relative } from 'node:path'
-import { BrowserWindow, protocol, session, type Session } from 'electron'
+import { app, BrowserWindow, protocol, session, type Session } from 'electron'
 import { MAX_FULL_PAGE_HEIGHT, type MockupVariant } from '@shared/mockup'
 import { resolveInRoots } from './agent/tools'
 import { isSensitivePath } from './agent/sensitive-paths'
@@ -24,7 +24,8 @@ import { attachCdp, cdpFullPage, cdpScreenshot, emulateViewport, type Cdp } from
  *    a network scheme, routes anything that slips past to a proxy that isn't there,
  *    and keeps WebRTC off non-proxied UDP, so no request, beacon, socket, or ICE
  *    candidate leaves the machine. Every response also carries a CSP limiting the
- *    page to its own origin and turning off DNS prefetch.
+ *    page to its own origin, and every HTML document gets a meta tag turning DNS
+ *    prefetch off (see withPrefetchOff).
  *  - Downloads, permissions, new windows, and navigation off the token origin are
  *    all refused, and JavaScript dialogs are dismissed rather than left blocking.
  */
@@ -172,7 +173,26 @@ export async function serveMockupRequest(
   } catch {
     return notFound
   }
-  return { status: 200, headers: mockupHeaders(contentTypeFor(abs)), body }
+  const type = contentTypeFor(abs)
+  return { status: 200, headers: mockupHeaders(type), body: type.startsWith('text/html') ? withPrefetchOff(body) : body }
+}
+
+/** Turns DNS prefetching off for the whole document; once off, a page can't turn it back on. */
+export const PREFETCH_OFF_META = '<meta http-equiv="x-dns-prefetch-control" content="off">'
+
+/**
+ * Put {@link PREFETCH_OFF_META} at the very start of an HTML document, after its
+ * doctype if it has one (before it would drop the page into quirks mode). Chromium
+ * resolves the host of a `<link rel="dns-prefetch">` through the system resolver
+ * even for a page that can make no other request, and ignores the
+ * X-DNS-Prefetch-Control response header here, so a page could leak data in DNS
+ * names to a server an attacker runs. The meta tag, seen before any link, stops it.
+ */
+export function withPrefetchOff(html: Buffer): Buffer {
+  const text = html.toString('utf8')
+  const doctype = /^\uFEFF?\s*<!doctype[^>]*>/i.exec(text)
+  const at = doctype ? doctype[0].length : 0
+  return Buffer.from(text.slice(0, at) + PREFETCH_OFF_META + text.slice(at), 'utf8')
 }
 
 /** The page URL for a file inside `root`, served under `token`. */
@@ -362,8 +382,19 @@ async function renderVariant(
   }
 }
 
+/**
+ * Turn off DNS prefetching in every renderer. A `<link rel="dns-prefetch">` makes
+ * Chromium resolve its host through the system resolver, outside the session's
+ * request filter and proxy, and it ignores the page-level opt-out for explicit
+ * links; this blink setting is the one switch it does check. It is app-wide (Electron
+ * has no per-session control), which costs nothing here: prefetching is only a
+ * speed hint, and Houston's own network calls go through Node, not Chromium.
+ */
+export const DNS_PREFETCH_OFF = 'dnsPrefetchingEnabled=false'
+
 /** Register the scheme and wire the renderer into the agent. Call once, before app ready. */
 export function wireMockupCapture(): void {
   registerScheme()
+  app.commandLine.appendSwitch('blink-settings', DNS_PREFETCH_OFF)
   setMockupBackend(renderMockupElectron)
 }

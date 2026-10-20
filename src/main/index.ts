@@ -21,6 +21,7 @@ import { setUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
 import { wireLocalhostCapture } from './localhostCapture'
 import { wireMockupCapture } from './mockupCapture'
+import { wireImageDownscale } from './imageDownscale'
 import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation } from './quit-confirm'
 import { parseHeadlessArgs } from './headless'
 import { parseTuiArgs } from './tui'
@@ -85,6 +86,8 @@ wireAgentHost()
 wireLocalhostCapture()
 // Registers the render_mockup page scheme, which Electron only allows before ready.
 wireMockupCapture()
+// Images go to the model scaled down; the transcript keeps the originals.
+wireImageDownscale()
 
 let mainWindow: BrowserWindow | null = null
 
