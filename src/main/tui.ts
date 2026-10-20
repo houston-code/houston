@@ -3396,9 +3396,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
       : undefined
     const md = new MarkdownStream({ paint, width: columns(), highlight })
+    // Whether the model round now streaming has put any text or reasoning on screen.
+    // A discarded round can only be struck out once printed (line mode can't erase),
+    // so this decides whether there is anything above to disown.
+    let roundShown = false
     const flushMd = (): void => {
       const s = md.flush()
-      if (s) deps.io.out(s)
+      if (s) {
+        deps.io.out(s)
+        roundShown = true
+      }
     }
     flushStreamedText = flushMd
     // Liveness while the agent works (relabelled per event; erased on any output).
@@ -3414,14 +3421,30 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // bell + notification honor the user's existing "notify me" setting.
       if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
       if (e.type === 'text') {
-        deps.io.out(md.push(e.delta))
+        const s = md.push(e.delta)
+        if (s) roundShown = true
+        deps.io.out(s)
         return
       }
-      flushMd()
+      // A discarded round's unfinished block is dropped unrendered, never flushed:
+      // its redo will print the whole reply again.
+      if (e.type === 'turn_discarded') md.discard()
+      else flushMd()
+      // Any event but reasoning means the streaming round is over (or gone).
+      const roundWasShown = roundShown
+      if (e.type !== 'reasoning') roundShown = false
       switch (e.type) {
         case 'reasoning':
           deps.io.setSpinnerLabel?.('Thinking')
           deps.io.out(paint(e.delta, 'dim'))
+          roundShown = true
+          break
+        case 'turn_discarded':
+          // What already reached the terminal can't be erased in line mode, so strike
+          // it out in words; the retry or fallback line that follows says why.
+          if (roundWasShown) {
+            deps.io.out(paint('\n· ✗ the reply above was cut off and is discarded; starting it over\n', 'yellow'))
+          }
           break
         case 'tool_start': {
           deps.io.setSpinnerLabel?.(e.name)

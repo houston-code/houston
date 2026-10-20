@@ -967,6 +967,160 @@ describe('startRun', () => {
     expect(types(r).at(-1)).toBe('error')
   })
 
+  describe('a stream that fails partway through a turn', () => {
+    type Discarded = Extract<AgentEvent, { type: 'turn_discarded' }>
+    const overloaded: ProviderStreamEvent = { type: 'error', message: 'Overloaded', status: 529 }
+    const badRequest: ProviderStreamEvent = { type: 'error', message: 'invalid request body', status: 400 }
+    const answer: ProviderStreamEvent[] = [
+      { type: 'text', text: 'the whole answer' },
+      { type: 'done', stopReason: 'end_turn' }
+    ]
+    // What each partial streams before the failure, and what the clients were shown
+    // of it: tool calls are only collected while a turn streams, never emitted.
+    const partials: Array<{
+      kind: string
+      events: ProviderStreamEvent[]
+      shown: string[]
+      textChars: number
+      reasoningChars: number
+    }> = [
+      {
+        kind: 'text',
+        events: [
+          { type: 'text', text: 'The answer is ' },
+          { type: 'text', text: 'forty' }
+        ],
+        shown: ['text', 'text'],
+        textChars: 'The answer is forty'.length,
+        reasoningChars: 0
+      },
+      {
+        kind: 'reasoning',
+        events: [{ type: 'reasoning', text: 'First, consider the ' }],
+        shown: ['reasoning'],
+        textChars: 0,
+        reasoningChars: 'First, consider the '.length
+      },
+      {
+        kind: 'a partial tool call',
+        events: [
+          { type: 'reasoning', text: 'Need the file.' },
+          { type: 'text', text: 'Reading it.' },
+          { type: 'tool_call', call: { id: 'dead', name: 'write_file', arguments: { path: 'x.txt', content: 'x' } } }
+        ],
+        shown: ['reasoning', 'text'],
+        textChars: 'Reading it.'.length,
+        reasoningChars: 'Need the file.'.length
+      }
+    ]
+    /** Event types up to the end of the run, without the per-round usage report. */
+    const flow = (r: RunResult): string[] => types(r).filter((t) => t !== 'usage')
+
+    it.each(partials)(
+      'discards a turn cut off after $kind and retries it',
+      async ({ events, shown, textChars, reasoningChars }) => {
+        const r = await run({ turns: [[...events, overloaded], answer], policy: 'full-auto' })
+
+        expect(flow(r)).toEqual([...shown, 'turn_discarded', 'retry', 'text', 'done'])
+        const discarded = r.events.find((e) => e.type === 'turn_discarded') as Discarded
+        expect(discarded).toMatchObject({ attempt: 1, textChars, reasoningChars })
+        expect(discarded.reason).toContain('Overloaded')
+        expect(r.events.find((e) => e.type === 'retry')).toMatchObject({ attempt: 1 })
+        // Nothing of the dead attempt was persisted, and its tool call never ran.
+        expect(r.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
+        expect(r.messages[1]).toEqual({ role: 'assistant', content: 'the whole answer' })
+        expect(existsSync(join(ws, 'x.txt'))).toBe(false)
+      }
+    )
+
+    it.each(partials)(
+      'ends the run on a non-transient failure after $kind, keeping nothing',
+      async ({ events, shown }) => {
+        const r = await run({ turns: [[...events, badRequest], answer], policy: 'full-auto' })
+
+        // Not retried, so nothing is retracted: the partial stays beside the error.
+        expect(flow(r)).toEqual([...shown, 'error'])
+        expect((r.events.at(-1) as { message: string }).message).toContain('invalid request body')
+        // The run never persisted past the user's turn (the client already holds it).
+        expect(r.messages.some((m) => m.role === 'assistant' || m.role === 'tool')).toBe(false)
+        expect(existsSync(join(ws, 'x.txt'))).toBe(false)
+      }
+    )
+
+    it('retracts only the attempt that failed, across repeated mid-stream drops', async () => {
+      const r = await run({
+        turns: [
+          [{ type: 'text', text: 'one' }, overloaded],
+          [{ type: 'reasoning', text: 'hmm' }, { type: 'text', text: 'two!' }, overloaded],
+          answer
+        ]
+      })
+      expect(flow(r)).toEqual([
+        'text',
+        'turn_discarded',
+        'retry',
+        'reasoning',
+        'text',
+        'turn_discarded',
+        'retry',
+        'text',
+        'done'
+      ])
+      const discards = r.events.filter((e) => e.type === 'turn_discarded') as Discarded[]
+      expect(discards.map((d) => [d.attempt, d.textChars, d.reasoningChars])).toEqual([
+        [1, 3, 0],
+        [2, 4, 3]
+      ])
+      expect(r.messages.filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual([
+        'the whole answer'
+      ])
+    }, 20_000)
+
+    it('gives up once the retry budget is spent, leaving the last partial beside the error', async () => {
+      const drops = Array.from({ length: 9 }, () => [{ type: 'text' as const, text: 'par' }, overloaded])
+      const r = await run({ turns: drops })
+      // One discard per retry; the final failure has nothing left to retry with.
+      const discards = r.events.filter((e) => e.type === 'turn_discarded')
+      const retries = r.events.filter((e) => e.type === 'retry') as { max: number }[]
+      expect(discards).toHaveLength(retries.length)
+      expect(retries.length).toBe(retries[0].max)
+      expect(flow(r).slice(-2)).toEqual(['text', 'error'])
+      expect(r.messages.some((m) => m.role === 'assistant')).toBe(false)
+    }, 30_000)
+
+    it('aborts during the backoff after a discard without retrying', async () => {
+      let calls = 0
+      const provider: Provider = {
+        async *streamChat() {
+          calls++
+          yield { type: 'text', text: 'par' }
+          yield overloaded
+        }
+      }
+      h.provider = provider
+      const runId = 'run-discard-abort'
+      const events: AgentEvent[] = []
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'go' }]
+        },
+        (e) => {
+          events.push(e)
+          if (e.type === 'retry') cancelRun(runId)
+        },
+        () => {}
+      )
+      expect(calls).toBe(1)
+      expect(events.map((e) => e.type)).toEqual(['text', 'turn_discarded', 'retry', 'done'])
+      expect(events.at(-1)).toMatchObject({ stopReason: 'aborted' })
+    })
+  })
+
   describe('fallback-model chains', () => {
     /** Every attempt fails as an overload, so the primary burns its whole budget. */
     const alwaysOverloaded = (): Provider =>
@@ -1013,14 +1167,41 @@ describe('startRun', () => {
       expect(types(r).at(-1)).toBe('error')
     })
 
-    it('does not hop once output has streamed, so a reply can never be spliced', async () => {
+    it('retracts a partial reply before hopping, so two models are never spliced', async () => {
       registerFallback(backupReplies())
       const r = await run({
-        turns: [[{ type: 'text', text: 'partial…' }, { type: 'error', message: 'Overloaded' }]]
+        provider: scripted(
+          Array.from({ length: 9 }, () => [
+            { type: 'text' as const, text: 'partial…' },
+            { type: 'error' as const, message: 'Overloaded' }
+          ])
+        )
+      })
+      const seq = types(r)
+      const hop = seq.indexOf('model_fallback')
+      expect(hop).toBeGreaterThan(0)
+      // The primary's last partial is taken back before the backup says anything.
+      expect(seq[hop - 1]).toBe('turn_discarded')
+      expect(seq.filter((t) => t === 'turn_discarded')).toHaveLength(seq.filter((t) => t === 'retry').length + 1)
+      const afterHop = r.events.slice(hop + 1).filter((e) => e.type === 'text') as { delta: string }[]
+      expect(afterHop.map((e) => e.delta)).toEqual(['from backup'])
+      expect(seq.at(-1)).toBe('done')
+      expect(r.messages.filter((m) => m.role === 'assistant').map((m) => m.content)).toEqual(['from backup'])
+    }, 30_000)
+
+    it('keeps the partial reply beside the error when the chain is exhausted', async () => {
+      const r = await run({
+        provider: scripted(
+          Array.from({ length: 9 }, () => [
+            { type: 'text' as const, text: 'partial…' },
+            { type: 'error' as const, message: 'Overloaded' }
+          ])
+        )
       })
       expect(types(r)).not.toContain('model_fallback')
-      expect(types(r).at(-1)).toBe('error')
-    })
+      // No discard after the final failure: nothing will replace what is on screen.
+      expect(types(r).slice(-2)).toEqual(['text', 'error'])
+    }, 30_000)
 
     it('reports the primary failure when the chain is empty', async () => {
       const r = await run({ turns: [[{ type: 'error', message: 'invalid api key' }]] })
@@ -2990,6 +3171,47 @@ describe('ask_user', () => {
       expect(midStream.some((e) => e.type === 'text' && e.delta === 'Half a thought')).toBe(true)
       // The turn finished and persisted, so the (now-ended) run's buffer is empty.
       expect(liveTranscriptForConversation(conversationId)).toEqual([])
+    })
+
+    it('forgets a discarded attempt, so a re-open never replays output the clients took back', async () => {
+      const conversationId = 'conv-live-discard'
+      const snapshots: string[][] = []
+      let calls = 0
+      h.provider = {
+        async *streamChat() {
+          calls++
+          if (calls === 1) {
+            yield { type: 'reasoning', text: 'a long think' }
+            yield { type: 'text', text: 'Half' }
+            yield { type: 'error', message: 'Overloaded', status: 529 }
+            return
+          }
+          yield { type: 'text', text: 'Whole.' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      await startRun(
+        {
+          runId: 'run-live-discard',
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'think' }]
+        },
+        (e) => {
+          if (e.type === 'retry' || (e.type === 'text' && e.delta === 'Whole.')) {
+            snapshots.push(liveTranscriptForConversation(conversationId).map((ev) => ev.type))
+          }
+        }
+      )
+      // At the retry, the buffer holds the retry notice and nothing of the dropped
+      // attempt; once the redo streams, only the redo is added after it.
+      expect(snapshots).toEqual([
+        ['retry'],
+        ['retry', 'text']
+      ])
     })
 
     it('drops already-persisted rounds from the buffer so a replay cannot double-count', async () => {

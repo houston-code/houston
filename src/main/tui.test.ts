@@ -1848,6 +1848,93 @@ describe('runTui', () => {
     expect(out).toContain('✓ Correctness')
   })
 
+  // Parity with the GUI reducer (items.test.ts) and headless (headless.test.ts): a
+  // turn the loop throws away mid-stream and redoes must leave one copy of the reply.
+  // Line mode can't erase what it printed, so it drops what it hadn't and disowns
+  // what it had.
+  describe('a turn the loop discarded and redid', () => {
+    const discarded = (textChars: number, reasoningChars = 0): AgentEvent => ({
+      runId: 'x',
+      type: 'turn_discarded',
+      attempt: 1,
+      reason: 'Overloaded',
+      textChars,
+      reasoningChars
+    })
+    const retry: AgentEvent = { runId: 'x', type: 'retry', attempt: 1, max: 6, message: 'Overloaded' }
+    const done: AgentEvent = { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    const text = (delta: string): AgentEvent => ({ runId: 'x', type: 'text', delta })
+    const STRUCK = 'the reply above was cut off and is discarded'
+
+    it('never prints the unfinished block, and strikes out the part already shown', async () => {
+      const { d } = deps([
+        text('Finished paragraph.\n\n'),
+        text('Unfinished para'),
+        discarded('Finished paragraph.\n\nUnfinished para'.length),
+        retry,
+        text('Finished paragraph.\n\nThe whole reply.'),
+        done
+      ])
+      const t = fakeIo(['go', null])
+      d.io = t.io
+      await runTui(opts, d)
+      const out = t.text()
+      expect(out).not.toContain('Unfinished para')
+      expect(out).toContain(STRUCK)
+      expect(out).toContain('retrying (1/6)')
+      expect(out).toContain('The whole reply.')
+      // The redo follows the strike-out; the first copy sits above it, disowned.
+      expect(out.lastIndexOf('Finished paragraph.')).toBeGreaterThan(out.indexOf(STRUCK))
+    })
+
+    it('says nothing about a discard when none of the dropped turn reached the screen', async () => {
+      const { d } = deps([text('Half a sente'), discarded(12), retry, text('A whole sentence.'), done])
+      const t = fakeIo(['go', null])
+      d.io = t.io
+      await runTui(opts, d)
+      const out = t.text()
+      expect(out).not.toContain('Half a sente')
+      expect(out).not.toContain(STRUCK)
+      expect(out.match(/A whole sentence\./g)).toHaveLength(1)
+    })
+
+    it('strikes out reasoning that was shown before the drop', async () => {
+      const { d } = deps([
+        { runId: 'x', type: 'reasoning', delta: 'weighing the options' },
+        discarded(0, 'weighing the options'.length),
+        retry,
+        text('Answer.'),
+        done
+      ])
+      const t = fakeIo(['go', null])
+      d.io = t.io
+      await runTui(opts, d)
+      const out = t.text()
+      expect(out.indexOf(STRUCK)).toBeGreaterThan(out.indexOf('weighing the options'))
+      expect(out).toContain('Answer.')
+    })
+
+    it('does not strike out a finished round when a later one is dropped unseen', async () => {
+      const { d } = deps([
+        text('Reading the file.'),
+        { runId: 'x', type: 'tool_start', callId: 'c1', name: 'read_file', args: { path: 'a.ts' } },
+        { runId: 'x', type: 'tool_result', callId: 'c1', name: 'read_file', ok: true, output: 'x' },
+        text('Half'),
+        discarded(4),
+        retry,
+        text('Done.'),
+        done
+      ])
+      const t = fakeIo(['go', null])
+      d.io = t.io
+      await runTui(opts, d)
+      const out = t.text()
+      expect(out).toContain('Reading the file.')
+      expect(out).not.toContain(STRUCK)
+      expect(out).not.toContain('Half')
+    })
+  })
+
   it('prints review findings as they arrive, then each verdict once', async () => {
     const f = (id: string, status: 'candidate' | 'verifying' | 'confirmed' | 'rejected'): AgentEvent => ({
       runId: 'x',

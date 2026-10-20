@@ -29,9 +29,10 @@ import {
 
 /**
  * One-shot headless mode: run a single prompt through the agent loop without the
- * GUI, streaming output to stdout, and exit with a status code. The agent loop is
- * already UI-agnostic, so this is just an alternate entry point + transport — the
- * same provider adapters, tools, sandbox, and rules apply.
+ * GUI, writing the reply to stdout as each model round completes, and exit with a
+ * status code. The agent loop is already UI-agnostic, so this is just an alternate
+ * entry point + transport — the same provider adapters, tools, sandbox, and rules
+ * apply.
  *
  * Everything here is pure / dependency-injected (no Electron, no real I/O) so it
  * can be unit-tested; index.ts wires the real deps when a prompt flag is present.
@@ -637,14 +638,36 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
   let finalText = ''
   // Review findings print once per status change (see createFindingPrinter).
   const printFinding = createFindingPrinter()
+  // Text mode holds each model round's text until the round ends. stdout is the
+  // answer a script captures, and bytes written there can't be taken back, so a round
+  // that drops mid-stream and is redone (`turn_discarded`) would otherwise leave its
+  // partial copy ahead of the full one. While a round streams only its text and
+  // reasoning arrive, so any other event means the round is over and its text stays.
+  let roundText = ''
+  const releaseRound = (): void => {
+    if (roundText) deps.out(roundText)
+    roundText = ''
+  }
   const send = (e: AgentEvent): void => {
     if (opts.json) {
       deps.out(`${JSON.stringify(e)}\n`)
+    } else if (e.type === 'turn_discarded') {
+      roundText = ''
+    } else if (e.type !== 'text' && e.type !== 'reasoning') {
+      releaseRound()
     }
     switch (e.type) {
       case 'text':
         finalText += e.delta
-        if (!opts.json) deps.out(e.delta)
+        if (!opts.json) roundText += e.delta
+        break
+      case 'turn_discarded':
+        // The dropped round's text is the tail of the closing answer too (nothing but
+        // its own deltas arrived since it began), so the result line loses it as well.
+        finalText = finalText.slice(0, Math.max(0, finalText.length - e.textChars))
+        // Text mode dropped the round's held text above; --json consumers got the
+        // event itself and retract `textChars` from what they accumulated.
+        if (!opts.json) deps.err('· discarded a reply cut off mid-stream; redoing it\n')
         break
       case 'tool_start':
         finalText = ''
@@ -827,6 +850,9 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
   await deps.startRun(req, send, (m) => {
     if (deps.session && conversationId) deps.session.setMessages(conversationId, m)
   })
+  // A run always ends on `done` or `error`, which releases the last round; this only
+  // guarantees held text can't be lost if one never comes.
+  if (!opts.json) releaseRound()
 
   // A failure outranks a budget stop: a run that also hit an error or a refused
   // approval didn't merely run out of room.

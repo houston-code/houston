@@ -470,8 +470,8 @@ export interface AppSettings {
    * provider is overloaded or rate-limiting past the retry budget, or the request
    * doesn't fit the model's context window even after compaction.
    *
-   * Only consulted when nothing has streamed yet, so a hop can never duplicate
-   * output the user already saw. Entries may name any provider; one that no longer
+   * A hop never splices two models' output: anything the failing model had streamed
+   * is retracted first (`turn_discarded`). Entries may name any provider; one that no longer
    * resolves (removed provider, missing key) is skipped rather than failing the run.
    * Unset or empty means a failing model ends the turn, as before.
    */

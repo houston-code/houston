@@ -370,8 +370,10 @@ interface RunState {
    * live output would vanish; {@link liveTranscriptForConversation} hands this
    * buffer back so the renderer can replay it on re-adopt. Cleared at every persist
    * (see the `persist` wrapper in {@link startRun}) so it never double-counts a
-   * round already written to disk. reduceEvent upserts by id/callId, so replaying
-   * onto the disk-rebuilt transcript is idempotent.
+   * round already written to disk, and trimmed when a model turn that dropped
+   * mid-stream is discarded, so it never replays output the clients took back.
+   * reduceEvent upserts by id/callId, so replaying onto the disk-rebuilt transcript
+   * is idempotent.
    */
   transcript: AgentEvent[]
   /**
@@ -888,15 +890,18 @@ export async function startRun(
      * exhausted, which leaves the caller to report the original failure — a hop is a
      * recovery attempt, so its absence must not mask why the primary failed.
      *
-     * Only ever called with nothing streamed this attempt: swapping models after the
-     * user has seen partial output would duplicate or splice it (the same invariant
-     * the transient-retry path enforces).
+     * The next model must never be spliced onto output the user has already seen, so
+     * a caller holding a partial turn passes `beforeHop` to retract it (the same
+     * `turn_discarded` the transient-retry path emits). It runs only once a hop is
+     * certain, so an exhausted chain leaves the partial turn in place beside the
+     * error that ends the run.
      */
-    const hopToFallback = (reason: string): boolean => {
+    const hopToFallback = (reason: string, beforeHop?: () => void): boolean => {
       while (fallbackQueue.length) {
         const next = fallbackQueue.shift() as SelectedModel
         const resolved = resolveRoute(next.providerId, next.model)
         if (!resolved) continue // unusable entry — try the one after it
+        beforeHop?.()
         emit({ type: 'model_fallback', from: route.label, to: resolved.label, reason })
         route = resolved
         return true
@@ -2428,9 +2433,13 @@ export async function startRun(
       let turnCacheWrite = 0
       let turnReasoning: ReasoningBlock[] = []
 
-      // Stream the model turn, retrying transient failures with backoff — but only
-      // when nothing has been emitted yet this attempt, so retried output can't
-      // duplicate what the user already saw.
+      // Stream the model turn, retrying transient failures with backoff. A failure
+      // after part of the turn has streamed is retried too: the partial turn is
+      // discarded whole (nothing below this loop has seen it, so nothing is persisted
+      // and its collected tool calls never run), and `turn_discarded` tells the
+      // clients to retract what it showed, so the redo can't duplicate it. A long
+      // reasoning phase is where a dropped stream is likeliest, and ending the run
+      // there threw away a turn the model would have finished on a second try.
       streaming: for (let attempt = 0; ; attempt++) {
         assistantText = ''
         toolCalls = []
@@ -2441,6 +2450,11 @@ export async function startRun(
         turnCacheWrite = 0
         turnReasoning = []
         let emitted = false
+        // How much of this attempt reached the clients, which a discard retracts, and
+        // where its events start in the mid-turn replay buffer, which a discard trims.
+        let shownText = 0
+        let shownReasoning = 0
+        const attemptMark = run.transcript.length
         try {
           for await (const ev of route.provider.streamChat({
             model: route.model,
@@ -2458,9 +2472,11 @@ export async function startRun(
             if (ev.type === 'text') {
               emitted = true
               assistantText += ev.text
+              shownText += ev.text.length
               emit({ type: 'text', delta: ev.text })
             } else if (ev.type === 'reasoning') {
               emitted = true
+              shownReasoning += ev.text.length
               emit({ type: 'reasoning', delta: ev.text })
             } else if (ev.type === 'tool_call') {
               emitted = true
@@ -2543,27 +2559,45 @@ export async function startRun(
             })
             return
           }
-          // Can't safely retry once output has streamed, or if it's not transient.
-          if (emitted || attempt >= MAX_STREAM_RETRIES || !isRetryableError(e)) {
+          const reason = redact(describeProviderError(e))
+          // Throw away whatever this attempt streamed before redoing the turn. The
+          // accumulators reset at the top of the next attempt; this tells the clients
+          // to retract the text and reasoning they already showed. Only ever called
+          // on the way to a retry or a hop, so a run that ends here keeps its partial
+          // turn on screen beside the error that explains it.
+          const discardPartial = (): void => {
+            if (!emitted) return
+            emit({
+              type: 'turn_discarded',
+              attempt: attempt + 1,
+              reason,
+              textChars: shownText,
+              reasoningChars: shownReasoning
+            })
+            // A renderer that re-opens the conversation from here on needs neither
+            // the partial nor its retraction, so the replay buffer forgets both and
+            // holds at most one attempt of a reasoning phase that keeps dropping.
+            run.transcript.length = attemptMark
+          }
+          // Not transient, or this model is out of attempts.
+          if (attempt >= MAX_STREAM_RETRIES || !isRetryableError(e)) {
             // This model is done for. Before failing the turn, try the next one in
             // the chain — but only for a transient failure the model itself couldn't
             // shake off (overloaded, rate-limited, 5xx). A non-retryable error is a
             // property of the *request* (malformed body, bad auth), so re-sending it
-            // to another model would fail the same way and just burn the chain.
-            if (!emitted && isRetryableError(e) && hopToFallback((e as Error).message)) {
+            // to another model would fail the same way and just burn the chain. A
+            // partial turn doesn't stop the hop: it is retracted first, exactly as
+            // for a retry on the same model, so two models' output is never spliced.
+            if (isRetryableError(e) && hopToFallback((e as Error).message, discardPartial)) {
               sendMessages = buildWindow()
               attempt = -1 // fresh transient-retry budget for the new model
               continue streaming
             }
-            emit({ type: 'error', message: redact(describeProviderError(e)) })
+            emit({ type: 'error', message: reason })
             return
           }
-          emit({
-            type: 'retry',
-            attempt: attempt + 1,
-            max: MAX_STREAM_RETRIES,
-            message: redact(describeProviderError(e))
-          })
+          discardPartial()
+          emit({ type: 'retry', attempt: attempt + 1, max: MAX_STREAM_RETRIES, message: reason })
           await abortableSleep(retryDelayMs(e, attempt + 1), abort.signal)
           if (abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
