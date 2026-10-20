@@ -12,7 +12,7 @@ export interface PreviewPaneItem {
   /** Stable slot id — keys the React row AND the native WebContentsView. */
   id: string
   url: string
-  /** What to show as the row's heading (the server command, or the URL for a manual entry). */
+  /** What to show as the row's heading (the server command, or "Added by you" for a manual entry). */
   label: string
   kind: 'server' | 'manual'
   /** Every URL the server printed, when more than one (the pane can switch between them). */
@@ -112,7 +112,8 @@ export function selectPreviewPanes(
     const key = canonical(raw)
     if (seen.has(key)) continue
     seen.add(key)
-    all.push({ id: `manual:${key}`, url: raw, label: raw, kind: 'manual' })
+    // The URL itself shows in the pane's address slot, so the heading just says whose it is.
+    all.push({ id: `manual:${key}`, url: raw, label: 'Added by you', kind: 'manual' })
   }
 
   const startingCount = servers.filter((s) => s.running && !s.url).length

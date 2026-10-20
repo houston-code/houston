@@ -170,8 +170,7 @@ export function PreviewDock({
                         </option>
                       ))}
                     </select>
-                  ) : pane.kind === 'manual' ? null : (
-                    // A manual pane's label already is its URL.
+                  ) : (
                     <span className="preview-pane__host" title={pane.url}>
                       {pane.url}
                     </span>
