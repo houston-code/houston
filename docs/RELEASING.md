@@ -29,17 +29,30 @@ runs, not what gets released.
 
 ### Release - prepare
 
-| What do you want to release? | Version | What it does |
+| What do you want to release? | Version to type | What it does |
 | --- | --- | --- |
-| Next minor version | the next minor, for example `0.10.0` | Cuts `main` into a new line `release/0.10` and opens its release PR |
-| Next major version | the next major, for example `1.0.0` | The same, for `release/1.0` |
-| Patch a release | the next patch of any shipped release, for example `0.9.1` | Cuts that line's tip and opens its release PR |
-| Update pending release | a pending version, for example `0.9.1` | Re-cuts it from its line's tip, with regenerated notes |
+| Next minor version | the highest version that exists (shipped or pending), plus one minor | Cuts `main` into a new line, `release/X.Y`, and opens its release PR |
+| Next major version | the highest version that exists (shipped or pending), plus one major | The same, for a new major's line |
+| Patch a release | the highest shipped version on that line, plus one patch | Cuts that line's tip and opens its release PR |
+| Update pending release | the pending version itself | Re-cuts it from its line's tip, with regenerated notes |
 
 The version always has to agree with the choice (a leading `v` is fine). When it doesn't,
-the run fails with the version that would work, for example "The next minor version is
-0.10.0." "Next minor" and "Next major" count from the highest version that exists, shipped
-or pending, so several new lines can be in progress at once.
+the run fails with the version that would work. Because new versions count pending ones too,
+several new lines can be in progress at once. **Patch a release** and **Update pending
+release** often take the same number: the patch starts 0.9.2, and if a fix lands on
+`release/0.9` before it ships, the update re-cuts 0.9.2.
+
+For example, with v0.8.0 shipped (from before release lines), v0.9.0 and v0.9.1 shipped on
+`release/0.9`, and 0.10.0 pending on `release/0.10`:
+
+| Choice | Valid | Refused, with the message |
+| --- | --- | --- |
+| Next minor version | `0.11.0` (0.10.0 is pending, so it counts) | `0.10.0`: "The next minor version is 0.11.0." |
+| Next major version | `1.0.0` | `2.0.0`: "The next major version is 1.0.0." |
+| Patch a release | `0.9.2`, or `0.8.1` (see [Patch a shipped release](#patch-a-shipped-release)) | `0.9.3`: "The next patch of 0.9 is 0.9.2." `0.9.0`: "A patch version ends in a number above 0, like 0.9.1." `0.10.1`: "Nothing has shipped on 0.10 yet, so there's nothing to patch." |
+| Update pending release | `0.10.0`, or `0.9.2` once its patch is prepared | `0.9.1`: "v0.9.1 already shipped. To fix it, choose "Patch a release" with 0.9.2." `0.12.0`: "v0.12.0 isn't pending. Prepare it first." |
+
+Anything that isn't `X.Y.Z` (`0.9`, `1.0.0-rc.1`) is refused before anything runs.
 
 The run checks the exact commit it cuts, in Release - publish's order, and only opens the
 PR when everything passes:
@@ -146,8 +159,10 @@ you do, the abandoned version stays pending, but it blocks nothing else.
 | Situation | Message points you to |
 | --- | --- |
 | The version doesn't match the choice | the version that would |
+| A patch version ending in `.0`, or for a line where nothing has shipped | the patch rule above |
 | A patch while that line already has a pending version | **Update pending release** with it |
 | **Update pending release** for a version that already shipped | **Patch a release** with the next patch |
+| **Update pending release** for a version that isn't pending | preparing it first |
 | A patch with nothing merged to the line since the last release | nothing to do |
 | A line with a commit that didn't come in through a PR (a rebase merge or a direct push) | reverting it and re-merging through a PR |
 | A new line whose branch already exists (an abandoned cut) | deleting it first |
