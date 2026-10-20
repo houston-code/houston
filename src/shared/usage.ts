@@ -68,6 +68,36 @@ function blankModelUsage(model: string): ModelUsage {
   return { model, inputTokens: 0, outputTokens: 0, cost: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
 }
 
+/** Row label for usage a conversation recorded before Houston kept it per model. */
+export const EARLIER_MODELS_LABEL = 'Earlier models'
+
+/**
+ * The part of a conversation's totals that its per-model rows don't account for, as one
+ * more row, or null when they add up. A conversation that ran before Houston tallied
+ * usage per model carries cumulative totals with no breakdown behind them, so its
+ * breakdown listed only the models used since and fell short of the total it printed
+ * (one model at $0.23 under a $30.11 total). Input is left at 0: the totals keep only
+ * the current context size, not cumulative input, so there is nothing to subtract from.
+ * Half a cent of float drift between the summed rows and the running total is ignored.
+ */
+export function unattributedUsage(u: SessionUsage): ModelUsage | null {
+  const rows = u.perModel
+  if (!rows?.length) return null
+  const sum = (pick: (m: ModelUsage) => number): number => rows.reduce((n, m) => n + pick(m), 0)
+  const cost = u.cost - sum((m) => m.cost)
+  const output = u.output - sum((m) => m.outputTokens)
+  const cacheRead = (u.cacheRead ?? 0) - sum((m) => m.cacheReadTokens)
+  if (cost < 0.005 && output <= 0 && cacheRead <= 0) return null
+  return {
+    model: EARLIER_MODELS_LABEL,
+    inputTokens: 0,
+    outputTokens: Math.max(0, output),
+    cost: cost < 0.005 ? 0 : cost,
+    cacheReadTokens: Math.max(0, cacheRead),
+    cacheWriteTokens: 0
+  }
+}
+
 /**
  * Map a conversation's persisted usage to the shape the control bar renders. One
  * place so a field added to {@link ConversationUsage} can't be silently dropped on
