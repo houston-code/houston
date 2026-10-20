@@ -4241,6 +4241,14 @@ body.is-resizing .preview-dock__resizer::after {
   max-height: 160px;
   overflow: auto;
 }
+.receipt__gaps ul {
+  margin: 2px 0 0;
+  padding-left: 18px;
+  color: var(--text);
+}
+.receipt__gaps li::marker {
+  color: var(--warn);
+}
 .receipt__label {
   color: var(--text);
 }

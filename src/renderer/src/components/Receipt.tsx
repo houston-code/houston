@@ -31,6 +31,16 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
             ))}
           </ul>
         )}
+        {receipt.todoGaps && receipt.todoGaps.length > 0 && (
+          <div className="receipt__gaps">
+            <span className="receipt__label">Marked done with nothing recorded</span>
+            <ul>
+              {receipt.todoGaps.map((g, i) => (
+                <li key={i}>{g}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {(receipt.checksOmitted ?? 0) > 0 && (
           <p className="receipt__note">
             Plus {receipt.checksOmitted} earlier check{receipt.checksOmitted === 1 ? '' : 's'}.

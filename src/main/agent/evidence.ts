@@ -11,6 +11,7 @@ import {
   type TurnReceipt,
   type UnknownReason
 } from '@shared/evidence'
+import type { RequiredCheck } from './todoEvidence'
 
 /**
  * The run's evidence ledger: what the loop saw run, kept so the turn can end with a
@@ -712,6 +713,20 @@ export class EvidenceLedger {
     if (any) this.lastWriteSeq = this.seq++
   }
 
+  /**
+   * Whether a check of `kind` passed this turn ('any': a check of the code of any kind).
+   * An HTTP request whose status wasn't checked counts: it was made, which is what a
+   * "curl the API" todo claims. A browser check counts only if it checked the page.
+   */
+  passed(kind: RequiredCheck): boolean {
+    for (const { record } of this.checks.values()) {
+      const ok = record.ok === true || (record.kind === 'http' && record.unknown === 'http-status-unchecked')
+      if (!ok) continue
+      if (kind === 'any' ? CHECKS_CODE.has(record.kind) : record.kind === kind) return true
+    }
+    return false
+  }
+
   private put(record: CheckRecord): void {
     const key = `${record.kind}\u0000${record.label}`
     const prior = this.checks.get(key)
@@ -725,8 +740,12 @@ export class EvidenceLedger {
    * `git log` read). `peek` reads a background shell's state from the registry, so a
    * dev server still up or a backgrounded test run that finished is reported as such.
    */
-  receipt(peek?: (shellId: string) => ShellPeek | undefined): TurnReceipt | null {
-    if (this.checks.size === 0 && this.files.size === 0) return null
+  receipt(
+    peek?: (shellId: string) => ShellPeek | undefined,
+    extra: { todoGaps?: string[] } = {}
+  ): TurnReceipt | null {
+    const todoGaps = (extra.todoGaps ?? []).slice(0, 10).map((g) => displayLabel(g, 120))
+    if (this.checks.size === 0 && this.files.size === 0 && todoGaps.length === 0) return null
     const all = [...this.checks.values()].map(({ record, runs }): ReceiptCheck => {
       const { seq, pending: _pending, ...check } = this.settle(record, peek)
       return {
@@ -743,7 +762,8 @@ export class EvidenceLedger {
       ...(all.length > checks.length ? { checksOmitted: all.length - checks.length } : {}),
       otherCommands: this.otherCommands,
       filesChanged: files.slice(0, RECEIPT_MAX_FILES),
-      filesChangedCount: files.length
+      filesChangedCount: files.length,
+      ...(todoGaps.length ? { todoGaps } : {})
     }
   }
 

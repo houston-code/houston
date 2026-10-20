@@ -189,3 +189,17 @@ describe('wording for browser checks, background runs, and who ran what', () => 
     expect(checkDetail(check({ beforeLastWrite: true }))).toBe('exit 0, ran before the last file change')
   })
 })
+
+describe('todo gaps in the receipt', () => {
+  const r = receipt({ todoGaps: ['Backend tests with pytest', 'Verify: pytest, curl, build, browser'] })
+
+  it('counts them in the summary, lists them, and treats them as a failure', () => {
+    expect(receiptSummary(r)).toBe('2 todos marked done with nothing recorded')
+    expect(formatReceiptLines(r)).toEqual([
+      'Recorded by Houston: 2 todos marked done with nothing recorded',
+      '  ! marked done with nothing recorded: Backend tests with pytest',
+      '  ! marked done with nothing recorded: Verify: pytest, curl, build, browser'
+    ])
+    expect(receiptHasFailure(r)).toBe(true)
+  })
+})

@@ -7452,6 +7452,44 @@ describe('turn receipt', () => {
     }
   })
 
+  it('notes a todo marked done that claims a test ran when none did, and lists it on the receipt', async () => {
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        call('t1', 'todo_write', {
+          todos: [
+            { content: 'Write the API', status: 'completed' },
+            { content: 'Backend tests with pytest', status: 'completed' }
+          ]
+        }),
+        say('All tests pass.')
+      ]
+    })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'todo_write') as { output: string }
+    expect(result.output).toContain(
+      '[note: "Backend tests with pytest" is marked completed, but Houston has no passing test run recorded this turn.'
+    )
+    expect(result.output).not.toContain('"Write the API"')
+    expect(r.messages.at(-1)?.receipt?.todoGaps).toEqual(['Backend tests with pytest'])
+  })
+
+  it('does not flag a todo a passing run backs', async () => {
+    h.sandboxed = true
+    h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '12 passed in 0.1s' } })]
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('s1', 'run_shell', { command: 'pytest' }),
+        call('t1', 'todo_write', { todos: [{ content: 'Backend tests with pytest', status: 'completed' }] }),
+        say('Tests pass.')
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'todo_write') as { output: string }
+    expect(result.output).not.toContain('[note:')
+    expect(r.messages.at(-1)?.receipt).not.toHaveProperty('todoGaps')
+  })
+
   it('records only writes that landed', async () => {
     const r = await run({
       policy: 'ask',

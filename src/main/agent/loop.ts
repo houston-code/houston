@@ -19,6 +19,7 @@ import type {
   ToolSchema
 } from '@shared/agent'
 import type { PlanReadiness } from '@shared/planReadiness'
+import type { Todo } from '@shared/todos'
 import {
   systemNoteMessage,
   sanitizeApprovalNote,
@@ -175,7 +176,8 @@ import {
   summaryMaxTokens
 } from './compaction'
 import { getConversation, setCompaction, setPromptSnapshot, takeChildReports } from '../conversations'
-import { buildPinnedMessages, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
+import { buildPinnedMessages, latestTodos, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
+import { todoEvidenceGaps, todoGapNote } from './todoEvidence'
 import { StallDetector, callSignature, resolveStallThresholds } from './stall'
 import {
   MAX_OUTPUT_CONTINUATIONS,
@@ -1131,8 +1133,18 @@ export async function startRun(
     // last event. A run that ran no checks and changed no files (a question answered)
     // has none.
     const runStart = messages.length
+    // The todo list as the turn found it: items already completed then are never
+    // flagged again, and `seenTodos` tracks the last list todo_write was given.
+    const startTodos = latestTodos(messages)
+    let seenTodos = startTodos
+    const checkTodos = (todos: Todo[]): string[] => {
+      const gaps = todoEvidenceGaps(seenTodos, todos, run.evidence)
+      seenTodos = todos
+      return gaps.map(todoGapNote)
+    }
     beforeEnd = () => {
-      const receipt = run.evidence.receipt(peekShell)
+      const todoGaps = todoEvidenceGaps(startTodos, latestTodos(messages), run.evidence).map((g) => g.item)
+      const receipt = run.evidence.receipt(peekShell, { todoGaps })
       if (!receipt) return
       for (let i = messages.length - 1; i >= runStart; i--) {
         if (messages[i].role !== 'assistant') continue
@@ -1785,6 +1797,7 @@ export async function startRun(
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
       recordEvidence: (e) => recordEvidence(e),
+      checkTodos,
       fileTracker,
       ghExec,
       getSecret: getKey,

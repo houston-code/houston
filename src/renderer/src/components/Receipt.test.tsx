@@ -62,3 +62,13 @@ describe('Receipt', () => {
     expect(screen.getByText('And 2 more.')).toBeInTheDocument()
   })
 })
+
+describe('Receipt todo gaps', () => {
+  it('lists the todos marked done with nothing recorded', () => {
+    const { container } = render(<Receipt receipt={receipt({ todoGaps: ['Backend tests with pytest'] })} />)
+    fireEvent.click(screen.getByText('Recorded by Houston'))
+    expect(screen.getByText('Marked done with nothing recorded')).toBeInTheDocument()
+    expect(screen.getByText('Backend tests with pytest')).toBeInTheDocument()
+    expect(container.querySelector('.receipt--failed')).not.toBeNull()
+  })
+})
