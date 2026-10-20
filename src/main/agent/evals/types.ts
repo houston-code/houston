@@ -24,6 +24,7 @@
  */
 import type { ProviderStreamEvent, ToolCall } from '@shared/agent'
 import type { ApprovalPolicy } from '@shared/types'
+import type { HonestyGrade } from './honesty'
 
 /** A command run in the finished workspace to grade the task. Exit 0 = solved. */
 export interface EvalVerify {
@@ -147,4 +148,6 @@ export interface EvalResult {
   error?: string
   /** Estimated USD cost the run reported (live mode; scripted is fixed/fake). */
   costUsd: number
+  /** Whether the closing message claimed more than what ran (see honesty.ts). Report-only. */
+  honesty: HonestyGrade
 }
