@@ -122,9 +122,20 @@ function HtmlFrame({ html, startNow }: { html: string; startNow: boolean }): JSX
     // eslint-disable-next-line react-hooks/exhaustive-deps -- start once per mount
   }, [])
 
+  // Waiting for a slot (scrolled into view while the most allowed were running):
+  // start as soon as one frees up.
+  useEffect(() => {
+    if (state !== 'paused' || holdsSlot.current) return
+    return liveFrameSlots.onFree(() => start(false))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- start reads refs and stable setters
+  }, [state])
+
   useEffect(
     () => () => {
-      if (holdsSlot.current) liveFrameSlots.release()
+      if (holdsSlot.current) {
+        holdsSlot.current = false
+        liveFrameSlots.release()
+      }
     },
     []
   )

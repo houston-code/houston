@@ -98,6 +98,20 @@ describe('mermaid blocks', () => {
   })
 })
 
+describe('mermaid failures', () => {
+  it('are not cached, so the next view of the diagram tries again', async () => {
+    renderMermaid.mockResolvedValueOnce({ error: 'The diagram took longer than 5 seconds to render.' })
+    renderMermaid.mockResolvedValueOnce({ svg: '<svg/>' })
+    const text = '```mermaid\nflowchart LR\n  Slow --> Start\n```'
+    const first = md(text)
+    expect(await screen.findByText(/took longer/)).toBeInTheDocument()
+    first.unmount()
+    md(text)
+    expect(await screen.findByAltText('Diagram from the reply')).toBeInTheDocument()
+    expect(renderMermaid).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('html visual blocks', () => {
   it('stay code, with a note, while interactive visuals are off', () => {
     md('```html visual\n<p>hi</p>\n```')
@@ -139,6 +153,15 @@ describe('html visual blocks', () => {
       )
     })
     expect(frame.style.height).toBe('800px')
+  })
+
+  it('start on their own once a running visual frees its slot', async () => {
+    registerHtmlVisual.mockResolvedValue('0123456789abcdef0123456789abcdef')
+    for (let i = 0; i < MAX_LIVE_FRAMES; i++) liveFrameSlots.take(false)
+    md('```html visual\n<p>hi</p>\n```', { html: true })
+    expect(await screen.findByText('Interactive visual, paused to save resources.')).toBeInTheDocument()
+    await act(async () => liveFrameSlots.release())
+    await waitFor(() => expect(document.querySelector('iframe')).not.toBeNull())
   })
 
   it('wait behind Run once the most allowed are already running', async () => {

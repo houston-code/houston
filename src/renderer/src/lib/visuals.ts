@@ -90,6 +90,12 @@ export function renderMermaidCached(
   }
   hit = render(source, scheme).catch((e: unknown): MermaidResult => ({ error: String((e as Error)?.message ?? e) }))
   mermaidCache.set(key, hit)
+  // Keep only successes: a failure may be transient (a timeout, the renderer still
+  // starting), and the next view of the diagram should try again.
+  const pending = hit
+  void pending.then((r) => {
+    if ('error' in r && mermaidCache.get(key) === pending) mermaidCache.delete(key)
+  })
   while (mermaidCache.size > MERMAID_CACHE_SIZE) mermaidCache.delete(mermaidCache.keys().next().value!)
   return hit
 }
@@ -104,6 +110,7 @@ export function clearMermaidCache(): void {
  * frames. A frame takes a slot when it starts and gives it back when it unmounts.
  */
 let liveFrames = 0
+const waiting = new Set<() => void>()
 export const liveFrameSlots = {
   take(force: boolean): boolean {
     if (!force && liveFrames >= MAX_LIVE_FRAMES) return false
@@ -112,9 +119,17 @@ export const liveFrameSlots = {
   },
   release(): void {
     liveFrames = Math.max(0, liveFrames - 1)
+    // Let a frame that was waiting for a slot try again.
+    for (const retry of [...waiting]) retry()
+  },
+  /** Be told when a slot frees up; returns the unsubscribe. */
+  onFree(retry: () => void): () => void {
+    waiting.add(retry)
+    return () => waiting.delete(retry)
   },
   /** Test-only. */
   reset(): void {
     liveFrames = 0
+    waiting.clear()
   }
 }

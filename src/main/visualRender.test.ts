@@ -57,6 +57,14 @@ describe('HTML visual documents', () => {
     }
   })
 
+  it('keep a document that was just loaded, even as newer ones arrive', () => {
+    const shown = registerHtmlVisual('<p>on screen</p>')!
+    for (let i = 0; i < 127; i++) registerHtmlVisual(`<p>${i}</p>`)
+    expect(serveHtmlVisual(`houston-visual://doc/${shown}`).status).toBe(200)
+    for (let i = 0; i < 127; i++) registerHtmlVisual(`<p>more ${i}</p>`)
+    expect(serveHtmlVisual(`houston-visual://doc/${shown}`).status).toBe(200)
+  })
+
   it('are registered only within the size cap, and the oldest are forgotten', () => {
     expect(registerHtmlVisual('')).toBeNull()
     expect(registerHtmlVisual(42)).toBeNull()
@@ -64,7 +72,7 @@ describe('HTML visual documents', () => {
     const first = registerHtmlVisual('<p>first</p>')!
     expect(first).toMatch(/^[0-9a-f]{32}$/)
     expect(serveHtmlVisual(`houston-visual://doc/${first}`).status).toBe(200)
-    for (let i = 0; i < 64; i++) registerHtmlVisual(`<p>${i}</p>`)
+    for (let i = 0; i < 128; i++) registerHtmlVisual(`<p>${i}</p>`)
     expect(serveHtmlVisual(`houston-visual://doc/${first}`).status).toBe(404)
   })
 })

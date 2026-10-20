@@ -26,7 +26,7 @@ import { markHelperWindow } from './helperWindows'
 const MAX_MERMAID_SOURCE = 50_000
 const MAX_MERMAID_SVG = 2 * 1024 * 1024
 export const MAX_HTML_VISUAL = 256 * 1024
-const MAX_HTML_VISUALS = 64
+const MAX_HTML_VISUALS = 128
 const MERMAID_TIMEOUT_MS = 5_000
 const PARTITION = 'render-visual'
 const DEAD_PROXY = 'http://127.0.0.1:9'
@@ -140,6 +140,11 @@ export function serveHtmlVisual(url: string, lookup: (id: string) => string | un
   if (!/^[0-9a-f]{32}$/.test(id)) return notFound
   const html = lookup(id)
   if (html === undefined) return notFound
+  // Recently loaded documents are the ones on screen: keep them last in eviction order.
+  if (docs.get(id) === html) {
+    docs.delete(id)
+    docs.set(id, html)
+  }
   return { status: 200, headers: headers('text/html; charset=utf-8', HTML_VISUAL_CSP), body: htmlVisualDocument(html) }
 }
 
@@ -261,6 +266,8 @@ function closeWhenIdle(): void {
 /** Render one Mermaid diagram to SVG, one at a time, each within a time limit. */
 export function renderMermaid(source: string, theme: 'light' | 'dark'): Promise<MermaidResult> {
   const job = queue.then(async (): Promise<MermaidResult> => {
+    // A render in progress must not have the window closed under it.
+    clearTimeout(idleTimer)
     let win: BrowserWindow
     try {
       win = await mermaidWindow()
