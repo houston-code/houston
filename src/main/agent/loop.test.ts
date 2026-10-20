@@ -4792,6 +4792,37 @@ describe('present_plan (Plan mode review)', () => {
     expect(result?.output).not.toMatch(/Invalid arguments/)
   })
 
+  it('shows with the plan whether its checks can run here, and tells the agent on accept', async () => {
+    // A confining host with no shell-network grant yet: an install would run offline.
+    h.sandboxed = true
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        [
+          {
+            type: 'tool_call',
+            call: {
+              id: 'p1',
+              name: 'present_plan',
+              arguments: { title: 'Todo API', plan: '## Steps\n- build it', files: ['requirements.txt'], verify: ['pytest'] }
+            }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Starting.' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onPlan: (_id, _plan, decide) => decide({ kind: 'accept', mode: 'auto-edit' })
+    })
+    const ready = r.events.find((e) => e.type === 'plan_ready') as { plan: PlanPayload } | undefined
+    expect(ready?.plan.verify).toEqual(['pytest'])
+    expect(ready?.plan.readiness?.items).toContainEqual(
+      expect.objectContaining({ need: 'Python packages (requirements.txt)', status: 'needs-network' })
+    )
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'present_plan') as { output: string }
+    expect(result.output).toContain('The user ACCEPTED the plan')
+    expect(result.output).toContain('- Python packages (requirements.txt): The plan creates this list. Installing needs network.')
+  })
+
   it('recovers from an interrupted present_plan: never sends an orphaned tool_use', async () => {
     // A prior run quit while the plan was pending (tool_use persisted, no result),
     // then the user re-sent a message — so a user turn now sits after the dangling

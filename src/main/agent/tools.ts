@@ -4271,6 +4271,14 @@ const presentPlan: ToolDef = {
             'Repo-relative paths the plan will create or change. Optional but recommended: shown as a ' +
             'collapsible list of chips beneath the plan for quick scanning.',
           items: { type: 'string' }
+        },
+        verify: {
+          type: 'array',
+          description:
+            'The concrete checks you will run to verify the work, one per item (e.g. "pytest", ' +
+            '"npm run build", "curl POST /todos", "view_localhost: add a todo and see it listed"). ' +
+            'Houston checks whether each can run on this machine and shows the user before they decide.',
+          items: { type: 'string' }
         }
       },
       ['title', 'plan']
@@ -4283,10 +4291,12 @@ const presentPlan: ToolDef = {
     const body = str(args, 'plan').trim()
     if (!body) throw new Error('plan is required: pass the full plan as markdown.')
     const files = parseStringList(args.files)
+    const verify = parseStringList(args.verify)
     const plan: PlanPayload = {
       title,
       body,
-      ...(files.length ? { files } : {})
+      ...(files.length ? { files } : {}),
+      ...(verify.length ? { verify } : {})
     }
     return ctx.presentPlan(plan)
   }

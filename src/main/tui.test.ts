@@ -13,6 +13,7 @@ import {
   makePainter,
   isThemeName,
   renderToolStart,
+  renderPlan,
   toolArgHint,
   renderApprovalPrompt,
   parseApprovalAnswer,
@@ -4753,6 +4754,26 @@ describe('steering a running turn', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('steering: use YAML instead')
+  })
+})
+
+describe('renderPlan checks', () => {
+  it("prints the plan's checks and whether they can run here", () => {
+    const out = renderPlan(
+      {
+        title: 'Todo API',
+        body: 'Build it.',
+        verify: ['pytest', 'curl POST /todos'],
+        readiness: {
+          items: [{ need: 'Python packages (requirements.txt)', status: 'needs-network', detail: 'Installing needs network.' }]
+        }
+      },
+      makePainter(false),
+      { actions: false }
+    )
+    expect(out).toContain('Checks: pytest; curl POST /todos')
+    expect(out).toContain('Can these checks run here: not as things stand')
+    expect(out).toContain('  ! Python packages (requirements.txt): Installing needs network.')
   })
 })
 
