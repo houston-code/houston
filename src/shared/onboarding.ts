@@ -139,3 +139,34 @@ export function pickTip(
   const before = dismissedThisRun.filter((id) => relevant.includes(id)).length
   return { id: run[0], index: before + 1, total: before + run.length, hasNext: run.length > 1 }
 }
+
+/** What's in the open folder, for picking step 3's example task. */
+export type FolderKind = 'empty' | 'has-files' | 'unknown'
+
+/**
+ * Classify a folder from its top-level listing: empty when nothing but hidden
+ * entries (`.git`, `.DS_Store`) is there. `null` (couldn't list it) is unknown.
+ */
+export function folderKind(entries: readonly { name: string }[] | null): FolderKind {
+  if (!entries) return 'unknown'
+  return entries.some((e) => !e.name.startsWith('.')) ? 'has-files' : 'empty'
+}
+
+/**
+ * Step 3's example task, picked to be useful for this folder: an empty folder gets
+ * something to build (small, quick, no installs, and it produces edits, so the
+ * Changes and Revert tips follow); a project gets a read-only first look.
+ */
+export function firstTaskExample(kind: FolderKind): string {
+  switch (kind) {
+    case 'empty':
+      return 'Build a simple to-do list web page in this folder.'
+    case 'has-files':
+      return 'Explain how this project is organized.'
+    case 'unknown':
+      return 'Look around this folder and suggest a good first task.'
+  }
+}
+
+/** How long the pre-send tips wait after step 3 becomes current: a follow-up, not a jolt. */
+export const PRE_SEND_TIP_DELAY_MS = 2000

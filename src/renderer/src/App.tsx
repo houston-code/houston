@@ -95,7 +95,11 @@ import { useOnboarding } from './hooks/useOnboarding'
 import {
   markTipsSeen,
   checklistVisible,
+  firstTaskExample,
+  folderKind,
+  PRE_SEND_TIP_DELAY_MS,
   relevantTips,
+  type FolderKind,
   type ChecklistFacts
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
@@ -387,6 +391,23 @@ export default function App(): JSX.Element {
     [conversations, currentId]
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
+  // Whether the open folder is empty, so the setup checklist's step 3 can suggest a
+  // first task that fits it (build something vs. explain the project).
+  const [workspaceKind, setWorkspaceKind] = useState<FolderKind>('unknown')
+  useEffect(() => {
+    let alive = true
+    if (!workspace) {
+      setWorkspaceKind('unknown')
+      return
+    }
+    window.api
+      .listWorkspaceDir(workspace, '')
+      .then((entries) => alive && setWorkspaceKind(folderKind(entries)))
+      .catch(() => alive && setWorkspaceKind('unknown'))
+    return () => {
+      alive = false
+    }
+  }, [workspace])
 
   // Has this chat produced at least one file write that actually landed? A boolean
   // (any write), not a count, so rapid multi-file writes don't stack. `status: 'done'`
@@ -1774,6 +1795,9 @@ export default function App(): JSX.Element {
     hasConversation: conversations.length > 0
   }
   const showChecklist = checklistVisible(onboarding.state, checklistFacts, conversationsLoaded)
+  // Setup is down to step 3: point the user at the message box (cursor + glow).
+  const awaitingFirstTask =
+    showChecklist && !connectOpen && checklistFacts.modelReady && checklistFacts.hasWorkspace
   const tipsRelevant = relevantTips({
     readyToSend: chat.items.length === 0 && canChat && !chat.running,
     afterEdit: Boolean(chat.checkpoint && !chat.checkpoint.reverted && !chat.running),
@@ -1912,12 +1936,9 @@ export default function App(): JSX.Element {
                     : undefined
                 }
                 folderSummary={workspace ? baseName(workspace) : undefined}
+                taskExample={firstTaskExample(workspaceKind)}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
-                onSkip={() => {
-                  setConnectOpen(false)
-                  onboarding.update((s) => ({ ...s, checklistDone: true }))
-                }}
               />
             ) : (
               <>
@@ -2067,6 +2088,7 @@ export default function App(): JSX.Element {
             disabled={!canChat}
             disabledReason={disabledReason}
             running={chat.running}
+            attention={awaitingFirstTask}
             workspace={workspace}
             commands={commands}
             vision={visionSupported}
@@ -2176,6 +2198,7 @@ export default function App(): JSX.Element {
         seen={onboarding.state.seenTips}
         suppressed={tipsSuppressed}
         touring={onboarding.touring}
+        delayMs={PRE_SEND_TIP_DELAY_MS}
         onSeen={(ids) => onboarding.update((s) => markTipsSeen(s, ids))}
         onTourEnd={onboarding.endTour}
       />

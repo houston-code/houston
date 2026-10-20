@@ -942,3 +942,24 @@ describe('turn receipts', () => {
     expect(replayed.map((i) => i.kind)).toEqual(['user', 'assistant', 'receipt'])
   })
 })
+
+describe('steered messages after a reload', () => {
+  it('keep their Steered label from the saved message', () => {
+    const items = itemsFromMessages([
+      { role: 'user', content: 'add retry to the upload client' },
+      { role: 'assistant', content: 'Working on it.' },
+      { role: 'user', content: 'use the existing logger instead', steered: true }
+    ])
+    const users = items.filter((i) => i.kind === 'user')
+    expect(users[0]).not.toHaveProperty('steered')
+    expect(users[1]).toMatchObject({ text: 'use the existing logger instead', steered: true })
+  })
+
+  it('ignores a non-boolean mark (an imported or hand-edited chat)', () => {
+    const items = itemsFromMessages([
+      { role: 'user', content: 'hi', steered: 'yes' as unknown as boolean }
+    ])
+    expect(items[0]).not.toHaveProperty('steered')
+  })
+})
+

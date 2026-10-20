@@ -123,6 +123,12 @@ export interface ChatMessage {
    * and it is display-only; providers never see it.
    */
   receipt?: TurnReceipt
+  /**
+   * Present on a `user` turn that was steered into a running turn (read before the
+   * agent's next step) rather than sent as its own turn. Saved so a reloaded chat
+   * still labels it "Steered". Display-only; providers never see it.
+   */
+  steered?: boolean
 }
 
 /**

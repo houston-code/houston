@@ -64,3 +64,22 @@ describe('a turn receipt never reaches a provider', () => {
     expect(wire).not.toContain('receipt')
   })
 })
+
+describe('the steered mark never reaches a provider', () => {
+  const steered: ChatMessage[] = [
+    { role: 'user', content: 'add retry to the upload client' },
+    { role: 'assistant', content: 'Working on it.' },
+    { role: 'user', content: 'use the existing logger instead', steered: true }
+  ]
+  it.each([
+    ['anthropic', () => toAnthropicMessages(steered, false)],
+    ['openai chat completions', () => toOpenAIMessages(undefined, steered)],
+    ['openai responses', () => toResponsesInput(steered)],
+    ['gemini', () => toGeminiContents(steered)]
+  ])('%s sends the steer text and not the mark', (_name, convert) => {
+    const wire = JSON.stringify(convert())
+    expect(wire).toContain('use the existing logger instead')
+    expect(wire).not.toContain('steered')
+  })
+})
+
