@@ -308,6 +308,7 @@ describe('release-source CLI', () => {
       const r = plan(MINOR, '0.10.0')
       expect(r.stderr).toBe('')
       expect(out(r)).toMatchObject({ mode: 'minor', version: '0.10.0', line: 'release/0.10', create_line: 'true', sha: s.main })
+      expect(out(r).summary).toBe('Cutting v0.10.0 (next minor) from main into a new release/0.10 branch.')
     })
 
     it('refuses a patch while 0.9.1 is pending on the line', () => {
