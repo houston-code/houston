@@ -339,7 +339,7 @@ describe('release legs verify before they upload', () => {
   it('never lets electron-builder publish', () => {
     // Its publisher uploads as it builds, before any check below has run.
     expect(leg).not.toContain('--publish always')
-    expect(leg).toContain('run: bash .pipeline/scripts/dist-with-retry.sh "$DIST"\n')
+    expect(leg).toContain('          bash .pipeline/scripts/dist-with-retry.sh "$DIST"\n')
     expect(distScript).toContain('npm run "$dist" -- --publish never')
     expect(distScript).not.toMatch(/--publish (always|onTag|onTagOrDraft)/)
   })
@@ -396,6 +396,16 @@ describe('release legs receive the macOS signing secrets', () => {
 
   it('keeps the Apple credentials away from the Windows and Linux legs', () => {
     expect(job('build-other')).not.toMatch(/CSC_LINK|APPLE_ID/)
+  })
+
+  it('unsets every empty one before packaging, so an unsigned macOS build does not fail', () => {
+    // electron-builder resolves an empty CSC_LINK as a path to the workspace ("not a file"),
+    // which failed both macOS legs of the first release-prepare run.
+    const start = leg.indexOf('      - name: Package\n')
+    const step = leg.slice(start, leg.indexOf('\n      - ', start + 1))
+    expect(step).toContain('for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do')
+    expect(step).toContain('if [ -z "${!name}" ]; then unset "$name"; fi')
+    expect(step.indexOf('unset "$name"')).toBeLessThan(step.indexOf('bash .pipeline/scripts/dist-with-retry.sh'))
   })
 
   it('still reads them in the leg only on macOS, and only when signing', () => {
