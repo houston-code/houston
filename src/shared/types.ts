@@ -453,6 +453,8 @@ export type MenuCommand =
   | { type: 'new-chat-in-workspace'; workspace: string }
   | { type: 'import-chat' }
   | { type: 'export-chat'; format: 'json' | 'html' }
+  /** Help → Take the Tour…: replay the getting-started tips. */
+  | { type: 'take-tour' }
 
 /** Renderer UI state the native menu reflects (Export is greyed out with no chat open). */
 export interface MenuState {

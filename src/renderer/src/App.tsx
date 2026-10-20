@@ -90,12 +90,11 @@ import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { GetStarted } from './components/GetStarted'
 import { ConnectModel } from './components/ConnectModel'
-import { TourInvite } from './components/TourInvite'
 import { TipHost } from './components/TipHost'
 import { useOnboarding } from './hooks/useOnboarding'
 import {
   markTipsSeen,
-  onboardingSurfaces,
+  checklistVisible,
   relevantTips,
   type ChecklistFacts
 } from '@shared/onboarding'
@@ -250,6 +249,7 @@ export default function App(): JSX.Element {
     conversationsLoaded,
     hasConversation: conversations.length > 0
   })
+  const { startTour } = onboarding
 
   useEffect(() => {
     void (async () => {
@@ -1472,9 +1472,9 @@ export default function App(): JSX.Element {
       },
       {
         id: 'act-tips',
-        title: 'Show getting-started tips',
+        title: 'Take the tour',
         section: 'Actions',
-        keywords: 'tour onboarding help walkthrough',
+        keywords: 'tips getting started onboarding help walkthrough',
         run: onboarding.startTour
       }
     )
@@ -1598,6 +1598,7 @@ export default function App(): JSX.Element {
         else if (cmd.type === 'new-chat-in-folder') void onChangeWorkspace()
         else if (cmd.type === 'new-chat-in-workspace') enterNewChat(cmd.workspace)
         else if (cmd.type === 'import-chat') void onImportConversation()
+        else if (cmd.type === 'take-tour') startTour()
         else if (cmd.type === 'export-chat' && currentId) {
           if (cmd.format === 'html') void onExportConversationHtml(currentId)
           else void onExportConversation(currentId)
@@ -1610,7 +1611,8 @@ export default function App(): JSX.Element {
       onImportConversation,
       onExportConversation,
       onExportConversationHtml,
-      currentId
+      currentId,
+      startTour
     ]
   )
   useEffect(() => window.api.setMenuState({ hasConversation: currentId !== null }), [currentId])
@@ -1752,11 +1754,7 @@ export default function App(): JSX.Element {
     hasWorkspace: Boolean(workspace),
     hasConversation: conversations.length > 0
   }
-  const { checklist: checklistVisible, tourInvite: tourInviteVisible } = onboardingSurfaces(
-    onboarding.state,
-    checklistFacts,
-    conversationsLoaded
-  )
+  const showChecklist = checklistVisible(onboarding.state, checklistFacts, conversationsLoaded)
   const tipsRelevant = relevantTips({
     readyToSend: chat.items.length === 0 && canChat && !chat.running,
     afterEdit: Boolean(chat.checkpoint && !chat.checkpoint.reverted && !chat.running),
@@ -1870,13 +1868,6 @@ export default function App(): JSX.Element {
           }}
         />
 
-        {tourInviteVisible && (
-          <TourInvite
-            onTakeTour={onboarding.startTour}
-            onDismiss={() => onboarding.update((s) => ({ ...s, tourInvite: 'done' }))}
-          />
-        )}
-
         {findOpen && (
           <Suspense fallback={null}>
             <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} />
@@ -1887,13 +1878,13 @@ export default function App(): JSX.Element {
           <div className="welcome">
             <h1>Houston</h1>
             <p>A model-agnostic, sandboxed coding agent. Decoupled from your model bill.</p>
-            {checklistVisible && connectOpen ? (
+            {showChecklist && connectOpen ? (
               <ConnectModel
                 settings={settings}
                 onConnected={(fresh, id) => void onModelConnected(fresh, id)}
                 onBack={() => setConnectOpen(false)}
               />
-            ) : checklistVisible ? (
+            ) : showChecklist ? (
               <GetStarted
                 facts={checklistFacts}
                 onConnectModel={() => setConnectOpen(true)}

@@ -4,12 +4,11 @@ import {
   checklistView,
   existingInstallOnboarding,
   markTipsSeen,
-  onboardingSurfaces,
+  checklistVisible,
   pickTip,
   relevantTips,
   restartTips,
   shouldShowChecklist,
-  shouldShowTourInvite,
   type ChecklistFacts,
   type TipId
 } from './onboarding'
@@ -64,21 +63,9 @@ describe('shouldShowChecklist', () => {
   })
 })
 
-describe('shouldShowTourInvite', () => {
-  it('shows only while pending', () => {
-    expect(shouldShowTourInvite({ tourInvite: 'pending' }, false)).toBe(true)
-    expect(shouldShowTourInvite({ tourInvite: 'done' }, false)).toBe(false)
-    expect(shouldShowTourInvite(undefined, false)).toBe(false)
-  })
-
-  it('never stacks on top of the checklist', () => {
-    expect(shouldShowTourInvite({ tourInvite: 'pending' }, true)).toBe(false)
-  })
-})
-
 describe('existingInstallOnboarding', () => {
-  it('marks every tip seen and invites a tour', () => {
-    expect(existingInstallOnboarding()).toEqual({ seenTips: [...TIP_IDS], tourInvite: 'pending' })
+  it('marks every tip seen, so nothing appears on its own', () => {
+    expect(existingInstallOnboarding()).toEqual({ seenTips: [...TIP_IDS] })
   })
 })
 
@@ -92,15 +79,12 @@ describe('markTipsSeen / restartTips', () => {
     expect(markTipsSeen({ checklistDone: true }, ['approval']).checklistDone).toBe(true)
   })
 
-  it('restart clears seen tips and settles a pending invite', () => {
-    expect(restartTips({ seenTips: [...TIP_IDS], tourInvite: 'pending' })).toEqual({
+  it('restart clears seen tips and keeps the rest', () => {
+    expect(restartTips({ seenTips: [...TIP_IDS], checklistDone: true })).toEqual({
       seenTips: [],
-      tourInvite: 'done'
+      checklistDone: true
     })
-  })
-
-  it('restart on a new install does not invent an invite', () => {
-    expect(restartTips(undefined).tourInvite).toBeUndefined()
+    expect(restartTips(undefined)).toEqual({ seenTips: [] })
   })
 })
 
@@ -174,30 +158,17 @@ describe('pickTip', () => {
   })
 })
 
-describe('onboardingSurfaces', () => {
+describe('checklistVisible', () => {
   it('shows nothing until conversations have loaded', () => {
-    expect(onboardingSurfaces({ tourInvite: 'pending' }, facts(), false)).toEqual({
-      checklist: false,
-      tourInvite: false
-    })
+    expect(checklistVisible(undefined, facts(), false)).toBe(false)
   })
 
-  it('shows the checklist to a new user, and holds a pending invite behind it', () => {
-    expect(onboardingSurfaces({ tourInvite: 'pending' }, facts(), true)).toEqual({
-      checklist: true,
-      tourInvite: false
-    })
+  it('shows the checklist to a new user once conversations have loaded', () => {
+    expect(checklistVisible(undefined, facts(), true)).toBe(true)
   })
 
-  it('shows the invite to an existing user with chats', () => {
-    expect(
-      onboardingSurfaces({ tourInvite: 'pending' }, facts({ hasConversation: true }), true)
-    ).toEqual({ checklist: false, tourInvite: true })
-  })
-
-  it('shows neither once both are settled', () => {
-    expect(
-      onboardingSurfaces({ checklistDone: true, tourInvite: 'done' }, facts(), true)
-    ).toEqual({ checklist: false, tourInvite: false })
+  it('never shows it to someone with chats, or after setup was finished or skipped', () => {
+    expect(checklistVisible(undefined, facts({ hasConversation: true }), true)).toBe(false)
+    expect(checklistVisible({ checklistDone: true }, facts(), true)).toBe(false)
   })
 })

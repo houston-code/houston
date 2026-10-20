@@ -1,4 +1,17 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
+
+// Menu clicks send commands to the focused window; capture what they send.
+const sentCommands = vi.hoisted(() => [] as unknown[])
+vi.mock('electron', () => {
+  const win = { webContents: { send: (_channel: string, cmd: unknown) => sentCommands.push(cmd) } }
+  return {
+    Menu: { setApplicationMenu: () => {}, buildFromTemplate: () => ({}) },
+    BrowserWindow: { getFocusedWindow: () => win, getAllWindows: () => [win] },
+    dialog: {},
+    app: { getVersion: () => '0.0.0-test', getName: () => 'Houston', getPath: () => '/tmp', on: () => {} },
+    shell: {}
+  }
+})
 import {
   appMenuTemplate,
   bindingToAccelerator,
@@ -63,18 +76,27 @@ describe('Help menu', () => {
   const itemLabels = (menu: { submenu?: unknown }): string[] =>
     ((menu.submenu ?? []) as { label?: string }[]).map((i) => i.label ?? '')
 
-  it.each([true, false])('is the last menu with the guide and issue links (isMac=%s)', (isMac) => {
+  it.each([true, false])('is the last menu: the tour, then the guide and issue links (isMac=%s)', (isMac) => {
     const template = appMenuTemplate(isMac)
     const help = template[template.length - 1]
     // role 'help' is what gives macOS its native menu search field.
     expect(help.role).toBe('help')
     expect(template.filter((m) => m.role === 'help')).toHaveLength(1)
-    expect(itemLabels(help).slice(0, 2)).toEqual(['Houston Guide', 'Report an Issue'])
+    expect(itemLabels(help).slice(0, 4)).toEqual(['Take the Tour…', '', 'Houston Guide', 'Report an Issue'])
   })
 
-  it('carries only the links on macOS, where share and updates live in the app menu', () => {
+  it('carries only the tour and the links on macOS, where share and updates live in the app menu', () => {
     const help = appMenuTemplate(true).at(-1)!
-    expect(itemLabels(help)).toEqual(['Houston Guide', 'Report an Issue'])
+    expect(itemLabels(help)).toEqual(['Take the Tour…', '', 'Houston Guide', 'Report an Issue'])
+  })
+
+  it.each([true, false])('Take the Tour… asks the renderer to replay the tips (isMac=%s)', (isMac) => {
+    const help = appMenuTemplate(isMac).at(-1)!
+    const item = (help.submenu as { label?: string; click?: () => void }[]).find(
+      (i) => i.label === 'Take the Tour…'
+    )!
+    item.click!()
+    expect(sentCommands.at(-1)).toEqual({ type: 'take-tour' })
   })
 
   it('links to https URLs that pass the external-open allowlist', () => {

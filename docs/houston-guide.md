@@ -1107,8 +1107,9 @@ the app's real state, and **Skip setup** hides the checklist for good.
 A few one-time tips then point at controls the first time they matter: the approval
 mode and the **New worktree** toggle before the first message, and **Revert** and
 **Changes** after the first turn that edits files. **Skip tips** or Esc dismisses them.
-Installs from before this feature get a single "Take the tour" banner instead. Replay
-the tips any time with **Show getting-started tips** in the command palette (⌘K).
+If you used Houston before this feature, nothing appears on its own. Anyone can play
+the tips any time with **Take the tour** in the command palette (⌘K), or
+**Help → Take the Tour…** in the menu bar.
 
 ## License and legal
 

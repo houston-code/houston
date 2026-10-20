@@ -16,21 +16,16 @@ export interface OnboardingState {
   checklistDone?: boolean
   /** Tips already shown and dismissed. Unknown ids are ignored. */
   seenTips?: string[]
-  /**
-   * The one-time "take a quick tour" banner for installs that predate onboarding.
-   * 'pending' shows it; 'done' means it was taken or dismissed. Absent on new installs,
-   * which get the checklist and contextual tips instead.
-   */
-  tourInvite?: 'pending' | 'done'
 }
 
 /**
  * Onboarding state seeded into an install that existed before onboarding shipped
- * (the settings migration). They already know their way around, so the contextual
- * tips are marked seen and they get a single, dismissible invitation instead.
+ * (the settings migration). They already know their way around, so nothing appears
+ * on its own: every tip is marked seen. The release's "What's new" notes point them
+ * at the command palette's "Take the tour" if they want it.
  */
 export function existingInstallOnboarding(): OnboardingState {
-  return { seenTips: [...TIP_IDS], tourInvite: 'pending' }
+  return { seenTips: [...TIP_IDS] }
 }
 
 /** What the checklist reads off the app's real state. */
@@ -72,25 +67,16 @@ export function shouldShowChecklist(state: OnboardingState | undefined, f: Check
 }
 
 /**
- * What the welcome screen shows. Nothing until conversations have loaded: before
- * then "no conversations" isn't known yet, and an existing user would see the
- * checklist flash.
+ * Whether the welcome screen shows the checklist. Never until conversations have
+ * loaded: before then "no conversations" isn't known yet, and an existing user would
+ * see the checklist flash.
  */
-export function onboardingSurfaces(
+export function checklistVisible(
   state: OnboardingState | undefined,
   f: ChecklistFacts,
   conversationsLoaded: boolean
-): { checklist: boolean; tourInvite: boolean } {
-  const checklist = conversationsLoaded && shouldShowChecklist(state, f)
-  return { checklist, tourInvite: conversationsLoaded && shouldShowTourInvite(state, checklist) }
-}
-
-/** The tour invitation shows once, and never on top of the checklist. */
-export function shouldShowTourInvite(
-  state: OnboardingState | undefined,
-  checklistVisible: boolean
 ): boolean {
-  return state?.tourInvite === 'pending' && !checklistVisible
+  return conversationsLoaded && shouldShowChecklist(state, f)
 }
 
 export function markTipsSeen(state: OnboardingState | undefined, ids: readonly TipId[]): OnboardingState {
@@ -99,9 +85,9 @@ export function markTipsSeen(state: OnboardingState | undefined, ids: readonly T
   return { ...state, seenTips: TIP_IDS.filter((id) => seen.has(id)) }
 }
 
-/** Replay every tip (the tour banner, or "Show getting-started tips"). */
+/** Replay every tip ("Take the tour" in the command palette). */
 export function restartTips(state: OnboardingState | undefined): OnboardingState {
-  return { ...state, seenTips: [], tourInvite: state?.tourInvite ? 'done' : undefined }
+  return { ...state, seenTips: [] }
 }
 
 /** When each tip is relevant, as read off the app's state. */
