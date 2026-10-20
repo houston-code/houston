@@ -177,9 +177,10 @@ export function isFinalStep(iter: number, limits: BudgetLimits): boolean {
  * two thirds of the way through, so the user had to type "continue" on work
  * that was going fine. So when a run reaches the point where it would be told to
  * land, it instead gets another `step` iterations IF it is demonstrably making
- * progress: successful file writes in most of its recent steps, no stall nudge
- * in that window, and no cost-ceiling landing. A hard `ceiling` bounds the total
- * so a productive-looking runaway still stops.
+ * progress: successful file writes in several of its recent steps, or steady
+ * discovery (most of its recent steps turned up something it had not seen this
+ * run), no stall nudge in that window, and no cost-ceiling landing. A hard
+ * `ceiling` bounds the total so a productive-looking runaway still stops.
  */
 export interface ExtensionLimits {
   /** Whether a productive run may grow past `maxIterations` at all. */
@@ -205,11 +206,52 @@ export const PROGRESS_TOOLS: ReadonlySet<string> = new Set([
   'dispatch_writable_agent'
 ])
 
+/**
+ * Bookkeeping tools a successful, never-before-made call of which still isn't
+ * discovery: they reshuffle what the run already knows (its todo list, its own
+ * history, a shell it started) rather than learning anything about the project.
+ */
+const NON_DISCOVERY_TOOLS: ReadonlySet<string> = new Set([
+  'todo_write',
+  'recall_history',
+  'kill_shell',
+  'list_scheduled_runs',
+  'skill',
+  'ask_user',
+  'present_plan',
+  'propose_session'
+])
+
+/** Tool kinds whose calls can find something out: reads, commands, and outside lookups. */
+const DISCOVERY_KINDS: ReadonlySet<string> = new Set(['read', 'shell', 'network', 'mcp'])
+
+/**
+ * Whether a successful call of tool `name` (of kind `kind`) can count as discovery for
+ * {@link shouldExtend}, when the run hasn't made that exact call before. A debugging or
+ * investigation turn spends most of its steps reading, searching, and running commands
+ * before the one edit that fixes the bug, so counting file writes alone wrapped those
+ * turns up at the cap with the fix still unwritten. Write-kind tools never count here:
+ * file edits are counted by {@link PROGRESS_TOOLS}, and the rest (scheduling) changes no
+ * project file.
+ */
+export function isDiscoveryTool(name: string, kind: string | undefined): boolean {
+  return kind !== undefined && DISCOVERY_KINDS.has(kind) && !NON_DISCOVERY_TOOLS.has(name)
+}
+
 /** How many recent iterations the progress test looks back over. */
 export const PROGRESS_WINDOW = 10
 
 /** Iterations with a successful file write needed inside the window. */
 export const MIN_PRODUCTIVE_STEPS = 3
+
+/**
+ * Iterations that wrote a file or discovered something new needed inside the window
+ * when there aren't {@link MIN_PRODUCTIVE_STEPS} writes. Higher than the write bar
+ * because a new call is weaker evidence than a landed edit: most of the window has to
+ * be finding things out, so a model trading a few fresh reads for a run of repeats
+ * still wraps up.
+ */
+export const MIN_ACTIVE_STEPS = 6
 
 /**
  * Resolve extension limits against the already-resolved base cap. A ceiling at
@@ -240,6 +282,11 @@ export interface ExtensionState {
   iteration: number
   /** Iterations (zero-based) in which at least one file write succeeded. */
   writeIterations: ReadonlySet<number>
+  /**
+   * Iterations (zero-based) in which at least one discovery call (see
+   * {@link isDiscoveryTool}) succeeded that the run had not made before.
+   */
+  discoveryIterations: ReadonlySet<number>
   /** Iteration of the most recent stall nudge, or null if none fired. */
   lastStallNudge: number | null
   /** Whether the landing nudge already fired (e.g. the cost ceiling tripped). */
@@ -263,9 +310,14 @@ export function shouldExtend(
 
   const from = state.iteration - PROGRESS_WINDOW
   if (state.lastStallNudge !== null && state.lastStallNudge >= from) return { extend: false }
-  let productive = 0
-  for (const i of state.writeIterations) if (i >= from && i < state.iteration) productive++
-  if (productive < MIN_PRODUCTIVE_STEPS) return { extend: false }
+  let writes = 0
+  let active = 0
+  for (let i = Math.max(0, from); i < state.iteration; i++) {
+    const wrote = state.writeIterations.has(i)
+    if (wrote) writes++
+    if (wrote || state.discoveryIterations.has(i)) active++
+  }
+  if (writes < MIN_PRODUCTIVE_STEPS && active < MIN_ACTIVE_STEPS) return { extend: false }
 
   return { extend: true, maxIterations: Math.min(ext.ceiling, limits.maxIterations + ext.step) }
 }

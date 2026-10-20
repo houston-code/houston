@@ -306,10 +306,12 @@ end the agent is told to wrap up, so it finishes the edit in hand or summarizes
 what is left instead of being cut off, and you say "continue" to pick it up.
 
 A turn that is plainly making progress doesn't have to stop there. If several of
-its recent steps edited files successfully and it hasn't been caught looping, it gets
-another round of steps instead of the wrap-up, and the transcript says so. This
-keeps going up to a hard limit (200 steps by default), so a big job such as
-scaffolding a new project finishes in one go. Stopping the run works as usual at
+its recent steps edited files successfully, or most of them turned up something new
+(a file it hadn't read, a search or command it hadn't run), and it hasn't been caught
+looping, it gets another round of steps instead of the wrap-up, and the transcript
+says so. Going back over calls it already made doesn't count. This keeps going up to
+a hard limit (200 steps by default), so a big job such as scaffolding a new project,
+or a long debugging session, finishes in one go. Stopping the run works as usual at
 any point. Settings > Loop control has the per-turn step count, the
 keep-going-while-productive switch, and the hard limit. If you had already set your
 own step count, it stays a hard stop until you turn the switch on.

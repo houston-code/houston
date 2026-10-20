@@ -11,6 +11,7 @@ import {
   extensionNotice,
   DEFAULT_ITERATION_CEILING,
   PROGRESS_TOOLS,
+  isDiscoveryTool,
   type BudgetLimits,
   type ExtensionState
 } from './budget'
@@ -148,6 +149,7 @@ describe('progress-aware extension', () => {
   const at = (iteration: number, over: Partial<ExtensionState> = {}): ExtensionState => ({
     iteration,
     writeIterations: writesIn(0, iteration),
+    discoveryIterations: new Set(),
     lastStallNudge: null,
     alreadyLanded: false,
     ...over
@@ -190,6 +192,53 @@ describe('progress-aware extension', () => {
     expect(shouldExtend(at(37, { writeIterations: writesIn(34, 37) }), base, ext).extend).toBe(true)
   })
 
+  it('extends a run that keeps discovering something new, without writes', () => {
+    const none = new Set<number>()
+    // Six of the last ten steps found something new: an investigation, not a loop.
+    expect(
+      shouldExtend(at(37, { writeIterations: none, discoveryIterations: writesIn(31, 37) }), base, ext)
+    ).toEqual({ extend: true, maxIterations: 80 })
+    // Five is below the bar.
+    expect(
+      shouldExtend(at(37, { writeIterations: none, discoveryIterations: writesIn(32, 37) }), base, ext)
+        .extend
+    ).toBe(false)
+    // Discovery long ago, none in the recent window.
+    expect(
+      shouldExtend(at(37, { writeIterations: none, discoveryIterations: writesIn(0, 25) }), base, ext)
+        .extend
+    ).toBe(false)
+  })
+
+  it('counts writes and discovery together toward the active bar, once per step', () => {
+    // Two writes alone miss the write bar; with four discovery steps the window has six
+    // active steps.
+    expect(
+      shouldExtend(
+        at(37, { writeIterations: writesIn(35, 37), discoveryIterations: writesIn(31, 35) }),
+        base,
+        ext
+      ).extend
+    ).toBe(true)
+    // A step that both wrote and discovered counts once: 5 distinct active steps.
+    expect(
+      shouldExtend(
+        at(37, { writeIterations: writesIn(35, 37), discoveryIterations: writesIn(32, 37) }),
+        base,
+        ext
+      ).extend
+    ).toBe(false)
+  })
+
+  it('does not extend a discovering run after a recent stall nudge', () => {
+    const state = at(37, {
+      writeIterations: new Set(),
+      discoveryIterations: writesIn(27, 37),
+      lastStallNudge: 30
+    })
+    expect(shouldExtend(state, base, ext).extend).toBe(false)
+  })
+
   it('does not extend after a recent stall nudge', () => {
     expect(shouldExtend(at(37, { lastStallNudge: 33 }), base, ext).extend).toBe(false)
     expect(shouldExtend(at(37, { lastStallNudge: 20 }), base, ext).extend).toBe(true)
@@ -217,5 +266,24 @@ describe('progress-aware extension', () => {
     expect(msg).toContain('80')
     expect(msg).toContain('200')
     expect(msg).not.toContain('—')
+  })
+})
+
+describe('isDiscoveryTool', () => {
+  it('counts reads, commands, and outside lookups', () => {
+    expect(isDiscoveryTool('read_file', 'read')).toBe(true)
+    expect(isDiscoveryTool('search_files', 'read')).toBe(true)
+    expect(isDiscoveryTool('run_shell', 'shell')).toBe(true)
+    expect(isDiscoveryTool('web_fetch', 'network')).toBe(true)
+    expect(isDiscoveryTool('mcp__docs__lookup', 'mcp')).toBe(true)
+  })
+
+  it('leaves out write-kind tools, bookkeeping, and unknown tools', () => {
+    expect(isDiscoveryTool('write_file', 'write')).toBe(false)
+    expect(isDiscoveryTool('schedule_run', 'write')).toBe(false)
+    for (const name of ['todo_write', 'recall_history', 'kill_shell', 'list_scheduled_runs', 'skill']) {
+      expect(isDiscoveryTool(name, 'read')).toBe(false)
+    }
+    expect(isDiscoveryTool('nonexistent', undefined)).toBe(false)
   })
 })
