@@ -1245,3 +1245,17 @@ export type AgentEvent =
       modelUnavailable?: { providerId: string; model: string }
     }
 
+
+/**
+ * The events the loop BLOCKS on until a client resolves them (through
+ * `resolveApproval` / `resolveQuestion` / `resolvePlan` / `resolveElicitation`).
+ * A client that drops one hangs the run, so the parity tests drive every client
+ * through each type listed here. Adding a blocking event means adding it here, and
+ * the typed sample tables in those tests then fail to compile until every client
+ * resolves it.
+ */
+export const BLOCKING_EVENT_TYPES = ['tool_approval', 'tool_question', 'plan_ready', 'elicitation'] as const
+
+export type BlockingEventType = (typeof BLOCKING_EVENT_TYPES)[number]
+
+export type BlockingEvent = Extract<AgentEvent, { type: BlockingEventType }>

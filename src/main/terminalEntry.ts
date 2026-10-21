@@ -62,6 +62,7 @@ import { saveMemory } from './memory'
 import { checkForUpdate } from './update-check'
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
 import { runHeadless, type HeadlessOptions } from './headless'
+import { serveAcp } from './acp'
 import { createTerminalIo, resolveColor } from './tui-io'
 import {
   makeCompleter,
@@ -731,6 +732,93 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
     killAllShells()
     disconnectAllMcp()
     await lspManager.stopAll()
+  }
+  return code
+}
+
+/**
+ * Point `process.stdout.write` at stderr and return the real stdout writer. In ACP
+ * mode stdout is the protocol channel, so anything else that writes there (a stray
+ * `console.log` in a dependency, a library banner) would corrupt the stream. The
+ * global `console` writes through the same stream object, so this covers it too.
+ */
+export function reserveStdoutForProtocol(): (frame: string) => void {
+  const stdout = process.stdout
+  const real = stdout.write.bind(stdout) as (chunk: string) => boolean
+  stdout.write = ((chunk: unknown, ...rest: unknown[]) =>
+    (process.stderr.write as (...a: unknown[]) => boolean)(chunk, ...rest)) as typeof stdout.write
+  return (frame) => {
+    real(frame)
+  }
+}
+
+/**
+ * Run Houston as an Agent Client Protocol server on stdio (`--acp`) until the
+ * editor closes the connection. Returns the exit code.
+ */
+export async function runAcpEntry(host: { version?: string } = {}): Promise<number> {
+  const writeFrame = reserveStdoutForProtocol()
+  // The editor went away mid-write: there is no one left to serve.
+  process.stdout.on('error', () => process.stdin.destroy())
+  const sessions = wireTerminalSessionBackends({
+    notify: (m) => process.stderr.write(`· ${m}\n`),
+    startScheduler: false
+  })
+  let code = 0
+  try {
+    await serveAcp(process.stdin, {
+      getSettings,
+      startRun,
+      resolveApproval,
+      resolveQuestion,
+      resolvePlan,
+      resolveElicitation,
+      cancelRun,
+      setRunPolicy,
+      write: writeFrame,
+      log: (m) => {
+        log.info(m)
+        process.stderr.write(`${m}\n`)
+      },
+      version: host.version ?? 'dev',
+      store: {
+        create: ({ workspace, providerId, model }) => createConversation({ workspace, providerId, model }),
+        get: (id) => {
+          const conv = getConversation(id)
+          return conv
+            ? {
+                id: conv.id,
+                workspace: conv.workspace,
+                messages: conv.messages,
+                title: conv.title,
+                updatedAt: conv.updatedAt
+              }
+            : null
+        },
+        list: () =>
+          listConversations().map((c) => ({
+            id: c.id,
+            workspace: c.workspace,
+            title: c.title,
+            updatedAt: c.updatedAt
+          })),
+        setMessages,
+        setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model })
+      }
+    })
+    const outstanding = sessions.pendingBackgroundSessions()
+    if (outstanding > 0) {
+      process.stderr.write(
+        `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`
+      )
+      await sessions.waitForBackgroundSessions()
+    }
+  } catch (e) {
+    process.stderr.write(`Fatal: ${(e as Error).message}\n`)
+    code = 1
+  } finally {
+    killAllShells()
+    disconnectAllMcp()
   }
   return code
 }

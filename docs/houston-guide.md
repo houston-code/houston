@@ -86,9 +86,9 @@ ships as a desktop app and as terminal clients.
     nothing ran), or a bad stream-json input line. 3: the run hit a budget before
     finishing (its step cap or the model's output limit). 4: the final answer
     still didn't match `--output-schema` after the corrective round.
-- **Standalone CLI.** The same `-p` and `-i` clients as a single self-contained
-  Node script, with no desktop app and no browser engine. Runs on headless Linux
-  servers; API keys come from environment variables.
+- **Standalone CLI.** The same `-p`, `-i`, and `--acp` clients as a single
+  self-contained Node script, with no desktop app and no browser engine. Runs on
+  headless Linux servers; API keys come from environment variables.
 - **GitHub Action (`houston-code/houston/action`).** Runs the standalone CLI in
   GitHub Actions on the user's own runners with their own model key from a repository
   secret; there is no Houston service. Three modes: `respond` answers an `@houston`
@@ -98,6 +98,40 @@ ships as a desktop app and as terminal clients.
   action verifies the downloaded CLI's signature first, gives the model only read access
   to GitHub and no web access, and does all posting and pushing itself. Inputs, example
   workflows, and the security model are in `action/README.md` in the Houston repository.
+- **Editor integration (`houston --acp`).** Speaks the Agent Client Protocol (ACP)
+  on stdio, so an editor that supports ACP agents can run Houston as its agent
+  without a Houston extension: point the editor's agent setting at the `houston`
+  command with the `--acp` argument (the desktop binary takes the same flag). The
+  editor's folder becomes the workspace, and its chat panel shows Houston's
+  replies, reasoning, tool calls with diffs for edits, the todo list as a plan, and
+  context and cost as usage. Details:
+  - **Modes** are the approval policies (Plan, Ask, Auto-edit, Full auto); a new
+    session starts in your default policy, and the editor's mode picker switches it
+    for the rest of the session, a running prompt included.
+  - **Approvals** appear as the editor's permission prompt: Allow (this call),
+    Always allow (saves a permission rule, as in the app), Deny, or Always deny.
+    Dismissing the prompt denies the call. The sandbox and your permission rules
+    apply exactly as in the other clients; file reads, writes, and commands go
+    through Houston's own tools, not the editor's.
+  - **Plans** from Plan mode arrive as a permission prompt too: accept with edits
+    applied automatically, accept approving each edit, or keep planning. Accepting
+    moves the session's mode.
+  - **Questions** (`ask_user`) and an MCP server's input requests show as a form
+    when the editor supports ACP forms. Without forms, a question is answered
+    "use your best judgment" and an MCP request is declined, as in headless mode,
+    so a run never hangs.
+  - **Sessions** are Houston conversations: the editor can list and reopen them,
+    and they show up in the desktop app and `houston -i --resume <id>` too. MCP
+    servers the editor passes join your own for that session (as `run-acp-<name>`),
+    and are never saved to your settings.
+  - **Credentials** resolve as in the CLI (environment variables, then the saved
+    keys). With no provider set up, the editor gets an "authentication required"
+    error; an editor that can open a terminal is offered to run `houston -i`,
+    which walks you through adding one.
+  - Stdout carries protocol messages only; diagnostics go to stderr and the log
+    file. A folder that isn't trusted yet gets none of its project's allow rules,
+    hooks, or MCP servers, as in headless mode; trust it from the desktop app or
+    `houston -i`.
 
 All clients share one agent core, so tools, permissions, and skills behave the
 same across them. Some surfaces are desktop-only: the sidebar, the preview panel,
