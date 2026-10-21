@@ -114,8 +114,21 @@ export async function runInSession(opts: {
   signal?: AbortSignal
   run: SandboxRunner
   fileOps?: Pick<typeof fs, 'readFile' | 'writeFile' | 'rm'>
+  /** Whether a path is an existing directory (default: a real stat). */
+  isDirectory?: (path: string) => Promise<boolean>
 }): Promise<SandboxRunResult> {
   const io = opts.fileOps ?? fs
+  // The session's directory can vanish under it: `cd build`, then a later command
+  // deletes build/ by its full path. bash's `pwd` still prints the old path, and a
+  // spawn in a missing cwd fails before bash starts ("spawn /bin/bash ENOENT"), so
+  // every later command in the turn failed the same way. Start over from the project
+  // root instead, and say so, since the command may have expected the old directory.
+  const isDirectory = opts.isDirectory ?? directoryExists
+  let movedFrom: string | null = null
+  if (opts.session.cwd !== opts.workspace && !(await isDirectory(opts.session.cwd))) {
+    movedFrom = opts.session.cwd
+    opts.session.cwd = opts.workspace
+  }
   const stamp = randomUUID().slice(0, 12)
   const paths: CapturePaths = {
     cwdOut: join(tmpdir(), `houston-sh-${stamp}.cwd`),
@@ -162,5 +175,15 @@ export async function runInSession(opts: {
     }
   }
 
-  return result
+  if (movedFrom === null) return result
+  const note = `[the shell's working directory ${movedFrom} no longer exists, so this command ran from the project root]`
+  return { ...result, stderr: result.stderr ? `${note}\n${result.stderr}` : note }
+}
+
+async function directoryExists(path: string): Promise<boolean> {
+  try {
+    return (await fs.stat(path)).isDirectory()
+  } catch {
+    return false
+  }
 }
