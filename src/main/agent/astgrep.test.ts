@@ -252,9 +252,10 @@ describe('runAstGrep / searchStructural (ast-grep binary)', { timeout: 30_000 },
     expect(res.error).toBeTruthy()
   })
 
-  // Scope parity with search_files: both ignore .gitignore (search everything
-  // except SKIP_DIRS), so the two search tools return a consistent file set.
-  it.skipIf(!ag)('searches .gitignored files (parity with search_files)', async () => {
+  // Scope parity with search_files: outside a git repo a .gitignore means nothing
+  // to either tool (both search everything except FALLBACK_SKIP_DIRS). The in-repo
+  // cases live in fileScope.test.ts.
+  it.skipIf(!ag)('outside git, searches .gitignored files (parity with search_files)', async () => {
     writeFileSync(join(workspace, '.gitignore'), 'generated.ts\n')
     writeFileSync(join(workspace, 'generated.ts'), 'console.log(7)\n')
     const out = await searchStructural({

@@ -1,7 +1,7 @@
 import { promises as fs, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { SKIP_DIRS } from './search'
+import { FALLBACK_SKIP_DIRS, gitListFiles, hasHiddenSegment } from './fileScope'
 
 /**
  * Project-level agent instructions. Many repos ship an `AGENTS.md` (the emerging
@@ -71,18 +71,59 @@ export interface LoadRulesOptions {
 }
 
 /**
- * Walk the workspace subtree for nested `AGENTS.md`/`CLAUDE.md` files (excluding
- * the root, which is loaded separately). Skips dotdirs and build/vendor dirs,
- * and is bounded by depth and count. Returns `{ path, label }` sorted shallowest
- * first then alphabetically, so deeper (more specific) rules land later — and
- * thus at higher precedence — in the assembled output.
+ * Find nested `AGENTS.md`/`CLAUDE.md` files below the workspace root (the root's
+ * own are loaded separately), bounded by depth and count and never inside a dot
+ * directory. In a git repo, git's listing decides which directories count (a
+ * tracked rules file under `build/` is found; nothing under an ignored
+ * `node_modules/` or `target/` is even looked at); elsewhere a walk skips
+ * FALLBACK_SKIP_DIRS. Returns `{ path, label }` sorted shallowest first then
+ * alphabetically, so deeper (more specific) rules land later — and thus at
+ * higher precedence — in the assembled output.
  */
 async function discoverNestedRules(
   workspace: string,
   maxDepth: number,
   maxFiles: number
 ): Promise<{ path: string; label: string }[]> {
-  const found: { path: string; label: string; depth: number }[] = []
+  if (maxDepth <= 0 || maxFiles <= 0) return []
+  const found =
+    (await listNestedRulesFromGit(workspace, maxDepth)) ?? (await walkNestedRules(workspace, maxDepth, maxFiles))
+  found.sort((a, b) => a.depth - b.depth || a.label.localeCompare(b.label))
+  return found.slice(0, maxFiles).map(({ path, label }) => ({ path, label }))
+}
+
+type NestedRule = { path: string; label: string; depth: number }
+
+/** Nested rules files from git's listing, or null when the workspace is not in a repo. */
+async function listNestedRulesFromGit(workspace: string, maxDepth: number): Promise<NestedRule[] | null> {
+  // The pathspec keeps git from listing anything but rules files.
+  const listed = await gitListFiles(
+    workspace,
+    RULES_FILES.map((name) => `:(glob)**/${name}`)
+  )
+  if (!listed) return null
+  const found: NestedRule[] = []
+  for (const rel of listed) {
+    const parts = rel.split('/')
+    const depth = parts.length - 1 // directory depth below the workspace root
+    if (depth < 1 || depth > maxDepth || hasHiddenSegment(rel)) continue
+    if (!(RULES_FILES as readonly string[]).includes(parts[parts.length - 1])) continue
+    const path = join(workspace, ...parts)
+    // A regular file only, like the walk's Dirent check: never a symlink, and not
+    // a tracked file since deleted from disk.
+    try {
+      if (!(await fs.lstat(path)).isFile()) continue
+    } catch {
+      continue
+    }
+    found.push({ path, label: relative(workspace, path), depth })
+  }
+  return found
+}
+
+/** Nested rules files from a bounded walk, for a workspace git does not cover. */
+async function walkNestedRules(workspace: string, maxDepth: number, maxFiles: number): Promise<NestedRule[]> {
+  const found: NestedRule[] = []
 
   const walk = async (dir: string, depth: number): Promise<void> => {
     if (found.length >= maxFiles) return
@@ -104,15 +145,14 @@ async function discoverNestedRules(
     if (depth >= maxDepth) return
     for (const e of entries) {
       if (found.length >= maxFiles) break
-      if (e.isDirectory() && !e.name.startsWith('.') && !SKIP_DIRS.has(e.name)) {
+      if (e.isDirectory() && !e.name.startsWith('.') && !FALLBACK_SKIP_DIRS.has(e.name)) {
         await walk(join(dir, e.name), depth + 1)
       }
     }
   }
 
   await walk(workspace, 0)
-  found.sort((a, b) => a.depth - b.depth || a.label.localeCompare(b.label))
-  return found.map(({ path, label }) => ({ path, label }))
+  return found
 }
 
 /** Resolve an @import spec against the importing file's directory; `~` is home. */

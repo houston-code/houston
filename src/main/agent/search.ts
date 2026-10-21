@@ -4,6 +4,15 @@ import { promises as fs, existsSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import { minimatch } from 'minimatch'
 import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
+import {
+  FALLBACK_SKIP_DIRS,
+  gitListFiles,
+  hasHiddenSegment,
+  isRegularFile,
+  planRuns,
+  planScope,
+  runPathArgs
+} from './fileScope'
 
 /**
  * Content search for the `search_files` tool. Uses ripgrep when a binary can be
@@ -11,19 +20,14 @@ import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
  * otherwise, so the tool works in any environment with no bundled binary.
  *
  * Both paths support the same options: case-insensitive matching, a file glob
- * filter, context lines, and a files-with-matches output mode.
+ * filter, context lines, and a files-with-matches output mode. Both search the
+ * same files (see ./fileScope): inside a git repo, every tracked file plus the
+ * untracked files the ignore rules allow; elsewhere, everything outside a fixed set
+ * of dependency/build directories. Hidden files are skipped either way.
  */
 
-export const SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'out',
-  'build',
-  '.next',
-  'vendor',
-  '.venv'
-])
+/** Dotfiles the JS walk still searches (ripgrep skips every hidden file). */
+const KEEP_HIDDEN = new Set(['.env.example'])
 
 const MAX_LINE = 300
 const RG_CANDIDATES = ['/opt/homebrew/bin/rg', '/usr/local/bin/rg', '/usr/bin/rg', '/bin/rg']
@@ -67,6 +71,17 @@ export interface MatchOptions {
   filesWithMatches?: boolean
 }
 
+/** Which files a ripgrep run walks (see ./fileScope). */
+export interface RgScope {
+  /**
+   * Honor .gitignore, .git/info/exclude, and the global excludes file (a git
+   * repo). False searches everything except FALLBACK_SKIP_DIRS (a plain folder).
+   */
+  honorIgnores: boolean
+  /** Extra paths, relative to `cwd`, searched in addition to `searchRel`. */
+  extraPaths?: string[]
+}
+
 /**
  * Run ripgrep and collect up to `max` output lines. Resolves with an `error`
  * (rather than rejecting) when the pattern is invalid so the caller can surface
@@ -79,7 +94,8 @@ export function runRipgrep(
   searchRel: string,
   max: number,
   signal?: AbortSignal,
-  opts: MatchOptions = {}
+  opts: MatchOptions = {},
+  scope: RgScope = { honorIgnores: false }
 ): Promise<{ matches: string[]; error?: string }> {
   return new Promise((resolve) => {
     const args = [
@@ -89,8 +105,12 @@ export function runRipgrep(
       // missing search path), which would leave us with an empty stderr and a
       // generic "ripgrep error". We want the real reason so the caller can report
       // it instead of mislabeling every code-2 exit as an invalid regex.
-      '--no-ignore', // match the JS walk: search everything except the dirs below
-      ...[...SKIP_DIRS].map((d) => `--glob=!${d}`)
+      ...(scope.honorIgnores
+        ? // git's own ignore files only: .ignore/.rgignore are invisible to the
+          // `git ls-files` listing the JS fallback uses, so honoring them here would
+          // make the two backends disagree.
+          ['--no-ignore-dot']
+        : ['--no-ignore', ...[...FALLBACK_SKIP_DIRS].map((d) => `--glob=!${d}`)])
     ]
     if (opts.ignoreCase) args.push('-i')
     if (opts.glob) args.push(`--glob=${opts.glob}`)
@@ -100,7 +120,7 @@ export function runRipgrep(
       args.push('--line-number')
       if (opts.context && opts.context > 0) args.push('-C', String(opts.context))
     }
-    args.push('-e', pattern, '--', searchRel || '.')
+    args.push('-e', pattern, '--', ...runPathArgs(searchRel, scope.extraPaths))
 
     let child
     try {
@@ -202,7 +222,7 @@ async function scanFile(
   }
 }
 
-/** Pure-JS recursive content search used when ripgrep is unavailable. */
+/** Pure-JS recursive content search used when ripgrep is unavailable outside git. */
 async function jsWalk(
   dir: string,
   workspace: string,
@@ -223,7 +243,7 @@ async function jsWalk(
     if (entry.name.startsWith('.') && entry.name !== '.env.example') continue
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue
+      if (FALLBACK_SKIP_DIRS.has(entry.name)) continue
       await jsWalk(full, workspace, regex, out, max, opts)
     } else if (entry.isFile()) {
       await scanFile(full, workspace, regex, out, max, opts)
@@ -261,22 +281,44 @@ export async function searchContents(o: SearchOptions): Promise<string> {
     context: o.context,
     filesWithMatches: o.filesWithMatches
   }
+  const isFile = statSync(o.startAbs).isFile()
+  // A file argument is searched as given, like ripgrep does; only a directory
+  // needs the git-or-fallback decision.
+  const plan = isFile ? ({ kind: 'plain' } as const) : await planScope(o.startAbs)
+  const git = plan.kind === 'git'
   if (o.rgPath) {
-    const { matches, error } = await runRipgrep(
-      o.rgPath,
-      o.pattern,
-      o.workspace,
-      o.searchRel,
-      o.max,
-      o.signal,
-      matchOpts
-    )
-    // Surface ripgrep's own message verbatim: it already self-describes the cause
-    // ("regex parse error: …" for a bad pattern, an IO message otherwise). Do not
-    // blanket-label every failure as an invalid regex — that misled the model into
-    // retrying a valid pattern when the real problem was elsewhere.
-    if (error) throw new Error(error)
-    return matches.length ? matches.join('\n') : 'No matches found.'
+    // ripgrep is handed the paths its walk would wrongly skip (see planScope) as
+    // explicit arguments, which it always searches (and follows when symlinked):
+    // so keep only regular files (a deleted one is an IO error that sinks the run)
+    // and apply the glob here (--glob ignores explicit paths).
+    const extras = git
+      ? plan.explicit
+          .map((rel) => join(o.startAbs, rel))
+          .filter(isRegularFile)
+          .map((full) => relative(o.workspace, full).split(sep).join('/'))
+          .filter((rel) => !o.glob || minimatch(rel, o.glob, { matchBase: true }))
+      : []
+    const all: string[] = []
+    for (const run of planRuns(o.searchRel || '.', extras, undefined, !git || plan.walk)) {
+      if (all.length >= o.max) break
+      const { matches, error } = await runRipgrep(
+        o.rgPath,
+        o.pattern,
+        o.workspace,
+        run.searchRel,
+        o.max - all.length,
+        o.signal,
+        matchOpts,
+        { honorIgnores: git, extraPaths: run.extraPaths }
+      )
+      // Surface ripgrep's own message verbatim: it already self-describes the cause
+      // ("regex parse error: …" for a bad pattern, an IO message otherwise). Do not
+      // blanket-label every failure as an invalid regex — that misled the model into
+      // retrying a valid pattern when the real problem was elsewhere.
+      if (error) throw new Error(error)
+      all.push(...matches)
+    }
+    return all.length ? all.join('\n') : 'No matches found.'
   }
   let regex: RegExp
   try {
@@ -288,8 +330,18 @@ export async function searchContents(o: SearchOptions): Promise<string> {
   // A single-file search path: scan just that file. jsWalk would readdir() it and hit
   // ENOTDIR, silently returning no matches — but ripgrep searches a file argument, so
   // the JS fallback must too, or the backends disagree.
-  if (statSync(o.startAbs).isFile()) {
+  const listed = git ? await gitListFiles(o.startAbs) : null
+  if (isFile) {
     await scanFile(o.startAbs, o.workspace, regex, out, o.max, matchOpts)
+  } else if (listed) {
+    for (const rel of listed) {
+      if (out.length >= o.max) break
+      if (hasHiddenSegment(rel, KEEP_HIDDEN)) continue
+      const full = join(o.startAbs, rel)
+      // Regular files only, as the walk's Dirent check: never follow a symlink.
+      if (!isRegularFile(full)) continue
+      await scanFile(full, o.workspace, regex, out, o.max, matchOpts)
+    }
   } else {
     await jsWalk(o.startAbs, o.workspace, regex, out, o.max, matchOpts)
   }

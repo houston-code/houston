@@ -240,17 +240,6 @@ dropped.
   renderer ([`Markdown.tsx`](src/renderer/src/components/Markdown.tsx)), the
   genuinely hard part, and separable from the structured-surface opens above.
 
-- **`.gitignore`-aware search & `glob`.** Neither `search_files` nor `glob` honors
-  a project's `.gitignore`: both skip a fixed set (`node_modules`, `.git`,
-  `dist`/`out`/`build`, dotfiles, …) but not project-specific ignore rules.
-  `search_files` deliberately runs ripgrep with `--no-ignore` so its results match
-  the pure-JS fallback walk, rather than diverging depending on whether the
-  bundled ripgrep is in play. *Why deferred:* honoring `.gitignore` only on the
-  ripgrep path would make results depend on the runtime environment, and a
-  hand-rolled parser for the JS path would only *half*-respect it (nested
-  `.gitignore` files, negations, etc.). Low marginal value given the existing
-  dir/dotfile skips.
-
 - **Custom-command status line.** A status line whose content comes from a
   user-configured shell command, beyond the built-in
   live-activity status bar.

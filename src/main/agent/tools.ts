@@ -91,7 +91,8 @@ import {
   type LocalhostCapture
 } from './viewlocalhost'
 import { getSearchAdapter, NO_RESULTS } from './websearch'
-import { resolveRipgrep, searchContents, SKIP_DIRS } from './search'
+import { resolveRipgrep, searchContents } from './search'
+import { FALLBACK_SKIP_DIRS, gitListFiles, hasHiddenSegment } from './fileScope'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type EditStrategy } from './edit-match'
 import { displayLines, numberedLine, numberLines, numberWidth } from './line-numbers'
@@ -1288,7 +1289,7 @@ const searchTool: ToolDef = {
   schema: {
     name: 'search_files',
     description:
-      'Search file contents across the project using a regular expression. Returns matching "path:line: text" entries. Uses a bundled ripgrep for speed, falling back to a built-in scan. Skips node_modules, .git, and build output.',
+      'Search file contents across the project using a regular expression. Returns matching "path:line: text" entries. Uses a bundled ripgrep for speed, falling back to a built-in scan. Skips hidden files and anything the project\'s .gitignore excludes (outside a git repo: node_modules, build output, and similar generated directories); every tracked file is searched.',
     parameters: objectSchema(
       {
         pattern: { type: 'string', description: 'A regular expression.' },
@@ -1368,7 +1369,8 @@ const astGrepTool: ToolDef = {
   }
 }
 
-async function collectGlob(
+/** Walk a folder git does not cover, skipping dotfiles and FALLBACK_SKIP_DIRS. */
+async function walkGlob(
   dir: string,
   base: string,
   pattern: string,
@@ -1384,8 +1386,8 @@ async function collectGlob(
     if (entry.name.startsWith('.')) continue // honour default glob dot:false
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
-      if (SKIP_DIRS.has(entry.name)) continue
-      await collectGlob(full, base, pattern, out)
+      if (FALLBACK_SKIP_DIRS.has(entry.name)) continue
+      await walkGlob(full, base, pattern, out)
     } else if (entry.isFile() && minimatch(relative(base, full), pattern)) {
       try {
         const st = await fs.stat(full)
@@ -1397,13 +1399,36 @@ async function collectGlob(
   }
 }
 
+/**
+ * Files under `base` whose base-relative path matches `pattern`. In a git repo the
+ * candidates are git's listing (every tracked file, untracked ones the ignore rules
+ * allow); elsewhere a walk that skips FALLBACK_SKIP_DIRS. Dotfiles are skipped
+ * either way (glob's default dot:false).
+ */
+async function collectGlob(base: string, pattern: string, out: { full: string; mtimeMs: number }[]): Promise<void> {
+  const listed = await gitListFiles(base)
+  if (!listed) return walkGlob(base, base, pattern, out)
+  for (const rel of listed) {
+    if (hasHiddenSegment(rel) || !minimatch(rel, pattern)) continue
+    const full = join(base, rel)
+    try {
+      // lstat: like the walk, never follow a symlink. Tracked files deleted from
+      // disk and submodule entries are skipped too.
+      const st = await fs.lstat(full)
+      if (st.isFile()) out.push({ full, mtimeMs: st.mtimeMs })
+    } catch {
+      // deleted from disk but still in the index
+    }
+  }
+}
+
 const globTool: ToolDef = {
   kind: 'read',
   summarize: (a) => `Glob ${str(a, 'pattern')}`,
   schema: {
     name: 'glob',
     description:
-      'Find files whose path matches a glob pattern (e.g. "**/*.ts", "src/**/*.test.tsx"). Returns matching paths relative to the project root, most-recently-modified first. Skips node_modules, .git, dotfiles, and build output.',
+      'Find files whose path matches a glob pattern (e.g. "**/*.ts", "src/**/*.test.tsx"). Returns matching paths relative to the project root, most-recently-modified first. Skips dotfiles and anything the project\'s .gitignore excludes (outside a git repo: node_modules, build output, and similar generated directories).',
     parameters: objectSchema(
       {
         pattern: { type: 'string', description: 'A glob pattern, e.g. "**/*.ts" or "src/*.json".' },
@@ -1424,7 +1449,7 @@ const globTool: ToolDef = {
     // Collect ALL matches before sorting/capping: the cap must be applied to the
     // mtime-sorted set so "most-recently-modified first" holds and the newest file is
     // never dropped just because traversal reached it after an arbitrary 200 others.
-    await collectGlob(start, start, pattern, found)
+    await collectGlob(start, pattern, found)
     if (found.length === 0) return 'No files found.'
     found.sort((a, b) => b.mtimeMs - a.mtimeMs)
     const shown = found.slice(0, MAX_GLOB_RESULTS)

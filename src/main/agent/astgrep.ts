@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
-import { existsSync } from 'node:fs'
-import { SKIP_DIRS } from './search'
+import { existsSync, statSync } from 'node:fs'
+import { join, relative, resolve as resolvePath, sep } from 'node:path'
+import { FALLBACK_SKIP_DIRS, isRegularFile, planRuns, planScope, runPathArgs } from './fileScope'
 import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
 
 /**
@@ -94,10 +95,17 @@ export interface AstGrepRunOptions {
   lang: string
   /** Workspace root; ast-grep runs with this as cwd so output paths are relative. */
   cwd: string
-  /** Search root relative to the workspace (ast-grep argument). */
+  /** Search root relative to the workspace (ast-grep argument); '' with `extraPaths` searches only those. */
   searchRel: string
   max: number
   signal?: AbortSignal
+  /**
+   * Honor git's ignore files (a git repo); false searches everything except
+   * FALLBACK_SKIP_DIRS. Same file set as search_files (see ./fileScope).
+   */
+  honorIgnores?: boolean
+  /** Extra paths, relative to `cwd`, searched in addition to `searchRel`. */
+  extraPaths?: string[]
 }
 
 /**
@@ -143,12 +151,16 @@ export function runAstGrep(o: AstGrepRunOptions): Promise<{ matches: string[]; e
   return new Promise((resolve) => {
     // --json=stream emits one JSON object per line (not one big array), so the
     // output cap below can drop a trailing line without corrupting the rest.
-    // --no-ignore vcs matches search_files' scope — search everything except the
-    // SKIP_DIRS globs below — rather than silently honoring the repo's .gitignore
-    // (which would give the two search tools different file sets).
-    const args = ['run', '--pattern', o.pattern, '--lang', o.lang, '--no-ignore', 'vcs', '--json=stream']
-    for (const d of SKIP_DIRS) args.push('--globs', `!${d}`)
-    args.push('--', o.searchRel || '.')
+    // The same file set as search_files: in a repo, git's ignore files (not
+    // .ignore, which the JS search fallback cannot see) plus tracked-but-ignored
+    // files as explicit paths; elsewhere, everything but the fallback skip dirs.
+    const args = ['run', '--pattern', o.pattern, '--lang', o.lang, '--json=stream']
+    if (o.honorIgnores) args.push('--no-ignore', 'dot')
+    else {
+      args.push('--no-ignore', 'vcs')
+      for (const d of FALLBACK_SKIP_DIRS) args.push('--globs', `!${d}`)
+    }
+    args.push('--', ...runPathArgs(o.searchRel, o.extraPaths))
 
     let child
     try {
@@ -204,15 +216,34 @@ export async function searchStructural(o: StructuralSearchOptions): Promise<stri
       'ast-grep is not available. The desktop app bundles it; on other setups (a source checkout or the standalone CLI) install it (e.g. `brew install ast-grep`) or set HOUSTON_AST_GREP to its path.'
     )
   }
-  const { matches, error } = await runAstGrep({
-    binPath: o.binPath,
-    pattern: o.pattern,
-    lang: o.lang,
-    cwd: o.workspace,
-    searchRel: o.searchRel,
-    max: o.max,
-    signal: o.signal
-  })
-  if (error) throw new Error(error)
-  return matches.length ? matches.join('\n') : 'No matches found.'
+  // A directory in a git repo honors the ignore files, plus the explicit paths
+  // planScope says the walk would wrongly skip (ast-grep always searches those).
+  const startAbs = resolvePath(o.workspace, o.searchRel || '.')
+  const dir = existsSync(startAbs) && statSync(startAbs).isDirectory()
+  const plan = dir ? await planScope(startAbs) : ({ kind: 'plain' } as const)
+  const git = plan.kind === 'git'
+  const extras = git
+    ? plan.explicit
+        .map((rel) => join(startAbs, rel))
+        // Regular files only: never follow a symlink, and a deleted one is an IO error.
+        .filter(isRegularFile)
+        .map((full) => relative(o.workspace, full).split(sep).join('/'))
+    : []
+  const all: string[] = []
+  for (const run of planRuns(o.searchRel || '.', extras, undefined, !git || plan.walk)) {
+    if (all.length >= o.max) break
+    const { matches, error } = await runAstGrep({
+      ...run,
+      honorIgnores: git,
+      binPath: o.binPath,
+      pattern: o.pattern,
+      lang: o.lang,
+      cwd: o.workspace,
+      max: o.max - all.length,
+      signal: o.signal
+    })
+    if (error) throw new Error(error)
+    all.push(...matches)
+  }
+  return all.length ? all.join('\n') : 'No matches found.'
 }
