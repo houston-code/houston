@@ -39,6 +39,8 @@ export const IPC = {
   updateInstallFailed: 'update:installFailed',
   /** Renderer → main: install the downloaded update now (quit, apply, relaunch). */
   updateInstall: 'update:install',
+  /** Renderer → main: cancel the background download (the banner's close button). */
+  updateCancelDownload: 'update:cancelDownload',
   /** Main → renderer: the native menu's "Settings…" item was chosen — open the modal. */
   menuOpenSettings: 'menu:openSettings',
   /** Main → renderer: a native File-menu command was chosen (see MenuCommand). */

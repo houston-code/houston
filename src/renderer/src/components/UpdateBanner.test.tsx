@@ -74,6 +74,61 @@ describe('UpdateBanner', () => {
     expect(screen.getByText(/42%/)).toBeInTheDocument()
   })
 
+  it('labels the close button "Cancel download" while the download runs', () => {
+    const onDismiss = vi.fn()
+    const { rerender } = render(
+      <UpdateBanner
+        update={{ ...available, autoInstall: true }}
+        progress={{ percent: 42, bytesPerSecond: 1000, transferred: 4, total: 10 }}
+        downloaded={null}
+        failed={null}
+        onInstall={noop}
+        onDismiss={onDismiss}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel update download' }))
+    expect(onDismiss).toHaveBeenCalledOnce()
+
+    // Before the first progress event the download has already started too.
+    rerender(
+      <UpdateBanner
+        update={{ ...available, autoInstall: true }}
+        progress={null}
+        downloaded={null}
+        failed={null}
+        onInstall={noop}
+        onDismiss={onDismiss}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Cancel update download' })).toBeInTheDocument()
+  })
+
+  it('keeps a plain dismiss once there is no download left to cancel', () => {
+    const { rerender } = render(
+      <UpdateBanner
+        update={available}
+        progress={null}
+        downloaded={null}
+        failed={null}
+        onInstall={noop}
+        onDismiss={noop}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Dismiss update notice' })).toBeInTheDocument()
+    rerender(
+      <UpdateBanner
+        update={{ ...available, autoInstall: true }}
+        progress={null}
+        downloaded={{ version: '0.2.0' }}
+        failed={null}
+        onInstall={noop}
+        onDismiss={noop}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Dismiss update notice' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /cancel/i })).not.toBeInTheDocument()
+  })
+
   it('shows a Restart-to-install button once downloaded and calls onInstall', () => {
     const onInstall = vi.fn()
     render(
