@@ -1,7 +1,7 @@
 import { app, autoUpdater as nativeUpdater, BrowserWindow, dialog } from 'electron'
 import type { MessageBoxOptions } from 'electron'
 import electronUpdater from 'electron-updater'
-import type { UpdateInfo } from 'electron-updater'
+import type { CancellationToken, UpdateInfo } from 'electron-updater'
 import { IPC } from '@shared/constants'
 import {
   DOWNLOAD_URL,
@@ -46,6 +46,12 @@ import { openExternalSafely } from './safeExternal'
  * verdict; a refusal switches the banner to the manual download instead of leaving a
  * restart button that can never install anything.
  *
+ * The banner's close button cancels a background download that is still running
+ * ({@link cancelDownload}), so nothing gets staged to install on quit. Once the file has
+ * been handed to Squirrel.Mac it can no longer be called back, so from then on closing
+ * the banner only hides it. The next check (on launch, every UPDATE_CHECK_INTERVAL_MS,
+ * or from the menu) offers the update and downloads it again.
+ *
  * Failures are logged, never thrown — a missing/unreachable feed must not crash.
  */
 
@@ -79,8 +85,42 @@ let refusedVersion: string | null = null
 /** Squirrel.Mac refused a downloaded update, so it can't be installed in place. */
 class UpdateRefusedError extends Error {}
 
-/** The in-flight background download kicked off by the last check, if any. */
-let pendingDownload: Promise<unknown> | null = null
+/** The in-flight background download (started by a check or the menu), if any, with
+ *  the token that cancels it. */
+let pendingDownload: { promise: Promise<unknown>; token: CancellationToken | null } | null = null
+
+/** Downloads the user cancelled, so a caller awaiting one knows not to report an error. */
+const cancelledDownloads = new WeakSet<Promise<unknown>>()
+
+/** Record an in-flight download until it settles; its failure is already reported via
+ *  the 'error' event (a cancellation isn't one), so it never goes unhandled. */
+function trackDownload(
+  promise: Promise<unknown>,
+  token: CancellationToken | null
+): Promise<unknown> {
+  const entry = { promise, token }
+  pendingDownload = entry
+  const settle = (): void => {
+    if (pendingDownload === entry) pendingDownload = null
+  }
+  promise.then(settle, settle)
+  return promise
+}
+
+/**
+ * Cancel the in-flight download, wired to the banner's close button. Resolves false when
+ * there is nothing left to cancel: no download is running, or it already finished and
+ * was handed to Squirrel.Mac, which will install it on quit regardless.
+ */
+export function cancelDownload(): boolean {
+  const entry = pendingDownload
+  if (!entry?.token || verifying !== null || downloadedVersion !== null) return false
+  pendingDownload = null
+  cancelledDownloads.add(entry.promise)
+  entry.token.cancel()
+  console.log('[updater] download cancelled')
+  return true
+}
 
 /** The in-flight feed check, shared so the periodic timer, launch check, and manual
  *  checks never run two at once. */
@@ -207,11 +247,22 @@ export async function installUpdate(): Promise<boolean> {
  * The menu dialog's Update action on auto-install builds: finish the background
  * download if it's still running (starting one if none is), wait for Squirrel.Mac to
  * verify it, then install. Throws if the download fails or macOS refuses it, so the
- * caller can offer the manual route instead.
+ * caller can offer the manual route instead; resolves false if the user cancels it.
  */
 async function downloadAndInstall(): Promise<boolean> {
   if (downloadedVersion === null) {
-    await (pendingDownload ?? configureUpdater().downloadUpdate())
+    let download = pendingDownload?.promise
+    if (!download) {
+      const token = new electronUpdater.CancellationToken()
+      download = trackDownload(configureUpdater().downloadUpdate(token), token)
+    }
+    try {
+      await download
+    } catch (e) {
+      // The user closed the banner mid-download: that's their answer, not a failure.
+      if (cancelledDownloads.has(download)) return false
+      throw e
+    }
     // The download settles once Squirrel has fetched the file, before its signature
     // check finishes, so wait for that verdict too.
     if (verifying) await verifying.verdict
@@ -270,18 +321,9 @@ async function runCheck(): Promise<UpdateCheckResult> {
     // manager or a manual re-download). That degradation is expected, not a bug.
     const result = await autoUpdater.checkForUpdates()
     if (result?.downloadPromise) {
-      // Keep the background download for the menu's Update button to await; its
-      // failure is already reported via the 'error' event, so don't let it go unhandled.
-      const download = result.downloadPromise
-      pendingDownload = download
-      download.then(
-        () => {
-          if (pendingDownload === download) pendingDownload = null
-        },
-        () => {
-          if (pendingDownload === download) pendingDownload = null
-        }
-      )
+      // Keep the background download for the menu's Update button to await and the
+      // banner's close button to cancel.
+      trackDownload(result.downloadPromise, result.cancellationToken ?? null)
     }
     if (result?.isUpdateAvailable) {
       const payload = {

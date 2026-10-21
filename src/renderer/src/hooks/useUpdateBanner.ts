@@ -11,7 +11,8 @@ export interface UpdateBannerState {
   progress: UpdateDownloadProgress | null
   downloaded: UpdateDownloaded | null
   failed: UpdateInstallFailed | null
-  /** Hide the banner until the next check or a new download outcome. */
+  /** Hide the banner until the next check or a new download outcome, cancelling a
+   *  download that is still running. */
   dismiss: () => void
 }
 
@@ -22,6 +23,11 @@ export interface UpdateBannerState {
  * second, so merely clearing the state would bring the banner straight back. A dismissal
  * mutes progress until the next check announces the update again, or the download ends
  * in something the user can act on (ready to install, or refused by macOS).
+ *
+ * It also asks main to cancel a download that is still running, so closing the banner
+ * stops the update rather than just hiding it. Main ignores the request when there is
+ * nothing left to cancel (no download, or one already staged to install on quit), so the
+ * hook doesn't need to know which state the download is in.
  */
 export function useUpdateBanner(): UpdateBannerState {
   const [update, setUpdate] = useState<UpdateBannerState['update']>(null)
@@ -63,6 +69,7 @@ export function useUpdateBanner(): UpdateBannerState {
 
   const dismiss = useCallback(() => {
     dismissed.current = true
+    void window.api.cancelUpdateDownload().catch(() => {})
     setUpdate(null)
     setProgress(null)
     setDownloaded(null)

@@ -26,7 +26,7 @@ import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDa
 import { sanitizeInvocation } from '@shared/promptInvocation'
 import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
 import { readPickedFile } from './pickedFiles'
-import { checkForUpdates, installUpdate, takePendingWhatsNew } from './updater'
+import { cancelDownload, checkForUpdates, installUpdate, takePendingWhatsNew } from './updater'
 import {
   getSettings,
   saveSettings,
@@ -429,6 +429,8 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
   // "Restart to install" — apply a downloaded update now instead of on next quit.
   ipcMain.handle(IPC.updateInstall, () => installUpdate())
+  // Closing the banner mid-download stops it, so nothing installs on the next quit.
+  ipcMain.handle(IPC.updateCancelDownload, () => cancelDownload())
 
   // Share Houston: the sidebar button anchors the macOS share menu at the point it
   // passes (window-relative CSS px); a non-finite point falls back to the cursor.
