@@ -1053,6 +1053,17 @@ describe('Sidebar: spawned chats nest under their parent', () => {
     expect(container.ownerDocument.querySelector('.conv__nest-spacer')).toBeNull()
   })
 
+  it('keeps titles in line across sections: a group with no nesting still reserves the slot', () => {
+    const grouped = makeConv({ id: 'w', title: 'Work item', updatedAt: 5, groupId: 'g1' })
+    render(
+      <FoldingSidebar
+        {...baseProps({ groups: [{ id: 'g1', name: 'Work' }], conversations: [grouped, ...convs] })}
+      />
+    )
+    const row = screen.getByText('Work item').closest('.conv') as HTMLElement
+    expect(row.querySelector('.conv__nest-spacer')).not.toBeNull()
+  })
+
   it('opens a nested chat on click, and only top-level rows are draggable', () => {
     const onSelect = vi.fn()
     render(<FoldingSidebar {...baseProps({ conversations: convs, onSelect })} />)

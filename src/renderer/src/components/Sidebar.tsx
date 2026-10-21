@@ -633,7 +633,8 @@ function SidebarSectionView({
   setRenamingConv,
   setRenamingGroup,
   collapsedParents,
-  toggleParent
+  toggleParent,
+  alignGutter
 }: {
   section: SidebarSection
   props: SidebarProps
@@ -645,6 +646,9 @@ function SidebarSectionView({
   /** Parents whose spawned chats the user folded away. */
   collapsedParents: ReadonlySet<string>
   toggleParent: (id: string) => void
+  /** Some section's top-level row has spawned chats, so every section reserves the fold
+   *  arrow's slot and titles line up across sections, not just within one. */
+  alignGutter: boolean
 }): JSX.Element {
   const { groups } = props
   // Slot the drop indicator sits at while dragging over this section, or null.
@@ -694,7 +698,7 @@ function SidebarSectionView({
   // reserve the fold arrow's slot and their titles stay in line).
   const needsGutter = (siblings: ConversationMeta[]): boolean =>
     siblings.some((c) => (section.children[c.id]?.length ?? 0) > 0)
-  const topGutter = needsGutter(section.conversations)
+  const topGutter = alignGutter || needsGutter(section.conversations)
   const renderTree = (c: ConversationMeta, depth: number, gutter: boolean): JSX.Element => {
     const kids = section.children[c.id] ?? []
     const all = kids.length ? descendantsOf(c.id, section.children) : []
@@ -779,6 +783,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // Parents whose spawned chats are folded away (saved in settings; expanded by default).
   const collapsedParents = props.collapsedParents ?? NO_PARENTS
   const toggleParent = (id: string): void => props.onToggleParentCollapsed?.(id)
+  // Reserve the fold arrow's slot in every section when any top-level row needs it.
+  const alignGutter = sections.some((s) => s.conversations.some((c) => (s.children[c.id]?.length ?? 0) > 0))
 
   // Collapsed: a thin rail with just the expand toggle and the most-used actions.
   if (props.collapsed) {
@@ -867,6 +873,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             setRenamingGroup={setRenamingGroup}
             collapsedParents={collapsedParents}
             toggleParent={toggleParent}
+            alignGutter={alignGutter}
           />
         ))}
       </div>
