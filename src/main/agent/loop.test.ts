@@ -310,27 +310,30 @@ async function run(
     unattended?: boolean
     overrides?: RunSettingsOverrides
     allowShellNetwork?: boolean
+    /** Answer prompts synchronously inside `send`, as the headless CLI does. */
+    syncReplies?: boolean
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
   const runId = `run-${Math.round(Math.random() * 1e9)}`
   const events: AgentEvent[] = []
   let messages: ChatMessage[] = []
+  // Respond on a later tick by default, as the real renderer replies async;
+  // `syncReplies` answers inside send itself, as the headless CLI does.
+  const reply = (fn: () => void): void => {
+    if (opts.syncReplies) fn()
+    else setTimeout(fn, 0)
+  }
   const send = (e: AgentEvent): void => {
     events.push(e)
     if (e.type === 'tool_approval' && opts.onApproval) {
-      // Respond on a later tick — the loop registers the approval resolver on the
-      // line *after* it emits tool_approval, just as the real renderer replies async.
-      setTimeout(
-        () => opts.onApproval!(e.callId, (d, note) => resolveApproval(runId, e.callId, d, note)),
-        0
-      )
+      reply(() => opts.onApproval!(e.callId, (d, note) => resolveApproval(runId, e.callId, d, note)))
     }
     if (e.type === 'tool_question' && opts.onQuestion) {
-      setTimeout(() => opts.onQuestion!(e.callId, (a) => resolveQuestion(runId, e.callId, a)), 0)
+      reply(() => opts.onQuestion!(e.callId, (a) => resolveQuestion(runId, e.callId, a)))
     }
     if (e.type === 'plan_ready' && opts.onPlan) {
-      setTimeout(() => opts.onPlan!(e.callId, e.plan, (d) => resolvePlan(runId, e.callId, d)), 0)
+      reply(() => opts.onPlan!(e.callId, e.plan, (d) => resolvePlan(runId, e.callId, d)))
     }
   }
   await startRun(
@@ -4234,6 +4237,98 @@ describe('permission gates: batched sensitive reads and subagent calls', () => {
     expect(approvals[1].preview?.length).toBeGreaterThan(0)
     expect(readFileSync(join(ws, 'guarded.txt'), 'utf8')).toBe('before')
     expect(readFileSync(join(ws, 'free.txt'), 'utf8')).toBe('unguarded')
+  })
+
+  // The headless CLI answers every prompt synchronously inside its send callback,
+  // so each blocking site must register its resolver before emitting the prompt;
+  // otherwise the answer is dropped and the run hangs forever.
+  describe('prompts answered synchronously inside send (headless)', () => {
+    it('resolves a main-loop approval', async () => {
+      const r = await run({
+        policy: 'ask',
+        syncReplies: true,
+        turns: [callTurn({ id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'W' } }), finalText('done')],
+        onApproval: (_id, decide) => decide('allow')
+      })
+      expect(approvalsOf(r).map((a) => a.callId)).toEqual(['w1'])
+      expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('W')
+      expect(r.events.at(-1)?.type).toBe('done')
+    })
+
+    it("resolves a subagent's gated call", async () => {
+      writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-sync-marker')
+      const r = await run({
+        policy: 'full-auto',
+        syncReplies: true,
+        turns: [
+          callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read .env' } }),
+          callTurn({ id: 's1', name: 'read_file', arguments: { path: '.env' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        onApproval: (_id, decide) => decide('allow')
+      })
+      expect(approvalsOf(r).map((a) => a.callId)).toEqual(['d1.read.1'])
+      expect(resultFor(r, 'd1.read.1')?.ok).toBe(true)
+      expect(r.events.at(-1)?.type).toBe('done')
+    })
+
+    it('resolves an ask_user question', async () => {
+      const r = await run({
+        syncReplies: true,
+        turns: [callTurn({ id: 'q1', name: 'ask_user', arguments: { question: 'Which?' } }), finalText('ok')],
+        onQuestion: (_id, answer) => answer('this one')
+      })
+      expect(resultFor(r, 'q1')?.output).toContain('this one')
+      expect(r.events.at(-1)?.type).toBe('done')
+    })
+
+    it('resolves a present_plan review', async () => {
+      const r = await run({
+        policy: 'plan',
+        syncReplies: true,
+        turns: [callTurn({ id: 'p1', name: 'present_plan', arguments: { title: 'T', plan: '1. step' } }), finalText('ok')],
+        onPlan: (_id, _plan, decide) => decide({ kind: 'reject' })
+      })
+      expect(resultFor(r, 'p1')).toBeDefined()
+      expect(r.events.at(-1)?.type).toBe('done')
+    })
+
+    it('finishes a real headless run whose write needs approval', async () => {
+      const { runHeadless } = await import('../headless')
+      h.provider = scripted([
+        callTurn({ id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'H' } }),
+        finalText('done')
+      ])
+      const err: string[] = []
+      const code = await runHeadless(
+        {
+          prompt: 'write it',
+          cwd: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          onApproval: 'allow',
+          allowShellNetwork: false,
+          json: false,
+          continueSession: false
+        },
+        {
+          getSettings: () =>
+            ({ ...h.settings, providers: [{ id: 'anthropic', models: [], requiresKey: false }] }) as never,
+          startRun,
+          resolveApproval,
+          resolveQuestion,
+          resolvePlan,
+          resolveElicitation: () => {},
+          out: () => {},
+          err: (s) => err.push(s)
+        }
+      )
+      expect(code).toBe(0)
+      expect(err.join('')).toContain('auto-approving write_file')
+      expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('H')
+    })
   })
 
   it("prompts for a subagent's .env read, and a denial keeps its contents out of the subagent", async () => {
