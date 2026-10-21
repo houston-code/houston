@@ -622,6 +622,22 @@ function assertSeen(ctx: ToolContext, name: string, abs: string, rel: string, cu
   if (reason) throw new Error(staleWriteMessage(rel, reason, name))
 }
 
+/**
+ * A file's text for an in-place edit, refusing bytes that are not UTF-8. Decoding is
+ * lossy: every byte that isn't valid UTF-8 (a Latin-1 or Windows-1252 accent, say)
+ * comes back as U+FFFD, and writing the edited text back would replace each of them
+ * with that character, damaging every line of the file and not just the one edited.
+ */
+export function editableText(buf: Buffer, rel: string): string {
+  const text = buf.toString('utf8')
+  if (!Buffer.from(text, 'utf8').equals(buf)) {
+    throw new Error(
+      `${rel} is not UTF-8 text (it may use a legacy encoding such as Latin-1 or Windows-1252), so editing it as text would corrupt its other non-ASCII characters. Make the change with run_shell instead (e.g. iconv to convert it, or sed on the bytes), or ask the user how to proceed.`
+    )
+  }
+  return text
+}
+
 /** The file's bytes, or null when it can't be read (most often: it does not exist). */
 async function readIfPresent(abs: string): Promise<Buffer | null> {
   try {
@@ -775,7 +791,7 @@ const editFile: ToolDef = {
     const replaceAll = args.replace_all === true
     const buf = await fs.readFile(abs)
     assertSeen(ctx, 'edit_file', abs, rel, buf)
-    const data = buf.toString('utf8')
+    const data = editableText(buf, rel)
     const sensitive = isSensitivePath(rel)
     const result = resolveEdit(data, oldStr, newStr, replaceAll, { showCandidate: !sensitive })
     assertNoRedactedValues(data, result.content)
@@ -878,7 +894,7 @@ const multiEdit: ToolDef = {
     }
     const buf = await fs.readFile(abs)
     assertSeen(ctx, 'multi_edit', abs, rel, buf)
-    const original = buf.toString('utf8')
+    const original = editableText(buf, rel)
     let data = original
     // Edits whose landing spot deserves a look, with their regions kept current as
     // later edits move lines around, so the snippets cite the file as written.
@@ -1138,12 +1154,13 @@ const applyPatch: ToolDef = {
         staged.push({ abs, rel: op.path, content: null, verb: 'delete' })
         deleted += 1
       } else {
-        let data: string
+        let bytes: Buffer
         try {
-          data = await fs.readFile(abs, 'utf8')
+          bytes = await fs.readFile(abs)
         } catch {
           throw new Error(`Update File: ${op.path} does not exist.`)
         }
+        let data = editableText(bytes, `Update File: ${op.path}`)
         const original = data
         op.hunks.forEach((hunk, h) => {
           try {
