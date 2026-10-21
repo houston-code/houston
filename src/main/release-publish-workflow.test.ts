@@ -161,6 +161,48 @@ describe('release build order', () => {
   })
 })
 
+describe('binary vulnerability scan in the Linux leg', () => {
+  const step = (() => {
+    const start = leg.indexOf('      - name: Scan binary SBOM + apply native-layer policy\n')
+    expect(start).toBeGreaterThan(-1)
+    return leg.slice(start, leg.indexOf('\n      - ', start + 1))
+  })()
+  const loop = step.slice(step.indexOf('          for attempt in 1 2 3; do\n'), step.indexOf('          done\n') + '          done\n'.length)
+
+  /** Runs the database retry loop with grype's `db update` failing its first `failures` calls. */
+  function run(failures: number) {
+    const script = [
+      'set -e',
+      'calls=0',
+      `fake_grype() { calls=$((calls + 1)); [ "$1 $2" = "db update" ] || return 9; [ "$calls" -gt ${failures} ] || return 1; }`,
+      'GRYPE=fake_grype',
+      'sleep() { :; }',
+      loop,
+      'echo "calls=$calls"'
+    ].join('\n')
+    return spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+  }
+
+  it.skipIf(process.platform === 'win32')('retries the database download until it lands', () => {
+    const res = run(2)
+    expect(res.status).toBe(0)
+    expect(res.stdout).toContain('calls=3')
+    expect(res.stdout).toContain('grype db update failed (attempt 2 of 3)')
+  })
+
+  it.skipIf(process.platform === 'win32')('fails the leg when every attempt fails', () => {
+    const res = run(3)
+    expect(res.status).toBe(1)
+    expect(res.stdout).toContain('::error::grype db update failed 3 times')
+  })
+
+  it('scans with the downloaded database, without checking for another over the network', () => {
+    expect(loop).toContain('if "$GRYPE" db update; then break; fi')
+    const scan = step.indexOf('GRYPE_DB_AUTO_UPDATE=false "$GRYPE" sbom:sbom.binary.linux-x64.cyclonedx.json')
+    expect(scan).toBeGreaterThan(step.indexOf(loop))
+  })
+})
+
 describe('release-publish SHA256SUMS manifest', () => {
   it('runs after every build leg and before finalize publishes', () => {
     expect(checksumsJob).toContain('needs: [source, build-mac, build-other, mac-feed]')
@@ -369,6 +411,24 @@ describe('release legs verify before they upload', () => {
     }
     // And the single-draft check runs on what was just uploaded.
     expect(upload).toBeLessThan(at('- name: Check the release is still a single draft'))
+  })
+
+  it('retries every upload into the draft, which runs after the leg has built and signed', () => {
+    // A dropped connection here would otherwise mean redoing the whole leg (and notarizing again).
+    const lines = leg.split('\n')
+    const uploads = lines.flatMap((line, i) => {
+      if (!line.includes('gh release upload')) return []
+      // The whole command, through its backslash continuations.
+      let end = i
+      while (lines[end].trimEnd().endsWith('\\')) end++
+      return [lines.slice(i, end + 1).join('\n')]
+    })
+    expect(uploads).toHaveLength(4)
+    for (const command of uploads) {
+      expect(command).toContain('bash .pipeline/scripts/retry.sh gh release upload "$tag"')
+      // --clobber is what makes repeating an upload safe.
+      expect(command).toContain('--clobber')
+    }
   })
 
   it('uploads exactly one update feed per non-macOS leg, last, and hands macOS feeds to mac-feed', () => {
