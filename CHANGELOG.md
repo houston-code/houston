@@ -11,6 +11,7 @@ This release also changes some defaults: reasoning now starts at High, and Enter
 - In the desktop app, pressing Enter while a turn runs now **steers** it (the agent reads your message before its next step). ⌘+Enter (Ctrl+Enter on Windows and Linux) queues the message for after the run instead. (#250)
 - Slash commands typed mid-turn now run as commands instead of being sent to the model as text. `/compact` waits until the turn ends. In the terminal, a known command typed mid-turn runs once the turn ends. (#203)
 - Shell commands that can discard work (for example `git reset --hard`, forced `git push`, `git clean -f`, `rm -r src`, `find … -delete`) now ask for approval in every mode, including full-auto. (#246)
+- Writing to a credential file (`.env` and `.env.<name>`, private keys, credential stores) now asks for approval in every mode, including full-auto, whether a file tool or a shell command does it. Templates like `.env.example` don't ask. An allow rule or **Allow for run** still skips the prompt. (#177)
 - Shell allow rules now match quoting and whitespace exactly as bash reads them. A quoted `*` no longer matches a bare `*`. Rules saved by earlier versions mean exactly what their text says, so you may be asked once more for some commands. A saved shell allow ending in a lone backslash now matches nothing. (#206, #214)
 - Headless runs (`-p`) now report how they ended through their exit code, so a run that stops at its step cap no longer exits 0 like a finished task. An invalid flag value exits 2 before any model call. (#220)
 
@@ -78,6 +79,9 @@ This release also changes some defaults: reasoning now starts at High, and Enter
 - Shell commands approved without network access now fail fast and say so. (#231)
 
 ### Changed
+- New installs start in **full-auto** on macOS and Linux, where the sandbox confines shell commands, and in ask elsewhere. Existing installs keep their mode. (#246)
+- The terminal now starts in the approval mode the desktop app last used instead of always starting in ask. `--approval` and `--full-auto` still override it for a session. (#246)
+- Electron is updated to 44.9.1 (Chromium 152.0.7977.167), with the upstream Chromium and V8 security fixes since 44.7.0. (#249)
 - "Reasoning off" on Claude models that always think now sends minimal reasoning and is labelled **Think: minimal**. (#162)
 - The local providers are renamed **Ollama (local)** and **LM Studio (local)**, unless you renamed them yourself. (#161)
 - Deleting a chat with an untouched worktree now asks a simple Delete/Cancel and removes the worktree. (#165)
