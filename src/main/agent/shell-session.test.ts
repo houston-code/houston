@@ -196,16 +196,11 @@ describe.skipIf(!BASH)('runInSession (end to end with real bash)', () => {
     mkdirSync(join(ws, 'build'))
     const session = createShellSession(ws)
     await runInSession({ command: 'cd build', session, workspace: ws, allowNetwork: false, run: bashRunner })
-    // Deleted by its full path while the session still sits in it: bash's pwd keeps
-    // reporting it, so the session records a directory that no longer exists.
-    await runInSession({
-      command: `rm -rf ${singleQuote(join(ws, 'build'))}`,
-      session,
-      workspace: ws,
-      allowNetwork: false,
-      run: bashRunner
-    })
-    expect(existsSync(join(ws, 'build'))).toBe(false)
+    // Deleted while the session still points at it (on macOS and Linux a later
+    // command can even do it from inside: bash's pwd keeps reporting the old path).
+    // Removed between commands here, since Windows won't delete a shell's own cwd.
+    expect(canon(session.cwd)).toBe(canon(join(ws, 'build')))
+    rmSync(join(ws, 'build'), { recursive: true, force: true })
 
     const cwds: string[] = []
     const recording = (o: SandboxRunOptions): Promise<SandboxRunResult> => {
