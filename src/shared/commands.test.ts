@@ -8,8 +8,12 @@ import {
   parseAgentInvocation,
   parseSlashCommand,
   resolveCommand,
+  terminalOnlyNote,
+  BUILTIN_COMMAND_CATALOG,
+  COMMAND_ALIASES,
   type Command
 } from './commands'
+import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, parseApprovalPolicy } from './types'
 
 describe('BUILTIN_COMMAND_CATALOG ↔ TUI parity', () => {
   // Every first-class command the interactive TUI (src/main/tui.ts parseSlashCommand)
@@ -164,3 +168,52 @@ describe('agentInvocationPrompt', () => {
     expect(agentInvocationPrompt('reviewer', '')).toContain('Use your judgment')
   })
 })
+
+describe('one command set across the desktop and the terminal', () => {
+  it('offers the approval words and /retry in both clients', () => {
+    for (const client of ['gui', 'tui'] as const) {
+      const names = new Set(builtinCommands(client).map((c) => c.name))
+      for (const n of ['plan', 'ask', 'auto', 'full', 'approval', 'retry', 'undo', 'changes', 'model']) {
+        expect(names.has(n), `/${n} in ${client}`).toBe(true)
+      }
+    }
+  })
+
+  it('resolves the terminal aliases in any client', () => {
+    const gui = builtinCommands('gui')
+    expect(resolveCommand(gui, 'diff')?.name).toBe('changes')
+    expect(resolveCommand(gui, 'Providers')?.name).toBe('login')
+    expect(resolveCommand(gui, 'think')?.name).toBe('reasoning')
+    // An alias only resolves when its command is in the list.
+    expect(resolveCommand(gui, 'paste')).toBeUndefined()
+    for (const target of Object.values(COMMAND_ALIASES)) {
+      expect(BUILTIN_COMMAND_CATALOG.some((c) => c.name === target), target).toBe(true)
+    }
+  })
+
+  it('points every terminal-only command at the desktop equivalent', () => {
+    for (const c of BUILTIN_COMMAND_CATALOG.filter((x) => !x.clients.includes('gui'))) {
+      const note = terminalOnlyNote(c.name)
+      expect(note, c.name).toMatch(new RegExp(`^/${c.name} is a terminal command: .+\\.$`))
+    }
+    expect(terminalOnlyNote('q')).toMatch(/^\/q is a terminal command/)
+    expect(terminalOnlyNote('changes')).toBeNull()
+    expect(terminalOnlyNote('nonsense')).toBeNull()
+  })
+})
+
+describe('approval policy names', () => {
+  it('labels every policy', () => {
+    for (const p of APPROVAL_POLICIES) expect(APPROVAL_POLICY_LABEL[p]).toBeTruthy()
+  })
+
+  it('reads ids and the short command words, and nothing else', () => {
+    expect(parseApprovalPolicy('auto-edit')).toBe('auto-edit')
+    expect(parseApprovalPolicy(' AUTO ')).toBe('auto-edit')
+    expect(parseApprovalPolicy('full')).toBe('full-auto')
+    expect(parseApprovalPolicy('plan')).toBe('plan')
+    expect(parseApprovalPolicy('yolo')).toBeNull()
+    expect(parseApprovalPolicy('')).toBeNull()
+  })
+})
+

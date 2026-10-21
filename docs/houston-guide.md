@@ -228,17 +228,27 @@ on the client, but the common built-ins are:
 
 - `/new` (alias `/clear`): start a fresh conversation.
 - `/compact`: summarize older turns now to free up context.
-- `/plan`: switch to plan mode (read-only). In the desktop app `/ask`, `/auto`,
-  and `/full` switch the other approval modes; the terminal uses `/approval <policy>`.
+- `/retry`: run your last message again after a turn that failed.
+- `/plan`, `/ask`, `/auto`, `/full`: switch the approval mode (plan mode, ask every
+  time, auto-approve edits, full auto); `/approval` shows the current one.
 - `/review`: run an adversarial review of your uncommitted changes and fix what
   it confirms.
+- `/undo`, `/redo`: revert the files the last turn changed, or put them back.
+- `/rewind`: go back to an earlier message: the conversation, the code, or both.
+- `/changes` (also `/diff`), `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`,
+  `/cost`, `/cwd`, `/share`, `/doctor`.
+- `/settings`, `/login`, `/mcp`, `/hooks`, `/trust`, `/theme`: in the desktop app
+  these open the matching section of Settings; the terminal edits a safe subset
+  in place.
 - `/skills`, `/agents`: list the workspace's skills and custom agents.
 - `/help`: list the available commands.
 
-The interactive terminal adds terminal-specific commands such as `/model` (list
-or switch model), `/login` (set an API key, also `/providers`), `/approval`,
-`/settings`, `/doctor`, `/verbose`, `/output`, `/resume`, `/spawned`, `/proposals`, `/btw`, `/fork`,
-`/cost`, `/mcp`, `/trust`, `/hooks`, `/theme`, `/image`, `/cwd`, `/share`, and `/exit`.
+Both clients accept these names, so a command learned in one works in the other.
+In the desktop app each one opens its own panel for the job (`/changes` the
+Changes panel, `/model` the model picker, `/btw` the side chat). A few are
+terminal-only: `/vim`, `/verbose`, `/output`, `/spawned`, `/proposals`, `/image`,
+and `/exit`. Typed in the desktop app, they say where the app does the same thing
+instead of being sent to the model.
 
 **Themes.** `/theme` lists the terminal's palettes and `/theme <name>` switches:
 `dark` (bright foregrounds for a dark background), `light` (readable on white,

@@ -2,9 +2,11 @@ import { randomUUID } from 'node:crypto'
 import { realpathSync } from 'node:fs'
 import {
   APPROVAL_POLICIES,
+  APPROVAL_POLICY_LABEL,
   HOOK_EVENTS,
   folderTrustState,
   isApprovalPolicy,
+  parseApprovalPolicy,
   removeFolderTrust,
   upsertFolderTrust,
   type AppSettings,
@@ -59,7 +61,7 @@ import type {
 } from '@shared/agent'
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
-import { isReasoningEffort, REASONING_EFFORTS } from '@shared/agent'
+import { isReasoningEffort, REASONING_EFFORTS, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd } from '@shared/usage'
 import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
@@ -1272,6 +1274,8 @@ export type SlashResult =
   | { kind: 'set-approval'; policy: ApprovalPolicy; asDefault?: boolean }
   /** Choose a model from the ready ones (/model with no model named). */
   | { kind: 'pick-model'; asDefault?: boolean }
+  /** Run the last message again after its turn failed (/retry), as the desktop's Retry does. */
+  | { kind: 'retry' }
   | { kind: 'set-model'; providerId: string; model: string; asDefault?: boolean }
   | { kind: 'compact' }
   /** The settings overview hub (/settings). */
@@ -1446,9 +1450,19 @@ export function parseSlashCommand(
       return { kind: 'paste-image' }
     case 'approval': {
       const { rest, asDefault } = splitDefaultFlag(arg)
-      if (isApprovalPolicy(rest)) return { kind: 'set-approval', policy: rest, ...(asDefault ? { asDefault } : {}) }
+      const policy = parseApprovalPolicy(rest)
+      if (policy) return { kind: 'set-approval', policy, ...(asDefault ? { asDefault } : {}) }
       return { kind: 'handled' } // no/invalid arg → driver prints current + usage
     }
+    case 'ask':
+    case 'auto':
+    case 'full': {
+      // The desktop's one-word approval commands, so the same names work in both.
+      const policy = parseApprovalPolicy(name)
+      return policy ? { kind: 'set-approval', policy } : { kind: 'handled' }
+    }
+    case 'retry':
+      return { kind: 'retry' }
     case 'plan':
       // Shortcut for the read-only research-and-propose policy (parity with the GUI's /plan).
       return { kind: 'set-approval', policy: 'plan' }
@@ -1523,10 +1537,12 @@ export const HELP_TEXT = [
   '  /help                 show this help',
   '  /model [id]           list models, or switch this chat (add --default for new chats too)',
   '  /login                set or replace a provider API key, or add a host',
-  '  /approval [policy]    show or set this chat\'s policy (plan | ask | auto-edit | full-auto; --default)',
-  '  /plan                 shortcut: switch to plan mode (read-only research & propose)',
+  '  /approval [policy]    show or set this chat\'s approval mode (--default: new chats too)',
+  '  /plan                 plan mode: read-only research & propose',
+  '  /ask /auto /full      ask every time · auto-approve edits · full auto (sandboxed)',
   '  /clear, /new          start a fresh conversation',
   '  /compact              summarize older turns to free up context now',
+  '  /retry                run your last message again after a turn that failed',
   '  /review               adversarial review of your uncommitted changes',
   '  /resume [query]       list (or search) and reopen a saved session',
   '  /spawned              list the background sessions the agent started; open one',
@@ -2888,7 +2904,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.io.setMode?.(policy)
     if (activeRunId) {
       deps.setRunPolicy?.(activeRunId, policy)
-      deps.io.out(paint(`\n· approval → ${policy} (this run too)\n`, 'dim'))
+      deps.io.out(paint(`\n· approval → ${APPROVAL_POLICY_LABEL[policy]} (this run too)\n`, 'dim'))
     }
   })
 
@@ -2902,7 +2918,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           : '  model:    (none yet, /login to set a key)',
         'dim'
       )}\n` +
-      `${paint(`  approval: ${policy}`, 'dim')}\n` +
+      `${paint(`  approval: ${APPROVAL_POLICY_LABEL[policy]}`, 'dim')}\n` +
       `${paint('  /help for commands, Ctrl-D to exit', 'dim')}\n`
   )
 
@@ -3452,7 +3468,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.setMode?.(policy)
         const asDefault = result.asDefault && deps.updateSettings
         if (asDefault) deps.updateSettings?.({ approvalPolicy: policy })
-        deps.io.out(paint(`· approval policy → ${policy}${asDefault ? ' (new chats too)' : ''}\n`, 'dim'))
+        deps.io.out(paint(`· approval → ${APPROVAL_POLICY_LABEL[policy]}${asDefault ? ' (new chats too)' : ''}\n`, 'dim'))
         continue
       }
       if (result.kind === 'pick-model') {
@@ -3604,6 +3620,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         text = turn.text
         invokedAs = turn.invokedAs
         deps.io.out(paint(`${invocationEcho(turn.invokedAs)}\n`, 'dim'))
+      } else if (result.kind === 'retry') {
+        // The desktop's Retry: a history that ends in the user's own message means
+        // its turn produced nothing (it failed or was stopped). Send that message
+        // again; appendUserTurn swaps it in place rather than stacking a copy.
+        const last = messages.at(-1)
+        if (!last || last.role !== 'user' || last.content.startsWith(SYSTEM_NOTE_PREFIX)) {
+          deps.io.out(paint('· nothing to retry: /retry runs your last message again after a turn fails\n', 'dim'))
+          continue
+        }
+        text = last.content
+        invokedAs = last.invokedAs
+        pendingImages = last.images ?? []
+        deps.io.out(paint('· retrying your last message\n', 'dim'))
       } else if (result.kind === 'prompt') {
         // A template command (custom `.houston/commands` or first-party /review):
         // run its expanded prompt as a normal turn. Fall through — don't `continue`.
@@ -4254,7 +4283,10 @@ function handleInfoCommand(
   if (name === 'approval') {
     if (arg) deps.io.out(paint(`· unknown policy: ${arg}\n`, 'yellow'))
     deps.io.out(
-      paint(`approval: ${state.policy}  (plan | ask | auto-edit | full-auto)\n`, 'dim')
+      paint(
+        `approval: ${APPROVAL_POLICY_LABEL[state.policy]}  (switch with /plan, /ask, /auto, /full)\n`,
+        'dim'
+      )
     )
     return
   }

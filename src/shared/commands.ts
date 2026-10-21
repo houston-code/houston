@@ -52,10 +52,32 @@ export function matchCommands(commands: Command[], prefix: string): Command[] {
   return commands.filter((c) => c.name.toLowerCase().startsWith(p))
 }
 
-/** Resolve a command by exact name, case-insensitively (matches the menu). */
+/**
+ * Second names for built-in commands, accepted by both clients: what the terminal
+ * has always taken (`/diff`, `/providers`, …), so a name learned in one client
+ * works in the other.
+ */
+export const COMMAND_ALIASES: Readonly<Record<string, string>> = {
+  diff: 'changes',
+  providers: 'login',
+  sessions: 'resume',
+  aside: 'btw',
+  think: 'reasoning',
+  proposed: 'proposals',
+  paste: 'image',
+  q: 'quit'
+}
+
+/**
+ * Resolve a command by exact name, case-insensitively (matches the menu), or by
+ * one of its {@link COMMAND_ALIASES} when that command is in the list.
+ */
 export function resolveCommand(commands: Command[], name: string): Command | undefined {
   const n = name.toLowerCase()
-  return commands.find((c) => c.name.toLowerCase() === n)
+  const direct = commands.find((c) => c.name.toLowerCase() === n)
+  if (direct) return direct
+  const target = COMMAND_ALIASES[n]
+  return target ? commands.find((c) => c.name === target) : undefined
 }
 
 /**
@@ -140,18 +162,23 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'clear', description: 'Start a new chat (alias for /new)', clients: ['gui', 'tui'] },
   { name: 'compact', description: 'Summarize older turns to free up context now', clients: ['gui', 'tui'] },
   {
+    name: 'retry',
+    description: 'Run your last message again after a turn that failed',
+    clients: ['gui', 'tui']
+  },
+  {
     name: 'plan',
     description: 'Plan mode: read-only (research & propose, no edits/commands)',
     clients: ['gui', 'tui']
   },
-  { name: 'ask', description: 'Approval: ask before every edit and command', clients: ['gui'] },
-  { name: 'auto', description: 'Approval: auto-approve edits, ask for commands', clients: ['gui'] },
-  { name: 'full', description: 'Approval: full auto (sandboxed)', clients: ['gui'] },
-  { name: 'model', description: 'List or switch the active model', clients: ['tui'] },
-  { name: 'login', description: 'Set or update an API key (also: /providers)', clients: ['tui'] },
-  { name: 'settings', description: 'Show a summary of your current settings', clients: ['tui'] },
-  { name: 'undo', description: "Revert the files the last turn changed", clients: ['tui'] },
-  { name: 'redo', description: 'Put back what /undo reverted', clients: ['tui'] },
+  { name: 'ask', description: 'Approval: ask before every edit and command', clients: ['gui', 'tui'] },
+  { name: 'auto', description: 'Approval: auto-approve edits, ask for commands', clients: ['gui', 'tui'] },
+  { name: 'full', description: 'Approval: full auto (sandboxed)', clients: ['gui', 'tui'] },
+  { name: 'model', description: 'List or switch the active model', clients: ['gui', 'tui'] },
+  { name: 'login', description: 'Set or update an API key (also: /providers)', clients: ['gui', 'tui'] },
+  { name: 'settings', description: 'Show a summary of your current settings', clients: ['gui', 'tui'] },
+  { name: 'undo', description: "Revert the files the last turn changed", clients: ['gui', 'tui'] },
+  { name: 'redo', description: 'Put back what /undo reverted', clients: ['gui', 'tui'] },
   {
     name: 'rewind',
     description: 'Rewind to an earlier message: the conversation, the code, or both',
@@ -160,12 +187,12 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   {
     name: 'changes',
     description: 'What is different in the working tree (also /diff)',
-    clients: ['tui']
+    clients: ['gui', 'tui']
   },
   {
     name: 'reasoning',
     description: 'Show or set thinking effort (off | low | medium | high | xhigh)',
-    clients: ['tui']
+    clients: ['gui', 'tui']
   },
   {
     name: 'doctor',
@@ -187,8 +214,8 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Reprint a tool result in full (/output [n])',
     clients: ['tui']
   },
-  { name: 'approval', description: 'Show or set the approval policy', clients: ['tui'] },
-  { name: 'resume', description: 'Reopen (or search) a saved session', clients: ['tui'] },
+  { name: 'approval', description: 'Show or set the approval policy', clients: ['gui', 'tui'] },
+  { name: 'resume', description: 'Reopen (or search) a saved session', clients: ['gui', 'tui'] },
   {
     name: 'spawned',
     description: 'List the background sessions the agent started, and open one',
@@ -202,10 +229,10 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   {
     name: 'btw',
     description: 'Ask a quick side question; the answer stays out of this chat',
-    clients: ['tui']
+    clients: ['gui', 'tui']
   },
-  { name: 'fork', description: 'Branch the current session into a copy', clients: ['tui'] },
-  { name: 'cost', description: 'Session token and cost totals', clients: ['tui'] },
+  { name: 'fork', description: 'Branch the current session into a copy', clients: ['gui', 'tui'] },
+  { name: 'cost', description: 'Session token and cost totals', clients: ['gui', 'tui'] },
   {
     name: 'skills',
     description: 'List the workspace skills (.houston/skills)',
@@ -221,17 +248,17 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Hand a task to one of your .houston/agents (/agent <name> <task>)',
     clients: ['gui', 'tui']
   },
-  { name: 'mcp', description: 'List MCP servers (add, remove, login, logout)', clients: ['tui'] },
+  { name: 'mcp', description: 'List MCP servers (add, remove, login, logout)', clients: ['gui', 'tui'] },
   {
     name: 'trust',
     description: "Show this folder's project-config trust (/trust forget re-decides)",
-    clients: ['tui']
+    clients: ['gui', 'tui']
   },
-  { name: 'hooks', description: 'List configured hooks', clients: ['tui'] },
-  { name: 'theme', description: 'List or switch the color theme', clients: ['tui'] },
+  { name: 'hooks', description: 'List configured hooks', clients: ['gui', 'tui'] },
+  { name: 'theme', description: 'List or switch the color theme', clients: ['gui', 'tui'] },
   { name: 'image', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
-  { name: 'cwd', description: 'Show the working directory', clients: ['tui'] },
-  { name: 'share', description: 'Copy an invite to Houston to share with a friend', clients: ['tui'] },
+  { name: 'cwd', description: 'Show the working directory', clients: ['gui', 'tui'] },
+  { name: 'share', description: 'Copy an invite to Houston to share with a friend', clients: ['gui', 'tui'] },
   { name: 'help', description: 'List the available slash commands', clients: ['gui', 'tui'] },
   {
     name: 'review',
@@ -256,6 +283,36 @@ function toCommand(c: BuiltinCommand): Command {
 /** The built-in commands a given client surfaces, as plain `Command`s. */
 export function builtinCommands(client: CommandClient): Command[] {
   return BUILTIN_COMMAND_CATALOG.filter((c) => c.clients.includes(client)).map(toCommand)
+}
+
+/**
+ * Where the desktop app does what a terminal-only command does. Typed into the
+ * app's composer, these names were sent to the model as a message; the app now
+ * answers with this instead. Every terminal-only built-in has an entry (a test
+ * holds the catalog to that).
+ */
+const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
+  vim: 'the app\'s composer has no vim mode',
+  verbose: 'in the app, open a tool row to see its full output',
+  output: 'in the app, open a tool row to see its full output',
+  spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
+  proposals: 'in the app, proposed sessions appear as cards in the chat, with Start and Dismiss',
+  image: 'in the app, attach an image with the + button, or paste or drop it into the message box',
+  exit: 'close the window to leave',
+  quit: 'close the window to leave'
+}
+
+/**
+ * For a command only the terminal has, a one-line note saying so and pointing at
+ * the desktop's way to do it; null for any other name.
+ */
+export function terminalOnlyNote(name: string): string | null {
+  const n = name.toLowerCase()
+  const canonical = COMMAND_ALIASES[n] ?? n
+  const entry = BUILTIN_COMMAND_CATALOG.find((c) => c.name === canonical)
+  if (!entry || entry.clients.includes('gui')) return null
+  const where = DESKTOP_EQUIVALENT[canonical]
+  return `/${n} is a terminal command${where ? `: ${where}` : ''}.`
 }
 
 /**

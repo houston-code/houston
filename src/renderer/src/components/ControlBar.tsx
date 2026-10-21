@@ -1,4 +1,4 @@
-import type { AppSettings, ApprovalPolicy, SelectedModel } from '@shared/types'
+import { APPROVAL_POLICY_LABEL, type AppSettings, type ApprovalPolicy, type SelectedModel } from '@shared/types'
 import type { ConversationWorktree, ReasoningEffort, RepoInfo } from '@shared/agent'
 import {
   contextPercent,
@@ -14,12 +14,8 @@ import { baseName } from '../lib/paths'
 import { ModelPicker } from './ModelPicker'
 import { CostBreakdown } from './CostBreakdown'
 
-export const POLICY_LABEL: Record<ApprovalPolicy, string> = {
-  plan: 'Plan mode (read-only)',
-  ask: 'Ask every time',
-  'auto-edit': 'Auto-approve edits',
-  'full-auto': 'Full auto'
-}
+/** Approval-policy names, shared with the terminal so both clients say the same thing. */
+export const POLICY_LABEL = APPROVAL_POLICY_LABEL
 
 /** Provider kinds served by the Claude adapter, whose models the Claude gates describe. */
 const CLAUDE_KINDS = new Set(['anthropic', 'bedrock', 'vertex', 'foundry'])
