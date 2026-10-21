@@ -304,7 +304,8 @@ describe('release-source CLI', () => {
     s.main = pr(15, 'feat/f', 'main', feature(15))
     point('main', s.main)
     point('release/0.9', s.m1)
-  })
+    // Dozens of synchronous git spawns: well past the 10s hook default on Windows runners.
+  }, 60_000)
 
   afterAll(() => rmSync(repo, { recursive: true, force: true }))
 
