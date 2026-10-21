@@ -153,6 +153,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'undo', description: "Revert the files the last turn changed", clients: ['tui'] },
   { name: 'redo', description: 'Put back what /undo reverted', clients: ['tui'] },
   {
+    name: 'rewind',
+    description: 'Rewind to an earlier message: the conversation, the code, or both',
+    clients: ['gui', 'tui']
+  },
+  {
     name: 'changes',
     description: 'What is different in the working tree (also /diff)',
     clients: ['tui']

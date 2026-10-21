@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   COMPACTION_SUMMARY_PREFIX,
   type ElicitationResult,
@@ -6,7 +6,9 @@ import {
 } from '@shared/agent'
 import { imageDataUrl, type ImageAttachment } from '@shared/images'
 import type { PromptInvocation, PromptInvocationKind } from '@shared/promptInvocation'
-import type { DisplayItem } from '../lib/items'
+import { rewindTargets, type DisplayItem, type RewindItemTarget } from '../lib/items'
+import type { RewindMode } from '@shared/rewind'
+import { Popover } from './Popover'
 import { groupItems } from '../lib/toolDisplay'
 import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
@@ -64,11 +66,20 @@ const INVOCATION_ICON: Record<PromptInvocationKind, IconName> = {
  * brief). The chip says what the user did; the prompt the agent actually received
  * stays one click away, so nothing it was told is hidden, just out of the way.
  */
-function InvokedBubble({ text, invokedAs }: { text: string; invokedAs: PromptInvocation }): JSX.Element {
+function InvokedBubble({
+  text,
+  invokedAs,
+  actions
+}: {
+  text: string
+  invokedAs: PromptInvocation
+  actions?: ReactNode
+}): JSX.Element {
   const mono = invokedAs.kind === 'command'
   return (
     <div className="msg msg--user msg--invoked">
       <CopyButton text={text} className="msg__copy--user" />
+      {actions}
       <div className="msg__invoked">
         <div className="msg__body msg__chip">
           <Icon name={INVOCATION_ICON[invokedAs.kind]} className="msg__chip-icon" />
@@ -91,13 +102,16 @@ function UserBubble({
   images,
   isSummary,
   invokedAs,
-  steered
+  steered,
+  actions
 }: {
   text: string
   images?: ImageAttachment[]
   isSummary?: boolean
   invokedAs?: PromptInvocation
   steered?: boolean
+  /** Hover actions beside the copy button (the rewind menu). */
+  actions?: ReactNode
 }): JSX.Element {
   // The compaction summary is model-authored markdown, not user input. Render it as
   // a labeled, full-width block with its body parsed as markdown rather than the
@@ -113,7 +127,7 @@ function UserBubble({
       </div>
     )
   }
-  if (invokedAs && !images?.length) return <InvokedBubble text={text} invokedAs={invokedAs} />
+  if (invokedAs && !images?.length) return <InvokedBubble text={text} invokedAs={invokedAs} actions={actions} />
   return (
     <div className={`msg msg--user${steered ? ' msg--steered' : ''}`}>
       {steered && (
@@ -122,6 +136,7 @@ function UserBubble({
         </div>
       )}
       {text.trim() !== '' && <CopyButton text={text} className="msg__copy--user" />}
+      {actions}
       <div className="msg__body">
         {images && images.length > 0 && (
           <div className="bubble__images">
@@ -133,6 +148,73 @@ function UserBubble({
         {text}
       </div>
     </div>
+  )
+}
+
+/** The transcript's rewind hooks; absent hides the menu (a new chat, a read-only view). */
+export interface RewindHandlers {
+  /** A turn is running: rewinding now would fight it, so the menu is disabled. */
+  disabled: boolean
+  onRewind: (target: RewindItemTarget, mode: RewindMode) => void
+  onEdit: (target: RewindItemTarget) => void
+}
+
+/**
+ * The hover "Rewind" button on one of the user's messages and its menu: edit the
+ * message and resend it, or rewind to just before it (conversation and code, the
+ * conversation only, or the code only). Every choice but Edit goes through the
+ * confirmation dialog, which shows what will change.
+ */
+function RewindMenu({ target, handlers }: { target: RewindItemTarget; handlers: RewindHandlers }): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const anchor = useRef<HTMLButtonElement>(null)
+  const pick = (fn: () => void): void => {
+    setOpen(false)
+    fn()
+  }
+  return (
+    <>
+      <button
+        ref={anchor}
+        className="msg__copy msg__copy--user msg__rewind"
+        onClick={() => setOpen((o) => !o)}
+        disabled={handlers.disabled}
+        title={handlers.disabled ? 'Rewind is available once the turn finishes' : 'Rewind to this message'}
+        aria-label="Rewind to this message"
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        <Icon name="rewind" />
+      </button>
+      {open && (
+        <Popover anchorRef={anchor} onClose={() => setOpen(false)} role="menu" ariaLabel="Rewind" align="right">
+          <button role="menuitem" className="menu__item" onClick={() => pick(() => handlers.onEdit(target))}>
+            Edit and resend
+          </button>
+          <button
+            role="menuitem"
+            className="menu__item"
+            onClick={() => pick(() => handlers.onRewind(target, 'both'))}
+          >
+            Rewind conversation and code
+          </button>
+          <button
+            role="menuitem"
+            className="menu__item"
+            onClick={() => pick(() => handlers.onRewind(target, 'conversation'))}
+          >
+            Rewind conversation only
+          </button>
+          <button
+            role="menuitem"
+            className="menu__item"
+            onClick={() => pick(() => handlers.onRewind(target, 'code'))}
+          >
+            Rewind code only
+          </button>
+        </Popover>
+      )}
+    </>
   )
 }
 
@@ -266,7 +348,8 @@ export function Transcript({
   onOpenPlan,
   onRunInTerminal,
   proposals,
-  onOpenConversation
+  onOpenConversation,
+  rewind
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
@@ -281,6 +364,8 @@ export function Transcript({
   proposals?: ProposalHandlers
   /** Open another chat (the handoff banner's link back to the chat that spawned this one). */
   onOpenConversation?: (id: string) => void
+  /** Rewind to (or edit and resend) one of the user's messages; absent hides the menu. */
+  rewind?: RewindHandlers
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -315,6 +400,8 @@ export function Transcript({
   // Memoized so it isn't rebuilt when the Transcript re-renders for a non-content
   // reason (e.g. the scroll-to-bottom button toggling).
   const nodes = useMemo(() => groupItems(items), [items])
+  // Each user message's rewind point, by item id.
+  const targets = useMemo(() => new Map(rewindTargets(items).map((t) => [t.id, t])), [items])
 
   // A coarse, polite status for screen readers — the streaming transcript is
   // otherwise silent to assistive tech. Announces on change only (not on mount).
@@ -339,7 +426,8 @@ export function Transcript({
         <div className="transcript__inner">
           {nodes.map((node) => {
             switch (node.kind) {
-              case 'user':
+              case 'user': {
+                const target = rewind ? targets.get(node.item.id) : undefined
                 return (
                   <UserBubble
                     key={node.id}
@@ -348,8 +436,10 @@ export function Transcript({
                     isSummary={node.item.isSummary}
                     invokedAs={node.item.invokedAs}
                     steered={node.item.steered}
+                    actions={target && rewind ? <RewindMenu target={target} handlers={rewind} /> : undefined}
                   />
                 )
+              }
               case 'assistant':
                 return (
                   <AssistantMessage

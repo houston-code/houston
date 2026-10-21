@@ -209,7 +209,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   {
     id: 'edit-last-message',
     chords: [{ key: 'Escape' }],
-    label: 'Edit last message (when the field is empty)',
+    label: 'Rewind to an earlier message (when the field is empty)',
     category: 'Chat',
     scope: 'composer',
     display: () => 'Esc Esc'

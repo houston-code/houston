@@ -171,5 +171,7 @@ export function forkConversationData(src: Conversation, id: string, now: number)
   delete fork.childReports
   // The side chat is an aside about the original chat, not part of its history.
   delete fork.sideChat
+  // An undo of the source's last rewind would restore the source's files, not the fork's.
+  delete fork.rewindBackup
   return fork
 }

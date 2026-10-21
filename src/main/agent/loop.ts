@@ -116,7 +116,16 @@ import {
   grantConversationShellNetwork,
   overrideForConversation
 } from './overrides'
-import { recordOriginal, recordResult, noteConversationRun, writeTargets } from './checkpoints'
+import { isRewindableTurn } from '@shared/rewind'
+import { rewindInProgress } from './rewindLock'
+import {
+  recordOriginal,
+  recordResult,
+  noteConversationRun,
+  setRunTurn,
+  turnFingerprint,
+  writeTargets
+} from './checkpoints'
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { peekShell } from './shells'
 import { gatherReadinessFacts, planReadiness, readinessNote } from './readiness'
@@ -755,6 +764,17 @@ export function childReportsNote(reports: ChildReport[]): ChatMessage {
 }
 
 /**
+ * The user message a run starts from (the last message, when it is a rewind point),
+ * for the conversation's checkpoint chain. Undefined for a run that continues
+ * without one.
+ */
+function startingTurn(messages: ChatMessage[]): { index: number; fp: string } | undefined {
+  const index = messages.length - 1
+  const last = messages[index]
+  return last && isRewindableTurn(last) ? { index, fp: turnFingerprint(last) } : undefined
+}
+
+/**
  * Run the agent loop, streaming events via `send`. Never throws — errors become events.
  * `onMessages` is called whenever the message log grows, so the caller can persist it.
  */
@@ -777,6 +797,12 @@ export async function startRun(
   // second start must fail loudly here regardless of how it was triggered.
   if (conversationId && runsByConversation.has(conversationId)) {
     send({ runId, type: 'error', message: 'A run is already in progress for this conversation.' })
+    return
+  }
+  // A rewind rewrites the log and the files under it; a run started mid-rewind would
+  // work from the log it is about to replace.
+  if (conversationId && rewindInProgress(conversationId)) {
+    send({ runId, type: 'error', message: 'This conversation is being rewound. Send again once it finishes.' })
     return
   }
 
@@ -815,8 +841,10 @@ export async function startRun(
   if (conversationId) {
     runsByConversation.set(conversationId, runId)
     // Record this as the conversation's latest run so its checkpoint (the
-    // revert/redo affordance) can be restored if the conversation is re-opened.
-    noteConversationRun(conversationId, runId)
+    // revert/redo affordance) can be restored if the conversation is re-opened, and
+    // chain it to the user message it answers, so a rewind to that message can put
+    // back this turn's files. Re-pointed below once the log is final for the start.
+    noteConversationRun(conversationId, runId, startingTurn(req.messages))
     notifyActiveRunsChanged()
   }
 
@@ -1150,6 +1178,10 @@ export async function startRun(
       messages.splice(0, messages.length, ...intakeRepaired)
       persist(messages)
     }
+    // The note inserted above and the repair can both move the user's message;
+    // re-point the run's chain entry at where it now sits.
+    const startTurn = startingTurn(messages)
+    if (conversationId && startTurn) setRunTurn(conversationId, runId, startTurn.index, startTurn.fp)
 
     // The turn's receipt: what the evidence ledger recorded, saved on the last
     // assistant message this run wrote and sent to the clients ahead of the run's

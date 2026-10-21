@@ -193,6 +193,11 @@ export const IPC = {
   checkpointReapply: 'checkpoint:reapply',
   /** Query a conversation's latest-run checkpoint (files + reverted) to restore the revert/redo UI on re-open. */
   checkpointGet: 'checkpoint:get',
+  /** Rewind to an earlier user message (see main/agent/rewind.ts): preview, apply, undo. */
+  rewindPreview: 'rewind:preview',
+  rewindApply: 'rewind:apply',
+  rewindUndo: 'rewind:undo',
+  rewindCanUndo: 'rewind:can-undo',
   // Integrated terminal (PTY-backed; see main/terminal.ts)
   terminalCreate: 'terminal:create',
   terminalInput: 'terminal:input',

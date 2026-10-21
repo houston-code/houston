@@ -86,7 +86,7 @@ function readImageFile(file: File): Promise<ImageAttachment | null> {
  * Built-in commands that can't run while a turn is in flight. /compact rewrites the
  * conversation history the running turn is reading and appending to.
  */
-const IDLE_ONLY_COMMANDS = new Set(['compact'])
+const IDLE_ONLY_COMMANDS = new Set(['compact', 'rewind'])
 
 /** Max gap between the two Esc presses that recalls the last message. */
 const DOUBLE_ESC_MS = 500
@@ -165,7 +165,12 @@ export function Composer({
   onInvoke,
   onSteer,
   onSaveMemory,
-  onCancel
+  onCancel,
+  editing,
+  onEditModeChange,
+  onCancelEdit,
+  prefill,
+  onRewindPicker
 }: {
   /** The open conversation (null for a not-yet-created new chat); keys the draft. */
   conversationId: string | null
@@ -210,6 +215,20 @@ export function Composer({
    */
   onSaveMemory?: (scope: MemoryScope, text: string) => void
   onCancel: () => void
+  /**
+   * Editing an earlier message (edit and resend): sending rewinds to it first, by
+   * `mode`. Shown as a bar above the field with the mode choice and a Cancel.
+   */
+  editing?: { label: string; mode: 'both' | 'conversation' }
+  onEditModeChange?: (mode: 'both' | 'conversation') => void
+  onCancelEdit?: () => void
+  /** Text to put in the field (an edited message); a new `seq` puts it there again. */
+  prefill?: { text: string; seq: number }
+  /**
+   * Esc Esc on an empty field opens the rewind picker. Absent: Esc Esc recalls the
+   * last message into the field instead.
+   */
+  onRewindPicker?: () => void
 }): JSX.Element {
   // Seed from this conversation's persisted draft so text typed but not sent
   // survives a restart. App.tsx keys the Composer by conversation, so this only
@@ -588,6 +607,16 @@ export function Composer({
     })
   }
 
+  // Put an edited message in the field. Keyed on `seq` so editing the same message
+  // twice still refills it.
+  useEffect(() => {
+    if (!prefill) return
+    setText(prefill.text)
+    setHistPos(null)
+    focusEnd(prefill.text.length)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill?.seq])
+
   // Show the history entry at `pos`, or restore the pre-recall draft when `pos`
   // reaches the end (the live-draft sentinel).
   const showHistory = (snapshot: string[], pos: number): void => {
@@ -788,13 +817,22 @@ export function Composer({
         return
       }
     }
-    // Esc Esc on an empty field recalls the last user message for editing (the
-    // edit-previous-message convention). A single Esc still falls through to the
-    // app handler (stop the run / close a dialog).
+    // Esc Esc on an empty field opens the rewind picker (pick an earlier message to
+    // rewind to), or, where the app offers no rewind, recalls the last user message
+    // for editing. Never while a turn runs: there Esc stops it. A single Esc still
+    // falls through to the app handler (stop the run / close a dialog).
     if (e.key === 'Escape' && !showCmdMenu && !showMentionMenu) {
       const now = Date.now()
       const isDouble = now - lastEscAt.current <= DOUBLE_ESC_MS
       lastEscAt.current = now
+      if (isDouble && text.trim() === '' && onRewindPicker) {
+        if (!running) {
+          e.preventDefault()
+          lastEscAt.current = 0
+          onRewindPicker()
+        }
+        return
+      }
       if (isDouble && text.trim() === '' && lastUserMessage) {
         e.preventDefault()
         setHistPos(null)
@@ -860,6 +898,28 @@ export function Composer({
               </button>
               <button className="btn btn--sm" onClick={sendMemoryAsMessage}>
                 Send as message
+              </button>
+            </div>
+          </div>
+        )}
+        {editing && (
+          <div className="memory-bar edit-bar" role="group" aria-label="Editing an earlier message">
+            <span className="memory-bar__label">
+              Editing <span className="memory-bar__note">“{editing.label}”</span>. Sending rewinds to
+              it first.
+            </span>
+            <div className="memory-bar__actions">
+              <select
+                className="edit-bar__mode"
+                aria-label="What to rewind before sending"
+                value={editing.mode}
+                onChange={(e) => onEditModeChange?.(e.target.value === 'conversation' ? 'conversation' : 'both')}
+              >
+                <option value="both">Conversation and code</option>
+                <option value="conversation">Conversation only</option>
+              </select>
+              <button className="btn btn--sm" onClick={onCancelEdit}>
+                Cancel edit
               </button>
             </div>
           </div>

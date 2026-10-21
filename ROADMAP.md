@@ -252,11 +252,6 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   `.gitignore` files, negations, etc.). Low marginal value given the existing
   dir/dotfile skips.
 
-- **Edit & resend a message.** Edit an earlier user message and re-run from that
-  point (truncating the later turns). *Why deferred:* needs conversation-history
-  rewind + a branching/transcript-truncation model — a real feature, not a tweak.
-  (Retry-the-last-failed-turn already ships; see the README.)
-
 - **Customizable keybindings.** A user-editable key map beyond the built-in
   shortcuts (⌘N / ⌘, / Esc). Would add a keybindings file/UI and a resolver.
 

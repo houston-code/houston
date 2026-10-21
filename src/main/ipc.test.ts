@@ -102,10 +102,12 @@ import {
   recordResult,
   noteConversationRun,
   clearCheckpoints,
-  flushCheckpoints
+  flushCheckpoints,
+  turnFingerprint
 } from './agent/checkpoints'
 import { setUserDataDir } from './userData'
-import { createConversation, getConversation } from './conversations'
+import { createConversation, getConversation, setMessages } from './conversations'
+import { configureHasKey, updateSettings } from './store'
 
 // registerIpc wires the scheduler, whose store lives under the profile directory.
 // Production sets the userData seam before app.whenReady() (index.ts); mirror that
@@ -478,6 +480,122 @@ describe('checkpoint restore/reapply gating', () => {
     noteConversationRun('conv-cp', 'run-new') // then a newer turn supersedes it
     expect(await handler(IPC.checkpointReapply)(from(1), 'run-cp')).toBe(0)
     expect(readFileSync(f, 'utf8')).toBe('original') // still reverted
+  })
+})
+
+/**
+ * Rewind over IPC: the handlers validate every argument before it reaches the store
+ * or the filesystem, and refuse while the conversation has a live run (whoever owns
+ * it). These drive the real rewind, checkpoints, and conversation store.
+ */
+describe('rewind IPC', () => {
+  registerIpc()
+  const from = (senderId: number) => ({ sender: { id: senderId } })
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+
+  let ws: string
+  let userDir: string
+  let convId: string
+
+  beforeEach(async () => {
+    ws = mkdtempSync(join(tmpdir(), 'houston-ipc-rw-'))
+    userDir = mkdtempSync(join(tmpdir(), 'houston-ipc-rw-ud-'))
+    setUserDataDir(userDir)
+    h.activeRun.mockReturnValue(null)
+    convId = createConversation({ workspace: ws, providerId: 'p', model: 'm' }).id
+    // One turn that changed a.txt.
+    const user = { role: 'user' as const, content: 'make it so' }
+    setMessages(convId, [user, { role: 'assistant', content: 'done' }])
+    writeFileSync(join(ws, 'a.txt'), 'original')
+    noteConversationRun(convId, 'run-rw', { index: 0, fp: turnFingerprint(user) })
+    await recordOriginal('run-rw', [ws], 'a.txt')
+    writeFileSync(join(ws, 'a.txt'), 'modified')
+    await recordResult('run-rw', [ws], 'a.txt')
+  })
+
+  afterEach(async () => {
+    h.activeRun.mockReturnValue(null)
+    await flushCheckpoints()
+    clearCheckpoints()
+    rmSync(ws, { recursive: true, force: true })
+    rmSync(userDir, { recursive: true, force: true })
+    setUserDataDir(MODULE_USER_DIR)
+  })
+
+  it('previews, applies, and undoes a rewind', async () => {
+    expect(await handler(IPC.rewindPreview)(from(1), convId, 0, 'both', 'make it so')).toEqual({
+      ok: true,
+      turns: 1,
+      files: 1,
+      conflicts: [],
+      unavailable: 0
+    })
+    const r = (await handler(IPC.rewindApply)(from(1), convId, 0, 'both', 'make it so')) as { ok: boolean }
+    expect(r).toMatchObject({ ok: true, restored: 1, text: 'make it so', messages: [] })
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('original')
+    expect(handler(IPC.rewindCanUndo)(from(1), convId)).toBe(true)
+
+    expect(await handler(IPC.rewindUndo)(from(2), convId)).toMatchObject({ ok: true, reapplied: 1 })
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('modified')
+    expect(getConversation(convId)?.messages).toHaveLength(2)
+  })
+
+  it('refuses while the conversation has a live run', async () => {
+    h.activeRun.mockReturnValue('run-live')
+    expect(await handler(IPC.rewindApply)(from(1), convId, 0, 'both', 'make it so')).toMatchObject({
+      ok: false
+    })
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('modified')
+    expect(getConversation(convId)?.messages).toHaveLength(2)
+  })
+
+  it.each([
+    ['a non-string conversation id', [42, 0, 'both', 'make it so']],
+    ['a traversal conversation id', ['../../etc', 0, 'both', 'make it so']],
+    ['a negative turn', [null, -1, 'both', 'make it so']],
+    ['a fractional turn', [null, 0.5, 'both', 'make it so']],
+    ['a string turn', [null, '0', 'both', 'make it so']],
+    ['an unknown mode', [null, 0, 'everything', 'make it so']],
+    ['a missing text', [null, 0, 'both', undefined]],
+    ['an oversized text', [null, 0, 'both', 'x'.repeat(1_000_001)]],
+    ['a text that no longer matches', [null, 0, 'both', 'something else']]
+  ])('refuses %s, changing nothing', async (_label, args) => {
+    const [id, ...rest] = args as unknown[]
+    const call = [id ?? convId, ...rest]
+    expect(await handler(IPC.rewindPreview)(from(1), ...call)).toMatchObject({ ok: false })
+    expect(await handler(IPC.rewindApply)(from(1), ...call)).toMatchObject({ ok: false })
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('modified')
+    expect(getConversation(convId)?.messages).toHaveLength(2)
+  })
+
+  it('refuses to start a run while a rewind is in flight, before appending the message', async () => {
+    // The refusal is an agent event, and emitting one checks the notification setting.
+    configureHasKey(() => false)
+    updateSettings({ desktopNotifications: false })
+    const send = vi.fn()
+    const sender = { id: 1, send, isDestroyed: () => false }
+    const pending = handler(IPC.rewindApply)(from(1), convId, 0, 'both', 'make it so')
+    await handler(IPC.agentStart)({ sender }, {
+      runId: 'r-mid', conversationId: convId, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: 'next'
+    })
+    await pending
+    expect(h.runAndDrain).not.toHaveBeenCalled()
+    expect(send).toHaveBeenCalledWith(
+      IPC.agentEvent,
+      expect.objectContaining({ type: 'error', message: expect.stringContaining('being rewound') })
+    )
+    // The rewind's log stands; the refused message was never appended.
+    expect(getConversation(convId)?.messages).toEqual([])
+  })
+
+  it('refuses a malformed undo and reports nothing to undo', async () => {
+    expect(await handler(IPC.rewindUndo)(from(1), { id: convId })).toMatchObject({ ok: false })
+    expect(handler(IPC.rewindCanUndo)(from(1), 7)).toBe(false)
+    expect(await handler(IPC.rewindUndo)(from(1), convId)).toMatchObject({ ok: false })
   })
 })
 

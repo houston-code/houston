@@ -42,6 +42,7 @@ import {
   restoreCheckpoint,
   reapplyCheckpoint
 } from './agent/checkpoints'
+import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import {
   canPersistHeaderSecrets,
@@ -473,6 +474,12 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
         info: (conversationId) => getConversationCheckpoint(conversationId),
         undo: (runId) => restoreCheckpoint(runId),
         redo: (runId) => reapplyCheckpoint(runId)
+      },
+      // /rewind: the same engine as the desktop app's Rewind menu.
+      rewind: {
+        preview: (conversationId, turn, mode, text) => previewRewind(conversationId, turn, mode, text),
+        apply: (conversationId, turn, mode, text) => rewindConversation(conversationId, turn, mode, text),
+        undo: (conversationId) => undoRewind(conversationId)
       },
       workingTree: async () => {
         const c = await collectWorkingTreeChanges(tui.cwd)

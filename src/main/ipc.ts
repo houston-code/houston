@@ -128,11 +128,22 @@ import { decideProposal, hostProposalDeps, startProposal } from './proposals'
 import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps, sideChatView } from './sideChat'
 import { setSchedulerBackend } from './agent/scheduler'
 import { appendUserTurn } from './agent/userTurn'
+import { canUndoRewind, previewRewind, rewindConversation, undoRewind } from './agent/rewind'
+import { rewindInProgress } from './agent/rewindLock'
+import {
+  isRewindMode,
+  type RewindMode,
+  type RewindPreviewResult,
+  type RewindResult,
+  type UndoRewindResult
+} from '@shared/rewind'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 
 /** Longest pasted key accepted by testKey; real provider keys are far shorter. */
 const MAX_TEST_KEY_LENGTH = 4096
+/** Longest message text a rewind request may carry for its staleness check. */
+const MAX_REWIND_TEXT = 1_000_000
 
 /**
  * Check a candidate API key with a live model listing, without storing it, so a typo
@@ -993,6 +1004,15 @@ export function registerIpc(): void {
       })
       return
     }
+    // Likewise mid-rewind, before the message is appended to a log about to be replaced.
+    if (rewindInProgress(conv.id)) {
+      emitEvent(event.sender, conv.id, {
+        runId: req.runId,
+        type: 'error',
+        message: 'This conversation is being rewound. Send again once it finishes.'
+      })
+      return
+    }
 
     const images = sanitizeAttachments(req.images)
     const invokedAs = sanitizeInvocation(req.invokedAs)
@@ -1365,6 +1385,50 @@ export function registerIpc(): void {
       conversationId: string
     ): Promise<{ runId: string; files: number; reverted: boolean } | null> =>
       getConversationCheckpoint(conversationId)
+  )
+
+  // ---- Rewind to an earlier message (see agent/rewind.ts) ----
+
+  // Validated here, at the boundary: the turn is a small non-negative integer, the
+  // mode one of three, and the text a bounded string. The text is never trusted for
+  // anything but the staleness check (it must equal the stored message's text), and
+  // the conversation id is checked by the store before it becomes a filename. There
+  // is no window to own the call (a rewind runs only when no run does); the guard
+  // that matters, refusing while the conversation has a live run, is in rewind.ts.
+  const validRewindArgs = (
+    conversationId: unknown,
+    turn: unknown,
+    mode: unknown,
+    text: unknown
+  ): boolean =>
+    typeof conversationId === 'string' &&
+    Number.isSafeInteger(turn) &&
+    (turn as number) >= 0 &&
+    (turn as number) < 100_000 &&
+    isRewindMode(mode) &&
+    typeof text === 'string' &&
+    text.length <= MAX_REWIND_TEXT
+  const INVALID_REWIND = { ok: false as const, error: 'Invalid rewind request.' }
+
+  ipcMain.handle(
+    IPC.rewindPreview,
+    async (_event, conversationId: unknown, turn: unknown, mode: unknown, text: unknown): Promise<RewindPreviewResult> =>
+      validRewindArgs(conversationId, turn, mode, text)
+        ? previewRewind(conversationId as string, turn as number, mode as RewindMode, text as string)
+        : INVALID_REWIND
+  )
+  ipcMain.handle(
+    IPC.rewindApply,
+    async (_event, conversationId: unknown, turn: unknown, mode: unknown, text: unknown): Promise<RewindResult> =>
+      validRewindArgs(conversationId, turn, mode, text)
+        ? rewindConversation(conversationId as string, turn as number, mode as RewindMode, text as string)
+        : INVALID_REWIND
+  )
+  ipcMain.handle(IPC.rewindUndo, async (_event, conversationId: unknown): Promise<UndoRewindResult> =>
+    typeof conversationId === 'string' ? undoRewind(conversationId) : INVALID_REWIND
+  )
+  ipcMain.handle(IPC.rewindCanUndo, (_event, conversationId: unknown): boolean =>
+    typeof conversationId === 'string' ? canUndoRewind(conversationId) : false
   )
 
   // ---- Integrated terminal (PTY-backed) ----

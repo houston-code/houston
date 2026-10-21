@@ -479,3 +479,72 @@ describe('steered messages', () => {
   })
 })
 
+
+describe('Transcript rewind menu', () => {
+  const items: DisplayItem[] = [
+    userItem({ id: 'sum', text: `${COMPACTION_SUMMARY_PREFIX} earlier`, isSummary: true }),
+    userItem({ id: 'u-a', text: 'first ask' }),
+    assistantItem({ id: 'a-a' }),
+    userItem({ id: 'u-s', text: 'steer it', steered: true }),
+    userItem({
+      id: 'u-b',
+      text: 'expanded review prompt',
+      invokedAs: { kind: 'command', label: '/review', typed: '/review src' }
+    }),
+    assistantItem({ id: 'a-b' })
+  ]
+
+  function renderWithRewind(disabled = false) {
+    const handlers = { disabled, onRewind: vi.fn(), onEdit: vi.fn() }
+    render(
+      <Transcript items={items} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} rewind={handlers} />
+    )
+    return handlers
+  }
+
+  it('offers rewind on the user’s own messages only, not the summary or a steer', () => {
+    renderWithRewind()
+    expect(screen.getAllByRole('button', { name: 'Rewind to this message' })).toHaveLength(2)
+  })
+
+  it('numbers turns the way main does and passes what the user typed', () => {
+    const h = renderWithRewind()
+    const [, second] = screen.getAllByRole('button', { name: 'Rewind to this message' })
+    fireEvent.click(second)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rewind code only' }))
+    expect(h.onRewind).toHaveBeenCalledWith(
+      expect.objectContaining({ turn: 1, text: '/review src', label: '/review src' }),
+      'code'
+    )
+  })
+
+  it('each menu choice maps to its mode, and Edit to onEdit', () => {
+    const h = renderWithRewind()
+    const open = (): void => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Rewind to this message' })[0])
+    }
+    open()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rewind conversation and code' }))
+    open()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rewind conversation only' }))
+    expect(h.onRewind.mock.calls.map((c) => [c[0].turn, c[1]])).toEqual([
+      [0, 'both'],
+      [0, 'conversation']
+    ])
+    open()
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Edit and resend' }))
+    expect(h.onEdit).toHaveBeenCalledWith(expect.objectContaining({ turn: 0, text: 'first ask' }))
+  })
+
+  it('is disabled while a turn runs', () => {
+    renderWithRewind(true)
+    for (const b of screen.getAllByRole('button', { name: 'Rewind to this message' })) {
+      expect((b as HTMLButtonElement).disabled).toBe(true)
+    }
+  })
+
+  it('is hidden without rewind handlers', () => {
+    render(<Transcript items={items} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Rewind to this message' })).toBeNull()
+  })
+})

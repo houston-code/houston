@@ -41,6 +41,7 @@ import type {
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import type { Scorecard } from '@shared/scorecard'
+import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type {
   UpdateCheckResult,
@@ -345,6 +346,25 @@ const api = {
     conversationId: string
   ): Promise<{ runId: string; files: number; reverted: boolean } | null> =>
     ipcRenderer.invoke(IPC.checkpointGet, conversationId),
+  /**
+   * What rewinding to the user's `turn`-th message would change. `text` is what the
+   * client shows for that message; main refuses when the stored log no longer agrees.
+   */
+  previewRewind: (
+    conversationId: string,
+    turn: number,
+    mode: RewindMode,
+    text: string
+  ): Promise<RewindPreviewResult> => ipcRenderer.invoke(IPC.rewindPreview, conversationId, turn, mode, text),
+  /** Rewind to just before the user's `turn`-th message. */
+  rewind: (conversationId: string, turn: number, mode: RewindMode, text: string): Promise<RewindResult> =>
+    ipcRenderer.invoke(IPC.rewindApply, conversationId, turn, mode, text),
+  /** Undo the conversation's latest rewind, while the chat hasn't moved on. */
+  undoRewind: (conversationId: string): Promise<UndoRewindResult> =>
+    ipcRenderer.invoke(IPC.rewindUndo, conversationId),
+  /** Whether the conversation's latest rewind can still be undone. */
+  canUndoRewind: (conversationId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.rewindCanUndo, conversationId),
   /** Subscribe to streamed agent events. Returns an unsubscribe function. */
   /** Start a propose_session card as its own background chat (under `policy`). */
   startProposal: (

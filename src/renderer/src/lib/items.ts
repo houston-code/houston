@@ -16,6 +16,7 @@ import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocat
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
 import { planOutcome } from '@shared/promptOutcome'
 import { upsertFinding } from '@shared/reviewFindings'
+import { turnLabel, turnText } from '@shared/rewind'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
 
@@ -192,6 +193,36 @@ export function lastUserText(items: DisplayItem[]): string | undefined {
     return it.text
   }
   return undefined
+}
+
+/** One of the user's messages as a rewind point (see RewindDialog), keyed to its bubble. */
+export interface RewindItemTarget {
+  /** The transcript item it belongs to. */
+  id: string
+  turn: number
+  text: string
+  label: string
+}
+
+/**
+ * The user's messages the transcript can rewind to, oldest first, numbered the way
+ * main numbers the stored log (`rewindableTurnIndices`): every user bubble except the
+ * compaction summary and a steered correction. Automated notes are notices here, so
+ * they never count.
+ */
+export function rewindTargets(items: DisplayItem[]): RewindItemTarget[] {
+  const out: RewindItemTarget[] = []
+  for (const it of items) {
+    if (it.kind !== 'user' || it.isSummary || it.steered) continue
+    const m: ChatMessage = {
+      role: 'user',
+      content: it.text,
+      ...(it.images ? { images: it.images } : {}),
+      ...(it.invokedAs ? { invokedAs: it.invokedAs } : {})
+    }
+    out.push({ id: it.id, turn: out.length, text: turnText(m), label: turnLabel(m) })
+  }
+  return out
 }
 
 /** Parse a tool call's `options` argument into display options (string[] or {label,…}[]). */
