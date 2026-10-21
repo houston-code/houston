@@ -1,12 +1,14 @@
 import { randomBytes } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { extname, relative } from 'node:path'
-import { app, BrowserWindow, protocol, session, type Session } from 'electron'
+import { app, BrowserWindow, session, type Session } from 'electron'
 import { MAX_FULL_PAGE_HEIGHT, type MockupVariant } from '@shared/mockup'
 import { resolveInRoots } from './agent/tools'
 import { isSensitivePath } from './agent/sensitive-paths'
 import { setMockupBackend, type MockupRender, type MockupRenderInput } from './agent/mockupRender'
 import { attachCdp, cdpFullPage, cdpScreenshot, emulateViewport, type Cdp } from './cdp'
+import { markHelperWindow } from './helperWindows'
+import { MOCKUP_SCHEME } from './schemes'
 
 /**
  * Electron backend for the `render_mockup` tool: renders a project HTML file in an
@@ -30,7 +32,7 @@ import { attachCdp, cdpFullPage, cdpScreenshot, emulateViewport, type Cdp } from
  *    all refused, and JavaScript dialogs are dismissed rather than left blocking.
  */
 
-export const MOCKUP_SCHEME = 'houston-mockup'
+export { MOCKUP_SCHEME }
 const PARTITION = 'render-mockup'
 /** Per-variant load budget; a page that never finishes loading is captured as it stands. */
 const LOAD_TIMEOUT_MS = 15_000
@@ -204,15 +206,6 @@ export function mockupUrl(token: string, root: string, file: string, query?: str
   return `${MOCKUP_SCHEME}://${token}/${path}${query ?? ''}`
 }
 
-/**
- * Register the private scheme. Electron allows this only before the app is ready,
- * so it runs from the shell's startup with the rest of the backend wiring.
- */
-function registerScheme(): void {
-  protocol.registerSchemesAsPrivileged([
-    { scheme: MOCKUP_SCHEME, privileges: { standard: true, secure: true, supportFetchAPI: true } }
-  ])
-}
 
 let sessionReady: Promise<Session> | null = null
 
@@ -266,6 +259,7 @@ async function renderMockupElectron(input: MockupRenderInput): Promise<MockupRen
       spellcheck: false
     }
   })
+  markHelperWindow(win)
   const wc = win.webContents
   wc.setFrameRate(30)
   wc.setWebRTCIPHandlingPolicy('disable_non_proxied_udp')
@@ -392,9 +386,11 @@ async function renderVariant(
  */
 export const DNS_PREFETCH_OFF = 'dnsPrefetchingEnabled=false'
 
-/** Register the scheme and wire the renderer into the agent. Call once, before app ready. */
+/**
+ * Wire the renderer into the agent. Call once, before app ready (the scheme itself is
+ * registered with the others in schemes.ts).
+ */
 export function wireMockupCapture(): void {
-  registerScheme()
   app.commandLine.appendSwitch('blink-settings', DNS_PREFETCH_OFF)
   setMockupBackend(renderMockupElectron)
 }

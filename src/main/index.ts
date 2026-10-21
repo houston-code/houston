@@ -21,6 +21,9 @@ import { setUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
 import { wireLocalhostCapture } from './localhostCapture'
 import { wireMockupCapture } from './mockupCapture'
+import { registerPrivilegedSchemes } from './schemes'
+import { isAllowedChatFrameUrl } from './visualRender'
+import { appWindows, destroyHelperWindows } from './helperWindows'
 import { wireImageDownscale } from './imageDownscale'
 import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation } from './quit-confirm'
 import { parseHeadlessArgs } from './headless'
@@ -84,7 +87,8 @@ trustSystemCertificates()
 // settings + secret storage, and the view_localhost screenshot backend.
 wireAgentHost()
 wireLocalhostCapture()
-// Registers the render_mockup page scheme, which Electron only allows before ready.
+// Houston's private URL schemes, which Electron only accepts before ready.
+registerPrivilegedSchemes()
 wireMockupCapture()
 // Images go to the model scaled down; the transcript keeps the originals.
 wireImageDownscale()
@@ -122,7 +126,12 @@ function createWindow(): void {
   // the manager at it, and tear every pane down when the window goes away so the
   // views (and their dev-server connections) don't leak.
   attachPreviewHost(mainWindow)
-  mainWindow.on('closed', () => destroyAllPreviewPanes())
+  mainWindow.on('closed', () => {
+    destroyAllPreviewPanes()
+    // Hidden helpers (captures, the diagram renderer) would otherwise keep Windows and
+    // Linux from quitting now that the app's last window is gone.
+    destroyHelperWindows()
+  })
 
   // On Windows/Linux, closing the window quits the app (window-all-closed →
   // app.quit()), so the live-run confirmation has to happen here — while the
@@ -175,6 +184,16 @@ function createWindow(): void {
   }
   mainWindow.webContents.on('will-navigate', guardNavigation)
   mainWindow.webContents.on('will-redirect', guardNavigation)
+  // The chat's only frames are interactive HTML visuals (sandboxed, see
+  // visualRender.ts): a frame may load its own document and nothing else, so model
+  // HTML can't navigate itself to a web page and pull it into the chat.
+  mainWindow.webContents.on('will-frame-navigate', (e) => {
+    if (!e.isMainFrame && !isAllowedChatFrameUrl(e.url)) e.preventDefault()
+  })
+  // WebRTC is the one way out a page's CSP doesn't cover. The app UI never uses it,
+  // so keep it off non-proxied UDP (with no proxy, off entirely) for this window and
+  // its frames; the HTML visual runtime also removes the constructors.
+  mainWindow.webContents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp')
 
   if (devUrl) {
     void mainWindow.loadURL(devUrl)
@@ -221,7 +240,8 @@ if (tui) {
     initUpdates()
 
     app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+      // A hidden helper window doesn't count: the user has no window to see.
+      if (appWindows().length === 0) createWindow()
     })
   })
 }

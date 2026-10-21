@@ -4,6 +4,9 @@ import { humanSize, MAX_PREVIEW_TEXT_BYTES } from '@shared/files'
 import { imageDataUrl } from '@shared/images'
 import { highlightFile } from '../lib/highlight'
 import { Markdown } from './Markdown'
+import { VisualsContext } from '../lib/visuals'
+
+const NO_HTML_VISUALS = { html: false }
 
 /** Text files that can also render visually, with a Source/Preview toggle. */
 type RichKind = 'markdown' | 'svg' | null
@@ -127,7 +130,10 @@ export function FilePreview({
             <p className="file-preview__note">This file is empty.</p>
           ) : rich === 'markdown' && view === 'rendered' ? (
             <div className="file-preview__markdown">
-              <Markdown text={data.text} />
+              {/* A repo's own markdown: diagrams and SVG render, but its HTML never runs. */}
+              <VisualsContext.Provider value={NO_HTML_VISUALS}>
+                <Markdown text={data.text} visuals />
+              </VisualsContext.Provider>
             </div>
           ) : rich === 'svg' && view === 'rendered' ? (
             <div className="file-preview__image-wrap">

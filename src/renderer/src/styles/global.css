@@ -2311,6 +2311,118 @@ h6.md-h {
 .md-codeblock__copy:hover {
   color: var(--accent);
 }
+/* ---- inline visuals (svg, mermaid, html visual) ---- */
+.md-codeblock__bar .md-visual__toggle,
+.md-codeblock__bar .md-visual__note,
+.md-codeblock__bar .md-visual__badge,
+.md-codeblock__bar .md-visual__preview {
+  margin-left: auto;
+  margin-right: 8px;
+}
+.md-codeblock__bar .md-visual__badge + .md-visual__toggle {
+  margin-left: 0;
+}
+.md-visual__toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.md-visual__toggle button {
+  background: none;
+  border: none;
+  padding: 2px 9px;
+  font-size: 11px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.md-visual__toggle button[aria-pressed='true'] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+.md-visual__toggle button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.md-visual__note {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.md-visual__badge {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+  white-space: nowrap;
+}
+.md-visual {
+  background: var(--bg-code);
+}
+.md-visual--figure,
+.md-visual--diagram {
+  display: flex;
+  justify-content: center;
+  padding: 14px;
+  overflow-x: auto;
+}
+/* An SVG image can't read the app's theme, so it sits on a light card in both themes. */
+.md-visual--figure {
+  background: #ffffff;
+}
+.md-visual--figure img,
+.md-visual--diagram img {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+/* An SVG with no width of its own would stretch across the chat; keep it figure-sized. */
+.md-visual--figure img {
+  width: min(100%, 720px);
+}
+.md-visual--loading {
+  padding: 22px 14px;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  text-align: center;
+}
+.md-visual__error {
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.md-visual__error b {
+  color: var(--danger);
+}
+.md-visual__error pre {
+  margin: 6px 0 0;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+}
+.md-visual--frame {
+  border-top: 1px dashed color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.md-visual__frame {
+  display: block;
+  width: 100%;
+  border: none;
+  background: #ffffff;
+}
+.md-visual__placeholder {
+  padding: 22px 14px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
 .md-codeblock__pre {
   margin: 0;
   padding: 11px 13px;

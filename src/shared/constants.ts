@@ -69,6 +69,10 @@ export const IPC = {
   imageCopy: 'image:copy',
   /** Save an image from the image viewer to a file the user picks. */
   imageSave: 'image:save',
+  /** Render a Mermaid diagram to SVG in the main process's locked-down renderer. */
+  visualMermaid: 'visual:mermaid',
+  /** Keep an interactive HTML visual for its sandboxed frame to load; returns its id. */
+  visualRegisterHtml: 'visual:registerHtml',
   commandsList: 'commands:list',
   /** List the workspace's skills (.houston/skills) as {name, description}, for /skills. */
   skillsList: 'skills:list',

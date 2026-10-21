@@ -581,6 +581,12 @@ export interface AppSettings {
    * Off by default and inert unless a command is configured.
    */
   verifyOnStop?: boolean
+  /**
+   * Run interactive HTML visuals (```html visual blocks, and Preview on plain HTML
+   * blocks) in sandboxed frames in the chat. Off by default: diagrams and SVG render
+   * either way, but running model-written HTML is opt-in.
+   */
+  htmlVisuals?: boolean
   /** Stall detection: same (tool,args) repeated this many times → stall (min 2). */
   stallRepeatCallLimit?: number
   /** Stall detection: same error signature this many times → stall (min 2). */

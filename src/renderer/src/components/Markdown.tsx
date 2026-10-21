@@ -1,7 +1,8 @@
-import { memo, useMemo, useState } from 'react'
+import { memo } from 'react'
 import { parseMarkdown, safeHref, type Block, type Inline } from '@shared/markdown'
-import { copyText } from '../lib/clipboard'
-import { highlightCode } from '../lib/highlight'
+import { visualKind } from '../lib/visuals'
+import { CodeBlock } from './CodeBlock'
+import { VisualBlock } from './VisualBlock'
 
 /** Render an inline node tree. Keys are positional — the tree is static per render. */
 function renderInline(nodes: Inline[]): JSX.Element[] {
@@ -36,38 +37,7 @@ function renderInline(nodes: Inline[]): JSX.Element[] {
   })
 }
 
-function CodeBlock({ lang, value }: { lang: string; value: string }): JSX.Element {
-  const [copied, setCopied] = useState(false)
-  const copy = (): void => {
-    void copyText(value).then((ok) => {
-      if (!ok) return
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1200)
-    })
-  }
-  // hljs escapes its input, so the returned token HTML is safe to inject; a null
-  // result (unknown language / too large) falls back to the escaped raw text.
-  const highlighted = useMemo(() => highlightCode(lang, value), [lang, value])
-  return (
-    <div className="md-codeblock">
-      <div className="md-codeblock__bar">
-        <span className="md-codeblock__lang">{lang || 'text'}</span>
-        <button className="md-codeblock__copy" onClick={copy} title="Copy code">
-          {copied ? '✓ Copied' : 'Copy'}
-        </button>
-      </div>
-      <pre className="md-codeblock__pre">
-        {highlighted !== null ? (
-          <code dangerouslySetInnerHTML={{ __html: highlighted }} />
-        ) : (
-          <code>{value}</code>
-        )}
-      </pre>
-    </div>
-  )
-}
-
-function renderBlock(block: Block, key: number): JSX.Element {
+function renderBlock(block: Block, key: number, visuals: boolean): JSX.Element {
   switch (block.type) {
     case 'heading': {
       const Tag = `h${Math.min(block.level, 6)}` as keyof JSX.IntrinsicElements
@@ -83,19 +53,25 @@ function renderBlock(block: Block, key: number): JSX.Element {
           {renderInline(block.children)}
         </p>
       )
-    case 'code':
-      return <CodeBlock key={key} lang={block.lang} value={block.value} />
+    case 'code': {
+      const kind = visuals ? visualKind(block.lang, block.info) : null
+      return kind ? (
+        <VisualBlock key={key} kind={kind} block={block} />
+      ) : (
+        <CodeBlock key={key} lang={block.lang} value={block.value} />
+      )
+    }
     case 'hr':
       return <hr key={key} className="md-hr" />
     case 'blockquote':
       return (
         <blockquote key={key} className="md-quote">
-          {block.children.map((b, i) => renderBlock(b, i))}
+          {block.children.map((b, i) => renderBlock(b, i, visuals))}
         </blockquote>
       )
     case 'list': {
       const items = block.items.map((it, i) => (
-        <li key={i}>{it.blocks.map((b, j) => renderBlock(b, j))}</li>
+        <li key={i}>{it.blocks.map((b, j) => renderBlock(b, j, visuals))}</li>
       ))
       return block.ordered ? (
         <ol key={key} className="md-list" start={block.start}>
@@ -139,9 +115,11 @@ function renderBlock(block: Block, key: number): JSX.Element {
 
 /**
  * Render a markdown string as React. Memoized on the source text so streaming
- * deltas only re-parse when the text actually grows.
+ * deltas only re-parse when the text actually grows. With `visuals`, svg, mermaid,
+ * and html blocks render as inline visuals (see lib/visuals.ts); leave it off for
+ * text that comes from outside the conversation's own replies (MCP prompts).
  */
-export const Markdown = memo(function Markdown({ text }: { text: string }): JSX.Element {
+export const Markdown = memo(function Markdown({ text, visuals = false }: { text: string; visuals?: boolean }): JSX.Element {
   const blocks = parseMarkdown(text)
-  return <div className="md">{blocks.map((b, i) => renderBlock(b, i))}</div>
+  return <div className="md">{blocks.map((b, i) => renderBlock(b, i, visuals))}</div>
 })

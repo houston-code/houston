@@ -84,6 +84,11 @@ const api = {
   /** Image viewer: save an image (a data: URL) to a file the user picks; resolves with the path, or null if cancelled. */
   saveImage: (dataUrl: string, label: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.imageSave, dataUrl, label),
+  /** Inline visuals: render a Mermaid diagram to SVG (or an error message). */
+  renderMermaid: (source: string, theme: 'light' | 'dark'): Promise<{ svg: string } | { error: string }> =>
+    ipcRenderer.invoke(IPC.visualMermaid, source, theme),
+  /** Inline visuals: keep an HTML visual for its frame; resolves with the id, or null when visuals are off or it's too big. */
+  registerHtmlVisual: (html: string): Promise<string | null> => ipcRenderer.invoke(IPC.visualRegisterHtml, html),
   listCommands: (workspace: string): Promise<Command[]> =>
     ipcRenderer.invoke(IPC.commandsList, workspace),
   /** The workspace's skills (.houston/skills), name + description, for /skills. */

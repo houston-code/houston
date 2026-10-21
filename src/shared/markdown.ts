@@ -30,7 +30,15 @@ export interface ListItem {
 export type Block =
   | { type: 'heading'; level: number; children: Inline[] }
   | { type: 'paragraph'; children: Inline[] }
-  | { type: 'code'; lang: string; value: string }
+  | {
+      type: 'code'
+      lang: string
+      value: string
+      /** The whole info string after the fence (`html visual`), trimmed; `lang` is its first word. */
+      info: string
+      /** False while the closing fence hasn't arrived (a reply still streaming, or a truncated one). */
+      closed: boolean
+    }
   | { type: 'list'; ordered: boolean; start: number; items: ListItem[] }
   | { type: 'blockquote'; children: Block[] }
   | { type: 'hr' }
@@ -96,15 +104,17 @@ function parseBlocks(lines: string[]): Block[] {
     const fence = line.match(FENCE_RE)
     if (fence) {
       const marker = fence[2][0]
-      const lang = fence[3].trim().split(/\s+/)[0] ?? ''
+      const info = fence[3].trim()
+      const lang = info.split(/\s+/)[0] ?? ''
       const body: string[] = []
       i++
       while (i < lines.length && !new RegExp(`^\\s{0,3}${marker}{${fence[2].length},}\\s*$`).test(lines[i])) {
         body.push(lines[i])
         i++
       }
+      const closed = i < lines.length
       i++ // consume closing fence (or EOF)
-      blocks.push({ type: 'code', lang, value: body.join('\n') })
+      blocks.push({ type: 'code', lang, value: body.join('\n'), info, closed })
       continue
     }
 

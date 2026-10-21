@@ -1098,7 +1098,9 @@ export async function startRun(
       builtinSchemas.map((s) => s.name),
       // The prompt states the OS and whether run_shell is confined, so a host
       // without an OS sandbox is never told its commands are sandboxed.
-      { platform: hostPlatform(), sandboxBackend: activeBackendId() }
+      { platform: hostPlatform(), sandboxBackend: activeBackendId() },
+      // Only the desktop app draws inline visuals in replies.
+      req.imageGallery === true ? { html: settings.htmlVisuals === true } : undefined
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
     // When a lot of MCP tools are connected, sending every schema on every turn

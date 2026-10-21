@@ -21,6 +21,19 @@ export interface MarkdownOpts {
   highlight?: (lang: string, code: string) => string
 }
 
+/**
+ * The desktop app draws these blocks as pictures (svg, mermaid) or runs them
+ * (html visual); here they stay code, with a note saying where to see them.
+ */
+export function visualHint(lang: string, info: string): string | null {
+  const l = lang.toLowerCase()
+  if (l === 'svg' || l === 'mermaid') return 'diagram: open this chat in the Houston app to see it drawn'
+  if (l === 'html' && info.toLowerCase().split(/\s+/).includes('visual')) {
+    return 'interactive visual: open this chat in the Houston app to run it'
+  }
+  return null
+}
+
 export function renderMarkdownAnsi(src: string, opts: MarkdownOpts): string {
   return renderBlocks(parseMarkdown(src), opts, 0)
 }
@@ -50,7 +63,8 @@ function renderBlock(b: Block, opts: MarkdownOpts, depth: number): string {
       const lines = body.replace(/\n$/, '').split('\n')
       const label = b.lang ? paint(`${b.lang}`, 'dim') : ''
       const head = label ? `${paint('┌', 'dim')} ${label}\n` : ''
-      return head + lines.map((l) => `${gutter}${l}`).join('\n')
+      const hint = visualHint(b.lang, b.info)
+      return head + lines.map((l) => `${gutter}${l}`).join('\n') + (hint ? `\n${paint(`  ↳ ${hint}`, 'dim')}` : '')
     }
     case 'list':
       return b.items

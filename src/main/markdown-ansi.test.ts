@@ -134,3 +134,19 @@ describe('MarkdownStream', () => {
     expect(out).toContain('const x = 1')
   })
 })
+
+describe('visual blocks in the terminal', () => {
+  const paint = (s: string): string => s
+  it('adds a hint under diagram and interactive visual blocks', () => {
+    expect(renderMarkdownAnsi('```mermaid\nflowchart LR\n```', { paint })).toContain(
+      '↳ diagram: open this chat in the Houston app to see it drawn'
+    )
+    expect(renderMarkdownAnsi('```svg\n<svg/>\n```', { paint })).toContain('↳ diagram')
+    expect(renderMarkdownAnsi('```html visual\n<p>x</p>\n```', { paint })).toContain('↳ interactive visual')
+  })
+
+  it('leaves ordinary code, and plain html, without a hint', () => {
+    expect(renderMarkdownAnsi('```ts\nconst x = 1\n```', { paint })).not.toContain('↳')
+    expect(renderMarkdownAnsi('```html\n<p>x</p>\n```', { paint })).not.toContain('↳')
+  })
+})

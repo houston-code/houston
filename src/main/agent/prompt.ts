@@ -131,10 +131,20 @@ export function buildSystemPrompt(
   }).map((t) => t.schema.name),
   // The OS and sandbox backend this run's shell commands execute under (loop.ts
   // passes the live values). The default keeps the original macOS wording.
-  host: PromptHost = DEFAULT_HOST
+  host: PromptHost = DEFAULT_HOST,
+  // Inline visuals the client draws (the desktop app): diagrams always, interactive
+  // HTML only when the user turned it on. Omitted for terminal clients.
+  visuals?: { html: boolean }
 ): string {
   const offered = new Set(tools)
   const offers = (...names: string[]): boolean => names.every((n) => offered.has(n))
+  const visualsLine = !visuals
+    ? ''
+    : '\n- When a diagram or chart would explain something better than prose, include it in your reply: a ```mermaid block for flowcharts and sequence, state, or entity diagrams, or a ```svg block for anything custom (self-contained, explicit colors, readable on a light background). The user sees them drawn, with the source a click away.' +
+      (visuals.html
+        ? ' For something genuinely interactive (a small chart with controls, a widget to try), use a ```html visual block: it runs in a sandbox with no network, so inline its script and style.'
+        : '') +
+      ' Visuals cannot load anything from the network. Use them when they help, not by default.'
   const viewLocalhostLine = !offers('run_shell', 'view_localhost')
     ? ''
     : host.sandboxBackend === 'bubblewrap'
@@ -209,7 +219,7 @@ ${approvalLine}
 - A page that loads or a server that starts doesn't verify an app. For a web app or service, exercise the flows you built (log in, create or save something, submit a form, call the endpoint you added) with HTTP requests or the project's end-to-end tests, and name any flow you couldn't exercise. Send the requests from the same run_shell command that starts the server (start it, wait until it answers, make the requests, stop it): a background server isn't always reachable from a separate command.
 - When you tell the user a value to use (a port, URL, path, or setting), read it from the file or output as it is now, not from what you meant to write. For a secret such as a password, say where it is set instead of repeating it.
 - If a check fails because of your change, fix it. If something unrelated was already broken, leave it and mention it.
-- If you couldn't run a meaningful check (no tests, dependencies you couldn't install, no network), say exactly what you didn't verify and why. Never describe unverified work as tested or working.${viewLocalhostLine}${showImagesLine}
+- If you couldn't run a meaningful check (no tests, dependencies you couldn't install, no network), say exactly what you didn't verify and why. Never describe unverified work as tested or working.${viewLocalhostLine}${showImagesLine}${visualsLine}
 - For a large or security-sensitive change, review_changes runs an independent multi-agent review: run it once, fix what it confirms, and verify those fixes directly. Small edits don't need it, and don't re-review the whole diff repeatedly (it is expensive; pass paths to scope a re-review).
 
 ${environmentSection(host, attended)}

@@ -59,6 +59,8 @@ vi.mock('electron', () => ({
   clipboard: h.clipboard,
   nativeImage: h.nativeImage,
   shell: {},
+  // The HTML-visual scheme handler is installed on the default session at registration.
+  session: { defaultSession: { protocol: { handle: () => {} } } },
   BrowserWindow: { getAllWindows: () => [], fromWebContents: () => null }
 }))
 
