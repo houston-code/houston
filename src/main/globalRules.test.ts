@@ -35,39 +35,39 @@ function writeGlobal(text: string): void {
 const readGlobal = (): string => readFileSync(globalRulesFile(home), 'utf8')
 
 describe('paths', () => {
-  it('puts the global rules file under ~/.houston', () => {
+  it('puts the global rules file under ~/.houston', async () => {
     expect(globalRulesFile(home)).toBe(join(home, '.houston', 'AGENTS.md'))
     expect(legacyRulesFile(home)).toBe(join(home, '.claude', 'CLAUDE.md'))
   })
 })
 
 describe('legacyRulesNoticeApplies', () => {
-  it('is false with no legacy file', () => {
+  it('is false with no legacy file', async () => {
     expect(legacyRulesNoticeApplies(home)).toBe(false)
   })
 
-  it('is false for an empty or whitespace-only legacy file', () => {
+  it('is false for an empty or whitespace-only legacy file', async () => {
     writeLegacy('')
     expect(legacyRulesNoticeApplies(home)).toBe(false)
     writeLegacy('  \n\n')
     expect(legacyRulesNoticeApplies(home)).toBe(false)
   })
 
-  it('is false when the global file is a symlink to the legacy file', () => {
+  it('is false when the global file is a symlink to the legacy file', async () => {
     writeLegacy()
     mkdirSync(join(home, '.houston'), { recursive: true })
     symlinkSync(legacyRulesFile(home), globalRulesFile(home))
     expect(legacyRulesNoticeApplies(home)).toBe(false)
   })
 
-  it('is false when the legacy file is a symlink to the global file', () => {
+  it('is false when the legacy file is a symlink to the global file', async () => {
     writeGlobal('Houston rules.')
     mkdirSync(join(home, '.claude'), { recursive: true })
     symlinkSync(globalRulesFile(home), legacyRulesFile(home))
     expect(legacyRulesNoticeApplies(home)).toBe(false)
   })
 
-  it('is false when the legacy file comes in through another import', () => {
+  it('is false when the legacy file comes in through another import', async () => {
     writeLegacy()
     mkdirSync(join(home, 'rules'), { recursive: true })
     writeFileSync(join(home, 'rules', 'shared.md'), `Shared.\n${LEGACY_RULES_IMPORT}\n`)
@@ -75,7 +75,7 @@ describe('legacyRulesNoticeApplies', () => {
     expect(legacyRulesNoticeApplies(home)).toBe(false)
   })
 
-  it('survives an import cycle while searching', () => {
+  it('survives an import cycle while searching', async () => {
     writeLegacy()
     mkdirSync(join(home, 'rules'), { recursive: true })
     writeFileSync(join(home, 'rules', 'a.md'), '@./b.md')
@@ -84,17 +84,17 @@ describe('legacyRulesNoticeApplies', () => {
     expect(legacyRulesNoticeApplies(home)).toBe(true)
   })
 
-  it('is false when the legacy path is a directory', () => {
+  it('is false when the legacy path is a directory', async () => {
     mkdirSync(legacyRulesFile(home), { recursive: true })
     expect(legacyRulesNoticeApplies(home)).toBe(false)
   })
 
-  it('is true when the legacy file exists and there is no global file', () => {
+  it('is true when the legacy file exists and there is no global file', async () => {
     writeLegacy()
     expect(legacyRulesNoticeApplies(home)).toBe(true)
   })
 
-  it('is true when the global file exists but does not import it', () => {
+  it('is true when the global file exists but does not import it', async () => {
     writeLegacy()
     writeGlobal('# Mine\n\nUse tabs.\n')
     expect(legacyRulesNoticeApplies(home)).toBe(true)
@@ -113,7 +113,7 @@ describe('legacyRulesNoticeApplies', () => {
     expect((await loadProjectRules(workspace, { home })).text).toContain('LEGACY-RULE')
   })
 
-  it('does not count a mention inside a fenced code block as an import', () => {
+  it('does not count a mention inside a fenced code block as an import', async () => {
     writeLegacy()
     writeGlobal(['```', LEGACY_RULES_IMPORT, '```'].join('\n'))
     expect(legacyRulesNoticeApplies(home)).toBe(true)
@@ -121,55 +121,55 @@ describe('legacyRulesNoticeApplies', () => {
 })
 
 describe('importLegacyRules', () => {
-  it('creates the global file with a heading and the import', () => {
+  it('creates the global file with a heading and the import', async () => {
     writeLegacy()
-    const file = importLegacyRules(home)
+    const file = await importLegacyRules(home)
     expect(file).toBe(globalRulesFile(home))
     expect(readGlobal()).toBe(`${GLOBAL_RULES_HEADING}\n\n${LEGACY_RULES_IMPORT}\n`)
     expect(legacyRulesNoticeApplies(home)).toBe(false)
   })
 
-  it('puts the import under an existing top heading, before the user\'s rules', () => {
+  it("puts the import under an existing top heading, before the user's rules", async () => {
     writeGlobal('# Mine\n\nUse tabs.\n')
-    importLegacyRules(home)
+    await importLegacyRules(home)
     const out = readGlobal()
     expect(out).toBe(`# Mine\n\n${LEGACY_RULES_IMPORT}\n\nUse tabs.\n`)
   })
 
-  it('keeps the import under a heading that has no trailing newline', () => {
+  it('keeps the import under a heading that has no trailing newline', async () => {
     writeGlobal('# Mine')
-    importLegacyRules(home)
+    await importLegacyRules(home)
     expect(readGlobal()).toBe(`# Mine\n\n${LEGACY_RULES_IMPORT}\n`)
   })
 
-  it('leaves a symlinked global file alone instead of replacing the link', () => {
+  it('leaves a symlinked global file alone instead of replacing the link', async () => {
     writeLegacy('Legacy rule.')
     mkdirSync(join(home, '.houston'), { recursive: true })
     symlinkSync(legacyRulesFile(home), globalRulesFile(home))
-    importLegacyRules(home)
+    await importLegacyRules(home)
     expect(lstatSync(globalRulesFile(home)).isSymbolicLink()).toBe(true)
     expect(readFileSync(legacyRulesFile(home), 'utf8')).toBe('Legacy rule.')
   })
 
-  it('does not make a file import itself through a reverse symlink', () => {
+  it('does not make a file import itself through a reverse symlink', async () => {
     writeGlobal('Houston rules.\n')
     mkdirSync(join(home, '.claude'), { recursive: true })
     symlinkSync(globalRulesFile(home), legacyRulesFile(home))
-    importLegacyRules(home)
+    await importLegacyRules(home)
     expect(readGlobal()).toBe('Houston rules.\n')
   })
 
-  it('prepends the import to a file with no top heading', () => {
+  it('prepends the import to a file with no top heading', async () => {
     writeGlobal('Use tabs.\n')
-    importLegacyRules(home)
+    await importLegacyRules(home)
     expect(readGlobal()).toBe(`${LEGACY_RULES_IMPORT}\n\nUse tabs.\n`)
   })
 
-  it('is idempotent', () => {
+  it('is idempotent', async () => {
     writeLegacy()
-    importLegacyRules(home)
+    await importLegacyRules(home)
     const once = readGlobal()
-    importLegacyRules(home)
+    await importLegacyRules(home)
     expect(readGlobal()).toBe(once)
   })
 
@@ -178,7 +178,7 @@ describe('importLegacyRules', () => {
     writeGlobal('# Mine\n\nHOUSTON-RULE\n')
     let rules = await loadProjectRules(workspace, { home })
     expect(rules.text).not.toContain('LEGACY-RULE')
-    importLegacyRules(home)
+    await importLegacyRules(home)
     rules = await loadProjectRules(workspace, { home })
     expect(rules.text).toContain('LEGACY-RULE')
     expect(rules.text.indexOf('LEGACY-RULE')).toBeLessThan(rules.text.indexOf('HOUSTON-RULE'))
@@ -189,13 +189,13 @@ describe('decideLegacyRulesNotice', () => {
   const settings = { recentWorkspaces: [] } as unknown as import('@shared/types').AppSettings
   const dismissed = { ...settings, theme: 'dark' as const }
 
-  function deps(importRules?: () => string) {
+  function deps(importRules?: () => Promise<string>) {
     return { current: vi.fn(() => settings), dismiss: vi.fn(() => dismissed), importRules }
   }
 
-  it('import: writes, then dismisses, and reports the file', () => {
+  it('import: writes, then dismisses, and reports the file', async () => {
     const order: string[] = []
-    const d = deps(() => {
+    const d = deps(async () => {
       order.push('import')
       return '/h/.houston/AGENTS.md'
     })
@@ -203,34 +203,34 @@ describe('decideLegacyRulesNotice', () => {
       order.push('dismiss')
       return dismissed
     })
-    expect(decideLegacyRulesNotice('import', d)).toEqual({
+    expect(await decideLegacyRulesNotice('import', d)).toEqual({
       settings: dismissed,
       file: '/h/.houston/AGENTS.md'
     })
     expect(order).toEqual(['import', 'dismiss'])
   })
 
-  it('import failure: reports the error and records nothing', () => {
-    const d = deps(() => {
+  it('import failure: reports the error and records nothing', async () => {
+    const d = deps(async () => {
       throw new Error('EACCES: permission denied')
     })
-    const res = decideLegacyRulesNotice('import', d)
+    const res = await decideLegacyRulesNotice('import', d)
     expect(res).toEqual({ settings, error: 'EACCES: permission denied' })
     expect(d.dismiss).not.toHaveBeenCalled()
   })
 
-  it('keep: dismisses without importing', () => {
-    const importRules = vi.fn(() => 'x')
+  it('keep: dismisses without importing', async () => {
+    const importRules = vi.fn(async () => 'x')
     const d = deps(importRules)
-    expect(decideLegacyRulesNotice('keep', d)).toEqual({ settings: dismissed })
+    expect(await decideLegacyRulesNotice('keep', d)).toEqual({ settings: dismissed })
     expect(importRules).not.toHaveBeenCalled()
   })
 
-  it('ignores anything else', () => {
-    const importRules = vi.fn(() => 'x')
+  it('ignores anything else', async () => {
+    const importRules = vi.fn(async () => 'x')
     const d = deps(importRules)
     for (const bad of ['delete', undefined, null, 1, { choice: 'import' }]) {
-      expect(decideLegacyRulesNotice(bad, d)).toEqual({ settings })
+      expect(await decideLegacyRulesNotice(bad, d)).toEqual({ settings })
     }
     expect(importRules).not.toHaveBeenCalled()
     expect(d.dismiss).not.toHaveBeenCalled()

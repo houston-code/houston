@@ -9,7 +9,7 @@ import {
   importTargets
 } from './agent/rules'
 import { writeFileAtomicSync } from './atomic-write'
-import { withFileLockSync } from './fileLock'
+import { withFileLock } from './fileLock'
 
 /**
  * Houston's global rules file, `~/.houston/AGENTS.md`, and the one-time offer to
@@ -110,14 +110,14 @@ export function legacyRulesNoticeApplies(home: string = homedir()): boolean {
  * Houston-specific rules come after it and win where the two disagree. Idempotent:
  * a file that already imports the legacy one is left as is. Returns the file path.
  */
-export function importLegacyRules(home: string = homedir()): string {
+export async function importLegacyRules(home: string = homedir()): Promise<string> {
   const file = globalRulesFile(home)
   // Already there (including a symlink between the two files, where writing would
   // replace the link with a copy, or make the file import itself).
   if (alreadyHasLegacy(home)) return file
   mkdirSync(globalRulesDir(home), { recursive: true })
   // Under the same lock a `#` note save takes, so the two can't overwrite each other.
-  return withFileLockSync(file, () => {
+  return withFileLock(file, () => {
     if (alreadyHasLegacy(home)) return file // added while we waited for the lock
     writeFileAtomicSync(file, withLegacyImport(readTextOrNull(file)))
     return file
@@ -138,7 +138,7 @@ function withLegacyImport(current: string | null): string {
 export interface LegacyRulesDecideDeps {
   current: () => AppSettings
   dismiss: () => AppSettings
-  importRules?: () => string
+  importRules?: () => Promise<string>
 }
 
 /**
@@ -147,15 +147,15 @@ export interface LegacyRulesDecideDeps {
  * banner stays up to retry. Either successful answer dismisses it for good. Any
  * other value is ignored.
  */
-export function decideLegacyRulesNotice(
+export async function decideLegacyRulesNotice(
   choice: unknown,
   deps: LegacyRulesDecideDeps
-): LegacyRulesDecideResult {
+): Promise<LegacyRulesDecideResult> {
   if (choice !== 'import' && choice !== 'keep') return { settings: deps.current() }
   let file: string | undefined
   if (choice === 'import') {
     try {
-      file = (deps.importRules ?? (() => importLegacyRules()))()
+      file = await (deps.importRules ?? (() => importLegacyRules()))()
     } catch (err) {
       return { settings: deps.current(), error: (err as Error).message }
     }

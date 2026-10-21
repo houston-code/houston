@@ -2,7 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MemoryScope } from '@shared/memory'
 import { writeFileAtomicSync } from './atomic-write'
-import { withFileLockSync } from './fileLock'
+import { withFileLock } from './fileLock'
 import { GLOBAL_RULES_HEADING, globalRulesDir, readTextOrNull } from './globalRules'
 import { neutralizeImports } from './agent/rules'
 
@@ -61,7 +61,7 @@ export async function saveMemoryTo(
   // Read, append, and write under one lock: the desktop app and the terminal app
   // share these files, and two saves at once would otherwise both read the old text
   // and the second write would drop the first note.
-  return withFileLockSync(file, () => appendNote(file, note, title))
+  return withFileLock(file, () => appendNote(file, note, title))
 }
 
 function appendNote(file: string, note: string, title: string): string {
