@@ -1994,23 +1994,6 @@ body.is-resizing {
   display: flex;
   justify-content: flex-end;
 }
-/* A message steered into a running turn: labelled, with an accent edge, so it reads
-   as a course correction to the run in progress rather than a new turn. */
-.msg--steered {
-  flex-direction: column;
-  align-items: flex-end;
-}
-.msg--user.msg--steered .msg__body {
-  border-color: var(--accent);
-}
-.msg__steered-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 4px;
-  font-size: 11px;
-  color: var(--accent);
-}
 .msg--user .msg__body {
   max-width: 86%;
   background: var(--bg-input);
