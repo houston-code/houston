@@ -1,9 +1,10 @@
 import http from 'node:http'
+import { expect, type Page } from '@playwright/test'
 
 /** One scripted assistant reply: either plain text or a single tool call. */
 export type MockReply = { text: string } | { tool: string; args: Record<string, unknown> }
 
-interface ChatMessage {
+export interface ChatMessage {
   role: string
   content?: unknown
   tool_call_id?: string
@@ -16,11 +17,15 @@ export interface MockProvider {
   toolResults: string[]
   /** How many chat-completion requests the app made. */
   requests: number
+  /** The Authorization header of each chat-completion request, in order ('' when absent). */
+  authorizations: string[]
+  /** The messages of the most recent chat-completion request. */
+  lastMessages: ChatMessage[]
   close(): Promise<void>
 }
 
 /** Flatten a chat message's content (a string, or an array of text parts) to text. */
-function contentText(content: unknown): string {
+export function contentText(content: unknown): string {
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
     return content.map((p) => (p && typeof p === 'object' && 'text' in p ? String(p.text) : '')).join('')
@@ -34,16 +39,24 @@ function contentText(content: unknown): string {
  * just enough of the Chat Completions API: `GET /v1/models` and streaming
  * `POST /v1/chat/completions`.
  *
- * The reply is chosen by how many tool results the request already carries: with none
- * it plays `script[0]`, after the first tool ran `script[1]`, and so on. That keys the
- * script to the conversation's own progress, so a retried request replays the same step
- * rather than skipping ahead. Past the end of the script it answers with the last entry.
+ * Given an array, the reply is chosen by how many tool results the request already
+ * carries: with none it plays `script[0]`, after the first tool ran `script[1]`, and so on.
+ * That keys the script to the conversation's own progress, so a retried request replays
+ * the same step rather than skipping ahead. Past the end of the script it answers with the
+ * last entry. Given a function, it picks the reply from the request's messages and
+ * whether the request offered tools (an agent turn does; side requests such as the chat
+ * title don't).
  */
-export function startMockProvider(model: string, script: MockReply[]): Promise<MockProvider> {
+export function startMockProvider(
+  model: string,
+  script: MockReply[] | ((messages: ChatMessage[], hasTools: boolean) => MockReply)
+): Promise<MockProvider> {
   const state: MockProvider = {
     baseUrl: '',
     toolResults: [],
     requests: 0,
+    authorizations: [],
+    lastMessages: [],
     close: async () => {}
   }
 
@@ -62,11 +75,17 @@ export function startMockProvider(model: string, script: MockReply[]): Promise<M
     req.on('data', (c: string) => (body += c))
     req.on('end', () => {
       state.requests++
-      const messages = (JSON.parse(body) as { messages: ChatMessage[] }).messages
+      state.authorizations.push(req.headers.authorization ?? '')
+      const parsed = JSON.parse(body) as { messages: ChatMessage[]; tools?: unknown[] }
+      const messages = parsed.messages
+      state.lastMessages = messages
       const results = messages.filter((m) => m.role === 'tool').map((m) => contentText(m.content))
       // Record each tool result the first time it shows up.
       for (let i = state.toolResults.length; i < results.length; i++) state.toolResults.push(results[i])
-      const step = script[Math.min(results.length, script.length - 1)]
+      const step =
+        typeof script === 'function'
+          ? script(messages, (parsed.tools?.length ?? 0) > 0)
+          : script[Math.min(results.length, script.length - 1)]
       streamReply(res, model, step, results.length)
     })
   })
@@ -109,4 +128,51 @@ function streamReply(res: http.ServerResponse, model: string, step: MockReply, n
   const usage = { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
   res.write(`data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 0, model, choices: [], usage })}\n\n`)
   res.end('data: [DONE]\n\n')
+}
+
+export const MOCK_PROVIDER_ID = 'e2e-mock'
+
+/**
+ * Point a running app at a mock provider, open `workspace` as its project folder, and
+ * reload so the renderer picks both up. Settings go through the app's own IPC rather
+ * than a pre-seeded settings.json, which first-run migrations would rewrite. With
+ * `key`, the provider requires one and it is stored through the app's credential store,
+ * the same path the Settings dialog uses.
+ */
+export async function useMockProvider(
+  page: Page,
+  opts: { baseUrl: string; model: string; workspace: string; key?: string }
+): Promise<void> {
+  await page.evaluate(
+    async ({ id, baseUrl, model, workspace, key }) => {
+      type Api = {
+        getSettings(): Promise<Record<string, unknown> & { providers: unknown[] }>
+        saveSettings(s: unknown): Promise<unknown>
+        setKey(providerId: string, key: string): Promise<unknown>
+      }
+      const api = (globalThis as unknown as { api: Api }).api
+      const s = await api.getSettings()
+      s.providers = [
+        ...s.providers,
+        {
+          id,
+          kind: 'openai-compatible',
+          label: 'E2E mock',
+          baseUrl,
+          models: [{ id: model }],
+          defaultModel: model,
+          requiresKey: key !== null,
+          hasKey: false
+        }
+      ]
+      s.selected = { providerId: id, model }
+      s.recentWorkspaces = [workspace]
+      s.approvalPolicy = 'ask'
+      await api.saveSettings(s)
+      if (key !== null) await api.setKey(id, key)
+    },
+    { id: MOCK_PROVIDER_ID, ...opts, key: opts.key ?? null }
+  )
+  await page.reload()
+  await expect(page.locator('.app')).toBeVisible()
 }
