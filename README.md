@@ -1062,10 +1062,11 @@ name and bundle substituted.
 **Build provenance.** Each release also carries one `provenance.slsa.bundle`: a signed
 [SLSA](https://slsa.dev/) provenance statement recording the workflow, source repository,
 and commit that built the release. It lists every file in `SHA256SUMS`, so the same bundle
-checks any of them:
+checks any of them. cosign 3 refuses to check a file over 128 MiB here unless
+`COSIGN_MAX_ATTACHMENT_SIZE` is raised, and the installers are bigger than that:
 
 ```bash
-cosign verify-blob-attestation Houston-<version>-arm64.dmg \
+COSIGN_MAX_ATTACHMENT_SIZE=512MiB cosign verify-blob-attestation Houston-<version>-arm64.dmg \
   --bundle provenance.slsa.bundle \
   --type slsaprovenance1 \
   --certificate-identity 'https://github.com/houston-code/houston/.github/workflows/release-publish.yml@refs/heads/main' \
