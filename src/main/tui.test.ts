@@ -70,6 +70,7 @@ import {
   renderConversationList,
   subagentGlyph,
   shortCwd,
+  homeRelative,
   renderStatusLine,
   spinnerFrame,
   renderCapabilityList,
@@ -837,6 +838,15 @@ describe('status line & progress', () => {
     expect(shortCwd('/Users/x/proj', '/Users/x')).toBe('~/proj')
     expect(shortCwd('/a/b/c/d/e', '/nope')).toBe('…/d/e')
     expect(shortCwd('/a/b', '/nope')).toBe('/a/b')
+  })
+
+  it('homeRelative writes paths under home from ~ and leaves the rest whole', () => {
+    expect(homeRelative('/Users/x/code/deep/app', '/Users/x')).toBe('~/code/deep/app')
+    expect(homeRelative('/Users/x', '/Users/x')).toBe('~')
+    expect(homeRelative('C:\\Users\\x\\app', 'C:\\Users\\x')).toBe('~\\app')
+    // A sibling that only shares the prefix is not under home.
+    expect(homeRelative('/Users/xy/app', '/Users/x')).toBe('/Users/xy/app')
+    expect(homeRelative('/tmp/app', undefined)).toBe('/tmp/app')
   })
 
   it('renders model, policy, cost, and a context bar', () => {
