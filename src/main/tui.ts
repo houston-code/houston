@@ -3429,6 +3429,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // (and per subagent), which would be noisy to print each time — the live
     // session total already sits in the status line above the composer. So we sum
     // the round usages here and print one compact summary when the turn ends.
+    // Back-to-back retries of one request: the first prints a line and later ones
+    // only relabel the spinner, as the desktop updates one line in place instead of
+    // stacking six. Any other output ends the streak.
+    let retryStreak = 0
     let turnInputTokens = 0
     let turnOutputTokens = 0
     let turnCost = 0
@@ -3467,6 +3471,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // bell + notification honor the user's existing "notify me" setting.
       if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
       if (e.type === 'text') {
+        retryStreak = 0 // the request got through
         const s = md.push(e.delta)
         if (s) roundShown = true
         deps.io.out(s)
@@ -3479,6 +3484,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // Any event but reasoning means the streaming round is over (or gone).
       const roundWasShown = roundShown
       if (e.type !== 'reasoning') roundShown = false
+      // Usage and a discarded partial round belong to the retry they surround.
+      if (e.type !== 'retry' && e.type !== 'error' && e.type !== 'usage' && e.type !== 'turn_discarded') {
+        retryStreak = 0
+      }
       switch (e.type) {
         case 'reasoning':
           deps.io.setSpinnerLabel?.('Thinking')
@@ -3559,8 +3568,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
         case 'retry':
-          deps.io.setSpinnerLabel?.('Retrying')
-          deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
+          deps.io.setSpinnerLabel?.(`Retrying ${e.attempt}/${e.max}`)
+          if (retryStreak === 0) deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
+          retryStreak = e.attempt
           break
         case 'model_fallback':
           deps.io.setSpinnerLabel?.('Switching model')
@@ -3726,6 +3736,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           if (e.inputTokens) contextTokens = e.inputTokens
           break
         case 'error':
+          // The run gave up mid-streak: say the retries are over, so the line above
+          // doesn't read as still in progress.
+          if (retryStreak > 0) {
+            deps.io.out(
+              paint(`\n· tried ${retryStreak} more time${retryStreak === 1 ? '' : 's'}, then stopped\n`, 'yellow')
+            )
+          }
           deps.io.out(paint(`\nError: ${e.message}\n`, 'red'))
           break
         case 'limit':
