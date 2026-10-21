@@ -1012,6 +1012,13 @@ headless or background run it is declined automatically so nothing ever hangs
 waiting for a user who is not there, and the server proceeds along its
 no-answer path. Stopping the run cancels any open request.
 
+**Protocol versions.** Houston speaks MCP protocol versions 2025-06-18,
+2025-03-26, and 2024-11-05, and asks for the newest when it connects. A server
+that answers with an older supported version still works, but server questions
+need 2025-06-18: an older server's requests for input are declined. A server
+that only speaks a version outside that list fails to connect, and its status
+names the version it asked for.
+
 ## Shell sandbox and network
 
 Shell commands run under the host OS sandbox where one exists, confined to the

@@ -4,6 +4,12 @@ import { StringDecoder } from 'node:string_decoder'
 import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
 import { sanitizeChildEnv } from '../childEnv'
 import {
+  initializeParams,
+  negotiatedProtocolVersion,
+  supportsElicitation,
+  type McpProtocolVersion
+} from './version'
+import {
   ListRefresher,
   PendingRequests,
   handleServerMessage,
@@ -143,7 +149,6 @@ export function parseMcpResourceList(result: unknown): McpResourceInfo[] {
   return out
 }
 
-const PROTOCOL_VERSION = '2024-11-05'
 const INIT_TIMEOUT_MS = 15_000
 const CALL_TIMEOUT_MS = 120_000
 
@@ -179,6 +184,8 @@ export class McpClient {
   }
 
   /** Answers `elicitation/create`; its presence declares the capability. */
+  /** The version agreed at initialize; set once the handshake answers. */
+  private protocolVersion?: McpProtocolVersion
   private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
 
   /** Spawn the server, perform the initialize handshake, and list its tools. */
@@ -209,15 +216,13 @@ export class McpClient {
 
     const init = await this.request(
       'initialize',
-      {
-        protocolVersion: PROTOCOL_VERSION,
-        // Declare elicitation only when a responder is wired: declaring it and
-        // then -32601ing the request would be lying to the server.
-        capabilities: this.onElicit ? { elicitation: {} } : {},
-        clientInfo: { name: 'Houston', version: '0.1.0' }
-      },
+      initializeParams({ elicitation: !!this.onElicit }),
       INIT_TIMEOUT_MS
     )
+    this.protocolVersion = negotiatedProtocolVersion(init)
+    // A server that negotiated down to a version without elicitation never gets
+    // an elicitation answer: its requests fall through to the -32601 decline.
+    if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
     this.notify('notifications/initialized', {})
 
     const listed = (await this.request('tools/list', {}, INIT_TIMEOUT_MS)) as {
