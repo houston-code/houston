@@ -1176,6 +1176,8 @@ body.is-resizing {
   border-color: var(--danger);
 }
 .control--branch {
+  /* Capped by .control's max-width; its .control__text truncates a long branch name
+     (full name in the title) rather than wrapping the chip onto two lines. */
   flex-shrink: 0;
   color: var(--accent);
   cursor: default;
