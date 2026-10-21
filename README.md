@@ -20,18 +20,22 @@ Open source under the [Apache License 2.0](LICENSE).
 ## Features
 
 - **Any model, your keys.** Anthropic (Claude), OpenAI (GPT), Google (Gemini),
-  any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Add a
+  any OpenAI-compatible endpoint, and local models via Ollama or LM Studio. Claude
+  also runs through your cloud account (Amazon Bedrock, Google Vertex AI, or
+  Microsoft Foundry), and GPT through your own Azure OpenAI deployments. Add a
   known host (OpenRouter, Together, Fireworks, Groq, and more) in one click, point
-  at any custom endpoint, and fetch live model lists in Settings. The model picker
-  shows each model's context window and capability badges (tool calling, vision,
-  reasoning) — read live from the host where it advertises them, so it warns before
-  you pick a model that can't call tools.
+  at any custom endpoint, and fetch live model lists in Settings. The searchable
+  model picker shows each model's context window, price, and capability badges
+  (tool calling, vision, reasoning), read live from the host where it advertises
+  them, so it warns before you pick a model that can't call tools. Name
+  `fallbackModels` in settings.json and a turn the selected model can't serve
+  moves on to the next one.
 - **Image attachments.** Drag-drop or paste images (PNG/JPEG/GIF/WebP) into the
-  composer to send them to a vision-capable model — screenshots, diagrams,
+  composer to send them to a vision-capable model: screenshots, diagrams,
   mockups. The affordance is offered only when the selected model supports
   vision. Thumbnails show inline and the images persist with the conversation.
   The agent can also `read_file` an image or PDF in the project and view it
-  directly — and images a tool produces (a `read_file` image, a `view_localhost`
+  directly, and images a tool produces (a `read_file` image, a `view_localhost`
   screenshot) reach any vision-capable model, on Anthropic, OpenAI, and Gemini
   alike. (PDFs are Anthropic-only; elsewhere they fall back to a text placeholder.)
 - **Agentic tool use.** The agent can `read_file`, `write_file`, `edit_file`,
@@ -59,8 +63,8 @@ Open source under the [Apache License 2.0](LICENSE).
   into pages of nonsense.
 - **Structural code search.** `ast_grep` matches code by its **syntax tree**
   rather than text, using a bundled [ast-grep](https://ast-grep.github.io)
-  binary. Meta-variables make it precise — `console.log($A)`,
-  `function $F($$$) { $$$ }`, `useEffect($CB, [])` — so the agent can find
+  binary. Meta-variables make it precise (`console.log($A)`,
+  `function $F($$$) { $$$ }`, `useEffect($CB, [])`), so the agent can find
   calls, declarations, and JSX without the false positives of a regex. Pass the
   language (`ts`, `tsx`, `py`, `rust`, …).
 - **Web search.** Pick a search provider and supply its API key (Settings →
@@ -68,13 +72,26 @@ Open source under the [Apache License 2.0](LICENSE).
   Like `web_fetch`, it requires approval since it leaves the machine.
 - **See its own localhost.** After starting a dev server (a background
   `run_shell`), the agent can `view_localhost` to load the page in an offscreen
-  Electron window, screenshot it, and read back the browser console — closing the
+  Electron window, screenshot it, and read back the browser console, closing the
   build → look → fix loop without a human eyeballing the page. The screenshot
   comes back through the same vision pipeline as pasted images, so a
   vision-capable model views it directly, and it shows inline in the transcript.
   Only loopback hosts (`localhost`, `127.0.0.1`, `::1`) are allowed (public URLs
   go through `web_fetch`), and, being local network egress, it always prompts for
-  approval like `web_fetch`. Pass a `selector` to capture just one element.
+  approval like `web_fetch`. Pass a `selector` to capture just one element. It can
+  also run steps first (fill a field, click, press a key, wait for an element,
+  check that some text is or isn't shown) to try a flow such as logging in and get a
+  pass or fail for each step, or capture the page at several viewports and color
+  schemes in one call.
+- **Mockups and image galleries.** `render_mockup` turns an HTML mockup file in the
+  project into screenshots at desktop, tablet, or mobile sizes, in a locked-down
+  hidden browser with no network, and `show_images` shows image files the agent
+  produced as a gallery. The full-size viewer has a before/after compare slider,
+  plus Copy, Save, Show in Files, and Open file.
+- **Diagrams in replies.** A Mermaid or SVG block in a reply is drawn as a diagram
+  in the desktop app, with a switch to see the source. Mermaid renders in a hidden
+  window with no network, and the result is shown as an image. Sandboxed
+  interactive HTML visuals are off by default (Settings > *Appearance*).
 - **Live preview panel.** When the agent starts a dev server (a background
   `run_shell`), Houston detects the loopback URLs it prints and offers a **Preview**
   panel: a resizable right-hand dock that renders the running page live and
@@ -92,23 +109,37 @@ Open source under the [Apache License 2.0](LICENSE).
   expand it for the full command, recent output, and Stop, Open preview, or Go to
   chat. A shell that exited but left a server running is flagged, with a button to
   stop the leftover process. The panel never opens by itself.
+- **Integrated terminal and Files panel.** A resizable, multi-tab terminal panel runs
+  full PTY sessions (interactive programs, colors, resize) next to the chat. The
+  Files panel browses the project like a file manager, with an in-app preview
+  (syntax-highlighted code, images) and an Open action that hands a file to its
+  default app. Each chat's ⋯ menu also has **Open in**, which opens the chat's
+  folder in a detected editor or reveals it in the file manager.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
-  drop a path into your message — no need to paste or describe where things live.
-- **Slash commands.** Type `/` for a command menu. Built-ins: `/new` (new chat),
-  `/compact` (summarize older turns to free up context now), `/plan` `/ask`
-  `/auto` `/full` (switch approval mode), `/review` (adversarial review), `/help`.
-  Any Markdown file in `.houston/commands/` becomes a custom command — its
-  contents are a prompt template (`$ARGUMENTS` is filled in with whatever you type
-  after the command name).
-- **Queue follow-ups while it works.** Keep typing while a run is in progress and
-  your message is queued instead of interrupting it — the **Stop** button is joined
-  by **Queue**. Line up as many as you like (a bar above the composer lists them,
-  and you can drop any or clear them all); when the turn finishes they're combined
-  into one next message and sent automatically. The queue is per-chat and lives in
-  the background, so a follow-up still fires when its chat's run finishes even after
-  you've switched to another conversation. If the turn fails or you stop it, the
-  queue is held — retry (or send) it deliberately rather than firing onto a broken
-  turn.
+  drop a path into your message, with no need to paste or describe where things live.
+- **Slash commands.** Type `/` for a command menu. Built-ins: `/new` (or `/clear`,
+  new chat), `/compact` (summarize older turns to free up context now), `/plan`
+  `/ask` `/auto` `/full` (switch approval mode), `/review` (adversarial review),
+  `/doctor` (check your setup), `/skills` and `/agents` (list them), `/agent <name>
+  <task>` (hand a task to one of your agents), and `/help`.
+  Any Markdown file in `.houston/commands/` (or `~/.houston/commands/` for every
+  project) becomes a custom command: its contents are a prompt template
+  (`$ARGUMENTS` is filled in with whatever you type after the command name, `$1`,
+  `$2`, … with the individual words).
+- **Remember an instruction.** Start a message with `#` (`# always run the linter
+  before committing`) and Houston appends it to the rules file it already reads,
+  `AGENTS.md` in the project or in `~/.claude` for everywhere.
+- **Steer or queue while it works.** Keep typing while a run is in progress. **Enter**
+  steers the running turn: the agent reads your message before its next step, and
+  the message is labelled **Steered**. **⌘+Enter** (Ctrl+Enter on Windows and Linux)
+  queues it instead, to be sent as the next turn. Line up as many as you like (a bar
+  above the composer lists them, and you can drop any or clear them all); when the
+  turn finishes they're combined into one next message and sent automatically. The
+  queue is per-chat and lives in the background, so a follow-up still fires when its
+  chat's run finishes even after you've switched to another conversation. If the
+  turn fails or you stop it, the queue is held: retry (or send) it deliberately
+  rather than firing onto a broken turn. A slash command typed mid-run runs as a
+  command (`/compact` waits for the turn to end).
 - **Subagent delegation.** The agent can `dispatch_agent` to hand a focused,
   read-only question to a subagent with its own fresh context: it reads, globs,
   and searches the project and reports back, keeping the main agent's context
@@ -168,8 +199,8 @@ Open source under the [Apache License 2.0](LICENSE).
   creating or cancelling is approval-gated.
 - **Adversarial review.** `review_changes` (or `/review`) reviews your uncommitted
   changes for correctness, security, and quality. It runs an independent read-only
-  reviewer per dimension — each in its own fresh context, so they don't inherit the
-  author's blind spots — then a skeptical verifier that re-checks every candidate
+  reviewer per dimension (each in its own fresh context, so they don't inherit the
+  author's blind spots), then a skeptical verifier that re-checks every candidate
   finding against the real code and drops the false positives, and reports the
   confirmed ones. The agent can self-review after a substantial change before
   telling you it's done. Review the whole diff, a different `base` (e.g. a branch),
@@ -197,7 +228,7 @@ Open source under the [Apache License 2.0](LICENSE).
   [docs/houston-guide.md](docs/houston-guide.md) and ships as a built-in
   `houston-guide` skill, so Houston's self-knowledge stays accurate as features
   change.
-- **MCP servers.** Connect Model Context Protocol servers in Settings — a local
+- **MCP servers.** Connect Model Context Protocol servers in Settings: a local
   **stdio** process (with optional working directory and encrypted env vars) or a
   remote **HTTP** (streamable) or **SSE** endpoint. Remote servers authenticate
   with a static bearer-token / custom header, or with **OAuth** for hosted
@@ -207,7 +238,9 @@ Open source under the [Apache License 2.0](LICENSE).
   terminal). Their tools are offered to the agent namespaced as
   `mcp__<id>__<tool>` and always require approval; servers exposing MCP
   resources or prompt templates get discovery meta-tools, list changes are
-  picked up live, and oversized results are capped. Point Houston at the
+  picked up live, and oversized results are capped. When a server asks for input
+  mid-call (elicitation), Houston shows it as a small form (an inline prompt in the
+  terminal; declined automatically in headless and background runs). Point Houston at the
   filesystem, git, a hosted MCP service, or any other server to extend what the
   agent can do. When a lot of MCP
   tools are connected, Houston **loads their schemas lazily**: above a threshold
@@ -217,23 +250,24 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.
-- **Desktop notifications.** Wander off during a long turn — Houston fires a
+- **Desktop notifications.** Wander off during a long turn: Houston fires a
   native notification when the agent finishes, needs approval, asks a question, or
   opens/merges a pull request while the window isn't focused, and clicking it
   brings the app back. PR events also show inline in the transcript: a notice
   banner when `gh_pr_create` opens a PR and when a `gh_pr_view` shows it merged.
   On by default; toggle it in Settings → *Appearance*.
-- **Rich transcript.** Replies render as full **Markdown** — headings, lists,
+- **Rich transcript.** Replies render as full **Markdown**: headings, lists,
   tables, blockquotes, and syntax-styled code blocks with one-click copy. Tool
   activity collapses into a compact, grouped list (one tidy row per call,
   expandable for output and diffs) instead of a wall of cards.
 - **Sandboxed execution (per-platform, honest).** Shell commands run under the host's
-  OS sandbox where one exists, confined to the project directory — writes outside the
+  OS sandbox where one exists, confined to the project directory: writes outside the
   project and (by default) network access are blocked. On **macOS** that's **Seatbelt**
   (`sandbox-exec`); on **Linux** it's **bubblewrap** (an unprivileged user namespace),
   when available. **Windows** has no broadly-available equivalent, so shell commands run
-  unconfined — and the app says so: the command is reported as not sandboxed and is never
-  silently auto-approved (you must explicitly allow each one, even in full-auto). The
+  unconfined, and the app says so: the command is reported as not sandboxed and is never
+  silently auto-approved (each one asks, even in full auto, until you choose "Allow for
+  run" on such a prompt). The
   structured file tools stay confined to the project on every platform. See
   [docs/sandboxing.md](docs/sandboxing.md) for the per-platform model and why
   AppContainer / Windows Sandbox aren't a fit for confining arbitrary build commands.
@@ -252,19 +286,19 @@ Open source under the [Apache License 2.0](LICENSE).
   Per-run effort, turn and cost budgets, a verification command, and distinct exit
   codes make it drivable from scripts, CI, and benchmark harnesses.
   See [Headless / scripting](#headless--scripting).
-- **Interactive terminal.** A stay-resident REPL in your terminal — `Houston -i`.
+- **Interactive terminal.** A stay-resident REPL in your terminal: `Houston -i`.
   Conversation streams live, tool approvals and questions are answered inline, and
   slash commands (`/model`, `/approval`, `/clear`, …) switch settings mid-session.
   See [Interactive terminal](#interactive-terminal).
-- **Standalone CLI.** The same `-p` and `-i` clients as a single-file Node script —
+- **Standalone CLI.** The same `-p` and `-i` clients as a single-file Node script:
   no desktop app, no Chromium, no display server, ~60 MB of RAM instead of a
   desktop app's footprint. Runs on headless Linux servers and small VPSes; API
   keys come from environment variables. See [Standalone CLI](#standalone-cli-no-desktop-app).
-- **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only —
+- **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only:
   the agent researches and proposes a plan, with writes and shell commands
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
   call you can approve once, deny, *allow for the run* (auto-approves that kind of
-  tool for the rest of the conversation), or *always allow* / *always deny* — which
+  tool for the rest of the conversation), or *always allow* / *always deny*, which
   saves a permission rule so the choice sticks across future runs. File edits show
   an inline red/green **diff** so you can review exactly what changes before
   approving.
@@ -303,21 +337,25 @@ Open source under the [Apache License 2.0](LICENSE).
   one target (no wildcards, no folder contents); *always allow* on a file, URL,
   or search saves one, as it does for a shell command holding `*` that it can't
   shorten to a prefix like `npm install`.
-- **Hooks.** Run your own shell commands around tool calls (Settings → *Hooks*):
-  a *PreToolUse* hook can block a call by exiting non-zero, and a *PostToolUse*
-  hook's output is fed back to the agent, e.g. auto-format after every edit, or
-  run tests after a write. Hooks run sandboxed to the project; the call's context
+- **Hooks.** Run your own shell commands at set points in the agent loop (Settings →
+  *Hooks*): a *PreToolUse* hook can block a call by exiting non-zero (or approve or
+  rewrite it with a JSON reply), and a *PostToolUse* hook's output is fed back to the
+  agent, e.g. auto-format after every edit, or run tests after a write.
+  *UserPromptSubmit*, *SessionStart*, *Stop* (keep the agent going until a check
+  passes), and *PreCompact* hooks cover the rest of the turn; see the
+  [guide](docs/houston-guide.md#hooks). Hooks run sandboxed to the project; the call's context
   is in `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT` (or, for an input over 16 KB,
   a temp file named by `$HOUSTON_TOOL_INPUT_FILE`).
 - **Plugins.** Drop a JS file in `.houston/plugins/` to register *observational*
-  lifecycle hooks — `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
-  fn)` — for logging, metrics, or notifications. Plugins are local trusted files
-  (the same trust model as hooks/agents/skills): each runs in an isolated context
+  lifecycle hooks, `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
+  fn)`, for logging, metrics, or notifications. Plugins are executable code, so they
+  load only after you set `"projectPlugins": true` in settings.json. Each runs in an
+  isolated context
   with no `require`/`process`/network, hooks can't block or alter a call, and a
   throwing or slow plugin is caught and ignored. To *block* a tool, use a
   *PreToolUse* shell hook instead.
 - **Format on save (optional).** Turn on *Format on save* (Settings → *Tools &
-  Permissions*) and Houston runs the matching formatter on each file the agent writes —
+  Permissions*) and Houston runs the matching formatter on each file the agent writes:
   Prettier for JS/TS/JSON/CSS/Markdown, `gofmt`, `rustfmt`, and `ruff`/`black` for
   Python. The formatters are **optional, not bundled**: install the ones you want on
   your `PATH` and Houston uses them when present (it silently skips a file when its
@@ -325,31 +363,42 @@ Open source under the [Apache License 2.0](LICENSE).
   shows which it detects. Runs in the same sandbox as `run_shell` (no network); off by
   default.
 - **Undo / redo a turn's file changes.** Houston snapshots each file before and
-  after the agent writes it, so when a turn edits files a **Revert** button appears —
+  after the agent writes it, so when a turn edits files a **Revert** button appears:
   one click restores everything that turn changed (and deletes files it created).
   Changed your mind? **Redo** puts the changes back.
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right
-  now (Ready / Responding… / Running a tool / Awaiting approval) and the active
-  model.
+  now (Ready, Responding…, running a tool, or waiting for your approval, answer, or
+  plan review) and the active model.
+- **Turn receipts.** A reply that ran checks or changed files ends with a
+  **Recorded by Houston** line built from what actually executed, not from what the
+  agent says: tests (with pass/fail counts for common runners), builds, installs,
+  browser checks, background servers, subagent work, the verify command, and files
+  changed. It flags a todo item marked done with nothing run behind it, and tracks an
+  accepted plan's progress across turns. It never goes to the model and costs no
+  extra calls.
 - **Keyboard shortcuts.** A ⌘K command palette, ⌘N new chat (⇧⌘N in another
   folder, also in the File menu with recent folders), ⌘1–9 / ⌃Tab to switch
   chats, Shift+Tab to cycle approval mode, ⌘F find-in-conversation, ⌘⇧M to switch
-  model, ↑/↓ to recall earlier prompts, Esc Esc to edit your last message, and Esc
-  to stop a running turn. Press ⌘/ (or ?) for the full list; rebind any of them
+  model, ⌃` to toggle the terminal, ⌘, for Settings, ↑/↓ to recall earlier prompts,
+  Esc Esc to edit your last message, and Esc to stop a running turn (Ctrl replaces ⌘
+  on Windows and Linux). Press ⌘/ (or ?) for the full list; rebind any of them
   under Settings → Keyboard.
 - **Accessible.** The Settings dialog is a proper focus-trapped `dialog` (focus
   moves in on open and restores on close, Tab stays inside, Esc closes), and all
   animations honor the OS *reduce motion* setting.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
-  *Appearance*; *System* follows your macOS appearance and switches live.
+  *Appearance*; *System* follows your OS appearance and switches live.
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
   dropped connections) are retried with exponential backoff, shown inline as a
   "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A
   reply that drops partway through is discarded and started over, never shown
   twice. If a turn still fails, a **Retry** button re-runs it without you
   re-typing.
-- **Secure key storage.** API keys are encrypted with the macOS Keychain
-  (Electron `safeStorage`) and never leave the main process or touch the renderer.
+- **Secure key storage.** API keys are encrypted with the OS credential store
+  through Electron `safeStorage` (the Keychain on macOS, DPAPI on Windows, a desktop
+  keyring such as GNOME Keyring or KWallet on Linux) and never leave the main process
+  or touch the renderer. Settings warns when Linux has no keyring and encryption
+  would fall back to a weak built-in key.
 - **Persistent conversations**, scoped per project folder. Export any chat to a
   JSON file and import it back (or onto another machine) from the sidebar, or
   export it as a self-contained HTML file for sharing and reading offline. HTML
@@ -358,20 +407,21 @@ Open source under the [Apache License 2.0](LICENSE).
   **Search** the sidebar to find a past chat by its title or anything said in it.
   **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
   direction without disturbing the original.
-- **Auto-named chats.** A new chat shows the first message as a placeholder, then —
-  once the first turn finishes — the conversation's own model writes a short,
+- **Auto-named chats.** A new chat shows the first message as a placeholder, then,
+  once the first turn finishes, the conversation's own model writes a short,
   specific title to replace it (the new title appears in the sidebar live). Renaming
   a chat yourself always wins; auto-titling never overwrites a title you set.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
   and groups persist across restarts. **Resize** the sidebar by dragging its right
   edge (double-click to reset), or **collapse** it to a thin rail with the ⌘B
-  shortcut or the « toggle — the chosen width and collapsed state are remembered.
-- **Long sessions stay in budget.** When a conversation grows past a configurable
-  token threshold, Houston automatically summarizes the older turns so it never
-  overflows the model's context window. The full transcript stays on screen —
-  only what's sent to the model is compacted. Tune or disable the threshold in
-  Settings → *Context window*.
+  shortcut or the « toggle; the chosen width and collapsed state are remembered.
+- **Long sessions stay in budget.** When a conversation grows too large, Houston
+  first trims tool output the agent has moved past, then summarizes the older turns
+  so it never overflows the model's context window. The threshold is sized from the
+  selected model's context window, and the summary is saved with the conversation.
+  The full transcript stays on screen: only what's sent to the model is compacted.
+  Set a fixed threshold or disable it in Settings → *Context window*.
 - **Multiple folders.** Beyond the project folder, add extra directories in
   Settings → *Additional folders* that the agent may read and write; they're
   added to the file tools' allowed roots and the shell sandbox so it can work
@@ -380,21 +430,23 @@ Open source under the [Apache License 2.0](LICENSE).
   and a short working-tree status into the agent's context each turn, so it knows
   what branch it's on and what's already modified without having to run git first.
 - **Changes panel.** The **⤓ Changes** button in the title bar opens a slide-over
-  diff of every uncommitted change in the working tree — the tracked diff vs HEAD
-  (staged and unstaged) plus untracked files — each file expandable with a
+  diff of every uncommitted change in the working tree (the tracked diff vs HEAD,
+  staged and unstaged, plus untracked files), each file expandable with a
   red/green line diff and a `+/−` stat. It's working-tree scoped (all uncommitted
   changes, not just the current chat's edits); read-only and hardened, the same
   way the agent's `git_diff` tool is. A **Create PR** action hands off to the
-  agent — it commits, pushes, and opens the pull request through the same
+  agent: it commits, pushes, and opens the pull request through the same
   `gh_pr_*` tools and approval gate, so the panel never drives git itself. It
-  opens an independent PR against the default branch, or — when the current branch
-  already has an open PR — stacks the new one on top (based on that PR's branch) so
+  opens an independent PR against the default branch, or, when the current branch
+  already has an open PR, stacks the new one on top (based on that PR's branch) so
   its diff shows only the new changes. Whenever the working tree has changes, the
   same **Create PR** action (and a clickable `N changed files +/−` summary that
   opens the panel) also sits at the top of the composer, so it's one click away
-  without opening the panel first.
+  without opening the panel first. The button adapts to the repository: **Publish
+  to GitHub** when there is no remote yet, **Push first commit** when nothing is
+  committed, and **Commit & push** for a remote that isn't on GitHub.
 - **Start a chat in its own worktree.** Every new chat in a git repo defaults to
-  running in a fresh, isolated worktree on its own branch — so the agent's edits
+  running in a fresh, isolated worktree on its own branch, so the agent's edits
   never touch your current checkout. Right after the folder picker in the control
   bar you choose the base branch to fork from and name the new branch (or untick
   *New worktree* to work in the repo directly); picking a subdirectory of a repo
@@ -424,34 +476,35 @@ Open source under the [Apache License 2.0](LICENSE).
   (always prompts for approval) and the mutating ones (PR/issue create, comment,
   and state changes, PR review, merge, and checkout, repo create) are refused in
   plan mode. Because these tools run `gh` *outside* the shell sandbox, they reach
-  the network on approval, unlike a raw `gh` in `run_shell`, which the sandbox blocks from the network unless the
-  run is full-auto or you pick "Allow for run." Houston tells the agent in its
+  the network on approval, unlike a raw `gh` in `run_shell`, which the sandbox keeps
+  offline until the run is granted shell network. Houston tells the agent in its
   system prompt when `gh` is available, so it reaches for these instead of raw
   shell `gh`. Settings → *Tools & Permissions* → *Optional integrations* shows whether
   `gh` is detected and signed in, with a one-line hint on how to enable it.
-- **PR sweeps.** For batch pull-request work the agent keeps a `pr_sweep` board —
-  the same scratchpad idea as the task list, specialized per PR — rendered live in
+- **PR sweeps.** For batch pull-request work the agent keeps a `pr_sweep` board
+  (the same scratchpad idea as the task list, specialized per PR), rendered live in
   the transcript with each item's status, branch, and PR link. Two modes:
   **author** (turn a list of tasks into PRs: branch → change → push → open) and
   **process** (work a batch of existing open PRs: check out → review/fix →
   update). It tracks the plan; the real work happens through the `gh_pr_*`,
   worktree, and file tools. Like the task list, the board lives in the
-  conversation — it's recorded as tool use in the message log, so it persists with
+  conversation: it's recorded as tool use in the message log, so it persists with
   the chat and needs no separate store.
-- **Project-aware.** Houston loads a small rules hierarchy into the system prompt —
+- **Project-aware.** Houston loads a small rules hierarchy into the system prompt:
   your global `~/.claude/CLAUDE.md` first, then the project's own `AGENTS.md` /
   `CLAUDE.md` at its root, then any `AGENTS.md` / `CLAUDE.md` found in
   subdirectories (so per-package conventions in a monorepo are picked up
-  automatically, shallowest first) — so the agent follows your conventions,
+  automatically, shallowest first), so the agent follows your conventions,
   build/test commands, and house rules without you re-explaining them each time.
   Any rules file can also pull in others with `@path` imports (relative, `~/…`, or
   absolute), to split or share common rules across files.
 - **Token usage & cost at a glance.** The control bar above the composer shows the
   current context size, the output tokens used this session, and an **estimated
-  USD cost** (for models with known pricing — Claude/GPT/Gemini; local models show
-  none), so you can see how big and how expensive a conversation is getting. The
-  model, project folder, approval policy and thinking controls live there too —
-  down by the composer, where you're typing.
+  USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show
+  none), so you can see how big and how expensive a conversation is getting. Open it
+  for a per-model breakdown (subagents and reviews often run on a cheaper model)
+  with the prompt-cache split. The model, project folder, approval policy and
+  reasoning controls live there too, down by the composer, where you're typing.
 
 ## Install (prebuilt binaries)
 
@@ -459,9 +512,9 @@ Grab the artifact for your platform:
 
 | Platform | Minimum OS | Download | Update notifications? |
 |----------|------------|----------|-----------------------|
-| macOS (Apple Silicon) | macOS 13 Ventura | `Houston-<version>-arm64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
-| macOS (Intel) | macOS 13 Ventura | `Houston-<version>-x64.dmg` — open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
-| Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe` — run the installer (per-user, no admin) | Yes |
+| macOS (Apple Silicon) | macOS 13 Ventura | `Houston-<version>-arm64.dmg`: open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
+| macOS (Intel) | macOS 13 Ventura | `Houston-<version>-x64.dmg`: open it, drag **Houston** to Applications | Yes (via the `.zip` feed) |
+| Windows (x64) | Windows 10 | `Houston-<version>-x64-setup.exe`: run the installer (per-user, no admin) | Yes |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-x86_64.AppImage`: `chmod +x` and run | Yes (AppImage only) |
 | Linux (x64) | glibc 2.35+ (Ubuntu 22.04+ / Debian 12+ / Fedora 36+) | `Houston-<version>-amd64.deb`: `sudo apt install ./…deb` | **No**, update via your package manager or re-download |
 | macOS, Windows, Linux (x64 or Arm), terminal only | Node ≥ 22 | `houston-cli.cjs`, the [standalone CLI](#standalone-cli-no-desktop-app): `node houston-cli.cjs -i`, or put it on your PATH as `houston` | **No**: re-download to update |
@@ -479,16 +532,16 @@ Grab the artifact for your platform:
 > linking to **Releases** for a manual download, until those platforms are signed too.
 > See [Updates](#updates).
 >
-> **Linux needs glibc 2.35 or newer** (Ubuntu 22.04+, Debian 12+, Fedora 36+) — **for the
+> **Linux needs glibc 2.35 or newer** (Ubuntu 22.04+, Debian 12+, Fedora 36+), **for the
 > desktop app.** The floor is set by the build toolchain: the native `node-pty` addon is
 > compiled on Ubuntu 22.04 (glibc 2.35), and the bundled `ast-grep`/`ripgrep` are glibc
-> builds — so musl distros (Alpine) can't run the desktop packages. The runner is pinned so
+> builds, so musl distros (Alpine) can't run the desktop packages. The runner is pinned so
 > this floor stays put rather than creeping up with newer CI images. **The standalone CLI is
 > exempt:** it's a pure-JS bundle with no native addon and no bundled binaries, so it runs
 > on any platform with Node ≥ 22, Alpine/musl included.
 >
 > **Both mac arches update from one feed.** arm64 and Intel build on separate
-> runners, and electron-builder emits one `latest-mac.yml` per build — naively publishing
+> runners, and electron-builder emits one `latest-mac.yml` per build, and naively publishing
 > both would clobber one another ([electron-builder#5592](https://github.com/electron-userland/electron-builder/issues/5592)).
 > So the release pipeline merges the x64 files into the arm64 feed
 > ([`scripts/merge-mac-update-yml.mjs`](scripts/merge-mac-update-yml.mjs)) and publishes a
@@ -500,11 +553,14 @@ Grab the artifact for your platform:
 
 1. Open Houston. There is no account, no sign-up, and nothing to accept: it is
    [Apache-2.0](LICENSE) software that runs on your machine.
-2. Open **Settings** (sidebar) and set an API key for at least one provider
-   (or point a local endpoint at Ollama/LM Studio — no key needed).
-3. Pick a **project folder** (control bar, above the composer).
+2. Follow the **Get started** checklist on the welcome screen: connect a model
+   (paste an API key for Anthropic, OpenAI, or Gemini, which is tested before it is
+   saved, or point at a local Ollama or LM Studio server, no key needed). Other
+   providers and hosts are in **Settings**.
+3. Open a **project folder** (control bar, above the composer).
 4. Choose a **model** and an **approval policy** (same control bar).
-5. Ask it to build or change something.
+5. Ask it to build or change something. **Take the tour** in the command palette
+   (⌘K) or the Help menu replays the tips any time.
 
 ## Headless / scripting
 
@@ -547,7 +603,7 @@ Flags: `--cwd <dir>` (project folder, default the current directory),
 Assistant text streams to stdout, tool activity (plus a one-line token/cost
 total, failed tools, and an early-stop notice if the run hits a step/output
 limit) to stderr, and the exit code says how the run ended (below). It
-reuses your saved settings and Keychain-stored API keys. Each run is saved as a
+reuses your saved settings and stored API keys. Each run is saved as a
 conversation (shared with the app and the interactive `-i` session), so you can
 script a prompt and then take over where it left off. The run prints its session
 id (`· session <id>` on stderr, or a `{"type":"session","conversationId":…}` line
@@ -587,7 +643,8 @@ summary a harness can read without folding the stream itself:
 stopped short. `turns` counts the agent's model steps (the unit `--max-turns`
 caps); `costUsd` and the token totals include subagent and review rounds.
 `finalText` is the agent's closing answer: the text it wrote after its last tool
-call. A run that fails before it starts (no model configured) still ends with a
+call. `receipt`, present when the run ran checks or changed files, is Houston's own
+record of what actually ran (see [Turn receipts](#features)). A run that fails before it starts (no model configured) still ends with a
 result line; a usage error (exit 2) prints only to stderr.
 
 **Exit codes.**
@@ -631,7 +688,7 @@ consent with yes.
 
 ## Interactive terminal
 
-Prefer to stay in the terminal? Run a persistent, interactive session — a REPL you
+Prefer to stay in the terminal? Run a persistent, interactive session: a REPL you
 converse with directly, with no window:
 
 ```bash
@@ -651,54 +708,75 @@ as markdown (headings, lists, tables, code blocks) right in the terminal, follow
 by reasoning, tool activity with a snippet of each result (including live progress
 and any nested subagents), and a per-turn plus running session token/cost meter. A status
 line above the composer keeps the model, approval policy, working directory,
-session cost, and context-window fill in view at all times. When a tool needs approval (under `ask` / `auto-edit`)
-you answer with an **arrow-key picker** (or type `y`/`n`/`a`) — a file edit shows
-its **diff** before you approve, and a shell command with no OS sandbox is flagged. When the agent asks a question (`ask_user`) the options are
+session cost, and context-window fill in view at all times. When a tool needs approval
+you answer with an **arrow-key picker** (or a key: `y` allow, `n` deny, `a` allow for
+the run, `!` always allow, `x` always deny, or type a reason to deny with guidance).
+A file edit shows its **diff** before you approve, and a shell command with no OS
+sandbox is flagged. When the agent asks a question (`ask_user`) the options are
 listed and you pick a number or type your own answer. In **plan mode**, once the
-agent presents a plan and stops, you're offered a one-key handoff — accept to
+agent presents a plan and stops, you're offered a one-key handoff: accept to
 switch to `auto-edit` and carry it out, or keep planning. While the agent works, a
 spinner with an elapsed timer shows it's alive (labelled with the current
-activity). Press `Ctrl-C` to interrupt the current turn (the session stays open);
-`Ctrl-D` to exit.
+activity), and what you type steers the running turn. Press `Esc` (or `Ctrl-C`) on
+an empty line to stop the current turn (the session stays open); `Ctrl-D` to exit.
+`Shift-Tab` cycles the approval mode, even mid-run.
 
-Press **Tab** to complete slash-command names and `@`-file mentions (fuzzy over the
-workspace), and **Up/Down** to recall previous prompts — history persists per
-project across restarts. A message can span multiple lines: end a line with `\` to
-continue, or open a ``` code fence and it keeps reading until the fence closes.
+The composer is a full line editor: **Tab** completes slash-command names and
+`@`-file mentions (fuzzy over the workspace), **Up/Down** and **Ctrl-R** recall and
+search previous prompts (history persists per project across restarts), `Ctrl-J` or
+`Alt-Enter` inserts a line break, a pasted block lands as one message, and `/vim`
+turns on vim keys. A line starting with `!` runs in your own shell, and `#` saves a
+standing instruction. The [guide](docs/houston-guide.md#the-terminal-composer) lists
+every key.
 
 Slash commands adjust the session without restarting:
 
 | Command | Effect |
 | --- | --- |
 | `/model [id]` | list configured models, or switch (`providerId`, `providerId/model`, or a bare model id) |
+| `/login` (`/providers`) | set or update a provider's API key |
 | `/approval [policy]` | show or set the policy (`plan` \| `ask` \| `auto-edit` \| `full-auto`) |
+| `/plan` | switch to plan mode |
+| `/reasoning [level]` | show or set reasoning effort (`off` \| `low` \| `medium` \| `high` \| `xhigh`) |
 | `/clear`, `/new` | start a fresh conversation |
+| `/compact` | summarize older turns to free up context now |
 | `/resume [query]` | list (or search by title) and reopen a saved session |
 | `/fork` | branch the current session into a copy, leaving the original intact |
-| `/cost` | show session token + cost totals |
-| `/skills`, `/agents` | list the workspace's skills / custom agents |
-| `/mcp`, `/hooks` | list configured MCP servers / hooks |
-| `/theme [name]` | list or switch color theme (`default` / `bright` / `mono`) |
-| `/image <path>` | attach an image (PNG/JPEG/GIF/WebP) to your next message |
+| `/undo`, `/redo` | revert the files the last turn changed, or put them back |
+| `/changes` (`/diff`) | summarize what is different in the working tree |
+| `/review` | adversarial review of your uncommitted changes |
+| `/cost` | session token + cost totals, per model |
+| `/doctor` | check your setup: model, keys, sandbox, tools, MCP |
+| `/verbose`, `/output [n]` | show each tool's full output as it runs, or reprint one after the fact |
+| `/btw <question>` | ask the side chat a quick question (`/btw clear` starts it over) |
+| `/spawned`, `/proposals` | open background sessions the agent started, or act on ones it proposed |
+| `/skills`, `/agents`, `/agent <name> <task>` | list the workspace's skills / custom agents, or hand a task to one |
+| `/mcp`, `/hooks` | list (and edit) MCP servers / hooks; `/mcp login <n>` signs in |
+| `/trust` | show this folder's project-config trust (`/trust forget` re-decides) |
+| `/settings` | summary of your current settings |
+| `/theme [name]` | list or switch color theme (`default` / `dark` / `light` / `colorblind` / `mono`) |
+| `/vim [on\|off]` | vim keys in the composer |
+| `/image [path]` | attach the image on your clipboard, or a file (PNG/JPEG/GIF/WebP) |
 | `/cwd` | show the working directory |
 | `/share` | copy an invite to Houston to send a friend |
 | `/help` | list commands |
 | `/exit`, `/quit` | leave |
 
 Each session is saved as an ordinary conversation, so it survives restarts and
-shows up in the desktop app's sidebar — one history across both clients. `/resume`
+shows up in the desktop app's sidebar: one history across both clients. `/resume`
 lists recent sessions for the current folder and reopens one where you left off;
 `/clear` starts a fresh one.
 
 Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
-(default `ask`), and `--full-auto`. It reuses your saved settings and
-Keychain-stored API keys. Running in a pipe (no TTY) isn't interactive; use
+(default: the mode the desktop app last used), `--full-auto`, and `--continue` /
+`--resume <id>` to reopen a session at launch. It reuses your saved settings and
+stored API keys. Running in a pipe (no TTY) isn't interactive; use
 headless `-p` there instead.
 
 ## Standalone CLI (no desktop app)
 
 Both terminal clients above also ship as a **standalone CLI**: a single-file Node
-script with no Electron inside — no Chromium is ever loaded, no display server is
+script with no Electron inside: no Chromium is ever loaded, no display server is
 needed, and a full run peaks around **60 MB of RAM**, so it works on headless
 Linux servers and small VPSes where the desktop app cannot even start.
 
@@ -803,13 +881,13 @@ vice versa. Set `HOUSTON_DATA_DIR` to use an isolated profile (useful for CI
 and servers).
 
 **What's desktop-only.** Capabilities that genuinely need the desktop shell are
-absent: `view_localhost` (screenshots of a local dev server need Chromium) is not
+absent: `view_localhost` and `render_mockup` (screenshots need Chromium) are not
 offered to the model at all in the CLI; the live Preview dock, integrated
-terminal, and auto-update are GUI features. Search tools degrade gracefully:
+terminal, Files panel, diagram rendering, and auto-update are GUI features. Search tools degrade gracefully:
 `search_files` uses `ripgrep` from your `PATH` when present and falls back to a
 built-in search otherwise, while `ast_grep` (structural search) needs an
-`ast-grep` binary on your `PATH` or via `HOUSTON_AST_GREP` — the desktop app
-bundles one, the single-file CLI does not — and reports it is unavailable when
+`ast-grep` binary on your `PATH` or via `HOUSTON_AST_GREP` (the desktop app
+bundles one, the single-file CLI does not), and reports it is unavailable when
 none is found.
 
 ## Develop
@@ -830,20 +908,20 @@ npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 
 ## Build a release
 
-Each OS+arch builds its own artifacts — native modules (`node-pty`) and the per-platform
+Each OS+arch builds its own artifacts: native modules (`node-pty`) and the per-platform
 `rg`/`ast-grep` binaries can't be cross-compiled, so you build on the target OS (and, for
-mac, on the target arch — arm64 on Apple Silicon, x64 on an Intel mac):
+mac, on the target arch, arm64 on Apple Silicon, x64 on an Intel mac):
 
 ```bash
-npm run dist:mac      # macOS arm64 → .dmg + .zip (+ latest-mac.yml) — run on Apple Silicon
-npm run dist:mac:x64  # macOS x64   → .dmg + .zip                    — run on an Intel mac
-npm run dist:win      # Windows x64 → -setup.exe (+ latest.yml)       — run on Windows
-npm run dist:linux    # Linux x64   → .AppImage + .deb (+ latest-linux.yml) — run on glibc 2.35+ (Ubuntu 22.04)
+npm run dist:mac      # macOS arm64 → .dmg + .zip (+ latest-mac.yml); run on Apple Silicon
+npm run dist:mac:x64  # macOS x64   → .dmg + .zip                    ; run on an Intel mac
+npm run dist:win      # Windows x64 → -setup.exe (+ latest.yml)       ; run on Windows
+npm run dist:linux    # Linux x64   → .AppImage + .deb (+ latest-linux.yml); run on glibc 2.35+ (Ubuntu 22.04)
 ```
 
-The human download is the `.dmg` / `-setup.exe` / `.AppImage`; the mac `.zip`, the nsis
-installer and the AppImage (+ `latest-*.yml`) (+ `latest-*.yml`) are what `electron-updater` uses to auto-update an
-installed app (see [Updates](#updates)). A `verify:resources` gate runs first and hard-
+The human download is the `.dmg` / `-setup.exe` / `.AppImage`; the mac `.zip`, the NSIS
+installer and the AppImage (+ `latest-*.yml`) are what `electron-updater` uses to
+check for (and, on macOS, install) updates (see [Updates](#updates)). A `verify:resources` gate runs first and hard-
 fails if a vendored binary is missing, so a build can't silently ship without search.
 
 Every PR runs a dependency license gate (`npm run license-gate`, which fails the PR if
@@ -898,11 +976,10 @@ release pipeline an RCE boundary. On those platforms the banner and the menu dia
 for a manual download, until they are signed too. (Linux downloads can still be verified
 by hand, they're GPG-signed: see [Verifying downloads](#verifying-downloads).)
 
-Update metadata is published by running `npm run dist` with a `GH_TOKEN` and
-`--publish`, or by attaching the artifacts to a release manually. On macOS the
-updater pulls the **`.zip`** (the `.dmg` is the human first-install), so a release
-needs the `.zip`, its `.blockmap`, and the generated `latest-mac.yml` — all
-produced by `npm run dist`.
+Releases, update metadata included, are published only by the **Release - publish**
+workflow ([docs/RELEASING.md](docs/RELEASING.md)). On macOS the updater pulls the
+**`.zip`** (the `.dmg` is the human first-install), so a release needs the `.zip`, its
+`.blockmap`, and the merged `latest-mac.yml`, all of which that workflow attaches.
 
 ## Architecture
 
@@ -911,25 +988,36 @@ src/
 ├── shared/        types + IPC channel names shared by all processes
 │   ├── agent.ts       chat/tool/stream protocol + agent run + conversation types
 │   ├── types.ts       settings, providers, approval policy
-│   └── defaults.ts    built-in provider seeds
+│   ├── defaults.ts    built-in provider seeds
+│   ├── model-facts.ts what Houston infers from a model id (price, context, capabilities)
+│   └── commands.ts    the built-in slash-command catalog both clients read
 ├── main/          Electron main process (Node)
-│   ├── providers/     Anthropic / OpenAI / Gemini / OpenAI-compatible adapters
+│   ├── providers/     Anthropic / OpenAI (Chat Completions + Responses) / Gemini /
+│   │                  OpenAI-compatible / Bedrock / Vertex / Azure OpenAI / Foundry
+│   │                  adapters
 │   ├── agent/         tool definitions + the tool-calling loop + system prompt
-│   │                  (incl. compaction.ts — summarize old turns to fit context;
-│   │                   rules.ts — load project AGENTS.md / CLAUDE.md)
+│   │                  (incl. compaction.ts: summarize old turns to fit context;
+│   │                   rules.ts: load project AGENTS.md / CLAUDE.md;
+│   │                   permissions.ts / approval.ts: rules and the approval gate;
+│   │                   untrusted.ts: the fence for outsider-written text;
+│   │                   evals/: task-level evals)
 │   ├── mcp/           MCP transports (stdio / streamable HTTP / SSE) + the
 │   │                  OAuth sign-in client for hosted servers (discovery,
 │   │                  dynamic registration, PKCE, refresh)
-│   ├── sandbox.ts     macOS Seatbelt profile + sandboxed command runner
-│   ├── secrets.ts     Keychain-encrypted credential storage (API keys, OAuth
+│   ├── sandbox/       per-OS shell sandbox backends (Seatbelt, bubblewrap,
+│   │                  unconfined Windows) + the egress allowlist proxy
+│   ├── secrets.ts     OS-keychain-encrypted credential storage (API keys, OAuth
 │   │                  token sets, custom header/env secrets)
 │   ├── oauth.ts       provider-account OAuth (stub; MCP-server OAuth is real
 │   │                  and lives in mcp/oauth.ts)
-│   ├── store.ts       settings persistence
+│   ├── store.ts       settings persistence + migrations
 │   ├── conversations.ts  conversation persistence (one JSON per chat)
+│   ├── tui.ts / headless.ts  the interactive terminal and one-shot clients
 │   └── ipc.ts         all IPC handlers
-├── preload/       contextBridge — the typed `window.api` surface
-└── renderer/      React UI (transcript, model picker, settings, approvals)
+├── cli/           the standalone CLI entry (no Electron): env/file credentials,
+│                  `houston providers`
+├── preload/       contextBridge: the typed `window.api` surface
+└── renderer/      React UI (transcript, model picker, settings, approvals, docks)
 ```
 
 The renderer talks to the main process only through the preload bridge. Provider
@@ -938,40 +1026,46 @@ the agent loop and UI never depend on a specific provider.
 
 ## Security model
 
-- **Tool execution is sandboxed.** `run_shell` runs under `sandbox-exec` with a
-  generated profile: deny-by-default, filesystem reads allowed, writes restricted
-  to the project + temp dirs, network denied until you grant it (a one-time
-  consent in *full auto*, "Allow for run" on a shell approval, or
-  `--allow-shell-network` on a headless run). Granted
-  network is confined to a per-domain egress allowlist on macOS and Linux:
-  direct sockets stay blocked and traffic flows through a local proxy that
-  permits package registries, VCS hosts, and domains you add in Settings (see
-  [docs/sandboxing.md](docs/sandboxing.md)).
-- **File tools are contained** to the workspace in code — any path that resolves
-  outside the project root is rejected.
+- **Tool execution is sandboxed where the OS allows it.** `run_shell` runs under
+  Seatbelt (`sandbox-exec`) on macOS and bubblewrap on Linux: filesystem reads
+  allowed, writes restricted to the project + temp dirs, network denied until you
+  grant it (a one-time consent in *full auto*, "Allow for run" on a shell approval,
+  or `--allow-shell-network` on a headless run). Granted network is confined to a
+  per-domain egress allowlist: direct sockets stay blocked and traffic flows through
+  a local proxy that permits package registries, VCS hosts, and domains you add in
+  Settings. Windows has no equivalent, so shell commands there run unconfined and
+  always ask (see [docs/sandboxing.md](docs/sandboxing.md)).
+- **File tools are contained** to the workspace in code: any path that resolves
+  outside the project roots, including through a symlink, is rejected.
 - **Human in the loop.** Writes and shell commands require approval unless you
   opt into a more autonomous policy. A new install starts in *full auto* only where
   the OS sandbox confines shell commands (macOS, Linux with bubblewrap), and in *ask*
   elsewhere; an existing install keeps its saved mode. Network egress (`web_fetch`,
-  `web_search`, `view_localhost`) always prompts on first use, even in *full auto*,
-  since it leaves the machine; choose *allow-for-the-run* to stop further prompts that
-  run. A shell command that can throw away work in the project (`git reset --hard`, a
-  forced `git clean`, `rm -r` of source, a forced or deleting push) asks in every mode,
-  since the sandbox protects everything but the project itself.
+  `web_search`, `view_localhost`) prompts per destination, even in *full auto*, since
+  it leaves the machine; choose *allow-for-the-run* to stop further prompts for that
+  destination that run. MCP and GitHub tool calls always ask. A shell command that can throw away
+  work in the project (`git reset --hard`, a forced `git clean`, `rm -r` of source, a
+  forced or deleting push), and reading or changing a credential file (a `.env`, a
+  private key), ask in every mode, since the sandbox protects everything but the
+  project itself and can read your whole filesystem.
   `view_localhost` is restricted to loopback addresses and loads untrusted page
   content in a sandboxed, isolated, no-Node window; its main frame can't be
   navigated or redirected off loopback, and its requests can't reach
   private/LAN/metadata hosts (public CDNs are still allowed so pages render).
-- **Fetched web pages are data, not instructions.** `web_fetch` resolves each
+- **Outsider-written text is data, not instructions.** `web_fetch` resolves each
   host once, checks every address, and connects to exactly those addresses, so a
   name can't resolve public for the check and private for the connect (DNS
-  rebinding); redirect hops are re-checked and re-pinned. Page text then arrives
-  inside a nonce-tagged untrusted-content fence, and a page that scores as an
+  rebinding); redirect hops are re-checked and re-pinned. Fetched pages, web search
+  results, GitHub issue, pull request, and CI text, and MCP results arrive inside a
+  nonce-tagged untrusted-content fence, and a page or MCP result that scores as an
   injection attempt is never inlined at all: a model call with no tools and no
   history reads it in isolation and only its report reaches the agent. Ordinary
-  pages are unaffected and stay byte-exact.
-- **Keys at rest** are encrypted via the OS Keychain; only ciphertext is written
-  to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
+  content is unaffected and stays byte-exact.
+- **Secrets stay out of the transcript.** Tool results, the transcript, and logs are
+  scrubbed of well-known token formats and this install's stored secrets, and
+  Houston's own network tools refuse to send a request that carries one.
+- **Keys at rest** are encrypted via the OS credential store; only ciphertext is
+  written to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
 
 Coding agents run model-authored commands. Treat *full auto* + network with the
 same caution you'd treat running untrusted code, and switch to *ask* or *auto-edit*
@@ -1081,9 +1175,9 @@ failed check here means re-download, not a blocked update.
 
 ## Roadmap
 
-What's intentionally not done yet — out of scope for a macOS desktop app, or a
-larger effort — is tracked in [ROADMAP.md](./ROADMAP.md) with the
-rationale for each.
+What's intentionally not done yet (a non-goal for a local, bring-your-own-model app,
+or a larger effort) is tracked in [ROADMAP.md](./ROADMAP.md) with the rationale for
+each.
 
 ## License
 
