@@ -93,6 +93,16 @@ describe('ModelPicker', () => {
     }
   })
 
+  it('puts the search field below the list, outside the part that scrolls', () => {
+    renderPicker()
+    fireEvent.click(screen.getByRole('combobox'))
+    const search = screen.getByLabelText('Search models')
+    const list = screen.getByRole('listbox')
+    expect(list.contains(search)).toBe(false)
+    expect(list.compareDocumentPosition(search) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(document.activeElement).toBe(search)
+  })
+
   it('marks the current model as the selected option', () => {
     renderPicker()
     fireEvent.click(screen.getByRole('combobox'))

@@ -298,20 +298,6 @@ export function ModelPicker({
           className="menu model-menu"
           roving={false}
         >
-          <input
-            type="search"
-            className="model-menu__search"
-            placeholder="Search models"
-            aria-label="Search models"
-            aria-controls={listId}
-            aria-activedescendant={flat[active] ? optId(active) : undefined}
-            value={query}
-            onChange={(e) => {
-              setQuery(e.target.value)
-              setActive(0)
-            }}
-            onKeyDown={onSearchKeyDown}
-          />
           <div id={listId} role="listbox" aria-label="Model" className="model-menu__list">
             {visible.map(({ provider, models }) => (
               <div key={provider.id} role="group" aria-label={groupLabel(provider)}>
@@ -396,6 +382,23 @@ export function ModelPicker({
               No models yet: {groups.empty.map((p) => p.label).join(', ')}
             </div>
           )}
+          {/* Last, next to the model button (the menu usually opens upward from the
+              control bar), and outside the scrolling list so it never scrolls away. */}
+          <input
+            type="search"
+            className="model-menu__search"
+            data-autofocus
+            placeholder="Search models"
+            aria-label="Search models"
+            aria-controls={listId}
+            aria-activedescendant={flat[active] ? optId(active) : undefined}
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value)
+              setActive(0)
+            }}
+            onKeyDown={onSearchKeyDown}
+          />
         </Popover>
       )}
     </>
