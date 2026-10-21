@@ -65,6 +65,15 @@ ships as a desktop app and as terminal clients.
 - **Standalone CLI.** The same `-p` and `-i` clients as a single self-contained
   Node script, with no desktop app and no browser engine. Runs on headless Linux
   servers; API keys come from environment variables.
+- **GitHub Action (`houston-code/houston/action`).** Runs the standalone CLI in
+  GitHub Actions on the user's own runners with their own model key from a repository
+  secret; there is no Houston service. Three modes: `respond` answers an `@houston`
+  mention from someone with write access as a reply, `review` posts one review comment on
+  a same-repository pull request from `review_changes`, and `fix-ci` fixes a failed
+  workflow run, pushes the fix to a new `houston/` branch, and opens a pull request. The
+  action verifies the downloaded CLI's signature first, gives the model only read access
+  to GitHub and no web access, and does all posting and pushing itself. Inputs, example
+  workflows, and the security model are in `action/README.md` in the Houston repository.
 
 All clients share one agent core, so tools, permissions, and skills behave the
 same across them. Some surfaces are desktop-only (the preview panel, spawning

@@ -209,6 +209,12 @@ describe('CI lints its own workflows', () => {
     expect(lint).toMatch(/run: zizmor .*--min-severity low --config \.github\/zizmor\.yml \.github\/workflows \.github\/actions/)
   })
 
+  it('lints the GitHub Action and its example workflows too', () => {
+    const lint = job('workflow-lint')
+    expect(lint).toMatch(/run: zizmor .* action action\/examples\/\*\.yml\n/)
+    expect(lint).toContain('run: actionlint -color action/examples/*.yml')
+  })
+
   it('lints queue candidates too, so the required `build` check never sees it skipped', () => {
     expect(job('workflow-lint')).toContain("if: github.event_name != 'push'")
   })

@@ -1,0 +1,47 @@
+# When CI fails on a branch of this repository, let Houston try a fix on a new branch and
+# open a pull request for review. It never pushes to the failed branch or the default
+# branch, and skips runs of fork pull requests.
+#
+# workflow_run runs this file from the default branch with a write token, while the run it
+# reacts to may come from any branch. So the job checks out the failed commit without
+# credentials, only same-repository runs are handled, and the action (not the agent) does
+# every git and GitHub write after checking what the run changed.
+name: Houston (fix CI)
+
+on:
+  workflow_run: # zizmor: ignore[dangerous-triggers] same-repository runs only, see the job's if
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+concurrency:
+  group: houston-fix-ci-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure'
+      && github.event.workflow_run.head_repository.full_name == github.repository
+      && !startsWith(github.event.workflow_run.head_branch, 'houston/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.workflow_run.head_sha }}
+      # Install what your test suite needs here, before Houston runs: its shell commands
+      # are sandboxed without network access.
+      # Pin the full commit SHA of the release tag in your workflow (see action/README.md).
+      - uses: houston-code/houston/action@v0.10.0 # zizmor: ignore[unpinned-uses] example only
+        with:
+          mode: fix-ci
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          verify: npm test
+          max-cost: '3'

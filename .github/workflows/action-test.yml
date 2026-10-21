@@ -1,0 +1,116 @@
+name: Action test
+
+# End-to-end test of the GitHub Action in action/. It runs the composite action itself
+# (`uses: ./action`), which downloads and verifies the pinned houston-cli.cjs release
+# exactly as a user's workflow would, against a scripted mock model (action/test/mock-provider.mjs)
+# and a fake gh (action/test/fake-gh.mjs). No secret, no model key, and nothing is posted to
+# GitHub. The pure logic has its own unit tests in action/lib/*.test.mjs, which `npm test`
+# runs in ci.yml.
+on:
+  pull_request:
+    paths:
+      - action/**
+      - houston-signing-key.asc
+      - .github/workflows/action-test.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: action-test-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the fixture repository and start the mock model
+        run: |
+          set -euo pipefail
+          fx="$RUNNER_TEMP/e2e"
+          node action/test/fixture.mjs "$fx"
+          nohup node action/test/mock-provider.mjs --script "$fx/scenarios.json" \
+            --log "$fx/mock.jsonl" --ready "$fx/port" > "$RUNNER_TEMP/mock.out" 2>&1 &
+          for _ in $(seq 100); do [ -s "$fx/port" ] && break; sleep 0.1; done
+          [ -s "$fx/port" ] || { cat "$RUNNER_TEMP/mock.out"; echo "::error::the mock model did not start"; exit 1; }
+          {
+            echo "FIXTURE=$fx"
+            echo "MOCK_URL=http://127.0.0.1:$(cat "$fx/port")/v1"
+          } >> "$GITHUB_ENV"
+          # The fake gh shadows the real one for the action and for Houston's gh tools.
+          echo "$GITHUB_WORKSPACE/action/test/bin" >> "$GITHUB_PATH"
+
+      - name: respond to a collaborator's mention
+        uses: ./action
+        env:
+          HOUSTON_ACTION_EVENT_NAME: issue_comment
+          HOUSTON_ACTION_EVENT_PATH: ${{ env.FIXTURE }}/events/respond.json
+          FAKE_GH_LOG: ${{ env.FIXTURE }}/gh-respond.jsonl
+        with:
+          provider: mock
+          model: mock-model
+          base-url: ${{ env.MOCK_URL }}
+          working-directory: ${{ env.FIXTURE }}/repo
+      - run: node action/test/assert.mjs respond "$FIXTURE"
+
+      - name: ignore a mention from someone without write access
+        id: stranger
+        uses: ./action
+        env:
+          HOUSTON_ACTION_EVENT_NAME: issue_comment
+          HOUSTON_ACTION_EVENT_PATH: ${{ env.FIXTURE }}/events/respond-stranger.json
+          FAKE_GH_LOG: ${{ env.FIXTURE }}/gh-respond-stranger.jsonl
+        with:
+          provider: mock
+          model: mock-model
+          base-url: ${{ env.MOCK_URL }}
+          working-directory: ${{ env.FIXTURE }}/repo
+      - env:
+          SKIPPED: ${{ steps.stranger.outputs.skipped }}
+        run: |
+          [ "$SKIPPED" = true ] || { echo "::error::a stranger's mention was not skipped"; exit 1; }
+          node action/test/assert.mjs respond-stranger "$FIXTURE"
+
+      - name: review a pull request
+        uses: ./action
+        env:
+          HOUSTON_ACTION_EVENT_NAME: pull_request
+          HOUSTON_ACTION_EVENT_PATH: ${{ env.FIXTURE }}/events/review.json
+          FAKE_GH_LOG: ${{ env.FIXTURE }}/gh-review.jsonl
+        with:
+          mode: review
+          provider: mock
+          model: mock-model
+          base-url: ${{ env.MOCK_URL }}
+          working-directory: ${{ env.FIXTURE }}/repo
+      - run: node action/test/assert.mjs review "$FIXTURE"
+
+      # post: false commits the fix on its branch but pushes nothing: the fixture has no remote.
+      - name: fix a failed CI run
+        id: fix
+        uses: ./action
+        env:
+          HOUSTON_ACTION_EVENT_NAME: workflow_run
+          HOUSTON_ACTION_EVENT_PATH: ${{ env.FIXTURE }}/events/fix-ci.json
+          FAKE_GH_LOG: ${{ env.FIXTURE }}/gh-fix-ci.jsonl
+        with:
+          mode: fix-ci
+          provider: mock
+          model: mock-model
+          base-url: ${{ env.MOCK_URL }}
+          working-directory: ${{ env.FIXTURE }}/repo
+          verify: node check.mjs
+          post: 'false'
+      - env:
+          REPLY_FILE: ${{ steps.fix.outputs.reply-file }}
+        run: node action/test/assert.mjs fix-ci "$FIXTURE"
+
+      - name: Show the mock model's log on failure
+        if: failure()
+        run: cat "$RUNNER_TEMP/mock.out" || true

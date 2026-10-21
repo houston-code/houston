@@ -1,0 +1,37 @@
+# One Houston review comment on each pull request.
+#
+# Pull requests from forks are skipped: GitHub gives their pull_request runs no secrets and
+# a read-only token, and this workflow must never move to pull_request_target to get them.
+name: Houston (review)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: houston-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # The review diffs against the base commit, so it must be in the checkout.
+          fetch-depth: 0
+      # Pin the full commit SHA of the release tag in your workflow (see action/README.md).
+      - uses: houston-code/houston/action@v0.10.0 # zizmor: ignore[unpinned-uses] example only
+        with:
+          mode: review
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          max-cost: '2'
+          prompt: Focus on correctness and security. Skip style nits.
