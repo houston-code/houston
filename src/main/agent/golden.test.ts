@@ -40,6 +40,9 @@ import type {
   ToolSchema
 } from '@shared/agent'
 import type { ApprovalPolicy } from '@shared/types'
+import { estimateTokens, estimateToolTokens } from './compaction'
+import { FIND_TOOLS_NAME } from './lazy-mcp'
+import { getTool } from './tools'
 import { resetCaptureBackend, setCaptureBackend } from './viewlocalhost'
 import { resetMockupBackend, setMockupBackend } from './mockupRender'
 import { resetSpawnBackend, setSpawnBackend } from './spawn'
@@ -434,6 +437,11 @@ describe('agent behavior goldens', () => {
     await expect(JSON.stringify(r.requests[0].tools, null, 2) + '\n').toMatchFileSnapshot(
       'goldens/toolset.desktop.json'
     )
+    // The deferred tools' full schemas, sent once the model loads them through
+    // find_tools: still prompt text, so pinned verbatim too.
+    const advertised = new Set(r.requests[0].tools.map((t) => t.name))
+    const deferred = offeredSchemas(r.requests[0].tools).filter((t) => !advertised.has(t.name))
+    await expect(JSON.stringify(deferred, null, 2) + '\n').toMatchFileSnapshot('goldens/toolset.desktop.deferred.json')
   })
 
   it('approval flow (ask policy): one write allowed, one denied', async () => {
@@ -602,6 +610,81 @@ describe('agent behavior goldens', () => {
   })
 })
 
+// ---- fixed per-request overhead ----
+
+/**
+ * Ceiling on the fixed overhead (system prompt plus tool schemas) every request
+ * pays before the first message, per client config, in the loop's own token
+ * estimate. A local model with a 32k window loses this much to Houston before the
+ * conversation starts, and an uncached request bills it in full. Raising a ceiling
+ * is allowed, but it is a decision: make it in the PR that needs the room, with
+ * the reason, rather than letting the prompt or the eager toolset creep.
+ */
+const OVERHEAD_BUDGET_TOKENS: Record<string, number> = {
+  desktop: 9_300,
+  cli: 8_700,
+  headless: 8_400,
+  'plan-mode': 10_000
+}
+
+describe('fixed per-request overhead', () => {
+  it('stays within its budget per client config and is pinned in the goldens', async () => {
+    const configs: {
+      label: string
+      wire: () => void
+      policy?: ApprovalPolicy
+      unattended?: boolean
+      conversation: boolean
+    }[] = [
+      { label: 'desktop', wire: configureDesktopBackends, conversation: true },
+      { label: 'cli', wire: configureCliBackends, conversation: false },
+      { label: 'headless', wire: configureCliBackends, unattended: true, conversation: false },
+      { label: 'plan-mode', wire: configureDesktopBackends, policy: 'plan', conversation: true }
+    ]
+    const rows: string[] = []
+    const over: string[] = []
+    for (const c of configs) {
+      resetCaptureBackend()
+      resetMockupBackend()
+      resetSpawnBackend()
+      resetSchedulerBackend()
+      desktopClient = false
+      c.wire()
+      const r = await runScenario({
+        turns: [[{ type: 'text', text: 'ok' }, doneTurn()]],
+        ...(c.conversation ? { conversationId: GOLDEN_CONVERSATION_ID } : {}),
+        ...(c.policy ? { policy: c.policy } : {}),
+        ...(c.unattended ? { unattended: true } : {})
+      })
+      const req = r.requests[0]
+      const system = norm(req.system)
+      const promptTokens = estimateTokens(system, [])
+      const toolTokens = estimateToolTokens(req.tools)
+      const total = promptTokens + toolTokens
+      rows.push(
+        `${c.label}: total ${total} tokens = system prompt ${promptTokens} (${system.length} chars) + ` +
+          `${req.tools.length} tool schemas ${toolTokens} (${JSON.stringify(req.tools).length} chars)`
+      )
+      if (total > OVERHEAD_BUDGET_TOKENS[c.label]) {
+        over.push(`${c.label}: ${total} > ${OVERHEAD_BUDGET_TOKENS[c.label]}`)
+      }
+    }
+    const doc = [
+      '# fixed per-request overhead',
+      '',
+      'The system prompt plus the tool schemas advertised on the first request of a',
+      'plain turn, per client config, in the loop\'s ~4 chars/token estimate',
+      '(compaction.ts estimateTokens + estimateToolTokens). No rules file or git',
+      'snapshot, so this is the floor every request pays.',
+      '',
+      ...rows,
+      ''
+    ].join('\n')
+    await expect(doc).toMatchFileSnapshot('goldens/request-overhead.txt')
+    expect(over).toEqual([])
+  })
+})
+
 // ---- prompt/toolset drift guard ----
 
 /** Every snake_case identifier in a text: the shape of every multi-word tool and parameter name. */
@@ -631,11 +714,24 @@ function schemaVocabulary(schema: unknown, out: Set<string>): void {
 }
 
 /**
- * The snake_case identifiers a system prompt mentions that are neither a tool the
- * same request advertises nor a parameter (or enum value) of one: in practice, a
- * tool the prompt tells the model to use that this run doesn't offer.
+ * Every tool schema a request offers: the ones it advertises, plus the deferred
+ * built-ins its find_tools catalog lists (each loadable on demand, so the prompt may
+ * name it and its parameters).
  */
-function unadvertisedMentions(system: string, tools: ToolSchema[]): string[] {
+function offeredSchemas(tools: ToolSchema[]): ToolSchema[] {
+  const find = tools.find((t) => t.name === FIND_TOOLS_NAME)
+  const deferred = [...(find?.description.matchAll(/^- ([a-z_]+): /gm) ?? [])].map((m) => getTool(m[1])!.schema)
+  return [...tools, ...deferred]
+}
+
+/**
+ * The snake_case identifiers a system prompt mentions that are neither a tool the
+ * same request offers (advertised or in its find_tools catalog) nor a parameter (or
+ * enum value) of one: in practice, a tool the prompt tells the model to use that
+ * this run doesn't offer.
+ */
+function unadvertisedMentions(system: string, advertised: ToolSchema[]): string[] {
+  const tools = offeredSchemas(advertised)
   const known = new Set(tools.map((t) => t.name))
   for (const t of tools) schemaVocabulary(t.parameters, known)
   return snakeCaseIdentifiers(system).filter((id) => !known.has(id))
@@ -735,15 +831,20 @@ describe('system prompt names only tools the run offers', () => {
     const dropped = req.tools.filter((t) => t.name !== 'apply_patch')
     expect(unadvertisedMentions(system, dropped)).toEqual(['apply_patch'])
 
-    const renamed = req.tools.map((t) => (t.name === 'view_localhost' ? { ...t, name: 'view_page' } : t))
-    expect(unadvertisedMentions(system, renamed)).toEqual(['view_localhost'])
+    const renamed = req.tools.map((t) => (t.name === 'web_search' ? { ...t, name: 'web_lookup' } : t))
+    expect(unadvertisedMentions(system, renamed)).toEqual(['web_search'])
 
-    const runView = req.tools.find((t) => t.name === 'gh_run_view')!
-    const { log_failed: _logFailed, ...rest } = (runView.parameters as { properties: Record<string, unknown> })
-      .properties
-    const paramDropped = req.tools.map((t) =>
-      t === runView ? { ...t, parameters: { ...t.parameters, properties: rest } } : t
+    // A deferred tool counts only while its find_tools catalog lists it.
+    const find = req.tools.find((t) => t.name === FIND_TOOLS_NAME)!
+    const uncatalogued = req.tools.map((t) =>
+      t === find ? { ...t, description: t.description.replace(/^- view_localhost: .*$/m, '') } : t
     )
-    expect(unadvertisedMentions(system, paramDropped)).toEqual(['log_failed'])
+    expect(unadvertisedMentions(system, uncatalogued)).toContain('view_localhost')
+
+    // A parameter the prompt names (edit_file's and multi_edit's old_string), renamed.
+    const paramRenamed = req.tools.map(
+      (t) => JSON.parse(JSON.stringify(t).replaceAll('"old_string"', '"old_text"')) as ToolSchema
+    )
+    expect(unadvertisedMentions(system, paramRenamed)).toEqual(['old_string'])
   })
 })

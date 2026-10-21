@@ -1,0 +1,11 @@
+# fixed per-request overhead
+
+The system prompt plus the tool schemas advertised on the first request of a
+plain turn, per client config, in the loop's ~4 chars/token estimate
+(compaction.ts estimateTokens + estimateToolTokens). No rules file or git
+snapshot, so this is the floor every request pays.
+
+desktop: total 8835 tokens = system prompt 4025 (16100 chars) + 20 tool schemas 4810 (19238 chars)
+cli: total 8213 tokens = system prompt 3542 (14166 chars) + 20 tool schemas 4671 (18683 chars)
+headless: total 7969 tokens = system prompt 3573 (14291 chars) + 19 tool schemas 4396 (17581 chars)
+plan-mode: total 9594 tokens = system prompt 4310 (17237 chars) + 21 tool schemas 5284 (21136 chars)

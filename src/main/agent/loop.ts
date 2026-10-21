@@ -84,7 +84,14 @@ import {
 } from './readCache'
 import { createShellSession } from './shell-session'
 import { getMcpToolDefs } from '../mcp/manager'
-import { MCP_LAZY_THRESHOLD, makeFindToolsDef } from './lazy-mcp'
+import {
+  MCP_LAZY_THRESHOLD,
+  builtinCatalogEntries,
+  loadedDeferredTools,
+  makeFindToolsDef,
+  mcpCatalogEntries
+} from './lazy-mcp'
+import { isDeferredBuiltin } from './deferred-tools'
 import { isParallelizableRead, partitionCalls } from './scheduling'
 import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import {
@@ -168,6 +175,7 @@ import {
   buildSummaryRequestMessages,
   compactionAnchor,
   estimateTokens,
+  estimateToolTokens,
   evictStaleToolResults,
   evictionBoundary,
   findCompactionCut,
@@ -1020,7 +1028,7 @@ export async function startRun(
     // The built-in tools this run offers (present_plan only in plan mode). The
     // prompt is built from the same list, so it never names a tool the model
     // can't call.
-    const builtinSchemas = builtinToolset({
+    const builtinDefs = builtinToolset({
       localhostCapture: localhostCaptureAvailable,
       // Only the desktop app draws image results as a gallery; in a terminal client
       // show_images and render_mockup would be a list of file names.
@@ -1036,14 +1044,20 @@ export async function startRun(
       // Nobody can answer a question on an unattended run; the prompt built from
       // this list then says so instead of naming ask_user.
       askUser: req.unattended !== true
-    }).map((t) => t.schema)
+    })
+    // Every built-in the run offers, deferred ones included: the prompt and the
+    // skills are written against what the model can call, loaded yet or not.
+    const builtinNames = builtinDefs.map((t) => t.schema.name)
+    // Only the eager ones are advertised up front; the rest are listed in the
+    // find_tools catalog and advertised once loaded (deferred-tools.ts).
+    const builtinSchemas = builtinDefs.filter((t) => !isDeferredBuiltin(t.schema.name)).map((t) => t.schema)
     // Merge Houston's built-in skills (e.g. houston-guide) with the workspace's
     // own for the agent runtime; `/skills` still lists only the workspace's. A
     // built-in tied to a tool this run doesn't offer (render-ui needs show_images)
     // is left out.
     const skills = withBuiltinSkills(
       await loadSkills(workspace),
-      builtinSchemas.map((s) => s.name)
+      builtinNames
     )
     // Local plugins (.houston/plugins/*.js) register observational lifecycle
     // hooks. They are executable JS run in-process and `vm` is not a security
@@ -1095,7 +1109,7 @@ export async function startRun(
       formatPromptSnapshot(promptSnapshot),
       req.providerId,
       req.model,
-      builtinSchemas.map((s) => s.name),
+      builtinNames,
       // The prompt states the OS and whether run_shell is confined, so a host
       // without an OS sandbox is never told its commands are sandboxed.
       { platform: hostPlatform(), sandboxBackend: activeBackendId() },
@@ -1103,11 +1117,6 @@ export async function startRun(
       req.imageGallery === true ? { html: settings.htmlVisuals === true } : undefined
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
-    // When a lot of MCP tools are connected, sending every schema on every turn
-    // bloats the context window (and bills BYO-model users) for tools the model
-    // may never touch. Above a threshold we defer them: the model gets a compact
-    // catalog via a `find_tools` meta-tool and loads only what it needs, which
-    // then rides along on later turns. At/below the threshold nothing changes.
     // A trusted folder's project MCP servers join the user's own under a `proj-`
     // id prefix (user servers win collisions); untrusted folders contribute none.
     const mcpToolDefs = await getMcpToolDefs(
@@ -1115,9 +1124,15 @@ export async function startRun(
         ? mergeProjectMcpServers(settings.mcpServers, projectConfig.elevated.mcpServers)
         : settings.mcpServers
     )
+    // Lazy loading (lazy-mcp.ts): every schema rides along on every request, so the
+    // deferred built-ins, and MCP tools once more than a threshold are connected, are
+    // listed in the find_tools catalog instead and advertised only once loaded. At
+    // or below the threshold every MCP schema is sent as before.
     const lazyMcp = mcpToolDefs.length > MCP_LAZY_THRESHOLD
-    const revealedMcp = new Set<string>()
-    const findTools = lazyMcp ? makeFindToolsDef(mcpToolDefs, revealedMcp) : null
+    const deferredBuiltins = builtinCatalogEntries(builtinDefs)
+    const deferredMcp = lazyMcp ? mcpCatalogEntries(mcpToolDefs) : []
+    const catalog = [...deferredBuiltins, ...deferredMcp]
+    const findTools = catalog.length ? makeFindToolsDef(deferredBuiltins, deferredMcp) : null
     const lookupTool = (name: string): ToolDef | undefined =>
       getTool(name) ??
       (findTools && name === findTools.schema.name ? findTools : undefined) ??
@@ -1127,15 +1142,16 @@ export async function startRun(
     const hasMatchingHook = (name: string): boolean =>
       matchingHooks(hooks, 'PreToolUse', name).length > 0 ||
       matchingHooks(hooks, 'PostToolUse', name).length > 0
-    // The schemas advertised to the model this turn: built-ins, plus either every
-    // MCP schema (small setups) or just find_tools + already-revealed MCP tools
-    // (lazy). Recomputed each turn so tools revealed via find_tools then appear.
+    // The schemas advertised to the model this turn: the eager built-ins, every MCP
+    // schema when there are few, find_tools, then whatever the conversation has
+    // loaded, in load order. Recomputed each step from the full log, so a tool loads
+    // on the step after find_tools matches it and stays loaded on later runs; the
+    // loaded tail only ever grows, so the prefix the provider cached never moves.
     const buildTools = (): ToolSchema[] => [
       ...builtinSchemas,
+      ...(lazyMcp ? [] : mcpToolDefs.map((d) => d.schema)),
       ...(findTools ? [findTools.schema] : []),
-      ...mcpToolDefs
-        .filter((d) => !lazyMcp || revealedMcp.has(d.schema.name))
-        .map((d) => d.schema)
+      ...loadedDeferredTools(messages, catalog).map((d) => d.schema)
     ]
     // A prior run interrupted while a tool call was pending (commonly parked on an
     // approval prompt, or a long-blocking present_plan / ask_user, when the app
@@ -2553,12 +2569,12 @@ export async function startRun(
         persist(messages)
       }
 
-      // The tool schemas for this turn. Recomputed each iteration because lazy MCP
-      // loading grows the set as find_tools reveals tools. They ride along on every
+      // The tool schemas for this turn. Recomputed each iteration because lazy
+      // loading grows the set as find_tools loads tools. They ride along on every
       // request but aren't part of the message window, so fold their size into the
       // compaction estimate; real provider usage supersedes it once known.
       const tools = buildTools()
-      const toolTokens = Math.ceil(JSON.stringify(tools).length / 4)
+      const toolTokens = estimateToolTokens(tools)
 
       // Shrink the window before it overflows the model's context window: first by
       // stubbing stale tool results (cheap, no model call), then, unless that alone

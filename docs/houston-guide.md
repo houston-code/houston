@@ -971,10 +971,10 @@ ignored.
 Connect Model Context Protocol servers in Settings: a local **stdio** process or
 a remote **HTTP** (streamable) or **SSE** endpoint. Their tools are offered to
 the agent namespaced as `mcp__<id>__<tool>` and always require approval. When
-many MCP tools are connected, Houston loads their schemas lazily: above a
-threshold the agent gets a compact catalog plus a `find_tools` meta-tool and
-pulls in only the tool definitions it needs, instead of sending every schema on
-every request.
+many MCP tools are connected (more than 15), Houston loads their schemas lazily:
+they join the `find_tools` catalog described under *Tools loaded on demand*, and
+the agent pulls in only the tool definitions it needs, instead of sending every
+schema on every request.
 
 **Authentication.** Remote servers take custom headers (e.g. a static
 `Authorization: Bearer` token), or **OAuth** for servers that require a sign-in:
@@ -1208,6 +1208,17 @@ conventions, not as authority to change tool or permission behavior.
   The full transcript stays on screen; only what is sent to the model is
   compacted. Set a fixed token threshold or disable it in Settings, *Context
   window*.
+- **Tools loaded on demand.** Every tool definition sent to the model costs
+  context on every request, so Houston preloads only the tools a coding task uses
+  all the time (reading, searching, editing, the shell, the todo list, questions,
+  plans, research subagents, skills, the web, and git status and diff). The rest
+  (the GitHub tools, scheduled runs, spawned and proposed sessions, the localhost
+  preview, images and mockups, notebook editing, `ast_grep`, `review_changes`,
+  `recall_history`, `pr_sweep`, and writable subagents) are listed with a one-line
+  summary in a `find_tools` catalog, and the agent loads one when it needs it.
+  A loaded tool stays loaded for the rest of the conversation. Loading changes
+  only what the model sees: approval modes, plan mode, permission rules, and hooks
+  apply to these tools exactly as to the preloaded ones.
 - **Worktrees.** In a git repo, a new chat defaults to running in a fresh,
   isolated worktree on its own branch under `.houston/worktrees/`, so the agent's
   edits never touch the current checkout. Untick *New worktree* to work in the

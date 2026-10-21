@@ -3001,7 +3001,117 @@ describe('lazy MCP tool loading', () => {
     await run({ provider })
     expect(seen[0]).toContain('srv:tool0')
     expect(seen[0]).toContain('srv:tool2')
-    expect(seen[0]).not.toContain('find_tools')
+    // find_tools is still offered for the deferred built-ins, but lists no MCP tool.
+    expect(seen[0].indexOf('srv:tool2')).toBeLessThan(seen[0].indexOf('find_tools'))
+  })
+})
+
+describe('lazily loaded built-in tools', () => {
+  /** A provider that records the tool names offered on each request. */
+  function recorder(turns: ProviderStreamEvent[][]): { provider: Provider; seen: string[][] } {
+    const seen: string[][] = []
+    let i = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        seen.push((req.tools ?? []).map((t) => t.name))
+        const turn = turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]
+        for (const ev of turn) yield ev
+      }
+    }
+    return { provider, seen }
+  }
+  const call = (id: string, name: string, args: Record<string, unknown>): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name, arguments: args } },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const load = (id: string, query: string): ProviderStreamEvent[] => call(id, 'find_tools', { query })
+  const editCell = { path: 'nb.ipynb', cell: 1, source: 'print(2)' }
+  const notebook = JSON.stringify({
+    cells: [{ cell_type: 'code', source: ['print(1)'], metadata: {}, outputs: [], execution_count: null }],
+    metadata: {},
+    nbformat: 4,
+    nbformat_minor: 5
+  })
+  const resultOf = (r: RunResult, name: string): { ok: boolean; output: string } =>
+    r.events.find((e) => e.type === 'tool_result' && e.name === name) as { ok: boolean; output: string }
+
+  it('advertises a deferred tool only once loaded, appended last, and keeps it on later runs', async () => {
+    const first = recorder([load('f1', 'notebook_edit'), [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]])
+    const r1 = await run({ provider: first.provider })
+    expect(first.seen[0]).toContain('find_tools')
+    expect(first.seen[0]).not.toContain('notebook_edit')
+    expect(first.seen[0]).not.toContain('gh_pr_create')
+    // Loaded on the next step, after every schema the first request sent, so the
+    // prefix the provider cached is unchanged.
+    expect(first.seen[1]).toEqual([...first.seen[0], 'notebook_edit'])
+
+    // A later run of the same chat advertises the same tools in the same order.
+    const second = recorder([[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]])
+    await run({ provider: second.provider, messages: [...r1.messages, { role: 'user', content: 'again' }] })
+    expect(second.seen[0]).toEqual(first.seen[1])
+  })
+
+  it('a find_tools query that matches nothing loads nothing', async () => {
+    const { provider, seen } = recorder([load('f1', 'no-such-tool')])
+    const r = await run({ provider })
+    expect(resultOf(r, 'find_tools').output).toContain('No tools matched')
+    expect(seen[1]).toEqual(seen[0])
+  })
+
+  it('asks for approval before a loaded write tool runs, and a denial leaves the file alone', async () => {
+    writeFileSync(join(ws, 'nb.ipynb'), notebook)
+    const r = await run({
+      policy: 'ask',
+      turns: [load('f1', 'notebook_edit'), call('n1', 'notebook_edit', editCell)],
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(r.events.filter((e) => e.type === 'tool_approval').map((e) => (e as { name: string }).name)).toEqual([
+      'notebook_edit'
+    ])
+    expect(resultOf(r, 'notebook_edit').ok).toBe(false)
+    expect(resultOf(r, 'notebook_edit').output).toContain('Denied by the user.')
+    expect(readFileSync(join(ws, 'nb.ipynb'), 'utf8')).toBe(notebook)
+  })
+
+  it('refuses a loaded write tool and a loaded GitHub mutation in plan mode, without prompting', async () => {
+    writeFileSync(join(ws, 'nb.ipynb'), notebook)
+    const r = await run({
+      policy: 'plan',
+      turns: [
+        load('f1', 'notebook_edit, gh_pr_create'),
+        call('n1', 'notebook_edit', editCell),
+        call('g1', 'gh_pr_create', { title: 'x' })
+      ]
+    })
+    expect(types(r)).not.toContain('tool_approval')
+    expect(resultOf(r, 'notebook_edit').output).toMatch(/Plan mode/)
+    expect(resultOf(r, 'gh_pr_create').output).toMatch(/Plan mode/)
+    expect(readFileSync(join(ws, 'nb.ipynb'), 'utf8')).toBe(notebook)
+  })
+
+  it('applies a permission deny rule to a loaded tool exactly as to an eager one', async () => {
+    writeFileSync(join(ws, 'nb.ipynb'), notebook)
+    h.settings.permissionRules = [{ action: 'deny', tool: 'notebook_edit', match: '*' }]
+    try {
+      const r = await run({
+        policy: 'full-auto',
+        turns: [load('f1', 'notebook_edit'), call('n1', 'notebook_edit', editCell)]
+      })
+      expect(types(r)).not.toContain('tool_approval')
+      expect(resultOf(r, 'notebook_edit')).toMatchObject({ ok: false, output: 'Denied by a permission rule.' })
+      expect(readFileSync(join(ws, 'nb.ipynb'), 'utf8')).toBe(notebook)
+    } finally {
+      h.settings.permissionRules = []
+    }
+  })
+
+  it('gates a deferred tool called before it was loaded the same way, then advertises it', async () => {
+    writeFileSync(join(ws, 'nb.ipynb'), notebook)
+    const { provider, seen } = recorder([call('n1', 'notebook_edit', editCell)])
+    const r = await run({ provider, policy: 'plan' })
+    expect(resultOf(r, 'notebook_edit').output).toMatch(/Plan mode/)
+    // The history now holds a call to it, so the next request declares it.
+    expect(seen[1].at(-1)).toBe('notebook_edit')
   })
 })
 
@@ -7038,17 +7148,18 @@ describe('session proposals, forked spawns, and finished-child reports', () => {
   })
 
   it('does not offer propose_session to a run with no saved chat', async () => {
-    const tools: string[][] = []
+    // Both are deferred, so "offered" means listed in the find_tools catalog.
+    let catalog = ''
     await run({
       provider: {
         async *streamChat(req) {
-          tools.push((req.tools ?? []).map((t) => t.name))
+          catalog = req.tools?.find((t) => t.name === 'find_tools')?.description ?? ''
           yield { type: 'done', stopReason: 'end_turn' }
         }
       }
     })
-    expect(tools[0]).toContain('spawn_session')
-    expect(tools[0]).not.toContain('propose_session')
+    expect(catalog).toContain('- spawn_session: ')
+    expect(catalog).not.toContain('propose_session')
   })
 
   it("hands a forked spawn this chat's history, minus the turn that is handing off", async () => {

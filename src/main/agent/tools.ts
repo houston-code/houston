@@ -464,7 +464,7 @@ const readFile: ToolDef = {
   schema: {
     name: 'read_file',
     description:
-      'Read a file within the project. Text comes back with each line prefixed by its line number and a tab (e.g. "  12\\tconst x = 1"); the prefix is not part of the file, so leave it out of edit_file and multi_edit strings. Pass offset/limit (1-based line numbers) to read just a slice of a large file; output that runs too long is cut at a whole line, with a note giving the offset to continue from. Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly. Jupyter notebooks (.ipynb) are returned as numbered cells with their source and a summary of their outputs; edit those cells with notebook_edit. Files that are not text are reported as binary rather than returned as garbled bytes.',
+      'Read a file within the project. Text comes back with each line prefixed by its line number and a tab (e.g. "  12\\tconst x = 1"); the prefix is not part of the file, so leave it out of edit_file and multi_edit strings. Pass offset/limit (1-based line numbers) to read just a slice of a large file; output that runs too long is cut at a whole line, with a note giving the offset to continue from. Images (PNG/JPEG/GIF/WebP) and PDFs are returned as attachments the model can view directly. Jupyter notebooks (.ipynb) are returned as numbered cells with their source and a summary of their outputs; edit those cells with notebook_edit.',
     parameters: objectSchema(
       {
         path: { type: 'string', description: 'Path relative to the project root.' },
@@ -1624,7 +1624,7 @@ const runShell: ToolDef = {
   schema: {
     name: 'run_shell',
     description:
-      'Run a shell command in the project directory and return its combined stdout/stderr and exit code. Where the host has an OS sandbox, the command can write only to the project and temp dirs, and network is off until the user grants it (granted network reaches only an allowlist of dev-infrastructure domains, so a refused destination is policy, not an outage). On a host without an OS sandbox (e.g. Windows) it runs unconfined with your full privileges and always requires approval. Foreground commands share a session within a turn, so `cd` and exported variables carry over to later calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command stops after 300s by default (raise `timeout_seconds` for a slow one-shot such as a cold `npm install`); GNU `timeout` is not available, so don\'t wrap commands in it. Use background:true for anything open-ended (a dev server, a watcher, a build of unknown length): it returns a shell id at once for read_shell_output and kill_shell. Never background with `&`: a trailing `&` on a foreground command loses its exit status, and a background:true command containing `&` is refused because the process would be orphaned. In a background command, make the server the last command and keep its output on stdout rather than in a file, so read_shell_output and the Preview pane can see it.',
+      'Run a shell command in the project directory and return its combined stdout/stderr and exit code. Foreground commands share a session within a turn, so `cd` and exported variables carry over to later calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command stops after 300s by default (raise `timeout_seconds` for a slow one-shot such as a cold `npm install`); GNU `timeout` is not available, so don\'t wrap commands in it. Use background:true for anything open-ended (a dev server, a watcher, a build of unknown length): it returns a shell id at once for read_shell_output and kill_shell. Never background with `&`: a trailing `&` on a foreground command loses its exit status, and a background:true command containing `&` is refused because the process would be orphaned. In a background command, make the server the last command and keep its output on stdout rather than in a file, so read_shell_output and the Preview pane can see it.',
     parameters: objectSchema(
       {
         command: { type: 'string', description: 'The shell command to run (with bash -c, or cmd.exe on a Windows host without Git Bash).' },
@@ -2504,7 +2504,7 @@ const skillTool: ToolDef = {
   schema: {
     name: 'skill',
     description:
-      "Load a project skill's full instructions by name and follow them. Skills are reusable procedures defined for this project (they're listed in your context when any exist). When a task matches a listed skill, invoke this before doing the work to get the complete SKILL.md, then follow it. Returns the instructions, or the list of available skills if the name is unknown.",
+      "Load a skill's full instructions (its SKILL.md) by name, then follow them. Skills are listed in your context when any exist. Returns the instructions, or the list of available skills if the name is unknown.",
     parameters: objectSchema(
       {
         name: {
@@ -4443,8 +4443,7 @@ const askUser: ToolDef = {
       'Ask the user a question and wait for their answer before continuing. Use this to resolve a ' +
       'genuine ambiguity or get a decision only the user can make (which option, which approach, a ' +
       'missing detail), not for routine narration or confirmations you can infer. Offer 2–4 concise ' +
-      'options; the user may also type their own answer. Returns the user’s answer as text. Available ' +
-      'in Plan mode, so use it to settle open questions before presenting a plan.',
+      'options; the user may also type their own answer. Returns the user’s answer as text.',
     parameters: objectSchema(
       {
         question: {

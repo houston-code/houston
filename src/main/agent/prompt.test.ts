@@ -191,7 +191,7 @@ describe('buildSystemPrompt', () => {
     expect(noCapture).not.toContain('view_localhost')
     // The neighbouring verification bullets must survive the removal.
     expect(noCapture).toContain('Never describe unverified work as tested or working.')
-    expect(noCapture).toContain('- For a large or security-sensitive change, review_changes')
+    expect(noCapture).toContain('- For a large or security-sensitive change, run review_changes')
   })
 
   it('points at render-ui and show_images only where show_images is offered', () => {
