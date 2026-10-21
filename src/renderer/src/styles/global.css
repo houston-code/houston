@@ -692,6 +692,9 @@ body.is-resizing {
 .conv__branch {
   color: var(--accent);
 }
+.conv__branch-icon {
+  margin-right: 3px;
+}
 .conv__menu-wrap {
   position: relative;
   flex-shrink: 0;
@@ -964,7 +967,9 @@ body.is-resizing {
 .sidebar__settings {
   width: 100%;
 }
-.sidebar__share {
+.sidebar__share,
+.sidebar__import,
+.sidebar__settings {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1213,7 +1218,6 @@ body.is-resizing {
 }
 .control__icon {
   flex-shrink: 0;
-  font-size: 11px;
 }
 .control__text {
   white-space: nowrap;

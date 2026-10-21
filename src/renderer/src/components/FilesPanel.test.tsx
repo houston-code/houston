@@ -45,6 +45,15 @@ describe('FilesPanel', () => {
     expect(screen.getByText('README.md')).toBeInTheDocument()
   })
 
+  it('names the refresh button for screen readers and draws it as an icon', async () => {
+    installApi({ '': [file('README.md', 'README.md')] })
+    render(<FilesPanel workspace="/repo" onClose={vi.fn()} />)
+    await screen.findByText('README.md')
+    const refresh = screen.getByRole('button', { name: 'Refresh' })
+    expect(refresh.querySelector('svg[data-icon="refresh"]')).toBeInTheDocument()
+    expect(refresh).not.toHaveTextContent('⟳')
+  })
+
   it('names the workspace folder in the subtitle', async () => {
     installApi({ '': [] })
     render(<FilesPanel workspace="/repo" onClose={vi.fn()} />)

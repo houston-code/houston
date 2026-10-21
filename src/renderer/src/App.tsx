@@ -110,6 +110,7 @@ import {
   type ChecklistFacts
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
+import { Icon } from './components/Icon'
 import type { WhatsNew } from '@shared/update'
 
 // These overlays aren't on the initial render path, so load them as separate
@@ -2002,7 +2003,7 @@ export default function App(): JSX.Element {
           <div className="checkpoint-bar">
             <span className="checkpoint-bar__label">The last turn failed.</span>
             <button className="btn btn--sm" onClick={onRetry}>
-              ⟳ Retry
+              <Icon name="refresh" /> Retry
             </button>
           </div>
         )}
