@@ -320,7 +320,9 @@ export function toolArgHint(args: Record<string, unknown>): string {
  */
 export function renderApprovalPrompt(
   ev: Extract<AgentEvent, { type: 'tool_approval' }>,
-  paint: Painter
+  paint: Painter,
+  /** The arrow-key picker lists the choices itself; the typed-answer keys would repeat them. */
+  opts: { picker?: boolean } = {}
 ): string {
   // The one-time full-auto shell-network consent gates the sandbox's network, not the
   // command — frame it as a network grant so "deny" reads as "run offline", not "block".
@@ -330,7 +332,8 @@ export function renderApprovalPrompt(
       '  Shell runs in a sandbox that can read your files; declining runs commands offline.',
       'dim'
     )
-    return `\n${head}\n  ${ev.summary}\n${note}\n${paint('  [y] allow network   [n] no network   [a] allow for run', 'dim')}`
+    const keys = opts.picker ? '' : `\n${paint('  [y] allow network   [n] no network   [a] allow for run', 'dim')}`
+    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
   }
   const warn =
     ev.kind === 'shell' && ev.sandboxed === false
@@ -347,11 +350,38 @@ export function renderApprovalPrompt(
     : ''
   const head = paint(`Approve ${ev.name}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
-  return (
-    `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}\n` +
-    paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim') +
-    paint('\n  …or type why not, and that goes back to the agent', 'dim')
-  )
+  const keys = opts.picker
+    ? ''
+    : `\n${paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim')}` +
+      paint('\n  …or type why not, and that goes back to the agent', 'dim')
+  return `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}${keys}`
+}
+
+/**
+ * The line recording how an approval was answered, as the desktop's card shows its
+ * outcome once decided. Without it the scrollback kept only the menu, and Esc
+ * (which denies) left no sign of what happened.
+ */
+export function approvalOutcome(
+  decision: ToolApprovalDecision,
+  opts: { shellNetwork?: boolean; note?: string } = {}
+): string {
+  if (opts.shellNetwork) {
+    if (decision === 'deny') return 'Running offline'
+    return decision === 'always' ? 'Network allowed for this run' : 'Network allowed'
+  }
+  switch (decision) {
+    case 'allow':
+      return 'Allowed'
+    case 'always':
+      return 'Allowed for this run'
+    case 'rule-allow':
+      return 'Always allowed (rule saved)'
+    case 'rule-deny':
+      return 'Always denied (rule saved)'
+    case 'deny':
+      return opts.note ? `Denied: ${opts.note}` : 'Denied'
+  }
 }
 
 /**
@@ -3569,7 +3599,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_approval':
           enqueue(async () => {
             // Context (name, kind, unsandboxed warning) + the diff for a write.
-            deps.io.out(`${renderApprovalPrompt(e, paint)}\n`)
+            deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select })}\n`)
             if (e.kind === 'write') {
               // Prefer the main process's preview: it is diffed against the files'
               // actual contents, so an overwrite shows what changed rather than the
@@ -3595,6 +3625,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               // reason" there would be nonsense, so keep that prompt to three options.
               const r = await deps.io.select({
                 title: 'Choose:',
+                // Esc is a refusal here (the safe default), so the footer says so.
+                escLabel: e.shellNetwork ? 'run offline' : 'deny',
                 options: e.shellNetwork
                   ? [
                       { label: 'Allow network', value: 'allow' },
@@ -3627,6 +3659,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               decision = parsed.decision
               note = parsed.note
             }
+            const outcome = approvalOutcome(decision, { shellNetwork: e.shellNetwork, note })
+            deps.io.out(paint(`  ↳ ${stripControlChars(outcome)}\n`, decision === 'deny' || decision === 'rule-deny' ? 'yellow' : 'dim'))
             deps.resolveApproval(e.runId, e.callId, decision, note)
           })
           break
