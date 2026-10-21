@@ -7,6 +7,12 @@ import { fileURLToPath } from 'node:url'
 
 const script = resolve(dirname(fileURLToPath(import.meta.url)), 'dist-with-retry.sh')
 const FLAKE = 'dmgbuild.core.DMGError: Unable to detach device cleanly: hdiutil: couldn\'t eject "disk2" - Resource busy'
+// The staple flake from a v0.9.0 publish (darwin-x64), trimmed to the lines that matter.
+const STAPLE_FLAKE = [
+  'error is Error Domain=NSURLErrorDomain Code=-1005 "The network connection was lost."',
+  "CloudKit's response is inconsistent with expections: (null)",
+  'The staple and validate action failed! Error 68.'
+].join('\n')
 
 // Stub `npm` fails its first $FAILS calls with $MSG; stub `hdiutil` lists one simulator
 // runtime image and one image from the workspace, and records every other call.
@@ -85,6 +91,30 @@ describe.skipIf(process.platform === 'win32')('dist-with-retry.sh', () => {
 
   it('gives up after three attempts', () => {
     expect(run({ fails: 3 })).toMatchObject({ status: 1, attempts: 3 })
+  })
+
+  it('retries a stapling network failure on macOS without touching disk images', () => {
+    const r = run({ fails: 2, msg: STAPLE_FLAKE })
+    expect(r).toMatchObject({ status: 0, attempts: 3, hdiutil: [] })
+    expect(r.out).toContain('::warning::stapling lost its connection to Apple on attempt 2 of 3, retrying')
+  })
+
+  it('gives up on stapling after three attempts', () => {
+    expect(run({ fails: 3, msg: STAPLE_FLAKE })).toMatchObject({ status: 1, attempts: 3 })
+  })
+
+  it('does not retry a stapling failure that is not a network error', () => {
+    const msg = 'The staple and validate action failed! Error 65.'
+    expect(run({ fails: 1, msg })).toMatchObject({ status: 1, attempts: 1 })
+    // Error 68 alone, without the lost connection, is not enough either.
+    expect(run({ fails: 1, msg: 'The staple and validate action failed! Error 68.' })).toMatchObject({
+      status: 1,
+      attempts: 1
+    })
+  })
+
+  it('does not retry a stapling failure off macOS', () => {
+    expect(run({ os: 'Linux', fails: 1, msg: STAPLE_FLAKE })).toMatchObject({ status: 1, attempts: 1 })
   })
 
   it('does not retry any other failure', () => {
