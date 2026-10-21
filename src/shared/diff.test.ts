@@ -99,12 +99,40 @@ describe('diffLines', () => {
     expect(diffLines('', '\n')).toEqual([{ type: 'add', text: '' }])
   })
 
-  it('falls back to a coarse diff for very large inputs without hanging', () => {
-    const big = Array.from({ length: 2500 }, (_, i) => `line ${i}`).join('\n')
-    const d = diffLines(big, `${big}\nextra`)
+  it('falls back to a coarse diff for a very large rewrite without hanging', () => {
+    const before = Array.from({ length: 2500 }, (_, i) => `old ${i}`).join('\n')
+    const after = Array.from({ length: 2600 }, (_, i) => `new ${i}`).join('\n')
+    const d = diffLines(before, after)
     // Coarse path: every old line deleted, every new line added.
     expect(d.filter((l) => l.type === 'del')).toHaveLength(2500)
-    expect(d.filter((l) => l.type === 'add')).toHaveLength(2501)
+    expect(d.filter((l) => l.type === 'add')).toHaveLength(2600)
+  })
+
+  it('diffs only the changed stretch of a large file', () => {
+    const lines = Array.from({ length: 3000 }, (_, i) => `line ${i}`)
+    const edited = [...lines]
+    edited[1500] = 'line 1500 CHANGED'
+    const d = diffLines(lines.join('\n'), edited.join('\n'))
+    expect(d.filter((l) => l.type === 'del')).toEqual([{ type: 'del', text: 'line 1500' }])
+    expect(d.filter((l) => l.type === 'add')).toEqual([{ type: 'add', text: 'line 1500 CHANGED' }])
+    expect(d).toHaveLength(3001)
+    // Appending to a large file is one added line, not the whole file twice.
+    const grown = diffLines(lines.join('\n'), `${lines.join('\n')}\nextra`)
+    expect(diffStat(grown)).toEqual({ added: 1, removed: 0 })
+  })
+
+  it('keeps the head and tail apart when the edit repeats a neighbouring line', () => {
+    expect(diffLines('a\nb\nb\nc', 'a\nb\nc')).toEqual([
+      { type: 'ctx', text: 'a' },
+      { type: 'ctx', text: 'b' },
+      { type: 'del', text: 'b' },
+      { type: 'ctx', text: 'c' }
+    ])
+    expect(diffLines('x\nx', 'x\nx\nx')).toEqual([
+      { type: 'ctx', text: 'x' },
+      { type: 'ctx', text: 'x' },
+      { type: 'add', text: 'x' }
+    ])
   })
 })
 
