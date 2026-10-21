@@ -91,6 +91,7 @@ import { Composer } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
+import { useUpdateBanner } from './hooks/useUpdateBanner'
 import { GetStarted } from './components/GetStarted'
 import { ConnectModel, providerShortName } from './components/ConnectModel'
 import { TipHost } from './components/TipHost'
@@ -109,13 +110,7 @@ import {
   type ChecklistFacts
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
-import type {
-  UpdateCheckResult,
-  UpdateDownloaded,
-  UpdateDownloadProgress,
-  UpdateInstallFailed,
-  WhatsNew
-} from '@shared/update'
+import type { WhatsNew } from '@shared/update'
 
 // These overlays aren't on the initial render path, so load them as separate
 // chunks fetched on first open instead of bloating the main bundle. SettingsModal
@@ -211,12 +206,7 @@ export default function App(): JSX.Element {
   const [matchIds, setMatchIds] = useState<Set<string> | null>(null)
   // Sidebar status filter: "active" hides archived chats; "archived" shows only them.
   const [statusFilter, setStatusFilter] = useState<ConversationStatusFilter>('active')
-  const [update, setUpdate] = useState<Extract<UpdateCheckResult, { status: 'available' }> | null>(
-    null
-  )
-  const [updateProgress, setUpdateProgress] = useState<UpdateDownloadProgress | null>(null)
-  const [updateDownloaded, setUpdateDownloaded] = useState<UpdateDownloaded | null>(null)
-  const [updateFailed, setUpdateFailed] = useState<UpdateInstallFailed | null>(null)
+  const updateBanner = useUpdateBanner()
   const [whatsNew, setWhatsNew] = useState<WhatsNew | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -324,35 +314,11 @@ export default function App(): JSX.Element {
     })
   }, [])
 
-  // Updates: subscribe to the on-launch auto-check, and pull any one-shot
-  // "What's new" staged after an upgrade-and-relaunch.
+  // Pull any one-shot "What's new" staged after an upgrade-and-relaunch.
   useEffect(() => {
-    const unsubAvailable = window.api.onUpdateAvailable((u) => {
-      setUpdate(u)
-      // A newer release than the one macOS refused gets its own in-place attempt.
-      setUpdateFailed((f) => (f && f.version !== u.latestVersion ? null : f))
-    })
-    const unsubProgress = window.api.onUpdateDownloadProgress(setUpdateProgress)
-    const unsubDownloaded = window.api.onUpdateDownloaded((d) => {
-      setUpdateDownloaded(d)
-      setUpdateProgress(null)
-      setUpdateFailed(null)
-    })
-    // macOS refused the downloaded update: drop "Restart to install" for a download link.
-    const unsubFailed = window.api.onUpdateInstallFailed((f) => {
-      setUpdateFailed(f)
-      setUpdateDownloaded(null)
-      setUpdateProgress(null)
-    })
     void window.api.getWhatsNew().then((wn) => {
       if (wn) setWhatsNew(wn)
     })
-    return () => {
-      unsubAvailable()
-      unsubProgress()
-      unsubDownloaded()
-      unsubFailed()
-    }
   }, [])
 
   // Open the Settings modal when chosen from the native app menu (macOS ⌘,).
@@ -1950,17 +1916,12 @@ export default function App(): JSX.Element {
         />
 
         <UpdateBanner
-          update={update}
-          progress={updateProgress}
-          downloaded={updateDownloaded}
-          failed={updateFailed}
+          update={updateBanner.update}
+          progress={updateBanner.progress}
+          downloaded={updateBanner.downloaded}
+          failed={updateBanner.failed}
           onInstall={() => void window.api.installUpdate()}
-          onDismiss={() => {
-            setUpdate(null)
-            setUpdateProgress(null)
-            setUpdateDownloaded(null)
-            setUpdateFailed(null)
-          }}
+          onDismiss={updateBanner.dismiss}
         />
 
         {findOpen && (
