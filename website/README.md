@@ -41,6 +41,8 @@ website/
     404.html            Not-found page (Cloudflare serves this automatically)
     favicon.ico         Tab icon, 16/32/48 px (generated from assets/icon.png)
     apple-touch-icon.png  180 px iOS / Safari favorites icon (generated)
+    apple-touch-icon-precomposed.png  the same size under the legacy name older iOS
+                        requests without a link tag (not generated; replace by hand)
     assets/
       styles.css        All styles; its header documents the design tokens
       theme.js          Light/dark toggle (follows the OS until a visitor picks one)

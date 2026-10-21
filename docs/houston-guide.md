@@ -67,8 +67,10 @@ ships as a desktop app and as terminal clients.
   servers; API keys come from environment variables.
 
 All clients share one agent core, so tools, permissions, and skills behave the
-same across them. Some surfaces are desktop-only (the preview panel, spawning
-separate sidebar sessions, viewing localhost screenshots).
+same across them. Some surfaces are desktop-only: the sidebar, the preview panel,
+the integrated terminal and Files panel, rendered diagrams, and the tools that need a
+browser engine (`view_localhost` and `render_mockup`). Spawned sessions run in every
+client, but only the desktop app shows them in a sidebar.
 
 ## Models
 

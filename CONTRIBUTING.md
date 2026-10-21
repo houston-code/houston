@@ -48,8 +48,10 @@ version:
   and wire it into the factory in `providers/index.ts`. Translate to/from the
   internal protocol in `src/shared/agent.ts`; don't leak SDK types upward.
 - **New tool?** Add a `ToolDef` in `src/main/agent/tools.ts` with a `kind`
-  (`read`/`write`/`shell`) so the approval policy applies correctly. File tools
-  must stay within the workspace.
+  (`read`/`write`/`shell`/`network`/`mcp`) so the approval policy applies correctly.
+  File tools must stay within the workspace, and a tool that returns text outsiders
+  wrote goes through `presentUntrusted` (see [AGENTS.md](AGENTS.md)). If users will
+  notice it, document it in `docs/houston-guide.md` in the same change.
 
 ## Tests
 
