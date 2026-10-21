@@ -16,6 +16,7 @@ import { formatReadinessLines } from '@shared/planReadiness'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { createFindingPrinter } from '@shared/reviewFindings'
+import { formatUsd } from '@shared/usage'
 import {
   isReasoningEffort,
   REASONING_EFFORTS,
@@ -795,7 +796,7 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
       case 'done':
         if (!opts.json) {
           deps.out('\n')
-          if (inTok || outTok || cost) deps.err(`· ${inTok}+${outTok} tok · $${cost.toFixed(4)}\n`)
+          if (inTok || outTok || cost) deps.err(`· ${inTok}+${outTok} tok · ${formatUsd(cost)}\n`)
         }
         stopReason = e.stopReason
         if (e.stopReason === 'error' || e.stopReason === 'aborted') errored = true
