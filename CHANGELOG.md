@@ -1,5 +1,91 @@
 # Changelog
 
+## v0.9.0 - 2026-10-21
+
+Guided setup, side chat, turn receipts, inline visuals, new models, and many safety and reliability fixes.
+
+This release also changes some defaults: reasoning now starts at High, and Enter steers a running turn.
+
+### Breaking changes
+- Reasoning effort now defaults to **High**. Installs that still had the old default of Off are moved to High once, so each step uses more output tokens and time. Lower it from the reasoning menu next to the model picker or with `/reasoning`. (#241)
+- In the desktop app, pressing Enter while a turn runs now **steers** it (the agent reads your message before its next step). ⌘+Enter (Ctrl+Enter on Windows and Linux) queues the message for after the run instead. (#250)
+- Slash commands typed mid-turn now run as commands instead of being sent to the model as text. `/compact` waits until the turn ends. In the terminal, a known command typed mid-turn runs once the turn ends. (#203)
+- Shell commands that can discard work (for example `git reset --hard`, forced `git push`, `git clean -f`, `rm -r src`, `find … -delete`) now ask for approval in every mode, including full-auto. (#246)
+- Shell allow rules now match quoting and whitespace exactly as bash reads them. A quoted `*` no longer matches a bare `*`. Rules saved by earlier versions mean exactly what their text says, so you may be asked once more for some commands. A saved shell allow ending in a lone backslash now matches nothing. (#206, #214)
+- Headless runs (`-p`) now report how they ended through their exit code, so a run that stops at its step cap no longer exits 0 like a finished task. An invalid flag value exits 2 before any model call. (#220)
+
+### Required steps
+- If you want reasoning off, set it back to Off after updating (reasoning menu or `/reasoning`). (#241)
+- If you script headless runs, check that your scripts handle the new exit codes. (#220)
+- Optional: run **Clean up rules** in Settings to remove shell allow rules that no longer match anything. (#214)
+
+### Added
+- **Getting started checklist** for new users: connect a model, open a folder, send a first task. API keys are tested before they're saved, and finished steps can be changed. Existing users see no checklist or banner. **Take the tour** in the command palette and the Help menu replays the tips. (#159, #232, #234, #250, #251)
+- **Side chat:** a docked panel for quick, read-only questions about the open chat, even while a turn runs. Send an exchange to the main chat or continue it in a new chat. Each chat keeps its side chat through plan reviews, chat switches, and restarts. Terminal: `/btw`. (#179, #224, #229)
+- The agent can **propose parallel sessions** as a card (Start session, Do it here, Dismiss). Spawned sessions can start with a copy of the chat and report back when they finish. Sessions you start from a proposal don't count toward the background session limit. (#179, #208)
+- Spawned sessions nest under the chat that started them in the sidebar, with foldable parents that stay folded across restarts. (#228, #230)
+- **Turn receipts:** a "Recorded by Houston" row under each reply lists what actually ran: tests, builds, installs, browser checks, background servers, subagent work, the verify command, and files changed. It flags todo items marked done with nothing run behind them, and tracks progress on an accepted plan across turns. (#252, #261, #263, #264)
+- Plan review shows whether the plan's checks can run on this machine (network, runtimes, dependencies) before you accept it. (#262)
+- **Inline visuals** in replies: SVG and Mermaid diagrams render in the chat. Sandboxed interactive HTML is off by default (Settings > Appearance). (#269)
+- The agent can show workspace images in a gallery, render HTML mockups at desktop, tablet, or mobile sizes, and capture the running app at several viewports and color schemes. The image viewer has a before/after compare slider plus Copy, Save, Show in Files, and Open file. (#267, #268)
+- `view_localhost` supports double-click, key presses, and text checks in one multi-step call. (#227)
+- **Searchable model picker** with per-model prices, a New mark, providers ready to use listed first, and badges read aloud by screen readers. (#163)
+- Fetching a provider's models now summarizes what changed: new models, models no longer listed, and new models this build doesn't fully recognize. (#167)
+- **Claude Haiku 5.5** with its 1M context window and prompt-length pricing, added to existing installs. (#175)
+- **Gemini 4 Argon**, added to existing installs. Announced price changes now take effect on their date without an update. (#176)
+- A **Help** menu on every platform, with Houston Guide and Report an Issue (and the menu search field on macOS). (#173)
+- **File** menu items: New Chat, New Chat in Another Folder (⇧⌘N, rebindable), Open Recent, Import Chat, and Export Chat. (#218)
+- Import chats from HTML exports. Older HTML exports bring back their text only. (#196)
+- Background tasks moved to a **Tasks** tab in the right-hand dock, with readable command names, folders, port chips, and running work listed first. (#278)
+- The Preview dock tracks every local URL a dev script prints and shows the full URL. The agent is told which address a server actually bound, and is warned when a port belongs to another project's server. (#245)
+- The agent can close, reopen, and toggle draft on pull requests, and close or reopen issues, with an approval each time. (#219)
+- Headless flags: `--effort`, `--max-turns`, `--max-cost`, `--verify`, and `--allow-shell-network`, a prompt from stdin, and a final `--json` result line. (#220, #233)
+- Slash commands and ship buttons (Create PR, `/review`, `/agent`) now show as a compact chip instead of the long prompt Houston sent, with the full instructions behind a disclosure. (#174)
+- The Steered label on a message is kept when the chat is reopened. (#253)
+
+### Fixed
+- Denying the macOS Keychain prompt no longer leaves key saves failing with no way out. Settings explains the fix and offers a **Restart Houston** button. (#158)
+- `.env` values with secret-like names (`SECRET`, `TOKEN`, `PASSWORD`, …) are now redacted from output, and the agent can't write a redaction marker over a real secret. (#177)
+- Closed several ways the agent could bypass approval prompts or permission rules: credential-file reads in parallel batches, subagent tool calls, `apply_patch` file rules, and respelled or quoted shell commands. Also fixed shell paths outside the project that went undetected, including Windows-style paths when Houston runs on macOS or Linux, and rule cleanup splitting chained commands into broader allows. (#182, #193, #206, #212, #213, #215, #226, #271)
+- Closed symlink escapes: a repo's rules file or skill pointing outside the workspace is no longer read, and reverting a turn can no longer write outside the workspace. (#186, #194)
+- The interactive Preview pane now blocks downloads and denies camera, microphone, location, and notification requests. (#185)
+- Text from GitHub tool output (titles, branch names, error messages) is now marked as untrusted for the agent. (#222, #225)
+- Reverting a turn no longer corrupts binary files, and the Revert bar now appears after every file-writing tool. (#197)
+- Long single prompts are now compacted before they exceed the context window, and prompt caching stays effective across turns. (#181)
+- A reply cut off at the output limit is continued automatically instead of ending the run, and a cut-off tool call is never run with empty arguments. (#189)
+- A connection drop mid-reply now retries the turn instead of ending the run. (#239)
+- A model the provider doesn't serve now gives a plain message, moves to your fallback model if one is set, and is flagged in the picker. (#242)
+- Resending a message whose turn failed no longer sends it twice. (#243)
+- Fixed conversations that became unusable after an empty reply, tool images with parallel calls, or a truncated OpenAI reply. (#183)
+- Fixed Gemini tool-using turns that could fail on the second step. (#195)
+- A turn now ends with an error instead of hanging or crashing when a hook receives a large payload. (#201)
+- Background dev servers left running after a crash or force-quit are stopped on the next launch. (#236)
+- Non-ASCII text in shell, search, and MCP output is no longer garbled. A crashed MCP server no longer crashes the terminal client. (#187)
+- New files no longer show an extra blank added line in diffs. (#184)
+- Generated chat titles no longer include markdown such as `##` or `**`. (#188)
+- Usage after a fallback model is billed to the model that served it. The cost breakdown adds an "Earlier models" row so older conversations add up. (#198, #244)
+- Fixed approval summaries for GitHub actions, files created by `apply_patch` (missing final newline, lost executable bit), and notebook cell inserts. (#190)
+- Fixed custom agents whose `tools:` is written as a YAML list, and stale directory listings on Windows. (#198)
+- The status bar now says when it's waiting for your answer, plan review, or approval. Stopped prompts read "Not answered" instead of internal text. (#192)
+- The Preview pane no longer covers the Files, Scorecard, and Doctor panels, and Shift+Tab in Doctor no longer changes approval mode. (#191)
+- The Changes, Files, Scorecard, and Doctor panels now trap and restore keyboard focus. (#204)
+- Windows paths show their folder name instead of the full path. Shortcut hints follow your platform and key bindings. (#202)
+- Every tool row now has a readable label. Connection retries update one notice instead of stacking six. (#205)
+- Terminal: custom commands with hyphens, digits, or capitals now autocomplete, and prompts, menus, and long lists no longer print twice or overflow. (#199, #200)
+- Updates that macOS refuses to install now offer a manual Download link instead of a Restart to install button that did nothing. (#209)
+- npm no longer warns "Unknown env config devdir" on every command. (#238)
+- Settings and chats opened by an older Houston version no longer cause migrations to run twice after upgrading again. (#164)
+- Shell commands approved without network access now fail fast and say so. (#231)
+
+### Changed
+- "Reasoning off" on Claude models that always think now sends minimal reasoning and is labelled **Think: minimal**. (#162)
+- The local providers are renamed **Ollama (local)** and **LM Studio (local)**, unless you renamed them yourself. (#161)
+- Deleting a chat with an untouched worktree now asks a simple Delete/Cancel and removes the worktree. (#165)
+- Revert and Redo no longer show a blocking dialog. A notice appears only if some files couldn't be restored. (#207)
+- A long turn that keeps discovering new things can continue past the step cap instead of stopping mid-investigation. (#235)
+- The agent now reads a file before overwriting or editing it, so it won't clobber changes you made mid-run. (#237)
+- `/plan`, `/ask`, `/auto`, and `/full` confirm with the mode's name. Long dashes are removed from app and terminal text. (#191, #210, #256)
+
 ## v0.8.0 - 2026-10-17
 
 Windows and Linux fixes, a host-aware system prompt, cheaper prompt caching, and defenses against injected text.
