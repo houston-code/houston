@@ -20,6 +20,7 @@ import {
   mergeRunningTotals,
   needsGeneratedTitle,
   organizeConversation,
+  otherConversationsInWorktree,
   setMessages
 } from './conversations'
 import { setUserDataDir, resetUserDataDir } from './userData'
@@ -356,5 +357,38 @@ describe('saveSideChat (persisted)', () => {
     saveSideChat(c.id, null)
     expect(getConversation(c.id)!.sideChat).toBeUndefined()
     saveSideChat('missing-id', sideChat) // a gone chat is a no-op
+  })
+})
+
+describe('otherConversationsInWorktree', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('counts a fork as sharing its source chat\'s worktree', () => {
+    const worktree = { path: '/repo/.houston/worktrees/feat', branch: 'feat', repoRoot: '/repo' }
+    const source = createConversation({ workspace: worktree.path, providerId: 'p', model: 'm', worktree })
+    expect(otherConversationsInWorktree(source.id, worktree.path)).toBe(0)
+
+    const fork = forkConversation(source.id)!
+    expect(fork.worktree).toEqual(worktree)
+    expect(otherConversationsInWorktree(fork.id, worktree.path)).toBe(1)
+    expect(otherConversationsInWorktree(source.id, worktree.path)).toBe(1)
+
+    // A chat in a different worktree, or none, doesn't count.
+    createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    createConversation({
+      workspace: '/repo/.houston/worktrees/other',
+      providerId: 'p',
+      model: 'm',
+      worktree: { ...worktree, path: '/repo/.houston/worktrees/other', branch: 'other' }
+    })
+    expect(otherConversationsInWorktree(fork.id, worktree.path)).toBe(1)
   })
 })
