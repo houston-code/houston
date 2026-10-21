@@ -150,14 +150,14 @@ export function runRipgrep(
       // code — a per-file read error during an otherwise-successful search still
       // yields exit 2, and it should not discard good results. Only surface an error
       // when code 2 produced nothing.
-      // Searching the root as `-- .` makes ripgrep prefix every path with `./`;
-      // strip it so output paths are clean and consistent with the JS fallback
+      // Searching the root as `-- .` makes ripgrep prefix every path with `./`
+      // (`.\` on Windows); strip it so output paths are clean and consistent with the JS fallback
       // (which emits workspace-relative paths). Only the leading path prefix is
       // touched, never text inside a match line.
       const matches = out
         .split('\n')
         .filter(Boolean)
-        .map((l) => clip(l.replace(/^\.\//, '')))
+        .map((l) => clip(l.replace(/^\.[\\/]/, '')))
         .slice(0, max)
       if (matches.length === 0 && code === 2) {
         resolve({ matches: [], error: err.trim() || 'ripgrep error' })

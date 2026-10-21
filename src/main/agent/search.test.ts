@@ -284,6 +284,27 @@ describe('searchContents options (ripgrep)', () => {
   })
 })
 
+describe('runRipgrep root prefix', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = realpathSync(mkdtempSync(join(tmpdir(), 'houston-fake-rg-prefix-')))
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  // ripgrep on Windows prefixes walked paths with `.\` instead of `./`; both must
+  // come back workspace-relative, like the JS fallback's paths.
+  it.skipIf(process.platform === 'win32')('strips a leading ./ or .\\ from each output path', async () => {
+    const fakeRg = join(dir, 'rg')
+    writeFileSync(
+      fakeRg,
+      `#!${process.execPath}\n` + 'process.stdout.write("./a.ts:1: x\\n.\\\\src\\\\b.ts:2: y\\n")\n'
+    )
+    chmodSync(fakeRg, 0o755)
+    const res = await runRipgrep(fakeRg, 'x', dir, '.', 100)
+    expect(res.matches).toEqual(['a.ts:1: x', 'src\\b.ts:2: y'])
+  })
+})
+
 describe('runRipgrep output decoding', () => {
   let dir: string
   beforeEach(() => {
