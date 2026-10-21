@@ -1,16 +1,25 @@
 # Rendering UI mockups and app screenshots (design)
 
 Status: phase 1 built (`show_images`, the gallery, the full-size viewer, and the
-media store), phase 3 built (`render_mockup`), and the prompt line and `render-ui`
-skill from phase 4. Phase 2 (`view_localhost` variants), the compare view, and the
-CLI file links are proposed, not built.
+media store), phase 2 built (`view_localhost` variants), phase 3 built
+(`render_mockup`), phase 4 (compare slider via `compareWith`, prompt line, `render-ui`
+skill), and phase 5 (terminal file links). Also built: the viewer's Copy image, Save
+image, and Show in Files actions; images sent to the model scaled to 1568 px on the
+long side; and an "Image files" badge on `show_images` galleries (only
+`view_localhost` and `render_mockup` can vouch for "Running app" or "Mockup from
+code"). The opt-in `out` folder for `render_mockup` was replaced by the viewer's
+Save image, which needs no write approval because the user picks the file.
 
 Verified for `render_mockup` in the real app with a hostile page: fetch, image,
 beacon, WebSocket, `file:` reads, path traversal, iframes outside the root, popups,
 geolocation, and dialogs are all blocked or dismissed, and a local listener received
 nothing. WebRTC is the one channel the CSP does not cover: on a plain session it sent
 STUN packets to the listener; on the mockup session it produced no candidates and no
-packets. DNS prefetch is turned off by header but was not observed directly. Companion to
+packets. DNS prefetch was a real leak: Chromium's network log showed it resolving a
+`<link rel="dns-prefetch">` host from the mockup page (the response header and a
+page-level meta opt-out don't stop explicit links). Houston now starts Chromium with
+`--blink-settings=dnsPrefetchingEnabled=false`, and the log then showed no resolution
+from the hostile page or from a control page that resolved one before the change. Companion to
 [inline-visuals-design.md](inline-visuals-design.md): that doc covers diagrams the
 model writes into a reply (Mermaid, SVG, small HTML widgets). This one covers
 **pictures of a user interface**: "render how this feature will look", answered with

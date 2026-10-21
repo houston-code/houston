@@ -4,6 +4,8 @@ import {
   exceedsImageSizeLimit,
   imageDataUrl,
   isSupportedImageType,
+  imageFileName,
+  parseImageDataUrl,
   sanitizeAttachments
 } from './images'
 
@@ -60,5 +62,34 @@ describe('sanitizeAttachments', () => {
   it('returns [] for non-arrays', () => {
     expect(sanitizeAttachments(undefined)).toEqual([])
     expect(sanitizeAttachments('x')).toEqual([])
+  })
+})
+
+describe('parseImageDataUrl', () => {
+  it('accepts supported base64 image data URLs', () => {
+    expect(parseImageDataUrl('data:image/png;base64,iVBORw0K')).toEqual({ mediaType: 'image/png', data: 'iVBORw0K' })
+    expect(parseImageDataUrl('data:image/webp;base64,UklGRg==')?.mediaType).toBe('image/webp')
+  })
+
+  it('rejects anything else from across the IPC boundary', () => {
+    for (const v of [
+      'data:image/svg+xml;base64,PHN2Zz4=',
+      'data:text/html;base64,PGgxPg==',
+      'data:image/png,not-base64',
+      'data:image/png;base64,bad chars!',
+      'file:///etc/passwd',
+      42,
+      null
+    ]) {
+      expect(parseImageDataUrl(v)).toBeNull()
+    }
+  })
+})
+
+describe('imageFileName', () => {
+  it('builds a safe name with the right extension', () => {
+    expect(imageFileName('Mobile, dark', 'image/png')).toBe('Mobile-dark.png')
+    expect(imageFileName('../../etc/passwd', 'image/jpeg')).toBe('..-..-etc-passwd.jpg')
+    expect(imageFileName('', 'image/webp')).toBe('image.webp')
   })
 })

@@ -87,6 +87,7 @@ describe('isSensitiveRead', () => {
     expect(isSensitiveRead('read', { images: [{ path: 'shots/a.png' }, { path: 'shots/b.png' }] })).toBe(false)
     expect(isSensitiveRead('read', { images: [null, 'x', { path: 7 }] })).toBe(false)
     expect(isSensitiveRead('read', { images: 'not-an-array' })).toBe(false)
+    expect(isSensitiveRead('read', { images: [{ path: 'a.png', compareWith: 'certs/server.key' }] })).toBe(true)
   })
 })
 

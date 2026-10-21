@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  galleryFiles,
   MAX_GALLERY_CAPTION,
   MAX_GALLERY_IMAGES,
   fileNameOf,
@@ -80,5 +81,19 @@ describe('sniffImageType', () => {
     expect(sniffImageType(new TextEncoder().encode('RIFF\0\0\0\0WAVEfmt '))).toBeNull()
     expect(sniffImageType(bytes(0x89, 0x50, 0x4e))).toBeNull()
     expect(sniffImageType(bytes())).toBeNull()
+  })
+})
+
+describe('compareWith', () => {
+  it('parses it and lists compare files after the entries', () => {
+    const g = parseGalleryArgs({ images: [{ path: 'new.png', compareWith: ' old.png ' }, { path: 'b.png' }] })
+    expect(g.images[0]).toEqual({ path: 'new.png', label: 'new.png', compareWith: 'old.png' })
+    expect(galleryFiles(g)).toEqual(['new.png', 'b.png', 'old.png'])
+  })
+
+  it('counts compare images toward the cap and rejects a blank one', () => {
+    const images = Array.from({ length: 7 }, (_, i) => ({ path: `${i}.png`, compareWith: `old${i}.png` }))
+    expect(() => parseGalleryArgs({ images })).toThrow('counting compareWith images')
+    expect(() => parseGalleryArgs({ images: [{ path: 'a.png', compareWith: ' ' }] })).toThrow('compareWith')
   })
 })

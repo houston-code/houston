@@ -1,7 +1,7 @@
 import { createContext, useContext } from 'react'
 import { imageDataUrl, type ImageAttachment } from '@shared/images'
-import { fileNameOf, type GalleryArgs } from '@shared/gallery'
-import type { MockupArgs } from '@shared/mockup'
+import { fileNameOf, galleryFiles, type GalleryArgs } from '@shared/gallery'
+import type { MockupArgs, MockupVariant } from '@shared/mockup'
 
 /**
  * The full-size image viewer. Any transcript row can open it (a show_images
@@ -16,6 +16,8 @@ export interface ViewerImage {
   caption?: string
   /** The file the image came from, when there is one, for "Open file". */
   path?: string
+  /** An image to compare this one against, shown with a slider. */
+  compare?: { src: string; label: string }
 }
 
 export interface ImageViewerApi {
@@ -42,25 +44,53 @@ export function stepIndex(index: number, delta: number, count: number): number {
  * nothing is returned rather than labels landing on the wrong pictures.
  */
 export function galleryViewerImages(gallery: GalleryArgs, images: ImageAttachment[] | undefined): ViewerImage[] {
-  if (!images || images.length !== gallery.images.length) return []
+  if (!images || images.length !== galleryFiles(gallery).length) return []
+  let nextCompare = gallery.images.length
   return gallery.images.map((g, i) => ({
     src: imageDataUrl(images[i]),
     label: g.label,
     ...(g.caption ? { caption: g.caption } : {}),
-    path: g.path
+    path: g.path,
+    ...(g.compareWith ? { compare: { src: imageDataUrl(images[nextCompare++]), label: fileNameOf(g.compareWith) } } : {})
   }))
 }
 
 /**
- * Pair a render_mockup call's variants with the screenshots it attached, one per
- * variant in order; a count mismatch returns nothing, as for galleries. The images
- * carry no path: they were never files, only renders of the mockup.
+ * Pair a call's viewport variants with the screenshots it attached, one per variant
+ * in order (render_mockup, or view_localhost with variants); a count mismatch
+ * returns nothing, as for galleries. The images carry no path: they were never
+ * files, only captures. `subject` names what was captured, for the caption.
  */
-export function mockupViewerImages(mockup: MockupArgs, images: ImageAttachment[] | undefined): ViewerImage[] {
-  if (!images || images.length !== mockup.variants.length) return []
-  return mockup.variants.map((v, i) => ({
+export function variantViewerImages(
+  variants: MockupVariant[],
+  images: ImageAttachment[] | undefined,
+  subject: string
+): ViewerImage[] {
+  if (!images || images.length !== variants.length) return []
+  return variants.map((v, i) => ({
     src: imageDataUrl(images[i]),
     label: v.label,
-    caption: `${fileNameOf(mockup.file)} at ${v.width}×${v.height}, ${v.colorScheme} color scheme.`
+    caption: `${subject} at ${v.width}×${v.height}, ${v.colorScheme} color scheme.`
   }))
+}
+
+/** A render_mockup call's screenshots, captioned with the mockup's file name. */
+export function mockupViewerImages(mockup: MockupArgs, images: ImageAttachment[] | undefined): ViewerImage[] {
+  return variantViewerImages(mockup.variants, images, fileNameOf(mockup.file))
+}
+
+/**
+ * A gallery path as the Files panel addresses it (relative to the project, forward
+ * slashes), or null when it lies outside the project folder (an added root).
+ */
+export function workspaceRelativePath(path: string, workspace: string): string | null {
+  const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+  const p = norm(path)
+  const absolute = p.startsWith('/') || /^[A-Za-z]:\//.test(p)
+  if (!absolute) {
+    const rel = p.replace(/^(\.\/)+/, '')
+    return rel && rel !== '..' && !rel.startsWith('../') ? rel : null
+  }
+  const root = norm(workspace)
+  return p.startsWith(`${root}/`) ? p.slice(root.length + 1) : null
 }

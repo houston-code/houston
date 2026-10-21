@@ -367,7 +367,7 @@
   },
   {
     "name": "view_localhost",
-    "description": "Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page's visible text and console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Pass steps to exercise a flow before the screenshot (fill a login form, click submit, wait for the next page): each step's result is reported, the run stops at the first failing step, and the screenshot shows where it ended. Judge whether a flow worked with expect_text steps or the returned page text, not from the screenshot alone. Every call is a fresh page load: typed input and other in-page state from an earlier call are gone (cookies and localStorage persist), so put a whole flow in one call's steps. Use test data, not the user's real credentials. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval, and calls with steps are approved separately from plain views.",
+    "description": "Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page's visible text and console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Pass steps to exercise a flow before the screenshot (fill a login form, click submit, wait for the next page): each step's result is reported, the run stops at the first failing step, and the screenshot shows where it ended. Judge whether a flow worked with expect_text steps or the returned page text, not from the screenshot alone. Every call is a fresh page load: typed input and other in-page state from an earlier call are gone (cookies and localStorage persist), so put a whole flow in one call's steps. Use test data, not the user's real credentials. Pass variants to capture the page in several viewports or color schemes at once (desktop, tablet, or mobile presets, light or dark, full page); the user sees them as a gallery labelled as the running app. Steps run with at most one variant. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval, and calls with steps are approved separately from plain views.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -378,6 +378,49 @@
         "selector": {
           "type": "string",
           "description": "Optional CSS selector: screenshot just that element's bounding box instead of the whole viewport (e.g. \"#app\", \".hero\")."
+        },
+        "variants": {
+          "type": "array",
+          "description": "Optional viewports to capture, each from a fresh page load (at most 6). Without it, one 1280×800 capture in the OS color scheme.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "preset": {
+                "type": "string",
+                "enum": [
+                  "desktop",
+                  "tablet",
+                  "mobile"
+                ],
+                "description": "Viewport preset: desktop 1280×800, tablet 768×1024, mobile 390×844. Defaults to desktop."
+              },
+              "colorScheme": {
+                "type": "string",
+                "enum": [
+                  "light",
+                  "dark"
+                ],
+                "description": "Defaults to light."
+              },
+              "label": {
+                "type": "string",
+                "description": "Short name shown under the image, e.g. \"Mobile, dark\"."
+              },
+              "width": {
+                "type": "number",
+                "description": "Custom viewport width in CSS pixels (200 to 2560)."
+              },
+              "height": {
+                "type": "number",
+                "description": "Custom viewport height in CSS pixels (200 to 2000)."
+              },
+              "fullPage": {
+                "type": "boolean",
+                "description": "Capture the whole page height (up to 6000px)."
+              }
+            },
+            "additionalProperties": false
+          }
         },
         "steps": {
           "type": "array",
@@ -453,7 +496,7 @@
   },
   {
     "name": "show_images",
-    "description": "Show image files to the user as a gallery in the chat, each with a short label and an optional caption; the user can open any of them full size. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.",
+    "description": "Show image files to the user, each with a short label and an optional caption: as a gallery they can open full size in the desktop app, or as clickable file links in the terminal. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -478,6 +521,10 @@
               "caption": {
                 "type": "string",
                 "description": "Optional sentence shown with the image in the full-size viewer."
+              },
+              "compareWith": {
+                "type": "string",
+                "description": "Optional path to another image to compare this one against, such as the same screen before a change; the viewer shows the two with a slider."
               }
             },
             "required": [

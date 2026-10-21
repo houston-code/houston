@@ -50,3 +50,25 @@ export function sanitizeAttachments(value: unknown): ImageAttachment[] {
   }
   return out
 }
+
+/** Largest image data URL the viewer may hand the main process to copy or save. */
+const MAX_IMAGE_DATA_URL_CHARS = 32 * 1024 * 1024
+
+/**
+ * Parse an image `data:` URL from an untrusted boundary (IPC) into its type and
+ * base64 payload, or null when it isn't a supported, base64-encoded image of a sane
+ * size. Never throws.
+ */
+export function parseImageDataUrl(value: unknown): ImageAttachment | null {
+  if (typeof value !== 'string' || value.length > MAX_IMAGE_DATA_URL_CHARS) return null
+  const m = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+={0,2})$/.exec(value)
+  if (!m || !isSupportedImageType(m[1])) return null
+  return { mediaType: m[1], data: m[2] }
+}
+
+/** A safe file name for saving an image: the label's words, the type's extension. */
+export function imageFileName(label: string, mediaType: string): string {
+  const ext = mediaType === 'image/jpeg' ? 'jpg' : mediaType.replace(/^image\//, '')
+  const base = label.replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'image'
+  return `${base}.${ext}`
+}

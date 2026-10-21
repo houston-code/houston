@@ -129,6 +129,45 @@ describe('render_mockup gallery row', () => {
   })
 })
 
+describe('view_localhost variants gallery row', () => {
+  it('labels each capture and marks the set as the running app', () => {
+    const { open } = renderWithViewer([
+      tool({
+        id: 'v',
+        name: 'view_localhost',
+        status: 'done',
+        args: { url: 'http://localhost:5173', variants: ['desktop-light', 'mobile-dark'] },
+        images: [
+          { mediaType: 'image/png', data: 'AAAA' },
+          { mediaType: 'image/png', data: 'BBBB' }
+        ]
+      })
+    ])
+    expect(screen.getByRole('region', { name: 'http://localhost:5173' })).toBeInTheDocument()
+    expect(screen.getByText('Running app')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Open Mobile, dark full size' }))
+    expect(open.mock.calls[0][0][1]).toEqual({
+      src: 'data:image/png;base64,BBBB',
+      label: 'Mobile, dark',
+      caption: 'http://localhost:5173 at 390×844, dark color scheme.'
+    })
+  })
+
+  it('keeps a plain capture as a single tool-card screenshot', () => {
+    renderWithViewer([
+      tool({
+        id: 'v',
+        name: 'view_localhost',
+        status: 'done',
+        args: { url: 'http://localhost:5173' },
+        images: [{ mediaType: 'image/png', data: 'AAAA' }]
+      })
+    ])
+    expect(screen.queryByRole('region')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open image full size' })).toBeInTheDocument()
+  })
+})
+
 describe('tool-card screenshots', () => {
   it('open the viewer when clicked', () => {
     const { open } = renderWithViewer([

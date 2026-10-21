@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve as resolvePath } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared/types'
 import { catalogForPlatform } from '@shared/provider-catalog'
 import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
@@ -36,6 +37,7 @@ import {
   renderPreviewDiff,
   colorizeDiff,
   renderToolResult,
+  renderImageLinks,
   parseAgentInvocation,
   agentInvocationPrompt,
   renderReasoningStatus,
@@ -649,6 +651,44 @@ describe('colorizeDiff', () => {
     expect(out).toContain('+++ a.ts')
     expect(out).toContain('added')
     expect(out).toContain('removed')
+  })
+})
+
+describe('renderImageLinks', () => {
+  const paint = makePainter(false)
+  // Built the way the code builds them, so the expectations hold on Windows too
+  // (C:\repo\… becomes file:///C:/repo/…).
+  const fileUrl = (rel: string): string => pathToFileURL(resolvePath('/repo', rel)).href
+  it('lists each image as a clickable link to its file, compare images too', () => {
+    const out = renderImageLinks(
+      { title: 'Settings', images: [{ path: 'shots/after.png', label: 'After', compareWith: 'shots/before.png' }] },
+      '/repo',
+      paint
+    )!
+    expect(out).toContain('Settings: 1 image (click a path to open it)')
+    expect(out).toContain(`\x1b]8;;${fileUrl('shots/after.png')}\x1b\\shots/after.png\x1b]8;;\x1b\\`)
+    expect(out).toContain(fileUrl('shots/before.png'))
+    expect(out).toContain('After')
+  })
+
+  it('strips control characters a label or path could use to forge a link', () => {
+    const out = renderImageLinks(
+      { images: [{ path: 'a\x1b]8;;https://evil\x07.png', label: 'x\x1b]52;c;ZXZpbA==\x07' }] },
+      '/repo',
+      paint
+    )!
+    // The escapes are gone, so what's left is inert text, not a sequence.
+    // eslint-disable-next-line no-control-regex -- checking for the escape is the point
+    expect(out).not.toMatch(/\x1b\]52/)
+    expect(out).not.toContain('\x07')
+    // eslint-disable-next-line no-control-regex -- counting the link escapes is the point
+    expect(out.match(/\x1b]8;;/g)).toHaveLength(2)
+    expect(out).toContain(fileUrl('a]8;;https://evil.png'))
+  })
+
+  it('returns null for arguments that do not parse', () => {
+    expect(renderImageLinks({ images: 'nope' }, '/repo', paint)).toBeNull()
+    expect(renderImageLinks(undefined, '/repo', paint)).toBeNull()
   })
 })
 

@@ -17,12 +17,14 @@ const getPath = vi.fn(() => '/tmp/houston-test-userdata')
 const getUserDefault = vi.fn(() => undefined)
 const setUserDefault = vi.fn()
 const registerSchemesAsPrivileged = vi.fn()
+const appendSwitch = vi.fn()
 
 vi.mock('electron', () => ({
-  app: { setName, whenReady, on, getName: vi.fn(), getPath },
+  app: { setName, whenReady, on, getName: vi.fn(), getPath, commandLine: { appendSwitch } },
   shell: { openExternal: vi.fn() },
   systemPreferences: { getUserDefault, setUserDefault },
   protocol: { registerSchemesAsPrivileged },
+  nativeImage: { createFromBuffer: vi.fn() },
   BrowserWindow: vi.fn()
 }))
 
@@ -70,6 +72,13 @@ describe('main entry app identity', () => {
     expect(registerSchemesAsPrivileged.mock.invocationCallOrder[0]).toBeLessThan(
       whenReady.mock.invocationCallOrder[0]
     )
+  })
+
+  it('turns DNS prefetching off in every renderer before whenReady', async () => {
+    await import('./index')
+
+    expect(appendSwitch).toHaveBeenCalledWith('blink-settings', 'dnsPrefetchingEnabled=false')
+    expect(appendSwitch.mock.invocationCallOrder[0]).toBeLessThan(whenReady.mock.invocationCallOrder[0])
   })
 
   it('pins scrollbars to the slim auto-hiding overlay style before whenReady (macOS only)', async () => {

@@ -139,6 +139,8 @@ function fakeSession(over: Partial<CaptureSession> = {}): {
     url: over.url ?? (() => 'http://localhost:3000/'),
     rectForSelector: over.rectForSelector ?? (async () => null),
     screenshot: over.screenshot ?? (async () => Buffer.from('PNGBYTES')),
+    screenshotFullPage:
+      over.screenshotFullPage ?? (async (max: number) => ({ png: Buffer.from('FULLPAGE'), height: Math.min(2400, max), truncated: false })),
     consoleEntries: over.consoleEntries ?? (() => []),
     runStep: over.runStep ?? (async () => ({ ok: true as const })),
     pageText: over.pageText ?? (async () => 'Hello'),

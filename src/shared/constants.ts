@@ -65,6 +65,10 @@ export const IPC = {
   attachmentPickFiles: 'attachment:pickFiles',
   /** Read the system clipboard (text + image) for the composer "+" menu. */
   clipboardRead: 'clipboard:read',
+  /** Put an image from the image viewer on the system clipboard. */
+  imageCopy: 'image:copy',
+  /** Save an image from the image viewer to a file the user picks. */
+  imageSave: 'image:save',
   commandsList: 'commands:list',
   /** List the workspace's skills (.houston/skills) as {name, description}, for /skills. */
   skillsList: 'skills:list',

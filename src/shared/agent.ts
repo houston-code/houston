@@ -628,6 +628,12 @@ export interface AgentRunRequest {
    * are not offered, since a terminal would show only a list of file names.
    */
   imageGallery?: boolean
+  /**
+   * The client lists show_images results as clickable file links (the interactive
+   * terminal app). show_images is offered where either this or imageGallery is set;
+   * render_mockup, whose images are never files, needs imageGallery.
+   */
+  imageLinks?: boolean
 }
 
 /**

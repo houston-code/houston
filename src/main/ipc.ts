@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow, clipboard, nativeImage, shell } from 'electron'
+import { ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
@@ -22,7 +22,7 @@ import {
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
 import { parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
-import { sanitizeAttachments, exceedsImageSizeLimit } from '@shared/images'
+import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDataUrl } from '@shared/images'
 import { sanitizeInvocation } from '@shared/promptInvocation'
 import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
 import { readPickedFile } from './pickedFiles'
@@ -519,6 +519,41 @@ export function registerIpc(): void {
     })
     if (result.canceled || result.filePaths.length === 0) return []
     return result.filePaths.slice(0, MAX_ATTACHMENT_FILES).map(readPickedFile)
+  })
+
+  // Image viewer: copy the shown image to the clipboard. The renderer only ever holds
+  // image data URLs it was sent, but this is still an IPC boundary, so the payload is
+  // parsed strictly (a supported image type, base64, size-capped) before use.
+  ipcMain.handle(IPC.imageCopy, async (_event, dataUrl: unknown): Promise<boolean> => {
+    const img = parseImageDataUrl(dataUrl)
+    if (!img) return false
+    try {
+      const decoded = nativeImage.createFromBuffer(Buffer.from(img.data, 'base64'))
+      if (decoded.isEmpty()) return false
+      const blob = new Blob([new Uint8Array(decoded.toPNG())], { type: 'image/png' })
+      await clipboard.write([new ClipboardItem({ 'image/png': blob })])
+      return true
+    } catch {
+      return false
+    }
+  })
+
+  // Image viewer: save the shown image where the user picks (a user gesture, so any
+  // folder they choose is fine). Resolves with the saved path, or null if cancelled.
+  ipcMain.handle(IPC.imageSave, async (event, dataUrl: unknown, label: unknown): Promise<string | null> => {
+    const img = parseImageDataUrl(dataUrl)
+    if (!img) return null
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const name = imageFileName(typeof label === 'string' ? label : 'image', img.mediaType)
+    const ext = name.slice(name.lastIndexOf('.') + 1)
+    const res = await dialog.showSaveDialog(win!, {
+      title: 'Save image',
+      defaultPath: name,
+      filters: [{ name: 'Image', extensions: [ext] }]
+    })
+    if (res.canceled || !res.filePath) return null
+    writeFileSync(res.filePath, Buffer.from(img.data, 'base64'))
+    return res.filePath
   })
 
   // Composer "+" menu: read the clipboard (text + image) on demand. Both halves are

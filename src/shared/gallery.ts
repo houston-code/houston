@@ -21,11 +21,25 @@ export interface GalleryImage {
   label: string
   /** Optional sentence shown in the full-size viewer. */
   caption?: string
+  /** Another image to compare this one against (e.g. the "before"), shown side by side in the viewer. */
+  compareWith?: string
 }
 
 export interface GalleryArgs {
   title?: string
   images: GalleryImage[]
+}
+
+/**
+ * Every file a gallery reads, in the order the tool attaches them: each entry's
+ * image, then each `compareWith` image in entry order. The renderer pairs the
+ * attached images back up by the same order.
+ */
+export function galleryFiles(gallery: GalleryArgs): string[] {
+  return [
+    ...gallery.images.map((g) => g.path),
+    ...gallery.images.flatMap((g) => (g.compareWith ? [g.compareWith] : []))
+  ]
 }
 
 /** The last path segment, for a default label. */
@@ -63,9 +77,20 @@ export function parseGalleryArgs(args: Record<string, unknown>): GalleryArgs {
     const path = o.path.trim()
     const label = optionalText(o.label, `images[${i}].label`, MAX_GALLERY_LABEL) ?? fileNameOf(path)
     const caption = optionalText(o.caption, `images[${i}].caption`, MAX_GALLERY_CAPTION)
-    return { path, label, ...(caption ? { caption } : {}) }
+    let compareWith: string | undefined
+    if (o.compareWith !== undefined && o.compareWith !== null) {
+      if (typeof o.compareWith !== 'string' || !o.compareWith.trim()) {
+        throw new Error(`images[${i}].compareWith must be a non-empty path.`)
+      }
+      compareWith = o.compareWith.trim()
+    }
+    return { path, label, ...(caption ? { caption } : {}), ...(compareWith ? { compareWith } : {}) }
   })
-  return { ...(title ? { title } : {}), images }
+  const gallery = { ...(title ? { title } : {}), images }
+  if (galleryFiles(gallery).length > MAX_GALLERY_IMAGES) {
+    throw new Error(`a gallery shows at most ${MAX_GALLERY_IMAGES} images, counting compareWith images; split them across calls.`)
+  }
+  return gallery
 }
 
 /** Best-effort parse for display code that must not throw. Returns null on bad input. */

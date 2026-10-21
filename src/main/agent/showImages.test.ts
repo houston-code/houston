@@ -59,6 +59,27 @@ describe('show_images', () => {
     expect(out).toContain('2. Dark: shots/dark.jpg (image/jpeg')
   })
 
+  it('attaches compare images after the entries, in entry order', async () => {
+    writeFileSync(join(workspace, 'shots', 'old.png'), PNG)
+    const out = await show({
+      images: [
+        { path: 'shots/dark.jpg', label: 'Dark', compareWith: 'shots/old.png' },
+        { path: 'shots/light.png', label: 'Light' }
+      ]
+    })
+    expect(images.map((i) => i.mediaType)).toEqual(['image/jpeg', 'image/png', 'image/png'])
+    expect(out).toContain('of 2 images (plus 1 to compare against, attached after them)')
+    expect(out).toContain('1. Dark: shots/dark.jpg (image/jpeg, 10 B), compared with shots/old.png')
+  })
+
+  it('refuses a compare file that is not an image, attaching nothing', async () => {
+    writeFileSync(join(workspace, 'notes.png'), 'not an image')
+    await expect(
+      show({ images: [{ path: 'shots/light.png', compareWith: 'notes.png' }] })
+    ).rejects.toThrow('compareWith (notes.png): not a PNG, JPEG, GIF, or WebP image.')
+    expect(images).toHaveLength(0)
+  })
+
   it('types a file by its bytes, not its extension', async () => {
     writeFileSync(join(workspace, 'shots', 'misnamed.gif'), PNG)
     await show({ images: [{ path: 'shots/misnamed.gif' }] })
@@ -144,9 +165,12 @@ describe('show_images in the toolset', () => {
   const names = (o: Partial<BuiltinToolsetOptions>): string[] =>
     builtinToolset({ ...base, ...o }).map((t) => t.schema.name)
 
-  it('is offered only where a client draws the gallery', () => {
+  it('is offered only where a client draws the gallery or lists links', () => {
     expect(names({})).toContain('show_images')
     expect(names({ imageGallery: false })).not.toContain('show_images')
+    expect(names({ imageGallery: false, imageLinks: true })).toContain('show_images')
+    // A terminal can't show a render that was never a file.
+    expect(names({ imageGallery: false, imageLinks: true })).not.toContain('render_mockup')
   })
 
   it('stays available in plan mode, since it only reads', () => {

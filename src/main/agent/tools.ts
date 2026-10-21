@@ -29,6 +29,7 @@ import { getSearchProviderInfo } from '@shared/search'
 import {
   MAX_GALLERY_IMAGES,
   SHOW_IMAGES_NAME,
+  galleryFiles,
   parseGalleryArgs,
   parseGalleryArgsSafe,
   sniffImageType
@@ -38,7 +39,9 @@ import {
   MAX_MOCKUP_VARIANTS,
   RENDER_MOCKUP_NAME,
   parseMockupArgs,
-  parseMockupArgsSafe
+  parseMockupArgsSafe,
+  parseVariantList,
+  parseVariantListSafe
 } from '@shared/mockup'
 import {
   MAX_ATTACH_IMAGE_BYTES,
@@ -1948,12 +1951,16 @@ const viewLocalhost: ToolDef = {
     } catch {
       steps = Array.isArray(a.steps) ? [`${a.steps.length} step(s), invalid`] : []
     }
-    return steps.length ? `View ${str(a, 'url')}, then: ${steps.join(', ')}` : `View ${str(a, 'url')}`
+    const variants = parseVariantListSafe(a.variants, { fullPage: a.fullPage === true, allowQuery: false })
+    const sizes = variants ? ` in ${variants.length} variant${variants.length === 1 ? '' : 's'}` : ''
+    return steps.length
+      ? `View ${str(a, 'url')}${sizes}, then: ${steps.join(', ')}`
+      : `View ${str(a, 'url')}${sizes}`
   },
   schema: {
     name: VIEW_LOCALHOST_NAME,
     description:
-      'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s visible text and console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Pass steps to exercise a flow before the screenshot (fill a login form, click submit, wait for the next page): each step\'s result is reported, the run stops at the first failing step, and the screenshot shows where it ended. Judge whether a flow worked with expect_text steps or the returned page text, not from the screenshot alone. Every call is a fresh page load: typed input and other in-page state from an earlier call are gone (cookies and localStorage persist), so put a whole flow in one call\'s steps. Use test data, not the user\'s real credentials. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval, and calls with steps are approved separately from plain views.',
+      'Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page\'s visible text and console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Pass steps to exercise a flow before the screenshot (fill a login form, click submit, wait for the next page): each step\'s result is reported, the run stops at the first failing step, and the screenshot shows where it ended. Judge whether a flow worked with expect_text steps or the returned page text, not from the screenshot alone. Every call is a fresh page load: typed input and other in-page state from an earlier call are gone (cookies and localStorage persist), so put a whole flow in one call\'s steps. Use test data, not the user\'s real credentials. Pass variants to capture the page in several viewports or color schemes at once (desktop, tablet, or mobile presets, light or dark, full page); the user sees them as a gallery labelled as the running app. Steps run with at most one variant. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval, and calls with steps are approved separately from plain views.',
     parameters: objectSchema(
       {
         url: { type: 'string', description: 'A loopback URL to load, e.g. "http://localhost:3000".' },
@@ -1961,6 +1968,26 @@ const viewLocalhost: ToolDef = {
           type: 'string',
           description:
             'Optional CSS selector: screenshot just that element\'s bounding box instead of the whole viewport (e.g. "#app", ".hero").'
+        },
+        variants: {
+          type: 'array',
+          description: `Optional viewports to capture, each from a fresh page load (at most ${MAX_MOCKUP_VARIANTS}). Without it, one 1280×800 capture in the OS color scheme.`,
+          items: {
+            type: 'object',
+            properties: {
+              preset: {
+                type: 'string',
+                enum: ['desktop', 'tablet', 'mobile'],
+                description: 'Viewport preset: desktop 1280×800, tablet 768×1024, mobile 390×844. Defaults to desktop.'
+              },
+              colorScheme: { type: 'string', enum: ['light', 'dark'], description: 'Defaults to light.' },
+              label: { type: 'string', description: 'Short name shown under the image, e.g. "Mobile, dark".' },
+              width: { type: 'number', description: 'Custom viewport width in CSS pixels (200 to 2560).' },
+              height: { type: 'number', description: 'Custom viewport height in CSS pixels (200 to 2000).' },
+              fullPage: { type: 'boolean', description: `Capture the whole page height (up to ${MAX_FULL_PAGE_HEIGHT}px).` }
+            },
+            additionalProperties: false
+          }
         },
         steps: {
           type: 'array',
@@ -1995,6 +2022,11 @@ const viewLocalhost: ToolDef = {
     if (!ctx.captureLocalhost) throw new Error('view_localhost is not available in this context.')
     const selector = str(args, 'selector') || undefined
     const steps = parseSteps(args.steps)
+    const variants =
+      args.variants === undefined ? undefined : parseVariantList(args.variants, { fullPage: false, allowQuery: false })
+    if (variants && variants.length > 1 && steps.length) {
+      throw new Error('steps can run with only one variant, so a flow never runs twice; split the call.')
+    }
     // Who serves the port, looked up while the page loads: a stale or other project's
     // server on the usual port renders a different app with nothing on the page to say so.
     const port = urlPort(url)
@@ -2010,6 +2042,7 @@ const viewLocalhost: ToolDef = {
       url,
       selector,
       ...(steps.length ? { steps } : {}),
+      ...(variants ? { variants } : {}),
       signal: ctx.signal
     })
 
@@ -2050,16 +2083,38 @@ const viewLocalhost: ToolDef = {
       )
     }
 
-    const bytes = cap.png.byteLength
-    if (bytes > MAX_ATTACH_IMAGE_BYTES) {
-      lines.push(
-        `[screenshot ${humanSize(bytes)} exceeds the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} attach limit, so it is not shown]`
-      )
-    } else if (!ctx.attachImage) {
-      lines.push(`[screenshot ${humanSize(bytes)} captured; it cannot be displayed in this context]`)
+    if (cap.variants) {
+      // One image per variant, in order, or none: the gallery labels them by position.
+      lines.push(`Captured ${cap.variants.length} variant${cap.variants.length === 1 ? '' : 's'}:`)
+      cap.variants.forEach((v, i) => {
+        const notes = [`${v.width}×${v.height}`, humanSize(v.png.byteLength)]
+        if (v.truncated) notes.push(`cut at ${MAX_FULL_PAGE_HEIGHT}px`)
+        lines.push(`${i + 1}. ${v.label} (${notes.join(', ')})`)
+        if (v.loadError && i > 0) lines.push(`   [load warning: ${v.loadError}]`)
+      })
+      const tooBig = cap.variants.find((v) => v.png.byteLength > MAX_ATTACH_IMAGE_BYTES)
+      if (tooBig) {
+        lines.push(
+          `[${tooBig.label} is ${humanSize(tooBig.png.byteLength)}, over the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} attach limit, so no screenshots are shown; use a smaller size or turn off fullPage]`
+        )
+      } else if (!ctx.attachImage) {
+        lines.push('[screenshots captured; they cannot be displayed in this context]')
+      } else {
+        for (const v of cap.variants) ctx.attachImage({ mediaType: 'image/png', data: v.png.toString('base64') })
+        lines.push('[screenshots attached below for viewing; the user sees them as a gallery]')
+      }
     } else {
-      ctx.attachImage({ mediaType: 'image/png', data: cap.png.toString('base64') })
-      lines.push(`[screenshot (${humanSize(bytes)}) attached below for viewing]`)
+      const bytes = cap.png.byteLength
+      if (bytes > MAX_ATTACH_IMAGE_BYTES) {
+        lines.push(
+          `[screenshot ${humanSize(bytes)} exceeds the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} attach limit, so it is not shown]`
+        )
+      } else if (!ctx.attachImage) {
+        lines.push(`[screenshot ${humanSize(bytes)} captured; it cannot be displayed in this context]`)
+      } else {
+        ctx.attachImage({ mediaType: 'image/png', data: cap.png.toString('base64') })
+        lines.push(`[screenshot (${humanSize(bytes)}) attached below for viewing]`)
+      }
     }
 
     // The page's text and console output are whatever the dev server serves, which
@@ -2230,7 +2285,7 @@ const showImages: ToolDef = {
   schema: {
     name: SHOW_IMAGES_NAME,
     description:
-      'Show image files to the user as a gallery in the chat, each with a short label and an optional caption; the user can open any of them full size. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.',
+      'Show image files to the user, each with a short label and an optional caption: as a gallery they can open full size in the desktop app, or as clickable file links in the terminal. Use it to present screenshots or renders you produced (for example of a UI before and after a change, or a page in light and dark themes) instead of describing them in words. Files must be PNG, JPEG, GIF, or WebP inside the project, at most 5 MB each. You also receive the images, so look at them before you describe them. Say in your reply which images come from the running app and which are mockups.',
     parameters: objectSchema(
       {
         title: { type: 'string', description: 'Optional heading for the gallery, e.g. "Settings page: proposed".' },
@@ -2242,7 +2297,12 @@ const showImages: ToolDef = {
             properties: {
               path: { type: 'string', description: 'Path to the image file, relative to the project root.' },
               label: { type: 'string', description: 'Short name shown under the image, e.g. "Dark theme". Defaults to the file name.' },
-              caption: { type: 'string', description: 'Optional sentence shown with the image in the full-size viewer.' }
+              caption: { type: 'string', description: 'Optional sentence shown with the image in the full-size viewer.' },
+              compareWith: {
+                type: 'string',
+                description:
+                  'Optional path to another image to compare this one against, such as the same screen before a change; the viewer shows the two with a slider.'
+              }
             },
             required: ['path'],
             additionalProperties: false
@@ -2256,10 +2316,12 @@ const showImages: ToolDef = {
     const gallery = parseGalleryArgs(args)
     if (!ctx.attachImage) throw new Error('Images cannot be shown in this context.')
     const roots = rootsOf(ctx)
+    const files = galleryFiles(gallery)
     const loaded: { mediaType: string; buf: Buffer }[] = []
-    for (const [i, img] of gallery.images.entries()) {
-      const where = `images[${i}] (${img.path})`
-      const abs = resolveInRoots(roots, img.path)
+    for (const [i, path] of files.entries()) {
+      const where =
+        i < gallery.images.length ? `images[${i}] (${path})` : `compareWith (${path})`
+      const abs = resolveInRoots(roots, path)
       let size: number
       try {
         const st = await fs.stat(abs)
@@ -2279,10 +2341,15 @@ const showImages: ToolDef = {
     }
     for (const { mediaType, buf } of loaded) ctx.attachImage({ mediaType, data: buf.toString('base64') })
     const lines = gallery.images.map(
-      (img, i) => `${i + 1}. ${img.label}: ${img.path} (${loaded[i].mediaType}, ${humanSize(loaded[i].buf.byteLength)})`
+      (img, i) =>
+        `${i + 1}. ${img.label}: ${img.path} (${loaded[i].mediaType}, ${humanSize(loaded[i].buf.byteLength)})` +
+        (img.compareWith ? `, compared with ${img.compareWith}` : '')
     )
     const heading = gallery.title ? ` titled "${gallery.title}"` : ''
-    return `Showed the user a gallery${heading} of ${loaded.length} image${loaded.length === 1 ? '' : 's'}:\n${lines.join('\n')}\n[images attached below for viewing]`
+    const n = gallery.images.length
+    const compares = loaded.length - n
+    const extra = compares ? ` (plus ${compares} to compare against, attached after them)` : ''
+    return `Showed the user a gallery${heading} of ${n} image${n === 1 ? '' : 's'}${extra}:\n${lines.join('\n')}\n[images attached below for viewing]`
   }
 }
 
@@ -4684,6 +4751,8 @@ export interface BuiltinToolsetOptions {
   localhostCapture: boolean
   /** The client draws show_images as a gallery (the desktop app); backs show_images. */
   imageGallery: boolean
+  /** The client lists show_images as clickable file links (the terminal app). Absent counts as false. */
+  imageLinks?: boolean
   /** An offscreen mockup renderer is wired (desktop only); backs render_mockup. Absent counts as false. */
   mockupRender?: boolean
   /** A spawn backend is wired; backs spawn_session (and propose_session). */
@@ -4715,7 +4784,7 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
   return TOOLS.filter((t) => {
     const name = t.schema.name
     if (name === VIEW_LOCALHOST_NAME) return opts.localhostCapture
-    if (name === SHOW_IMAGES_NAME) return opts.imageGallery
+    if (name === SHOW_IMAGES_NAME) return opts.imageGallery || opts.imageLinks === true
     if (name === RENDER_MOCKUP_NAME) return opts.imageGallery && opts.mockupRender === true
     if (name === SPAWN_SESSION_NAME) return opts.spawn
     if (name === PROPOSE_SESSION_NAME) return opts.spawn && opts.proposals !== false

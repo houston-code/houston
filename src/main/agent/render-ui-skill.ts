@@ -27,10 +27,13 @@ there). Put them in a folder the project ignores, such as one already listed in
 .gitignore, or tell the user which folder you created so it doesn't end up in a
 commit by accident. Never commit screenshots unless the user asks.
 
-**Web app with a dev server.** Start the server with run_shell (background: true).
-For a quick look, view_localhost shows you the page and the user sees the capture in
-the tool card. For screenshots to present, or several viewports and themes, write a
-short Playwright script that saves PNGs, run it with run_shell, then show them.
+**Web app with a dev server.** Start the server with run_shell (background: true),
+then call view_localhost. Without variants it takes one capture; with variants (for
+example desktop light, desktop dark, and mobile) it captures each from a fresh load
+and the user sees them as a gallery marked as the running app, so you don't need
+show_images after it. For flows across several pages, or files you want to keep,
+write a short Playwright script that saves PNGs, run it with run_shell, then show
+them with show_images.
 
 **Electron app.** Build it, then a Playwright script with \`_electron.launch\` opens the
 built app; size the window, drive it to the state you need (with test or mock data,
@@ -59,7 +62,9 @@ user may have to approve. Use what the project already has before adding anythin
 
 Pick the few that answer the question, usually 2 to 6: light and dark theme, desktop
 and mobile width, empty, loading, error, and the populated state. For a change, show
-before and after of the same state at the same size.
+before and after of the same state at the same size: capture the "before" first and
+pass it as compareWith on the "after" image in show_images, so the user can drag a
+slider between the two.
 
 ## 4. Check, then show
 

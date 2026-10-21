@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import { stepIndex, galleryViewerImages, type ViewerImage } from '../lib/imageViewer'
+import { stepIndex, galleryViewerImages, workspaceRelativePath, type ViewerImage } from '../lib/imageViewer'
 import { ImageViewer } from './ImageViewer'
 
 const IMAGES: ViewerImage[] = [
@@ -107,5 +107,97 @@ describe('galleryViewerImages', () => {
   it('returns nothing when the counts differ or nothing was attached', () => {
     expect(galleryViewerImages(gallery, [{ mediaType: 'image/png', data: 'AAAA' }])).toEqual([])
     expect(galleryViewerImages(gallery, undefined)).toEqual([])
+  })
+})
+
+describe('ImageViewer compare', () => {
+  const withCompare: ViewerImage = {
+    src: 'data:image/png;base64,AFTER',
+    label: 'After',
+    compare: { src: 'data:image/png;base64,BEFORE', label: 'before.png' }
+  }
+
+  it('offers Compare only for an image with something to compare against', () => {
+    render(<ImageViewer images={[IMAGES[1], withCompare]} initialIndex={0} onClose={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: 'Compare' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Next image' }))
+    expect(screen.getByRole('button', { name: 'Compare' })).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  it('shows both images with a slider that moves the divider', () => {
+    render(<ImageViewer images={[withCompare]} initialIndex={0} onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Compare' }))
+    expect(screen.getByAltText('before.png')).toHaveAttribute('src', 'data:image/png;base64,BEFORE')
+    const slider = screen.getByRole('slider', { name: 'Divider between before.png and After' })
+    fireEvent.change(slider, { target: { value: '30' } })
+    expect(screen.getByAltText('After')).toHaveStyle({ clipPath: 'inset(0 0 0 30%)' })
+  })
+
+  it('leaves the arrow keys to the slider while it has focus', () => {
+    render(<ImageViewer images={[withCompare, IMAGES[0]]} initialIndex={0} onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Compare' }))
+    fireEvent.keyDown(screen.getByRole('slider'), { key: 'ArrowRight' })
+    expect(screen.getByText('1 of 2')).toBeInTheDocument()
+  })
+})
+
+describe('ImageViewer actions', () => {
+  it('copies and saves the current image and reports the result', async () => {
+    const onCopy = vi.fn().mockResolvedValue({ ok: true, message: 'Copied' })
+    const onSave = vi.fn().mockResolvedValue(null)
+    render(<ImageViewer images={IMAGES} initialIndex={1} onClose={vi.fn()} onCopy={onCopy} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Copy image' }))
+    expect(onCopy).toHaveBeenCalledWith(IMAGES[1])
+    expect(await screen.findByRole('status')).toHaveTextContent('Copied')
+    fireEvent.click(screen.getByRole('button', { name: 'Save image…' }))
+    expect(onSave).toHaveBeenCalledWith(IMAGES[1])
+  })
+
+  it('says so when copying or saving fails outright', async () => {
+    const onSave = vi.fn().mockRejectedValue(new Error('EACCES'))
+    render(<ImageViewer images={IMAGES} initialIndex={0} onClose={vi.fn()} onSave={onSave} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Save image…' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent("Couldn't save the image.")
+  })
+
+  it('shows a file in the Files panel, or says why it cannot', () => {
+    const onShowInFiles = vi.fn().mockReturnValueOnce(null).mockReturnValueOnce('That file is outside the project folder.')
+    render(<ImageViewer images={IMAGES} initialIndex={0} onClose={vi.fn()} onShowInFiles={onShowInFiles} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Show in Files' }))
+    expect(onShowInFiles).toHaveBeenCalledWith('shots/light.png')
+    fireEvent.click(screen.getByRole('button', { name: 'Show in Files' }))
+    expect(screen.getByRole('alert')).toHaveTextContent('outside the project folder')
+  })
+})
+
+describe('gallery compare pairing', () => {
+  it('pairs each compareWith with the images attached after the entries', () => {
+    const imgs = galleryViewerImages(
+      {
+        images: [
+          { path: 'after/a.png', label: 'A', compareWith: 'before/a.png' },
+          { path: 'after/b.png', label: 'B' },
+          { path: 'after/c.png', label: 'C', compareWith: 'before/c.png' }
+        ]
+      },
+      ['A1', 'B1', 'C1', 'A0', 'C0'].map((d) => ({ mediaType: 'image/png', data: d }))
+    )
+    expect(imgs.map((i) => [i.src.slice(-2), i.compare?.src.slice(-2), i.compare?.label])).toEqual([
+      ['A1', 'A0', 'a.png'],
+      ['B1', undefined, undefined],
+      ['C1', 'C0', 'c.png']
+    ])
+  })
+})
+
+describe('workspaceRelativePath', () => {
+  it('maps project paths for the Files panel and refuses ones outside it', () => {
+    expect(workspaceRelativePath('shots/a.png', '/repo')).toBe('shots/a.png')
+    expect(workspaceRelativePath('./shots/a.png', '/repo')).toBe('shots/a.png')
+    expect(workspaceRelativePath('/repo/shots/a.png', '/repo/')).toBe('shots/a.png')
+    expect(workspaceRelativePath('C:\\repo\\a.png', 'C:\\repo')).toBe('a.png')
+    expect(workspaceRelativePath('/elsewhere/a.png', '/repo')).toBeNull()
+    expect(workspaceRelativePath('../a.png', '/repo')).toBeNull()
+    expect(workspaceRelativePath('/repository/a.png', '/repo')).toBeNull()
   })
 })

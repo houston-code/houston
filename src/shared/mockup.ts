@@ -59,7 +59,7 @@ function intIn(value: unknown, field: string, min: number, max: number): number 
   return value
 }
 
-function parseVariant(raw: unknown, i: number, fullPageDefault: boolean): MockupVariant {
+function parseVariant(raw: unknown, i: number, fullPageDefault: boolean, allowQuery: boolean): MockupVariant {
   const where = `variants[${i}]`
   if (typeof raw === 'string') {
     const m = /^(desktop|tablet|mobile)(?:-(light|dark))?$/.exec(raw.trim().toLowerCase())
@@ -100,6 +100,7 @@ function parseVariant(raw: unknown, i: number, fullPageDefault: boolean): Mockup
   if (o.fullPage !== undefined && typeof o.fullPage !== 'boolean') throw new Error(`${where}.fullPage must be true or false.`)
   if (o.mobile !== undefined && typeof o.mobile !== 'boolean') throw new Error(`${where}.mobile must be true or false.`)
   let query: string | undefined
+  if (o.query !== undefined && !allowQuery) throw new Error(`${where}.query is not supported here; put it in the URL.`)
   if (o.query !== undefined) {
     if (typeof o.query !== 'string' || !/^[?#]/.test(o.query) || o.query.length > MAX_QUERY || /\s/.test(o.query)) {
       throw new Error(`${where}.query must start with "?" or "#", have no spaces, and be at most ${MAX_QUERY} characters.`)
@@ -136,12 +137,37 @@ export function parseMockupArgs(args: Record<string, unknown>): MockupArgs {
   if (!/\.html?$/i.test(file)) throw new Error('file must be an .html or .htm file.')
   if (args.fullPage !== undefined && typeof args.fullPage !== 'boolean') throw new Error('fullPage must be true or false.')
   const fullPage = args.fullPage === true
-  const raw = args.variants === undefined ? ['desktop'] : args.variants
+  const variants = parseVariantList(args.variants === undefined ? ['desktop'] : args.variants, {
+    fullPage,
+    allowQuery: true
+  })
+  return { file, variants }
+}
+
+/**
+ * Validate a raw `variants` list (presets like "mobile-dark" or objects) into
+ * viewport variants, shared by render_mockup and view_localhost. `allowQuery` is
+ * off where the page's URL already carries its own query.
+ */
+export function parseVariantList(
+  raw: unknown,
+  opts: { fullPage: boolean; allowQuery: boolean }
+): MockupVariant[] {
   if (!Array.isArray(raw) || raw.length === 0) throw new Error('variants must be a non-empty array.')
   if (raw.length > MAX_MOCKUP_VARIANTS) {
     throw new Error(`variants allows at most ${MAX_MOCKUP_VARIANTS} entries; split them across calls.`)
   }
-  return { file, variants: raw.map((v, i) => parseVariant(v, i, fullPage)) }
+  return raw.map((v, i) => parseVariant(v, i, opts.fullPage, opts.allowQuery))
+}
+
+/** Best-effort parse of a variants list for display code. Returns null on bad or missing input. */
+export function parseVariantListSafe(raw: unknown, opts: { fullPage: boolean; allowQuery: boolean }): MockupVariant[] | null {
+  if (raw === undefined || raw === null) return null
+  try {
+    return parseVariantList(raw, opts)
+  } catch {
+    return null
+  }
 }
 
 /** Best-effort parse for display code that must not throw. Returns null on bad input. */
