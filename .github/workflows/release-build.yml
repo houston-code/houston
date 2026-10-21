@@ -322,10 +322,11 @@ jobs:
             exit 1
           fi
           printf 'uploading %s\n' "${files[@]}"
-          gh release upload "$tag" "${files[@]}" -R houston-code/houston --clobber
+          # retry.sh: a dropped connection here would otherwise mean redoing the whole leg.
+          bash .pipeline/scripts/retry.sh gh release upload "$tag" "${files[@]}" -R houston-code/houston --clobber
           case "$OS" in
             macos*) echo "Leaving ${feeds[0]} to the mac-feed job." ;;
-            *) gh release upload "$tag" "${feeds[@]}" -R houston-code/houston --clobber ;;
+            *) bash .pipeline/scripts/retry.sh gh release upload "$tag" "${feeds[@]}" -R houston-code/houston --clobber ;;
           esac
       - name: Save the macOS update feed for the mac-feed job
         if: startsWith(inputs.os, 'macos')
@@ -362,7 +363,7 @@ jobs:
           # binary SBOMs are attached + signed separately, per leg — see "Attach + sign
           # the binary SBOM".) The VEX travels with them so consumers get the
           # exploitability assessment, not just the list.
-          gh release upload "$tag" \
+          bash .pipeline/scripts/retry.sh gh release upload "$tag" \
             out/cli/houston-cli.cjs \
             THIRD-PARTY-NOTICES.md \
             sbom.cyclonedx.json \
@@ -383,7 +384,7 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           tag="v$VERSION"
-          gh release upload "$tag" \
+          bash .pipeline/scripts/retry.sh gh release upload "$tag" \
             "sbom.binary.${SBOM_LABEL}.cyclonedx.json" "sbom.binary.${SBOM_LABEL}.spdx.json" \
             -R houston-code/houston --clobber
       # On a REAL publish the assets live on the published GitHub Release, so no Actions

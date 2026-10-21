@@ -370,6 +370,24 @@ describe('release legs verify before they upload', () => {
     expect(upload).toBeLessThan(at('- name: Check the release is still a single draft'))
   })
 
+  it('retries every upload into the draft, which runs after the leg has built and signed', () => {
+    // A dropped connection here would otherwise mean redoing the whole leg (and notarizing again).
+    const lines = leg.split('\n')
+    const uploads = lines.flatMap((line, i) => {
+      if (!line.includes('gh release upload')) return []
+      // The whole command, through its backslash continuations.
+      let end = i
+      while (lines[end].trimEnd().endsWith('\\')) end++
+      return [lines.slice(i, end + 1).join('\n')]
+    })
+    expect(uploads).toHaveLength(4)
+    for (const command of uploads) {
+      expect(command).toContain('bash .pipeline/scripts/retry.sh gh release upload "$tag"')
+      // --clobber is what makes repeating an upload safe.
+      expect(command).toContain('--clobber')
+    }
+  })
+
   it('uploads exactly one update feed per non-macOS leg, last, and hands macOS feeds to mac-feed', () => {
     const start = at("- name: Upload this leg's installers to the draft")
     const step = leg.slice(start, leg.indexOf('\n      - ', start + 1))
