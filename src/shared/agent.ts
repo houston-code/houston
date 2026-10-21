@@ -342,8 +342,18 @@ export interface ConversationMeta {
   id: string
   title: string
   workspace: string
+  /** The chat's own model. Seeded from the default selection when the chat is created. */
   providerId: string
   model: string
+  /**
+   * The chat's own reasoning effort and approval policy. Changing them in one chat
+   * never touches another chat or the defaults (`AppSettings.reasoningEffort` /
+   * `approvalPolicy`), which only seed new chats. Absent on chats written before
+   * these were stored per chat: the defaults apply until the chat next runs or the
+   * user changes one. Values off the known lists are dropped on read.
+   */
+  reasoningEffort?: ReasoningEffort
+  approvalPolicy?: ApprovalPolicy
   createdAt: number
   updatedAt: number
   /** Pinned chats float to a "Pinned" section at the top of the sidebar. */
@@ -619,6 +629,11 @@ export interface AgentRunRequest {
   providerId: string
   model: string
   approvalPolicy: ApprovalPolicy
+  /**
+   * The conversation's reasoning effort, seeding the run's live value (see
+   * setRunEffort). Unset: each model turn reads the saved default instead.
+   */
+  reasoningEffort?: ReasoningEffort
   messages: ChatMessage[]
   /**
    * Nobody is attending this run (the one-shot headless client), so nothing can
@@ -680,7 +695,13 @@ export interface AgentSendRequest {
   providerId: string
   model: string
   approvalPolicy: ApprovalPolicy
+  reasoningEffort?: ReasoningEffort
 }
+
+/** The settings a chat keeps for itself; see {@link ConversationMeta.reasoningEffort}. */
+export type ConversationSettingsPatch = Partial<
+  Pick<ConversationMeta, 'providerId' | 'model' | 'reasoningEffort' | 'approvalPolicy'>
+>
 
 /**
  * The user's verdict on a tool-approval prompt:

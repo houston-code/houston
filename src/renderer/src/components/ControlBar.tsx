@@ -53,7 +53,8 @@ export function ControlBar({
   onChangePolicy,
   onChangeReasoning,
   onChangeWorkspace,
-  onOpenSettings
+  onOpenSettings,
+  onMakeDefault
 }: {
   settings: AppSettings
   selected: SelectedModel | null
@@ -79,6 +80,11 @@ export function ControlBar({
   onChangeReasoning: (e: ReasoningEffort) => void
   onChangeWorkspace: () => void
   onOpenSettings: () => void
+  /**
+   * Make the open chat's model, reasoning effort and approval mode the defaults for
+   * new chats. Set only while they differ from the defaults; the button hides otherwise.
+   */
+  onMakeDefault?: () => void
 }): JSX.Element {
   const provider = settings.providers.find((p) => p.id === selected?.providerId)
   const needsKey = provider?.requiresKey && !provider.hasKey
@@ -111,6 +117,9 @@ export function ControlBar({
     anthropicThinksByDefault(selected.model)
   const pct = usage ? contextPercent(usage.context, ctxWindow) : null
   const meterClass = pct === null ? '' : pct >= 95 ? ' usage__fill--danger' : pct >= 80 ? ' usage__fill--warn' : ''
+  // In an open chat these controls change that chat only; on the new-chat screen
+  // they set what new chats start with. Said in each tooltip.
+  const scope = newChat ? ' (for new chats)' : ' (this chat only)'
 
   return (
     <div className="control-bar">
@@ -217,8 +226,8 @@ export function ControlBar({
           !hasReasoning
             ? 'The selected model has no reasoning mode'
             : alwaysThinks
-              ? 'This model always reasons. Minimal runs it at the lowest effort with its reasoning hidden.'
-              : 'How hard the model should think before answering'
+              ? `This model always reasons. Minimal runs it at the lowest effort with its reasoning hidden${scope}.`
+              : `How hard the model should think before answering${scope}`
         }
       >
         {(Object.keys(REASONING_LABEL) as ReasoningEffort[]).map((r) => (
@@ -234,7 +243,7 @@ export function ControlBar({
         aria-label="Approval mode"
         data-tour="approval"
         onChange={(e) => onChangePolicy(e.target.value as ApprovalPolicy)}
-        title="How much the agent may do without asking"
+        title={`How much the agent may do without asking${scope}`}
       >
         {(Object.keys(POLICY_LABEL) as ApprovalPolicy[]).map((p) => (
           <option key={p} value={p}>
@@ -242,6 +251,16 @@ export function ControlBar({
           </option>
         ))}
       </select>
+
+      {onMakeDefault && (
+        <button
+          className="control"
+          onClick={onMakeDefault}
+          title="Start new chats with this chat's model, reasoning and approval mode. Other chats keep their own."
+        >
+          <span className="control__text">Use for new chats</span>
+        </button>
+      )}
 
       <div className="control-bar__spacer" />
 

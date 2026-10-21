@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ImageAttachment } from '@shared/images'
 import type { PromptInvocation } from '@shared/promptInvocation'
 import type { ApprovalPolicy } from '@shared/types'
+import type { ReasoningEffort } from '@shared/agent'
 import type { QueuedInputMeta } from '@shared/queue'
 
 export interface InputQueue {
@@ -15,6 +16,7 @@ export interface InputQueue {
     providerId: string
     model: string
     approvalPolicy: ApprovalPolicy
+    reasoningEffort?: ReasoningEffort
     /**
      * Queue into this conversation instead of the open one. For a fallback that
      * resolves after an async gap (a steer that the run declined), during which the
@@ -78,7 +80,8 @@ export function useInputQueue(conversationId: string | null): InputQueue {
         ...(input.invokedAs ? { invokedAs: input.invokedAs } : {}),
         providerId: input.providerId,
         model: input.model,
-        approvalPolicy: input.approvalPolicy
+        approvalPolicy: input.approvalPolicy,
+        ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {})
       })
       .then((items) => {
         if (convIdRef.current === cid) setQueued(items)

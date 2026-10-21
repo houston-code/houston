@@ -332,4 +332,32 @@ describe('ControlBar reasoning control', () => {
     const select = screen.getByRole('combobox', { name: 'Reasoning effort' })
     expect(within(select).getByRole('option', { name: 'Think: off' })).toBeInTheDocument()
   })
+
+  it('offers "Use for new chats" only when given the action, and calls it', () => {
+    const { rerender } = render(<ControlBar {...baseProps()} />)
+    expect(screen.queryByRole('button', { name: 'Use for new chats' })).not.toBeInTheDocument()
+    const onMakeDefault = vi.fn()
+    rerender(<ControlBar {...baseProps()} onMakeDefault={onMakeDefault} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Use for new chats' }))
+    expect(onMakeDefault).toHaveBeenCalledTimes(1)
+  })
+
+  it('says whether the reasoning and approval controls change this chat or new chats', () => {
+    const { rerender } = render(<ControlBar {...baseProps()} />)
+    expect(screen.getByRole('combobox', { name: 'Approval mode' })).toHaveAttribute(
+      'title',
+      expect.stringContaining('(this chat only)')
+    )
+    rerender(<ControlBar {...baseProps()} newChat />)
+    expect(screen.getByRole('combobox', { name: 'Approval mode' })).toHaveAttribute(
+      'title',
+      expect.stringContaining('(for new chats)')
+    )
+    // A model with a reasoning mode, so the control is live and carries the scope too.
+    rerender(<ControlBar {...withModel('claude-opus-4-8')} newChat />)
+    expect(screen.getByRole('combobox', { name: 'Reasoning effort' })).toHaveAttribute(
+      'title',
+      expect.stringContaining('(for new chats)')
+    )
+  })
 })

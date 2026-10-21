@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import type { ApprovalPolicy } from '@shared/types'
+import { isApprovalPolicy, type ApprovalPolicy } from '@shared/types'
+import { isReasoningEffort, type ReasoningEffort } from '@shared/agent'
 import {
   toQueuedMeta,
   type QueueAddRequest,
@@ -15,6 +16,7 @@ interface QueueState {
   providerId: string
   model: string
   approvalPolicy: ApprovalPolicy
+  reasoningEffort?: ReasoningEffort
 }
 
 /**
@@ -41,7 +43,10 @@ export function addToQueue(req: QueueAddRequest): QueuedInputMeta[] {
     items: [...(existing?.items ?? []), item],
     providerId: req.providerId,
     model: req.model,
-    approvalPolicy: req.approvalPolicy
+    // Validated here like agentStart: the drained turn runs under these, and an
+    // unknown policy fails open downstream, so coerce it to the most restrictive.
+    approvalPolicy: isApprovalPolicy(req.approvalPolicy) ? req.approvalPolicy : 'plan',
+    ...(isReasoningEffort(req.reasoningEffort) ? { reasoningEffort: req.reasoningEffort } : {})
   }
   queues.set(req.conversationId, next)
   return toQueuedMeta(next.items)

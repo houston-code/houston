@@ -1,5 +1,5 @@
 import type { ApprovalPolicy } from '@shared/types'
-import type { ChatMessage, ConversationWorktree, ToolCall } from '@shared/agent'
+import type { ChatMessage, ConversationWorktree, ReasoningEffort, ToolCall } from '@shared/agent'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
 import { repairDanglingToolResults } from './repair'
 
@@ -104,6 +104,8 @@ export interface SpawnSessionInput {
    * the spawned session is never more permissive than the one that spawned it.
    */
   approvalPolicy: ApprovalPolicy
+  /** The parent's reasoning effort, which the child keeps as its own. Unset: the default. */
+  reasoningEffort?: ReasoningEffort
   /** The parent run's workspace; the child reuses it unless a worktree is requested. */
   workspace: string
   /**

@@ -113,6 +113,28 @@ describe('runAndDrain', () => {
     expect(listQueue(cid)).toEqual([]) // drained
   })
 
+  it("runs and records a flushed turn under the chat's own effort and policy", async () => {
+    const cid = 'conv-chat-settings'
+    addToQueue({
+      conversationId: cid,
+      userText: 'A',
+      providerId: 'anthropic',
+      model: 'm1',
+      approvalPolicy: 'plan',
+      reasoningEffort: 'low'
+    })
+    endRunsWith({ done: 'end_turn' })
+    await runAndDrain(io(), cid, runReq(cid))
+    await settle()
+    expect(h.startRun.mock.calls[1][0]).toMatchObject({ approvalPolicy: 'plan', reasoningEffort: 'low' })
+    expect(h.updateConversationMeta).toHaveBeenCalledWith(cid, {
+      providerId: 'anthropic',
+      model: 'm1',
+      approvalPolicy: 'plan',
+      reasoningEffort: 'low'
+    })
+  })
+
   it('keeps a lone queued first-party prompt tagged through the flush', async () => {
     const cid = 'conv-invoked'
     const invokedAs = { kind: 'action', label: 'Create PR' } as const

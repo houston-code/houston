@@ -157,6 +157,7 @@ async function spawnProposal(
     providerId: conv.providerId,
     model: conv.model,
     approvalPolicy,
+    ...(conv.reasoningEffort !== undefined ? { reasoningEffort: conv.reasoningEffort } : {}),
     workspace: conv.workspace,
     parentConversationId: conv.id,
     // The user's own click: exempt from the cap on agent-started sessions.

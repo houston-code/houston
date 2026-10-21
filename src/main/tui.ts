@@ -67,7 +67,7 @@ import { pickDefaultModel } from '@shared/models'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { assertNever } from '@shared/assert'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
-import type { ProposalState } from '@shared/agent'
+import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
@@ -756,19 +756,26 @@ export interface ResumeEntry {
 
 /** Persistence hooks, injected so the driver stays testable without a real store. */
 export interface TuiPersist {
-  create: (input: { workspace: string; providerId: string; model: string }) => { id: string }
+  create: (input: {
+    workspace: string
+    providerId: string
+    model: string
+    reasoningEffort?: ReasoningEffort
+    approvalPolicy?: ApprovalPolicy
+  }) => { id: string }
   setMessages: (id: string, messages: ChatMessage[]) => void
   /**
-   * Rewrite the backing conversation's provider/model. `create` records them once,
-   * but the session's active model drifts when the user switches with `/model` or
-   * resumes a chat first created under a different model — leaving the stored value
-   * stale, which mis-attributes the usage scorecard and makes a GUI re-open reopen
-   * on the wrong model. The GUI keeps this in step via `updateConversationMeta` on
-   * every send; this is the terminal's counterpart.
+   * Rewrite the backing conversation's own settings (model, reasoning effort,
+   * approval policy). `create` records them once, but the session's settings drift when the
+   * user switches with `/model`, `/reasoning` or `/approval`, leaving the stored
+   * values stale: that mis-attributes the usage scorecard and makes a GUI re-open
+   * or a later `/resume` come back on the wrong settings. The GUI keeps this in step
+   * via `updateConversationMeta` on every send; this is the terminal's counterpart.
    */
-  setModel: (id: string, providerId: string, model: string) => void
+  setSettings: (id: string, patch: ConversationSettingsPatch) => void
   list: (workspace: string) => ResumeEntry[]
-  get: (id: string) => { messages: ChatMessage[] } | null
+  /** The chat's messages, plus its own settings when it has them (restored on resume). */
+  get: (id: string) => ({ messages: ChatMessage[] } & ConversationSettingsPatch) | null
   /** Recent sessions in this folder whose title/content matches `query`. */
   search: (workspace: string, query: string) => ResumeEntry[]
   /** Duplicate a conversation (fresh id, copied history); null if it can't be forked. */
@@ -1172,15 +1179,16 @@ export type SlashResult =
   | { kind: 'image'; path: string }
   /** Attach the image on the clipboard (/image with no path, /paste). */
   | { kind: 'paste-image' }
-  | { kind: 'set-approval'; policy: ApprovalPolicy }
-  | { kind: 'set-model'; providerId: string; model: string }
+  /** `asDefault` (`--default`): also make it what new chats start with. */
+  | { kind: 'set-approval'; policy: ApprovalPolicy; asDefault?: boolean }
+  | { kind: 'set-model'; providerId: string; model: string; asDefault?: boolean }
   | { kind: 'compact' }
   /** The settings overview hub (/settings). */
   | { kind: 'settings' }
   /** Environment diagnostics (/doctor). */
   | { kind: 'doctor' }
   /** Show or set how hard the model thinks before answering (/reasoning). */
-  | { kind: 'reasoning'; effort?: ReasoningEffort }
+  | { kind: 'reasoning'; effort?: ReasoningEffort; asDefault?: boolean }
   /** Turn vim keys in the composer on or off (/vim). */
   | { kind: 'vim'; on?: boolean }
   /** Revert (or restore) the files the last turn changed (/undo, /redo). */
@@ -1279,8 +1287,9 @@ export function parseSlashCommand(
       return { kind: 'doctor' }
     case 'reasoning':
     case 'think': {
-      const a = arg.trim().toLowerCase()
-      if (isReasoningEffort(a)) return { kind: 'reasoning', effort: a }
+      const { rest, asDefault } = splitDefaultFlag(arg)
+      const a = rest.toLowerCase()
+      if (isReasoningEffort(a)) return { kind: 'reasoning', effort: a, ...(asDefault ? { asDefault } : {}) }
       return { kind: 'reasoning' } // no/invalid arg → the driver reports the current one
     }
     case 'vim': {
@@ -1332,7 +1341,8 @@ export function parseSlashCommand(
     case 'paste':
       return { kind: 'paste-image' }
     case 'approval': {
-      if (isApprovalPolicy(arg)) return { kind: 'set-approval', policy: arg }
+      const { rest, asDefault } = splitDefaultFlag(arg)
+      if (isApprovalPolicy(rest)) return { kind: 'set-approval', policy: rest, ...(asDefault ? { asDefault } : {}) }
       return { kind: 'handled' } // no/invalid arg → driver prints current + usage
     }
     case 'plan':
@@ -1341,9 +1351,10 @@ export function parseSlashCommand(
     case 'compact':
       return { kind: 'compact' }
     case 'model': {
-      if (!arg) return { kind: 'handled' } // driver lists providers/models
-      const resolved = resolveModelArg(arg, settings)
-      if (resolved) return { kind: 'set-model', ...resolved }
+      const { rest, asDefault } = splitDefaultFlag(arg)
+      if (!rest) return { kind: 'handled' } // driver lists providers/models
+      const resolved = resolveModelArg(rest, settings)
+      if (resolved) return { kind: 'set-model', ...resolved, ...(asDefault ? { asDefault } : {}) }
       return { kind: 'handled' }
     }
     case 'help':
@@ -1361,6 +1372,17 @@ export function parseSlashCommand(
       return { kind: 'unknown', name }
     }
   }
+}
+
+/**
+ * Split a trailing or leading `--default` off a command argument. `/model`,
+ * `/reasoning` and `/approval` change this chat only; with `--default` they also
+ * set what new chats start with.
+ */
+export function splitDefaultFlag(arg: string): { rest: string; asDefault: boolean } {
+  const words = arg.trim().split(/\s+/).filter(Boolean)
+  const asDefault = words.includes('--default')
+  return { rest: words.filter((w) => w !== '--default').join(' '), asDefault }
 }
 
 /**
@@ -1393,9 +1415,9 @@ export function resolveModelArg(
 export const HELP_TEXT = [
   'Commands:',
   '  /help                 show this help',
-  '  /model [id]           list models, or switch (providerId, providerId/model, or model)',
+  '  /model [id]           list models, or switch this chat (add --default for new chats too)',
   '  /login                set or replace a provider API key, or add a host',
-  '  /approval [policy]    show or set policy (plan | ask | auto-edit | full-auto)',
+  '  /approval [policy]    show or set this chat\'s policy (plan | ask | auto-edit | full-auto; --default)',
   '  /plan                 shortcut: switch to plan mode (read-only research & propose)',
   '  /clear, /new          start a fresh conversation',
   '  /compact              summarize older turns to free up context now',
@@ -1411,7 +1433,7 @@ export const HELP_TEXT = [
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
   '  /settings             settings overview + where to edit them',
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
-  '  /reasoning [effort]   show or set thinking effort (off | low | medium | high | xhigh)',
+  '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /changes              what is different in the working tree (also /diff)',
@@ -2075,6 +2097,8 @@ export interface TuiDeps {
    * were trying to unblock.
    */
   setRunPolicy?: (runId: string, policy: ApprovalPolicy) => void
+  /** Retarget a running turn's reasoning effort (its next model turn), like setRunPolicy. */
+  setRunEffort?: (runId: string, effort: ReasoningEffort) => void
   /**
    * Hand a running turn a course correction, seen before its next step. Returns
    * false when the run is already over (nothing to steer), which is what lets the
@@ -2518,6 +2542,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
 
   let policy = opts.approvalPolicy ?? deps.getSettings().approvalPolicy ?? 'ask'
+  // This chat's own reasoning effort: starts at the default, changed by /reasoning,
+  // restored on /resume. The default changes only with `/reasoning <effort> --default`.
+  let effort: ReasoningEffort = deps.getSettings().reasoningEffort ?? DEFAULT_REASONING_EFFORT
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
   // Prints whatever assistant text the running turn is still holding back (markdown
@@ -2547,26 +2574,51 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
     }
   }
-  // The provider/model last written to the backing conversation's meta. `create`
-  // stores them once; after that a `/model` switch or a `/resume` onto a chat made
-  // under a different model leaves the stored value stale (see setModel). We track
-  // what we've persisted and, when a turn runs under a different model, rewrite it —
-  // mirroring the GUI, which calls updateConversationMeta on every send. null means
-  // "unknown" (freshly resumed/forked), which forces the next turn to re-sync.
-  let persistedProviderId: string | null = null
-  let persistedModel: string | null = null
+  // The settings last written to the backing conversation. `create` stores them
+  // once; after that a `/model`, `/reasoning` or `/approval` change leaves the stored
+  // values stale (see setSettings). We track what we've persisted and, when a turn
+  // runs under different settings, rewrite them, mirroring the GUI, which calls
+  // updateConversationMeta on every send. null means "unknown" (freshly forked, or
+  // resumed from a chat that never stored them), which forces the next turn to re-sync.
+  type ChatSettingsKey = string
+  const settingsKey = (): ChatSettingsKey => JSON.stringify([providerId, model, effort, policy])
+  let persistedSettings: ChatSettingsKey | null = null
   const syncPersistedModel = (): void => {
     if (!deps.persist || !conversationId || !providerId || !model) return
-    if (persistedProviderId === providerId && persistedModel === model) return
+    if (persistedSettings === settingsKey()) return
     try {
-      deps.persist.setModel(conversationId, providerId, model)
-      persistedProviderId = providerId
-      persistedModel = model
+      deps.persist.setSettings(conversationId, { providerId, model, reasoningEffort: effort, approvalPolicy: policy })
+      persistedSettings = settingsKey()
     } catch (e) {
       if (!warnedPersistFail) {
         warnedPersistFail = true
         deps.io.out(paint(`· couldn't save the conversation (continuing unsaved): ${(e as Error).message}\n`, 'dim'))
       }
+    }
+  }
+  // Opening a saved chat (--continue, /resume, /spawned) switches the session to that
+  // chat's own settings, the ones it last ran under. A stored model whose provider is
+  // gone keeps the session's; values a chat never stored keep the session's too, and
+  // the first turn then writes them. Says what changed, so a switch is never silent.
+  const adoptChatSettings = (conv: ConversationSettingsPatch): void => {
+    const before = settingsKey()
+    const known = deps.getSettings().providers.some((p) => p.id === conv.providerId)
+    if (conv.providerId && conv.model && known) {
+      providerId = conv.providerId
+      model = conv.model
+    }
+    if (isReasoningEffort(conv.reasoningEffort)) effort = conv.reasoningEffort
+    if (isApprovalPolicy(conv.approvalPolicy)) {
+      policy = conv.approvalPolicy
+      deps.io.setMode?.(policy)
+    }
+    const complete =
+      known && conv.model && isReasoningEffort(conv.reasoningEffort) && isApprovalPolicy(conv.approvalPolicy)
+    persistedSettings = complete ? settingsKey() : null
+    if (settingsKey() !== before) {
+      deps.io.out(
+        paint(`· this chat's settings: ${providerId} / ${model}, thinking ${effort}, approval ${policy}\n`, 'dim')
+      )
     }
   }
   // Short project label, folded into titles/notifications so two terminals in two
@@ -2701,10 +2753,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (conv) {
       conversationId = entry!.id
       messages = conv.messages
-      persistedProviderId = persistedModel = null
       deps.io.out(
         paint(`· continuing "${entry!.title}" (${messages.length} message(s))\n`, 'dim')
       )
+      adoptChatSettings(conv)
     } else if (wanted) {
       deps.io.out(paint(`· no saved session "${wanted}" in this folder; starting fresh\n`, 'yellow'))
     } else {
@@ -2903,7 +2955,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'clear') {
         messages = []
         conversationId = null // next turn starts (and persists) a fresh conversation
-        persistedProviderId = persistedModel = null // stored meta belongs to the old conversation
+        persistedSettings = null // stored meta belongs to the old conversation
         pendingImages = [] // don't carry a staged /image into the fresh conversation
         contextTokens = 0 // the context meter belongs to the old conversation
         deps.io.out(paint('· conversation cleared\n', 'dim'))
@@ -2931,7 +2983,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· cancelled\n', 'dim'))
           continue
         }
-        let conv: { messages: ChatMessage[] } | null
+        let conv: ReturnType<TuiPersist['get']>
         try {
           conv = deps.persist.get(id)
         } catch (e) {
@@ -2944,11 +2996,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         conversationId = id
         messages = conv.messages
-        // The resumed chat's stored model is unknown to the driver; mark the meta
-        // stale so the first turn re-syncs it to the model actually in use (which may
-        // differ from the one it was created under).
-        persistedProviderId = persistedModel = null
         deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
+        adoptChatSettings(conv)
         continue
       }
       if (result.kind === 'fork') {
@@ -2970,7 +3019,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         conversationId = forked.id
         // The fork is a fresh conversation whose stored model we don't track; mark it
         // stale so the next turn re-syncs the meta to the active model.
-        persistedProviderId = persistedModel = null
+        persistedSettings = null
         deps.io.out(paint('· forked: continuing on a copy, original left intact\n', 'dim'))
         continue
       }
@@ -3041,7 +3090,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· opening a session needs a session store\n', 'dim'))
           continue
         }
-        let conv: { messages: ChatMessage[] } | null
+        let conv: ReturnType<TuiPersist['get']>
         try {
           conv = deps.persist.get(id)
         } catch (e) {
@@ -3058,7 +3107,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const stillRunning = list.find((x) => x.id === id)?.running
         conversationId = id
         messages = conv.messages
-        persistedProviderId = persistedModel = null
+        adoptChatSettings(conv)
         deps.io.out(
           paint(
             stillRunning
@@ -3074,17 +3123,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'reasoning') {
-        const current = deps.getSettings().reasoningEffort ?? DEFAULT_REASONING_EFFORT
         if (!result.effort) {
-          deps.io.out(`${renderReasoningStatus(current, activeModelReasons(deps, providerId, model), paint)}\n`)
+          deps.io.out(`${renderReasoningStatus(effort, activeModelReasons(deps, providerId, model), paint)}\n`)
           continue
         }
-        if (!deps.updateSettings) {
-          deps.io.out(paint('· changing settings is unavailable here\n', 'dim'))
-          continue
+        // This chat's effort; the next turn runs under it. --default also makes it
+        // what new chats start with.
+        effort = result.effort
+        if (activeRunId) deps.setRunEffort?.(activeRunId, effort)
+        if (result.asDefault) {
+          if (deps.updateSettings) deps.updateSettings({ reasoningEffort: effort })
+          else deps.io.out(paint('· saving the default is unavailable here; changed this chat only\n', 'dim'))
         }
-        deps.updateSettings({ reasoningEffort: result.effort })
-        deps.io.out(paint(`· thinking effort → ${result.effort}\n`, 'dim'))
+        deps.io.out(
+          paint(`· thinking effort → ${effort}${result.asDefault && deps.updateSettings ? ' (new chats too)' : ''}\n`, 'dim')
+        )
         // Say it plainly rather than let someone wonder why nothing changed.
         if (result.effort !== 'off' && activeModelReasons(deps, providerId, model) === false) {
           deps.io.out(
@@ -3202,17 +3255,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (result.kind === 'set-approval') {
         policy = result.policy
         deps.io.setMode?.(policy)
-        deps.io.out(paint(`· approval policy → ${policy}\n`, 'dim'))
+        const asDefault = result.asDefault && deps.updateSettings
+        if (asDefault) deps.updateSettings?.({ approvalPolicy: policy })
+        deps.io.out(paint(`· approval policy → ${policy}${asDefault ? ' (new chats too)' : ''}\n`, 'dim'))
         continue
       }
       if (result.kind === 'set-model') {
         providerId = result.providerId
         model = result.model
-        // Persist the switch as the saved selection, mirroring the GUI's picker —
-        // otherwise the next launch snaps back to whatever `selected` was stored
-        // last (usually by a long-ago /login) and the switch silently evaporates.
-        deps.updateSettings?.({ selected: { providerId, model } })
-        deps.io.out(paint(`· model → ${providerId} / ${model}\n`, 'dim'))
+        // This chat's model, stored on the chat at its next turn (so /resume and the
+        // desktop app reopen it on this model). --default also makes it the model new
+        // chats, and the next launch, start on.
+        const asDefault = result.asDefault && deps.updateSettings
+        if (asDefault) deps.updateSettings?.({ selected: { providerId, model } })
+        deps.io.out(paint(`· model → ${providerId} / ${model}${asDefault ? ' (new chats too)' : ''}\n`, 'dim'))
         continue
       }
       if (result.kind === 'set-theme') {
@@ -3380,10 +3436,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // when the store can't be written (degrade rather than crash the REPL).
     if (deps.persist && !conversationId) {
       try {
-        conversationId = deps.persist.create({ workspace: opts.cwd, providerId, model }).id
+        conversationId = deps.persist.create({
+          workspace: opts.cwd,
+          providerId,
+          model,
+          reasoningEffort: effort,
+          approvalPolicy: policy
+        }).id
         // create() stored these, so the meta already matches — no sync needed below.
-        persistedProviderId = providerId
-        persistedModel = model
+        persistedSettings = settingsKey()
       } catch (e) {
         if (!warnedPersistFail) {
           warnedPersistFail = true
@@ -3408,6 +3469,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       providerId,
       model,
       approvalPolicy: policy,
+      reasoningEffort: effort,
       messages,
       // show_images results print as clickable file links (see renderImageLinks).
       imageLinks: true

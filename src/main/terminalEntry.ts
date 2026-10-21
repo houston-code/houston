@@ -18,7 +18,8 @@ import {
   resolvePlan,
   resolveElicitation,
   cancelRun,
-  setRunPolicy
+  setRunPolicy,
+  setRunEffort
 } from './agent/loop'
 import { killAllShells } from './agent/shells'
 import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
@@ -534,6 +535,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       resolveElicitation,
       cancelRun,
       setRunPolicy,
+      setRunEffort,
       steerRun,
       editText: (initial) => editInEditor(initial),
       persistHistory,
@@ -599,12 +601,11 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       io,
       highlightHtml: (lang, codeStr) => highlightToHtml(hljs, lang, codeStr),
       persist: {
-        create: ({ workspace, providerId, model }) =>
-          createConversation({ workspace, providerId, model }),
+        create: (input) => createConversation(input),
         setMessages,
-        // Keep the stored provider/model current after a `/model` switch or a `/resume`
-        // (the GUI's per-send updateConversationMeta counterpart).
-        setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model }),
+        // Keep the chat's stored settings current after a `/model`, `/reasoning` or
+        // `/approval` change (the GUI's per-send updateConversationMeta counterpart).
+        setSettings: (id, patch) => updateConversationMeta(id, patch),
         // Recent conversations for this folder, newest first, for the `/resume` picker.
         list: (workspace) =>
           listConversations()
@@ -624,7 +625,15 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
         },
         get: (id) => {
           const conv = getConversation(id)
-          return conv ? { messages: conv.messages } : null
+          return conv
+            ? {
+                messages: conv.messages,
+                providerId: conv.providerId,
+                model: conv.model,
+                ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {}),
+                ...(conv.approvalPolicy ? { approvalPolicy: conv.approvalPolicy } : {})
+              }
+            : null
         }
       }
     })

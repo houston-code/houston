@@ -12,6 +12,8 @@ function fakeDeps(overrides: Partial<SpawnDeps> = {}): {
       workspace: string
       providerId: string
       model: string
+      reasoningEffort?: string
+      approvalPolicy?: string
       worktree?: ConversationWorktree
       spawnedFrom?: { conversationId: string; title: string }
     }>
@@ -123,6 +125,21 @@ describe('createSpawnBackend', () => {
 
     expect(result).toMatchObject({ conversationId: 'conv-1', workspace: '/repo' })
     expect(result.worktree).toBeUndefined()
+  })
+
+  it("stores the parent's policy and effort on the child, and runs it under them", async () => {
+    const { deps, calls } = fakeDeps()
+    await createSpawnBackend(deps).spawn({ ...baseInput, approvalPolicy: 'plan', reasoningEffort: 'low' })
+    // The child keeps them as its own, so a later change in the parent doesn't reach it.
+    expect(calls.created[0]).toMatchObject({ approvalPolicy: 'plan', reasoningEffort: 'low' })
+    expect(calls.runs[0].req).toMatchObject({ approvalPolicy: 'plan', reasoningEffort: 'low' })
+  })
+
+  it('leaves the child on the default effort when the parent had none of its own', async () => {
+    const { deps, calls } = fakeDeps()
+    await createSpawnBackend(deps).spawn(baseInput)
+    expect(calls.created[0]).not.toHaveProperty('reasoningEffort')
+    expect(calls.runs[0].req).not.toHaveProperty('reasoningEffort')
   })
 
   it('branches off a worktree, runs there, and remembers the repo root (not the worktree)', async () => {

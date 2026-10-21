@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -10,6 +10,7 @@ import {
   conversationMatches,
   createConversation,
   forkConversation,
+  importConversation,
   listConversations,
   reportChildToParent,
   saveSideChat,
@@ -20,7 +21,9 @@ import {
   mergeRunningTotals,
   needsGeneratedTitle,
   organizeConversation,
-  setMessages
+  setConversationSettings,
+  setMessages,
+  updateConversationMeta
 } from './conversations'
 import { setUserDataDir, resetUserDataDir } from './userData'
 import type { AgentEvent, Conversation, ConversationUsage } from '@shared/agent'
@@ -356,5 +359,149 @@ describe('saveSideChat (persisted)', () => {
     saveSideChat(c.id, null)
     expect(getConversation(c.id)!.sideChat).toBeUndefined()
     saveSideChat('missing-id', sideChat) // a gone chat is a no-op
+  })
+})
+
+describe('per-chat settings (persisted)', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  const rewrite = (id: string, patch: Record<string, unknown>): void => {
+    const raw = JSON.parse(readFileSync(file(id), 'utf8')) as Record<string, unknown>
+    writeFileSync(file(id), JSON.stringify({ ...raw, ...patch }))
+  }
+
+  it('stores the settings a chat is created with, and lists them', () => {
+    const c = createConversation({
+      workspace: '/ws',
+      providerId: 'p',
+      model: 'm',
+      reasoningEffort: 'low',
+      approvalPolicy: 'plan'
+    })
+    expect(getConversation(c.id)).toMatchObject({ reasoningEffort: 'low', approvalPolicy: 'plan' })
+    expect(listConversations().find((m) => m.id === c.id)).toMatchObject({
+      reasoningEffort: 'low',
+      approvalPolicy: 'plan'
+    })
+  })
+
+  it('drops values off the lists at create rather than storing them', () => {
+    const c = createConversation({
+      workspace: '/ws',
+      providerId: 'p',
+      model: 'm',
+      reasoningEffort: 'enormous' as never,
+      approvalPolicy: 'yolo' as never
+    })
+    const got = getConversation(c.id)
+    expect(got?.reasoningEffort).toBeUndefined()
+    expect(got?.approvalPolicy).toBeUndefined()
+  })
+
+  it('setConversationSettings saves each field, without reordering the sidebar', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const before = getConversation(c.id)!.updatedAt
+    const meta = setConversationSettings(c.id, {
+      providerId: 'q',
+      model: 'n',
+      reasoningEffort: 'xhigh',
+      approvalPolicy: 'auto-edit'
+    })
+    expect(meta).toMatchObject({ providerId: 'q', model: 'n', reasoningEffort: 'xhigh', approvalPolicy: 'auto-edit' })
+    expect(getConversation(c.id)).toMatchObject({
+      providerId: 'q',
+      model: 'n',
+      reasoningEffort: 'xhigh',
+      approvalPolicy: 'auto-edit',
+      updatedAt: before
+    })
+  })
+
+  it('setConversationSettings ignores unknown values and a model without its provider', () => {
+    const c = createConversation({
+      workspace: '/ws',
+      providerId: 'p',
+      model: 'm',
+      reasoningEffort: 'low',
+      approvalPolicy: 'ask'
+    })
+    setConversationSettings(c.id, { approvalPolicy: 'full-auto ' as never, reasoningEffort: 'max' as never })
+    setConversationSettings(c.id, { model: 'other' })
+    setConversationSettings(c.id, { providerId: '', model: 'x' })
+    setConversationSettings(c.id, null as never)
+    expect(getConversation(c.id)).toMatchObject({
+      providerId: 'p',
+      model: 'm',
+      reasoningEffort: 'low',
+      approvalPolicy: 'ask'
+    })
+  })
+
+  it('setConversationSettings returns null for a chat that does not exist', () => {
+    expect(setConversationSettings('00000000-0000-4000-8000-000000000000', { approvalPolicy: 'ask' })).toBeNull()
+  })
+
+  it('updateConversationMeta records what a turn ran under, dropping unknown values', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm', approvalPolicy: 'ask' })
+    updateConversationMeta(c.id, { providerId: 'q', model: 'n', reasoningEffort: 'medium', approvalPolicy: 'plan' })
+    expect(getConversation(c.id)).toMatchObject({ providerId: 'q', reasoningEffort: 'medium', approvalPolicy: 'plan' })
+    updateConversationMeta(c.id, { approvalPolicy: 'bogus' as never })
+    expect(getConversation(c.id)?.approvalPolicy).toBeUndefined()
+  })
+
+  it('a hand-edited or newer file with unknown values reads back as using the defaults', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm', approvalPolicy: 'ask' })
+    rewrite(c.id, { approvalPolicy: 'full-auto-plus', reasoningEffort: 42 })
+    const got = getConversation(c.id)
+    // Never coerced to some other policy: unset means "the default", like an older chat.
+    expect(got?.approvalPolicy).toBeUndefined()
+    expect(got?.reasoningEffort).toBeUndefined()
+  })
+
+  it('an older chat with neither field still loads, with both unset', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    rewrite(c.id, { schemaVersion: undefined })
+    const got = getConversation(c.id)
+    expect(got).toMatchObject({ providerId: 'p', model: 'm' })
+    expect(got?.approvalPolicy).toBeUndefined()
+    expect(got?.reasoningEffort).toBeUndefined()
+  })
+
+  it('a fork keeps the source chat\'s settings', () => {
+    const c = createConversation({
+      workspace: '/ws',
+      providerId: 'p',
+      model: 'm',
+      reasoningEffort: 'low',
+      approvalPolicy: 'plan'
+    })
+    const fork = forkConversation(c.id)
+    expect(fork).toMatchObject({ providerId: 'p', model: 'm', reasoningEffort: 'low', approvalPolicy: 'plan' })
+  })
+
+  it('an imported chat never takes an approval policy or effort from the file', () => {
+    const imported = importConversation(
+      {
+        title: 'Imported',
+        messages: [],
+        providerId: 'p',
+        model: 'm',
+        approvalPolicy: 'full-auto',
+        reasoningEffort: 'xhigh'
+      } as never,
+      { workspace: '/ws', providerId: 'p', model: 'm' }
+    )
+    const got = getConversation(imported.id)
+    expect(got?.approvalPolicy).toBeUndefined()
+    expect(got?.reasoningEffort).toBeUndefined()
   })
 })
