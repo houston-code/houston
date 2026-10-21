@@ -2236,6 +2236,38 @@ h6.md-h {
 .md-list .md-list {
   margin: 4px 0 4px;
 }
+/* GFM task items: the box replaces the bullet and hangs in the list's indent. */
+.md-task {
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-left: -20px;
+}
+.md-task__box {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--text-dim);
+  border-radius: 4px;
+  transform: translateY(2px);
+}
+.md-task__box.is-checked {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: #fff;
+}
+.md-task__box .icon {
+  stroke-width: 2.2;
+}
+.md-task__body {
+  flex: 1;
+  min-width: 0;
+}
 .md-link {
   color: var(--accent);
   text-decoration: none;
