@@ -182,7 +182,7 @@ describe('importLegacyRules', () => {
 
 describe('decideLegacyRulesNotice', () => {
   const settings = { recentWorkspaces: [] } as unknown as import('@shared/types').AppSettings
-  const dismissed = { ...settings, legacyRulesNoticeDismissed: true }
+  const dismissed = { ...settings, theme: 'dark' as const }
 
   function deps(importRules?: () => string) {
     return { current: vi.fn(() => settings), dismiss: vi.fn(() => dismissed), importRules }

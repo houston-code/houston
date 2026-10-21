@@ -44,8 +44,6 @@ import {
   getProvider,
   isGitInitDismissed,
   dismissGitInit,
-  isLegacyRulesNoticeDismissed,
-  dismissLegacyRulesNotice,
   folderTrustFor,
   setFolderTrust
 } from './store'
@@ -90,6 +88,7 @@ import { gatherDoctorFacts } from './doctor'
 import type { DoctorFacts } from '@shared/doctor'
 import { saveMemory } from './memory'
 import { decideLegacyRulesNotice, legacyRulesNoticeApplies } from './globalRules'
+import { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } from './legacyRulesNotice'
 import { MAX_MEMORY_NOTE } from '@shared/memory'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import {
@@ -461,7 +460,13 @@ export function registerIpc(): void {
   ipcMain.handle(
     IPC.legacyRulesNoticeDecide,
     (_event, choice: unknown): LegacyRulesDecideResult =>
-      decideLegacyRulesNotice(choice, { current: getSettings, dismiss: dismissLegacyRulesNotice })
+      decideLegacyRulesNotice(choice, {
+        current: getSettings,
+        dismiss: () => {
+          dismissLegacyRulesNotice()
+          return getSettings()
+        }
+      })
   )
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".

@@ -6,7 +6,7 @@ import { GlobalRulesNotice } from './GlobalRulesNotice'
 const TITLE = /Your global rules now live in/
 
 function installApi(opts: { show?: boolean; decide?: LegacyRulesDecideResult | Error } = {}) {
-  const { show = true, decide = { settings: { legacyRulesNoticeDismissed: true } } } = opts
+  const { show = true, decide = { settings: { theme: 'dark' } } } = opts
   const getLegacyRulesNotice = vi.fn().mockResolvedValue(show)
   const decideLegacyRulesNotice =
     decide instanceof Error ? vi.fn().mockRejectedValue(decide) : vi.fn().mockResolvedValue(decide)
@@ -39,7 +39,7 @@ describe('GlobalRulesNotice', () => {
   })
 
   it('imports, hands back fresh settings, and hides', async () => {
-    const settings = { legacyRulesNoticeDismissed: true }
+    const settings = { theme: 'dark' }
     const { decideLegacyRulesNotice } = installApi({
       decide: { settings, file: '/h/.houston/AGENTS.md' } as LegacyRulesDecideResult
     })

@@ -52,8 +52,7 @@ import {
   canSetKey,
   getSettings,
   setProviderKey,
-  updateSettings,
-  takeLegacyRulesTerminalNotice
+  updateSettings
 } from './store'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
@@ -62,6 +61,7 @@ import type { DoctorFacts } from './tui-doctor'
 import { gatherDoctorFacts } from './doctor'
 import { saveMemory } from './memory'
 import { legacyRulesNoticeApplies } from './globalRules'
+import { takeLegacyRulesTerminalNotice } from './legacyRulesNotice'
 import { checkForUpdate } from './update-check'
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
 import { runHeadless, type HeadlessOptions } from './headless'
