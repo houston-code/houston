@@ -223,6 +223,31 @@ describe('reduceEvent — retry', () => {
     expect(notices[0].text).toContain('retrying (3/6)')
   })
 
+  it('settles the notice in the past tense when the run gives up', () => {
+    let items: DisplayItem[] = []
+    for (const n of [1, 2, 3, 4, 5, 6]) items = reduceEvent(items, retry(n))
+    items = reduceEvent(items, { runId: 'r', type: 'error', message: 'Connection error.' })
+    const notices = items.filter((i): i is NoticeItem => i.kind === 'notice')
+    expect(notices.map((n) => [n.tone, n.text])).toEqual([
+      ['info', '⟳ Connection issue: tried 6 more times, then stopped.'],
+      ['error', 'Connection error.']
+    ])
+    expect(notices[0].retry).toBeUndefined()
+  })
+
+  it('says "time" for a single retry', () => {
+    let items = reduceEvent([], retry(1))
+    items = reduceEvent(items, { runId: 'r', type: 'error', message: 'boom' })
+    expect((items[0] as NoticeItem).text).toBe('⟳ Connection issue: tried 1 more time, then stopped.')
+  })
+
+  it('leaves an earlier retry notice alone when an unrelated error follows other output', () => {
+    let items = reduceEvent([], retry(1))
+    items = reduceEvent(items, { runId: 'r', type: 'text', delta: 'recovered' })
+    items = reduceEvent(items, { runId: 'r', type: 'error', message: 'later failure' })
+    expect((items[0] as NoticeItem).text).toContain('retrying (1/6)')
+  })
+
   it('starts a new notice when other output came between attempts', () => {
     let items = reduceEvent([], retry(1))
     items = reduceEvent(items, { runId: 'r', type: 'text', delta: 'partial reply' })
