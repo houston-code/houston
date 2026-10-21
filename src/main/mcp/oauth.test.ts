@@ -12,6 +12,7 @@ import {
   registerClient,
   runMcpOAuthFlow,
   tokensNeedRefresh,
+  urlOpenCommand,
   type FetchFn,
   type McpOAuthTokens
 } from './oauth'
@@ -93,6 +94,33 @@ describe('isAllowedEndpointUrl', () => {
     expect(isAllowedEndpointUrl('http://as.example.com/authorize')).toBe(false)
     expect(isAllowedEndpointUrl('javascript:alert(1)')).toBe(false)
     expect(isAllowedEndpointUrl('not a url')).toBe(false)
+  })
+})
+
+describe('urlOpenCommand', () => {
+  // An authorization endpoint is server-controlled, and a URL keeps these characters
+  // unescaped in its path and fragment. cmd.exe would read `|` as a pipe.
+  const hostile = new URL('https://as.example.com/a|calc^x(y)#z|calc')
+  hostile.searchParams.set('state', 's&t')
+  const url = hostile.toString()
+
+  it('hands the URL to rundll32 on Windows as one argument, never to cmd', () => {
+    expect(url).toContain('|calc')
+    const command = urlOpenCommand(url, 'win32')
+    expect(command).toEqual(['rundll32', ['url.dll,FileProtocolHandler', url]])
+    expect(command![0]).not.toMatch(/^cmd/i)
+  })
+
+  it('uses open on macOS and xdg-open elsewhere, with the URL as its own argument', () => {
+    expect(urlOpenCommand(url, 'darwin')).toEqual(['open', [url]])
+    expect(urlOpenCommand(url, 'linux')).toEqual(['xdg-open', [url]])
+  })
+
+  it('refuses anything but an http(s) URL', () => {
+    expect(urlOpenCommand('file:///etc/passwd', 'darwin')).toBeNull()
+    expect(urlOpenCommand('javascript:alert(1)', 'win32')).toBeNull()
+    expect(urlOpenCommand('-a Calculator', 'darwin')).toBeNull()
+    expect(urlOpenCommand('not a url', 'linux')).toBeNull()
   })
 })
 
