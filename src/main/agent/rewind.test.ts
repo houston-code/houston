@@ -305,7 +305,8 @@ describe('rewind', () => {
     expect(read('a.txt')).toBe('a1')
   })
 
-  it('refuses to restore through a symlink, leaving its target untouched', async () => {
+  // POSIX-only: Windows symlink creation needs elevated privileges in CI.
+  it.skipIf(process.platform === 'win32')('refuses to restore through a symlink, leaving its target untouched', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'houston-rw-out-'))
     try {
       writeFileSync(file('a.txt'), 'a0')
@@ -321,7 +322,8 @@ describe('rewind', () => {
     }
   })
 
-  it('refuses to restore under a parent swapped for a symlink out of the workspace', async () => {
+  // POSIX-only: Windows symlink creation needs elevated privileges in CI.
+  it.skipIf(process.platform === 'win32')('refuses to restore under a parent swapped for a symlink out of the workspace', async () => {
     const outside = mkdtempSync(join(tmpdir(), 'houston-rw-out-'))
     try {
       await agentTurn('one', { 'sub/x.txt': 'made' })
@@ -329,7 +331,7 @@ describe('rewind', () => {
       writeFileSync(join(outside, 'x.txt'), 'made')
       symlinkSync(outside, file('sub'))
       const r = await rewindConversation(convId, 0, 'code', 'one')
-      expect(r).toMatchObject({ ok: true, restored: 0, conflicts: ['sub/x.txt'] })
+      expect(r).toMatchObject({ ok: true, restored: 0, conflicts: [join('sub', 'x.txt')] })
       expect(readFileSync(join(outside, 'x.txt'), 'utf8')).toBe('made')
     } finally {
       rmSync(outside, { recursive: true, force: true })
