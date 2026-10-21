@@ -1359,6 +1359,29 @@ describe('stale-write guard', () => {
     await expect(run('write_file', { path: 'gone.txt', content: 'y' })).rejects.toThrow(/not read it yet/)
   })
 
+  it('counts an image too large to attach as seen without loading it into a listing', async () => {
+    const big = Buffer.alloc(6 * 1024 * 1024, 1)
+    writeFileSync(join(workspace, 'huge.png'), big)
+    expect(await run('read_file', { path: 'huge.png' })).toMatch(/huge\.png \(6\.0 MB\): too large to attach/)
+    expect(tracker.check(join(workspace, 'huge.png'), big)).toBeNull()
+  })
+
+  it('describes a notebook too large to parse instead of loading it, and counts it as seen', async () => {
+    const big = Buffer.from(`{"cells": [], "nbformat": 4, "pad": "${'x'.repeat(65 * 1024 * 1024)}"}`)
+    writeFileSync(join(workspace, 'huge.ipynb'), big)
+    expect(await run('read_file', { path: 'huge.ipynb' })).toMatch(/huge\.ipynb \(65\.0 MB\): too large to render/)
+    expect(tracker.check(join(workspace, 'huge.ipynb'), big)).toBeNull()
+  })
+
+  it('records a streamed text read by the digest of the whole file', async () => {
+    const text = Array.from({ length: 5_000 }, (_, i) => `row ${i}`).join('\n')
+    put('rows.txt', text)
+    await run('read_file', { path: 'rows.txt', offset: 10, limit: 2 })
+    expect(tracker.check(join(workspace, 'rows.txt'), Buffer.from(text))).toBeNull()
+    put('rows.txt', `${text}\nmore`)
+    expect(tracker.check(join(workspace, 'rows.txt'), Buffer.from(`${text}\nmore`))).toBe('changed')
+  })
+
   it('counts an image read as seen, so the refusal can always be cleared', async () => {
     writeFileSync(join(workspace, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]))
     await run('read_file', { path: 'logo.png' })
