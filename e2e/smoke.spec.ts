@@ -1,43 +1,11 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import electronPath from 'electron'
-import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
+import { expect, test } from '@playwright/test'
+import { launchApp } from './launch'
 
-const ROOT = join(__dirname, '..')
-
-/**
- * Decide what to launch. Prefer the packaged app from `npm run dist` (in
- * `release/`): it runs the real artifact — the asar archive, bundled resources
- * (e.g. the vendored ripgrep), and the `app.isPackaged` code paths. Fall back to
- * the unpackaged `out/` bundle from `npm run build` for fast local runs. CI
- * builds with `npm run dist`, so it always smoke-tests the packaged app.
- */
-function resolveLaunch(): { executablePath: string; args: string[]; mode: string } {
-  for (const dir of ['mac-arm64', 'mac', 'mac-universal']) {
-    const bin = join(ROOT, 'release', dir, 'Houston.app', 'Contents', 'MacOS', 'Houston')
-    if (existsSync(bin)) return { executablePath: bin, args: [], mode: `packaged (${dir})` }
-  }
-  // In Node, importing `electron` yields the path to the executable, but its
-  // published types describe the in-process API — cast to use it as the launcher.
-  return {
-    executablePath: electronPath as unknown as string,
-    args: [join(ROOT, 'out', 'main', 'index.js')],
-    mode: 'unpackaged (out/)'
-  }
-}
+// Each test launches the packaged app when one is built (see e2e/launch.ts), so these
+// exercise the real artifact in CI and the out/ bundle in fast local runs.
 
 test('app boots and renders the UI', async () => {
-  const { executablePath, args, mode } = resolveLaunch()
-  test.info().annotations.push({ type: 'launch-mode', description: mode })
-
-  // Isolate userData: a boot writes settings and window state. Without isolation
-  // those writes land in the developer's REAL profile. Use a throwaway dir.
-  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
-  const app: ElectronApplication = await electron.launch({
-    executablePath,
-    args: [...args, `--user-data-dir=${userDataDir}`]
-  })
+  const { app, close } = await launchApp()
 
   try {
     const window = await app.firstWindow()
@@ -52,20 +20,12 @@ test('app boots and renders the UI', async () => {
     // BrowserWindow opened. (It renders a "Loading…" placeholder until then.)
     await expect(window.locator('.app')).toBeVisible()
   } finally {
-    await app.close()
-    rmSync(userDataDir, { recursive: true, force: true })
+    await close()
   }
 })
 
 test('integrated terminal opens and round-trips through a PTY', async () => {
-  const { executablePath, args, mode } = resolveLaunch()
-  test.info().annotations.push({ type: 'launch-mode', description: mode })
-
-  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
-  const app: ElectronApplication = await electron.launch({
-    executablePath,
-    args: [...args, `--user-data-dir=${userDataDir}`]
-  })
+  const { app, close } = await launchApp()
 
   try {
     const window = await app.firstWindow()
@@ -109,16 +69,12 @@ test('integrated terminal opens and round-trips through a PTY', async () => {
     )
     expect(drained).toBe(false)
   } finally {
-    await app.close()
-    rmSync(userDataDir, { recursive: true, force: true })
+    await close()
   }
 })
 
 test('⌘W is bound to a custom terminal-aware Close, not the default window close', async () => {
-  const { executablePath, args, mode } = resolveLaunch()
-  test.info().annotations.push({ type: 'launch-mode', description: mode })
-
-  const app: ElectronApplication = await electron.launch({ executablePath, args })
+  const { app, close } = await launchApp()
   try {
     // Inspect the live application menu from the main process. The File → Close
     // item must carry ⌘W and our own click handler (role null) rather than the
@@ -137,19 +93,12 @@ test('⌘W is bound to a custom terminal-aware Close, not the default window clo
     expect(close?.accelerator).toBe('CmdOrCtrl+W')
     expect(close?.role).toBeNull()
   } finally {
-    await app.close()
+    await close()
   }
 })
 
 test('forces slim auto-hiding overlay scrollbars regardless of the OS setting', async () => {
-  const { executablePath, args, mode } = resolveLaunch()
-  test.info().annotations.push({ type: 'launch-mode', description: mode })
-
-  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
-  const app: ElectronApplication = await electron.launch({
-    executablePath,
-    args: [...args, `--user-data-dir=${userDataDir}`]
-  })
+  const { app, close } = await launchApp()
 
   try {
     const window = await app.firstWindow()
@@ -178,23 +127,12 @@ test('forces slim auto-hiding overlay scrollbars regardless of the OS setting', 
     })
     expect(barWidth).toBeLessThan(15)
   } finally {
-    await app.close()
-    rmSync(userDataDir, { recursive: true, force: true })
+    await close()
   }
 })
 
 test('sidebar collapses to a rail and expands again', async () => {
-  const { executablePath, args, mode } = resolveLaunch()
-  test.info().annotations.push({ type: 'launch-mode', description: mode })
-
-  // Isolate userData so toggling collapse persists into a throwaway dir instead
-  // of the developer's real settings, and so the app starts in the known default
-  // (expanded) state regardless of local config.
-  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
-  const app: ElectronApplication = await electron.launch({
-    executablePath,
-    args: [...args, `--user-data-dir=${userDataDir}`]
-  })
+  const { app, close } = await launchApp()
 
   try {
     const window = await app.firstWindow()
@@ -216,7 +154,6 @@ test('sidebar collapses to a rail and expands again', async () => {
     await expand.click()
     await expect(window.locator('[role="separator"][aria-label="Resize sidebar"]')).toBeVisible()
   } finally {
-    await app.close()
-    rmSync(userDataDir, { recursive: true, force: true })
+    await close()
   }
 })

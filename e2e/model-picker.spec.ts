@@ -1,10 +1,5 @@
-import { mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import electronPath from 'electron'
-import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
-
-const ROOT = join(__dirname, '..')
+import { expect, test } from '@playwright/test'
+import { launchApp } from './launch'
 
 /**
  * The model picker is a custom listbox (not a native <select>) precisely so it can be
@@ -13,11 +8,7 @@ const ROOT = join(__dirname, '..')
  * layout-dependent, so it can't be checked under jsdom — it needs the real app.
  */
 test('model picker opens upward, fully on-screen, in advanced-first order', async () => {
-  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
-  const app: ElectronApplication = await electron.launch({
-    executablePath: electronPath as unknown as string,
-    args: [join(ROOT, 'out', 'main', 'index.js'), `--user-data-dir=${userDataDir}`]
-  })
+  const { app, close } = await launchApp()
   try {
     const page = await app.firstWindow()
     await expect(page.locator('.app')).toBeVisible()
@@ -70,7 +61,6 @@ test('model picker opens upward, fully on-screen, in advanced-first order', asyn
     // the whole list, since any one model's number moves with the seed.
     for (const o of info.options) expect(o).toMatch(/\b\d+(\.\d+)?[kM]\b/)
   } finally {
-    await app.close()
-    rmSync(userDataDir, { recursive: true, force: true })
+    await close()
   }
 })
