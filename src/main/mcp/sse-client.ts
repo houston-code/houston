@@ -361,12 +361,15 @@ export class McpSseClient implements McpConnection {
   private waitForEndpoint(timeoutMs: number): Promise<void> {
     const ready = this.endpointReady
     if (!ready) return Promise.reject(new Error('SSE stream not opened'))
+    // Cleared once the race settles: left armed, the timer outlived every connect by
+    // its full 20 seconds and kept a finished one-shot CLI run from exiting.
+    let timer: ReturnType<typeof setTimeout> | undefined
     return Promise.race([
       ready,
-      new Promise<void>((_, reject) =>
-        setTimeout(() => reject(new Error('MCP SSE endpoint handshake timed out')), timeoutMs)
-      )
-    ])
+      new Promise<void>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('MCP SSE endpoint handshake timed out')), timeoutMs)
+      })
+    ]).finally(() => clearTimeout(timer))
   }
 
   private async rpc(
