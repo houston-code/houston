@@ -63,7 +63,7 @@ import { isReasoningEffort, REASONING_EFFORTS } from '@shared/agent'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd } from '@shared/usage'
 import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
-import { pickDefaultModel } from '@shared/models'
+import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { assertNever } from '@shared/assert'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
@@ -1226,6 +1226,8 @@ export type SlashResult =
   | { kind: 'paste-image' }
   /** `asDefault` (`--default`): also make it what new chats start with. */
   | { kind: 'set-approval'; policy: ApprovalPolicy; asDefault?: boolean }
+  /** Choose a model from the ready ones (/model with no model named). */
+  | { kind: 'pick-model'; asDefault?: boolean }
   | { kind: 'set-model'; providerId: string; model: string; asDefault?: boolean }
   | { kind: 'compact' }
   /** The settings overview hub (/settings). */
@@ -1397,7 +1399,9 @@ export function parseSlashCommand(
       return { kind: 'compact' }
     case 'model': {
       const { rest, asDefault } = splitDefaultFlag(arg)
-      if (!rest) return { kind: 'handled' } // driver lists providers/models
+      // Bare /model: pick from a list (the desktop's model picker), or list them
+      // when the terminal can't show a picker.
+      if (!rest) return { kind: 'pick-model', ...(asDefault ? { asDefault } : {}) }
       const resolved = resolveModelArg(rest, settings)
       if (resolved) return { kind: 'set-model', ...resolved, ...(asDefault ? { asDefault } : {}) }
       return { kind: 'handled' }
@@ -2996,7 +3000,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
 
     if (text.startsWith('/')) {
-      const result = parseSlashCommand(text, deps.getSettings(), templateCommands)
+      let result = parseSlashCommand(text, deps.getSettings(), templateCommands)
       if (result.kind === 'exit') break
       if (result.kind === 'clear') {
         messages = []
@@ -3306,6 +3310,27 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(paint(`· approval policy → ${policy}${asDefault ? ' (new chats too)' : ''}\n`, 'dim'))
         continue
       }
+      if (result.kind === 'pick-model') {
+        const choices = deps.io.select ? modelChoices(deps.getSettings(), providerId, model) : []
+        if (choices.length === 0) {
+          // No picker (or nothing ready to pick): list providers and models instead.
+          handleInfoCommand(text, { providerId, model, policy, cwd: opts.cwd, sessionCost, modelCosts }, deps, paint)
+          continue
+        }
+        const r = await deps.io.select!({
+          title: 'Model:',
+          options: choices.map((c, i) => ({ label: c.label, value: String(i), description: c.description }))
+        })
+        if (r.kind !== 'commit') continue
+        const picked = choices[Number(r.value)]
+        if (!picked) continue
+        result = {
+          kind: 'set-model',
+          providerId: picked.providerId,
+          model: picked.model,
+          ...(result.asDefault ? { asDefault: true } : {})
+        }
+      }
       if (result.kind === 'set-model') {
         providerId = result.providerId
         model = result.model
@@ -3314,7 +3339,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // chats, and the next launch, start on.
         const asDefault = result.asDefault && deps.updateSettings
         if (asDefault) deps.updateSettings?.({ selected: { providerId, model } })
-        deps.io.out(paint(`· model → ${providerId} / ${model}${asDefault ? ' (new chats too)' : ''}\n`, 'dim'))
+        const kind = deps.getSettings().providers.find((p) => p.id === providerId)?.kind
+        const shown = kind ? modelDisplayName(kind, model) : model
+        const where = `${providerId} / ${model}`
+        const named = shown === model ? where : `${shown}  (${where})`
+        deps.io.out(paint(`· model → ${named}${asDefault ? ' (new chats too)' : ''}\n`, 'dim'))
         continue
       }
       if (result.kind === 'set-theme') {
@@ -3991,6 +4020,37 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   deps.io.signal?.({ title: '' })
   deps.io.out(paint('\nBye.\n', 'dim'))
   return 0
+}
+
+/**
+ * The models /model offers to switch to: every model of a provider that is ready
+ * (no key needed, or one saved), by its display name as the desktop's picker shows
+ * it, with the current one first. Models the provider no longer serves are left out.
+ */
+export function modelChoices(
+  settings: AppSettings,
+  currentProvider: string | null,
+  currentModel: string | null
+): Array<{ providerId: string; model: string; label: string; description: string }> {
+  const out: Array<{ providerId: string; model: string; label: string; description: string }> = []
+  for (const p of settings.providers) {
+    if (p.requiresKey && !p.hasKey) continue
+    for (const m of p.models) {
+      if (m.unavailableAt) continue
+      const current = p.id === currentProvider && m.id === currentModel
+      const label = m.label ?? modelDisplayName(p.kind, m.id)
+      const entry = {
+        providerId: p.id,
+        model: m.id,
+        label,
+        // The id only when the name differs from it, so it is what you'd type for /model <id>.
+        description: [p.label, label === m.id ? '' : m.id, current ? 'current' : ''].filter(Boolean).join(' · ')
+      }
+      if (current) out.unshift(entry)
+      else out.push(entry)
+    }
+  }
+  return out
 }
 
 function handleInfoCommand(
