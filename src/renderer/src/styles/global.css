@@ -898,11 +898,6 @@ body.is-resizing {
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
-.model-menu__price {
-  color: var(--text-dim);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
 /* "New" mark after the name: a model released recently or added by an update. */
 .model-menu__new {
   margin-left: 6px;

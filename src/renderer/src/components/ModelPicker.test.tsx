@@ -79,16 +79,18 @@ describe('ModelPicker', () => {
     fireEvent.click(screen.getByRole('combobox'))
     expect(
       screen.getByRole('option', {
-        name: 'GPT-5, 400k context, tools, vision, reasoning, $1.25 input, $10 output per million tokens'
+        name: 'GPT-5, 400k context, tools, vision, reasoning'
       })
     ).toBeInTheDocument()
   })
 
-  it('shows the price per million tokens next to each priced model', () => {
+  it('shows no prices, even for models with known pricing', () => {
     renderPicker()
     fireEvent.click(screen.getByRole('combobox'))
-    const opt = screen.getByRole('option', { name: /^GPT-4o,/ })
-    expect(within(opt).getByText('$2.50/$10')).toBeInTheDocument()
+    for (const opt of screen.getAllByRole('option')) {
+      expect(opt.textContent).not.toContain('$')
+      expect(opt.getAttribute('aria-label')).not.toMatch(/\$|per million tokens/)
+    }
   })
 
   it('marks the current model as the selected option', () => {
@@ -233,18 +235,6 @@ describe('ModelPicker', () => {
     const badge = within(flagged[0]).getByText('Not found')
     expect(badge.getAttribute('title')).toContain('2026-10-20')
     expect(screen.getAllByText('Not found')).toHaveLength(1)
-  })
-
-  it('marks a price that rises for long prompts, and reads the higher rate aloud', () => {
-    const settings = {
-      providers: [provider({ id: 'anthropic', kind: 'anthropic', label: 'Anthropic (Claude)', models: [{ id: 'claude-haiku-5-5' }] })]
-    } as unknown as AppSettings
-    renderPicker({ settings, selected: null })
-    fireEvent.click(screen.getByRole('combobox'))
-    const opt = screen.getByRole('option', {
-      name: /\$0\.10 input, \$0\.50 output per million tokens, \$0\.50 input, \$2\.50 output above 100k tokens/
-    })
-    expect(within(opt).getByText('$0.10/$0.50+')).toBeInTheDocument()
   })
 
   it('shows the tools badge on Claude, whose listing carries no capability metadata', () => {

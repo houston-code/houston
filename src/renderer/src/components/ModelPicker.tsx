@@ -4,7 +4,6 @@ import {
   formatTokens,
   resolveCapabilities,
   resolveContextWindow,
-  resolvePricing,
   resolveToolSupport
 } from '@shared/usage'
 import { modelDisplayName, sortedModels } from '@shared/models'
@@ -44,27 +43,6 @@ function modelName(kind: ProviderConfig['kind'], m: ModelOption): string {
 function windowLabel(m: ModelOption): string {
   const win = resolveContextWindow(m.id, m.caps)
   return win ? formatTokens(win) : ''
-}
-
-/** A per-million-token price, compact: `$4`, `$2.50`, `$0.10`. */
-function usd(n: number): string {
-  return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`
-}
-
-/** Input / output price per million tokens, or null when no price is known. */
-function priceOf(m: ModelOption): { short: string; spoken: string } | null {
-  const p = resolvePricing(m.id, m.caps)
-  if (!p) return null
-  const base = `${usd(p.input)} input, ${usd(p.output)} output per million tokens`
-  const long = p.longContext
-  return {
-    // A trailing "+" marks a price that rises for long prompts; the tooltip and the spoken
-    // name give the higher rate.
-    short: `${usd(p.input)}/${usd(p.output)}${long ? '+' : ''}`,
-    spoken: long
-      ? `${base}, ${usd(long.input)} input, ${usd(long.output)} output above ${formatTokens(long.above)} tokens`
-      : base
-  }
 }
 
 function daysSince(date: string | undefined, now: Date): number | null {
@@ -122,7 +100,7 @@ interface FlatOption {
 /**
  * Model selector: a trigger plus a popover listbox with a search field. It's a popover
  * rather than a native <select> so it can open upward from the bottom-docked control bar,
- * group by provider, and annotate each model (capabilities, price, context window, "New").
+ * group by provider, and annotate each model (capabilities, context window, "New").
  *
  * Providers that can be called right now are listed first; ones missing a key follow, and
  * ones with no models collapse into a single line. Typing filters across every provider.
@@ -345,7 +323,6 @@ export function ModelPicker({
                   const isSelected = key === selectedKey
                   const win = windowLabel(m)
                   const chips = capChips(m)
-                  const price = priceOf(m)
                   const fresh = isNew(m, today)
                   const missing = !!m.unavailableAt
                   const name = modelName(provider.kind, m)
@@ -354,7 +331,6 @@ export function ModelPicker({
                     missing && `not found by ${provider.label}`,
                     win && `${win} context`,
                     ...chips.map((c) => c.spoken),
-                    price?.spoken,
                     fresh && 'new'
                   ]
                     .filter(Boolean)
@@ -402,11 +378,6 @@ export function ModelPicker({
                                 {c.glyph}
                               </span>
                             ))}
-                          </span>
-                        )}
-                        {price && (
-                          <span className="model-menu__price" title={`Per million tokens: ${price.spoken}`}>
-                            {price.short}
                           </span>
                         )}
                         {win && <span className="model-menu__win">{win}</span>}
