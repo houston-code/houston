@@ -94,6 +94,30 @@ describe('Composer', () => {
     expect(screen.queryByText('Start a new chat')).not.toBeInTheDocument()
   })
 
+  it('names the message field, whatever the placeholder says', () => {
+    render(<Composer {...baseProps()} />)
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBeInTheDocument()
+  })
+
+  it('exposes the command menu as a listbox tracking the highlighted option', () => {
+    render(<Composer {...baseProps()} />)
+    const input = type('/')
+    const list = screen.getByRole('listbox', { name: 'Commands' })
+    const options = within(list).getAllByRole('option')
+    expect(options).toHaveLength(2)
+    expect(input).toHaveAttribute('aria-controls', list.id)
+    expect(input).toHaveAttribute('aria-activedescendant', options[0].id)
+    expect(options[0]).toHaveAttribute('aria-selected', 'true')
+
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(input).toHaveAttribute('aria-activedescendant', options[1].id)
+    expect(options[1]).toHaveAttribute('aria-selected', 'true')
+
+    fireEvent.mouseDown(document.body)
+    expect(input).not.toHaveAttribute('aria-controls')
+    expect(input).not.toHaveAttribute('aria-activedescendant')
+  })
+
   it('shows the disabled reason as the placeholder', () => {
     render(
       <Composer

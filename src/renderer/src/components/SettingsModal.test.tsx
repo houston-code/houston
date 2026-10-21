@@ -187,6 +187,20 @@ describe('SettingsModal', () => {
     await waitFor(() => expect(window.api.getVersion).toHaveBeenCalled())
   })
 
+  it('marks the open section in a labelled nav', () => {
+    installApi()
+    renderModal()
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' })
+    const current = (): string[] =>
+      within(nav)
+        .getAllByRole('button')
+        .filter((b) => b.getAttribute('aria-current') === 'page')
+        .map((b) => b.textContent?.trim() ?? '')
+    expect(current()).toEqual(['Models & Inference'])
+    fireEvent.click(within(nav).getByRole('button', { name: 'Keyboard' }))
+    expect(current()).toEqual(['Keyboard'])
+  })
+
   it('renders Legal as the last tab in the nav, revealing its links when selected', () => {
     installApi()
     renderModal()
