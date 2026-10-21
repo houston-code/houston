@@ -195,7 +195,15 @@ jobs:
           codesign -dvv "$app" 2>&1 | grep -q 'Authority=Developer ID Application' \
             || { echo "::error::$app is not signed with a Developer ID Application certificate"; exit 1; }
           # The notarization ticket must be stapled to the bundle (offline Gatekeeper proof).
-          xcrun stapler validate "$app"
+          # `stapler validate` also looks the ticket up on Apple's servers, so a dropped
+          # connection fails it ("The network connection was lost", exit 68); retry before
+          # failing the leg. A missing ticket fails every attempt.
+          for attempt in 1 2 3; do
+            if xcrun stapler validate "$app"; then break; fi
+            if [ "$attempt" -eq 3 ]; then echo "::error::stapler validate failed 3 times for $app"; exit 1; fi
+            echo "::warning::stapler validate failed (attempt $attempt of 3); retrying in 30s"
+            sleep 30
+          done
           # Informational only — never fail the release on spctl's flakiness.
           spctl --assess --type exec --verbose=4 "$app" \
             || echo "::warning::spctl assessment did not pass (informational only — codesign + stapler are the gates)"
@@ -343,7 +351,8 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: node .pipeline/scripts/release-draft.mjs check houston-code/houston "v$VERSION"
       # Fail the release if the macOS artifact isn't properly Developer-ID-signed AND
-      # notarized. codesign --verify + `stapler validate` are deterministic, offline checks
+      # notarized. codesign --verify + `stapler validate` are deterministic checks (stapler
+      # retried for its network lookup)
       # and GATE the release. `spctl --assess` (the full Gatekeeper policy assessment) is
       # flaky on CI runners — the reason electron-builder's gatekeeperAssess is off — so it
       # runs last, INFORMATIONAL only, and never fails the job.

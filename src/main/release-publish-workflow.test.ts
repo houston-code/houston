@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -427,5 +428,50 @@ describe('release legs receive the macOS signing secrets', () => {
     // Unsigned (release-prepare): no keychain probing, and no signature to verify.
     expect(leg).toContain("CSC_IDENTITY_AUTO_DISCOVERY: ${{ inputs.sign && 'true' || 'false' }}")
     expect(leg).toContain("if: startsWith(inputs.os, 'macos') && inputs.sign")
+  })
+})
+
+describe('macOS notarization check', () => {
+  // `stapler validate` looks the ticket up on Apple's servers; a dropped connection (exit 68)
+  // failed the darwin-arm64 leg of the v0.9.0 publish after it had signed and notarized.
+  const loop = (() => {
+    const start = leg.indexOf('          for attempt in 1 2 3; do\n')
+    expect(start).toBeGreaterThan(-1)
+    const end = leg.indexOf('          done\n', start)
+    return leg.slice(start, end + '          done\n'.length)
+  })()
+
+  /** Runs the retry loop with `xcrun` failing the first `failures` calls; sleep is a no-op. */
+  function run(failures: number) {
+    const script = [
+      'set -e',
+      'app=Houston.app; calls=0',
+      `xcrun() { calls=$((calls + 1)); [ "$calls" -gt ${failures} ] || return 68; }`,
+      'sleep() { :; }',
+      loop,
+      'echo "calls=$calls"'
+    ].join('\n')
+    return spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+  }
+
+  it.skipIf(process.platform === 'win32')('passes after a transient failure', () => {
+    const res = run(2)
+    expect(res.status).toBe(0)
+    expect(res.stdout).toContain('calls=3')
+    expect(res.stdout).toContain('attempt 2 of 3')
+  })
+
+  it.skipIf(process.platform === 'win32')('fails the leg when every attempt fails', () => {
+    const res = run(3)
+    expect(res.status).toBe(1)
+    expect(res.stdout).toContain('::error::stapler validate failed 3 times for Houston.app')
+    expect(res.stdout).not.toContain('calls=')
+  })
+
+  it('stays inside the signed-only verification step', () => {
+    const start = leg.indexOf('      - name: Verify code signature + notarization\n')
+    const step = leg.slice(start, leg.indexOf('\n      - ', start + 1))
+    expect(step).toContain("if: startsWith(inputs.os, 'macos') && inputs.sign")
+    expect(step).toContain(loop)
   })
 })
