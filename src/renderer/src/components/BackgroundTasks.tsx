@@ -1,155 +1,51 @@
-import { useRef, useState } from 'react'
-import { Popover } from './Popover'
 import { Icon } from './Icon'
 import { Tooltip } from './Tooltip'
 import type { BackgroundTask } from '../hooks/useBackgroundTasks'
 
-/** Coarse "x ago" label for a finished task; precision isn't important here. */
-function formatAgo(now: number, then: number): string {
-  const s = Math.max(0, Math.round((now - then) / 1000))
-  if (s < 45) return 'just now'
-  const m = Math.round(s / 60)
-  if (m < 60) return `${m}m ago`
-  const h = Math.round(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.round(h / 24)}d ago`
-}
-
-const STATUS_LABEL: Record<BackgroundTask['status'], string> = {
-  running: 'Running',
-  done: 'Completed',
-  error: 'Failed'
-}
-
-const KIND_LABEL: Record<BackgroundTask['kind'], string> = {
-  terminal: 'Terminal',
-  shell: 'Shell'
-}
-
-/** The dim secondary line: kind, location, status, and (when finished) age. */
-function metaLine(task: BackgroundTask, now: number): string {
-  return [
-    KIND_LABEL[task.kind],
-    task.subtitle,
-    STATUS_LABEL[task.status],
-    task.finishedAt !== undefined ? formatAgo(now, task.finishedAt) : ''
-  ]
-    .filter(Boolean)
-    .join(' · ')
+/**
+ * How many tasks need attention: backgrounded shells that are running, plus exited
+ * ones that left a server running. An integrated terminal is user-opened and stays
+ * "running" the whole time it's open, so counting it would keep the badge
+ * permanently lit; terminals still appear in the panel, they just don't nag here.
+ */
+export function activeTaskCount(tasks: readonly BackgroundTask[]): number {
+  return tasks.filter((t) => t.kind !== 'terminal' && (t.status === 'running' || t.status === 'leftover'))
+    .length
 }
 
 /**
- * Top-right indicator for background tasks — integrated terminal sessions and the
- * agent's backgrounded shells, plus the most recently finished of each. The button
- * shows a live count while a backgrounded command is in progress; clicking a task
- * in the popover opens that terminal or the conversation that spawned it. (Chat
- * runs live in the sidebar as per-chat dots, not here.)
+ * Title-bar button for background tasks: integrated terminals and the agent's
+ * backgrounded shells. It shows a pulsing count while backgrounded work is live and
+ * toggles the Tasks tab of the right-hand dock. It never opens anything on its own:
+ * the count is the signal, and the user decides when to look.
  */
 export function BackgroundTasks({
   tasks,
-  onSelect,
-  onClearFinished
+  active,
+  onToggle
 }: {
   tasks: BackgroundTask[]
-  onSelect: (task: BackgroundTask) => void
-  onClearFinished: () => void
+  /** The dock is open on the Tasks tab. */
+  active: boolean
+  onToggle: () => void
 }): JSX.Element {
-  const [open, setOpen] = useState(false)
-  const btnRef = useRef<HTMLButtonElement>(null)
-
-  // The attention badge counts backgrounded shells only — an integrated terminal
-  // is user-opened and stays "running" the whole time it's open, so counting it
-  // would keep the badge permanently lit. Terminals still appear in the list
-  // below; they just don't nag from the titlebar.
-  const runningCount = tasks.filter((t) => t.status === 'running' && t.kind !== 'terminal').length
-  const hasFinished = tasks.some((t) => t.status !== 'running')
-  const now = Date.now()
-
-  const pick = (task: BackgroundTask): void => {
-    onSelect(task)
-    setOpen(false)
-  }
-
+  const count = activeTaskCount(tasks)
   return (
-    <>
-      <Tooltip
-        label={
-          runningCount > 0
-            ? `Background tasks: ${runningCount} running`
-            : 'Background tasks'
-        }
-        disabled={open}
+    <Tooltip label={count > 0 ? `Background tasks: ${count} running` : 'Background tasks'}>
+      <button
+        type="button"
+        className={`titlebar__action bgtasks__btn${active ? ' titlebar__action--active' : ''}`}
+        aria-label={count > 0 ? `Background tasks, ${count} running` : 'Background tasks'}
+        aria-pressed={active}
+        onClick={onToggle}
       >
-        <button
-          ref={btnRef}
-          type="button"
-          className="titlebar__action bgtasks__btn"
-          aria-haspopup="menu"
-          aria-expanded={open}
-          aria-label={
-            runningCount > 0 ? `Background tasks, ${runningCount} running` : 'Background tasks'
-          }
-          onClick={() => setOpen((v) => !v)}
-        >
-          <Icon name="tasks" size={15} />
-          {runningCount > 0 && (
-            <span className="titlebar__badge bgtasks__count" data-running="">
-              {runningCount}
-            </span>
-          )}
-        </button>
-      </Tooltip>
-
-      {open && (
-        <Popover
-          anchorRef={btnRef}
-          onClose={() => setOpen(false)}
-          align="right"
-          role="menu"
-          ariaLabel="Background tasks"
-          className="menu bgtasks__menu"
-        >
-          <div className="bgtasks__head">
-            <span className="bgtasks__title">Background tasks</span>
-            {hasFinished && (
-              <button type="button" className="bgtasks__clear" onClick={() => onClearFinished()}>
-                Clear finished
-              </button>
-            )}
-          </div>
-
-          {tasks.length === 0 ? (
-            <div className="bgtasks__empty">
-              No background tasks. Terminals and commands the agent runs in the
-              background keep going here while you work elsewhere.
-            </div>
-          ) : (
-            <ul className="bgtasks__list">
-              {tasks.map((t) => (
-                <li key={`${t.kind}:${t.id}`}>
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="bgtasks__item"
-                    onClick={() => pick(t)}
-                  >
-                    <span
-                      className={`bgtasks__status bgtasks__status--${t.status}`}
-                      aria-hidden="true"
-                    >
-                      {t.status === 'running' ? '' : t.status === 'error' ? '✕' : '✓'}
-                    </span>
-                    <span className="bgtasks__body">
-                      <span className="bgtasks__name">{t.title}</span>
-                      <span className="bgtasks__meta">{metaLine(t, now)}</span>
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Popover>
-      )}
-    </>
+        <Icon name="tasks" size={15} />
+        {count > 0 && (
+          <span className="titlebar__badge bgtasks__count" data-running="">
+            {count}
+          </span>
+        )}
+      </button>
+    </Tooltip>
   )
 }

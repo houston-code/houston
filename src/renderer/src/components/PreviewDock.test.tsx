@@ -148,3 +148,71 @@ describe('PreviewDock', () => {
     expect(screen.getByText(/\+1 more not shown \(max 3\)/)).toBeInTheDocument()
   })
 })
+
+describe('PreviewDock tabs (Preview | Tasks)', () => {
+  function renderTabbed(tab: 'preview' | 'tasks', onTabChange = vi.fn(), servers: PreviewServer[] = []) {
+    const utils = render(
+      <PreviewDock
+        servers={servers}
+        occluded={false}
+        onResizeMouseDown={noop}
+        onClose={vi.fn()}
+        tab={tab}
+        onTabChange={onTabChange}
+        taskCount={2}
+        tasks={<p>tasks content</p>}
+      />
+    )
+    return { ...utils, onTabChange }
+  }
+
+  it('has no tab strip when used Preview-only', () => {
+    renderDock()
+    expect(screen.queryByRole('tablist')).toBeNull()
+    expect(screen.getByLabelText('Hide preview panel')).toBeInTheDocument()
+  })
+
+  it('shows the Preview tab selected with the Tasks tab carrying the live count', () => {
+    renderTabbed('preview')
+    const preview = screen.getByRole('tab', { name: 'Preview' })
+    const tasks = screen.getByRole('tab', { name: /Tasks/ })
+    expect(preview).toHaveAttribute('aria-selected', 'true')
+    expect(tasks).toHaveAttribute('aria-selected', 'false')
+    expect(within(tasks).getByLabelText('2 running')).toHaveTextContent('2')
+    expect(screen.getByRole('tabpanel', { name: 'Preview' })).toBeVisible()
+    expect(screen.getByText('tasks content')).not.toBeVisible()
+  })
+
+  it('switches tabs on click and with the arrow keys', () => {
+    const { onTabChange } = renderTabbed('preview')
+    fireEvent.click(screen.getByRole('tab', { name: /Tasks/ }))
+    expect(onTabChange).toHaveBeenLastCalledWith('tasks')
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Preview' }), { key: 'ArrowRight' })
+    expect(onTabChange).toHaveBeenLastCalledWith('tasks')
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Preview' }), { key: 'End' })
+    expect(onTabChange).toHaveBeenLastCalledWith('tasks')
+  })
+
+  it('keeps Preview mounted but hides its native pages while Tasks shows', () => {
+    renderTabbed('tasks', vi.fn(), [running('a', 'http://localhost:3000/')])
+    expect(screen.getByText('tasks content')).toBeVisible()
+    // The pane's DOM survives (added URLs and choices are kept) …
+    expect(screen.getByText('http://localhost:3000/')).toBeInTheDocument()
+    // … but main is told not to paint the native view over the Tasks list.
+    expect(api.syncPreviewPanes).toHaveBeenLastCalledWith(expect.any(Array), false)
+  })
+
+  it('labels the close button for the whole panel', () => {
+    renderTabbed('preview')
+    expect(screen.getByLabelText('Hide side panel')).toBeInTheDocument()
+  })
+})
+
+describe('PreviewDock pane labels', () => {
+  it('labels a server pane by the command that runs it, with the full command on hover', () => {
+    const cmd = 'cd /w/app/web && source venv/bin/activate && python manage.py runserver > /tmp/log 2>&1'
+    renderDock({ servers: [{ id: 'a', command: cmd, running: true, url: 'http://localhost:8000/' }] })
+    const label = screen.getByText('python manage.py runserver')
+    expect(label).toHaveAttribute('title', cmd)
+  })
+})

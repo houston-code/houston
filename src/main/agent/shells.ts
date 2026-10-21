@@ -1,10 +1,11 @@
 import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
-import type { BackgroundShellInfo } from '@shared/agent'
+import type { BackgroundShellInfo, KillShellOutcome } from '@shared/agent'
 import { killProcessTree } from '../sandbox'
 import { detectLocalUrls, type FoundUrl } from './loopback'
 import { writeShellLedger, type LedgerEntry } from './shellLedger'
+import { redactSecrets } from './redact'
 import type { PreviewServer } from '@shared/preview'
 
 /**
@@ -43,6 +44,13 @@ interface Shell {
   exitedAt: number | null
   /** Conversation whose agent run spawned this shell (for renderer navigation). */
   conversationId?: string
+  /** The workspace the shell ran in (its starting directory), for relative folder labels. */
+  workspace?: string
+  /**
+   * Both streams' most recent output in arrival order, for the Tasks panel's output
+   * tail. Kept separately from stdout/stderr because those can't be re-interleaved.
+   */
+  recent: string
   /**
    * Loopback URLs the shell printed (e.g. http://localhost:5173/), the ones labeled
    * as the local page first, then in the order they appeared. Capped.
@@ -119,6 +127,14 @@ function persistLedger(): void {
   writeShellLedger(entries)
 }
 
+/** Trailing characters of interleaved output kept for the Tasks panel's tail. */
+const MAX_RECENT = 16_000
+
+function appendRecent(buf: string, chunk: string): string {
+  const next = buf + chunk
+  return next.length > MAX_RECENT ? next.slice(next.length - MAX_RECENT) : next
+}
+
 function appendCapped(buf: string, chunk: string): string {
   const next = buf + chunk
   return next.length > MAX_BUF ? next.slice(next.length - MAX_BUF) : next
@@ -141,7 +157,8 @@ export function unreadSlice(buffer: string, produced: number, cursor: number): s
 export function registerShell(
   command: string,
   child: ChildProcess,
-  conversationId?: string
+  conversationId?: string,
+  workspace?: string
 ): string {
   const id = randomUUID().slice(0, 8)
   const shell: Shell = {
@@ -161,7 +178,9 @@ export function registerShell(
     previewUrls: [],
     announcedCount: 0,
     reportedUrls: new Set(),
-    ...(conversationId ? { conversationId } : {})
+    recent: '',
+    ...(conversationId ? { conversationId } : {}),
+    ...(workspace ? { workspace } : {})
   }
   // Sniff each freshly arrived chunk for the loopback URLs the servers announce.
   // Servers print them on a line of their own early on, so scanning the chunk (not
@@ -179,12 +198,14 @@ export function registerShell(
     const s = outDecoder.write(c)
     shell.stdoutProduced += s.length
     shell.stdout = appendCapped(shell.stdout, s)
+    shell.recent = appendRecent(shell.recent, s)
     sniff(s)
   })
   child.stderr?.on('data', (c: Buffer) => {
     const s = errDecoder.write(c)
     shell.stderrProduced += s.length
     shell.stderr = appendCapped(shell.stderr, s)
+    shell.recent = appendRecent(shell.recent, s)
     sniff(s)
   })
   child.on('close', (code) => {
@@ -277,7 +298,10 @@ function groupHasLiveMembers(pid: number | undefined): boolean {
  * - `already-exited`: the shell and everything it started had already ended.
  * - `not-found`: no shell with that id.
  */
-export type KillShellResult = 'killed' | 'killed-leftovers' | 'already-exited' | 'not-found'
+export type KillShellResult = KillShellOutcome
+
+/** Delay before re-broadcasting after stopping a leftover, so the list sees it gone. */
+const LEFTOVER_SETTLE_MS = 300
 
 /**
  * Stop a background shell and its process tree. A shell that already exited is still
@@ -295,6 +319,9 @@ export function killShell(id: string): KillShellResult {
   if (groupHasLiveMembers(s.child.pid)) {
     killProcessTree(s.child)
     persistLedger()
+    // No 'close' event follows (the shell already exited), so tell listeners the
+    // leftover is gone once SIGKILL has had a moment to land.
+    setTimeout(notifyShellsChanged, LEFTOVER_SETTLE_MS).unref?.()
     return 'killed-leftovers'
   }
   return 'already-exited'
@@ -315,8 +342,39 @@ export function listShells(): BackgroundShellInfo[] {
     exitCode: s.exitCode,
     startedAt: s.startedAt,
     exitedAt: s.exitedAt,
-    ...(s.conversationId ? { conversationId: s.conversationId } : {})
+    // An exited shell whose group still has members left a process running (most
+    // often a server it backgrounded). Probed at list time, so a refresh of the list
+    // also notices when that leftover finally goes away.
+    ...(!s.running && groupHasLiveMembers(s.child.pid) ? { leftover: true } : {}),
+    ...(s.previewUrls.length ? { urls: [...s.previewUrls] } : {}),
+    ...(s.conversationId ? { conversationId: s.conversationId } : {}),
+    ...(s.workspace ? { workspace: s.workspace } : {})
   }))
+}
+
+/** Terminal color/cursor escape sequences, which would show as junk in the panel. */
+// eslint-disable-next-line no-control-regex
+const ANSI_ESCAPE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g
+
+/** Most lines {@link shellTail} returns. */
+const TAIL_MAX_LINES = 40
+
+/**
+ * The last lines a background shell printed (both streams, in arrival order) with
+ * secrets masked, for the Tasks panel. Read-only: moves no read cursor, so showing it
+ * never hides output from the agent's next read_shell_output. Undefined for an
+ * unknown id.
+ */
+export function shellTail(id: string, maxLines = TAIL_MAX_LINES): string[] | undefined {
+  const s = shells.get(id)
+  if (!s) return undefined
+  const n = Math.max(1, Math.min(TAIL_MAX_LINES, Math.floor(maxLines) || TAIL_MAX_LINES))
+  const lines = redactSecrets(s.recent.replace(ANSI_ESCAPE, ''))
+    // A progress bar redraws its line with \r; keep only the last redraw.
+    .split('\n')
+    .map((l) => l.slice(l.lastIndexOf('\r') + 1).trimEnd())
+    .filter((l) => l.length > 0)
+  return lines.slice(-n)
 }
 
 /**

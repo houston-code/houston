@@ -9,8 +9,24 @@ import type { BackgroundShellInfo } from '@shared/agent'
  * The background-tasks indicator uses this to surface long-running commands the
  * agent spawned (dev servers, watchers) alongside chats and terminals.
  */
-export function useBackgroundShells(): BackgroundShellInfo[] {
+export function useBackgroundShells(pollMs = 0): BackgroundShellInfo[] {
   const [shells, setShells] = useState<BackgroundShellInfo[]>([])
+
+  // Optional re-poll (the Tasks tab while visible): a server an exited shell left
+  // running can die on its own, and nothing broadcasts that, so ask again.
+  useEffect(() => {
+    if (pollMs <= 0 || typeof window.api?.getBackgroundShells !== 'function') return
+    let alive = true
+    const timer = setInterval(() => {
+      void window.api.getBackgroundShells().then((list) => {
+        if (alive) setShells(list)
+      })
+    }, pollMs)
+    return () => {
+      alive = false
+      clearInterval(timer)
+    }
+  }, [pollMs])
 
   useEffect(() => {
     // Guard for test setups that stub only part of `window.api`.

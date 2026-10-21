@@ -116,7 +116,11 @@
 .attach-menu__item:focus-visible,
 .tool-row__head--clickable:focus-visible,
 .titlebar__action:focus-visible,
-.bgtasks__item:focus-visible,
+.tasks__head:focus-visible,
+.tasks__iconbtn:focus-visible,
+.tasks__clear:focus-visible,
+.tasks__output:focus-visible,
+.dock-tabs__tab:focus-visible,
 .jump-bottom:focus-visible,
 .msg__copy:focus-visible,
 .question__option:focus-visible,
@@ -3528,74 +3532,177 @@ body.is-resizing .preview-dock__resizer::after {
   border-color: var(--danger, #e5534b);
 }
 
-/* ---- Background tasks indicator (title-bar button + popover) ---- */
-/* The corner count badge (a `.titlebar__badge`) pulses while runs are live, so
-   "something is working" reads the same as the sidebar's running dot. */
+/* ---- Background tasks: title-bar count + the dock's Tasks tab ---- */
+/* The corner count badge (a `.titlebar__badge`) pulses while backgrounded work is
+   live, so "something is working" reads the same as the sidebar's running dot. */
 .bgtasks__count[data-running] {
   animation: conv-pulse 1.2s ease-in-out infinite;
 }
-.bgtasks__menu {
-  min-width: 280px;
-  max-width: 340px;
-  padding: 0;
-  gap: 0;
+@media (prefers-reduced-motion: reduce) {
+  .bgtasks__count[data-running],
+  .tasks__status--running {
+    animation: none;
+  }
 }
-.bgtasks__head {
+
+/* Dock tab strip (Preview | Tasks) in the dock header. */
+.dock-tabs {
   display: flex;
+  gap: 2px;
+}
+.dock-tabs__tab {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 9px 12px;
-  border-bottom: 1px solid var(--border);
-}
-.bgtasks__title {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-dim);
-}
-.bgtasks__clear {
-  -webkit-app-region: no-drag;
-  background: none;
+  gap: 6px;
   border: none;
-  padding: 0;
-  font-size: 11.5px;
+  background: transparent;
   color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
   cursor: pointer;
 }
-.bgtasks__clear:hover {
+.dock-tabs__tab:hover {
   color: var(--text);
-  text-decoration: underline;
+  background: var(--bg-hover);
 }
-.bgtasks__empty {
-  padding: 16px 14px;
+.dock-tabs__tab--active {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--bg-selected);
+}
+.dock-tabs__count {
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+  color: #fff;
+  background: var(--accent-fill);
+}
+/* Each tab's content fills the dock below the header; a hidden tab stays mounted. */
+.preview-dock__panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.preview-dock__panel[hidden] {
+  display: none;
+}
+.preview-dock__panel--tasks {
+  overflow-y: auto;
+  background: var(--bg);
+}
+
+.tasks {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 8px;
+}
+.tasks--empty {
+  padding: 24px 16px;
   font-size: 12.5px;
   line-height: 1.45;
   color: var(--text-dim);
+  text-align: center;
 }
-.bgtasks__list {
+.tasks__section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0;
+  padding: 10px 12px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.tasks__clear {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 400;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.tasks__clear:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.tasks__list {
   list-style: none;
   margin: 0;
-  padding: 4px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
+  padding: 0;
 }
-.bgtasks__item {
+.tasks__row {
+  border-bottom: 1px solid var(--border);
+}
+.tasks__head {
   width: 100%;
   display: flex;
   align-items: flex-start;
   gap: 9px;
+  padding: 9px 12px;
   text-align: left;
-  background: none;
   border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
   cursor: pointer;
-  padding: 7px 8px;
-  border-radius: 7px;
 }
-.bgtasks__item:hover {
+.tasks__head:hover {
   background: var(--bg-hover);
 }
-.bgtasks__status {
+.tasks__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tasks__titleline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.tasks__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tasks__chip {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  background: var(--bg-hover);
+}
+.tasks__meta {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tasks__chevron {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--text-dim);
+  transition: transform 0.12s ease;
+}
+.tasks__row--open .tasks__chevron {
+  transform: rotate(90deg);
+}
+.tasks__status {
   flex-shrink: 0;
   width: 14px;
   height: 14px;
@@ -3603,44 +3710,137 @@ body.is-resizing .preview-dock__resizer::after {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  font-weight: 700;
 }
-.bgtasks__status--done {
+.tasks__status--done {
   color: var(--ok);
 }
-.bgtasks__status--error {
+.tasks__status--error {
   color: var(--danger);
 }
+.tasks__status--leftover {
+  color: var(--warn);
+}
 /* The running row borrows the tool-row spinner so progress reads consistently. */
-.bgtasks__status--running {
-  border: 1.6px solid var(--border);
-  border-top-color: var(--accent);
-  border-radius: 50%;
+.tasks__status--running {
   width: 12px;
   height: 12px;
   margin-top: 2px;
+  border: 1.6px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
-.bgtasks__body {
+.tasks__body {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  min-width: 0;
+  gap: 8px;
+  padding: 0 12px 12px 35px;
 }
-.bgtasks__name {
-  font-size: 13px;
+.tasks__body[hidden] {
+  display: none;
+}
+.tasks__warn {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.4;
   color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent);
 }
-.bgtasks__meta {
+.tasks__warn .icon {
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--warn);
+}
+.tasks__cmd {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 6px 4px 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+}
+.tasks__cmdtext {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--mono);
   font-size: 11px;
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tasks__iconbtn {
+  flex-shrink: 0;
+  display: inline-flex;
+  padding: 3px;
+  border: none;
+  border-radius: 5px;
+  background: none;
   color: var(--text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.tasks__iconbtn:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.tasks__facts {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 3px 8px;
+  margin: 0;
+  font-size: 11.5px;
+}
+.tasks__facts dt {
+  color: var(--text-dim);
+}
+.tasks__facts dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.tasks__exposed {
+  color: var(--warn);
+}
+.tasks__output {
+  max-height: 180px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  font-size: 11px;
+}
+.tasks__output pre {
+  margin: 0;
+  font-family: var(--mono);
+  line-height: 1.45;
+  color: var(--text);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.tasks__dim {
+  color: var(--text-dim);
+}
+.tasks__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.tasks__note {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.tasks__note:empty {
+  display: none;
 }
 
 /* ---- Changes panel (working-tree diff drawer) ---- */

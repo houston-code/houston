@@ -69,7 +69,7 @@ import {
   runningConversationIds,
   onActiveRunsChanged
 } from './agent/loop'
-import { listShells, listPreviewServers, onShellsChanged } from './agent/shells'
+import { killShell, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
 import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { version as APP_VERSION } from '../../package.json'
@@ -1252,6 +1252,14 @@ export function registerIpc(): void {
   // The background shells (run_shell background mode) for the tasks indicator —
   // queried once on load, then kept current via the shellsChanged broadcast.
   ipcMain.handle(IPC.shellList, () => listShells())
+
+  // The Tasks panel's Stop button and output tail. Ids are the registry's 8-hex
+  // keys; anything else is refused before it reaches the registry. Stopping only
+  // ever signals a process group Houston itself spawned for a background shell.
+  const validShellId = (id: unknown): id is string =>
+    typeof id === 'string' && /^[0-9a-f]{8}$/.test(id)
+  ipcMain.handle(IPC.shellStop, (_e, id: unknown) => (validShellId(id) ? killShell(id) : 'not-found'))
+  ipcMain.handle(IPC.shellTail, (_e, id: unknown) => (validShellId(id) ? (shellTail(id) ?? null) : null))
 
   // Push the shell registry to every renderer whenever one starts, exits, or first
   // reveals its dev-server URL, so the tasks indicator AND the Preview dock stay

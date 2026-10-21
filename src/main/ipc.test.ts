@@ -693,3 +693,36 @@ describe('clipboardRead', () => {
     await expect(read()).resolves.toEqual({ text: '', image: null })
   })
 })
+
+/**
+ * The Tasks panel's Stop and output-tail calls reach the shell registry by id. Only
+ * the registry's own 8-hex ids are accepted; anything else is refused before the
+ * registry is consulted, so the renderer can't steer a kill or read at a guessed key.
+ */
+describe('background shell IPC (Tasks panel)', () => {
+  beforeEach(() => {
+    h.handlers.clear()
+    registerIpc()
+  })
+
+  const call = (channel: string, id: unknown): unknown => h.handlers.get(channel)!({ sender: {} }, id)
+
+  it('refuses ids that are not registry ids', async () => {
+    for (const bad of [undefined, 42, '', '../x', 'ABCDEF12', 'abcdef123', { id: 'abcdef12' }]) {
+      expect(await call(IPC.shellStop, bad)).toBe('not-found')
+      expect(await call(IPC.shellTail, bad)).toBeNull()
+    }
+  })
+
+  it('tails and stops a real background shell', async () => {
+    const { registerShell } = await import('./agent/shells')
+    const { spawn } = await import('node:child_process')
+    const child = spawn(process.execPath, ['-e', 'console.log("hello from the server"); setInterval(() => {}, 1000)'])
+    const id = registerShell('node server.js', child)
+    await vi.waitFor(async () => expect(await call(IPC.shellTail, id)).toEqual(['hello from the server']))
+    const closed = new Promise<void>((resolve) => child.on('close', () => resolve()))
+    expect(await call(IPC.shellStop, id)).toBe('killed')
+    await closed
+    expect(await call(IPC.shellStop, id)).toBe('already-exited')
+  })
+})

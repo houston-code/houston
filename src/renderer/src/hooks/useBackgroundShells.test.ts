@@ -34,6 +34,30 @@ afterEach(() => {
 })
 
 describe('useBackgroundShells', () => {
+  it('re-polls only while asked to, and stops when the interval goes to 0', async () => {
+    vi.useFakeTimers()
+    try {
+      const { api } = installApi([shell('s1')])
+      const { rerender } = renderHook(({ ms }) => useBackgroundShells(ms), { initialProps: { ms: 0 } })
+      await act(async () => {
+        vi.advanceTimersByTime(20_000)
+      })
+      expect(api.getBackgroundShells).toHaveBeenCalledTimes(1) // the seed only
+      rerender({ ms: 5000 })
+      await act(async () => {
+        vi.advanceTimersByTime(10_000)
+      })
+      expect(api.getBackgroundShells).toHaveBeenCalledTimes(3)
+      rerender({ ms: 0 })
+      await act(async () => {
+        vi.advanceTimersByTime(20_000)
+      })
+      expect(api.getBackgroundShells).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('seeds from the one-shot query', async () => {
     installApi([shell('s1'), shell('s2')])
     const { result } = renderHook(() => useBackgroundShells())

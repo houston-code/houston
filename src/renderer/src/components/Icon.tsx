@@ -40,6 +40,8 @@ export type IconName =
   | 'mail'
   | 'sideChat'
   | 'split'
+  | 'chevronRight'
+  | 'warning'
 
 const PATHS: Record<IconName, ReactNode> = {
   // Funnel.
@@ -172,6 +174,16 @@ const PATHS: Record<IconName, ReactNode> = {
     </>
   ),
   // A path forking in two — split off parallel work into its own session.
+  // A right-pointing chevron; rotated 90deg when its row is expanded.
+  chevronRight: <path d="m6 3.5 4.5 4.5L6 12.5" />,
+  // Warning triangle with an exclamation mark.
+  warning: (
+    <>
+      <path d="M8 2.2 14.3 13.3H1.7z" />
+      <path d="M8 6.3v3.4" />
+      <path d="M8 11.7v.1" />
+    </>
+  ),
   split: (
     <>
       <path d="M8 13.5V8.5" />

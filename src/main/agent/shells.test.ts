@@ -13,6 +13,7 @@ import {
   readShellOutput,
   registerShell,
   peekShell,
+  shellTail,
   unreadSlice
 } from './shells'
 
@@ -106,6 +107,7 @@ describe('background shell registry', () => {
     }
     expect(readShellOutput(id).running).toBe(false)
     expect(groupAlive()).toBe(true)
+    expect(listShells().find((s) => s.id === id)?.leftover).toBe(true)
     expect(killShell(id)).toBe('killed-leftovers')
     await vi.waitFor(() => expect(groupAlive()).toBe(false))
     expect(killShell(id)).toBe('already-exited')
@@ -123,6 +125,44 @@ describe('background shell registry', () => {
     expect(ended.running).toBe(false)
     expect(ended.exitCode).toBe(0)
     expect(ended.exitedAt).toBeGreaterThanOrEqual(ended.startedAt)
+  })
+
+  it('lists the workspace and printed URLs for the Tasks panel', async () => {
+    const child = node('process.stdout.write("  Local:   http://localhost:5173/\\n"); process.exit(0)')
+    const id = registerShell('npm run dev', child, 'conv-1', '/w/app')
+    await onClose(child)
+    expect(listShells().find((s) => s.id === id)).toMatchObject({
+      workspace: '/w/app',
+      urls: ['http://localhost:5173/']
+    })
+    // A cleanly exited shell with nothing left running is not a leftover.
+    expect(listShells().find((s) => s.id === id)?.leftover).toBeUndefined()
+  })
+
+  it('tails recent output without colors, redraws, or secrets', async () => {
+    const token = 'ghp_' + 'A'.repeat(36)
+    const child = node(
+      `process.stdout.write("\\x1b[32mready\\x1b[39m in 90ms\\n");` +
+        `process.stderr.write("warn: slow\\n");` +
+        `process.stdout.write("10%\\r50%\\r100%\\n");` +
+        `process.stdout.write("token=${token}\\n\\n");` +
+        'process.exit(0)'
+    )
+    const id = registerShell('build', child)
+    await onClose(child)
+    const tail = shellTail(id)!
+    // stdout and stderr are separate pipes, so only order within a stream is fixed.
+    expect(tail.filter((l) => l !== 'warn: slow')).toEqual([
+      'ready in 90ms',
+      '100%',
+      expect.stringContaining('[redacted')
+    ])
+    expect(tail).toContain('warn: slow')
+    expect(tail.join('\n')).not.toContain(token)
+    expect(shellTail(id, 2)).toHaveLength(2)
+    // Tailing moves no cursor: the agent's next read still sees everything.
+    expect(readShellOutput(id).stdout).toContain('ready')
+    expect(shellTail('nope')).toBeUndefined()
   })
 
   it('notifies subscribers when a shell starts and when it exits', async () => {

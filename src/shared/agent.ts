@@ -389,6 +389,12 @@ export interface ConversationMeta {
  * the renderer for the background-tasks indicator. Mirrors the main-process
  * registry entry minus the live child handle and output buffers.
  */
+/**
+ * What stopping a background shell did: stopped it while it ran, stopped what it left
+ * running after it exited, found nothing left to stop, or didn't know the id.
+ */
+export type KillShellOutcome = 'killed' | 'killed-leftovers' | 'already-exited' | 'not-found'
+
 export interface BackgroundShellInfo {
   id: string
   /** The command line, used as the task title. */
@@ -402,6 +408,15 @@ export interface BackgroundShellInfo {
   exitedAt: number | null
   /** Conversation whose agent run spawned this shell, for click-to-open navigation. */
   conversationId?: string
+  /** The workspace it ran in, so the panel can show the folder relative to it. */
+  workspace?: string
+  /** Loopback URLs it printed (dev-server addresses), `Local:` ones first. */
+  urls?: string[]
+  /**
+   * The shell exited but something it started is still running (typically a server
+   * it backgrounded with `&`), so its port is still taken. POSIX only.
+   */
+  leftover?: boolean
 }
 
 /**

@@ -72,8 +72,8 @@ Open source under the [Apache License 2.0](LICENSE).
   build → look → fix loop without a human eyeballing the page. The screenshot
   comes back through the same vision pipeline as pasted images, so a
   vision-capable model views it directly, and it shows inline in the transcript.
-  Only loopback hosts (`localhost`, `127.0.0.1`, `::1`) are allowed — public URLs
-  go through `web_fetch` — and, being local network egress, it always prompts for
+  Only loopback hosts (`localhost`, `127.0.0.1`, `::1`) are allowed (public URLs
+  go through `web_fetch`), and, being local network egress, it always prompts for
   approval like `web_fetch`. Pass a `selector` to capture just one element.
 - **Live preview panel.** When the agent starts a dev server (a background
   `run_shell`), Houston detects the loopback URLs it prints and offers a **Preview**
@@ -85,6 +85,13 @@ Open source under the [Apache License 2.0](LICENSE).
   `localhost` URL or port by hand. The pages render in isolated, sandboxed,
   loopback-pinned views with the same network guards as `view_localhost`, so
   untrusted dev-server output can't reach your network.
+- **Background tasks.** The tasks button in the titlebar shows a pulsing count while
+  terminals or commands the agent backgrounded are running, and opens a **Tasks** tab
+  in the same right-hand dock as Preview. Each row names the command that does the
+  work (setup like `cd` and virtualenv activation is stripped), its port and folder;
+  expand it for the full command, recent output, and Stop, Open preview, or Go to
+  chat. A shell that exited but left a server running is flagged, with a button to
+  stop the leftover process. The panel never opens by itself.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message — no need to paste or describe where things live.
 - **Slash commands.** Type `/` for a command menu. Built-ins: `/new` (new chat),

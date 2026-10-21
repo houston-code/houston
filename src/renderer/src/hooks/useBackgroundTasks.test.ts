@@ -57,6 +57,39 @@ describe('useBackgroundTasks', () => {
     expect(byId.s4.status).toBe('error') // killed (null exit) counts as failed
   })
 
+  it('groups a shell that exited but left its server running with the running tasks', () => {
+    const shells = [
+      shell('s1', { running: false, exitCode: 0, exitedAt: 700, leftover: true }),
+      shell('s2', { running: false, exitCode: 0, exitedAt: 800 })
+    ]
+    const tick = clock()
+    const { result } = renderHook(() => useBackgroundTasks(NO_TERMS, shells, tick))
+    expect(result.current.tasks.map((t) => [t.id, t.status])).toEqual([
+      ['s1', 'leftover'],
+      ['s2', 'done']
+    ])
+    // Clearing finished work must not hide a server that is still holding its port.
+    act(() => result.current.clearFinished())
+    expect(result.current.tasks.map((t) => t.id)).toEqual(['s1'])
+  })
+
+  it('titles a shell by the command that does the work, with its folder and ports', () => {
+    const shells = [
+      shell('s1', {
+        command: 'cd /w/app/frontend && npm run dev > /tmp/vite.log 2>&1',
+        workspace: '/w/app',
+        urls: ['http://localhost:5173/']
+      })
+    ]
+    const { result } = renderHook(() => useBackgroundTasks(NO_TERMS, shells, clock()))
+    expect(result.current.tasks[0]).toMatchObject({
+      title: 'npm run dev',
+      subtitle: 'frontend/',
+      ports: [':5173'],
+      command: 'cd /w/app/frontend && npm run dev > /tmp/vite.log 2>&1'
+    })
+  })
+
   it('merges terminals and shells: running first, finished newest-first', () => {
     const terminals = [term('t1'), term('t2', { exited: true, exitedAt: 9_000, exitCode: 0 })]
     const shells = [shell('s2', { running: false, exitCode: 0, exitedAt: 4_000 })]

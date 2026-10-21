@@ -167,6 +167,10 @@ export const IPC = {
   shellList: 'shell:list',
   /** Main → renderer: the background-shell registry changed (one started or exited). */
   shellsChanged: 'shell:changed',
+  /** Renderer → main: stop a background shell (or what it left running) from the Tasks panel. */
+  shellStop: 'shell:stop',
+  /** Renderer → main: the last lines a background shell printed, secrets masked. */
+  shellTail: 'shell:tail',
   // Queued input (messages typed while a run is in progress)
   agentQueueAdd: 'agent:queue:add',
   agentQueueRemove: 'agent:queue:remove',

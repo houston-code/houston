@@ -18,7 +18,9 @@ ships as a desktop app and as terminal clients.
 
 ## Clients (where Houston runs)
 
-- **Desktop app.** The full GUI: chat sidebar, diffs, preview panel, settings.
+- **Desktop app.** The full GUI: chat sidebar, diffs, a right-hand dock with the
+  live Preview and a Tasks list of background commands (stop them, read their
+  output, see which port each holds), settings.
 - **Interactive terminal (`houston -i`).** A stay-resident REPL in the terminal.
   `--continue` reopens this folder's most recent chat at launch, `--resume <id>` a
   specific one.
