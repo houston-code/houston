@@ -1,0 +1,1051 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Houston headless --json output",
+  "description": "One line of `houston -p ... --json` output (schemaVersion 1). The first line is a system/init line, then a session line when the run is saved, then the agent's events, then a result line (one per turn with --input-format stream-json). Lines may carry fields not listed here; a consumer should ignore what it does not know.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/init"
+    },
+    {
+      "$ref": "#/$defs/session"
+    },
+    {
+      "$ref": "#/$defs/result"
+    },
+    {
+      "$ref": "#/$defs/event_text"
+    },
+    {
+      "$ref": "#/$defs/event_reasoning"
+    },
+    {
+      "$ref": "#/$defs/event_steered"
+    },
+    {
+      "$ref": "#/$defs/event_tool_start"
+    },
+    {
+      "$ref": "#/$defs/event_tool_progress"
+    },
+    {
+      "$ref": "#/$defs/event_subagent"
+    },
+    {
+      "$ref": "#/$defs/event_review_finding"
+    },
+    {
+      "$ref": "#/$defs/event_tool_approval"
+    },
+    {
+      "$ref": "#/$defs/event_tool_result"
+    },
+    {
+      "$ref": "#/$defs/event_tool_question"
+    },
+    {
+      "$ref": "#/$defs/event_plan_ready"
+    },
+    {
+      "$ref": "#/$defs/event_elicitation"
+    },
+    {
+      "$ref": "#/$defs/event_turn_start"
+    },
+    {
+      "$ref": "#/$defs/event_compaction"
+    },
+    {
+      "$ref": "#/$defs/event_retry"
+    },
+    {
+      "$ref": "#/$defs/event_turn_discarded"
+    },
+    {
+      "$ref": "#/$defs/event_model_fallback"
+    },
+    {
+      "$ref": "#/$defs/event_limit"
+    },
+    {
+      "$ref": "#/$defs/event_receipt"
+    },
+    {
+      "$ref": "#/$defs/event_verification"
+    },
+    {
+      "$ref": "#/$defs/event_runtime_missing"
+    },
+    {
+      "$ref": "#/$defs/event_notice"
+    },
+    {
+      "$ref": "#/$defs/event_usage"
+    },
+    {
+      "$ref": "#/$defs/event_done"
+    },
+    {
+      "$ref": "#/$defs/event_error"
+    }
+  ],
+  "$defs": {
+    "init": {
+      "description": "The first line: what the run is about to do.",
+      "type": "object",
+      "required": [
+        "type",
+        "subtype",
+        "schemaVersion",
+        "houstonVersion",
+        "cwd",
+        "providerId",
+        "model",
+        "approvalPolicy",
+        "onApproval",
+        "inputFormat",
+        "outputSchema"
+      ],
+      "properties": {
+        "type": {
+          "const": "system"
+        },
+        "subtype": {
+          "const": "init"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "houstonVersion": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "providerId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approvalPolicy": {
+          "enum": [
+            "plan",
+            "ask",
+            "auto-edit",
+            "full-auto"
+          ]
+        },
+        "onApproval": {
+          "enum": [
+            "allow",
+            "deny",
+            "fail"
+          ]
+        },
+        "inputFormat": {
+          "enum": [
+            "text",
+            "stream-json"
+          ]
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "disallowedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outputSchema": {
+          "type": "boolean"
+        }
+      }
+    },
+    "session": {
+      "description": "The saved session id, for a later --resume.",
+      "type": "object",
+      "required": [
+        "type",
+        "conversationId"
+      ],
+      "properties": {
+        "type": {
+          "const": "session"
+        },
+        "conversationId": {
+          "type": "string"
+        }
+      }
+    },
+    "result": {
+      "description": "How the run (or, with stream-json input, one turn) ended. Always the last line of a turn.",
+      "type": "object",
+      "required": [
+        "type",
+        "schemaVersion",
+        "status",
+        "stopReason",
+        "turns",
+        "costUsd",
+        "inputTokens",
+        "outputTokens",
+        "durationMs",
+        "finalText"
+      ],
+      "properties": {
+        "type": {
+          "const": "result"
+        },
+        "schemaVersion": {
+          "const": 1
+        },
+        "status": {
+          "enum": [
+            "success",
+            "limit",
+            "stalled",
+            "approval_denied",
+            "error",
+            "schema_invalid",
+            "input_error"
+          ]
+        },
+        "stopReason": {
+          "anyOf": [
+            {
+              "enum": [
+                "end_turn",
+                "tool_use",
+                "max_tokens",
+                "error",
+                "aborted"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limitReason": {
+          "enum": [
+            "max-steps",
+            "max-output",
+            "stalled"
+          ]
+        },
+        "turns": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "costUsd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "durationMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "finalText": {
+          "type": "string"
+        },
+        "receipt": {
+          "type": "object"
+        },
+        "structured_output": true,
+        "schemaErrors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "error": {
+          "type": "string"
+        }
+      }
+    },
+    "event_text": {
+      "description": "A piece of the assistant's reply as it streams.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "delta"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "text"
+        },
+        "delta": {
+          "type": "string"
+        }
+      }
+    },
+    "event_reasoning": {
+      "description": "A piece of the model's reasoning summary, where the model provides one.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "delta"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "reasoning"
+        },
+        "delta": {
+          "type": "string"
+        }
+      }
+    },
+    "event_steered": {
+      "description": "A course correction that reached the model mid-turn.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "text"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "steered"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "event_tool_start": {
+      "description": "A tool call started.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "callId",
+        "name",
+        "args"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "tool_start"
+        },
+        "callId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "args": {
+          "type": "object"
+        },
+        "kind": {
+          "enum": [
+            "read",
+            "write",
+            "shell",
+            "network",
+            "mcp"
+          ]
+        },
+        "preview": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "event_tool_progress": {
+      "description": "Progress from a long-running tool.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "callId",
+        "message"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "tool_progress"
+        },
+        "callId": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "event_subagent": {
+      "description": "A nested subagent started or finished.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "parentCallId",
+        "id",
+        "label",
+        "status"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "subagent"
+        },
+        "parentCallId": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "running",
+            "done",
+            "error"
+          ]
+        }
+      }
+    },
+    "event_review_finding": {
+      "description": "A review finding, raised and then updated with its verdict.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "parentCallId",
+        "finding"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "review_finding"
+        },
+        "parentCallId": {
+          "type": "string"
+        },
+        "finding": {
+          "type": "object"
+        }
+      }
+    },
+    "event_tool_approval": {
+      "description": "A call that needs approval; headless resolves it per --on-approval.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "callId",
+        "name",
+        "summary",
+        "kind"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "tool_approval"
+        },
+        "callId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "args": {
+          "type": "object"
+        },
+        "kind": {
+          "enum": [
+            "read",
+            "write",
+            "shell",
+            "network",
+            "mcp"
+          ]
+        },
+        "preview": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "sandboxed": {
+          "type": "boolean"
+        },
+        "shellNetwork": {
+          "type": "boolean"
+        },
+        "shellOffline": {
+          "type": "boolean"
+        },
+        "sensitiveRead": {
+          "type": "boolean"
+        },
+        "sensitiveWrite": {
+          "type": "boolean"
+        }
+      }
+    },
+    "event_tool_result": {
+      "description": "A tool call finished.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "callId",
+        "name",
+        "ok",
+        "output"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "tool_result"
+        },
+        "callId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "output": {
+          "type": "string"
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "event_tool_question": {
+      "description": "The model asked a question; headless answers it automatically.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "callId",
+        "question",
+        "options"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "tool_question"
+        },
+        "callId": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array"
+        },
+        "multiSelect": {
+          "type": "boolean"
+        }
+      }
+    },
+    "event_plan_ready": {
+      "description": "A plan presented in plan mode; headless prints it and does not execute it.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "callId",
+        "plan"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "plan_ready"
+        },
+        "callId": {
+          "type": "string"
+        },
+        "plan": {
+          "type": "object"
+        }
+      }
+    },
+    "event_elicitation": {
+      "description": "An MCP server asked for input; headless declines it.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "callId",
+        "elicitId",
+        "serverId",
+        "message",
+        "fields"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "elicitation"
+        },
+        "callId": {
+          "type": "string"
+        },
+        "elicitId": {
+          "type": "string"
+        },
+        "serverId": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "event_turn_start": {
+      "description": "A queued follow-up turn started.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "conversationId",
+        "userText"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "turn_start"
+        },
+        "conversationId": {
+          "type": "string"
+        },
+        "userText": {
+          "type": "string"
+        },
+        "images": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "invokedAs": {
+          "type": "object"
+        }
+      }
+    },
+    "event_compaction": {
+      "description": "Older messages were summarized to fit the context window.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "summarized"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "compaction"
+        },
+        "summarized": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "event_retry": {
+      "description": "A provider call failed transiently and is being retried.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "attempt",
+        "max",
+        "message"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "retry"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "event_turn_discarded": {
+      "description": "A partly streamed model round was dropped to be redone: retract the last textChars of text and reasoningChars of reasoning.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "attempt",
+        "reason",
+        "textChars",
+        "reasoningChars"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "turn_discarded"
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reason": {
+          "type": "string"
+        },
+        "textChars": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "reasoningChars": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "event_model_fallback": {
+      "description": "The run moved to the next model in the fallback chain.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "from",
+        "to",
+        "reason"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "model_fallback"
+        },
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "event_limit": {
+      "description": "The run stopped at a budget or guard.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "reason"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "limit"
+        },
+        "reason": {
+          "enum": [
+            "max-steps",
+            "max-output",
+            "stalled"
+          ]
+        }
+      }
+    },
+    "event_receipt": {
+      "description": "What Houston recorded running this turn: checks with their exit codes, files changed.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "receipt"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "receipt"
+        },
+        "receipt": {
+          "type": "object"
+        }
+      }
+    },
+    "event_verification": {
+      "description": "The --verify command ran.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "passed"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "verification"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      }
+    },
+    "event_runtime_missing": {
+      "description": "A shell command failed because a language runtime is not installed.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "runtime",
+        "label",
+        "url"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "runtime_missing"
+        },
+        "runtime": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "installCommand": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      }
+    },
+    "event_notice": {
+      "description": "A note for the user (a hook message, a budget extension).",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "message"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "notice"
+        },
+        "message": {
+          "type": "string"
+        }
+      }
+    },
+    "event_usage": {
+      "description": "Tokens and cost of one model round (or a rolled-up subagent).",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "inputTokens",
+        "outputTokens",
+        "cost"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "usage"
+        },
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cost": {
+          "type": "number"
+        },
+        "model": {
+          "type": "string"
+        },
+        "cacheReadTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cacheWriteTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "perModel": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "event_done": {
+      "description": "One run of the agent ended.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "stopReason"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "done"
+        },
+        "stopReason": {
+          "enum": [
+            "end_turn",
+            "tool_use",
+            "max_tokens",
+            "error",
+            "aborted"
+          ]
+        }
+      }
+    },
+    "event_error": {
+      "description": "The run failed.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "message"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "error"
+        },
+        "message": {
+          "type": "string"
+        },
+        "modelUnavailable": {
+          "type": "object",
+          "required": [
+            "providerId",
+            "model"
+          ],
+          "properties": {
+            "providerId": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}

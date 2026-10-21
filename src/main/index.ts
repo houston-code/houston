@@ -227,7 +227,7 @@ if (tui) {
 } else if (headless) {
   app.whenReady().then(async () => {
     await initSecrets()
-    const code = await runHeadlessEntry(headless)
+    const code = await runHeadlessEntry(headless, { version: app.getVersion() })
     app.exit(await flushBeforeExit(code))
   })
 } else {

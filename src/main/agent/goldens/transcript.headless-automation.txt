@@ -1,0 +1,15 @@
+# golden transcript: headless-automation
+
+--- request 1 ---
+model: claude-sonnet-5
+reasoning: effort=off capable=- summary=- verbosity=-
+explicitCacheControl: false
+system: sha256:95a684857711 (14904 chars)
+tools (4): read_file, glob, search_files, run_shell
+messages (1):
+1. user: "Review the branch"
+--- events ---
+run_info {"tools":["read_file","glob","search_files","run_shell"]}
+text {"delta":"{\"verdict\":\"pass\"}"}
+usage {"cost":0.00272,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
+done {"stopReason":"end_turn"}

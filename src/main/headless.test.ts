@@ -7,6 +7,7 @@ import type { AgentEvent, AgentRunRequest, ChatMessage, ElicitationResult, PlanD
 import { loadProjectConfig } from './agent/projectConfig'
 import {
   HEADLESS_EXIT,
+  HEADLESS_SCHEMA_VERSION,
   headlessExitCode,
   headlessOverrides,
   parseHeadlessArgs,
@@ -697,8 +698,9 @@ describe('runHeadless', () => {
     ])
     await runHeadless({ ...baseOpts, json: true }, d)
     const lines = out.join('').trim().split('\n')
-    expect(JSON.parse(lines[0])).toMatchObject({ type: 'text', delta: 'hi' })
-    expect(JSON.parse(lines[1])).toMatchObject({ type: 'done' })
+    expect(JSON.parse(lines[0])).toMatchObject({ type: 'system', subtype: 'init' })
+    expect(JSON.parse(lines[1])).toMatchObject({ type: 'text', delta: 'hi' })
+    expect(JSON.parse(lines[2])).toMatchObject({ type: 'done' })
   })
 
   it('returns 1 when no model is configured', async () => {
@@ -841,11 +843,12 @@ describe('runHeadless', () => {
     expect(out.join('')).not.toContain('conv-1')
   })
 
-  it('emits the session id as the first JSON line in --json mode', async () => {
+  it('emits the session id right after the init line in --json mode, and on the init line', async () => {
     const { d, out } = withSession()
     await runHeadless({ ...baseOpts, json: true }, d)
-    const first = out.join('').trim().split('\n')[0]
-    expect(JSON.parse(first)).toEqual({ type: 'session', conversationId: 'conv-1' })
+    const [init, session] = out.join('').trim().split('\n').map((l) => JSON.parse(l))
+    expect(init).toMatchObject({ type: 'system', subtype: 'init', conversationId: 'conv-1' })
+    expect(session).toEqual({ type: 'session', conversationId: 'conv-1' })
   })
 
   it('surfaces a max-steps limit in plain mode and exits with the limit code', async () => {
@@ -1191,6 +1194,7 @@ describe('runHeadless --json result line', () => {
     const r = resultLine(out)
     expect(r).toEqual({
       type: 'result',
+      schemaVersion: HEADLESS_SCHEMA_VERSION,
       status: 'success',
       stopReason: 'end_turn',
       turns: 2,
@@ -1396,18 +1400,20 @@ describe('runHeadless --json result line', () => {
       setModel: () => {}
     }
     await runHeadless({ ...baseOpts, json: true }, d)
-    expect(jsonLines(out).map((l) => l.type)).toEqual(['session', 'text', 'done', 'result'])
+    expect(jsonLines(out).map((l) => l.type)).toEqual(['system', 'session', 'text', 'done', 'result'])
   })
 })
 
 describe('headlessExitCode', () => {
-  it('gives success 0, a budget stop 3, and every failure 1', () => {
+  it('gives success 0, a budget stop 3, a schema miss 4, a bad input line 2, and every failure 1', () => {
     expect(headlessExitCode('success')).toBe(0)
     expect(headlessExitCode('limit')).toBe(3)
     expect(headlessExitCode('stalled')).toBe(1)
     expect(headlessExitCode('approval_denied')).toBe(1)
     expect(headlessExitCode('error')).toBe(1)
-    expect(HEADLESS_EXIT).toEqual({ ok: 0, failed: 1, usage: 2, limit: 3 })
+    expect(headlessExitCode('schema_invalid')).toBe(4)
+    expect(headlessExitCode('input_error')).toBe(2)
+    expect(HEADLESS_EXIT).toEqual({ ok: 0, failed: 1, usage: 2, limit: 3, schema: 4 })
   })
 })
 
@@ -1545,6 +1551,7 @@ describe('a turn the loop discarded and redid', () => {
     await runHeadless({ ...baseOpts, json: true }, d)
     const lines = out.map((l) => JSON.parse(l) as { type: string } & Record<string, unknown>)
     expect(lines.map((e) => e.type)).toEqual([
+      'system',
       'text',
       'tool_start',
       'text',
@@ -1555,7 +1562,7 @@ describe('a turn the loop discarded and redid', () => {
       'done',
       'result'
     ])
-    expect(lines[4]).toMatchObject({ textChars: 23, reasoningChars: 0, attempt: 1 })
+    expect(lines[5]).toMatchObject({ textChars: 23, reasoningChars: 0, attempt: 1 })
     // The closing answer holds the redo once: the dropped round's text is taken back.
     expect(lines.at(-1)).toMatchObject({ status: 'success', finalText: 'So: The answer is 42.' })
   })

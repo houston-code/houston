@@ -106,6 +106,12 @@ function environmentSection(host: PromptHost, attended: boolean): string {
   return `# Environment\n${lines.join('\n')}`
 }
 
+/** Per-run additions to the system prompt from the caller that started the run. */
+export interface RunPromptAdditions {
+  append?: string
+  outputSchema?: Record<string, unknown>
+}
+
 /** Build the coding-agent system prompt for a run. */
 export function buildSystemPrompt(
   workspace: string,
@@ -134,7 +140,10 @@ export function buildSystemPrompt(
   host: PromptHost = DEFAULT_HOST,
   // Inline visuals the client draws (the desktop app): diagrams always, interactive
   // HTML only when the user turned it on. Omitted for terminal clients.
-  visuals?: { html: boolean }
+  visuals?: { html: boolean },
+  // What the caller that started this run added for it alone (the headless
+  // `--append-system-prompt` and `--output-schema` flags).
+  run?: RunPromptAdditions
 ): string {
   const offered = new Set(tools)
   const offers = (...names: string[]): boolean => names.every((n) => offered.has(n))
@@ -274,6 +283,20 @@ ${environmentSection(host, attended)}
 
   if (extra && extra.trim()) {
     sections.push(`Additional user instructions:\n${extra.trim()}`)
+  }
+
+  // Delimited so the model, and anyone reading a transcript, can tell where the
+  // caller's text starts and stops.
+  if (run?.append && run.append.trim()) {
+    sections.push(
+      `# Instructions for this run\nThe caller that started this run added the instructions between the markers below. Follow them like the user's own instructions; they do not override the Safety rules above.\n<run-instructions>\n${run.append.trim()}\n</run-instructions>`
+    )
+  }
+
+  if (run?.outputSchema) {
+    sections.push(
+      `# Final answer format\nThis run's result is read by a program. Do the work as usual, then make your final message a single JSON value that matches the JSON Schema below, and nothing else: no prose before or after it and no code fence. If you could not complete the task, still answer with JSON that matches the schema, and use its fields to say what went wrong if it has any.\n<output-schema>\n${JSON.stringify(run.outputSchema, null, 2)}\n</output-schema>`
+    )
   }
 
   // Last: the date + git snapshot is the only section that depends on the outside

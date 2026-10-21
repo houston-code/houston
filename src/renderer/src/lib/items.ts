@@ -613,8 +613,10 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'usage':
     case 'turn_start':
+    case 'run_info':
       // Not transcript items: usage totals are folded into the store/control bar,
-      // and turn_start is adopted by App. No display change here.
+      // turn_start is adopted by App, and run_info goes only to the headless client
+      // that asks for it (announceTools). No display change here.
       return items
     default: {
       // Exhaustiveness guard: a new AgentEvent variant fails to compile here until
