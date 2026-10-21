@@ -574,6 +574,13 @@ jobs:
               --body "Brings the published v$VERSION release notes to main's CHANGELOG.md (and, for an X.Y.0 release, the version). Opened by Release - publish.")
           fi
           echo "Sync PR: $url"
-          # Queue it. If the token can't turn on auto-merge, the PR still exists: say so.
-          gh pr merge --auto --merge "$url" \
-            || echo "::warning::Couldn't turn on auto-merge for $url; add it to the merge queue yourself."
+          # Queue it. Turning on auto-merge needs RELEASE_PR_TOKEN to have Contents: read and
+          # write as well as Pull requests (docs/RELEASING.md, One-time setup). The release is
+          # already published here, so a missing permission warns instead of failing the run,
+          # in the job summary too, where it's harder to miss than in the log.
+          if gh pr merge --auto --merge "$url"; then
+            echo "Opened $url and turned on auto-merge: it joins the merge queue once its checks pass." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Couldn't turn on auto-merge for $url; add it to the merge queue yourself."
+            echo "**Add $url to the merge queue yourself** once its checks pass: RELEASE_PR_TOKEN couldn't turn on auto-merge (it needs Contents: read and write)." >> "$GITHUB_STEP_SUMMARY"
+          fi

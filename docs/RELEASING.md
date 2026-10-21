@@ -90,11 +90,29 @@ on to build and sign everything without publishing (it still asks for approval).
 7. **finalize**: tags the release commit and publishes the release. It's marked **latest**
    only if it's the highest release, so a patch to an older line never takes the update feed.
 8. **sync-main**: opens a PR that brings the release's `CHANGELOG.md` section (and, for X.Y.0,
-   the version) to `main`, and queues it to merge once CI passes.
+   the version) to `main`, and turns on auto-merge so it joins the merge queue once CI passes.
+   The release PR merged into the line, not `main`, so without this `main` would keep the old
+   version and miss these notes, and the next line would be cut without them. If auto-merge
+   can't be turned on, the run still passes and its summary says to queue the PR yourself.
 
 The workflow files and the release orchestration scripts come from `main`, and everything
 that's built and shipped comes from the release commit. So a fix to the pipeline applies to a
 retry without changing what ships.
+
+## One-time setup
+
+Both workflows open PRs with `RELEASE_PR_TOKEN`, because a PR opened by the workflow's own
+token runs no checks. It's a fine-grained personal access token for this repository, stored in
+the `release-pr` environment (Settings > Environments), whose deployment branches are limited
+to `main` so a workflow edited on another branch can't read it. It needs:
+
+| Permission | Used for |
+| --- | --- |
+| Pull requests: read and write | opening, closing, reopening and commenting on the release and sync PRs |
+| Contents: read and write | turning on auto-merge for the sync PR, so it joins the merge queue |
+
+Branches are pushed with the workflow's own token, not this one. Auto-merge also needs **Allow
+auto-merge** on in the repository settings.
 
 ## Common tasks
 
