@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -157,6 +158,48 @@ describe('release build order', () => {
     const runs = leg.split('\n').filter((l) => !l.trim().startsWith('#'))
     const script = runs.join('\n').match(/run: \|\n([\s\S]*?)(?=\n {6}- |\n {0,4}\S|$)/g) ?? []
     for (const block of script) expect(block).not.toContain('${{ inputs.')
+  })
+})
+
+describe('binary vulnerability scan in the Linux leg', () => {
+  const step = (() => {
+    const start = leg.indexOf('      - name: Scan binary SBOM + apply native-layer policy\n')
+    expect(start).toBeGreaterThan(-1)
+    return leg.slice(start, leg.indexOf('\n      - ', start + 1))
+  })()
+  const loop = step.slice(step.indexOf('          for attempt in 1 2 3; do\n'), step.indexOf('          done\n') + '          done\n'.length)
+
+  /** Runs the database retry loop with grype's `db update` failing its first `failures` calls. */
+  function run(failures: number) {
+    const script = [
+      'set -e',
+      'calls=0',
+      `fake_grype() { calls=$((calls + 1)); [ "$1 $2" = "db update" ] || return 9; [ "$calls" -gt ${failures} ] || return 1; }`,
+      'GRYPE=fake_grype',
+      'sleep() { :; }',
+      loop,
+      'echo "calls=$calls"'
+    ].join('\n')
+    return spawnSync('bash', ['-c', script], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } })
+  }
+
+  it.skipIf(process.platform === 'win32')('retries the database download until it lands', () => {
+    const res = run(2)
+    expect(res.status).toBe(0)
+    expect(res.stdout).toContain('calls=3')
+    expect(res.stdout).toContain('grype db update failed (attempt 2 of 3)')
+  })
+
+  it.skipIf(process.platform === 'win32')('fails the leg when every attempt fails', () => {
+    const res = run(3)
+    expect(res.status).toBe(1)
+    expect(res.stdout).toContain('::error::grype db update failed 3 times')
+  })
+
+  it('scans with the downloaded database, without checking for another over the network', () => {
+    expect(loop).toContain('if "$GRYPE" db update; then break; fi')
+    const scan = step.indexOf('GRYPE_DB_AUTO_UPDATE=false "$GRYPE" sbom:sbom.binary.linux-x64.cyclonedx.json')
+    expect(scan).toBeGreaterThan(step.indexOf(loop))
   })
 })
 

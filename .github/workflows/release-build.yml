@@ -285,7 +285,16 @@ jobs:
           GRYPE: ${{ steps.grype.outputs.cmd }}
         run: |
           curl -fsSL --retry 3 https://releases.electronjs.org/releases.json -o electron-releases.json
-          "$GRYPE" sbom:sbom.binary.linux-x64.cyclonedx.json \
+          # Fetch the vulnerability database first, retried: this runs after the leg has built,
+          # so a dropped connection would otherwise mean redoing the whole leg. The scan then
+          # uses that database instead of checking for a newer one over the network.
+          for attempt in 1 2 3; do
+            if "$GRYPE" db update; then break; fi
+            if [ "$attempt" -eq 3 ]; then echo "::error::grype db update failed 3 times"; exit 1; fi
+            echo "::warning::grype db update failed (attempt $attempt of 3); retrying in 30s"
+            sleep 30
+          done
+          GRYPE_DB_AUTO_UPDATE=false "$GRYPE" sbom:sbom.binary.linux-x64.cyclonedx.json \
             --only-fixed --vex .github/vex/houston.openvex.json -o table -o json=grype.binary.json
           mkdir -p release-vex
           node scripts/native-vuln-policy.mjs evaluate --report grype.binary.json \
