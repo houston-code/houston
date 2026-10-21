@@ -123,6 +123,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   const prs = raw ? JSON.parse(raw) : []
 
   // new Anthropic() reads ANTHROPIC_API_KEY from the env.
+  console.error(`Generating AI release notes (${MODEL})…`)
   const client = new Anthropic()
   const ask = async (messages) => {
     const res = await client.beta.messages.create(buildRequest(messages))
