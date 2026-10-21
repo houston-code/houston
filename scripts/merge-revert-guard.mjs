@@ -23,12 +23,22 @@
 //   baseRef    the merge target as it is NOW (e.g. the fetched origin/main)
 //   resultRef  the built merge commit/tree that would land (e.g. HEAD after `git merge`)
 // Override: set ALLOW_REVERT=1 (wired to an `intentional-revert` PR label in CI).
+// DEPENDENCY_UPDATE=1 (wired to Dependabot-authored PRs in CI) exempts the generated
+// dependency files from Rule 2; see GENERATED_DEPENDENCY_FILES.
 // Exit 0 = clean or overridden; exit 1 = a revert was detected and must be confirmed.
 
 import { execFileSync } from 'node:child_process'
 
 const LINE_THRESHOLD = 30 // net lines removed from a single file to count as a content revert
 const WINDOW = 40 // how many recent main commits count as "work that landed while this branch was open"
+
+// Files derived entirely from the dependency tree. A dependency update that prunes
+// transitive packages shrinks both by hundreds of lines, and since nearly every dependency
+// PR touches them they are always "recent", so Rule 2 flags every such bump as a revert
+// (mermaid 11.4 -> 11.17 drops ~30 packages). Dependabot builds its branch from the
+// current base, so it cannot carry a stale tree; on its PRs these two files are exempt
+// from Rule 2. Rule 1 and every other file stay guarded, and on human PRs nothing changes.
+export const GENERATED_DEPENDENCY_FILES = new Set(['package-lock.json', 'THIRD-PARTY-NOTICES.md'])
 
 function git(args) {
   return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
@@ -65,6 +75,7 @@ export function findReverts(base, result, deps = {}) {
   const numstat = (deps.git ?? git)(['diff', '--numstat', `${base}`, `${result}`])
   const recent = deps.recent ?? recentlyTouchedOnMain(base)
   const exists = deps.exists ?? ((f) => existsAt(base, f))
+  const dependencyUpdate = deps.dependencyUpdate ?? false
   const deletions = []
   const contentReverts = []
   for (const line of numstat.split('\n')) {
@@ -81,6 +92,7 @@ export function findReverts(base, result, deps = {}) {
       continue
     }
     // Rule 2: a large net line-loss in a file main touched recently.
+    if (dependencyUpdate && GENERATED_DEPENDENCY_FILES.has(file)) continue
     if (removed - added >= LINE_THRESHOLD && recent.has(file)) {
       contentReverts.push({ file, net: removed - added })
     }
@@ -99,7 +111,9 @@ function main() {
     console.error('usage: merge-revert-guard.mjs <baseRef> <resultRef>')
     process.exit(2)
   }
-  const { deletions, contentReverts } = findReverts(base, result)
+  const { deletions, contentReverts } = findReverts(base, result, {
+    dependencyUpdate: process.env.DEPENDENCY_UPDATE === '1'
+  })
   if (deletions.length === 0 && contentReverts.length === 0) {
     console.log('revert-guard: clean — the merge does not roll back existing main content.')
     process.exit(0)

@@ -60,6 +60,14 @@ describe('CI revert guard', () => {
     expect(revertGuardJob).toMatch(/labels\.\*\.name, 'intentional-revert'/)
   })
 
+  it('relaxes the guard for dependency updates only on PRs Dependabot authored', () => {
+    // The PR author, not the event actor: the notices regeneration pushes to the branch
+    // as another identity, and that run must keep the exemption.
+    expect(revertGuardJob).toContain(
+      "DEPENDENCY_UPDATE: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && '1' || '' }}"
+    )
+  })
+
   it('re-runs when a label changes, so applying intentional-revert takes effect', () => {
     // Without `labeled` in the trigger types, adding the override label would not start a
     // new run and the guard would keep reporting its pre-label failure.

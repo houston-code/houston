@@ -3,12 +3,19 @@ import { findReverts } from './merge-revert-guard.mjs'
 
 // findReverts(base, result, deps) is pure given injected git/exists lookups, so we drive
 // it with synthetic numstat + tree membership instead of a real repo.
-function harness({ numstat, existsOnBase = new Set(), existsInResult = new Set(), recent = new Set() }) {
+function harness({
+  numstat,
+  existsOnBase = new Set(),
+  existsInResult = new Set(),
+  recent = new Set(),
+  dependencyUpdate = false
+}) {
   return findReverts('BASE', 'RESULT', {
     git: () => numstat,
     exists: (f) => existsOnBase.has(f),
     existsInResult: (_r, f) => existsInResult.has(f),
-    recent
+    recent,
+    dependencyUpdate
   })
 }
 
@@ -89,5 +96,47 @@ describe('merge-revert-guard findReverts', () => {
     })
     expect(deletions).toEqual([])
     expect(contentReverts).toEqual([])
+  })
+
+  describe('dependency updates (DEPENDENCY_UPDATE=1, Dependabot PRs)', () => {
+    // The shape of a Dependabot bump that prunes transitive packages (PR #275).
+    const pruning = {
+      numstat: '98\t345\tpackage-lock.json\n878\t2669\tTHIRD-PARTY-NOTICES.md\n1\t1\tpackage.json',
+      existsOnBase: new Set(['package-lock.json', 'THIRD-PARTY-NOTICES.md', 'package.json']),
+      existsInResult: new Set(['package-lock.json', 'THIRD-PARTY-NOTICES.md', 'package.json']),
+      recent: new Set(['package-lock.json', 'THIRD-PARTY-NOTICES.md', 'package.json'])
+    }
+
+    it('flags a pruned lockfile and notices on an ordinary PR', () => {
+      expect(harness(pruning).contentReverts).toEqual([
+        { file: 'package-lock.json', net: 247 },
+        { file: 'THIRD-PARTY-NOTICES.md', net: 1791 }
+      ])
+    })
+
+    it('does NOT flag them on a dependency update', () => {
+      expect(harness({ ...pruning, dependencyUpdate: true })).toEqual({ deletions: [], contentReverts: [] })
+    })
+
+    it('still flags a content revert of any other file on a dependency update', () => {
+      const { contentReverts } = harness({
+        numstat: '0\t120\tsrc/main/agent/loop.ts\n10\t300\tpackage-lock.json',
+        existsOnBase: new Set(['src/main/agent/loop.ts', 'package-lock.json']),
+        existsInResult: new Set(['src/main/agent/loop.ts', 'package-lock.json']),
+        recent: new Set(['src/main/agent/loop.ts', 'package-lock.json']),
+        dependencyUpdate: true
+      })
+      expect(contentReverts).toEqual([{ file: 'src/main/agent/loop.ts', net: 120 }])
+    })
+
+    it('still flags deleting a generated file on a dependency update (Rule 1)', () => {
+      const { deletions } = harness({
+        numstat: '0\t900\tTHIRD-PARTY-NOTICES.md',
+        existsOnBase: new Set(['THIRD-PARTY-NOTICES.md']),
+        existsInResult: new Set(),
+        dependencyUpdate: true
+      })
+      expect(deletions).toEqual([{ file: 'THIRD-PARTY-NOTICES.md', removed: 900 }])
+    })
   })
 })

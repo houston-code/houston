@@ -462,6 +462,10 @@ jobs:
       - name: Check this merge does not revert work already on its base branch
         env:
           ALLOW_REVERT: ${{ contains(github.event.pull_request.labels.*.name, 'intentional-revert') && '1' || '' }}
+          # A Dependabot update that prunes packages shrinks package-lock.json and
+          # THIRD-PARTY-NOTICES.md, which reads as a revert; this exempts only those two
+          # files from the recent-content rule (see GENERATED_DEPENDENCY_FILES).
+          DEPENDENCY_UPDATE: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && '1' || '' }}
           BASE: ${{ github.base_ref }}
         run: |
           set -euo pipefail

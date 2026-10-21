@@ -223,7 +223,9 @@ deletions.
 every PR and fails if merging would delete a file that still exists on `main`, or roll back
 a large chunk of a file `main` touched recently. It runs against `refs/pull/N/merge`, the
 tree merging would actually produce. A deliberate removal is acknowledged with the
-`intentional-revert` label. Keep the guard's logic and its unit tests
+`intentional-revert` label. On Dependabot PRs the generated `package-lock.json` and
+`THIRD-PARTY-NOTICES.md` are exempt from the recent-content rule, since an update that
+prunes packages shrinks both legitimately. Keep the guard's logic and its unit tests
 (`scripts/merge-revert-guard.test.mjs`) in sync if you change the merge flow;
 `src/main/ci-workflow.test.ts` pins that the job is wired correctly. See
 [CONTRIBUTING.md](CONTRIBUTING.md#how-a-pr-gets-merged) for how the required checks fit
