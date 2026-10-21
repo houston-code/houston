@@ -46,7 +46,7 @@ import {
   revealInFileManager
 } from './openInEditor'
 import { relaunchApp } from './quit-confirm'
-import { setKey, deleteKey, setMcpOAuthTokens, secureStorageStatus } from './secrets'
+import { setKey, deleteKey, setMcpOAuthTokens, secureStorageStatus, flushSecrets } from './secrets'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { getMcpStatuses } from './mcp/manager'
 import { openExternalSafely } from './safeExternal'
@@ -685,13 +685,16 @@ export function registerIpc(): void {
     cleanupPermissionRules(Array.isArray(rules) ? rules : [])
   )
 
-  ipcMain.handle(IPC.settingsSetKey, (_event, providerId: string, key: string) => {
+  // Wait for the encrypted write so a failed save reaches the renderer as an error.
+  ipcMain.handle(IPC.settingsSetKey, async (_event, providerId: string, key: string) => {
     setKey(providerId, key)
+    await flushSecrets()
     return getSettings()
   })
 
-  ipcMain.handle(IPC.settingsDeleteKey, (_event, providerId: string) => {
+  ipcMain.handle(IPC.settingsDeleteKey, async (_event, providerId: string) => {
     deleteKey(providerId)
+    await flushSecrets()
     return getSettings()
   })
 
@@ -736,6 +739,7 @@ export function registerIpc(): void {
           openUrl: (url) => openExternalSafely(url)
         })
         setMcpOAuthTokens(serverId, tokens)
+        await flushSecrets()
         return { ok: true, settings: getSettings() }
       } catch (e) {
         return { ok: false, error: (e as Error).message, settings: getSettings() }
