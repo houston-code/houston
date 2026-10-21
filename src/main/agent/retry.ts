@@ -89,8 +89,23 @@ export function describeProviderError(err: unknown): string {
   return `${message} (${detail.length > CAUSE_DETAIL_MAX ? `${detail.slice(0, CAUSE_DETAIL_MAX - 1)}\u2026` : detail})`
 }
 
+/**
+ * Whether a provider error says the account has run out of quota or credit. OpenAI
+ * reports an exhausted balance as a 429 with code `insufficient_quota`, the same
+ * status as a rate limit, but no amount of waiting fixes it: retrying only held the
+ * error back for the whole backoff budget (about 40 seconds) before showing it.
+ */
+export function isQuotaExhaustedError(err: unknown): boolean {
+  const code = (err as { code?: unknown; error?: { code?: unknown } })?.code ??
+    (err as { error?: { code?: unknown } })?.error?.code
+  if (code === 'insufficient_quota') return true
+  const msg = String((err as { message?: unknown })?.message ?? err)
+  return /insufficient_quota|exceeded your current quota/i.test(msg)
+}
+
 /** Whether an error looks transient and worth retrying. Defaults to NOT retrying. */
 export function isRetryableError(err: unknown): boolean {
+  if (isQuotaExhaustedError(err)) return false
   const status = (err as { status?: number })?.status
   if (typeof status === 'number') {
     // Retry rate-limits, conflicts, request-timeouts, and any server error.
