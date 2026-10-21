@@ -5,13 +5,15 @@ import {
   planCheckText,
   receiptHasFailure,
   receiptSummary,
+  RECEIPT_TITLE,
   type PlanProgress,
   type ReceiptCheck,
   type TurnReceipt
 } from '@shared/evidence'
+import { describeShell } from '../lib/taskLabel'
 
 /**
- * What Houston recorded running during a turn, under the turn's last message: one
+ * What ran during a turn, under the turn's last message: one
  * summary line, expandable to each check and the files changed. Styled as Houston's
  * own row, not part of the model's markdown, because the point is that the model
  * didn't write it. Commands are model-written, so everything renders as plain text.
@@ -22,7 +24,7 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
   return (
     <details className={`receipt${failed ? ' receipt--failed' : ''}`}>
       <summary className="receipt__summary">
-        <span className="receipt__by">Recorded by Houston</span>
+        <span className="receipt__by">{RECEIPT_TITLE}</span>
         <span className="receipt__text">{receiptSummary(receipt)}</span>
       </summary>
       <div className="receipt__body">
@@ -77,6 +79,9 @@ const OUTCOME = { ok: 'passed', failed: 'failed', unknown: 'outcome unknown' } a
 function CheckRow({ check }: { check: ReceiptCheck }): JSX.Element {
   const state = check.ok === true ? 'ok' : check.ok === false ? 'failed' : 'unknown'
   const detail = checkDetail(check)
+  // The command minus its `cd /abs/path &&` and `2>&1` scaffolding, on one line; the
+  // full command is on hover.
+  const short = describeShell(check.label).label
   return (
     <li className={`receipt__check receipt__check--${state}`}>
       <span className="receipt__glyph" aria-hidden="true">
@@ -84,8 +89,14 @@ function CheckRow({ check }: { check: ReceiptCheck }): JSX.Element {
       </span>
       <span className="sr-only">{OUTCOME[state]}: </span>
       <span className="receipt__kind">{checkKindLabel(check.kind)}</span>
-      <code className="receipt__cmd">{check.label}</code>
-      {detail && <span className="receipt__detail">{detail}</span>}
+      <code className="receipt__cmd" title={check.label}>
+        {short}
+      </code>
+      {detail && (
+        <span className="receipt__detail" title={detail}>
+          {detail}
+        </span>
+      )}
     </li>
   )
 }

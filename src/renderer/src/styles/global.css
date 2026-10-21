@@ -4727,8 +4727,8 @@ body.is-resizing .preview-dock__resizer::after {
   user-select: all;
 }
 
-/* What Houston recorded running during a turn, under the turn's last message. Its own
-   bordered row so it never reads as part of the model's reply. */
+/* What ran during a turn (recorded locally by the agent loop), under the turn's last
+   message. Its own bordered row so it never reads as part of the model's reply. */
 .receipt {
   width: 100%;
   border: 1px solid var(--border);
@@ -4783,11 +4783,12 @@ body.is-resizing .preview-dock__resizer::after {
   padding: 0;
   list-style: none;
 }
+/* One line per check: mark, kind, the command (truncated, full text on hover), outcome. */
 .receipt__check {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px 8px;
+  gap: 8px;
+  min-width: 0;
 }
 .receipt__glyph {
   width: 1em;
@@ -4800,10 +4801,26 @@ body.is-resizing .preview-dock__resizer::after {
   color: var(--danger);
 }
 .receipt__kind {
+  flex: none;
   min-width: 64px;
   color: var(--text);
 }
-.receipt__cmd,
+.receipt__cmd {
+  /* Gives up space well before the outcome does. */
+  flex: 0 20 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+.receipt__detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .receipt__files code {
   font-family: var(--mono);
   word-break: break-all;

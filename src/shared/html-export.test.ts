@@ -50,7 +50,7 @@ describe('conversationToHtml receipts', () => {
     const html = conversationToHtml(
       makeConversation({ messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'All tests pass.', receipt }] })
     )
-    expect(html).toContain('<pre class="turn__receipt">Recorded by Houston: Test command failed · 1 file changed')
+    expect(html).toContain('<pre class="turn__receipt">What ran: Test command failed · 1 file changed')
     expect(html).toContain('pytest &lt;script&gt;alert(1)&lt;/script&gt;')
     expect(html).not.toContain('<script>alert(1)')
   })
