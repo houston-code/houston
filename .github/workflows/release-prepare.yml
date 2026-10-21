@@ -250,7 +250,6 @@ jobs:
           done
           node -e "const fs=require('fs');const l=fs.readFileSync('prs.jsonl','utf8').split('\n').filter(Boolean).map(JSON.parse);fs.writeFileSync('prs.json',JSON.stringify(l))"
           if [ -n "$ANTHROPIC_API_KEY" ]; then
-            echo "Generating AI release notes…"
             if ! node scripts/ai-release-notes.mjs < prs.json > .release-section.md; then
               echo "::warning::AI note generation failed; falling back to the deterministic generator."
               node scripts/gen-release-notes.mjs < prs.json > .release-section.md
@@ -337,7 +336,7 @@ jobs:
             gh pr reopen "$open" -R "$GITHUB_REPOSITORY"
             gh pr comment "$open" -R "$GITHUB_REPOSITORY" \
               --body "Updated: re-cut from \`$SHA\` (the tip of \`$LINE\`), with regenerated notes. Any edits made to the notes in this PR were replaced: check the summary again."
-            echo "Updated release PR #$open for v$VERSION." >> "$GITHUB_STEP_SUMMARY"
+            echo "Updated release PR #$open for v$VERSION: https://github.com/$GITHUB_REPOSITORY/pull/$open" | tee -a "$GITHUB_STEP_SUMMARY"
             created=()
             exit 0
           fi
@@ -360,4 +359,4 @@ jobs:
           )")
           # The PR exists: nothing to roll back from here on.
           created=()
-          echo "Opened $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "Opened release PR for v$VERSION: $url" | tee -a "$GITHUB_STEP_SUMMARY"
