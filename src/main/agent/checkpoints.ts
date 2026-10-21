@@ -42,6 +42,12 @@ interface FileSnapshot {
   afterBinary?: boolean
   /** Whether the post-turn content was captured, so redo skips files it can't restore. */
   afterCaptured: boolean
+  /**
+   * This file is back at `before` (a revert or rewind put it there). Tracked per file
+   * because a rewind can leave some of a run's files alone (changed outside the
+   * agent): a later rewind must skip the ones already put back and still reach the rest.
+   */
+  reverted?: boolean
 }
 
 interface Checkpoint {
@@ -70,6 +76,8 @@ interface PersistedCheckpoint {
     /** Set when the content is base64 bytes rather than text (schema version 2 on). */
     beforeEncoding?: 'base64'
     afterEncoding?: 'base64'
+    /** See FileSnapshot.reverted. Optional, so older builds simply ignore it. */
+    reverted?: boolean
   }[]
 }
 
@@ -85,8 +93,13 @@ const MAX_CHECKPOINTS = 50
 const MAX_DISK_CHECKPOINTS = 200
 /** Runs remembered per conversation chain; the oldest drop off first. */
 const MAX_CHAIN_ENTRIES = 100
-/** Conversations whose chains index.json keeps; the least recently run drop off. */
-const MAX_CHAIN_CONVERSATIONS = 500
+/**
+ * Chain entries index.json keeps across all conversations; the least recently run
+ * conversations drop off first. Disk keeps only MAX_DISK_CHECKPOINTS run files, so
+ * entries far beyond that point at pruned snapshots anyway, and the bound keeps the
+ * file (read synchronously on first use of a conversation) small.
+ */
+const MAX_INDEX_ENTRIES = 1000
 /** Version stamped on index.json. 3 added `chains`; older builds read only `conversations`. */
 const INDEX_SCHEMA_VERSION = 3
 /**
@@ -223,7 +236,10 @@ function chainFor(conversationId: string): ChainEntry[] {
       ? index.conversations[conversationId]
       : undefined
     if (latest && RUN_ID_RE.test(latest) && chain.at(-1)?.runId !== latest) {
-      chain = [...chain.filter((e) => e.runId !== latest), { runId: latest, at: 0 }]
+      // Ordered after what the chain already has (chains sort by `at`): an older
+      // build ran it last. A chain-less index migrates as one entry at 0.
+      const rest = chain.filter((e) => e.runId !== latest)
+      chain = [...rest, { runId: latest, at: rest.length ? (rest[rest.length - 1].at ?? 0) + 1 : 0 }]
     }
   }
   for (const e of chain) runConversation.set(e.runId, conversationId)
@@ -276,9 +292,40 @@ export function setRunTurn(conversationId: string, runId: string, index: number,
   void scheduleWriteIndex()
 }
 
-/** A copy of a conversation's chain, oldest first. */
+/**
+ * One conversation's chain from two sources (disk and this process's memory): the
+ * union by runId, oldest first. A run this process knows wins whole (so a detached
+ * flag it cleared stays cleared); runs only the other source has are kept. That is
+ * what lets the desktop app and the terminal app, which share one profile, work on
+ * the same chat without either dropping the other's runs.
+ */
+function mergeChains(disk: ChainEntry[], mem: ChainEntry[]): ChainEntry[] {
+  const byId = new Map<string, ChainEntry>()
+  for (const e of disk) byId.set(e.runId, e)
+  for (const e of mem) byId.set(e.runId, e)
+  // Array.prototype.sort is stable: equal times (a migrated entry's 0) keep their order.
+  return [...byId.values()].sort((a, b) => a.at - b.at).slice(-MAX_CHAIN_ENTRIES)
+}
+
+/** Fold the on-disk chain into memory, picking up runs another process recorded. */
+function refreshChain(conversationId: string): ChainEntry[] {
+  const mem = chainFor(conversationId)
+  const dir = checkpointsDirOrNull()
+  if (!dir) return mem
+  const index = readIndexSync(dir)
+  if (!Object.prototype.hasOwnProperty.call(index.chains, conversationId)) return mem
+  const merged = mergeChains(index.chains[conversationId], mem)
+  for (const e of merged) runConversation.set(e.runId, conversationId)
+  chains.set(conversationId, merged)
+  return merged
+}
+
+/**
+ * A copy of a conversation's chain, oldest first, including runs another Houston
+ * process recorded since this one first loaded it.
+ */
 export function conversationChain(conversationId: string): ChainEntry[] {
-  return chainFor(conversationId).map((e) => ({ ...e }))
+  return refreshChain(conversationId).map((e) => ({ ...e }))
 }
 
 /**
@@ -466,7 +513,8 @@ async function writeRunFile(runId: string): Promise<void> {
       after: s.after,
       afterCaptured: s.afterCaptured,
       ...(s.beforeBinary ? { beforeEncoding: 'base64' as const } : {}),
-      ...(s.afterBinary ? { afterEncoding: 'base64' as const } : {})
+      ...(s.afterBinary ? { afterEncoding: 'base64' as const } : {}),
+      ...(s.reverted ? { reverted: true } : {})
     }))
   }
   await writeJsonAtomic(join(dir, `${runId}.json`), data)
@@ -514,12 +562,24 @@ function scheduleWriteIndex(): Promise<void> {
     const conversations = index.conversations
     for (const [conv, runId] of lastRunByConversation) conversations[conv] = runId
     const merged: Record<string, ChainEntry[]> = index.chains
-    for (const [conv, chain] of chains) merged[conv] = chain
-    // Bound the index: keep the most recently run conversations' chains.
-    const kept = Object.entries(merged)
+    for (const [conv, chain] of chains) {
+      const own = Object.prototype.hasOwnProperty.call(merged, conv) ? merged[conv] : []
+      const next = mergeChains(own, chain)
+      merged[conv] = next
+      chains.set(conv, next)
+      for (const e of next) runConversation.set(e.runId, conv)
+    }
+    // Bound the index: the most recently run conversations' chains, up to the cap.
+    const byRecency = Object.entries(merged)
       .filter(([, chain]) => chain.length > 0)
       .sort((a, b) => (b[1].at(-1)?.at ?? 0) - (a[1].at(-1)?.at ?? 0))
-      .slice(0, MAX_CHAIN_CONVERSATIONS)
+    const kept: [string, ChainEntry[]][] = []
+    let total = 0
+    for (const entry of byRecency) {
+      if (kept.length > 0 && total + entry[1].length > MAX_INDEX_ENTRIES) break
+      kept.push(entry)
+      total += entry[1].length
+    }
     await writeJsonAtomic(join(dir, 'index.json'), {
       version: INDEX_SCHEMA_VERSION,
       conversations,
@@ -599,7 +659,11 @@ async function loadRunIntoMemory(runId: string): Promise<Checkpoint | null> {
       ...(entry.beforeEncoding === 'base64' ? { beforeBinary: true } : {}),
       after: entry.after,
       ...(entry.afterEncoding === 'base64' ? { afterBinary: true } : {}),
-      afterCaptured: entry.afterCaptured === true
+      afterCaptured: entry.afterCaptured === true,
+      // A file written before per-file tracking follows its run's flag.
+      ...(entry.reverted === true || (entry.reverted === undefined && parsed.reverted === true)
+        ? { reverted: true }
+        : {})
     })
   }
   const cp: Checkpoint = { roots: parsed.roots, files, reverted: parsed.reverted === true }
@@ -822,6 +886,7 @@ export async function restoreCheckpoint(runId: string): Promise<number> {
     if (!resolveOrNull(cp.roots, abs)) continue
     try {
       await applyState(abs, snap.before, snap.beforeBinary)
+      snap.reverted = true
       restored++
     } catch {
       // Best effort — keep going with the rest.
@@ -848,6 +913,7 @@ export async function reapplyCheckpoint(runId: string): Promise<number> {
     if (!resolveOrNull(cp.roots, abs)) continue
     try {
       await applyState(abs, snap.after, snap.afterBinary)
+      snap.reverted = false
       reapplied++
     } catch {
       // Best effort — keep going with the rest.
@@ -901,13 +967,13 @@ export interface RevertedRun {
 }
 
 export interface GuardedRevertResult {
-  /** Distinct files now at their pre-turn content (written, or already there). */
+  /** Distinct files written back to their pre-turn content. */
   restored: number
   /** Files left alone because they changed outside the agent (display paths). */
   conflicts: string[]
   /** Runs that changed files but whose snapshots are gone (pruned). */
   unavailable: number
-  /** Per run, newest first: the files put back. */
+  /** Per run, newest first: the files written back (what an undo re-applies). */
   runs: RevertedRun[]
 }
 
@@ -943,12 +1009,19 @@ export async function revertRunsGuarded(
     }
     if (cp.reverted) continue
     const files: string[] = []
+    let changed = false
     for (const [abs, snap] of cp.files) {
+      // Put back by an earlier revert or rewind already.
+      if (snap.reverted) continue
       const cur = overlay.get(abs) ?? (await currentState(cp.roots, abs))
       const target: FileState = { content: snap.before, binary: snap.beforeBinary === true }
+      // Already at its pre-turn content (put back by hand, or by a later turn's
+      // revert): nothing to write, nothing to count, nothing for an undo to redo.
       if (cur && sameState(cur, snap.before, snap.beforeBinary)) {
-        files.push(abs)
-        restored.add(abs)
+        if (!opts.dryRun) {
+          snap.reverted = true
+          changed = true
+        }
         continue
       }
       if (!cur || !snap.afterCaptured || !sameState(cur, snap.after, snap.afterBinary)) {
@@ -962,14 +1035,20 @@ export async function revertRunsGuarded(
           conflicts.add(displayPath(cp.roots, abs))
           continue
         }
+        snap.reverted = true
+        changed = true
       }
       overlay.set(abs, target)
       files.push(abs)
       restored.add(abs)
     }
     runs.push({ runId: entry.runId, files })
-    if (!opts.dryRun) {
-      cp.reverted = true
+    if (!opts.dryRun && changed) {
+      // The run counts as reverted only once every file is back. One with a file
+      // left alone stays open, so a later rewind (once the user has sorted that file
+      // out) still reaches it, and the latest-turn bar doesn't claim a revert that
+      // didn't happen.
+      cp.reverted = [...cp.files.values()].every((f) => f.reverted)
       await schedulePersistRun(entry.runId)
     }
   }
@@ -997,6 +1076,7 @@ export async function reapplyRunsGuarded(
       if (!snap || !snap.afterCaptured) continue
       const cur = await currentState(cp.roots, abs)
       if (cur && sameState(cur, snap.after, snap.afterBinary)) {
+        snap.reverted = false
         reapplied.add(abs)
         continue
       }
@@ -1006,12 +1086,13 @@ export async function reapplyRunsGuarded(
       }
       try {
         await applyState(abs, snap.after, snap.afterBinary, { noFollow: true })
+        snap.reverted = false
         reapplied.add(abs)
       } catch {
         conflicts.add(displayPath(cp.roots, abs))
       }
     }
-    cp.reverted = false
+    cp.reverted = [...cp.files.values()].every((f) => f.reverted)
     await schedulePersistRun(run.runId)
   }
   return { reapplied: reapplied.size, conflicts: [...conflicts] }

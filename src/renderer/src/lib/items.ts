@@ -202,6 +202,8 @@ export interface RewindItemTarget {
   turn: number
   text: string
   label: string
+  /** The message's attachments, so edit and resend sends them again. */
+  images?: ImageAttachment[]
 }
 
 /**
@@ -220,9 +222,24 @@ export function rewindTargets(items: DisplayItem[]): RewindItemTarget[] {
       ...(it.images ? { images: it.images } : {}),
       ...(it.invokedAs ? { invokedAs: it.invokedAs } : {})
     }
-    out.push({ id: it.id, turn: out.length, text: turnText(m), label: turnLabel(m) })
+    out.push({
+      id: it.id,
+      turn: out.length,
+      text: turnText(m),
+      label: turnLabel(m),
+      ...(it.images?.length ? { images: it.images } : {})
+    })
   }
   return out
+}
+
+/**
+ * Whether a spawned chat still holds its hand-off message (at `historyLength`, after
+ * any history copied from the parent), so the "Handoff from" banner has something to
+ * sit above. A rewind to before it removes the hand-off, and the banner with it.
+ */
+export function showsHandoff(historyLength: number, messageCount: number): boolean {
+  return historyLength < messageCount
 }
 
 /** Parse a tool call's `options` argument into display options (string[] or {label,…}[]). */

@@ -222,8 +222,11 @@ export function Composer({
   editing?: { label: string; mode: 'both' | 'conversation' }
   onEditModeChange?: (mode: 'both' | 'conversation') => void
   onCancelEdit?: () => void
-  /** Text to put in the field (an edited message); a new `seq` puts it there again. */
-  prefill?: { text: string; seq: number }
+  /**
+   * Text (and images) to put in the composer: an edited message. A new `seq` puts
+   * it there again.
+   */
+  prefill?: { text: string; images?: ImageAttachment[]; seq: number }
   /**
    * Esc Esc on an empty field opens the rewind picker. Absent: Esc Esc recalls the
    * last message into the field instead.
@@ -612,6 +615,7 @@ export function Composer({
   useEffect(() => {
     if (!prefill) return
     setText(prefill.text)
+    setImages(vision && prefill.images?.length ? prefill.images.slice(0, MAX_ATTACHMENTS) : [])
     setHistPos(null)
     focusEnd(prefill.text.length)
     // eslint-disable-next-line react-hooks/exhaustive-deps

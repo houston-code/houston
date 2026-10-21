@@ -10,6 +10,7 @@ import {
   itemsFromMessages,
   lastUserText,
   rewindTargets,
+  showsHandoff,
   systemNoteSummary,
   reduceEvent,
   type DisplayItem,
@@ -991,5 +992,23 @@ describe('rewindTargets', () => {
       { runId: 'r', type: 'steered', text: 'also this' } as AgentEvent
     )
     expect(rewindTargets(items).map((t) => t.text)).toEqual(['go'])
+  })
+})
+
+describe('showsHandoff', () => {
+  it('shows the banner only while the hand-off message is still in the log', () => {
+    expect(showsHandoff(0, 1)).toBe(true)
+    expect(showsHandoff(4, 6)).toBe(true)
+    // Rewound to before the hand-off (or everything): no banner over nothing.
+    expect(showsHandoff(4, 4)).toBe(false)
+    expect(showsHandoff(0, 0)).toBe(false)
+  })
+})
+
+describe('rewindTargets images', () => {
+  it('carries a message\'s images, so edit and resend sends them again', () => {
+    const img = { mediaType: 'image/png', data: 'AA==' }
+    const [t] = rewindTargets([{ kind: 'user', id: 'u', text: 'look', images: [img] } as UserItem])
+    expect(t.images).toEqual([img])
   })
 })

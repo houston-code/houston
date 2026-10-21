@@ -206,7 +206,12 @@ export function createConversation(input: {
  */
 export function getConversation(id: string): Conversation | null {
   const conv = read(id)
-  return conv && hydrateMedia(conv, mediaDir(conv.id))
+  if (!conv) return null
+  // The rewind backup is the store's own undo state (see agent/rewind.ts), read with
+  // peekConversation. Left out here, it can't reach an export, the renderer, or a
+  // provider: it holds the messages the user rewound away, attachments and all.
+  const { rewindBackup: _rewindBackup, ...rest } = conv
+  return hydrateMedia(rest, mediaDir(conv.id))
 }
 
 /**

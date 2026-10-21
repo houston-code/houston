@@ -76,7 +76,7 @@ import { useInputQueue } from './hooks/useInputQueue'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
 import type { ShipAction } from '@shared/shipAction'
 import { saveComposerDraft } from './lib/composerDraft'
-import { itemsFromMessages, lastUserText, rewindTargets, type RewindItemTarget } from './lib/items'
+import { itemsFromMessages, lastUserText, rewindTargets, showsHandoff, type RewindItemTarget } from './lib/items'
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
 import { activeTaskCount } from './components/BackgroundTasks'
@@ -198,7 +198,7 @@ export default function App(): JSX.Element {
   // Tagged with its chat: the Composer remounts per chat and applies a prefill on
   // mount, so one meant for another chat must never reach it.
   const [composerPrefill, setComposerPrefill] = useState<
-    { text: string; seq: number; conversationId: string | null } | undefined
+    { text: string; images?: ImageAttachment[]; seq: number; conversationId: string | null } | undefined
   >()
   const [canUndoRewind, setCanUndoRewind] = useState(false)
   // The full-size image viewer (a show_images gallery or a tool-card screenshot).
@@ -606,7 +606,7 @@ export default function App(): JSX.Element {
       // child's log starts with the parent's copied history, so the banner goes
       // after that, right above the hand-off itself.
       const forked = conv.spawnedFrom?.historyLength ?? 0
-      const items = conv.spawnedFrom
+      const items = conv.spawnedFrom && showsHandoff(forked, conv.messages.length)
         ? [
             ...itemsFromMessages(conv.messages.slice(0, forked)),
             {
@@ -1224,8 +1224,13 @@ export default function App(): JSX.Element {
   // ---- Rewind ----
 
   const prefillComposer = useCallback(
-    (text: string) => {
-      setComposerPrefill((prev) => ({ text, seq: (prev?.seq ?? 0) + 1, conversationId: currentId }))
+    (text: string, images?: ImageAttachment[]) => {
+      setComposerPrefill((prev) => ({
+        text,
+        ...(images?.length ? { images } : {}),
+        seq: (prev?.seq ?? 0) + 1,
+        conversationId: currentId
+      }))
     },
     [currentId]
   )
@@ -1271,7 +1276,7 @@ export default function App(): JSX.Element {
       setRewindConfirm(null)
       setRewindPickerOpen(false)
       setEditing({ target, mode: 'both' })
-      prefillComposer(target.text)
+      prefillComposer(target.text, target.images)
     },
     [prefillComposer]
   )
@@ -1332,13 +1337,13 @@ export default function App(): JSX.Element {
   // Edit and resend: a message sent while editing first rewinds to the edited one.
   // If the rewind is refused, the text goes back in the field and nothing is sent.
   const sendAfterEdit = useCallback(
-    async (text: string, send: () => void) => {
+    async (text: string, images: ImageAttachment[] | undefined, send: () => void) => {
       const pending = editing
       if (!pending) return send()
       setEditing(null)
       const done = await performRewind(pending.target, pending.mode)
       if (!done) {
-        prefillComposer(text)
+        prefillComposer(text, images)
         return
       }
       send()
@@ -1347,7 +1352,8 @@ export default function App(): JSX.Element {
   )
 
   const onSend = useCallback(
-    (text: string, images?: ImageAttachment[]) => void sendAfterEdit(text, () => dispatch(text, images)),
+    (text: string, images?: ImageAttachment[]) =>
+      void sendAfterEdit(text, images, () => dispatch(text, images)),
     [dispatch, sendAfterEdit]
   )
 
@@ -1355,7 +1361,7 @@ export default function App(): JSX.Element {
   // transcript shows what they did, not the instructions it expanded to.
   const onInvoke = useCallback(
     (turn: InvokedTurn) =>
-      void sendAfterEdit(turn.invokedAs.typed ?? turn.text, () =>
+      void sendAfterEdit(turn.invokedAs.typed ?? turn.text, undefined, () =>
         dispatch(turn.text, undefined, turn.invokedAs)
       ),
     [dispatch, sendAfterEdit]

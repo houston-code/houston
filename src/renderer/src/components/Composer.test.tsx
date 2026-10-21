@@ -351,6 +351,18 @@ describe('Composer rewind (Esc Esc picker, edit and resend)', () => {
     expect(input.value).toBe('edit me')
   })
 
+  it('puts an edited message\'s images back with its text (vision models only)', () => {
+    const img = { mediaType: 'image/png', data: 'AA==' }
+    render(<Composer {...baseProps({ prefill: { text: 'see this', images: [img], seq: 1 } })} />)
+    expect(screen.getAllByAltText('attachment')).toHaveLength(1)
+  })
+
+  it('drops prefilled images for a model that can\'t see them', () => {
+    const img = { mediaType: 'image/png', data: 'AA==' }
+    render(<Composer {...baseProps({ vision: false, prefill: { text: 'see this', images: [img], seq: 1 } })} />)
+    expect(screen.queryByAltText('attachment')).toBeNull()
+  })
+
   it('shows the editing bar with a mode choice and a cancel', () => {
     const onEditModeChange = vi.fn()
     const onCancelEdit = vi.fn()

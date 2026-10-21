@@ -14,6 +14,7 @@ import type { ChatMessage } from '@shared/agent'
 import { setUserDataDir, resetUserDataDir } from '../userData'
 import {
   createConversation,
+  getConversation,
   peekConversation,
   setCompaction,
   setConversationError,
@@ -34,6 +35,18 @@ import {
 
 const active = vi.hoisted(() => ({ runId: null as string | null }))
 vi.mock('./loop', () => ({ activeRunForConversation: () => active.runId }))
+// Lets a test make the conversation store's rewind write fail (a full disk).
+const store = vi.hoisted(() => ({ failWrite: false }))
+vi.mock('../conversations', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../conversations')>()
+  return {
+    ...real,
+    writeRewind: (...args: Parameters<typeof real.writeRewind>) => {
+      if (store.failWrite) throw new Error('disk full')
+      return real.writeRewind(...args)
+    }
+  }
+})
 
 import { canUndoRewind, previewRewind, rewindConversation, undoRewind } from './rewind'
 import { rewindInProgress } from './rewindLock'
@@ -47,6 +60,7 @@ beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), 'houston-rw-data-'))
   setUserDataDir(dataDir)
   active.runId = null
+  store.failWrite = false
   convId = createConversation({ workspace: ws, providerId: 'p', model: 'm' }).id
 })
 
@@ -159,6 +173,38 @@ describe('checkpoint chain', () => {
     expect(read('a.txt')).toBe('a0')
   })
 
+  it('merges runs another Houston process recorded for the same chat', async () => {
+    await agentTurn('one')
+    await flushCheckpoints()
+    // The terminal app (another process) runs a turn on this chat and records it.
+    const indexPath = join(dataDir, 'checkpoints', 'index.json')
+    const index = JSON.parse(readFileSync(indexPath, 'utf8'))
+    index.chains[convId].push({ runId: 'run-elsewhere', turn: 2, at: index.chains[convId][0].at })
+    writeFileSync(indexPath, JSON.stringify(index))
+    // This process sees it, and its own next write keeps it.
+    expect(conversationChain(convId).map((e) => e.runId)).toEqual(['run-one', 'run-elsewhere'])
+    noteConversationRun(convId, 'run-here', { index: 4, fp: 'x' })
+    await flushCheckpoints()
+    const after = JSON.parse(readFileSync(indexPath, 'utf8'))
+    expect(after.chains[convId].map((e: { runId: string }) => e.runId)).toEqual([
+      'run-one',
+      'run-elsewhere',
+      'run-here'
+    ])
+  })
+
+  it('bounds index.json across chats, keeping the most recently run', async () => {
+    for (let c = 0; c < 12; c++) {
+      const id = `00000000-0000-4000-8000-${String(c).padStart(12, '0')}`
+      for (let r = 0; r < 100; r++) noteConversationRun(id, `r-${c}-${r}`)
+    }
+    await flushCheckpoints()
+    const index = JSON.parse(readFileSync(join(dataDir, 'checkpoints', 'index.json'), 'utf8'))
+    const chains = Object.values(index.chains) as unknown[][]
+    expect(chains.reduce((n, c) => n + c.length, 0)).toBeLessThanOrEqual(1000)
+    expect(index.chains['00000000-0000-4000-8000-000000000011']).toHaveLength(100)
+  })
+
   it('ignores a corrupt index.json rather than failing', async () => {
     mkdirSync(join(dataDir, 'checkpoints'), { recursive: true })
     writeFileSync(join(dataDir, 'checkpoints', 'index.json'), '{not json')
@@ -234,6 +280,61 @@ describe('rewind', () => {
     expect(r).toMatchObject({ ok: true, restored: 1, conflicts: ['b.txt'] })
     expect(read('a.txt')).toBe('a1')
     expect(read('b.txt')).toBe('the user edited this')
+  })
+
+  it('a run with a file left alone stays open, so a later rewind finishes it', async () => {
+    await threeTurns()
+    writeFileSync(file('b.txt'), 'the user edited this')
+    const first = await rewindConversation(convId, 1, 'code', 'two')
+    expect(first).toMatchObject({ ok: true, restored: 1, conflicts: ['b.txt'] })
+    // The latest turn isn't claimed as reverted: one of its files is untouched.
+    expect(await getConversationCheckpoint(convId)).toMatchObject({ runId: 'run-three', reverted: false })
+
+    // The user puts b.txt back the way the agent left it and rewinds again.
+    writeFileSync(file('b.txt'), 'b3')
+    const second = await rewindConversation(convId, 1, 'code', 'two')
+    // a.txt was already put back (not a conflict, not counted again); b.txt goes now.
+    expect(second).toMatchObject({ ok: true, restored: 1, conflicts: [] })
+    expect(read('a.txt')).toBe('a1')
+    expect(read('b.txt')).toBeNull()
+    expect(await getConversationCheckpoint(convId)).toMatchObject({ runId: 'run-three', reverted: true })
+  })
+
+  it('neither rewrites nor counts a file the user already put back', async () => {
+    writeFileSync(file('a.txt'), 'a0')
+    await agentTurn('one', { 'a.txt': 'a1', 'c.txt': 'c1' })
+    writeFileSync(file('a.txt'), 'a0') // put back by hand
+    expect(await previewRewind(convId, 0, 'code', 'one')).toMatchObject({ ok: true, files: 1, conflicts: [] })
+    const r = await rewindConversation(convId, 0, 'code', 'one')
+    expect(r).toMatchObject({ ok: true, restored: 1, conflicts: [] })
+    // The undo re-applies only what the rewind wrote: a.txt stays as the user left it.
+    await undoRewind(convId)
+    expect(read('a.txt')).toBe('a0')
+    expect(read('c.txt')).toBe('c1')
+  })
+
+  it('puts the files back and changes nothing else when the rewound log cannot be saved', async () => {
+    await threeTurns()
+    const before = messages()
+    store.failWrite = true
+    const r = await rewindConversation(convId, 1, 'both', 'two')
+    expect(r).toMatchObject({ ok: false, error: expect.stringContaining('disk full') })
+    expect(read('a.txt')).toBe('a3')
+    expect(read('b.txt')).toBe('b3')
+    expect(messages()).toEqual(before)
+    // Nothing detached: the latest turn's revert is still offered, and unreverted.
+    expect(conversationChain(convId).some((e) => e.detached)).toBe(false)
+    expect(await getConversationCheckpoint(convId)).toMatchObject({ runId: 'run-three', reverted: false })
+    // And a retry once the disk is fine works from the same state.
+    store.failWrite = false
+    expect(await rewindConversation(convId, 1, 'both', 'two')).toMatchObject({ ok: true, restored: 2 })
+  })
+
+  it('keeps the backup out of getConversation (exports, the renderer, runs)', async () => {
+    await threeTurns()
+    await rewindConversation(convId, 1, 'both', 'two')
+    expect(peekConversation(convId)!.rewindBackup?.messages).toHaveLength(6)
+    expect(getConversation(convId)).not.toHaveProperty('rewindBackup')
   })
 
   it('walks a file back through every turn, and stops where the user edited between turns', async () => {
@@ -436,6 +537,18 @@ describe('undo rewind', () => {
     expect(canUndoRewind(convId)).toBe(false)
     expect(await undoRewind(convId)).toMatchObject({ ok: false })
     expect(peekConversation(convId)!.rewindBackup).toBeUndefined()
+  })
+
+  it('an undo whose log cannot be saved changes nothing and can be retried', async () => {
+    await threeTurns()
+    await rewindConversation(convId, 1, 'both', 'two')
+    store.failWrite = true
+    expect(await undoRewind(convId)).toMatchObject({ ok: false })
+    expect(read('a.txt')).toBe('a1')
+    expect(canUndoRewind(convId)).toBe(true)
+    store.failWrite = false
+    expect(await undoRewind(convId)).toMatchObject({ ok: true, reapplied: 2 })
+    expect(read('a.txt')).toBe('a3')
   })
 
   it('is refused when there was no rewind', async () => {

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import {
+  REWIND_MODE_INFO,
   rewindConfirmText,
   type RewindMode,
   type RewindPreview
@@ -15,20 +16,6 @@ export interface RewindTarget {
   /** One-line label for the dialog. */
   label: string
 }
-
-const MODE_LABEL: Record<RewindMode, string> = {
-  both: 'Conversation and code',
-  conversation: 'Conversation only',
-  code: 'Code only'
-}
-
-const MODE_HINT: Record<RewindMode, string> = {
-  both: 'Remove this message and everything after it, and put back the files the agent changed.',
-  conversation: 'Remove this message and everything after it. Files stay as they are.',
-  code: 'Put back the files the agent changed from this message on. The chat stays.'
-}
-
-const ORDER: RewindMode[] = ['both', 'conversation', 'code']
 
 /**
  * Confirm a rewind: pick what to rewind, see what it will change (how many messages
@@ -96,18 +83,18 @@ export function RewindDialog({
           <p className="rewind-dialog__target">“{target.label}”</p>
           <fieldset className="rewind-dialog__modes">
             <legend className="rewind-dialog__legend">What to rewind</legend>
-            {ORDER.map((m) => (
-              <label key={m} className="rewind-dialog__mode">
+            {REWIND_MODE_INFO.map((m) => (
+              <label key={m.mode} className="rewind-dialog__mode">
                 <input
                   type="radio"
                   name="rewind-mode"
-                  value={m}
-                  checked={mode === m}
-                  onChange={() => setMode(m)}
+                  value={m.mode}
+                  checked={mode === m.mode}
+                  onChange={() => setMode(m.mode)}
                 />
                 <span>
-                  <span className="rewind-dialog__mode-label">{MODE_LABEL[m]}</span>
-                  <span className="rewind-dialog__mode-hint">{MODE_HINT[m]}</span>
+                  <span className="rewind-dialog__mode-label">{m.label}</span>
+                  <span className="rewind-dialog__mode-hint">{m.hint}</span>
                 </span>
               </label>
             ))}

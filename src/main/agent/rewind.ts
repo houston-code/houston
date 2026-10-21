@@ -125,7 +125,6 @@ async function rewindNow(
   // Runs whose turns leave the chat. Every run in the slice started at or after the
   // target, and a run never answers a message from before the one it started at.
   const detached = cut ? runs.filter((r) => !r.detached).map((r) => r.runId) : []
-  if (detached.length) setRunsDetached(conversationId, detached, true)
 
   const backup: RewindBackup = {
     mode,
@@ -137,13 +136,22 @@ async function rewindNow(
     code: code.runs.filter((r) => r.files.length > 0),
     detached
   }
-  writeRewind(conversationId, {
-    messages,
-    compaction: cut ? compactionAfterTruncate(conv.compaction, at) : (conv.compaction ?? null),
-    // The failed turn the marker describes was cut along with the rest.
-    lastError: cut ? null : (conv.lastError ?? null),
-    backup
-  })
+  try {
+    writeRewind(conversationId, {
+      messages,
+      compaction: cut ? compactionAfterTruncate(conv.compaction, at) : (conv.compaction ?? null),
+      // The failed turn the marker describes was cut along with the rest.
+      lastError: cut ? null : (conv.lastError ?? null),
+      backup
+    })
+  } catch (e) {
+    // The log couldn't be saved, so there is no backup to undo from: put the files
+    // back the way they were rather than leave code and chat out of step.
+    await reapplyRunsGuarded(code.runs)
+    return { ok: false, error: `Couldn't save the rewound conversation: ${(e as Error).message}` }
+  }
+  // Only once the log is saved: detaching withdraws the latest turn's revert.
+  if (detached.length) setRunsDetached(conversationId, detached, true)
 
   return {
     ok: true,
@@ -182,15 +190,20 @@ async function undoNow(conversationId: string): Promise<UndoRewindResult> {
   if (!backup || backup.afterLength !== conv.messages.length) {
     return { ok: false, error: 'There is no rewind to undo: the chat has moved on since.' }
   }
+  // The log first: if it can't be saved, nothing has changed and the backup stays.
+  const restoresLog = backup.messages !== undefined
+  try {
+    writeRewind(conversationId, {
+      messages: backup.messages ?? conv.messages,
+      compaction: restoresLog ? (backup.compaction ?? null) : (conv.compaction ?? null),
+      lastError: restoresLog ? (backup.lastError ?? null) : (conv.lastError ?? null),
+      backup: null
+    })
+  } catch (e) {
+    return { ok: false, error: `Couldn't save the conversation: ${(e as Error).message}` }
+  }
   const code = await reapplyRunsGuarded(backup.code)
   if (backup.detached.length) setRunsDetached(conversationId, backup.detached, false)
-  const restoresLog = backup.messages !== undefined
-  writeRewind(conversationId, {
-    messages: backup.messages ?? conv.messages,
-    compaction: restoresLog ? (backup.compaction ?? null) : (conv.compaction ?? null),
-    lastError: restoresLog ? (backup.lastError ?? null) : (conv.lastError ?? null),
-    backup: null
-  })
   return {
     ok: true,
     messages: getConversation(conversationId)?.messages ?? backup.messages ?? conv.messages,

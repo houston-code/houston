@@ -83,6 +83,7 @@ import type { PickerSpec, PickerOutcome } from './tui-picker'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
 import { workspaceLabel } from '@shared/notify'
 import {
+  REWIND_MODE_INFO,
   rewindConfirmText,
   rewindDoneText,
   rewindPoints,
@@ -896,13 +897,6 @@ export function renderCheckpoint(cp: CheckpointInfo | null, paint: Painter): str
     : paint(`· /undo would revert ${cp.files} file(s) changed by the last turn`, 'dim')
 }
 
-/** `/rewind`'s mode choices, in the order the prompt numbers them. */
-export const REWIND_MODE_CHOICES: { mode: RewindMode; label: string }[] = [
-  { mode: 'both', label: 'conversation and code' },
-  { mode: 'conversation', label: 'conversation only (files stay as they are)' },
-  { mode: 'code', label: 'code only (the chat stays)' }
-]
-
 /**
  * `/rewind`: the user's earlier messages, numbered from 1 oldest first (the number
  * `/rewind <n>` takes), showing at most the last `max`.
@@ -928,7 +922,7 @@ export function parseRewindMode(answer: string): RewindMode | null {
   const a = answer.trim().toLowerCase()
   if (a === '') return 'both' // the default, as the prompt says
   const n = Number(a)
-  if (Number.isInteger(n) && n >= 1 && n <= REWIND_MODE_CHOICES.length) return REWIND_MODE_CHOICES[n - 1].mode
+  if (Number.isInteger(n) && n >= 1 && n <= REWIND_MODE_INFO.length) return REWIND_MODE_INFO[n - 1].mode
   if (a === 'both' || a === 'conversation' || a === 'code') return a
   if (a === 'chat') return 'conversation'
   return null
@@ -3208,7 +3202,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         let mode = result.mode
         if (!mode) {
           deps.io.out(
-            `${paint('Rewind what?', 'bold')}\n${REWIND_MODE_CHOICES.map((c, i) => `  ${paint(String(i + 1), 'cyan')}  ${c.label}`).join('\n')}\n`
+            `${paint('Rewind what?', 'bold')}\n${REWIND_MODE_INFO.map((c, i) => `  ${paint(String(i + 1), 'cyan')}  ${c.label}  ${paint(c.hint, 'dim')}`).join('\n')}\n`
           )
           const ans = await deps.io.readLine('[1] > ', { discardPending: true })
           mode = ans === null ? undefined : (parseRewindMode(ans) ?? undefined)

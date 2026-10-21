@@ -20,6 +20,25 @@ export type RewindMode = 'conversation' | 'code' | 'both'
 
 export const REWIND_MODES: readonly RewindMode[] = ['both', 'conversation', 'code']
 
+/** How both clients name and explain each mode, in the order they offer them. */
+export const REWIND_MODE_INFO: readonly { mode: RewindMode; label: string; hint: string }[] = [
+  {
+    mode: 'both',
+    label: 'Conversation and code',
+    hint: 'Remove this message and everything after it, and put back the files the agent changed.'
+  },
+  {
+    mode: 'conversation',
+    label: 'Conversation only',
+    hint: 'Remove this message and everything after it. Files stay as they are.'
+  },
+  {
+    mode: 'code',
+    label: 'Code only',
+    hint: 'Put back the files the agent changed from this message on. The chat stays.'
+  }
+]
+
 export function isRewindMode(v: unknown): v is RewindMode {
   return v === 'conversation' || v === 'code' || v === 'both'
 }
