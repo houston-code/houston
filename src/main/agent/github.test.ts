@@ -1,6 +1,7 @@
+import { execFileSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { win32 } from 'node:path'
-import { resolveGh, runGh, githubContext } from './github'
+import { gitConfigEnv, resolveGh, runGh, githubContext } from './github'
 
 describe('resolveGh', () => {
   const has = (set: string[]) => (p: string) => set.includes(p)
@@ -81,5 +82,47 @@ describe('githubContext', () => {
 
   it('returns empty when gh is absent (no section, no network probe)', () => {
     expect(githubContext(() => null)).toBe('')
+  })
+})
+
+describe('gh git hardening', () => {
+  it('turns -c pairs into GIT_CONFIG_* entries after any already set', () => {
+    const env = gitConfigEnv(['-c', 'core.hooksPath=/dev/null', '-c', 'filter.x.clean='], {
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'user.name',
+      GIT_CONFIG_VALUE_0: 'me'
+    })
+    expect(env).toMatchObject({
+      GIT_CONFIG_COUNT: '3',
+      GIT_CONFIG_KEY_0: 'user.name',
+      GIT_CONFIG_KEY_1: 'core.hooksPath',
+      GIT_CONFIG_VALUE_1: '/dev/null',
+      GIT_CONFIG_KEY_2: 'filter.x.clean',
+      GIT_CONFIG_VALUE_2: ''
+    })
+  })
+
+  it('is read by git as config', () => {
+    let out: string
+    try {
+      out = execFileSync('git', ['config', '--get', 'core.hooksPath'], {
+        env: gitConfigEnv(['-c', 'core.hooksPath=/dev/null'], process.env),
+        encoding: 'utf8'
+      })
+    } catch {
+      return // git not installed here
+    }
+    expect(out.trim()).toBe('/dev/null')
+  })
+
+  it('hands gh the hardening its git subprocesses inherit', async () => {
+    const r = await runGh(process.execPath)(
+      ['-e', 'const e = process.env; const n = +e.GIT_CONFIG_COUNT; for (let i = 0; i < n; i++) console.log(e["GIT_CONFIG_KEY_" + i] + "=" + e["GIT_CONFIG_VALUE_" + i])'],
+      process.cwd()
+    )
+    expect(r.ok).toBe(true)
+    expect(r.stdout.split('\n')).toEqual(
+      expect.arrayContaining(['core.hooksPath=/dev/null', 'core.fsmonitor=', 'log.showSignature=false'])
+    )
   })
 })
