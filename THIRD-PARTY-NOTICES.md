@@ -6052,7 +6052,7 @@ Apache License
    limitations under the License.
 ```
 
-### @google/genai: 2.29.0
+### @google/genai: 2.29.1
 
 - License: Apache-2.0
 - Homepage: https://github.com/googleapis/js-genai#readme
