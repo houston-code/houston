@@ -237,9 +237,12 @@ async function expandImports(
 
     let result = ''
     let lastIndex = 0
-    IMPORT_RE.lastIndex = 0
+    // A fresh regex per line: this loop awaits file reads mid-iteration, and the
+    // module-level IMPORT_RE is shared, so another expansion (a second conversation's
+    // run, a note save) would otherwise move its lastIndex underneath this one.
+    const re = new RegExp(IMPORT_RE.source, IMPORT_RE.flags)
     let m: RegExpExecArray | null
-    while ((m = IMPORT_RE.exec(line)) !== null) {
+    while ((m = re.exec(line)) !== null) {
       const [full, lead, rawSpec] = m
       const trimmed = trimSpec(rawSpec)
       if (!trimmed) continue
@@ -361,8 +364,13 @@ export async function loadProjectRules(
 
 const RULES_SEP = '\n\n'
 const TRUNCATED_MARK = '\n[truncated]'
-/** Shortest useful slice of a shrunk global block; below this it's dropped instead. */
-const MIN_GLOBAL_KEEP = 200
+/** Shortest useful slice of a shortened block; below this it's dropped instead. */
+const MIN_KEEP = 200
+
+/** The line telling the model which rule sources were cut. */
+function cutNote(cap: number, cut: string[]): string {
+  return `[Rules over the ${cap}-character limit; shortened or left out: ${cut.join(', ')}]`
+}
 
 /**
  * Fit the loaded rule blocks (lowest precedence first) into `cap` characters.
@@ -378,42 +386,57 @@ export function fitRules(
   parts: Array<{ label: string; block: string }>,
   cap: number
 ): ProjectRules {
+  let fit = fitBlocks(parts, cap)
+  // The note naming the cut sources counts against the cap too, so refit into the
+  // room it leaves. That can cut one more source and lengthen the note; repeat until
+  // the cut list stops growing.
+  for (let i = 0; i < 4 && fit.cut.length; i++) {
+    const room = cap - RULES_SEP.length - cutNote(cap, fit.cut).length
+    const next = fitBlocks(parts, Math.max(0, room))
+    const settled = next.cut.length === fit.cut.length
+    fit = next
+    if (settled) break
+  }
+  const blocks = fit.kept.map((p) => p.block)
+  if (fit.cut.length) blocks.push(cutNote(cap, fit.cut))
+  return { text: blocks.join(RULES_SEP), files: fit.kept.map((p) => p.label), truncated: fit.cut }
+}
+
+/** The blocks that fit in `cap`, and the labels shortened or dropped to get there. */
+function fitBlocks(
+  parts: Array<{ label: string; block: string }>,
+  cap: number
+): { kept: Array<{ label: string; block: string }>; cut: string[] } {
   const size = (ps: typeof parts): number =>
     ps.reduce((n, p) => n + p.block.length, 0) + RULES_SEP.length * Math.max(0, ps.length - 1)
   let kept = parts.slice()
-  const truncated: string[] = []
+  const truncated = new Set<string>()
   if (size(kept) > cap && kept.length > 1 && kept[0].label === GLOBAL_RULES_LABEL) {
     const over = size(kept) - cap
     const room = kept[0].block.length - over - TRUNCATED_MARK.length
-    truncated.push(kept[0].label)
+    truncated.add(kept[0].label)
     kept =
-      room >= MIN_GLOBAL_KEEP
+      room >= MIN_KEEP
         ? [{ ...kept[0], block: kept[0].block.slice(0, room) + TRUNCATED_MARK }, ...kept.slice(1)]
         : kept.slice(1)
   }
   if (size(kept) > cap) {
     const fitted: typeof parts = []
     let used = 0
-    for (const p of kept) {
+    for (const [i, p] of kept.entries()) {
       const sep = fitted.length ? RULES_SEP.length : 0
       if (used + sep + p.block.length <= cap) {
         fitted.push(p)
         used += sep + p.block.length
         continue
       }
-      const room = cap - used - sep
-      if (room > 0) fitted.push({ ...p, block: p.block.slice(0, room) + TRUNCATED_MARK })
-      for (const rest of kept.slice(kept.indexOf(p))) {
-        if (!truncated.includes(rest.label)) truncated.push(rest.label)
-      }
+      // Shorten this one if a useful amount fits; a few stray characters are dropped.
+      const room = cap - used - sep - TRUNCATED_MARK.length
+      if (room >= MIN_KEEP) fitted.push({ ...p, block: p.block.slice(0, room) + TRUNCATED_MARK })
+      for (const rest of kept.slice(i)) truncated.add(rest.label)
       break
     }
     kept = fitted
   }
-  const cut = parts.map((p) => p.label).filter((l) => truncated.includes(l))
-  let text = kept.map((p) => p.block).join(RULES_SEP)
-  // Say what's missing, so the model knows its instructions are incomplete rather
-  // than silently working from a partial set.
-  if (cut.length) text += `${RULES_SEP}[Rules over the ${cap}-character limit; shortened or left out: ${cut.join(', ')}]`
-  return { text, files: kept.map((p) => p.label), truncated: cut }
+  return { kept, cut: parts.map((p) => p.label).filter((l) => truncated.has(l)) }
 }

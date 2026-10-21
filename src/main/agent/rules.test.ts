@@ -138,7 +138,7 @@ describe('loadProjectRules', () => {
       expect(rules.files).toEqual([GLOBAL_RULES_LABEL, 'AGENTS.md'])
       expect(rules.truncated).toEqual([GLOBAL_RULES_LABEL])
       expect(rules.text).toContain(`shortened or left out: ${GLOBAL_RULES_LABEL}`)
-      expect(rules.text.length).toBeLessThan(MAX_RULES_CHARS + 200)
+      expect(rules.text.length).toBeLessThanOrEqual(MAX_RULES_CHARS)
     })
 
     it('reports nothing truncated when everything fits', async () => {
@@ -166,19 +166,58 @@ describe('loadProjectRules', () => {
       expect(r.files).toEqual(['AGENTS.md', 'pkg/AGENTS.md'])
       expect(r.truncated).toEqual([GLOBAL_RULES_LABEL, 'pkg/AGENTS.md'])
       expect(r.text).toContain('[truncated]')
+      expect(r.text.length).toBeLessThanOrEqual(1000)
     })
 
     it('lists a fully dropped tail source as truncated but not as loaded', () => {
       const r = fitRules([p('AGENTS.md', 1000), p('pkg/AGENTS.md', 50)], 1000)
       expect(r.files).toEqual(['AGENTS.md'])
-      expect(r.truncated).toEqual(['pkg/AGENTS.md'])
+      // AGENTS.md is shortened to leave room for the cut note; pkg is left out.
+      expect(r.truncated).toEqual(['AGENTS.md', 'pkg/AGENTS.md'])
     })
 
     it('leaves a lone oversized global block to the tail cut', () => {
       const r = fitRules([g(1500)], 1000)
       expect(r.files).toEqual([GLOBAL_RULES_LABEL])
       expect(r.truncated).toEqual([GLOBAL_RULES_LABEL])
-      expect(r.text.startsWith('g'.repeat(1000))).toBe(true)
+      expect(r.text.startsWith('g'.repeat(800))).toBe(true)
+    })
+
+    it('keeps the text, cut note included, within the cap', () => {
+      for (const parts of [
+        [g(500), p('AGENTS.md', 600), p('pkg/AGENTS.md', 600)],
+        [g(300), p('AGENTS.md', 900)],
+        [g(1500)],
+        [p('AGENTS.md', 1000), p('pkg/AGENTS.md', 50)],
+        [g(5000), p('AGENTS.md', 400), p('a/AGENTS.md', 400), p('b/AGENTS.md', 400)]
+      ]) {
+        const r = fitRules(parts, 1000)
+        expect(r.text.length).toBeLessThanOrEqual(1000)
+        expect(r.text).toContain('[Rules over the 1000-character limit')
+      }
+    })
+
+    it('drops a source when only a few characters of it would fit', () => {
+      const r = fitRules([p('AGENTS.md', 790), p('pkg/AGENTS.md', 400)], 1000)
+      expect(r.files).toEqual(['AGENTS.md'])
+      expect(r.truncated).toEqual(['pkg/AGENTS.md'])
+      expect(r.text).not.toContain('pkg/AGENTS.md\n') // no stray fragment of its block
+    })
+  })
+
+  describe('concurrent expansion', () => {
+    it('expands correctly while other expansions run at the same time', async () => {
+      mkdirSync(join(workspace, 'docs'), { recursive: true })
+      for (const n of ['a', 'b', 'c']) writeFileSync(join(workspace, 'docs', `${n}.md`), `CONTENT-${n}`)
+      writeFileSync(join(workspace, 'AGENTS.md'), 'see @./docs/a.md and @./docs/b.md and @./docs/c.md end')
+      const runs = await Promise.all(
+        Array.from({ length: 8 }, (_, i) =>
+          i % 2 ? loadProjectRules(workspace, opts()) : Promise.resolve(neutralizeImports('x @~/y.md z')).then(() => loadProjectRules(workspace, opts()))
+        )
+      )
+      for (const r of runs) {
+        expect(r.text).toContain('see CONTENT-a and CONTENT-b and CONTENT-c end')
+      }
     })
   })
 
