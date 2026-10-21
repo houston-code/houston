@@ -75,7 +75,7 @@ describe('receiptSummary', () => {
           ]
         })
       )
-    ).toBe('Server started · HTTP requests sent, status not checked')
+    ).toBe('Server started · HTTP response not checked')
   })
 
   it('names each other kind by its last run', () => {
@@ -122,7 +122,7 @@ describe('formatReceiptLines', () => {
       filesChangedCount: 1
     })
     expect(formatReceiptLines(r)).toEqual([
-      'Recorded by Houston: Tests passed (4) · 1 file changed',
+      'What ran: Tests passed (4) · 1 file changed',
       '  ✓ tests: npm test (4 passed)',
       '  plus 2 earlier checks',
       '  plus 5 other commands'
@@ -180,7 +180,13 @@ describe('wording for browser checks, background runs, and who ran what', () => 
     expect(
       receiptSummary(receipt({ checks: [check({ kind: 'server', ok: null, unknown: 'still-running', background: true })] }))
     ).toBe('Server running')
-    expect(checkDetail(check({ ok: false, exitCode: 1, background: true }))).toBe('exit 1, ran in the background')
+    expect(checkDetail(check({ ok: false, exitCode: 1, background: true }))).toBe('exit 1')
+  })
+
+  it('says an unchecked HTTP request\'s response was not checked, without curl\'s exit code', () => {
+    expect(checkDetail(check({ kind: 'http', ok: null, unknown: 'http-status-unchecked', exitCode: 0 }))).toBe(
+      'response not checked'
+    )
   })
 
   it('credits a subagent, marks the verify command, and flags a check older than the last edit', () => {
@@ -196,7 +202,7 @@ describe('todo gaps in the receipt', () => {
   it('counts them in the summary, lists them, and treats them as a failure', () => {
     expect(receiptSummary(r)).toBe('2 todos marked done with nothing recorded')
     expect(formatReceiptLines(r)).toEqual([
-      'Recorded by Houston: 2 todos marked done with nothing recorded',
+      'What ran: 2 todos marked done with nothing recorded',
       '  ! marked done with nothing recorded: Backend tests with pytest',
       '  ! marked done with nothing recorded: Verify: pytest, curl, build, browser'
     ])
@@ -233,6 +239,6 @@ describe('plan progress in the receipt', () => {
   it('says once that the plan is complete', () => {
     const r = receipt({ plan: { ...plan, complete: true } })
     expect(receiptSummary(r)).toBe('Plan complete')
-    expect(formatReceiptLines(r)).toEqual(['Recorded by Houston: Plan complete'])
+    expect(formatReceiptLines(r)).toEqual(['What ran: Plan complete'])
   })
 })

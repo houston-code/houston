@@ -4840,10 +4840,10 @@ describe('turn receipt', () => {
     d.io = t.io
     await runTui(opts, d)
     const out = t.text()
-    expect(out).toContain('· Recorded by Houston: No tests ran · build passed · install failed (no network) · 1 file changed')
+    expect(out).toContain('· What ran: No tests ran · build passed · install failed (no network) · 1 file changed')
     expect(out).toContain('✗ install: pip install -r requirements.txt (exit 1, no network)')
     expect(out).toContain('plus 2 other commands')
-    expect(out.indexOf('All tests pass.')).toBeLessThan(out.indexOf('Recorded by Houston'))
+    expect(out.indexOf('All tests pass.')).toBeLessThan(out.indexOf('What ran'))
   })
 
   it('strips control characters from the commands it prints', async () => {

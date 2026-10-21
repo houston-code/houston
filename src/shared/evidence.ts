@@ -145,6 +145,9 @@ export interface PlanProgress {
   complete: boolean
 }
 
+/** The receipt's heading in every client. Local wording: nothing here leaves the machine. */
+export const RECEIPT_TITLE = 'What ran'
+
 export const RECEIPT_MAX_CHECKS = 24
 export const RECEIPT_MAX_FILES = 200
 export const RECEIPT_LABEL_MAX = 160
@@ -198,13 +201,13 @@ export function checkDetail(c: ReceiptCheck): string {
   else if (c.unknown === 'still-running') parts.push('still running')
   else if (c.timedOut) parts.push('timed out')
   else if (c.counts) parts.push(countsText(c.counts))
+  // An unchecked HTTP request's exit code only says curl ran, not how the server answered.
+  else if (c.unknown === 'http-status-unchecked') parts.push('response not checked')
   else if (c.exitCode === null) parts.push('killed')
   else if (c.exitCode !== undefined) parts.push(`exit ${c.exitCode}`)
   if (c.unknown === 'exit-not-attributable') parts.push('exit code is from another part of the command')
-  if (c.unknown === 'http-status-unchecked') parts.push('HTTP status not checked')
   if (c.unknown === 'not-asserted') parts.push('nothing on the page was checked')
   if (c.blocked) parts.push(BLOCKED_TEXT[c.blocked])
-  if (c.background && c.exitCode !== undefined) parts.push('ran in the background')
   if (c.gate) parts.push('your verify command')
   if (c.by) parts.push(`run by ${c.by}`)
   if (c.beforeLastWrite) parts.push('ran before the last file change')
@@ -265,7 +268,7 @@ function otherPhrase(c: ReceiptCheck): string {
   }
   if (c.unknown === 'background') return c.kind === 'server' ? 'server started' : `${name} started in the background`
   if (c.unknown === 'still-running') return c.kind === 'server' ? 'server running' : `${name} still running`
-  if (c.unknown === 'http-status-unchecked') return 'HTTP requests sent, status not checked'
+  if (c.unknown === 'http-status-unchecked') return 'HTTP response not checked'
   if (c.unknown === 'not-asserted') return 'browser: nothing on the page was checked'
   return `${name} result unknown`
 }
@@ -331,7 +334,7 @@ export function receiptHasFailure(r: TurnReceipt): boolean {
  * per check, then a count of the commands not listed.
  */
 export function formatReceiptLines(r: TurnReceipt): string[] {
-  const lines = [`Recorded by Houston: ${receiptSummary(r)}`]
+  const lines = [`${RECEIPT_TITLE}: ${receiptSummary(r)}`]
   for (const c of r.checks) {
     const detail = checkDetail(c)
     lines.push(`  ${checkGlyph(c)} ${KIND_LABEL[c.kind]}: ${c.label}${detail ? ` (${detail})` : ''}`)

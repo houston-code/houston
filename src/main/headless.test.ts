@@ -939,10 +939,10 @@ describe('runHeadless', () => {
     const text = deps(events)
     expect(await runHeadless(baseOpts, text.d)).toBe(0)
     const err = text.err.join('')
-    expect(err).toContain('· Recorded by Houston: Test result unknown · install failed (no network) · 1 file changed\n')
+    expect(err).toContain('· What ran: Test result unknown · install failed (no network) · 1 file changed\n')
     expect(err).toContain('✗ install: pip install -r requirements.txt (exit 1, no network)')
     expect(err).not.toContain('\u001b')
-    expect(text.out.join('')).not.toContain('Recorded by Houston')
+    expect(text.out.join('')).not.toContain('What ran')
 
     const json = deps(events)
     expect(await runHeadless({ ...baseOpts, json: true }, json.d)).toBe(0)
