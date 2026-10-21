@@ -1166,6 +1166,8 @@ body.is-resizing {
 .control--input {
   min-width: 0;
   max-width: 180px;
+  /* As wide as the name typed, not a fixed 20 characters. */
+  field-sizing: content;
 }
 .control--input[aria-invalid='true'] {
   border-color: var(--danger);
@@ -1258,6 +1260,9 @@ body.is-resizing {
   /* Let dropdowns concede width once the folder hits its floor, instead of
      forcing all the squeeze onto the folder button. */
   min-width: 0;
+  /* As wide as the chosen option, not the longest one ("Full auto" was sized for
+     its longest mode, the base-branch picker for the longest branch name). */
+  field-sizing: content;
   appearance: none;
   padding-right: 22px;
   background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
