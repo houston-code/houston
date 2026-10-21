@@ -135,9 +135,6 @@ const Scorecard = lazy(() =>
 const TerminalDock = lazy(() =>
   import('./components/TerminalDock').then((m) => ({ default: m.TerminalDock }))
 )
-/** How often the Tasks tab re-polls background shells while it is showing. */
-const TASKS_POLL_MS = 5000
-
 const PreviewDock = lazy(() =>
   import('./components/PreviewDock').then((m) => ({ default: m.PreviewDock }))
 )
@@ -227,6 +224,9 @@ export default function App(): JSX.Element {
   // Which tab the right-hand dock shows: the live Preview or the Tasks list. Not
   // persisted: the dock reopens on Preview, as it always has.
   const [dockTab, setDockTab] = useState<DockTab>('preview')
+  // The background shell whose page "Open preview" asked for, so the Preview tab
+  // shows it even when more servers are running than it has panes for.
+  const [previewFocus, setPreviewFocus] = useState<string | null>(null)
   const [previewWidth, setPreviewWidth] = useState(PREVIEW_DEFAULT_WIDTH)
   const [planWidth, setPlanWidth] = useState(PLAN_DEFAULT_WIDTH)
   // The plan-review panel opens automatically when a plan is presented; this latches
@@ -462,9 +462,7 @@ export default function App(): JSX.Element {
 
   // Background shells the agent spawned via run_shell (dev servers, watchers),
   // tracked by the main process.
-  // While the Tasks tab is showing, re-poll the registry so a server an exited shell
-  // left running is noticed going away (that change has no event of its own).
-  const backgroundShells = useBackgroundShells(previewOpen && dockTab === 'tasks' ? TASKS_POLL_MS : 0)
+  const backgroundShells = useBackgroundShells()
 
   // The background-tasks list shown in the title bar: running/recently-finished
   // integrated terminals + agent-backgrounded shells, so a backgrounded completion
@@ -2171,13 +2169,17 @@ export default function App(): JSX.Element {
             onClose={closeDock}
             tab={dockTab}
             onTabChange={setDockTab}
+            focusServerId={previewFocus}
             taskCount={activeTaskCount(backgroundTasks)}
             tasks={
               <TasksPanel
                 tasks={backgroundTasks}
+                active={dockTab === 'tasks'}
                 onStop={(id) => window.api.stopBackgroundShell(id)}
-                // The Preview tab already shows every running server's page.
-                onOpenPreview={() => setDockTab('preview')}
+                onOpenPreview={(task) => {
+                  setPreviewFocus(task.id)
+                  setDockTab('preview')
+                }}
                 onGoToChat={openBackgroundTask}
                 onOpenTerminal={openBackgroundTask}
                 onClearFinished={clearFinishedTasks}

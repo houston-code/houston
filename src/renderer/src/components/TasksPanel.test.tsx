@@ -155,7 +155,7 @@ describe('TasksPanel', () => {
     const p = setup([server, failed])
     fireEvent.click(screen.getByRole('button', { name: /runserver 0\.0\.0\.0/ }))
     fireEvent.click(screen.getByRole('button', { name: 'Open preview' }))
-    expect(p.onOpenPreview).toHaveBeenCalledWith('http://0.0.0.0:8000/')
+    expect(p.onOpenPreview).toHaveBeenCalledWith(server)
     fireEvent.click(screen.getByRole('button', { name: 'Go to chat' }))
     expect(p.onGoToChat).toHaveBeenCalledWith(server)
 
@@ -186,6 +186,47 @@ describe('TasksPanel', () => {
   it('says a task just started rather than "running for 0m"', () => {
     setup([{ ...server, startedAt: NOW - 5000 }])
     expect(screen.getByText('Shell · Started just now · backend/')).toBeInTheDocument()
+  })
+
+  it('says so when the Stop request itself fails', async () => {
+    const p = setup([server])
+    p.onStop.mockRejectedValueOnce(new Error('ipc down') as never)
+    fireEvent.click(screen.getByRole('button', { name: /runserver/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    expect(await screen.findByText("Couldn't stop this task. Try again.")).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeEnabled()
+  })
+
+  it('tells a shell main no longer tracks apart from one still loading', async () => {
+    api.getBackgroundShellTail.mockResolvedValueOnce(null)
+    setup([server])
+    fireEvent.click(screen.getByRole('button', { name: /runserver/ }))
+    expect(screen.getByText('Loading output…')).toBeInTheDocument()
+    expect(await screen.findByText('Output is no longer available.')).toBeInTheDocument()
+  })
+
+  it('does not poll an expanded row while the Tasks tab is hidden', async () => {
+    vi.useFakeTimers()
+    const props = {
+      onStop: vi.fn(async () => 'killed' as const),
+      onOpenPreview: vi.fn(),
+      onGoToChat: vi.fn(),
+      onOpenTerminal: vi.fn(),
+      onClearFinished: vi.fn()
+    }
+    const { rerender } = render(<TasksPanel tasks={[server]} active now={() => NOW} {...props} />)
+    fireEvent.click(screen.getByRole('button', { name: /runserver/ }))
+    await act(async () => {})
+    expect(api.getBackgroundShellTail).toHaveBeenCalledTimes(1)
+    rerender(<TasksPanel tasks={[server]} active={false} now={() => NOW} {...props} />)
+    await act(async () => {
+      vi.advanceTimersByTime(10_000)
+    })
+    expect(api.getBackgroundShellTail).toHaveBeenCalledTimes(1)
+    // Shown again: it refreshes right away and resumes polling.
+    rerender(<TasksPanel tasks={[server]} active now={() => NOW} {...props} />)
+    await act(async () => {})
+    expect(api.getBackgroundShellTail).toHaveBeenCalledTimes(2)
   })
 
   it('opens a terminal row in the terminal panel', () => {

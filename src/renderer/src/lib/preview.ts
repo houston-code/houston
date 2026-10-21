@@ -84,7 +84,9 @@ export function selectPreviewPanes(
   servers: PreviewServer[],
   manualUrls: string[],
   cap: number = MAX_PREVIEW_PANES,
-  chosen: Readonly<Record<string, string>> = {}
+  chosen: Readonly<Record<string, string>> = {},
+  /** A server the user asked to see (Tasks' "Open preview"): kept within the cap. */
+  focusServerId: string | null = null
 ): PreviewSelection {
   const seen = new Set<string>()
   const all: PreviewPaneItem[] = []
@@ -114,6 +116,14 @@ export function selectPreviewPanes(
     seen.add(key)
     // The URL itself shows in the pane's address slot, so the heading just says whose it is.
     all.push({ id: `manual:${key}`, url: raw, label: 'Added by you', kind: 'manual' })
+  }
+
+  // A focused server past the cap swaps in for the last visible pane, rather than
+  // being silently cut, so "Open preview" always lands on the page it named.
+  const focusAt = focusServerId ? all.findIndex((p) => p.id === `server:${focusServerId}`) : -1
+  if (focusAt >= cap && cap > 0) {
+    const [focused] = all.splice(focusAt, 1)
+    all.splice(cap - 1, 0, focused!)
   }
 
   const startingCount = servers.filter((s) => s.running && !s.url).length

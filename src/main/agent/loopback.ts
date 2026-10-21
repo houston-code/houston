@@ -84,7 +84,7 @@ function trimUrlTail(raw: string): string {
 }
 
 /** Remove terminal escape sequences (SGR colors, cursor moves, OSC titles and links). */
-function stripAnsi(text: string): string {
+export function stripAnsi(text: string): string {
   // eslint-disable-next-line no-control-regex
   return text.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b\[[0-?]*[ -/]*[@-~]|\x1b[@-Z\\-_]/g, '')
 }

@@ -54,6 +54,9 @@ const STOP_RESULT: Record<KillShellOutcome, string> = {
   'not-found': 'This task is no longer tracked.'
 }
 
+/** Shown when the Stop request itself failed (IPC error), so the click isn't silent. */
+const STOP_FAILED = "Couldn't stop this task. Try again."
+
 function StatusIcon({ status }: { status: BackgroundTask['status'] }): JSX.Element {
   if (status === 'running') return <span className="tasks__status tasks__status--running" aria-hidden="true" />
   if (status === 'leftover')
@@ -73,6 +76,7 @@ function TaskRow({
   task,
   now,
   expanded,
+  active,
   onToggle,
   onStop,
   onOpenPreview,
@@ -84,17 +88,20 @@ function TaskRow({
   task: BackgroundTask
   now: number
   expanded: boolean
+  /** The Tasks tab is showing; a hidden row doesn't poll. */
+  active: boolean
   onToggle: () => void
   /** The outcome of this row's last Stop. Kept by the panel: a stopped row moves groups and remounts. */
   note: string
   onNote: (note: string) => void
   onStop: (id: string) => Promise<KillShellOutcome>
-  onOpenPreview: (url: string) => void
+  onOpenPreview: (task: BackgroundTask) => void
   onGoToChat: (task: BackgroundTask) => void
   onOpenTerminal: (task: BackgroundTask) => void
 }): JSX.Element {
   const bodyId = useId()
-  const [tail, setTail] = useState<string[] | null>(null)
+  // undefined: not loaded yet. null: main no longer tracks this shell.
+  const [tail, setTail] = useState<string[] | null | undefined>(undefined)
   const [copied, setCopied] = useState(false)
   const [stopping, setStopping] = useState(false)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -104,9 +111,10 @@ function TaskRow({
   const live = task.status === 'running' || task.status === 'leftover'
   const isShell = task.kind === 'shell'
 
-  // Fetch the output tail while expanded; keep it fresh while the task is live.
+  // Fetch the output tail while expanded and visible; keep it fresh while the task is
+  // live. A row on a hidden tab (dock showing Preview) doesn't poll.
   useEffect(() => {
-    if (!expanded || !isShell || typeof window.api?.getBackgroundShellTail !== 'function') return
+    if (!expanded || !active || !isShell || typeof window.api?.getBackgroundShellTail !== 'function') return
     let alive = true
     const load = (): void => {
       void window.api.getBackgroundShellTail(task.id).then((lines) => {
@@ -119,7 +127,7 @@ function TaskRow({
       alive = false
       if (timer) clearInterval(timer)
     }
-  }, [expanded, isShell, live, task.id])
+  }, [expanded, active, isShell, live, task.id])
 
   useLayoutEffect(() => {
     const el = outputRef.current
@@ -137,6 +145,8 @@ function TaskRow({
     setStopping(true)
     try {
       onNote(STOP_RESULT[await onStop(task.id)])
+    } catch {
+      onNote(STOP_FAILED)
     } finally {
       setStopping(false)
     }
@@ -154,7 +164,7 @@ function TaskRow({
 
   // Only a running shell's server is in the Preview tab (it shows running servers);
   // a leftover's page isn't, so it gets Stop but no Open preview.
-  const previewUrl = task.status === 'running' ? task.urls?.[0] : undefined
+  const canPreview = task.status === 'running' && !!task.urls?.length
 
   return (
     <li className={`tasks__row${expanded ? ' tasks__row--open' : ''}`}>
@@ -256,8 +266,10 @@ function TaskRow({
               pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8
             }}
           >
-            {tail === null ? (
+            {tail === undefined ? (
               <span className="tasks__dim">Loading output…</span>
+            ) : tail === null ? (
+              <span className="tasks__dim">Output is no longer available.</span>
             ) : tail.length === 0 ? (
               <span className="tasks__dim">No output yet.</span>
             ) : (
@@ -272,8 +284,8 @@ function TaskRow({
               {task.status === 'leftover' ? 'Stop leftover process' : 'Stop'}
             </button>
           )}
-          {previewUrl && (
-            <button type="button" className="btn btn--sm" onClick={() => onOpenPreview(previewUrl)}>
+          {canPreview && (
+            <button type="button" className="btn btn--sm" onClick={() => onOpenPreview(task)}>
               Open preview
             </button>
           )}
@@ -304,6 +316,7 @@ function TaskRow({
  */
 export function TasksPanel({
   tasks,
+  active = true,
   onStop,
   onOpenPreview,
   onGoToChat,
@@ -312,8 +325,10 @@ export function TasksPanel({
   now = Date.now
 }: {
   tasks: BackgroundTask[]
+  /** The Tasks tab is visible. Expanded rows stop refreshing their output when it isn't. */
+  active?: boolean
   onStop: (id: string) => Promise<KillShellOutcome>
-  onOpenPreview: (url: string) => void
+  onOpenPreview: (task: BackgroundTask) => void
   onGoToChat: (task: BackgroundTask) => void
   onOpenTerminal: (task: BackgroundTask) => void
   onClearFinished: () => void
@@ -342,6 +357,7 @@ export function TasksPanel({
         task={task}
         now={t}
         expanded={expanded.has(key)}
+        active={active}
         onToggle={() => toggle(key)}
         onStop={onStop}
         onOpenPreview={onOpenPreview}

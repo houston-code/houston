@@ -31,7 +31,8 @@ export function PreviewDock({
   tab = 'preview',
   onTabChange,
   tasks,
-  taskCount = 0
+  taskCount = 0,
+  focusServerId = null
 }: {
   servers: PreviewServer[]
   /** An overlay (modal, palette, find bar) is on top — hide the native views. */
@@ -46,6 +47,8 @@ export function PreviewDock({
   tasks?: ReactNode
   /** Live background tasks, shown as a count on the Tasks tab. */
   taskCount?: number
+  /** A server to keep on screen even past the pane cap (Tasks' "Open preview"). */
+  focusServerId?: string | null
 }): JSX.Element {
   // While Tasks is showing, Preview stays mounted (its pages and added URLs survive
   // the switch) but its native views are hidden, exactly as under an overlay.
@@ -61,7 +64,13 @@ export function PreviewDock({
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dockRef = useRef<HTMLDivElement>(null)
 
-  const { panes, hiddenCount, startingCount } = selectPreviewPanes(servers, manualUrls, MAX_PREVIEW_PANES, chosen)
+  const { panes, hiddenCount, startingCount } = selectPreviewPanes(
+    servers,
+    manualUrls,
+    MAX_PREVIEW_PANES,
+    chosen,
+    focusServerId
+  )
 
   // Placeholder elements keyed by pane id; the native view is positioned over each.
   const slots = useRef(new Map<string, HTMLDivElement>())

@@ -4,6 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bindShellLedger, resetShellLedger } from './shellLedger'
+import { configureAgentHost, resetAgentHost, type AgentHost } from '../agentHost'
 import {
   backgroundShellGroups,
   killShell,
@@ -163,6 +164,62 @@ describe('background shell registry', () => {
     // Tailing moves no cursor: the agent's next read still sees everything.
     expect(readShellOutput(id).stdout).toContain('ready')
     expect(shellTail('nope')).toBeUndefined()
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'never treats a recycled group id as a leftover once the group was seen empty',
+    async () => {
+      const child = node('process.exit(0)')
+      const id = registerShell('node done', child)
+      await onClose(child)
+      // The exit's ledger write probed the (empty) group and latched it gone.
+      expect(listShells().find((s) => s.id === id)?.leftover).toBeUndefined()
+      // Now pretend the pgid was recycled by an unrelated live group leader.
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
+      try {
+        expect(listShells().find((s) => s.id === id)?.leftover).toBeUndefined()
+        expect(killShell(id)).toBe('already-exited')
+        expect(kill).not.toHaveBeenCalledWith(-child.pid!, expect.anything())
+      } finally {
+        kill.mockRestore()
+      }
+    }
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'broadcasts when a leftover dies on its own, without anyone polling',
+    async () => {
+      const child = spawn('/bin/sh', ['-c', 'sleep 2 >/dev/null 2>&1 &\necho started'], { detached: true })
+      const id = registerShell('sleep 2 &', child)
+      await onClose(child)
+      expect(listShells().find((s) => s.id === id)?.leftover).toBe(true)
+      const seen: boolean[] = []
+      const off = onShellsChanged((list) => seen.push(!!list.find((s) => s.id === id)?.leftover))
+      try {
+        await vi.waitFor(() => expect(seen).toContain(false), { timeout: 12_000, interval: 200 })
+      } finally {
+        off()
+      }
+    },
+    20_000
+  )
+
+  it('masks secrets in the listed command and the tail, including configured credentials', async () => {
+    const known = 'k3y-' + 'Z'.repeat(24)
+    configureAgentHost({ collectSecrets: () => [known] } as unknown as AgentHost)
+    try {
+      const token = 'ghp_' + 'B'.repeat(36)
+      const child = node(`console.log("using ${known}"); process.exit(0)`)
+      const id = registerShell(`GH_TOKEN=${token} PROVIDER_KEY=${known} node app.js`, child)
+      await onClose(child)
+      const listed = listShells().find((s) => s.id === id)!.command
+      expect(listed).not.toContain(token)
+      expect(listed).not.toContain(known)
+      expect(listPreviewServers().find((s) => s.id === id)!.command).not.toContain(known)
+      expect(shellTail(id)!.join('\n')).not.toContain(known)
+    } finally {
+      resetAgentHost()
+    }
   })
 
   it('notifies subscribers when a shell starts and when it exits', async () => {

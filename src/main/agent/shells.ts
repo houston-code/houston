@@ -3,9 +3,10 @@ import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import type { BackgroundShellInfo, KillShellOutcome } from '@shared/agent'
 import { killProcessTree } from '../sandbox'
-import { detectLocalUrls, type FoundUrl } from './loopback'
+import { detectLocalUrls, stripAnsi, type FoundUrl } from './loopback'
 import { writeShellLedger, type LedgerEntry } from './shellLedger'
 import { redactSecrets } from './redact'
+import { collectSecrets } from '../agentHost'
 import type { PreviewServer } from '@shared/preview'
 
 /**
@@ -46,6 +47,12 @@ interface Shell {
   conversationId?: string
   /** The workspace the shell ran in (its starting directory), for relative folder labels. */
   workspace?: string
+  /**
+   * The shell exited AND a probe found its process group empty. Latched: once a group
+   * is empty its id can be recycled by an unrelated group leader, so it is never
+   * probed or signalled again (a later probe could otherwise "find" that stranger).
+   */
+  groupGone?: boolean
   /**
    * Both streams' most recent output in arrival order, for the Tasks panel's output
    * tail. Kept separately from stdout/stderr because those can't be re-interleaved.
@@ -122,7 +129,7 @@ function persistLedger(): void {
   for (const s of shells.values()) {
     const pid = s.child.pid
     if (pid === undefined) continue
-    if (s.running || groupHasLiveMembers(pid)) entries.push({ pgid: pid, startedAt: s.startedAt })
+    if (s.running || hasLeftover(s)) entries.push({ pgid: pid, startedAt: s.startedAt })
   }
   writeShellLedger(entries)
 }
@@ -214,12 +221,14 @@ export function registerShell(
     shell.exitedAt = Date.now()
     persistLedger()
     notifyShellsChanged()
+    watchLeftovers()
   })
   child.on('error', () => {
     shell.running = false
     shell.exitedAt = Date.now()
     persistLedger()
     notifyShellsChanged()
+    watchLeftovers()
   })
   shells.set(id, shell)
   persistLedger()
@@ -291,6 +300,63 @@ function groupHasLiveMembers(pid: number | undefined): boolean {
 }
 
 /**
+ * Whether an exited shell left processes running in its group. Latches
+ * {@link Shell.groupGone} the first time the group is found empty, so a recycled
+ * group id is never mistaken for a leftover (and never signalled) afterwards, and
+ * a long session stops paying a probe for every shell that ever finished.
+ */
+function hasLeftover(s: Shell): boolean {
+  if (s.running || s.groupGone) return false
+  if (groupHasLiveMembers(s.child.pid)) return true
+  s.groupGone = true
+  return false
+}
+
+/** How often main re-probes leftover groups so the panel and badge see them go away. */
+const LEFTOVER_WATCH_MS = 5000
+let leftoverWatch: ReturnType<typeof setInterval> | null = null
+
+/**
+ * While any exited shell still has a leftover, re-probe on a timer and broadcast when
+ * one goes away: nothing else announces that (no 'close' fires for a grandchild), so
+ * without this the titlebar badge would keep counting a server that already died.
+ * Stops itself once no leftovers remain.
+ */
+function watchLeftovers(): void {
+  if (leftoverWatch) return
+  const pending = (): Shell[] => [...shells.values()].filter((s) => !s.running && !s.groupGone)
+  if (pending().length === 0) return
+  leftoverWatch = setInterval(() => {
+    let changed = false
+    for (const s of pending()) if (!hasLeftover(s)) changed = true
+    if (changed) {
+      persistLedger()
+      notifyShellsChanged()
+    }
+    if (pending().length === 0 && leftoverWatch) {
+      clearInterval(leftoverWatch)
+      leftoverWatch = null
+    }
+  }, LEFTOVER_WATCH_MS)
+  leftoverWatch.unref?.()
+}
+
+/**
+ * Text bound for the renderer (a command line, an output tail) with secrets masked:
+ * pattern-matched tokens plus the host's own configured credentials, the same two
+ * layers the agent's tool output gets.
+ */
+function maskForUi(text: string): string {
+  let known: string[] = []
+  try {
+    known = collectSecrets()
+  } catch {
+    // No agent host (unit tests, early startup): pattern masking still applies.
+  }
+  return redactSecrets(text, known)
+}
+
+/**
  * Outcome of {@link killShell}:
  * - `killed`: the shell was running and its process tree was stopped.
  * - `killed-leftovers`: the shell had already exited but left processes running in
@@ -316,7 +382,7 @@ export function killShell(id: string): KillShellResult {
     killProcessTree(s.child)
     return 'killed'
   }
-  if (groupHasLiveMembers(s.child.pid)) {
+  if (hasLeftover(s)) {
     killProcessTree(s.child)
     persistLedger()
     // No 'close' event follows (the shell already exited), so tell listeners the
@@ -337,7 +403,9 @@ export function backgroundShellGroups(): Set<number> {
 export function listShells(): BackgroundShellInfo[] {
   return [...shells.values()].map((s) => ({
     id: s.id,
-    command: s.command,
+    // Masked: an agent command can carry an inline secret (`API_KEY=… npm run dev`),
+    // and the panel shows and copies it in full.
+    command: maskForUi(s.command),
     running: s.running,
     exitCode: s.exitCode,
     startedAt: s.startedAt,
@@ -345,16 +413,12 @@ export function listShells(): BackgroundShellInfo[] {
     // An exited shell whose group still has members left a process running (most
     // often a server it backgrounded). Probed at list time, so a refresh of the list
     // also notices when that leftover finally goes away.
-    ...(!s.running && groupHasLiveMembers(s.child.pid) ? { leftover: true } : {}),
+    ...(hasLeftover(s) ? { leftover: true } : {}),
     ...(s.previewUrls.length ? { urls: [...s.previewUrls] } : {}),
     ...(s.conversationId ? { conversationId: s.conversationId } : {}),
     ...(s.workspace ? { workspace: s.workspace } : {})
   }))
 }
-
-/** Terminal color/cursor escape sequences, which would show as junk in the panel. */
-// eslint-disable-next-line no-control-regex
-const ANSI_ESCAPE = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07/g
 
 /** Most lines {@link shellTail} returns. */
 const TAIL_MAX_LINES = 40
@@ -369,7 +433,7 @@ export function shellTail(id: string, maxLines = TAIL_MAX_LINES): string[] | und
   const s = shells.get(id)
   if (!s) return undefined
   const n = Math.max(1, Math.min(TAIL_MAX_LINES, Math.floor(maxLines) || TAIL_MAX_LINES))
-  const lines = redactSecrets(s.recent.replace(ANSI_ESCAPE, ''))
+  const lines = maskForUi(stripAnsi(s.recent))
     // A progress bar redraws its line with \r; keep only the last redraw.
     .split('\n')
     .map((l) => l.slice(l.lastIndexOf('\r') + 1).trimEnd())
@@ -386,7 +450,7 @@ export function shellTail(id: string, maxLines = TAIL_MAX_LINES): string[] | und
 export function listPreviewServers(): PreviewServer[] {
   return [...shells.values()].map((s) => ({
     id: s.id,
-    command: s.command,
+    command: maskForUi(s.command),
     running: s.running,
     ...(s.previewUrls.length ? { url: s.previewUrls[0], urls: [...s.previewUrls] } : {})
   }))
@@ -395,9 +459,13 @@ export function listPreviewServers(): PreviewServer[] {
 /** Kill every tracked shell, and any leftovers of exited ones, then clear the registry (wired on app shutdown). */
 export function killAllShells(): void {
   for (const s of shells.values()) {
-    if (s.running || groupHasLiveMembers(s.child.pid)) killProcessTree(s.child)
+    if (s.running || hasLeftover(s)) killProcessTree(s.child)
   }
   shells.clear()
+  if (leftoverWatch) {
+    clearInterval(leftoverWatch)
+    leftoverWatch = null
+  }
   writeShellLedger([])
   notifyShellsChanged()
 }
