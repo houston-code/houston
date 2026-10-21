@@ -1,10 +1,16 @@
 import { useMemo, useRef, useState } from 'react'
 import type { BackgroundShellInfo } from '@shared/agent'
 import type { TermTab } from './useTerminals'
+import { describeShell } from '../lib/taskLabel'
 
 /** What kind of background work a task represents (drives its icon + click target). */
 export type BackgroundTaskKind = 'terminal' | 'shell'
-export type BackgroundTaskStatus = 'running' | 'done' | 'error'
+/**
+ * `leftover`: a background shell that exited but left something running (usually a
+ * server it backgrounded with `&`). It still holds its port, so it's grouped with the
+ * running tasks and counted by the titlebar badge, with its own warning.
+ */
+export type BackgroundTaskStatus = 'running' | 'leftover' | 'done' | 'error'
 
 /**
  * One unit of background work surfaced in the indicator. A "background task" is
@@ -23,13 +29,25 @@ export interface BackgroundTask {
   id: string
   kind: BackgroundTaskKind
   title: string
-  /** Secondary line; terminals/shells have none today, kept for row-layout parity. */
+  /** Secondary detail: the folder a shell ran in, relative to its workspace (`backend/`). */
   subtitle: string
   status: BackgroundTaskStatus
   /** Epoch ms the task finished; set for `done`/`error`, omitted while running. */
   finishedAt?: number
   /** Conversation to open on click — the run that spawned a background shell. */
   conversationId?: string
+  /** A shell's full command line, shown and copyable in the expanded row. */
+  command?: string
+  /** Ports a shell's server printed URLs on (`:5173`), for the row chips. */
+  ports?: string[]
+  /** Its loopback URLs, so the row can open one in the Preview tab. */
+  urls?: string[]
+  /** It listens on every interface, so other machines on the network can reach it. */
+  exposed?: boolean
+  /** Epoch ms a shell started. */
+  startedAt?: number
+  /** A finished shell's exit code (null when it was killed). */
+  exitCode?: number | null
 }
 
 /**
@@ -78,20 +96,36 @@ export function useBackgroundTasks(
 
     // --- Background shells (run_shell background mode) ------------------------
     for (const s of shells) {
+      const d = describeShell(s.command, s.urls, s.workspace)
       const base = {
         id: s.id,
         kind: 'shell' as const,
-        title: s.command,
-        subtitle: '',
+        title: d.label,
+        subtitle: d.folder,
+        command: s.command,
+        startedAt: s.startedAt,
+        ...(d.ports.length ? { ports: d.ports } : {}),
+        ...(s.urls?.length ? { urls: s.urls } : {}),
+        ...(d.exposed ? { exposed: true } : {}),
         ...(s.conversationId ? { conversationId: s.conversationId } : {})
       }
       if (s.running) {
         running.push({ ...base, status: 'running' })
+      } else if (s.leftover) {
+        // Exited, but its server is still up: it belongs with the running work, and
+        // "Clear finished" must not hide it.
+        running.push({
+          ...base,
+          status: 'leftover',
+          exitCode: s.exitCode,
+          finishedAt: s.exitedAt ?? undefined
+        })
       } else if (!(s.exitedAt !== null && s.exitedAt <= clearedBefore)) {
         // exitCode 0 is a clean finish; nonzero or null (killed) is a failure.
         finished.push({
           ...base,
           status: s.exitCode === 0 ? 'done' : 'error',
+          exitCode: s.exitCode,
           finishedAt: s.exitedAt ?? undefined
         })
       }

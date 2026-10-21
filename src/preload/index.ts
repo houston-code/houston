@@ -25,6 +25,7 @@ import type {
   AgentEvent,
   AgentSendRequest,
   BackgroundShellInfo,
+  KillShellOutcome,
   ChatMessage,
   Conversation,
   ConversationMeta,
@@ -320,6 +321,10 @@ const api = {
   },
   /** The background shells (run_shell background mode) for the tasks indicator. */
   getBackgroundShells: (): Promise<BackgroundShellInfo[]> => ipcRenderer.invoke(IPC.shellList),
+  /** Stop a background shell, or the processes it left running after it exited. */
+  stopBackgroundShell: (id: string): Promise<KillShellOutcome> => ipcRenderer.invoke(IPC.shellStop, id),
+  /** The last lines a background shell printed (secrets masked); null for an unknown id. */
+  getBackgroundShellTail: (id: string): Promise<string[] | null> => ipcRenderer.invoke(IPC.shellTail, id),
   /** Subscribe to background-shell registry changes. Returns an unsubscribe fn. */
   onShellsChanged: (cb: (shells: BackgroundShellInfo[]) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, shells: BackgroundShellInfo[]): void => cb(shells)

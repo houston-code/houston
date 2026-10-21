@@ -44,6 +44,17 @@ describe('normalizeManualUrl', () => {
 })
 
 describe('selectPreviewPanes', () => {
+  it('keeps a focused server on screen when it would fall past the cap', () => {
+    const servers = ['a', 'b', 'c', 'd'].map((id, i) => server({ id, url: `http://localhost:${3000 + i}/` }))
+    expect(selectPreviewPanes(servers, [], 3).panes.map((p) => p.id)).toEqual(['server:a', 'server:b', 'server:c'])
+    const focused = selectPreviewPanes(servers, [], 3, {}, 'd')
+    expect(focused.panes.map((p) => p.id)).toEqual(['server:a', 'server:b', 'server:d'])
+    expect(focused.hiddenCount).toBe(1)
+    // Already visible, or unknown: nothing moves.
+    expect(selectPreviewPanes(servers, [], 3, {}, 'a').panes.map((p) => p.id)).toEqual(['server:a', 'server:b', 'server:c'])
+    expect(selectPreviewPanes(servers, [], 3, {}, 'zz').panes.map((p) => p.id)).toEqual(['server:a', 'server:b', 'server:c'])
+  })
+
   it('includes only running servers that have a URL', () => {
     const { panes, startingCount } = selectPreviewPanes(
       [

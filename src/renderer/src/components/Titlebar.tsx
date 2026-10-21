@@ -8,7 +8,7 @@ import { Tooltip, TooltipProvider } from './Tooltip'
  * `hiddenInset` traffic lights it keeps the top of the window draggable (the
  * sidebar covers the left), and shows the current chat's title for context now
  * that the model/mode controls live in the bottom bar. Top-right actions show
- * background tasks, open the Files browser and working-tree diff panel, toggle
+ * the background-tasks count (opening the side panel's Tasks tab), open the Files browser and working-tree diff panel, toggle
  * the preview panel, and toggle the integrated terminal. Each action carries a
  * shared custom tooltip (see {@link TooltipProvider}) — instant on hover and
  * smooth as the pointer moves along the row, unlike the slow native `title`.
@@ -16,8 +16,8 @@ import { Tooltip, TooltipProvider } from './Tooltip'
 export function Titlebar({
   title,
   tasks,
-  onSelectTask,
-  onClearFinishedTasks,
+  tasksOpen,
+  onToggleTasks,
   changes,
   onShowFiles,
   onShowChanges,
@@ -31,10 +31,12 @@ export function Titlebar({
   terminalShortcut
 }: {
   title: string
-  /** Background work (agent runs + terminals, in progress + recently finished) for the indicator. */
+  /** Background work (terminals + backgrounded shells) for the indicator's count. */
   tasks?: BackgroundTask[]
-  onSelectTask?: (task: BackgroundTask) => void
-  onClearFinishedTasks?: () => void
+  /** The side panel is open on its Tasks tab. */
+  tasksOpen?: boolean
+  /** Open or close the side panel's Tasks tab. */
+  onToggleTasks?: () => void
   /** Working-tree change counts; highlights the Changes button and shows a +/− badge. */
   changes?: { fileCount: number; added: number; removed: number }
   onShowFiles?: () => void
@@ -57,12 +59,8 @@ export function Titlebar({
       <span className="titlebar__title">{title}</span>
       <div className="titlebar__actions">
         <TooltipProvider>
-          {tasks && onSelectTask && (
-            <BackgroundTasks
-              tasks={tasks}
-              onSelect={onSelectTask}
-              onClearFinished={onClearFinishedTasks ?? (() => {})}
-            />
+          {tasks && onToggleTasks && (
+            <BackgroundTasks tasks={tasks} active={!!tasksOpen} onToggle={onToggleTasks} />
           )}
           {onTogglePreview && (
             <Tooltip label="Preview: toggle the live preview panel">

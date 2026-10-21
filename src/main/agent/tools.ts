@@ -1656,7 +1656,7 @@ const runShell: ToolDef = {
         egressProxy: ctx.egressProxy,
         signal: ctx.signal
       })
-      const id = registerShell(command, child, ctx.conversationId)
+      const id = registerShell(command, child, ctx.conversationId, ctx.workspace)
       ctx.recordEvidence?.({
         kind: 'shell',
         command,

@@ -79,6 +79,9 @@ import { saveComposerDraft } from './lib/composerDraft'
 import { itemsFromMessages, lastUserText } from './lib/items'
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
+import { activeTaskCount } from './components/BackgroundTasks'
+import { TasksPanel } from './components/TasksPanel'
+import type { DockTab } from './components/PreviewDock'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { Transcript } from './components/Transcript'
 import { PlanPanel } from './components/PlanPanel'
@@ -223,6 +226,12 @@ export default function App(): JSX.Element {
   const [terminalMounted, setTerminalMounted] = useState(false)
   const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT)
   const [previewOpen, setPreviewOpen] = useState(false)
+  // Which tab the right-hand dock shows: the live Preview or the Tasks list. Not
+  // persisted: the dock reopens on Preview, as it always has.
+  const [dockTab, setDockTab] = useState<DockTab>('preview')
+  // The background shell whose page "Open preview" asked for, so the Preview tab
+  // shows it even when more servers are running than it has panes for.
+  const [previewFocus, setPreviewFocus] = useState<string | null>(null)
   const [previewWidth, setPreviewWidth] = useState(PREVIEW_DEFAULT_WIDTH)
   const [planWidth, setPlanWidth] = useState(PLAN_DEFAULT_WIDTH)
   // The plan-review panel opens automatically when a plan is presented; this latches
@@ -1063,12 +1072,29 @@ export default function App(): JSX.Element {
     []
   )
 
-  const togglePreview = useCallback(() => {
-    setPreviewOpen((open) => {
-      const next = !open
-      void persistPreview({ previewOpen: next })
-      return next
-    })
+  // The titlebar's Preview and Tasks buttons each toggle the shared right-hand dock on
+  // their own tab: a click opens the dock on that tab, switches to it if the dock is
+  // showing the other one, and closes the dock if it is already showing.
+  const toggleDockTab = useCallback(
+    (tab: DockTab) => {
+      if (previewOpen && dockTab === tab) {
+        setPreviewOpen(false)
+        void persistPreview({ previewOpen: false })
+        return
+      }
+      setDockTab(tab)
+      if (!previewOpen) {
+        setPreviewOpen(true)
+        void persistPreview({ previewOpen: true })
+      }
+    },
+    [previewOpen, dockTab, persistPreview]
+  )
+  const togglePreview = useCallback(() => toggleDockTab('preview'), [toggleDockTab])
+  const toggleTasks = useCallback(() => toggleDockTab('tasks'), [toggleDockTab])
+  const closeDock = useCallback(() => {
+    setPreviewOpen(false)
+    void persistPreview({ previewOpen: false })
   }, [persistPreview])
 
   // Drag the panel's left edge: update the width CSS variable live (no re-render of
@@ -1466,10 +1492,17 @@ export default function App(): JSX.Element {
       },
       {
         id: 'act-toggle-preview',
-        title: previewOpen ? 'Hide preview panel' : 'Show preview panel',
+        title: previewOpen && dockTab === 'preview' ? 'Hide preview panel' : 'Show preview panel',
         section: 'Actions',
         keywords: 'browser localhost dev server web',
         run: togglePreview
+      },
+      {
+        id: 'act-toggle-tasks',
+        title: previewOpen && dockTab === 'tasks' ? 'Hide background tasks' : 'Show background tasks',
+        section: 'Actions',
+        keywords: 'shell server process running port stop',
+        run: toggleTasks
       },
       {
         id: 'act-change-folder',
@@ -1606,6 +1639,7 @@ export default function App(): JSX.Element {
     currentId,
     sidebarCollapsed,
     previewOpen,
+    dockTab,
     sideChatOpen,
     settings?.approvalPolicy,
     settings?.providers,
@@ -1615,6 +1649,7 @@ export default function App(): JSX.Element {
     toggleSidebar,
     toggleTerminal,
     togglePreview,
+    toggleTasks,
     onChangeWorkspace,
     onImportConversation,
     onCompact,
@@ -1899,13 +1934,13 @@ export default function App(): JSX.Element {
         <Titlebar
           title={currentConv?.title ?? 'Houston'}
           tasks={backgroundTasks}
-          onSelectTask={openBackgroundTask}
-          onClearFinishedTasks={clearFinishedTasks}
+          tasksOpen={previewOpen && dockTab === 'tasks'}
+          onToggleTasks={toggleTasks}
           changes={workspace ? workingTreeStats : undefined}
           onShowFiles={workspace ? () => setFilesOpen(true) : undefined}
           onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
           onTogglePreview={togglePreview}
-          previewOpen={previewOpen}
+          previewOpen={previewOpen && dockTab === 'preview'}
           previewCount={previewableCount}
           onToggleTerminal={toggleTerminal}
           terminalOpen={terminalOpen}
@@ -2137,7 +2172,25 @@ export default function App(): JSX.Element {
             // keep them alive) while one is open so a preview can't cover it.
             occluded={occludesPreview(overlays)}
             onResizeMouseDown={onPreviewResizeMouseDown}
-            onClose={togglePreview}
+            onClose={closeDock}
+            tab={dockTab}
+            onTabChange={setDockTab}
+            focusServerId={previewFocus}
+            taskCount={activeTaskCount(backgroundTasks)}
+            tasks={
+              <TasksPanel
+                tasks={backgroundTasks}
+                active={dockTab === 'tasks'}
+                onStop={(id) => window.api.stopBackgroundShell(id)}
+                onOpenPreview={(task) => {
+                  setPreviewFocus(task.id)
+                  setDockTab('preview')
+                }}
+                onGoToChat={openBackgroundTask}
+                onOpenTerminal={openBackgroundTask}
+                onClearFinished={clearFinishedTasks}
+              />
+            }
           />
         </Suspense>
       )}

@@ -4,6 +4,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { bindShellLedger, resetShellLedger } from './shellLedger'
+import { configureAgentHost, resetAgentHost, type AgentHost } from '../agentHost'
 import {
   backgroundShellGroups,
   killShell,
@@ -13,6 +14,7 @@ import {
   readShellOutput,
   registerShell,
   peekShell,
+  shellTail,
   unreadSlice
 } from './shells'
 
@@ -106,6 +108,7 @@ describe('background shell registry', () => {
     }
     expect(readShellOutput(id).running).toBe(false)
     expect(groupAlive()).toBe(true)
+    expect(listShells().find((s) => s.id === id)?.leftover).toBe(true)
     expect(killShell(id)).toBe('killed-leftovers')
     await vi.waitFor(() => expect(groupAlive()).toBe(false))
     expect(killShell(id)).toBe('already-exited')
@@ -123,6 +126,100 @@ describe('background shell registry', () => {
     expect(ended.running).toBe(false)
     expect(ended.exitCode).toBe(0)
     expect(ended.exitedAt).toBeGreaterThanOrEqual(ended.startedAt)
+  })
+
+  it('lists the workspace and printed URLs for the Tasks panel', async () => {
+    const child = node('process.stdout.write("  Local:   http://localhost:5173/\\n"); process.exit(0)')
+    const id = registerShell('npm run dev', child, 'conv-1', '/w/app')
+    await onClose(child)
+    expect(listShells().find((s) => s.id === id)).toMatchObject({
+      workspace: '/w/app',
+      urls: ['http://localhost:5173/']
+    })
+    // A cleanly exited shell with nothing left running is not a leftover.
+    expect(listShells().find((s) => s.id === id)?.leftover).toBeUndefined()
+  })
+
+  it('tails recent output without colors, redraws, or secrets', async () => {
+    const token = 'ghp_' + 'A'.repeat(36)
+    const child = node(
+      `process.stdout.write("\\x1b[32mready\\x1b[39m in 90ms\\n");` +
+        `process.stderr.write("warn: slow\\n");` +
+        `process.stdout.write("10%\\r50%\\r100%\\n");` +
+        `process.stdout.write("token=${token}\\n\\n");` +
+        'process.exit(0)'
+    )
+    const id = registerShell('build', child)
+    await onClose(child)
+    const tail = shellTail(id)!
+    // stdout and stderr are separate pipes, so only order within a stream is fixed.
+    expect(tail.filter((l) => l !== 'warn: slow')).toEqual([
+      'ready in 90ms',
+      '100%',
+      expect.stringContaining('[redacted')
+    ])
+    expect(tail).toContain('warn: slow')
+    expect(tail.join('\n')).not.toContain(token)
+    expect(shellTail(id, 2)).toHaveLength(2)
+    // Tailing moves no cursor: the agent's next read still sees everything.
+    expect(readShellOutput(id).stdout).toContain('ready')
+    expect(shellTail('nope')).toBeUndefined()
+  })
+
+  it.skipIf(process.platform === 'win32')(
+    'never treats a recycled group id as a leftover once the group was seen empty',
+    async () => {
+      const child = node('process.exit(0)')
+      const id = registerShell('node done', child)
+      await onClose(child)
+      // The exit's ledger write probed the (empty) group and latched it gone.
+      expect(listShells().find((s) => s.id === id)?.leftover).toBeUndefined()
+      // Now pretend the pgid was recycled by an unrelated live group leader.
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true)
+      try {
+        expect(listShells().find((s) => s.id === id)?.leftover).toBeUndefined()
+        expect(killShell(id)).toBe('already-exited')
+        expect(kill).not.toHaveBeenCalledWith(-child.pid!, expect.anything())
+      } finally {
+        kill.mockRestore()
+      }
+    }
+  )
+
+  it.skipIf(process.platform === 'win32')(
+    'broadcasts when a leftover dies on its own, without anyone polling',
+    async () => {
+      const child = spawn('/bin/sh', ['-c', 'sleep 2 >/dev/null 2>&1 &\necho started'], { detached: true })
+      const id = registerShell('sleep 2 &', child)
+      await onClose(child)
+      expect(listShells().find((s) => s.id === id)?.leftover).toBe(true)
+      const seen: boolean[] = []
+      const off = onShellsChanged((list) => seen.push(!!list.find((s) => s.id === id)?.leftover))
+      try {
+        await vi.waitFor(() => expect(seen).toContain(false), { timeout: 12_000, interval: 200 })
+      } finally {
+        off()
+      }
+    },
+    20_000
+  )
+
+  it('masks secrets in the listed command and the tail, including configured credentials', async () => {
+    const known = 'k3y-' + 'Z'.repeat(24)
+    configureAgentHost({ collectSecrets: () => [known] } as unknown as AgentHost)
+    try {
+      const token = 'ghp_' + 'B'.repeat(36)
+      const child = node(`console.log("using ${known}"); process.exit(0)`)
+      const id = registerShell(`GH_TOKEN=${token} PROVIDER_KEY=${known} node app.js`, child)
+      await onClose(child)
+      const listed = listShells().find((s) => s.id === id)!.command
+      expect(listed).not.toContain(token)
+      expect(listed).not.toContain(known)
+      expect(listPreviewServers().find((s) => s.id === id)!.command).not.toContain(known)
+      expect(shellTail(id)!.join('\n')).not.toContain(known)
+    } finally {
+      resetAgentHost()
+    }
   })
 
   it('notifies subscribers when a shell starts and when it exits', async () => {
