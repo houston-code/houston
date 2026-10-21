@@ -153,10 +153,14 @@ export function ControlBar({
             // Show it (read-only) so it's clear which branch will be touched.
             <span
               className="control control--branch"
-              title="No worktree: this chat works directly on the repo's current branch"
+              title={`No worktree: this chat works directly on the repo's current branch, ${
+                repoInfo.currentBranch ?? 'detached HEAD'
+              }`}
             >
-              ⑂ {repoInfo.currentBranch ?? 'detached HEAD'}
-              {repoInfo.unborn ? ' (no commits yet)' : ''}
+              <span className="control__text">
+                ⑂ {repoInfo.currentBranch ?? 'detached HEAD'}
+                {repoInfo.unborn ? ' (no commits yet)' : ''}
+              </span>
             </span>
           )}
 
@@ -197,7 +201,7 @@ export function ControlBar({
           className="control control--branch"
           title={`This chat runs in a worktree on branch ${currentWorktree.branch}`}
         >
-          ⑂ {currentWorktree.branch}
+          <span className="control__text">⑂ {currentWorktree.branch}</span>
         </span>
       )}
 
