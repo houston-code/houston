@@ -230,8 +230,9 @@ export default function App(): JSX.Element {
   // persisted: the dock reopens on Preview, as it always has.
   const [dockTab, setDockTab] = useState<DockTab>('preview')
   // The background shell whose page "Open preview" asked for, so the Preview tab
-  // shows it even when more servers are running than it has panes for.
-  const [previewFocus, setPreviewFocus] = useState<string | null>(null)
+  // shows it even when more servers are running than it has panes for. Each request is a
+  // fresh object so asking again for the same server reopens a pane the user closed.
+  const [previewFocus, setPreviewFocus] = useState<{ id: string } | null>(null)
   const [previewWidth, setPreviewWidth] = useState(PREVIEW_DEFAULT_WIDTH)
   const [planWidth, setPlanWidth] = useState(PLAN_DEFAULT_WIDTH)
   // The plan-review panel opens automatically when a plan is presented; this latches
@@ -2175,7 +2176,8 @@ export default function App(): JSX.Element {
             onClose={closeDock}
             tab={dockTab}
             onTabChange={setDockTab}
-            focusServerId={previewFocus}
+            focusServerId={previewFocus?.id ?? null}
+            focusRequest={previewFocus}
             taskCount={activeTaskCount(backgroundTasks)}
             tasks={
               <TasksPanel
@@ -2183,7 +2185,7 @@ export default function App(): JSX.Element {
                 active={dockTab === 'tasks'}
                 onStop={(id) => window.api.stopBackgroundShell(id)}
                 onOpenPreview={(task) => {
-                  setPreviewFocus(task.id)
+                  setPreviewFocus({ id: task.id })
                   setDockTab('preview')
                 }}
                 onGoToChat={openBackgroundTask}

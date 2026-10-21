@@ -132,6 +132,67 @@ describe('PreviewDock', () => {
     expect(screen.queryByText('http://localhost:4321/')).not.toBeInTheDocument()
   })
 
+  it('closes one server pane without touching the other, and shows it again on request', () => {
+    const servers = [running('a', 'http://localhost:3001/'), running('b', 'http://localhost:3002/')]
+    renderDock({ servers })
+
+    fireEvent.click(screen.getByLabelText('Close preview of localhost:3002'))
+    expect(screen.queryByText('http://localhost:3002/')).not.toBeInTheDocument()
+    expect(screen.getByText('http://localhost:3001/')).toBeInTheDocument()
+    expect(api.syncPreviewPanes.mock.calls.at(-1)![0].map((p: { id: string }) => p.id)).toEqual(['server:a'])
+    expect(screen.getByText(/1 preview closed/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Show it' }))
+    expect(screen.getByText('http://localhost:3002/')).toBeInTheDocument()
+    expect(screen.queryByText(/preview closed/)).not.toBeInTheDocument()
+  })
+
+  it('frees a closed pane\'s slot for a server past the cap', () => {
+    const servers = ['a', 'b', 'c', 'd'].map((id, i) => running(id, `http://localhost:300${i}/`))
+    renderDock({ servers })
+    fireEvent.click(screen.getByLabelText('Close preview of localhost:3000'))
+    expect(screen.getByText('http://localhost:3003/')).toBeInTheDocument()
+    expect(screen.queryByText(/more not shown/)).not.toBeInTheDocument()
+  })
+
+  it('says the servers still run when every pane is closed', () => {
+    renderDock({ servers: [running('a', 'http://localhost:3001/')] })
+    fireEvent.click(screen.getByLabelText('Close preview of localhost:3001'))
+    expect(screen.getByText(/All previews are closed/)).toBeInTheDocument()
+    expect(screen.queryByText('No running dev servers.')).not.toBeInTheDocument()
+  })
+
+  it('reopens a closed pane when Tasks asks to preview its server', () => {
+    const servers = [running('a', 'http://localhost:3001/')]
+    const { rerender } = renderDock({ servers })
+    fireEvent.click(screen.getByLabelText('Close preview of localhost:3001'))
+    rerender(
+      <PreviewDock
+        servers={servers}
+        occluded={false}
+        onResizeMouseDown={noop}
+        onClose={vi.fn()}
+        focusServerId="a"
+        focusRequest={{ id: 'a' }}
+      />
+    )
+    expect(screen.getByText('http://localhost:3001/')).toBeInTheDocument()
+
+    // Closed again, then a second "Open preview" for the same server: a new request object.
+    fireEvent.click(screen.getByLabelText('Close preview of localhost:3001'))
+    rerender(
+      <PreviewDock
+        servers={servers}
+        occluded={false}
+        onResizeMouseDown={noop}
+        onClose={vi.fn()}
+        focusServerId="a"
+        focusRequest={{ id: 'a' }}
+      />
+    )
+    expect(screen.getByText('http://localhost:3001/')).toBeInTheDocument()
+  })
+
   it('flags an invalid manual URL instead of adding it', () => {
     renderDock()
     const input = screen.getByLabelText('Add a localhost URL to preview')
