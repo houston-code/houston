@@ -17,10 +17,10 @@ function verdict(rules, tool) {
 }
 
 describe('resolveApproval', () => {
-  it('defaults to read-only plan for respond and review, full-auto for fix-ci', () => {
+  it('defaults to read-only plan for respond and review, auto-edit for fix-ci', () => {
     expect(resolveApproval('respond', '')).toBe('plan')
     expect(resolveApproval('review', 'default')).toBe('plan')
-    expect(resolveApproval('fix-ci', '')).toBe('full-auto')
+    expect(resolveApproval('fix-ci', '')).toBe('auto-edit')
   })
 
   it('takes an explicit policy and refuses anything else', () => {

@@ -70,7 +70,7 @@ built-in Seatbelt sandbox. Windows runners are not supported.
 | `model` | provider default | Model id. |
 | `base-url` | | An OpenAI-compatible endpoint to register as `provider`, for a self-hosted model or a gateway. |
 | `api-key` | | The provider key, from a secret. Masked, and given to Houston only through its environment. |
-| `approval` | `default` | `default` is `plan` (read-only) for `respond` and `review` and `full-auto` (shell sandboxed) for `fix-ci`. Also `plan`, `auto-edit`, `full-auto`. |
+| `approval` | `default` | `default` is `plan` (read-only) for `respond` and `review` and `auto-edit` with sandboxed, offline shell allowed by rule for `fix-ci`. Also `plan`, `auto-edit`, `full-auto`. |
 | `max-turns` | `40` | Hard cap on model steps. |
 | `max-cost` | | US dollars at which Houston is told to wrap up, like `2`. |
 | `effort` | | Reasoning effort: `off`, `low`, `medium`, `high`, `xhigh`. |

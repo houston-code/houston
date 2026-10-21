@@ -56,11 +56,14 @@ export const APPROVAL_POLICIES = ['plan', 'ask', 'auto-edit', 'full-auto']
 
 /**
  * The approval policy for a run. Unset (or `default`) picks the safe one per mode:
- * read-only plan mode to answer or review, sandboxed full-auto to fix CI.
+ * read-only plan mode to answer or review, and for fix-ci auto-edit with shell commands
+ * allowed by rule inside the sandbox (see {@link permissionRules}). That is full autonomy
+ * within the sandbox, offline, without full-auto's one-time network-consent prompt, which
+ * nobody is there to answer.
  */
 export function resolveApproval(mode, input) {
   const v = (input ?? '').trim()
-  if (v === '' || v === 'default') return mode === 'fix-ci' ? 'full-auto' : 'plan'
+  if (v === '' || v === 'default') return mode === 'fix-ci' ? 'auto-edit' : 'plan'
   if (!APPROVAL_POLICIES.includes(v)) {
     throw new Error(`approval must be one of default, ${APPROVAL_POLICIES.join(', ')} (got ${JSON.stringify(v)})`)
   }
@@ -81,17 +84,33 @@ export function parseToolList(input) {
  * matching rule wins, so the denials come first. With `allowed-tools`, the listed tools
  * (plus the mode's own) are the only ones that run at all.
  *
- * TODO(D3 headless flags): once `--allowed-tools` lands in headless, pass the list there
- * and keep only the denials here.
+ * `shell` settles `run_shell` up front so it never raises an approval prompt: `allow`
+ * when the OS sandbox confines it (writes stay in the checkout and temp, no network),
+ * `deny` when it would run unconfined. Left undefined (plan mode), the policy decides.
+ *
+ * TODO(D3 headless flags): once `--allowed-tools` lands in a CLI release this action
+ * pins, pass the list there and keep only the denials here.
  */
-export function permissionRules(mode, allowedTools = []) {
+export function permissionRules(mode, allowedTools = [], { shell } = {}) {
   const deny = ALWAYS_DENIED_TOOLS.map((tool) => ({ action: 'deny', tool, match: '*' }))
   const reads = GITHUB_READ_TOOLS.map((tool) => ({ action: 'allow', tool, match: '*' }))
-  if (allowedTools.length === 0) return [...deny, ...reads]
+  const strict = allowedTools.length > 0
+  const shellRules =
+    shell === 'deny'
+      ? [{ action: 'deny', tool: 'run_shell', match: '*' }]
+      : shell === 'allow' && (!strict || allowedTools.includes('run_shell'))
+        ? [{ action: 'allow', tool: 'run_shell', match: '*' }]
+        : []
+  if (!strict) return [...deny, ...shellRules, ...reads]
   const allowed = [...new Set([...allowedTools, ...(MODE_TOOLS[mode] ?? [])])].filter(
-    (t) => !ALWAYS_DENIED_TOOLS.includes(t)
+    (t) => !ALWAYS_DENIED_TOOLS.includes(t) && t !== 'run_shell'
   )
-  return [...deny, ...allowed.map((tool) => ({ action: 'allow', tool, match: '*' })), { action: 'deny', tool: '*', match: '*' }]
+  return [
+    ...deny,
+    ...shellRules,
+    ...allowed.map((tool) => ({ action: 'allow', tool, match: '*' })),
+    { action: 'deny', tool: '*', match: '*' }
+  ]
 }
 
 /** The env var the standalone CLI reads a provider's key from (see src/shared/provider-keys.ts). */

@@ -42,8 +42,8 @@ inputs:
     default: ''
   approval:
     description: >-
-      Approval policy: default (plan, read-only, for respond and review; full-auto with
-      the shell sandboxed for fix-ci), plan, auto-edit, or full-auto. Anything a policy
+      Approval policy: default (plan, read-only, for respond and review; auto-edit with
+      sandboxed, offline shell allowed for fix-ci), plan, auto-edit, or full-auto. Anything a policy
       would ask about is refused, since no one is there to answer.
     required: false
     default: default

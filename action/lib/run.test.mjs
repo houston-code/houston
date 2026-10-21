@@ -200,7 +200,7 @@ describe('fix-ci', () => {
   it('commits the fix on a new branch, pushes it with the token in the env only, and opens a PR', async () => {
     const w = world({ eventName: 'workflow_run', event: failed, onCli: fix })
     expect(await w.go()).toBe(0)
-    expect(w.cliCall().args).toEqual(expect.arrayContaining(['--approval', 'full-auto', '--on-approval', 'deny']))
+    expect(w.cliCall().args).toEqual(expect.arrayContaining(['--approval', 'auto-edit', '--on-approval', 'deny']))
 
     const { git } = w.repo
     expect(git('rev-parse', '--abbrev-ref', 'HEAD')).toBe('houston/fix-ci-321-1')

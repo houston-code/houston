@@ -104,7 +104,7 @@ export async function run({ env, exec, log = (s) => process.stdout.write(`${s}\n
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository)) return fail('GITHUB_REPOSITORY is not set')
   const event = JSON.parse(readFileSync(env.HOUSTON_ACTION_EVENT_PATH || env.GITHUB_EVENT_PATH, 'utf8'))
 
-  let ctx, approval, rules, budgets, mode
+  let ctx, approval, allowedTools, budgets, mode
   const trigger = input('trigger') || '@houston'
   const branchPrefix = input('branch-prefix') || 'houston/'
   const provider = input('provider') || 'anthropic'
@@ -116,7 +116,7 @@ export async function run({ env, exec, log = (s) => process.stdout.write(`${s}\n
     if ('skip' in ctx) return skip(ctx.skip)
     if (!isValidProviderId(provider)) throw new Error(`provider must be a provider id like anthropic (got ${JSON.stringify(provider)})`)
     approval = resolveApproval(mode, input('approval'))
-    rules = permissionRules(mode, parseToolList(input('allowed-tools')))
+    allowedTools = parseToolList(input('allowed-tools'))
     budgets = budgetInputs({ maxTurns: input('max-turns'), maxCost: input('max-cost') })
     const effort = input('effort')
     if (effort && !EFFORTS.includes(effort)) throw new Error(`effort must be one of ${EFFORTS.join(', ')} (got ${JSON.stringify(effort)})`)
@@ -169,10 +169,17 @@ export async function run({ env, exec, log = (s) => process.stdout.write(`${s}\n
     }
   }
 
-  if (approval !== 'plan' && process.platform === 'linux') {
-    const sandboxed = await ensureSandbox(exec, env, input('install-sandbox') !== 'false', log)
-    if (!sandboxed) warn('bubblewrap is not usable on this runner, so Houston will refuse every shell command this run')
+  // Shell is settled by rule so it never prompts: allowed inside the OS sandbox, refused
+  // without one. macOS always has Seatbelt; Linux needs a working bubblewrap.
+  let shell
+  if (approval !== 'plan') {
+    const sandboxed =
+      process.platform === 'darwin' ||
+      (process.platform === 'linux' && (await ensureSandbox(exec, env, input('install-sandbox') !== 'false', log)))
+    if (!sandboxed) warn('no OS sandbox is usable on this runner, so Houston will refuse every shell command this run')
+    shell = sandboxed ? 'allow' : 'deny'
   }
+  const rules = permissionRules(mode, allowedTools, { shell })
 
   // A private profile: settings with this run's permission rules, the provider, and nothing
   // from anyone's desktop install.
