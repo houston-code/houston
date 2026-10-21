@@ -20,7 +20,13 @@ import {
   MAX_PENDING_STEERS
 } from '@shared/agent'
 import type { ApprovalPolicy, PermissionRule } from '@shared/types'
-import type { ToolDef } from './tools'
+import {
+  HEADLESS_NETWORK_BLOCKED_HINT,
+  NETWORK_BLOCKED_HINT,
+  SHELL_NETWORK_DECLINED_NOTE,
+  SHELL_NETWORK_GRANTED_NOTE,
+  type ToolDef
+} from './tools'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
@@ -5722,6 +5728,43 @@ describe('egress hardening', () => {
     call: { id, name: 'net_shell', arguments: {} }
   })
 
+  // A shell-kind stand-in for a command that needs the network (an `npm install`): it
+  // fails offline the way run_shell reports it (the hint in its output, `blocked:
+  // 'network'` on its receipt) and succeeds online. Counts runs so a test can prove the
+  // loop never re-runs a command on its own.
+  const needsNetRuns: boolean[] = []
+  const probeNeedsNetShell = (): ToolDef => ({
+    kind: 'shell',
+    summarize: () => 'npm install',
+    schema: {
+      name: 'needs_net_shell',
+      description: 'probe shell that needs the network',
+      parameters: { type: 'object', properties: {}, additionalProperties: false }
+    },
+    execute: async (_a, ctx) => {
+      needsNetRuns.push(ctx.allowNetwork)
+      if (ctx.allowNetwork) return 'added 12 packages\n[exit code: 0]'
+      const body = 'npm error code ENOTFOUND'
+      ctx.recordEvidence?.({
+        kind: 'shell',
+        command: 'npm install',
+        background: false,
+        exitCode: 1,
+        timedOut: false,
+        output: body,
+        blocked: 'network'
+      })
+      return `${body}\n[exit code: 1]\n${ctx.unattended ? HEADLESS_NETWORK_BLOCKED_HINT : NETWORK_BLOCKED_HINT}`
+    }
+  })
+  const needsNetCall = (id: string): ProviderStreamEvent => ({
+    type: 'tool_call',
+    call: { id, name: 'needs_net_shell', arguments: {} }
+  })
+  const resultOf = (r: RunResult, callId: string): string =>
+    (r.events.find((e) => e.type === 'tool_result' && e.callId === callId) as { output: string } | undefined)
+      ?.output ?? ''
+
   // A stand-in registered under the real `run_shell` name so the workspace-escape
   // tripwire (which keys on that name + a `command` arg) actually fires, letting us
   // exercise a first shell command that must be approved for a NON-network reason.
@@ -5856,7 +5899,7 @@ describe('egress hardening', () => {
         policy: 'full-auto',
         onApproval: (id, decide) => decide(id === 'x3' ? 'deny' : 'allow'),
         turns: [
-          // x1 pauses once for the run's shell-network consent; x2 then runs unasked.
+          // Ordinary commands run unasked (offline); only the discard prompts.
           [runShellCall('x1', 'npm test'), { type: 'done', stopReason: 'tool_use' }],
           [runShellCall('x2', 'npm run build'), { type: 'done', stopReason: 'tool_use' }],
           [runShellCall('x3', 'git reset --hard'), { type: 'done', stopReason: 'tool_use' }],
@@ -5865,7 +5908,7 @@ describe('egress hardening', () => {
           [{ type: 'done', stopReason: 'end_turn' }]
         ]
       })
-      expect(approvalCallIds(r)).toEqual(['x1', 'x3'])
+      expect(approvalCallIds(r)).toEqual(['x3'])
       expect(shellNetPerCall.map((c) => c.command)).toEqual(['npm test', 'npm run build', 'rm -rf node_modules dist'])
     })
 
@@ -5882,7 +5925,7 @@ describe('egress hardening', () => {
             [{ type: 'done', stopReason: 'end_turn' }]
           ]
         })
-        expect(approvalCallIds(r)).toEqual(['x1'])
+        expect(approvalCallIds(r)).toEqual([])
         expect(shellNetPerCall.map((c) => c.command)).toContain('git reset --hard')
       } finally {
         h.settings.permissionRules = []
@@ -5891,22 +5934,177 @@ describe('egress hardening', () => {
   })
 
   describe('#3b full-auto shell-network consent', () => {
-    // The consent only exists on a confining host (needsShellNetworkConsent requires
-    // isSandboxed()). Force it true so these run identically on a sandboxed macOS dev
-    // machine and on unsandboxed Linux CI — the probe shell tools don't spawn a real
-    // sandbox, so this just drives the approval logic, not execution. Reset by the
+    // Full auto runs shell offline and asks once per chat, only after a command fails for
+    // lack of network. The consent only exists on a confining host (offerShellNetwork
+    // requires isSandboxed()). Force it true so these run identically on a sandboxed
+    // macOS dev machine and on unsandboxed Linux CI; the probe shell tools don't spawn a
+    // real sandbox, so this drives the approval logic, not execution. Reset by the
     // top-level beforeEach (h.sandboxed = null).
     beforeEach(() => {
       shellSawNetwork = undefined
       shellNetPerCall.length = 0
+      needsNetRuns.length = 0
       h.sandboxed = true
     })
 
+    it('runs a command that needs no network offline, without asking', async () => {
+      h.probeTools = [probeNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual([])
+      expect(shellSawNetwork).toBe(false)
+    })
+
+    it('asks after a command fails for lack of network; allowing turns network on and tells the agent to retry', async () => {
+      h.probeTools = [probeNeedsNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          // The agent's retry, its own call: runs online, unasked.
+          [needsNetCall('n2'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const approvals = r.events.filter((e) => e.type === 'tool_approval')
+      expect(approvals).toHaveLength(1)
+      expect(approvals[0]).toMatchObject({ callId: 'n1', kind: 'shell', shellNetwork: true })
+      // The card comes after the command ran, and carries no "runs offline" note.
+      expect((approvals[0] as { shellOffline?: boolean }).shellOffline).toBeUndefined()
+      const startIdx = r.events.findIndex((e) => e.type === 'tool_start' && e.callId === 'n1')
+      const askIdx = r.events.indexOf(approvals[0])
+      expect(startIdx).toBeGreaterThanOrEqual(0)
+      expect(askIdx).toBeGreaterThan(startIdx)
+      // The loop never re-runs on its own: n1 ran once (offline), n2 once (online).
+      expect(needsNetRuns).toEqual([false, true])
+      const out = resultOf(r, 'n1')
+      expect(out).toContain('ENOTFOUND')
+      expect(out).toContain(SHELL_NETWORK_GRANTED_NOTE)
+      expect(out).not.toContain(NETWORK_BLOCKED_HINT)
+      expect(resultOf(r, 'n2')).toContain('added 12 packages')
+    })
+
+    it('a plain "Allow" on the card also grants network (any non-deny answer does)', async () => {
+      h.probeTools = [probeNeedsNetShell()]
+      await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [needsNetCall('n2'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(needsNetRuns).toEqual([false, true])
+    })
+
+    it('keeping offline is remembered: a later failure is not re-asked and says not to retry', async () => {
+      h.probeTools = [probeNeedsNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('deny'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [needsNetCall('n2'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['n1'])
+      expect(needsNetRuns).toEqual([false, false])
+      for (const id of ['n1', 'n2']) {
+        expect(resultOf(r, id)).toContain(SHELL_NETWORK_DECLINED_NOTE)
+        expect(resultOf(r, id)).not.toContain(NETWORK_BLOCKED_HINT)
+      }
+      // The command itself was never refused: "Keep offline" is not a deny.
+      const n1 = r.events.find((e) => e.type === 'tool_result' && e.callId === 'n1') as { ok: boolean }
+      expect(n1.ok).toBe(true)
+    })
+
+    it('carries the answer to later turns of the same chat', async () => {
+      h.probeTools = [probeNeedsNetShell()]
+      const conversationId = 'conv-shellnet-lazy-carry'
+      await run({
+        policy: 'full-auto',
+        conversationId,
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const r2 = await run({
+        policy: 'full-auto',
+        conversationId,
+        turns: [
+          [needsNetCall('n2'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r2)).toEqual([])
+      expect(needsNetRuns).toEqual([false, true])
+    })
+
+    it('replays the card when the conversation is re-adopted while it waits', async () => {
+      h.probeTools = [probeNeedsNetShell()]
+      let replayed: AgentEvent[] = []
+      await run({
+        policy: 'full-auto',
+        conversationId: 'conv-shellnet-lazy-replay',
+        onApproval: (_id, decide) => {
+          replayed = pendingPromptsForConversation('conv-shellnet-lazy-replay')
+          decide('deny')
+        },
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(replayed).toHaveLength(1)
+      expect(replayed[0]).toMatchObject({ type: 'tool_approval', callId: 'n1', shellNetwork: true })
+    })
+
+    it('does not ask when the egress proxy failed (no grant could bring network back)', async () => {
+      h.egressFails = true
+      h.probeTools = [probeNeedsNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual([])
+      expect(resultOf(r, 'n1')).toContain(NETWORK_BLOCKED_HINT)
+    })
+
+    it('does not ask outside full auto (there "Allow for run" on the command grants network)', async () => {
+      h.probeTools = [probeNeedsNetShell()]
+      const r = await run({
+        policy: 'auto-edit',
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const approvals = r.events.filter((e) => e.type === 'tool_approval')
+      expect(approvals).toHaveLength(1)
+      expect((approvals[0] as { shellNetwork?: boolean }).shellNetwork).toBeUndefined()
+      expect(resultOf(r, 'n1')).toContain(NETWORK_BLOCKED_HINT)
+    })
+
     it('a command approved for an ESCAPE reason does not silently grant network', async () => {
-      // The consent-conflation guard: the first shell command escapes the workspace, so it
-      // prompts with plain command framing (no network wording). Approving it with a bare
-      // "Allow" must NOT unlock run-wide shell network — otherwise a later in-workspace
-      // `curl … @.env …` would auto-run online with no prompt (the exfiltration channel).
+      // The consent-conflation guard: the escaping command prompts with plain command
+      // framing. Approving it with a bare "Allow" must NOT unlock shell network:
+      // otherwise a later in-workspace `curl … @.env …` would auto-run online.
       h.probeTools = [probeRunShell()]
       const r = await run({
         policy: 'full-auto',
@@ -5920,55 +6118,13 @@ describe('egress hardening', () => {
       const evs = r.events.filter((e) => e.type === 'tool_approval') as Array<{
         callId: string
         shellNetwork?: boolean
+        shellOffline?: boolean
       }>
-      // x1 (escape) prompts with normal framing; the escape approval leaves network
-      // UNDECIDED, so x2 does NOT auto-run — the network consent finally fires there,
-      // properly framed. If the grant had leaked, x2 would carry no approval at all.
-      expect(evs.map((e) => e.callId)).toEqual(['x1', 'x2'])
+      expect(evs.map((e) => e.callId)).toEqual(['x1'])
       expect(evs[0].shellNetwork).toBeUndefined()
-      expect(evs[1].shellNetwork).toBe(true)
-      // The escaping command ran OFFLINE — approving it never opened egress.
-      expect(shellNetPerCall.find((c) => c.command === 'cat /etc/hosts')?.sawNetwork).toBe(false)
-    })
-
-    it('prompts once with the shellNetwork flag and turns network on when granted', async () => {
-      h.probeTools = [probeNetShell()]
-      const r = await run({
-        policy: 'full-auto',
-        onApproval: (_id, decide) => decide('always'),
-        turns: [
-          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
-          [shellCall('s2'), { type: 'done', stopReason: 'tool_use' }],
-          [{ type: 'done', stopReason: 'end_turn' }]
-        ]
-      })
-      const approvals = r.events.filter((e) => e.type === 'tool_approval')
-      expect(approvals).toHaveLength(1)
-      expect(approvals[0]).toMatchObject({ callId: 's1', kind: 'shell', shellNetwork: true })
-      // Granted → the sandbox got network, and the second command didn't re-prompt.
-      expect(shellSawNetwork).toBe(true)
-      const ran = r.events.filter((e) => e.type === 'tool_result' && e.name === 'net_shell')
-      expect(ran).toHaveLength(2)
-      expect(ran.every((x) => (x as { ok: boolean }).ok)).toBe(true)
-    })
-
-    it('declining runs the command OFFLINE (never denies it) and does not re-prompt', async () => {
-      h.probeTools = [probeNetShell()]
-      const r = await run({
-        policy: 'full-auto',
-        onApproval: (_id, decide) => decide('deny'),
-        turns: [
-          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
-          [shellCall('s2'), { type: 'done', stopReason: 'tool_use' }],
-          [{ type: 'done', stopReason: 'end_turn' }]
-        ]
-      })
-      // Only s1 asked; the decline is remembered so s2 runs straight through offline.
-      expect(approvalCallIds(r)).toEqual(['s1'])
-      const ran = r.events.filter((e) => e.type === 'tool_result' && e.name === 'net_shell')
-      expect(ran).toHaveLength(2)
-      expect(ran.every((x) => (x as { ok: boolean }).ok)).toBe(true)
-      expect(shellSawNetwork).toBe(false)
+      // Its prompt says it runs offline, since only "Allow for run" grants network.
+      expect(evs[0].shellOffline).toBe(true)
+      expect(shellNetPerCall.map((c) => c.sawNetwork)).toEqual([false, false])
     })
 
     it('does not gate shell network under auto-edit until shell is granted for the run', async () => {
@@ -6061,13 +6217,14 @@ describe('egress hardening', () => {
       expect(replayed[0]).toMatchObject({ type: 'tool_approval', callId: 's1', shellOffline: true })
     })
 
-    it('leaves the full-auto network consent prompt unflagged (it asks the network question itself)', async () => {
-      h.probeTools = [probeNetShell()]
+    it('leaves the full-auto network question unflagged (it asks the network question itself)', async () => {
+      needsNetRuns.length = 0
+      h.probeTools = [probeNeedsNetShell()]
       const r = await run({
         policy: 'full-auto',
         onApproval: (_id, decide) => decide('deny'),
         turns: [
-          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
           [{ type: 'done', stopReason: 'end_turn' }]
         ]
       })
@@ -6174,6 +6331,41 @@ describe('egress hardening', () => {
       expect(shellSawNetwork).toBe(false)
       // The marker that switches the network-blocked hint to the CLI flag.
       expect(shellSawUnattended).toBe(true)
+    })
+
+    it('without the flag, full auto still asks after a network failure so --on-approval answers it', async () => {
+      needsNetRuns.length = 0
+      h.probeTools = [probeNeedsNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        unattended: true,
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [needsNetCall('n2'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['n1'])
+      expect(needsNetRuns).toEqual([false, true])
+      expect(resultOf(r, 'n1')).toContain(SHELL_NETWORK_GRANTED_NOTE)
+      expect(resultOf(r, 'n1')).not.toContain(HEADLESS_NETWORK_BLOCKED_HINT)
+    })
+
+    it('a headless decline keeps the hint that names --allow-shell-network', async () => {
+      needsNetRuns.length = 0
+      h.probeTools = [probeNeedsNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        unattended: true,
+        onApproval: (_id, decide) => decide('deny'),
+        turns: [
+          [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(resultOf(r, 'n1')).toContain(HEADLESS_NETWORK_BLOCKED_HINT)
+      expect(resultOf(r, 'n1')).not.toContain(SHELL_NETWORK_DECLINED_NOTE)
     })
 
     it('leaves an interactive run unmarked, so it keeps the "Allow for run" hint', async () => {

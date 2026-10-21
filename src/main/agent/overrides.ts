@@ -30,8 +30,9 @@ export interface ConversationOverride {
    */
   networkHosts: Set<string>
   /**
-   * Whether the user has answered the one-time full-auto shell-network consent
-   * (grant or decline). Once answered, later turns don't re-prompt.
+   * Whether the user has answered the full-auto shell-network question, asked once per
+   * chat after a command first fails for lack of network (grant or decline). Once
+   * answered, later turns don't re-ask.
    */
   shellNetworkDecided: boolean
   /**

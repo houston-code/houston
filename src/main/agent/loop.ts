@@ -66,6 +66,9 @@ import {
   getTool,
   resolveInRoots,
   staleWriteRefusal,
+  SHELL_NETWORK_DECLINED_NOTE,
+  SHELL_NETWORK_GRANTED_NOTE,
+  withShellNetworkDecision,
   type DispatchAgentOptions,
   type ToolDef,
   type ToolContext,
@@ -1821,6 +1824,50 @@ export async function startRun(
       return result
     }
 
+    // Full auto runs shell commands offline until the user allows network for the chat.
+    // Rather than pausing the first command to ask (which reads as a question about
+    // that command, even one like `python3 hello.py` that needs no network), the
+    // question waits until a command actually fails for lack of network. The answer
+    // decides only the chat's shell network, never whether a command runs: this one
+    // has already run, and the agent decides whether retrying it is safe (a blind
+    // re-run would repeat whatever the offline attempt did before failing). Returns
+    // the command's output with the "ran without network" hint swapped for the answer.
+    const offerShellNetwork = async (
+      call: ToolCall,
+      execArgs: Record<string, unknown>,
+      tool: ToolDef,
+      output: string
+    ): Promise<string> => {
+      if (run.policy !== 'full-auto' || !isSandboxed() || run.shellNetworkGranted || egressUnavailable) {
+        return output
+      }
+      const unattended = req.unattended === true
+      // Asked once per chat; a decline is remembered, so later failures just say so.
+      if (run.shellNetworkDecided) {
+        return unattended ? output : withShellNetworkDecision(output, SHELL_NETWORK_DECLINED_NOTE)
+      }
+      const prompt = {
+        name: call.name,
+        summary: tool.summarize(execArgs),
+        args: execArgs,
+        kind: tool.kind,
+        shellNetwork: true as const
+      }
+      run.pendingApprovals.set(call.id, prompt)
+      emit({ type: 'tool_approval', callId: call.id, ...prompt })
+      const { decision } = await waitForApproval(run, call.id)
+      run.pendingApprovals.delete(call.id)
+      // A stopped run resolves the card as a deny; that is not the user's answer.
+      if (abort.signal.aborted) return output
+      const grant = decision !== 'deny' && decision !== 'rule-deny'
+      run.shellNetworkGranted = grant
+      run.shellNetworkDecided = true
+      grantConversationShellNetwork(conversationId, grant)
+      if (grant) return withShellNetworkDecision(output, SHELL_NETWORK_GRANTED_NOTE)
+      // Headless keeps its own hint, which already points at --allow-shell-network.
+      return unattended ? output : withShellNetworkDecision(output, SHELL_NETWORK_DECLINED_NOTE)
+    }
+
     // Shared tool-execution context. `run.policy` and `run.shellNetworkGranted` are
     // read at call time so a mid-run policy change or a network-consent decision earlier
     // in the turn takes effect. `allowNetwork` governs the shell sandbox's network
@@ -1828,7 +1875,7 @@ export async function startRun(
     // filesystem, so blanket egress + full-auto is an exfiltration channel. Shell now
     // reaches the network only after a conscious per-run grant (the shell-network
     // consent, "Allow for run" on a shell command, or headless --allow-shell-network).
-    // See needsShellNetworkConsent.
+    // See offerShellNetwork.
     const makeToolContext = (
       callId: string,
       attachImage: (i: ImageAttachment) => void,
@@ -3401,27 +3448,14 @@ export async function startRun(
               sensitiveWrite
             })
 
-            // #3b: in full-auto on a confining host, the first shell command pauses once
-            // for a conscious network-consent decision. Full-auto otherwise auto-runs
-            // shell inside a sandbox that reads the whole filesystem AND (previously) had
-            // unconditional network — a one-command read-and-exfiltrate. The consent only
-            // decides the sandbox's network switch; the command itself still runs, so when
-            // it is the SOLE reason to pause, a decline runs the command offline rather
-            // than denying it.
-            const needsShellNetworkConsent =
-              tool.kind === 'shell' &&
-              run.policy === 'full-auto' &&
-              isSandboxed() &&
-              !run.shellNetworkGranted &&
-              !run.shellNetworkDecided
-            const consentOnly = needsShellNetworkConsent && !mustApprove
             // A shell command on a confining host with no shell-network grant yet runs
-            // offline when merely allowed. Flag it so the card can say only "Allow for
-            // run" also grants network. Not when the egress proxy failed to start: then
-            // no grant brings network back, so pointing at one would mislead.
+            // offline. Flag its prompt so the card can say only "Allow for run" also grants
+            // network. Not when the egress proxy failed to start: then no grant brings
+            // network back, so pointing at one would mislead. (Full auto never prompts up
+            // front for network: see offerShellNetwork, which asks after a command fails
+            // for lack of it.)
             const shellOffline =
               tool.kind === 'shell' &&
-              !consentOnly &&
               isSandboxed() &&
               !run.shellNetworkGranted &&
               !egressUnavailable
@@ -3444,8 +3478,7 @@ export async function startRun(
             // interaction rather than needing a separate corrective turn.
             let approvalNote: string | undefined
             // A PreToolUse hook that explicitly approves skips the approval prompt —
-            // unless a guardrail-tier `ask` rule forced it. The one-time shell-network
-            // consent rides the same gate.
+            // unless a guardrail-tier `ask` rule forced it.
             // Model this write's effect on each file it touches while the "before" is
             // still on disk. Computed once here and reused for both the approval card
             // and tool_start: after the call runs the original content is gone, so a
@@ -3454,14 +3487,9 @@ export async function startRun(
             const preview =
               tool.kind === 'write' ? await previewWrite(call.name, execArgs, roots) : null
 
-            if ((mustApprove || needsShellNetworkConsent) && (!pre.approved || guardrailAsk)) {
+            if (mustApprove && (!pre.approved || guardrailAsk)) {
               // Track the prompt so it can be replayed if the renderer re-opens this
               // conversation while the call is still blocking (the event is one-shot).
-              // The shellNetwork FRAMING is shown only when the network question is the
-              // sole reason to pause (consentOnly). When the command needs approval for
-              // another reason (a rule, an escape, an unconfined host) it keeps its normal
-              // command framing, yet approving it still grants the run's shell network
-              // below — so the flag drives UI wording, not the grant.
               run.pendingApprovals.set(call.id, {
                 name: call.name,
                 summary: tool.summarize(execArgs),
@@ -3469,7 +3497,6 @@ export async function startRun(
                 kind: tool.kind,
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
-                ...(consentOnly ? { shellNetwork: true } : {}),
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {})
@@ -3483,7 +3510,6 @@ export async function startRun(
                 kind: tool.kind,
                 ...(preview ? { preview } : {}),
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
-                ...(consentOnly ? { shellNetwork: true } : {}),
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {})
@@ -3492,25 +3518,10 @@ export async function startRun(
               // Resolved (or cancelled) — it's no longer awaiting the user.
               run.pendingApprovals.delete(call.id)
               approvalNote = denyGuidance
-              if (consentOnly) {
-                // The prompt was FRAMED as the network question, so its answer decides
-                // ONLY the run's shell network — never whether the command runs (a decline
-                // runs it offline). Gated on `consentOnly` (NOT `needsShellNetworkConsent`)
-                // so a first shell command approved for another reason (an escape, an `ask`
-                // rule), shown with plain command framing, can't silently unlock run-wide
-                // egress: the network question is still asked separately. An explicit "Allow
-                // for run" on such a command still grants network via applyApprovalDecision.
-                const grant = decision !== 'deny' && decision !== 'rule-deny'
-                run.shellNetworkGranted = grant
-                run.shellNetworkDecided = true
-                grantConversationShellNetwork(conversationId, grant)
-                approved = true
-              } else {
-                // Overrides + rule persistence live in applyApprovalDecision (shared with
-                // the writable subagent's unconfined-shell gate) — including the
-                // per-destination network grant and shell → network coupling.
-                approved = applyApprovalDecision(decision, call.name, execArgs, tool.kind, unsandboxedShell)
-              }
+              // Overrides + rule persistence live in applyApprovalDecision (shared with
+              // the writable subagent's unconfined-shell gate) — including the
+              // per-destination network grant and shell → network coupling.
+              approved = applyApprovalDecision(decision, call.name, execArgs, tool.kind, unsandboxedShell)
             }
 
             if (!approved) {
@@ -3549,19 +3560,32 @@ export async function startRun(
                 for (const img of cached.images) toolImages.push(img)
                 for (const doc of cached.documents) toolDocs.push(doc)
               } else {
+                // Whether run_shell blamed a failure on the missing network (the same
+                // judgement its receipt records), so full auto can offer network now.
+                let networkBlocked = false
                 try {
+                  const ctx = makeToolContext(
+                    call.id,
+                    (img) => toolImages.push(img),
+                    (doc) => toolDocs.push(doc)
+                  )
                   output = await tool.execute(
                     execArgs,
-                    makeToolContext(
-                      call.id,
-                      (img) => toolImages.push(img),
-                      (doc) => toolDocs.push(doc)
-                    )
+                    tool.kind === 'shell'
+                      ? {
+                          ...ctx,
+                          recordEvidence: (e) => {
+                            if (e.kind === 'shell' && e.blocked === 'network') networkBlocked = true
+                            ctx.recordEvidence?.(e)
+                          }
+                        }
+                      : ctx
                   )
                 } catch (e) {
                   output = `Error: ${(e as Error).message}`
                   ok = false
                 }
+                if (networkBlocked) output = await offerShellNetwork(call, execArgs, tool, output)
                 if (useCache) {
                   await readCache.set(
                     call.name,

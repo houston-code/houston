@@ -572,9 +572,11 @@ Approval is layered. From most to least restrictive:
 - **Full auto:** edits and (sandboxed) commands run without asking. A few controls
   still hold even here, because the sandbox can read your whole filesystem: network
   egress is granted **per destination** (approving a fetch to one host does not open
-  egress to another), the first shell command pauses once for a **shell-network
-  consent** so blanket outbound access is never automatic (declining runs commands
-  offline), a shell command that **names a path outside the project**, quoted or
+  egress to another), shell commands run offline until you allow network: the
+  first time one fails for lack of network, Houston asks once whether shell
+  commands in this chat may reach the network (the **shell-network consent**), so
+  blanket outbound access is never automatic (declining keeps them offline; when
+  you allow it, the agent retries the command if that is safe), a shell command that **names a path outside the project**, quoted or
   not, asks first (`/dev/null` and the temp directory the sandbox can already write
   to don't count),
   and **reading a credential file** (a `.env`, a private key, `.aws/credentials`
@@ -1027,9 +1029,9 @@ The structured file tools stay confined to the project on every platform.
 Network from `run_shell` is *gated*, not permanently off, and it is no longer
 implied by full auto: the sandbox can read your whole filesystem, so blanket
 outbound access plus full auto would be a one-command read-and-exfiltrate. Shell
-reaches the network only after a conscious per-run grant, either the one-time
-**shell-network consent** (full auto) or "Allow for run" on a shell command
-(ask / auto-edit). Plain "Allow" and "Always allow" run that one command offline,
+reaches the network only after a conscious grant for the chat, either the
+**shell-network consent** (full auto, asked once after a command first fails
+without network) or "Allow for run" on a shell command (ask / auto-edit). Plain "Allow" and "Always allow" run that one command offline,
 and until the run has the grant, each shell approval prompt says so. A command
 that needs the network (cloning, installing dependencies, `gh`, `curl`) is not
 impossible, it just needs that grant; declining runs the command offline instead
@@ -1037,7 +1039,8 @@ of blocking it. A headless run (`-p`) has no prompt to grant it from, so the gra
 is a flag: `--allow-shell-network` lets shell commands reach the network for that
 run under any policy, and is not remembered for the next one. Without it, shell
 runs offline, except under `--full-auto`, where `--on-approval allow` (its
-default) also answers the shell-network consent. `--on-approval allow` alone never
+default) also answers the shell-network consent when a command fails without
+network. `--on-approval allow` alone never
 grants it under ask or auto-edit, since it approves each command the way plain
 "Allow" does. Offline, npm, pip, and cargo skip their usual retries, so an
 install that needs the network fails in about a second instead of a minute or

@@ -1424,8 +1424,8 @@ const NETWORK_ERROR_RE =
 /** The hint appended to a network-looking failure that ran without network access. */
 export const NETWORK_BLOCKED_HINT =
   '[note: this command ran in the sandbox WITHOUT network access. If it failed because it needs the network ' +
-  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: choose "Allow for run" on the approval ' +
-  'prompt, or switch the run to full-auto, to grant network for the rest of the run, then retry.]'
+  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user grants network for the rest ' +
+  'of the run by choosing "Allow for run" on a shell command\'s approval prompt. Then retry.]'
 
 /**
  * {@link NETWORK_BLOCKED_HINT} for a headless run, which has no approval prompt to
@@ -1437,6 +1437,31 @@ export const HEADLESS_NETWORK_BLOCKED_HINT =
   '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible, but this headless run cannot be granted ' +
   'network now: do not retry it. Tell the user to re-run with --allow-shell-network to let shell commands reach ' +
   'the network.]'
+
+/**
+ * Replaces the network hint on a full-auto command that failed offline once the user
+ * has answered the shell-network question it raised (see offerShellNetwork in loop.ts).
+ */
+export const SHELL_NETWORK_GRANTED_NOTE =
+  '[note: this command ran WITHOUT network access and failed. The user has now allowed shell commands to reach ' +
+  'the network for the rest of this chat. If running this command again is safe (it did not already half-finish ' +
+  'something you would repeat), retry it.]'
+
+/** The same note when the user chose to keep shell commands offline for the chat. */
+export const SHELL_NETWORK_DECLINED_NOTE =
+  '[note: this command ran WITHOUT network access, and the user chose to keep shell commands offline in this ' +
+  'chat. Do not retry it. Work offline, or tell the user which step needs the network.]'
+
+/**
+ * Swap the "ran without network" hint in a command's output for the user's answer to
+ * the shell-network question, or append the answer when the tool added no hint.
+ */
+export function withShellNetworkDecision(output: string, note: string): string {
+  for (const hint of [NETWORK_BLOCKED_HINT, HEADLESS_NETWORK_BLOCKED_HINT]) {
+    if (output.includes(hint)) return output.replace(hint, note)
+  }
+  return `${output}\n${note}`
+}
 
 /**
  * Return {@link NETWORK_BLOCKED_HINT} (or, for a headless run,
