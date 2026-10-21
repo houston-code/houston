@@ -152,10 +152,14 @@ describe('CI never scopes away a required check', () => {
     for (const os of SHIPPED_RUNNERS) expect(planScript).toContain(`os: '${os}'`)
     expect(workflow).toMatch(/^ {2}schedule:\n {4}- cron: /m)
     // The full unit suite on every non-Linux leg (macOS against the real Seatbelt backend,
-    // Windows against its own; Linux runs it in `test`), and the e2e on macOS.
+    // Windows against its own; Linux runs it in `test`), and the e2e on every leg.
     expect(pkg).toMatch(/if: runner\.os != 'Linux'\n {8}run: \|\n(?: {10}.*\n)*? {10}npm test /)
     expect(pkg).not.toContain('npx vitest run src/main/sandbox')
-    expect(pkg).toMatch(/if: runner\.os == 'macOS'\n {8}run: npm run test:e2e/)
+    const e2e = pkg.slice(pkg.indexOf('- name: Packaged-app e2e'))
+    expect(e2e).toMatch(/^- name: Packaged-app e2e\n {8}run: \|\n/)
+    expect(e2e).toContain('xvfb-run -a npm run test:e2e:packaged')
+    // Unconditional: a platform guard on the step would skip it to a pass on that leg.
+    expect(e2e.split('\n      - ')[0]).not.toContain('if:')
   })
 
   it('runs the Windows unit suite with its temp dirs on D:, off the OS disk', () => {

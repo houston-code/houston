@@ -265,7 +265,8 @@ the SBOM conformance gate and `workflow-lint` succeeded. `workflow-lint` runs ac
 and zizmor over `.github/workflows`; zizmor's suppressions live in `.github/zizmor.yml`.
 Each `package` leg builds the app on its own runner and runs the full unit suite there:
 macOS against the real Seatbelt sandbox, Windows against its own backend (Git Bash) and
-its path semantics. The macOS legs also run the packaged-app Playwright e2e.
+its path semantics. Every leg also runs the packaged-app Playwright e2e against the app it
+just built (Linux under Xvfb).
 
 Tests run on Windows too, so build expected paths with `join`/`resolve` (or `normalize` a
 POSIX literal) rather than hard-coding `/`, and pin `platform` on anything that takes one. Each leg
