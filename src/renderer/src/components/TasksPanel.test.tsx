@@ -55,7 +55,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-function setup(tasks: BackgroundTask[]) {
+function setup(tasks: BackgroundTask[], extra: { currentId?: string } = {}) {
   const props = {
     onStop: vi.fn(async () => 'killed' as const),
     onOpenPreview: vi.fn(),
@@ -63,7 +63,7 @@ function setup(tasks: BackgroundTask[]) {
     onOpenTerminal: vi.fn(),
     onClearFinished: vi.fn()
   }
-  render(<TasksPanel tasks={tasks} now={() => NOW} {...props} />)
+  render(<TasksPanel tasks={tasks} now={() => NOW} {...extra} {...props} />)
   return props
 }
 
@@ -149,6 +149,12 @@ describe('TasksPanel', () => {
     expect(screen.queryByRole('button', { name: 'Open preview' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Stop leftover process' }))
     expect(await screen.findByText('Stopped the process it left running.')).toBeInTheDocument()
+  })
+
+  it("doesn't offer Go to chat for a task the open chat started", () => {
+    setup([server], { currentId: 'conv-1' })
+    fireEvent.click(screen.getByRole('button', { name: /runserver 0\.0\.0\.0/ }))
+    expect(screen.queryByRole('button', { name: 'Go to chat' })).toBeNull()
   })
 
   it('opens the preview and the originating chat; finished shells offer neither Stop nor Preview', () => {

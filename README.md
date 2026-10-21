@@ -82,15 +82,16 @@ Open source under the [Apache License 2.0](LICENSE).
   client and its API) shows the page it labels `Local:`, with a picker for the
   others. Multiple servers stack top-to-bottom (up to three), each showing its full
   URL with reload, copy, and open-in-browser controls; you can also add a
-  `localhost` URL or port by hand. The pages render in isolated, sandboxed,
+  `localhost` URL or port by hand. Each chat's Preview shows the servers its own agent
+  started, so switching chats switches the pages. The pages render in isolated, sandboxed,
   loopback-pinned views with the same network guards as `view_localhost`, so
   untrusted dev-server output can't reach your network.
 - **Background tasks.** The tasks button in the titlebar shows a pulsing count while
-  terminals or commands the agent backgrounded are running, and opens a **Tasks** tab
-  in the same right-hand dock as Preview. Each row names the command that does the
+  terminals or commands the agent backgrounded in the open chat are running, and opens
+  a **Tasks** tab in the same right-hand dock as Preview. Another chat's backgrounded
+  commands show when that chat is open; terminals show in every chat. Each row names the command that does the
   work (setup like `cd` and virtualenv activation is stripped), its port and folder;
-  expand it for the full command, recent output, and Stop, Open preview, or Go to
-  chat. A shell that exited but left a server running is flagged, with a button to
+  expand it for the full command, recent output, and Stop or Open preview. A shell that exited but left a server running is flagged, with a button to
   stop the leftover process. The panel never opens by itself.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message — no need to paste or describe where things live.

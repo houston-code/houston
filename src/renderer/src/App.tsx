@@ -71,6 +71,7 @@ import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPane
 import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH } from './lib/previewPanel'
 import { clampPlanWidth, PLAN_DEFAULT_WIDTH } from './lib/planPanel'
 import { usePreviewServers } from './hooks/usePreviewServers'
+import { ownedByChat } from './lib/chatScope'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
@@ -247,7 +248,12 @@ export default function App(): JSX.Element {
   const chat = useChat(currentId)
 
   // Dev servers the agent started (auto-detected loopback URLs) — drives the Preview dock.
-  const previewServers = usePreviewServers()
+  // Only the open chat's: another chat's servers stay out of its Preview and Tasks.
+  const allPreviewServers = usePreviewServers()
+  const previewServers = useMemo(
+    () => ownedByChat(allPreviewServers, currentId),
+    [allPreviewServers, currentId]
+  )
   const previewableCount = useMemo(
     () => previewServers.filter((s) => s.running && s.url).length,
     [previewServers]
@@ -434,11 +440,15 @@ export default function App(): JSX.Element {
 
   // Background shells the agent spawned via run_shell (dev servers, watchers),
   // tracked by the main process.
-  const backgroundShells = useBackgroundShells()
+  const allBackgroundShells = useBackgroundShells()
+  const backgroundShells = useMemo(
+    () => ownedByChat(allBackgroundShells, currentId),
+    [allBackgroundShells, currentId]
+  )
 
   // The background-tasks list shown in the title bar: running/recently-finished
-  // integrated terminals + agent-backgrounded shells, so a backgrounded completion
-  // is noticeable from anywhere. Chat runs are intentionally excluded — each is
+  // integrated terminals + the open chat's agent-backgrounded shells (another chat's
+  // shells show when that chat is open). Chat runs are intentionally excluded — each is
   // already represented by its own Stop button and its sidebar dot (see
   // useBackgroundTasks).
   const { tasks: backgroundTasks, clearFinished: clearFinishedTasks } = useBackgroundTasks(
@@ -2143,6 +2153,7 @@ export default function App(): JSX.Element {
             tasks={
               <TasksPanel
                 tasks={backgroundTasks}
+                currentId={currentId}
                 active={dockTab === 'tasks'}
                 onStop={(id) => window.api.stopBackgroundShell(id)}
                 onOpenPreview={(task) => {

@@ -452,7 +452,8 @@ export function listPreviewServers(): PreviewServer[] {
     id: s.id,
     command: maskForUi(s.command),
     running: s.running,
-    ...(s.previewUrls.length ? { url: s.previewUrls[0], urls: [...s.previewUrls] } : {})
+    ...(s.previewUrls.length ? { url: s.previewUrls[0], urls: [...s.previewUrls] } : {}),
+    ...(s.conversationId ? { conversationId: s.conversationId } : {})
   }))
 }
 
