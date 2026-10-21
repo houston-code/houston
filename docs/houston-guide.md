@@ -1330,7 +1330,9 @@ Start a line with `#` to turn it into a standing instruction: `# always run the
 linter before committing`. Houston asks whether it applies to this project or to
 you everywhere, appends it to the rules file it already reads on every run
 (`AGENTS.md` in the project, or `~/.houston/AGENTS.md` for everywhere), and tells
-you which file it wrote.
+you which file it wrote. A path written with `@` in a note (`@~/notes.md`) is kept
+as text, shown in backticks, and never loaded as an import; to import a file, edit
+the rules file yourself.
 
 This is for the moment you notice "it should always do X", the moment you are
 least likely to stop and open an editor. `#` alone is not a note, and a `#` in the
@@ -1341,7 +1343,13 @@ middle of a line is ordinary text.
 Houston folds a small rules hierarchy into the system prompt each run: the global
 `~/.houston/AGENTS.md` first, then the project's own `AGENTS.md` / `CLAUDE.md` at
 its root, then any `AGENTS.md` / `CLAUDE.md` in subdirectories (shallowest
-first). Any rules file can pull in others with `@path` imports.
+first). Any rules file can pull in others with `@path` imports. When two of these
+files hold the same rules (a `CLAUDE.md` that links to `AGENTS.md`, or an identical
+copy), Houston loads them once.
+
+All rules together are capped at 32,000 characters. When they run over, the global
+file is shortened (or left out) first, so your project's own rules still fit, and
+Houston tells the model which files were cut.
 
 Houston does not load `~/.claude/CLAUDE.md` on its own. To use it everywhere, add
 this line to `~/.houston/AGENTS.md`:

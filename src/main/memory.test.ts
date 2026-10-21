@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveMemory, saveMemoryTo } from './memory'
@@ -110,6 +110,16 @@ describe('saveMemory scopes', () => {
     const file = await saveMemory(ws, 'project', 'run the linter')
     expect(file).toBe(join(ws, 'AGENTS.md'))
     expect(readFileSync(file, 'utf8').startsWith('# Project instructions\n')).toBe(true)
+  })
+
+  it('a global note that mentions a path does not pull the file into the rules', async () => {
+    mkdirSync(join(home, '.aws'))
+    writeFileSync(join(home, '.aws', 'credentials'), 'aws_secret_access_key = FAKE-SECRET')
+    const file = await saveMemory(ws, 'global', 'my AWS profile lives in @~/.aws/credentials')
+    expect(readFileSync(file, 'utf8')).toContain('- my AWS profile lives in `@~/.aws/credentials`')
+    const rules = await loadProjectRules(ws, { home })
+    expect(rules.text).not.toContain('FAKE-SECRET')
+    expect(rules.text).toContain('my AWS profile lives in `@~/.aws/credentials`')
   })
 
   it('a saved global note is loaded into the rules on the next run', async () => {

@@ -88,7 +88,8 @@ vi.mock('./rules', async (importActual) => ({
   ...(await importActual<typeof import('./rules')>()),
   loadProjectRules: async () => ({
     text: h.rulesText,
-    files: h.rulesText ? ['CLAUDE.md'] : []
+    files: h.rulesText ? ['CLAUDE.md'] : [],
+    truncated: []
   })
 }))
 // Real gitContext shells out to git; githubContext probes PATH for gh. Both are

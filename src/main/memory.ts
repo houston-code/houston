@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import type { MemoryScope } from '@shared/memory'
 import { writeFileAtomicSync } from './atomic-write'
 import { GLOBAL_RULES_HEADING, globalRulesDir, readTextOrNull } from './globalRules'
+import { neutralizeImports } from './agent/rules'
 
 /**
  * Persist a `#`-captured standing instruction. Shared by the terminal and the
@@ -36,6 +37,15 @@ function oneLine(text: string): string {
 }
 
 /**
+ * A note as stored: one line, with any @path mention made inert. Rules files expand
+ * `@path` as an import, so without this a note that only names a path would put that
+ * file's contents into every prompt.
+ */
+function storedNote(text: string): string {
+  return neutralizeImports(oneLine(text))
+}
+
+/**
  * Append `text` as a note to `dir`'s rules file, creating it under `title` when it
  * doesn't exist yet. Exported for tests.
  */
@@ -44,7 +54,7 @@ export async function saveMemoryTo(
   text: string,
   title = '# Project instructions'
 ): Promise<string> {
-  const note = oneLine(text)
+  const note = storedNote(text)
   const file = join(dir, 'AGENTS.md')
   const existing = readTextOrNull(file)
   const heading = '## Notes'

@@ -206,7 +206,7 @@ vi.mock('../managedPolicy', () => ({ loadManagedPolicy: async () => ({ permissio
 // would make an eval pass or fail based on whose laptop it ran on.
 vi.mock('../rules', async (importActual) => ({
   ...(await importActual<typeof import('../rules')>()),
-  loadProjectRules: async () => ({ text: '', files: [] })
+  loadProjectRules: async () => ({ text: '', files: [], truncated: [] })
 }))
 // Fixtures are not git repos, and a real `git`/`gh` probe would put the *host*
 // repo's branch into the prompt when the fixture has no repo of its own.

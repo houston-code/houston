@@ -53,8 +53,10 @@ export const MAX_NESTED_RULES_FILES = 25
 export interface ProjectRules {
   /** Combined, section-headed rules text (empty when no rules files exist). */
   text: string
-  /** The rule sources that were actually loaded (labels, in order). */
+  /** The rule sources whose text made it into `text`, in whole or in part (labels, in order). */
   files: string[]
+  /** Sources shortened or dropped to fit MAX_RULES_CHARS (labels, in order). Empty when all fit. */
+  truncated: string[]
 }
 
 export interface LoadRulesOptions {
@@ -121,6 +123,15 @@ function resolveImport(spec: string, baseDir: string, home: string): string {
   return resolve(baseDir, spec)
 }
 
+/** Canonical path of an existing file, or null when it can't be resolved. */
+function realpathOrNull(path: string): string | null {
+  try {
+    return realpathSync(path)
+  } catch {
+    return null
+  }
+}
+
 /** Whether `abs` (canonical) is `root` itself or lives inside it. */
 function isWithinRoot(root: string, abs: string): boolean {
   const rel = relative(root, abs)
@@ -158,6 +169,17 @@ const IMPORT_RE = /(^|\s)@([^\s`]*\/[^\s`]*|~[^\s`]*)/g
 /** Trim the trailing punctuation an import token may carry ("see @./notes.md."). */
 function trimSpec(rawSpec: string): string {
   return rawSpec.replace(/[.,;:!?)\]}]+$/, '')
+}
+
+/**
+ * Make any @import tokens in `text` inert by wrapping each in inline code, so the
+ * text reads the same but the loader leaves it alone (an `@` right after a backtick
+ * isn't an import). Used for `#` notes: a note that merely MENTIONS a path, like
+ * "keys live in @~/.aws/credentials", must not pull that file into every prompt,
+ * least of all from the trusted global file, whose imports are unconfined.
+ */
+export function neutralizeImports(text: string): string {
+  return text.replace(IMPORT_RE, (_full, lead: string, spec: string) => `${lead}\`@${spec}\``)
 }
 
 /**
@@ -311,17 +333,87 @@ export async function loadProjectRules(
     ...nested.map((n) => ({ ...n, confineRoot }))
   ]
 
+  // The same rules reached twice (a `CLAUDE.md` symlinked to `AGENTS.md`, or kept as
+  // an identical copy, a common way to serve several tools) load once: a second copy
+  // only spends the budget and states every rule twice. The first, lowest-precedence
+  // copy is kept; with identical text nothing is lost by dropping the later one.
+  const loadedReal = new Set<string>()
+  const loadedBodies = new Set<string>()
   for (const { path, label, confineRoot: cr } of sources) {
+    const real = realpathOrNull(path)
+    if (real !== null && loadedReal.has(real)) continue
     const block = await loadOne(path, label, home, visited, cr)
     if (block) {
+      const body = block.slice(block.indexOf('\n') + 1)
+      if (loadedBodies.has(body)) continue
+      loadedBodies.add(body)
+      if (real !== null) loadedReal.add(real)
       parts.push(block)
       files.push(label)
     }
   }
 
-  let text = parts.join('\n\n')
-  if (text.length > MAX_RULES_CHARS) {
-    text = `${text.slice(0, MAX_RULES_CHARS)}\n[truncated]`
+  return fitRules(
+    parts.map((block, i) => ({ label: files[i], block })),
+    MAX_RULES_CHARS
+  )
+}
+
+const RULES_SEP = '\n\n'
+const TRUNCATED_MARK = '\n[truncated]'
+/** Shortest useful slice of a shrunk global block; below this it's dropped instead. */
+const MIN_GLOBAL_KEEP = 200
+
+/**
+ * Fit the loaded rule blocks (lowest precedence first) into `cap` characters.
+ *
+ * The global block gives way first: it is the least specific, and a long personal
+ * file (one that grows with every "Everywhere" note) must not push the project's
+ * own rules out of the prompt. It is shortened, or dropped when too little of it
+ * would be left. If the project and nested rules alone still don't fit, the tail is
+ * cut as before. `files` names only what made it in; `truncated` names what was
+ * shortened or dropped, so a caller can tell the user. Exported for tests.
+ */
+export function fitRules(
+  parts: Array<{ label: string; block: string }>,
+  cap: number
+): ProjectRules {
+  const size = (ps: typeof parts): number =>
+    ps.reduce((n, p) => n + p.block.length, 0) + RULES_SEP.length * Math.max(0, ps.length - 1)
+  let kept = parts.slice()
+  const truncated: string[] = []
+  if (size(kept) > cap && kept.length > 1 && kept[0].label === GLOBAL_RULES_LABEL) {
+    const over = size(kept) - cap
+    const room = kept[0].block.length - over - TRUNCATED_MARK.length
+    truncated.push(kept[0].label)
+    kept =
+      room >= MIN_GLOBAL_KEEP
+        ? [{ ...kept[0], block: kept[0].block.slice(0, room) + TRUNCATED_MARK }, ...kept.slice(1)]
+        : kept.slice(1)
   }
-  return { text, files }
+  if (size(kept) > cap) {
+    const fitted: typeof parts = []
+    let used = 0
+    for (const p of kept) {
+      const sep = fitted.length ? RULES_SEP.length : 0
+      if (used + sep + p.block.length <= cap) {
+        fitted.push(p)
+        used += sep + p.block.length
+        continue
+      }
+      const room = cap - used - sep
+      if (room > 0) fitted.push({ ...p, block: p.block.slice(0, room) + TRUNCATED_MARK })
+      for (const rest of kept.slice(kept.indexOf(p))) {
+        if (!truncated.includes(rest.label)) truncated.push(rest.label)
+      }
+      break
+    }
+    kept = fitted
+  }
+  const cut = parts.map((p) => p.label).filter((l) => truncated.includes(l))
+  let text = kept.map((p) => p.block).join(RULES_SEP)
+  // Say what's missing, so the model knows its instructions are incomplete rather
+  // than silently working from a partial set.
+  if (cut.length) text += `${RULES_SEP}[Rules over the ${cap}-character limit; shortened or left out: ${cut.join(', ')}]`
+  return { text, files: kept.map((p) => p.label), truncated: cut }
 }
