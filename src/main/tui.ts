@@ -1420,7 +1420,7 @@ export const HELP_TEXT = [
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
-  '  /theme [name]         list or switch color theme (default | bright | mono)',
+  `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
   '  /image [path]         attach an image from your clipboard, or a file',
   '  /cwd                  show the working directory',
   '  /share                copy an invite to Houston to send a friend',

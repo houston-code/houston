@@ -2187,6 +2187,13 @@ describe('runTui', () => {
     expect(missing).toEqual([])
   })
 
+  it('names the themes /theme actually has', () => {
+    const line = HELP_TEXT.split('\n').find((l) => l.includes('/theme'))!
+    for (const name of Object.keys(THEMES)) expect(line).toContain(name)
+    // `bright` is only a legacy alias for `dark`; /help used to list it as a theme.
+    expect(line).not.toContain('bright')
+  })
+
   it('lists custom commands under /help', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     d.commands = async () => [{ name: 'ship', description: 'Ship the release', template: 'go' }]
