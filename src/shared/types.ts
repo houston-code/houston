@@ -535,12 +535,24 @@ export interface AppSettings {
    */
   formatOnSave?: boolean
   /**
-   * Run a fast file-appropriate checker (eslint/ruff/pyflakes/gofmt) on a file
-   * right after the agent writes it and feed any problems back so the model can
-   * self-correct in the same turn. Read-only (never modifies the file); only fires
-   * when the checker's binary is installed; off by default.
+   * Check a file right after the agent writes it and feed the problems the edit
+   * introduced back so the model can self-correct in the same turn. Read-only (never
+   * modifies the file).
+   *  - unset (default): the language server covering the file reports new errors (and
+   *    a few warnings); files no installed server covers get no check.
+   *  - true: the same, plus a fast checker (eslint/ruff/pyflakes/gofmt) for files no
+   *    language server covers, when its binary is installed.
+   *  - false: no post-edit checks.
    */
   diagnosticsOnSave?: boolean
+  /**
+   * Language servers (code intelligence: post-edit diagnostics and the lsp_* tools).
+   * Unset: on when the OS sandbox can confine them. true: on even where it can't.
+   * false: off. Servers are never bundled; one runs only when its binary is installed.
+   */
+  lspEnabled?: boolean
+  /** Extra language servers, or replacements for a built-in one (same `id`). */
+  lspServers?: LspServerConfig[]
   /**
    * Hard cap on loop iterations for a single agent turn. When the run gets within
    * a small margin of this cap it's nudged to "land" (finish or summarize) rather
@@ -685,6 +697,37 @@ export interface AppSettings {
 }
 
 /** One format-on-save backend and whether its binary is present on this machine. */
+/** A user-configured language server (Settings > Tools & Permissions). */
+export interface LspServerConfig {
+  /** Name for the server; reusing a built-in id (typescript, python, go, rust, clangd) replaces it. */
+  id: string
+  /** Executable name on PATH, or an absolute path. */
+  command: string
+  args?: string[]
+  /** File extensions it covers, without the dot (e.g. `["lua"]`). */
+  extensions: string[]
+  /** The LSP languageId to open those files with (defaults to the extension). */
+  languageId?: string
+  /** Files whose presence at the project root means the project uses this language. */
+  rootMarkers?: string[]
+  initializationOptions?: unknown
+}
+
+/** One language server's install status, for Settings and /doctor. */
+export interface LanguageServerStatus {
+  id: string
+  name: string
+  /** File extensions it covers. */
+  languages: string[]
+  /** Resolved executable, or null when not installed. */
+  path: string | null
+  /** Where it was found: the workspace's node_modules/.bin, PATH, or a settings entry. */
+  source?: 'workspace' | 'path' | 'settings'
+  installHint: string
+  /** Configured in settings rather than built in. */
+  user: boolean
+}
+
 export interface FormatterStatus {
   /** Binary name, e.g. `prettier`, `gofmt`, `ruff`. */
   bin: string
@@ -714,4 +757,12 @@ export interface IntegrationsInfo {
    * Git for Windows, where the shell is the cmd.exe fallback.
    */
   formattersNeedGitBash?: boolean
+  /** Language servers Houston can drive, and which are installed. */
+  languageServers?: LanguageServerStatus[]
+  /**
+   * Why language servers won't start on this host even when installed, if they won't:
+   * 'disabled' (turned off in settings), 'unsandboxed' (no OS sandbox to confine them
+   * and not turned on explicitly), or 'needs-git-bash' (Windows without Git Bash).
+   */
+  languageServersBlocked?: 'disabled' | 'unsandboxed' | 'needs-git-bash'
 }

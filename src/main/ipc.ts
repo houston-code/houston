@@ -38,7 +38,7 @@ import {
   setFolderTrust
 } from './store'
 import { loadProjectConfig } from './agent/projectConfig'
-import { getIntegrations } from './integrations'
+import { getIntegrations, languageServerIntegration } from './integrations'
 import {
   detectEditors,
   openProjectInEditor,
@@ -759,7 +759,9 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.mcpStatus, () => getMcpStatuses())
 
   // Optional-integrations status (gh CLI, formatters) for the Settings hint.
-  ipcMain.handle(IPC.integrationsGet, () => getIntegrations())
+  ipcMain.handle(IPC.integrationsGet, () =>
+    getIntegrations({ languageServers: () => languageServerIntegration(getSettings()) })
+  )
 
   // "Open project in…" — user gesture, launches an external editor / file manager.
   ipcMain.handle(IPC.editorsList, () => detectEditors())

@@ -324,6 +324,15 @@ Open source under the [Apache License 2.0](LICENSE).
   formatter is missing). Settings → *Tools & Permissions* → *Optional integrations*
   shows which it detects. Runs in the same sandbox as `run_shell` (no network); off by
   default.
+- **Code intelligence from language servers (optional).** When a language server is
+  installed (`typescript-language-server` or `vtsls`, `pyright`/`basedpyright`,
+  `gopls`, `rust-analyzer`, `clangd`, or one you add in settings), the agent's edits
+  are checked as they land: the tool result lists the errors the edit introduced,
+  compared with what the file had before, so the agent fixes them in the same turn.
+  Servers are **optional, not bundled**; a project's own `node_modules/.bin` copy is
+  preferred. They start on demand, are reused across turns, stop when idle, and run in
+  the same sandbox as `run_shell` (no network). Settings → *Tools & Permissions* shows
+  which are detected and lets you turn them off.
 - **Undo / redo a turn's file changes.** Houston snapshots each file before and
   after the agent writes it, so when a turn edits files a **Revert** button appears —
   one click restores everything that turn changed (and deletes files it created).

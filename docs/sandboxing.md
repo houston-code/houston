@@ -52,6 +52,23 @@ broadly-available primitive with the same shape, which is why its backend runs
 unconfined. The rest of this document records *why* the obvious Windows candidates were
 rejected, so the decision isn't re-litigated from scratch.
 
+## Language servers
+
+Language servers (see the guide's *Code intelligence* section) are long-running
+processes launched through the same backend as background shell commands, with the
+network off and writes confined to the roots, the posture the post-edit checkers in
+`diagnostics.ts` already had. A server can execute project code (TypeScript plugins
+from `tsconfig.json`, Rust build scripts and proc macros), and unlike a shell command
+it starts without an approval prompt, so on a host whose backend does not confine
+(`isSandboxed()` false) servers do not start unless the user sets them to run
+unconfined explicitly. Under the Windows `cmd.exe` fallback they never start, since a
+path can't be quoted safely there. Two consequences of confinement: the client sends
+`processId: null` in `initialize`, because servers poll the given pid with `kill(pid, 0)`
+and the sandbox denies signals outside it (they would exit within seconds), and
+Houston therefore stops servers itself (idle timeout, app quit, terminal-client exit).
+A server's `workspace/applyEdit` request is always refused: edits reach disk only
+through the agent's write tools and their approval gate.
+
 ## Environment sanitization (all backends)
 
 The sandbox is a *filesystem/network* jail, not an environment one — a child can read

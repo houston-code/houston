@@ -41,3 +41,30 @@ describe('buildDoctorReport — terminal group is client-specific', () => {
     expect(sandbox.detail).toContain('NOT enforced')
   })
 })
+
+describe('buildDoctorReport — language servers', () => {
+  const ls = (id: string, path: string | null, usedByProject: boolean) => ({
+    id,
+    name: id,
+    path,
+    usedByProject,
+    installHint: `install ${id}`
+  })
+  const group = (f: DoctorFacts) => buildDoctorReport(f).groups.find((g) => g.title === 'Language servers')
+
+  it('lists installed servers, warns only for a missing one the project uses, and rolls up the rest', () => {
+    const g = group(
+      facts({ languageServers: [ls('typescript', '/bin/tls', true), ls('go', null, true), ls('rust', null, false), ls('clangd', null, false)] })
+    )!
+    expect(g.checks).toEqual([
+      { label: 'typescript', status: 'ok', detail: '/bin/tls' },
+      { label: 'go', status: 'warn', detail: 'not installed; this project uses go', fix: 'install go' },
+      { label: 'not installed', status: 'ok', detail: 'rust, clangd (optional)' }
+    ])
+  })
+
+  it('warns when servers are blocked on this host', () => {
+    const g = group(facts({ languageServers: [], languageServersBlocked: 'unsandboxed' }))!
+    expect(g.checks[0]).toMatchObject({ label: 'language servers', status: 'warn', detail: expect.stringContaining('no OS sandbox') })
+  })
+})
