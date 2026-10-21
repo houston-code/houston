@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { PassThrough } from 'node:stream'
 import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { AppSettings, ApprovalPolicy } from '@shared/types'
 import {
   BLOCKING_EVENT_TYPES,
@@ -595,18 +596,24 @@ describe('ACP server: resolves every blocking interaction', () => {
 })
 
 describe('ACP mapping helpers', () => {
+  // A workspace root that is absolute on every platform.
+  const W = resolve(tmpdir(), 'houston-acp-ws')
+
   it('turns prompt blocks into one user turn', () => {
     const png = Buffer.from('png').toString('base64')
+    // Real absolute paths for this platform (a drive letter on Windows).
+    const src = resolve(W, 'src', 'a.ts')
+    const readme = resolve(W, 'README.md')
     const r = promptFromBlocks([
       { type: 'text', text: 'Look at this' },
-      { type: 'resource', resource: { uri: 'file:///w/src/a.ts', text: 'const a = 1' } },
-      { type: 'resource_link', uri: 'file:///w/README.md', name: 'README.md' },
+      { type: 'resource', resource: { uri: pathToFileURL(src).href, text: 'const a = 1' } },
+      { type: 'resource_link', uri: pathToFileURL(readme).href, name: 'README.md' },
       { type: 'image', data: png, mimeType: 'image/png' },
       { type: 'audio', data: 'x', mimeType: 'audio/wav' }
     ])
     expect(r.text).toContain('Look at this')
-    expect(r.text).toContain('Contents of /w/src/a.ts:\n```\nconst a = 1\n```')
-    expect(r.text).toContain('Referenced file: /w/README.md')
+    expect(r.text).toContain(`Contents of ${src}:\n\`\`\`\nconst a = 1\n\`\`\``)
+    expect(r.text).toContain(`Referenced file: ${readme}`)
     expect(r.text).toContain('audio attachment was not included')
     expect(r.images).toEqual([{ mediaType: 'image/png', data: png }])
     expect(() => promptFromBlocks('nope')).toThrow()
@@ -623,7 +630,7 @@ describe('ACP mapping helpers', () => {
   })
 
   it('rebuilds a diff from preview hunks, keeping folds as context', () => {
-    const [d] = previewToDiffContent('/w', [
+    const [d] = previewToDiffContent(W, [
       {
         path: 'f.ts',
         diff: [
@@ -634,8 +641,8 @@ describe('ACP mapping helpers', () => {
         ]
       }
     ])
-    expect(d).toEqual({ type: 'diff', path: '/w/f.ts', oldText: 'a\n⋯ 3 unchanged lines\nb', newText: 'a\n⋯ 3 unchanged lines\nc' })
-    const [created] = previewToDiffContent('/w', [{ path: 'n.ts', created: true, diff: [{ type: 'add', text: 'x' }] }])
+    expect(d).toEqual({ type: 'diff', path: resolve(W, 'f.ts'), oldText: 'a\n⋯ 3 unchanged lines\nb', newText: 'a\n⋯ 3 unchanged lines\nc' })
+    const [created] = previewToDiffContent(W, [{ path: 'n.ts', created: true, diff: [{ type: 'add', text: 'x' }] }])
     expect(created).toEqual(expect.objectContaining({ oldText: null, newText: 'x' }))
   })
 
@@ -680,7 +687,7 @@ describe('ACP mapping helpers', () => {
         },
         { role: 'tool', content: 'file body', toolCallId: 'c1', toolName: 'read_file' }
       ],
-      '/w'
+      W
     )
     expect(ups).toEqual([
       { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: '/review' } },
@@ -693,7 +700,7 @@ describe('ACP mapping helpers', () => {
         kind: 'read',
         status: 'completed',
         rawInput: { path: 'a.ts' },
-        locations: [{ path: '/w/a.ts' }]
+        locations: [{ path: resolve(W, 'a.ts') }]
       },
       {
         sessionUpdate: 'tool_call_update',
