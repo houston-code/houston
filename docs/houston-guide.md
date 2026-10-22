@@ -2302,7 +2302,8 @@ you used Houston before this feature, nothing appears on its own.
 ## License and legal
 
 Houston is open-source software under the **Apache License 2.0** (`LICENSE` in the
-repository, and a copy inside the packaged app under `Resources/`).
+repository, and a copy inside the packaged app under `Resources/`). There's no
+account and no terms to accept: Houston opens straight into the app.
 
 ### What the license lets you do
 
@@ -2337,13 +2338,6 @@ should carry a different name.
 
 Contributions are covered by the same license under Apache-2.0 section 5, so there's
 no CLA to sign. See `CONTRIBUTING.md`.
-
-### No terms to accept
-
-There's no Terms of Use, no account, and no acceptance gate: Houston opens straight
-into the app on first launch. The license's warranty disclaimer (section 7) and
-limitation of liability (section 8) apply on their own, so there's nothing to click
-through.
 
 ### Your data
 
