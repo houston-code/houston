@@ -25,6 +25,7 @@ function installApi() {
       Promise.resolve()
     ),
     setAgentPolicy: vi.fn((_runId: string, _policy: string) => Promise.resolve()),
+    setAgentEffort: vi.fn((_runId: string, _effort: string) => Promise.resolve()),
     steerAgent: vi.fn((_runId: string, _text: string) => Promise.resolve(true)),
     restoreCheckpoint: vi.fn((_runId: string) => Promise.resolve(3)),
     reapplyCheckpoint: vi.fn((_runId: string) => Promise.resolve(2))
@@ -309,6 +310,32 @@ describe('useChat', () => {
 
     act(() => result.current.cancel())
     expect(api.cancelAgent).toHaveBeenCalledWith(runId)
+  })
+
+  it("routes setEffort to the active run, and sends the chat's effort with a turn", async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useChat())
+    await act(async () => {
+      await result.current.send({
+        conversationId: 'c1',
+        userText: 'hi',
+        providerId: 'p',
+        model: 'm',
+        approvalPolicy: 'ask',
+        reasoningEffort: 'low'
+      })
+    })
+    const req = api.startAgent.mock.calls[0][0]
+    expect(req).toMatchObject({ reasoningEffort: 'low' })
+    act(() => result.current.setEffort('xhigh'))
+    expect(api.setAgentEffort).toHaveBeenCalledWith(req.runId, 'xhigh')
+  })
+
+  it('setEffort is a no-op when no run is active', () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useChat())
+    act(() => result.current.setEffort('low'))
+    expect(api.setAgentEffort).not.toHaveBeenCalled()
   })
 
   it('setPolicy is a no-op when no run is active', () => {

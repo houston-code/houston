@@ -2,21 +2,24 @@ import { ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, 
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
-import type { AppSettings, FolderTrustStatus, MenuState, PermissionRule } from '@shared/types'
+import type { AppSettings, ApprovalPolicy, FolderTrustStatus, MenuState, PermissionRule } from '@shared/types'
 import { isApprovalPolicy } from '@shared/types'
 import { cleanupPermissionRules } from './agent/permissions'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import {
   isPlanDecision,
+  isReasoningEffort,
   isToolApprovalDecision,
   sanitizeApprovalNote,
   sanitizeElicitationResult,
   type AgentEvent,
   type AgentSendRequest,
   type ChatMessage,
+  type ConversationSettingsPatch,
   type DeleteConversationResult,
   type ImportConversationResult,
   type PlanDecision,
+  type ReasoningEffort,
   type ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
@@ -61,6 +64,7 @@ import {
   resolveQuestion,
   resolvePlan,
   setRunPolicy,
+  setRunEffort,
   steerRun,
   runOwner,
   activeRunForConversation,
@@ -120,6 +124,7 @@ import {
   setMessages,
   setGeneratedTitle,
   updateConversationMeta,
+  setConversationSettings,
   reportChildToParent,
   saveSideChat
 } from './conversations'
@@ -785,10 +790,15 @@ export function registerIpc(): void {
         workspace: string
         providerId: string
         model: string
+        /** The new chat's own settings (the defaults, as the renderer shows them). */
+        reasoningEffort?: ReasoningEffort
+        approvalPolicy?: ApprovalPolicy
         /** When set, create a branch + worktree and run the chat there. */
         worktree?: { branch: string; base?: string }
       }
     ) => {
+      // createConversation drops either setting when it isn't a known value.
+      const chatSettings = { reasoningEffort: input.reasoningEffort, approvalPolicy: input.approvalPolicy }
       if (input.worktree) {
         // Create the branch + worktree first; the worktree becomes the workspace.
         // Throws (surfaced to the renderer) on a bad branch name or git failure.
@@ -805,15 +815,20 @@ export function registerIpc(): void {
           workspace: wt.path,
           providerId: input.providerId,
           model: input.model,
+          ...chatSettings,
           worktree: wt
         })
       }
       return createConversation({
         workspace: input.workspace,
         providerId: input.providerId,
-        model: input.model
+        model: input.model,
+        ...chatSettings
       })
     }
+  )
+  ipcMain.handle(IPC.conversationSetSettings, (_event, id: string, patch: ConversationSettingsPatch) =>
+    setConversationSettings(id, patch)
   )
   ipcMain.handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
   ipcMain.handle(
@@ -1014,12 +1029,19 @@ export function registerIpc(): void {
     // A resend of a message whose turn failed replaces it rather than repeating it.
     const messages = appendUserTurn(conv.messages, userMessage)
     setMessages(conv.id, messages)
-    updateConversationMeta(conv.id, { providerId: req.providerId, model: req.model })
 
     // Validate the policy at the IPC boundary: an unknown value fails *open* downstream
     // (needsApproval auto-approves any non-'ask' policy; isBlockedByPlan stops guarding),
     // so coerce anything off the list to the most restrictive policy. Mirrors setRunPolicy.
     const approvalPolicy = isApprovalPolicy(req.approvalPolicy) ? req.approvalPolicy : 'plan'
+    const reasoningEffort = isReasoningEffort(req.reasoningEffort) ? req.reasoningEffort : undefined
+    // Record what this turn runs under as the chat's own settings.
+    updateConversationMeta(conv.id, {
+      providerId: req.providerId,
+      model: req.model,
+      approvalPolicy,
+      ...(reasoningEffort ? { reasoningEffort } : {})
+    })
 
     void runAndDrain(
       makeIo(event.sender),
@@ -1030,6 +1052,7 @@ export function registerIpc(): void {
         providerId: req.providerId,
         model: req.model,
         approvalPolicy,
+        ...(reasoningEffort ? { reasoningEffort } : {}),
         messages
       },
       // Record the starting window so only it can approve/answer/cancel this run.
@@ -1043,7 +1066,14 @@ export function registerIpc(): void {
     IPC.agentRetry,
     async (
       event,
-      req: { runId: string; conversationId: string; providerId: string; model: string; approvalPolicy: AppSettings['approvalPolicy'] }
+      req: {
+        runId: string
+        conversationId: string
+        providerId: string
+        model: string
+        approvalPolicy: AppSettings['approvalPolicy']
+        reasoningEffort?: ReasoningEffort
+      }
     ) => {
       const conv = getConversation(req.conversationId)
       if (!conv) {
@@ -1066,10 +1096,16 @@ export function registerIpc(): void {
       }
       // Same boundary validation as agentStart: an unknown policy fails open, so coerce.
       const approvalPolicy = isApprovalPolicy(req.approvalPolicy) ? req.approvalPolicy : 'plan'
-      // Persist the (possibly switched) provider/model like agentStart does, so a retry
-      // after changing provider isn't run under the new one while the conversation's
-      // stored meta still names the old — which mis-attributes the turn in the scorecard.
-      updateConversationMeta(conv.id, { providerId: req.providerId, model: req.model })
+      const reasoningEffort = isReasoningEffort(req.reasoningEffort) ? req.reasoningEffort : undefined
+      // Persist the (possibly switched) settings like agentStart does, so a retry after
+      // changing provider isn't run under the new one while the conversation's stored
+      // meta still names the old — which mis-attributes the turn in the scorecard.
+      updateConversationMeta(conv.id, {
+        providerId: req.providerId,
+        model: req.model,
+        approvalPolicy,
+        ...(reasoningEffort ? { reasoningEffort } : {})
+      })
       void runAndDrain(
         makeIo(event.sender),
         conv.id,
@@ -1079,6 +1115,7 @@ export function registerIpc(): void {
           providerId: req.providerId,
           model: req.model,
           approvalPolicy,
+          ...(reasoningEffort ? { reasoningEffort } : {}),
           messages: conv.messages
         },
         // Record the starting window so only it can approve/answer/cancel this run.
@@ -1197,6 +1234,13 @@ export function registerIpc(): void {
       setRunPolicy(runId, policy)
     }
   )
+
+  // Change the reasoning effort of an in-flight run, for its own chat only; the next
+  // model turn uses it. Owner-gated like set-policy; setRunEffort ignores unknown values.
+  ipcMain.handle(IPC.agentSetEffort, (event, runId: string, effort: ReasoningEffort) => {
+    if (!callerOwnsRun(event, runId)) return
+    setRunEffort(runId, effort)
+  })
 
   // Steer the live run: inject a course correction the model reads before its next
   // step (see steerRun). A run-control call like the others, so it is gated on run

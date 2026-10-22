@@ -4,12 +4,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   AgentEvent,
+  AgentRunRequest,
   ChatMessage,
   ChatRequest,
   PlanDecision,
   PlanPayload,
   Provider,
   ProviderStreamEvent,
+  ReasoningEffort,
   RunSettingsOverrides,
   ToolApprovalDecision
 } from '@shared/agent'
@@ -236,6 +238,7 @@ const {
   resolveQuestion,
   resolvePlan,
   setRunPolicy,
+  setRunEffort,
   steerRun,
   activeRunForConversation,
   pendingPromptsForConversation,
@@ -301,6 +304,7 @@ async function run(
     provider?: Provider
     messages?: ChatMessage[]
     policy?: ApprovalPolicy
+    reasoningEffort?: ReasoningEffort
     userText?: string
     onApproval?: (callId: string, decide: (d: ToolApprovalDecision, note?: string) => void) => void
     onQuestion?: (callId: string, answer: (a: string) => void) => void
@@ -344,6 +348,7 @@ async function run(
       providerId: 'anthropic',
       model: opts.model ?? 'claude-test',
       approvalPolicy: opts.policy ?? 'ask',
+      ...(opts.reasoningEffort ? { reasoningEffort: opts.reasoningEffort } : {}),
       messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }],
       ...(opts.unattended !== undefined ? { unattended: opts.unattended } : {}),
       ...(opts.overrides ? { overrides: opts.overrides } : {}),
@@ -2132,6 +2137,77 @@ describe('startRun', () => {
     } finally {
       h.settings = original
     }
+  })
+  // A chat that keeps its own effort: its run is sent that effort, a change made in
+  // another chat (or to the default) never reaches it, and its own change does.
+  describe('a chat\'s own reasoning effort', () => {
+    const twoTurns = (seen: unknown[], afterFirst: () => void): Provider => ({
+      async *streamChat(req) {
+        seen.push(req.reasoningEffort)
+        if (seen.length === 1) {
+          afterFirst()
+          yield { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'x.txt' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    })
+    const start = (runId: string, over: Partial<AgentRunRequest> = {}): Promise<void> =>
+      startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'go' }],
+          ...over
+        },
+        () => {},
+        () => {}
+      )
+
+    it('ignores a change to the default made mid-run', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const original = h.settings
+      try {
+        h.settings = { ...h.settings, reasoningEffort: 'medium' }
+        const seen: unknown[] = []
+        h.provider = twoTurns(seen, () => {
+          h.settings = { ...h.settings, reasoningEffort: 'xhigh' } // another chat, or the default
+        })
+        await start('run-own-effort', { reasoningEffort: 'low' })
+        expect(seen).toEqual(['low', 'low'])
+      } finally {
+        h.settings = original
+      }
+    })
+
+    it('takes its own mid-run change (setRunEffort) on the next model turn', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      h.provider = twoTurns(seen, () => setRunEffort('run-set-effort', 'xhigh'))
+      await start('run-set-effort', { reasoningEffort: 'low' })
+      expect(seen).toEqual(['low', 'xhigh'])
+    })
+
+    it('ignores an effort off the list, keeping the one it had', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      h.provider = twoTurns(seen, () => setRunEffort('run-bad-effort', 'max' as never))
+      await start('run-bad-effort', { reasoningEffort: 'medium' })
+      expect(seen).toEqual(['medium', 'medium'])
+    })
+
+    it('still loses to a headless --effort override', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      h.provider = twoTurns(seen, () => {})
+      await start('run-override-effort', { reasoningEffort: 'low', overrides: { reasoningEffort: 'high' } })
+      expect(seen).toEqual(['high', 'high'])
+    })
   })
 })
 
@@ -7301,6 +7377,29 @@ describe('session proposals, forked spawns, and finished-child reports', () => {
     expect(spawned).toHaveLength(1)
     expect(spawned[0].history).toEqual([{ role: 'user', content: 'split this up' }])
     expect(spawned[0].parentConversationId).toBe(conv.id)
+  })
+
+  it("starts a spawned session on this chat's model, effort and current policy", async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    await run({
+      conversationId: conv.id,
+      policy: 'auto-edit',
+      reasoningEffort: 'low',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'spawn_session', arguments: { prompt: 'docs' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    expect(spawned).toHaveLength(1)
+    expect(spawned[0]).toMatchObject({
+      providerId: 'anthropic',
+      model: 'claude-test',
+      approvalPolicy: 'auto-edit',
+      reasoningEffort: 'low'
+    })
   })
 
   it('delivers finished-child reports once, as a Houston note just before the new message', async () => {

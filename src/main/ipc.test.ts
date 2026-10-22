@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   resolveApproval: vi.fn(),
   resolveQuestion: vi.fn(),
   setRunPolicy: vi.fn(),
+  setRunEffort: vi.fn(),
   steerRun: vi.fn<(runId: string, text: string) => boolean>(() => true),
   saveMemory: vi.fn<(ws: string, scope: string, text: string) => Promise<string>>(
     async (_ws, scope) => `/AGENTS.md#${scope}`
@@ -71,6 +72,7 @@ vi.mock('./agent/loop', () => ({
   resolveApproval: h.resolveApproval,
   resolveQuestion: h.resolveQuestion,
   setRunPolicy: h.setRunPolicy,
+  setRunEffort: h.setRunEffort,
   steerRun: h.steerRun,
   runOwner: h.runOwner,
   activeRunForConversation: h.activeRun,
@@ -399,6 +401,18 @@ describe('run-control IPC ownership', () => {
     })
   })
 
+  describe('agentSetEffort', () => {
+    it('sets the effort when the owning window calls', () => {
+      handler(IPC.agentSetEffort)(from(OWNER), RUN, 'low')
+      expect(h.setRunEffort).toHaveBeenCalledWith(RUN, 'low')
+    })
+
+    it("rejects a change from a window that doesn't own the run", () => {
+      handler(IPC.agentSetEffort)(from(OTHER), RUN, 'low')
+      expect(h.setRunEffort).not.toHaveBeenCalled()
+    })
+  })
+
   describe('agentCancel', () => {
     it('cancels the run when the owning window calls', () => {
       handler(IPC.agentCancel)(from(OWNER), RUN)
@@ -625,6 +639,46 @@ describe('agentStart / agentRetry approval-policy validation', () => {
     const updated = getConversation(id)
     expect(updated?.providerId).toBe('q')
     expect(updated?.model).toBe('m2')
+  })
+
+  it("records the turn's effort and validated policy as the chat's own, and runs under them", async () => {
+    const id = freshConv()
+    await handler(IPC.agentStart)(from(SENDER), {
+      runId: 'r1', conversationId: id, providerId: 'q', model: 'n',
+      approvalPolicy: 'auto-edit', reasoningEffort: 'low', userText: 'hi'
+    })
+    expect(getConversation(id)).toMatchObject({
+      providerId: 'q', model: 'n', approvalPolicy: 'auto-edit', reasoningEffort: 'low'
+    })
+    expect(h.runAndDrain.mock.calls[0][2]).toMatchObject({ approvalPolicy: 'auto-edit', reasoningEffort: 'low' })
+  })
+
+  it('stores the coerced policy, never the unknown one, and drops an unknown effort', async () => {
+    const id = freshConv()
+    await handler(IPC.agentRetry)(from(SENDER), {
+      runId: 'r2', conversationId: id, providerId: 'p', model: 'm',
+      approvalPolicy: 'yolo', reasoningEffort: 'max'
+    })
+    expect(getConversation(id)?.approvalPolicy).toBe('plan')
+    expect(getConversation(id)?.reasoningEffort).toBeUndefined()
+    expect(h.runAndDrain.mock.calls[0][2]).not.toHaveProperty('reasoningEffort')
+  })
+
+  it("conversationSetSettings saves one chat's change and returns its meta", async () => {
+    const id = freshConv()
+    const meta = await handler(IPC.conversationSetSettings)(from(SENDER), id, {
+      approvalPolicy: 'plan',
+      reasoningEffort: 'xhigh'
+    })
+    expect(meta).toMatchObject({ id, approvalPolicy: 'plan', reasoningEffort: 'xhigh' })
+  })
+
+  it('conversationCreate stores the new chat\'s settings, dropping unknown ones', async () => {
+    const conv = (await handler(IPC.conversationCreate)(from(SENDER), {
+      workspace: '/tmp/ws', providerId: 'p', model: 'm', reasoningEffort: 'medium', approvalPolicy: 'bogus'
+    })) as { id: string }
+    expect(getConversation(conv.id)?.reasoningEffort).toBe('medium')
+    expect(getConversation(conv.id)?.approvalPolicy).toBeUndefined()
   })
 })
 
