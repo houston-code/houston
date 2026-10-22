@@ -1,6 +1,6 @@
 import { BrowserWindow, session, type Session, type WebContents } from 'electron'
 import { isLoopbackHost } from './agent/loopback'
-import { hardenUntrustedSession } from './hardenedSession'
+import { blockFileChoosers, hardenUntrustedSession } from './hardenedSession'
 import { attachCdp, cdpFullPage, cdpScreenshot, emulateViewport, type Cdp } from './cdp'
 import {
   setCaptureBackend,
@@ -355,21 +355,26 @@ async function openElectronWindow(opts: {
     entries.push({ level: consoleLevelName(lvl), text: String(txt) })
   })
 
-  // A variant forces its color scheme (a plain capture follows the OS theme) and
-  // device type through the DevTools protocol, set on a blank page before the real
-  // one loads so the first paint already uses them (see cdp.ts).
-  let cdp: Cdp | null = null
-  if (opts.emulate) {
-    try {
-      await win.loadURL('about:blank')
-      cdp = attachCdp(wc)
-      await emulateViewport(cdp, { width: opts.width, height: opts.height, ...opts.emulate })
-    } catch (err) {
-      // The caller only closes a session it got back, so don't leave the window behind.
-      cdp?.detach()
-      if (!win.isDestroyed()) win.destroy()
-      throw err
-    }
+  // Every capture gets a DevTools client, attached on a blank page before the real
+  // one loads (see cdp.ts). It cancels any file picker the page opens: steps run
+  // with user activation, so a click on a file input's label (or a button that
+  // calls input.click()) would otherwise open the OS picker on the user's screen.
+  // A variant also forces its color scheme (a plain capture follows the OS theme)
+  // and device type through it, so the first paint already uses them.
+  let cdp: Cdp | undefined
+  let fileChoosersBlocked: boolean
+  try {
+    await win.loadURL('about:blank')
+    cdp = attachCdp(wc)
+    fileChoosersBlocked = await blockFileChoosers(cdp, () =>
+      entries.push({ level: 'warning', text: '[file chooser] cancelled: view_localhost cannot choose files' })
+    )
+    if (opts.emulate) await emulateViewport(cdp, { width: opts.width, height: opts.height, ...opts.emulate })
+  } catch (err) {
+    // The caller only closes a session it got back, so don't leave the window behind.
+    cdp?.detach()
+    if (!win.isDestroyed()) win.destroy()
+    throw err
   }
 
   return {
@@ -398,7 +403,8 @@ async function openElectronWindow(opts: {
     url: () => wc.getURL(),
     async rectForSelector(selector) {
       try {
-        const rect = (await wc.executeJavaScript(selectorRectScript(selector), true)) as Rect | null
+        // No user gesture: measuring an element must not give the page activation to spend.
+        const rect = (await wc.executeJavaScript(selectorRectScript(selector), false)) as Rect | null
         return rect && rect.width > 0 && rect.height > 0 ? rect : null
       } catch {
         return null
@@ -407,11 +413,11 @@ async function openElectronWindow(opts: {
     async screenshot(rect) {
       // An emulated page must be captured through the protocol, which renders it at
       // the emulated size; capturePage would grab the window's own bitmap.
-      if (cdp) {
+      if (opts.emulate) {
         if (!rect) return cdpScreenshot(cdp)
         // The protocol clips in page coordinates; the rect is relative to the
         // viewport, which a step may have scrolled (scrollIntoView before a click).
-        const scroll = (await wc.executeJavaScript('({ x: window.scrollX, y: window.scrollY })', true)) as {
+        const scroll = (await wc.executeJavaScript('({ x: window.scrollX, y: window.scrollY })', false)) as {
           x: number
           y: number
         }
@@ -422,12 +428,15 @@ async function openElectronWindow(opts: {
       return image.toPNG()
     },
     async screenshotFullPage(maxHeight) {
-      // The page has loaded by now, so attaching here is safe even without emulation.
-      cdp ??= attachCdp(wc)
       return cdpFullPage(cdp, opts.width, opts.height, maxHeight)
     },
     consoleEntries: () => entries,
     async runStep(step) {
+      // Every step hands the page user activation, which is all it needs to open
+      // a file picker. Run none unless pickers are being cancelled.
+      if (!fileChoosersBlocked) {
+        return { ok: false, error: 'steps are unavailable: file pickers could not be blocked in this page' }
+      }
       try {
         if (step.action === 'wait') {
           await sleep(step.ms)
@@ -476,7 +485,7 @@ async function openElectronWindow(opts: {
     },
     async pageText() {
       try {
-        const text: unknown = await wc.executeJavaScript(PAGE_TEXT_SCRIPT, true)
+        const text: unknown = await wc.executeJavaScript(PAGE_TEXT_SCRIPT, false)
         return typeof text === 'string' ? text : null
       } catch {
         return null
@@ -484,7 +493,7 @@ async function openElectronWindow(opts: {
     },
     typedSecrets: () => typedSecrets,
     close: () => {
-      cdp?.detach()
+      cdp.detach()
       if (!win.isDestroyed()) win.destroy()
     }
   }

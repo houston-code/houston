@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { hardenUntrustedSession, type LockableSession } from './hardenedSession'
+import { blockFileChoosers, hardenUntrustedSession, type LockableSession } from './hardenedSession'
 
 /** A fake Session that records the handlers hardenUntrustedSession installs. */
 function fakeSession(): {
@@ -87,5 +87,60 @@ describe('hardenUntrustedSession', () => {
     for (const permission of ['media', 'geolocation', 'notifications', 'clipboard-read', 'midi']) {
       expect(f.permissionGranted(permission)).toBe(false)
     }
+  })
+})
+
+/** A fake DevTools client that records commands and can deliver protocol events. */
+function fakeCdp(fails?: string): {
+  cdp: Parameters<typeof blockFileChoosers>[0]
+  sent: { method: string; params?: object }[]
+  emit: (method: string) => void
+} {
+  const sent: { method: string; params?: object }[] = []
+  let listener: ((method: string, params: Record<string, unknown>) => void) | null = null
+  return {
+    cdp: {
+      send: async (method, params) => {
+        sent.push({ method, params })
+        if (method === fails) throw new Error(`The page did not answer ${method} within 10000ms.`)
+        return {}
+      },
+      on: (l) => {
+        listener = l
+      }
+    },
+    sent,
+    emit: (method) => listener?.(method, {})
+  }
+}
+
+describe('blockFileChoosers', () => {
+  it('turns on file-chooser interception with cancel, and reports it in force', async () => {
+    const f = fakeCdp()
+    expect(await blockFileChoosers(f.cdp, () => {})).toBe(true)
+    expect(f.sent).toEqual([
+      { method: 'Page.enable', params: undefined },
+      { method: 'Page.setInterceptFileChooserDialog', params: { enabled: true, cancel: true } }
+    ])
+  })
+
+  it('reports each picker the page opened, and nothing else', async () => {
+    const f = fakeCdp()
+    let count = 0
+    await blockFileChoosers(f.cdp, () => count++)
+    f.emit('Page.frameNavigated')
+    f.emit('Page.fileChooserOpened')
+    f.emit('Page.fileChooserOpened')
+    expect(count).toBe(2)
+  })
+
+  it('fails closed when the Page domain cannot be enabled', async () => {
+    const f = fakeCdp('Page.enable')
+    expect(await blockFileChoosers(f.cdp, () => {})).toBe(false)
+  })
+
+  it('fails closed when the browser refuses the interception', async () => {
+    const f = fakeCdp('Page.setInterceptFileChooserDialog')
+    expect(await blockFileChoosers(f.cdp, () => {})).toBe(false)
   })
 })
