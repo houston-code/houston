@@ -7105,6 +7105,25 @@ describe('scheduled runs (loop wiring)', () => {
     expect(result?.type === 'tool_result' && result.output).toContain('sch-test')
   })
 
+  it("stores the creating chat's own reasoning effort on the schedule, and none without one", async () => {
+    const created: ScheduledRunInput[] = []
+    setSchedulerBackend(fakeBackend(created))
+    const turns = (): ProviderStreamEvent[][] => [
+      [
+        {
+          type: 'tool_call',
+          call: { id: 'c1', name: 'schedule_run', arguments: { name: 'n', spec: 'daily at 09:00', prompt: 'p' } }
+        },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', stopReason: 'end_turn' }]
+    ]
+    await run({ policy: 'full-auto', reasoningEffort: 'low', turns: turns() })
+    await run({ policy: 'full-auto', turns: turns() })
+    expect(created[0].reasoningEffort).toBe('low')
+    expect(created[1]).not.toHaveProperty('reasoningEffort')
+  })
+
   it('schedule_run surfaces a spec validation error from the backend', async () => {
     setSchedulerBackend({
       create: () => {
