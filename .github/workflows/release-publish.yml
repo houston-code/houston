@@ -715,8 +715,10 @@ jobs:
           AUR_KNOWN_HOSTS: ${{ vars.AUR_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
-          [ -n "$AUR_SSH_KEY" ] && [ -n "$AUR_KNOWN_HOSTS" ] \
-            || { echo "::error::AUR_PUBLISH is on but AUR_SSH_KEY or AUR_KNOWN_HOSTS is not set."; exit 1; }
+          if [ -z "$AUR_SSH_KEY" ] || [ -z "$AUR_KNOWN_HOSTS" ]; then
+            echo "::error::AUR_PUBLISH is on but AUR_SSH_KEY or AUR_KNOWN_HOSTS is not set."
+            exit 1
+          fi
           ssh_dir="$(mktemp -d)"
           trap 'rm -rf "$ssh_dir"' EXIT
           chmod 700 "$ssh_dir"
