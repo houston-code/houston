@@ -185,13 +185,19 @@ describe('buildSystemPrompt', () => {
     })
   })
 
+  it('points at find_tools only when the run offers a deferred tool', () => {
+    expect(promptFor(toolNames())).toContain('load one with find_tools')
+    // A scoped headless run that allows only eager tools gets no find_tools.
+    expect(promptFor(['read_file', 'glob', 'search_files', 'run_shell'])).not.toContain('find_tools')
+  })
+
   it('lists view_localhost by default but omits it when capture is unavailable', () => {
     expect(buildSystemPrompt('/tmp/x')).toContain('view_localhost')
     const noCapture = promptFor(toolNames({ localhostCapture: false }))
     expect(noCapture).not.toContain('view_localhost')
     // The neighbouring verification bullets must survive the removal.
     expect(noCapture).toContain('Never describe unverified work as tested or working.')
-    expect(noCapture).toContain('- For a large or security-sensitive change, review_changes')
+    expect(noCapture).toContain('- For a large or security-sensitive change, run review_changes')
   })
 
   it('points at render-ui and show_images only where show_images is offered', () => {

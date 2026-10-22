@@ -1,7 +1,8 @@
 import {
   COMPACTION_SUMMARY_PREFIX,
   type ChatMessage,
-  type ConversationCompaction
+  type ConversationCompaction,
+  type ToolSchema
 } from '@shared/agent'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
 
@@ -170,6 +171,16 @@ export function estimateTokens(system: string, messages: ChatMessage[]): number 
     attachmentTokens += messageAttachmentTokens(m)
   }
   return Math.ceil(chars / 4) + messages.length * 4 + attachmentTokens
+}
+
+/**
+ * Rough token estimate for the tool schemas a request advertises, on the same
+ * ~4 characters per token basis as {@link estimateTokens}. The schemas ride along on
+ * every request but aren't part of the message window, so callers add this to the
+ * window estimate.
+ */
+export function estimateToolTokens(tools: ToolSchema[]): number {
+  return Math.ceil(JSON.stringify(tools).length / 4)
 }
 
 /** Text characters a message contributes to the estimate: content plus tool-call JSON. */

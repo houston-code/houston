@@ -2,6 +2,7 @@ import { basename } from 'node:path'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { isBlockedByPlan } from './approval'
 import { builtinToolset, getTool } from './tools'
+import { isDeferredBuiltin } from './deferred-tools'
 
 /**
  * A short, factual addendum tailored to the model family in use, or '' for
@@ -168,7 +169,7 @@ export function buildSystemPrompt(
     ? 'It reports back here at the start of a later turn, once it finishes, so give it a self-contained prompt (or context "fork" to hand it this conversation).'
     : 'It does not report back here, so give it a self-contained prompt.'
   const spawnSessionLine = offers('spawn_session')
-    ? ` spawn_session is different: it starts a separate, persistent background session (optionally on its own git branch/worktree) for independent work that should run in parallel with this one. Use it when the user asks for parallel or background work. ${spawnReport}`
+    ? ` spawn_session starts a separate, persistent background session; use it only when the user asks for parallel or background work. ${spawnReport}`
     : ''
   const proposeSessionLine = offers('propose_session')
     ? '\n- When you notice work that could run in parallel and is not what the user asked you to do (a separate fix spotted in passing, the natural follow-up, a part you set aside), propose it with propose_session rather than starting it or doing it here: the user gets a card and decides. Propose real, self-contained work only, never what you are about to do anyway, and say in your reply that you proposed it.'
@@ -186,8 +187,13 @@ export function buildSystemPrompt(
   const lspLine = offers('lsp_definition', 'lsp_references', 'lsp_rename')
     ? '\n- A language server is available for this project. To find where a symbol is defined, every place it is used, or its type, prefer lsp_definition, lsp_references, and lsp_hover over text search: they follow imports and skip same-named text. Rename a symbol with lsp_rename rather than editing each use by hand.'
     : ''
+  // find_tools exists only when the run offers a deferred built-in (a scoped
+  // headless run may offer none) or defers MCP tools; the loop adds it then.
+  const findToolsLine = tools.some(isDeferredBuiltin)
+    ? "\n- Tools listed in find_tools (GitHub, scheduling, sessions, UI previews, and others) aren't preloaded: load one with find_tools before you first call it."
+    : ''
   const scheduleLine = offers('schedule_run', 'list_scheduled_runs', 'cancel_scheduled_run')
-    ? '\n- When the user wants something done on a schedule or later ("every morning...", "tomorrow at 9..."), use schedule_run (list_scheduled_runs and cancel_scheduled_run manage existing ones). Each occurrence starts a fresh session with the stored prompt under the current approval policy, so make that prompt self-contained. Schedules fire while Houston is running and persist across restarts.'
+    ? '\n- When the user wants something done on a schedule or later ("every morning...", "tomorrow at 9..."), use schedule_run (list_scheduled_runs and cancel_scheduled_run manage existing ones).'
     : ''
   const base = `You are Houston, a coding agent working on the user's ${osName(host)} machine. You help with software engineering tasks in a single project directory.
 
@@ -212,7 +218,7 @@ ${keepGoingLine}
 - edit_file's old_string must match exactly one place, so include enough surrounding lines to make it unique. Use multi_edit for several edits to one file and apply_patch for a change spanning several files. A failed edit returns an error, so don't re-read a file just to confirm an edit landed.
 - Shell commands must not wait for input: pass non-interactive flags (-y, --yes, --no-input) and never open an editor or pager. Run dev servers, watchers, and other open-ended commands with background:true, then use read_shell_output and kill_shell.
 ${approvalLine}
-- Use the gh_* tools for GitHub (pull requests, issues, CI runs, creating a repo) rather than gh in run_shell: they carry their own network approval, so they work even when the shell has no network. Push the branch before gh_pr_create, and use gh_run_view with log_failed:true to diagnose a failed CI run.
+- Use the gh_* tools for GitHub (pull requests, issues, CI runs, creating a repo) rather than gh in run_shell: they carry their own network approval, so they work even when the shell has no network.${findToolsLine}
 - Delegate only when it pays for itself. dispatch_agent suits a broad, read-heavy investigation that would flood your context; dispatch_writable_agent suits a self-contained piece of implementation. Don't delegate what you can finish in a few tool calls, and don't dispatch agents just to double-check your own work.${spawnSessionLine}${proposeSessionLine}${scheduleLine}
 - When you need facts that may have changed since your training (a library's current API, an unfamiliar error message) and the project can't answer, use web_search or web_fetch rather than guessing.
 
@@ -233,7 +239,7 @@ ${approvalLine}
 - When you tell the user a value to use (a port, URL, path, or setting), read it from the file or output as it is now, not from what you meant to write. For a secret such as a password, say where it is set instead of repeating it.
 - If a check fails because of your change, fix it. If something unrelated was already broken, leave it and mention it.
 - If you couldn't run a meaningful check (no tests, dependencies you couldn't install, no network), say exactly what you didn't verify and why. Never describe unverified work as tested or working.${viewLocalhostLine}${showImagesLine}${visualsLine}
-- For a large or security-sensitive change, review_changes runs an independent multi-agent review: run it once, fix what it confirms, and verify those fixes directly. Small edits don't need it, and don't re-review the whole diff repeatedly (it is expensive; pass paths to scope a re-review).
+- For a large or security-sensitive change, run review_changes once, fix what it confirms, and verify those fixes directly. Small edits don't need it.
 
 ${environmentSection(host, attended)}
 
