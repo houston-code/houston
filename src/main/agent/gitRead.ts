@@ -122,6 +122,8 @@ export async function runReadGit(args: string[], cwd: string): Promise<string> {
 export interface GitCapture {
   /** True when git exited 0. */
   ok: boolean
+  /** git's exit code; null when it never ran or was killed (e.g. the timeout). */
+  code: number | null
   stdout: string
   stderr: string
 }
@@ -136,7 +138,7 @@ export async function runGitCapture(args: string[], cwd: string): Promise<GitCap
   try {
     hardening = await hardenedGitArgs(cwd)
   } catch (e) {
-    return { ok: false, stdout: '', stderr: (e as Error).message }
+    return { ok: false, code: null, stdout: '', stderr: (e as Error).message }
   }
   return new Promise((resolve) => {
     execFile(
@@ -144,7 +146,8 @@ export async function runGitCapture(args: string[], cwd: string): Promise<GitCap
       [...hardening, '--no-pager', ...args],
       { cwd, env: GIT_ENV, timeout: 15_000, maxBuffer: 16_000_000, windowsHide: true },
       (err, stdout, stderr) => {
-        resolve({ ok: !err, stdout: stdout || '', stderr: stderr || '' })
+        const code = !err ? 0 : typeof err.code === 'number' ? err.code : null
+        resolve({ ok: !err, code, stdout: stdout || '', stderr: stderr || '' })
       }
     )
   })

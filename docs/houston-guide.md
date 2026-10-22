@@ -1389,9 +1389,11 @@ middle of a line is ordinary text.
 Houston folds a small rules hierarchy into the system prompt each run: the global
 `~/.houston/AGENTS.md` first, then the project's own `AGENTS.md` / `CLAUDE.md` at
 its root, then any `AGENTS.md` / `CLAUDE.md` in subdirectories (shallowest
-first). Any rules file can pull in others with `@path` imports. When two of these
-files hold the same rules (a `CLAUDE.md` that links to `AGENTS.md`, or an identical
-copy), Houston loads them once.
+first). In a git repository, subdirectories the project's `.gitignore` excludes
+(dependencies, build output) are never searched for rules; outside git, well-known
+dependency and build folders are skipped. Any rules file can pull in others with
+`@path` imports. When two of these files hold the same rules (a `CLAUDE.md` that
+links to `AGENTS.md`, or an identical copy), Houston loads them once.
 
 All rules together are capped at 32,000 characters. When they run over, the global
 file is shortened (or left out) first, so your project's own rules still fit, and

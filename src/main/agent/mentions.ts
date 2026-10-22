@@ -1,7 +1,6 @@
 import { promises as fs } from 'node:fs'
 import { join, relative, sep } from 'node:path'
-import { SKIP_DIRS } from './search'
-import { runGitCapture } from './gitRead'
+import { FALLBACK_SKIP_DIRS, gitListFiles } from './fileScope'
 
 /**
  * Workspace file search for the composer's `@`-mention autocomplete.
@@ -42,10 +41,8 @@ export function clearMentionCache(): void {
  * list we could hardcode. Null when this is not a repo.
  */
 async function gitListing(workspace: string): Promise<string[] | null> {
-  const res = await runGitCapture(['ls-files', '--cached', '--others', '--exclude-standard'], workspace)
-  if (!res.ok) return null
-  const paths = res.stdout.split('\n').filter(Boolean)
-  return paths.length ? paths : null
+  const paths = await gitListFiles(workspace)
+  return paths?.length ? paths : null
 }
 
 /** Walk the tree ourselves, for a workspace git does not cover. */
@@ -66,7 +63,7 @@ async function walkListing(workspace: string): Promise<string[]> {
       if (e.name === '.git') continue
       const full = join(dir, e.name)
       if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name)) continue
+        if (FALLBACK_SKIP_DIRS.has(e.name)) continue
         await walk(full)
       } else if (e.isFile()) {
         // '/' on every OS, like the `git ls-files` listing: the directory entries and the
