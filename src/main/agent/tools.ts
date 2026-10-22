@@ -7,7 +7,6 @@ import type {
   DocumentAttachment,
   ElicitationField,
   ElicitationResult,
-  JSONSchema,
   PlanPayload,
   QuestionOption,
   ToolSchema
@@ -113,6 +112,7 @@ import {
 import { SCHEDULE_TOOL_NAMES, type ScheduledRunInfo } from './scheduler'
 import type { RenderMockup } from './mockupRender'
 import { LSP_TOOL_NAMES, makeLspTools, type LspToolAccess } from './lsp/tools'
+import { objectSchema, rootsOf, str } from './toolHelpers'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -421,11 +421,6 @@ function realpathWithinRoots(roots: string[], abs: string): boolean {
   return false // exceeded the walk bound → fail closed
 }
 
-/** The allowed roots for a tool call (workspace plus any added directories). */
-function rootsOf(ctx: ToolContext): string[] {
-  return ctx.roots && ctx.roots.length ? ctx.roots : [ctx.workspace]
-}
-
 /** Whether a path exists (file or directory). */
 async function exists(abs: string): Promise<boolean> {
   try {
@@ -434,11 +429,6 @@ async function exists(abs: string): Promise<boolean> {
   } catch {
     return false
   }
-}
-
-function str(args: Record<string, unknown>, key: string): string {
-  const v = args[key]
-  return typeof v === 'string' ? v : ''
 }
 
 function num(args: Record<string, unknown>, key: string): number | undefined {
@@ -463,13 +453,6 @@ function refOr(args: Record<string, unknown>, fallback: string): string {
   const n = idArg(args, 'number')
   return n ? `#${n}` : fallback
 }
-
-const objectSchema = (properties: JSONSchema, required: string[]): JSONSchema => ({
-  type: 'object',
-  properties,
-  required,
-  additionalProperties: false
-})
 
 const readFile: ToolDef = {
   kind: 'read',

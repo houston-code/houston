@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -616,5 +616,54 @@ describe('unconfined-shell override cannot skip an ask rule', () => {
     expect(prompts(events)).toHaveLength(1)
     expect(ran('echo hi')).toBe(true)
     expect(ran('echo bye')).toBe(true)
+  })
+})
+
+describe('hooks scoped to lsp_rename', () => {
+  // lsp_rename is gated and run as the apply_patch holding the server's edits; hooks
+  // whose matcher names lsp_rename must still run, and a hook matching both names once.
+  async function stubRename(): Promise<void> {
+    const { lspManager } = await import('./lsp/manager')
+    const { toUri } = await import('./lsp/uri')
+    const uri = toUri(join(realpathSync(ws), 'a.ts'))
+    const changes = { [uri]: [{ range: { start: { line: 0, character: 16 }, end: { line: 0, character: 19 } }, newText: 'bar' }] }
+    vi.spyOn(lspManager, 'clientFor').mockResolvedValue({
+      server: { spec: { name: 'Stub' } },
+      serverCapabilities: { renameProvider: true },
+      sync: async () => 1,
+      request: async (method: string) => (method === 'textDocument/rename' ? { changes } : null)
+    } as never)
+  }
+  const renameTurns: ProviderStreamEvent[][] = [
+    [
+      { type: 'tool_call', call: { id: 'r1', name: 'lsp_rename', arguments: { path: 'a.ts', line: 1, symbol: 'foo', new_name: 'bar' } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ],
+    [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+  ]
+
+  beforeEach(() => writeFileSync(join(ws, 'a.ts'), 'export function foo() {}\n'))
+
+  it('a PreToolUse hook on lsp_rename can block it before anything is written', async () => {
+    await stubRename()
+    h.settings.hooks = [{ event: 'PreToolUse', matcher: 'lsp_rename', command: 'guard' }]
+    h.static = { guard: { exitCode: 1, stdout: 'no renames today' } }
+    const { events, messages } = await run({ turns: renameTurns, onApproval: (_id, d) => d('allow') })
+    expect(events.some((e) => e.type === 'tool_approval')).toBe(false)
+    expect(String(messages.find((m) => m.role === 'tool')?.content)).toContain('no renames today')
+    expect(readFileSync(join(ws, 'a.ts'), 'utf8')).toContain('foo')
+  })
+
+  it('runs Post hooks on lsp_rename after it lands, and a hook matching both names only once', async () => {
+    await stubRename()
+    h.settings.hooks = [
+      { event: 'PostToolUse', matcher: 'lsp_rename', command: 'post-rename' },
+      { event: 'PostToolUse', matcher: '*', command: 'post-any' }
+    ]
+    const { messages } = await run({ turns: renameTurns, onApproval: (_id, d) => d('allow') })
+    expect(readFileSync(join(ws, 'a.ts'), 'utf8')).toBe('export function bar() {}\n')
+    expect(String(messages.find((m) => m.role === 'tool')?.content)).toMatch(/^Renamed "foo" to "bar"/)
+    expect(h.calls.filter((c) => c.command === 'post-rename')).toHaveLength(1)
+    expect(h.calls.filter((c) => c.command === 'post-any')).toHaveLength(1)
   })
 })

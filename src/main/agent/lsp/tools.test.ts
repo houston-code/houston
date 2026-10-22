@@ -31,6 +31,11 @@ function makeManager(env: Record<string, string> = {}): LspManager {
 
 const ctx = (): ToolContext => ({ workspace: root, roots: [root], allowNetwork: false, lsp: manager })
 const tool = (name: string) => getTool(name)!
+/** Open a file in the fake server, which only knows files it has been sent. */
+async function open(name: string): Promise<void> {
+  const abs = join(root, name)
+  await (await manager.clientFor(abs, [root]))!.sync(abs)
+}
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), 'houston-lsptools-')))
@@ -73,7 +78,7 @@ describe('navigation tools against a fake server', () => {
   })
 
   it('lsp_definition answers with path:line:col and the line', async () => {
-    await manager.noteRead(join(root, 'a.fk'), [root]) // the fake server only knows open files
+    await open('a.fk') // the fake server only knows open files
     const out = await tool('lsp_definition').execute({ path: 'b.fk', line: 2, symbol: 'greet' }, ctx())
     expect(out).toBe('a.fk:1:10  function greet() {}')
   })
@@ -82,13 +87,13 @@ describe('navigation tools against a fake server', () => {
     await manager.stopAll()
     manager = makeManager({ FAKE_LSP_DEF_IMPORT: '1' })
     writeFileSync(join(root, 'c.fk'), "import { greet } from './a'\ngreet()\n")
-    await manager.noteRead(join(root, 'a.fk'), [root])
+    await open('a.fk')
     const out = await tool('lsp_definition').execute({ path: 'c.fk', line: 2, symbol: 'greet' }, ctx())
     expect(out).toBe('a.fk:1:10  function greet() {}')
   })
 
   it('lsp_references lists real uses across open files', async () => {
-    await manager.noteRead(join(root, 'b.fk'), [root])
+    await open('b.fk')
     const out = await tool('lsp_references').execute({ path: 'a.fk', line: 1, symbol: 'greet' }, ctx())
     expect(out.split('\n')[0]).toBe('4 references:')
     expect(out).toContain('b.fk:2:1  greet()')
@@ -120,6 +125,14 @@ describe('navigation tools against a fake server', () => {
     expect(def).not.toContain(outside)
   })
 
+  it('shows a workspace file whose name starts with dots by its relative path', async () => {
+    writeFileSync(join(root, '..gen.fk'), 'greet()\n')
+    await open('..gen.fk')
+    const out = await tool('lsp_references').execute({ path: 'a.fk', line: 1, symbol: 'greet' }, ctx())
+    expect(out).toContain('\n..gen.fk:1:1  greet()')
+    expect(out).not.toContain(root)
+  })
+
   it("never quotes a credential file's lines", async () => {
     writeFileSync(join(root, 'id_rsa'), 'PRIVATE KEY MATERIAL\n')
     await manager.stopAll()
@@ -144,7 +157,7 @@ describe('navigation tools against a fake server', () => {
   })
 
   it('lsp_rename applies the server edits as a patch when run directly', async () => {
-    await manager.noteRead(join(root, 'b.fk'), [root])
+    await open('b.fk')
     const out = await tool('lsp_rename').execute({ path: 'a.fk', line: 1, symbol: 'greet', new_name: 'hello' }, ctx())
     expect(out).toMatch(/^Renamed "greet" to "hello": 4 edits in 2 files\. Applied patch/)
     expect(readFileSync(join(root, 'a.fk'), 'utf8')).toBe('function hello() {}\nconst x = hello()\n')

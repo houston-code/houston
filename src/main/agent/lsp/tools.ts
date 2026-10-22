@@ -15,11 +15,12 @@
  * so this module never imports tools.ts at runtime (tools.ts imports it).
  */
 import { promises as fs } from 'node:fs'
-import { isAbsolute, relative } from 'node:path'
+import { isAbsolute, relative, sep } from 'node:path'
 import type { ToolContext, ToolDef } from '../tools'
 import type { LspClient, Location, Position, Range } from './client'
 import { isSensitivePath } from '../sensitive-paths'
 import { fromUri, toUri } from './uri'
+import { objectSchema, rootsOf, str } from '../toolHelpers'
 
 export const LSP_TOOL_NAMES = [
   'lsp_definition',
@@ -77,18 +78,9 @@ const SYMBOL_KINDS = [
   'type parameter'
 ]
 
-function str(args: Record<string, unknown>, key: string): string {
-  const v = args[key]
-  return typeof v === 'string' ? v : ''
-}
-
 function int(args: Record<string, unknown>, key: string): number | undefined {
   const v = args[key]
   return typeof v === 'number' && Number.isInteger(v) ? v : undefined
-}
-
-function rootsOf(ctx: ToolContext): string[] {
-  return ctx.roots && ctx.roots.length ? ctx.roots : [ctx.workspace]
 }
 
 const POSITION_PROPS = {
@@ -150,7 +142,9 @@ async function target(
 /** How a path is shown: relative to the workspace when inside it. */
 function display(abs: string, ctx: ToolContext): string {
   const rel = relative(ctx.workspace, abs)
-  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : abs
+  // A parent-directory step, not any name starting with dots (`..generated.ts` is inside).
+  const outside = rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)
+  return rel && !outside ? rel : abs
 }
 
 /** Whether `abs` is inside the roots (symlinks resolved), the check every returned path passes. */
@@ -524,12 +518,6 @@ async function planRename(deps: LspToolDeps, args: Record<string, unknown>, ctx:
 
 // ---- The tools --------------------------------------------------------------
 
-const objectSchema = (properties: Record<string, unknown>, required: string[]) => ({
-  type: 'object' as const,
-  properties,
-  required,
-  additionalProperties: false
-})
 
 export function makeLspTools(deps: LspToolDeps): ToolDef[] {
   const definition: ToolDef = {

@@ -3405,6 +3405,11 @@ export async function startRun(
         // which the path below reports without asking the server anything.
         let call = modelCall
         let materializedNote = ''
+        // Hooks scoped to the model's tool name (a matcher of `lsp_rename`), which the
+        // concrete call's name wouldn't select. A hook that matches both (`*`, a glob)
+        // already runs for the concrete call below, so it is left out here to run once.
+        let ownHooks: typeof hooks = []
+        let ownPreContext = ''
         const declared = lookupTool(modelCall.name)
         if (
           declared?.materialize &&
@@ -3420,6 +3425,11 @@ export async function startRun(
             )
             call = { ...modelCall, name: m.name, arguments: m.arguments }
             materializedNote = m.note ?? ''
+            ownHooks = hooks.filter(
+              (h) =>
+                matchingHooks([h], h.event, modelCall.name).length > 0 &&
+                matchingHooks([h], h.event, m.name).length === 0
+            )
           } catch (e) {
             await flushResult({
               call: modelCall,
@@ -3430,6 +3440,27 @@ export async function startRun(
             })
             continue
           }
+          // PreToolUse hooks scoped to the model's tool: a block stops the call before
+          // anything is gated or written; their added context reaches the result.
+          const ownPre = await runHooks(
+            ownHooks,
+            'PreToolUse',
+            { tool: modelCall.name, input: modelCall.arguments },
+            workspace,
+            abort.signal
+          )
+          emitHookNotice(ownPre)
+          if (ownPre.blocked) {
+            await flushResult({
+              call: modelCall,
+              output: `Blocked by a PreToolUse hook:\n${ownPre.message || '(no output)'}`,
+              ok: false,
+              images: [],
+              documents: []
+            })
+            continue
+          }
+          ownPreContext = ownPre.additionalContext ?? ''
         }
 
         const tool = lookupTool(call.name)
@@ -3837,6 +3868,19 @@ export async function startRun(
           }
         }
 
+        if (ok && call !== modelCall) {
+          // PostToolUse hooks scoped to the model's tool, after the concrete call succeeded.
+          const ownPost = await runHooks(
+            ownHooks,
+            'PostToolUse',
+            { tool: modelCall.name, input: modelCall.arguments, result: output },
+            workspace,
+            abort.signal
+          )
+          emitHookNotice(ownPost)
+          if (ownPost.message) output += `\n\n[PostToolUse hook]\n${ownPost.message}`
+        }
+        if (ownPreContext) output += `\n\n[PreToolUse hook]\n${ownPreContext}`
         await flushResult({
           call: modelCall,
           output: ok && materializedNote ? `${materializedNote} ${output}` : output,
