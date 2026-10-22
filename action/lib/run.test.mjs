@@ -1,8 +1,8 @@
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import { exec as realExec } from './exec.mjs'
 import { profileDir, run } from './run.mjs'
 
@@ -12,9 +12,15 @@ const CLI = '/opt/houston/houston-cli.cjs'
 const API_KEY = 'sk-test-0123456789abcdef'
 const GH_TOKEN = 'ghs_test0123456789abcdef'
 
-function gitRepo() {
-  const dir = mkdtempSync(join(tmpdir(), 'h-run-'))
-  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { cwd: dir, encoding: 'utf8' }).trim()
+const gitIn = (dir) => (...a) =>
+  execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { cwd: dir, encoding: 'utf8' }).trim()
+
+// Built once per file and copied for each world: a fresh repository costs seven git spawns,
+// which on Windows runners is most of a test's time and all of its exposure to a slow runner.
+let template
+beforeAll(() => {
+  const dir = mkdtempSync(join(tmpdir(), 'h-run-template-'))
+  const git = gitIn(dir)
   git('init', '--quiet', '--initial-branch=main')
   writeFileSync(join(dir, 'app.js'), 'bug\n')
   git('add', '.')
@@ -23,7 +29,14 @@ function gitRepo() {
   git('switch', '--quiet', '--create', 'feature')
   writeFileSync(join(dir, 'app.js'), 'still a bug\n')
   git('commit', '--quiet', '-am', 'head')
-  return { dir, base, head: git('rev-parse', 'HEAD'), git }
+  template = { dir, base, head: git('rev-parse', 'HEAD') }
+}, 30_000)
+
+/** A private copy of the template checkout (on `feature`, one commit past `main`). */
+function gitRepo() {
+  const dir = mkdtempSync(join(tmpdir(), 'h-run-'))
+  cpSync(template.dir, dir, { recursive: true, preserveTimestamps: true })
+  return { dir, base: template.base, head: template.head, git: gitIn(dir) }
 }
 
 function resultLine(o = {}) {
@@ -180,7 +193,9 @@ describe('review', () => {
   })
 })
 
-describe('fix-ci', () => {
+// Each run here makes real commits (status, add, commit, switch, then the checks' own git
+// calls): around 1s on a Windows runner, and a busy runner has stretched that past 5s.
+describe('fix-ci', { timeout: 30_000 }, () => {
   const failed = (r, o = {}) => ({
     action: 'completed',
     repository: { default_branch: 'main' },

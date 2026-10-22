@@ -232,7 +232,10 @@ describe('releaseProblems', () => {
 //                 v0.9.0) ─ "(#58)" squash backport ─ #60 release-pr/v0.9.1 (R1) ─ [#59]
 //
 // origin/* refs point at the branch tips (the workflows fetch them before running the script).
-describe('release-source CLI', () => {
+// Every CLI test spawns the script (a node start plus a dozen or more git calls) and most
+// move refs or commit first: about 1s each on a Windows runner, and a busy runner has
+// stretched one past 6s.
+describe('release-source CLI', { timeout: 30_000 }, () => {
   const script = resolve(dirname(fileURLToPath(import.meta.url)), 'release-source.mjs')
   let repo
   const sh = (...args) => execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim()
