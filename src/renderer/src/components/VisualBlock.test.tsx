@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Markdown } from './Markdown'
 import { VisualsContext } from '../lib/visuals'
-import { clearMermaidCache, liveFrameSlots, MAX_LIVE_FRAMES } from '../lib/visuals'
+import { clearMermaidCache, liveFrameSlots, MAX_DIAGRAM_HEIGHT, MAX_LIVE_FRAMES } from '../lib/visuals'
 
 /**
  * Inline visuals in a reply: which fences render, the Rendered/Code toggle, the
@@ -95,6 +95,42 @@ describe('mermaid blocks', () => {
       document.documentElement.dataset.theme = 'light'
     })
     await waitFor(() => expect(renderMermaid).toHaveBeenLastCalledWith('flowchart TD\n  T --> U', 'light'))
+  })
+})
+
+describe('mermaid sizing', () => {
+  it('shows a small diagram at its natural size, not stretched to the column', async () => {
+    renderMermaid.mockResolvedValue({
+      svg: '<svg width="100%" xmlns="http://www.w3.org/2000/svg" style="max-width: 97.5px;" viewBox="0 0 97.5 174"></svg>'
+    })
+    md('```mermaid\ngraph TD\n  A[Start] --> B[End]\n```')
+    const img = await screen.findByAltText('Diagram from the reply')
+    expect(img.getAttribute('width')).toBe('98')
+    expect(img.getAttribute('height')).toBe('174')
+    expect(decodeURIComponent(img.getAttribute('src')!)).toContain('<svg width="98" height="174"')
+    expect(screen.queryByRole('button', { name: 'Expand' })).not.toBeInTheDocument()
+  })
+
+  it('caps a tall diagram, scrolling inside its box until expanded', async () => {
+    renderMermaid.mockResolvedValue({ svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 3000"></svg>' })
+    md('```mermaid\ngraph TD\n  Tall --> Diagram\n```')
+    const img = await screen.findByAltText('Diagram from the reply')
+    const box = img.parentElement!
+    expect(box.classList.contains('md-visual--capped')).toBe(true)
+    expect(box.style.maxHeight).toBe(`${MAX_DIAGRAM_HEIGHT}px`)
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }))
+    expect(box.classList.contains('md-visual--capped')).toBe(false)
+    expect(box.style.maxHeight).toBe('')
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse' }))
+    expect(box.classList.contains('md-visual--capped')).toBe(true)
+  })
+
+  it('shows an SVG with no size of its own as it came', async () => {
+    renderMermaid.mockResolvedValue({ svg: '<svg width="100%"></svg>' })
+    md('```mermaid\ngraph TD\n  No --> Size\n```')
+    const img = await screen.findByAltText('Diagram from the reply')
+    expect(img.hasAttribute('width')).toBe(false)
+    expect(decodeURIComponent(img.getAttribute('src')!)).toContain('<svg width="100%">')
   })
 })
 

@@ -2431,6 +2431,19 @@ h6.md-h {
 .md-visual--figure img {
   width: min(100%, 720px);
 }
+/* A diagram taller than the cap scrolls inside its box until expanded. */
+.md-visual--capped {
+  overflow-y: auto;
+  align-items: flex-start;
+}
+.md-visual--capped:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.md-visual__expand {
+  display: block;
+  margin: 0 auto 10px;
+}
 .md-visual--loading {
   padding: 22px 14px;
   color: var(--text-dim);
