@@ -1348,8 +1348,8 @@ failed check here means re-download, not a blocked update.
 
 ## Roadmap
 
-What's intentionally not done yet (a non-goal for a local, bring-your-own-model app,
-or a larger effort) is tracked in [ROADMAP.md](./ROADMAP.md) with the rationale for
+What's not done yet (deferred increments and bigger directions planned for later)
+is tracked in [ROADMAP.md](./ROADMAP.md) with the rationale for
 each.
 
 ## License

@@ -2,9 +2,10 @@
 
 Houston covers a broad span of coding-agent features (see the **Features** list in
 the [README](./README.md)). This file tracks the items that are intentionally
-**not done yet**: either a non-goal for a local, bring-your-own-model app, or a
-larger effort than the work so far has covered. Each notes *why*
-it's deferred and roughly *what* it would take, so nothing is silently dropped.
+**not done yet**: increments on what already ships (*Deferred*), and bigger
+directions that each need a new surface, integration, or service (*Later*). Each
+notes *why* it's deferred and roughly *what* it would take, so nothing is silently
+dropped.
 
 ## Deferred: larger effort
 
@@ -259,8 +260,9 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   as its agent (sessions, modes, approvals, plans, streamed tool calls and diffs,
   session load). Still open: routing reads and writes through the editor's `fs/*`
   methods so edits land in unsaved buffers, running commands in the editor's
-  terminal (`terminal/*`), advertising Houston's slash commands
-  (`available_commands_update`), and per-editor extensions for editors without ACP.
+  terminal (`terminal/*`), and advertising Houston's slash commands
+  (`available_commands_update`). Extensions for editors without ACP are under
+  *Later*.
 
 - **Integrated-terminal enhancements.** The in-app terminal ships today as a
   resizable, multi-tab panel of full PTY sessions (interactive programs, colours,
@@ -282,49 +284,69 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
     user has `cd`'d. *Why deferred:* needs an escape-sequence handler and shell-side
     integration, and degrades unevenly across shells.
 
-## Out of scope: non-goals
+## Later
 
-These are capabilities that conflict with Houston's **bring-your-own-model**
-stance or require a hosted backend. They're
-deliberately **not** on the roadmap (recorded here so the gap analysis is honest
-and nothing is silently dropped):
+Directions Houston intends to take, each a product-scale piece of work rather than an
+increment on an existing feature. Running locally with the user's own model keys
+stays the default; anything hosted would be opt-in.
 
-- **Subscription / OAuth sign-in.**
-  Houston is **bring-your-own-API-key** by design: keys are encrypted with the OS
-  credential store and used directly (or, for Bedrock and Vertex, your cloud
-  account's own credentials). Subscription sign-in (vendor OAuth, included usage,
-  workspace RBAC) is a different account / billing model that doesn't fit a
-  BYO-key local app.
+- **Subscription / OAuth sign-in.** Sign in with an existing AI subscription or
+  provider account instead of pasting an API key. API keys stay the default and are
+  stored encrypted in the OS credential store (Electron `safeStorage`), and Bedrock
+  and Vertex keep using the cloud account's own credentials. *Why later:* each
+  provider needs its own registered OAuth client and sign-in flow, a token store
+  with refresh and revocation, and terms that permit a third-party client to use the
+  subscription; which providers to support first is still open.
 
-- **Cloud task delegation** (parallel/best-of-N attempts, isolated cloud
-  sandboxes, applying cloud-computed diffs). Requires a hosted execution backend
-  and account; Houston runs entirely on the user's machine.
+- **Remote and parallel task execution.** Run a task on a machine the user controls
+  (an SSH host or their own cloud VM) instead of the local one, and run best-of-N
+  attempts at one task side by side in separate worktrees, then pick or apply the
+  winning diff. *Why later:* remote runs need a transport for the agent host, remote
+  sandboxing, and a way to sync the diff back; parallel attempts need a comparison
+  and apply UI on top of the existing worktree support.
 
-- **Hosted GitHub bot / "install GitHub app".** A *server-side* PR-creating bot,
-  hosted code review that runs on GitHub's infrastructure, or an "install GitHub
-  app" OAuth flow. *What ships instead:* first-class pull-request tools
-  (`gh_pr_create` / `gh_pr_list` / `gh_pr_view` / `gh_pr_comment` /
-  `gh_pr_review` / `gh_pr_checkout` / `gh_pr_checks` / `gh_pr_merge` /
-  `gh_pr_set_state`), issue tools (`gh_issue_list` / `gh_issue_view` /
-  `gh_issue_create` / `gh_issue_comment` / `gh_issue_set_state`), CI-run tools
-  (`gh_run_list` / `gh_run_view`), `gh_repo_create` for new repositories, and the
-  `pr_sweep` board (batch-author PRs from tasks, or
-  process a batch of existing PRs), all driving the user's local `gh` CLI: no
-  hosted backend, no app-level token storage (`gh` owns auth), which keeps
-  Houston entirely on the user's machine. The remaining non-goal is specifically the
-  *hosted* bot/app side, which needs a multi-tenant backend and an OAuth app
-  registration that don't fit a single-user desktop app.
+- **GitHub automation in the user's own CI.** Houston reaching GitHub today means the
+  `gh_*` tools (PRs, reviews, merges, issues, CI runs, repo creation) and the
+  `pr_sweep` board, all driving the user's local `gh` CLI, which owns auth. The next
+  step is a GitHub Action that runs the headless CLI (`houston -p`) in the user's own
+  workflows, for example to review a PR or answer an issue when mentioned, using the
+  repository's own secrets. A Houston-hosted GitHub App that installs into
+  repositories and acts on them without the user's own CI would follow, on top of the
+  hosted service below. *Why later:* the action needs packaging, a permission model
+  for unattended runs, and guidance on which events are safe to trigger it from; the
+  app also needs an OAuth app registration and a multi-tenant backend.
 
-- **Per-editor extensions.** Houston is a standalone GUI desktop app with its own
-  themes, status bar, and shortcuts; an editor-embedded surface built per editor is a
-  different product. Editors that speak ACP get Houston through `houston --acp`
-  instead (see the IDE integration entry above).
+- **Per-editor extensions.** Editors that speak ACP already run Houston through
+  `houston --acp` (see IDE integration under *Deferred: polish*). For editors that
+  don't, a VS Code or JetBrains extension would hand the editor's open file,
+  selection, and diagnostics to Houston and show its diffs in the editor's own diff
+  view. *Why later:* each editor is its own extension and release channel to build
+  and maintain.
 
-- **Record & Replay / Computer-Use skill capture.** Turning a demonstrated
-  desktop workflow into a reusable skill needs OS-level computer-use automation,
-  outside a coding agent's remit.
+- **Computer use and recorded workflows.** A tool that lets the agent see and drive
+  a desktop app (screenshots plus mouse and keyboard input), for example to test the
+  app it is building, and later, turning a demonstrated workflow into a reusable
+  skill. *Why later:* it needs per-OS capture and input injection, OS permission
+  prompts (macOS Accessibility and Screen Recording), and its own consent model,
+  since input injection can act anywhere on the machine.
 
-- **Enterprise / admin governance.** Org-managed controls such as forced login
-  method, allowed-web-search-mode policy, server-side feature-flag toggles, and
-  retention/residency enforcement assume a managed multi-tenant backend; Houston
-  is single-user and local.
+- **Organization-managed settings beyond permission rules.** A managed policy already
+  ships: an administrator can place a machine-wide `managed-settings.json` whose
+  *deny* and *ask* rules outrank every user's own (see the README). Natural next
+  controls are locking which providers and models may be used, which sign-in methods
+  are allowed, and which web search modes are permitted, plus local retention limits
+  on saved conversations. Central administration (remote feature flags, usage
+  dashboards across a team, and retention or residency enforced server-side) would
+  follow on top of the hosted service below. *Why later:* each control needs a
+  tighten-only meaning that composes with the user's settings, the sign-in control
+  depends on subscription sign-in above, and central administration needs a backend
+  that devices report to.
+
+- **Hosted Houston service.** An optional service Houston operates: accounts, hosted
+  execution sandboxes for cloud tasks, and included model usage billed through
+  Houston. It is also the base the hosted GitHub App and central administration
+  above would build on. *Why later:* it means running a multi-tenant backend with
+  billing, abuse prevention, and a security and compliance program, and it changes
+  the privacy story (today Houston itself receives none of the user's code or
+  conversations), so it has to stay strictly opt-in, with the local app fully
+  functional without it.
