@@ -239,6 +239,17 @@ describe('Sidebar — expanded rendering', () => {
     expect(onSetUnread).toHaveBeenLastCalledWith('a', true)
   })
 
+  it('offers Mark as unread on the open chat, which shows no unread dot', () => {
+    const chatStatus: ChatStatusMap = { a: { running: false, pending: [], unread: { since: 1, outcome: 'done' } } }
+    render(
+      <Sidebar
+        {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], chatStatus, currentId: 'a', onSetUnread: vi.fn() })}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Alpha' }))
+    expect(screen.getByRole('button', { name: /Mark as unread/ })).toBeInTheDocument()
+  })
+
   it('does not offer read toggles on a chat waiting for input', () => {
     const onSetUnread = vi.fn()
     const chatStatus: ChatStatusMap = { a: { running: true, pending: [{ kind: 'question' }] } }

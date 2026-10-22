@@ -129,9 +129,46 @@ describe('chat attention', () => {
       ok: true,
       output: 'https://github.com/o/r/pull/412'
     })
-    t.attn.noteEvent('c', { runId: 'r1', type: 'limit', reason: 'max-steps' })
     t.attn.noteEvent('c', done())
-    expect(t.store.get('c')).toMatchObject({ outcome: 'limit', note: 'Opened PR #412' })
+    expect(t.store.get('c')).toMatchObject({ outcome: 'done', note: 'Opened PR #412' })
+    t.attn.setViewing(1, 'c', true)
+    t.attn.setViewing(1, null, true)
+    t.start('c', 'r2')
+    t.attn.noteEvent('c', { runId: 'r2', type: 'limit', reason: 'max-steps' })
+    t.attn.noteEvent('c', done('end_turn', 'r2'))
+    expect(t.store.get('c')).toMatchObject({ outcome: 'limit', note: 'Stopped at step limit' })
+  })
+
+  it('keeps the first unseen anchor when more turns finish before the user looks', () => {
+    const t = setup()
+    t.start('c')
+    t.attn.noteEvent('c', done())
+    // A queued follow-up runs straight after: its start is never seen on its own.
+    t.attn.noteEvent('c', done('end_turn', 'r1'))
+    expect(t.store.get('c')?.anchor).toBe(4)
+  })
+
+  it('names which limit a run stopped at', () => {
+    const t = setup()
+    t.start('c')
+    t.attn.noteEvent('c', { runId: 'r1', type: 'limit', reason: 'max-output' })
+    t.attn.noteEvent('c', done())
+    expect(t.store.get('c')).toMatchObject({ outcome: 'limit', note: 'Stopped: reply hit the output limit' })
+  })
+
+  it("doesn't caption a failure with a PR the run opened", () => {
+    const t = setup()
+    t.start('c')
+    t.attn.noteEvent('c', {
+      runId: 'r1',
+      type: 'tool_result',
+      callId: 'x',
+      name: 'gh_pr_create',
+      ok: true,
+      output: 'https://github.com/o/r/pull/9'
+    })
+    t.attn.noteEvent('c', done('error'))
+    expect(t.store.get('c')).toEqual({ since: 1000, outcome: 'error', anchor: 4 })
   })
 
   it("ignores events from a run that isn't the chat's live one", () => {

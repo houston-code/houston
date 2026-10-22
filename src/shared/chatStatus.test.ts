@@ -116,6 +116,7 @@ describe('statusSignal and signalReason', () => {
     expect(signalReason(unread('error', 'boom'), 'error')).toBe('Failed: boom')
     expect(signalReason(unread('error'), 'error')).toBe('Failed')
     expect(signalReason(unread('limit'), 'unread')).toBe('Stopped at step limit')
+    expect(signalReason(unread('limit', 'Stopped: no progress'), 'unread')).toBe('Stopped: no progress')
     expect(signalReason(unread('manual'), 'unread')).toBe('Marked unread')
     expect(signalReason(unread('done'), 'unread')).toBe('Finished')
     expect(signalReason(unread('done', 'Opened PR #4'), 'unread')).toBe('Opened PR #4')

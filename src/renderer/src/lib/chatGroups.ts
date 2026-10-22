@@ -130,9 +130,15 @@ export function buildSidebarSections(
     return value
   }
   const byRecency = bySectionOrder(recency)
-  const flagged = (c: ConversationMeta): boolean =>
-    !!wantsAttention &&
-    (wantsAttention(c.id) || descendantsOf(c.id, children).some((d) => wantsAttention(d.id)))
+  // Decided once per chat, not on every comparison (each walks the chat's subtree).
+  const flaggedIds = new Set(
+    wantsAttention
+      ? conversations
+          .filter((c) => wantsAttention(c.id) || descendantsOf(c.id, children).some((d) => wantsAttention(d.id)))
+          .map((c) => c.id)
+      : []
+  )
+  const flagged = (c: ConversationMeta): boolean => flaggedIds.has(c.id)
   const order = wantsAttention
     ? (a: ConversationMeta, b: ConversationMeta): number =>
         Number(flagged(b)) - Number(flagged(a)) || byRecency(a, b)

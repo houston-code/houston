@@ -58,14 +58,22 @@ export interface ChatAttention {
   forget(conversationId: string): void
 }
 
+/** The meta line for each way a run can stop at a limit. */
+const LIMIT_NOTE: Record<Extract<AgentEvent, { type: 'limit' }>['reason'], string> = {
+  'max-steps': 'Stopped at step limit',
+  'max-output': 'Stopped: reply hit the output limit',
+  stalled: 'Stopped: no progress'
+}
+
 export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
   const now = deps.now ?? Date.now
   const viewers = new Map<number, Viewer>()
   // Where each live run's output starts in its conversation's log (the log's length
   // when the run began), for the unread anchor.
   const runStart = new Map<string, number>()
-  // What the live run has said about how it is ending, before its final event.
-  const ending = new Map<string, { limit?: boolean; note?: string }>()
+  // What the live run has said about how it is ending, before its final event: the
+  // limit it stopped at (as the line to show), and a PR it opened or merged.
+  const ending = new Map<string, { limit?: string; note?: string }>()
   let running = new Set<string>()
 
   const merge = (live: ChatStatusMap): ChatStatusMap => {
@@ -85,7 +93,10 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
     [...viewers.values()].some((v) => v.focused && v.conversationId === id)
 
   const finish = (id: string, outcome: 'done' | 'limit' | 'error', note?: string): void => {
-    const anchor = runStart.get(id)
+    // A chat already unread keeps its earlier anchor: the unseen part starts at the
+    // first turn the user missed, not the latest (several can finish while they're
+    // away, e.g. a queued follow-up, whose run start is never seen separately).
+    const anchor = deps.store.get(id)?.anchor ?? runStart.get(id)
     runStart.delete(id)
     ending.delete(id)
     if (isViewed(id)) return
@@ -120,7 +131,7 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
       if (live !== null && live !== e.runId) return
       switch (e.type) {
         case 'limit':
-          ending.set(conversationId, { ...ending.get(conversationId), limit: true })
+          ending.set(conversationId, { ...ending.get(conversationId), limit: LIMIT_NOTE[e.reason] })
           return
         case 'tool_result': {
           const pr = prNoticeFromToolResult(e.name, e.ok, e.output)
@@ -141,8 +152,11 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
             return
           }
           const how = ending.get(conversationId)
-          if (e.stopReason === 'error') finish(conversationId, 'error', how?.note)
-          else finish(conversationId, how?.limit ? 'limit' : 'done', how?.note)
+          // A PR note describes what's new, not why the run failed, so a failure
+          // carries none (the error event, when there is one, names the cause).
+          if (e.stopReason === 'error') finish(conversationId, 'error')
+          else if (how?.limit) finish(conversationId, 'limit', how.limit)
+          else finish(conversationId, 'done', how?.note)
           return
         }
         default:

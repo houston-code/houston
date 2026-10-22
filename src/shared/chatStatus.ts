@@ -149,7 +149,7 @@ export function signalReason(status: ChatLiveStatus | undefined, signal: ChatSig
     case 'error':
       return u.note ? `Failed: ${u.note}` : 'Failed'
     case 'limit':
-      return 'Stopped at step limit'
+      return u.note ?? 'Stopped at step limit'
     case 'manual':
       return 'Marked unread'
     case 'done':

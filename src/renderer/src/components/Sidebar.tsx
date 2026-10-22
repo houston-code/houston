@@ -255,8 +255,10 @@ function ConvRow({
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
+  // The open chat shows no unread dot (it's being looked at), so its toggle offers
+  // Mark as unread, matching what the row shows.
+  const isUnread = props.chatStatus[conv.id]?.unread !== undefined && !active
   // A chat waiting on the user can't be marked read or unread: answering clears it.
-  const isUnread = props.chatStatus[conv.id]?.unread !== undefined
   const canToggleRead = !!props.onSetUnread && (props.chatStatus[conv.id]?.pending.length ?? 0) === 0
   // Editors are probed lazily the first time this row's menu opens (null = not yet).
   const [editors, setEditors] = useState<EditorStatus[] | null>(null)
