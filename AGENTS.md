@@ -187,6 +187,11 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   in a context holding file, shell, and network tools. The nonce fence and the classifier
   around it are not advisory; keep them non-optional, and route any new tool that returns
   such text through `presentUntrusted` / `presentUntrustedInline`.
+- `src/main/agent/lsp/` — language servers run project code without an approval prompt,
+  so they launch only through the sandbox (off where it can't confine them unless the user
+  opts in), every location a server returns must pass `resolveInRoots`, credential-file
+  lines are never quoted, a server's `workspace/applyEdit` is always refused, and
+  `lsp_rename` reaches disk only as an `apply_patch` through the normal write gate.
 
 `SECURITY.md` and `docs/sandboxing.md` describe the guarantees these modules are meant to
 provide. If a change alters one, update them in the same PR.
