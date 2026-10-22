@@ -9,6 +9,7 @@
 //   FAKE_LSP_OUTSIDE=<abs>   definition/references/rename also point at this path
 //   FAKE_LSP_LOG=<abs>       append every received method to this file
 //   FAKE_LSP_NO_VERSION=1    publish diagnostics without a version
+//   FAKE_LSP_INIT_DELAY_MS   delay before answering initialize
 //
 // Diagnostics: every line containing ERROR yields an error, every line containing WARN
 // yields a warning, at the column where the word starts.
@@ -123,6 +124,10 @@ function handle(msg) {
   const p = msg.params ?? {}
   switch (msg.method) {
     case 'initialize':
+      if (env.FAKE_LSP_INIT_DELAY_MS && !msg.delayed) {
+        setTimeout(() => handle({ ...msg, delayed: true }), Number(env.FAKE_LSP_INIT_DELAY_MS))
+        return
+      }
       return send({
         id: msg.id,
         result: {

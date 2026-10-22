@@ -211,13 +211,19 @@ export class LspManager {
       this.entries.set(key, created)
       entry = created
     }
-    this.touch(entry)
+    // The idle clock runs only once the server is up: armed before the start, a slow
+    // start (a cold project load, a busy machine) could outlast it and be stopped
+    // halfway through initializing.
+    if (entry.idleTimer) clearTimeout(entry.idleTimer)
+    entry.idleTimer = null
     try {
       await entry.client.start()
     } catch {
       return null
     }
-    return entry.client.state === 'ready' ? entry.client : null
+    if (entry.client.state !== 'ready') return null
+    this.touch(entry)
+    return entry.client
   }
 
   /** Running clients whose workspace is `roots`. */

@@ -291,6 +291,15 @@ describe('LspManager', () => {
     expect(await m.clientFor(file, [root])).not.toBeNull()
   })
 
+  it('does not count a slow start against the idle timeout', async () => {
+    // Initialize takes longer than the idle timeout; the server must still come up.
+    const m = makeManager({ FAKE_LSP_INIT_DELAY_MS: '150' }, { idleTimeoutMs: 40 })
+    const file = join(root, 'a.fk')
+    writeFileSync(file, 'x\n')
+    const c = await m.clientFor(file, [root])
+    expect(c?.state).toBe('ready')
+  })
+
   it('stops a server after it sits idle', async () => {
     const m = makeManager({}, { idleTimeoutMs: 50 })
     const file = join(root, 'a.fk')
