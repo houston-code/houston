@@ -7,6 +7,7 @@ import {
   MAX_SVG_CHARS,
   clampFrameHeight,
   diagramIsTall,
+  diagramScale,
   liveFrameSlots,
   naturalSizeSvg,
   renderMermaidCached,
@@ -70,7 +71,8 @@ function MermaidView({ source, value }: { source: string; value: string }): JSX.
 
 /**
  * A rendered diagram at its natural size: never wider than it was drawn, scaled down
- * to fit the column, and capped in height (scrolling inside its box) until expanded.
+ * to fit the column (a very wide one only so far, then it scrolls sideways), and
+ * capped in height (scrolling inside its box) until expanded.
  */
 function Diagram({ svg }: { svg: string }): JSX.Element {
   const sized = useMemo(() => naturalSizeSvg(svg), [svg])
@@ -93,19 +95,24 @@ function Diagram({ svg }: { svg: string }): JSX.Element {
   }, [])
   const tall = sized !== null && diagramIsTall(sized, columnWidth)
   const capped = tall && !expanded
+  // Wider than the column even at the smallest scale: draw it at that scale and scroll.
+  const scrollWidth = sized && columnWidth > 0 ? Math.ceil(sized.width * diagramScale(sized, columnWidth)) : 0
+  const wide = scrollWidth > columnWidth
+  const scrolls = capped || wide
   return (
     <div className="md-visual md-visual--diagram-wrap">
       <div
         ref={box}
         className={`md-visual--diagram${capped ? ' md-visual--capped' : ''}`}
         style={capped ? { maxHeight: MAX_DIAGRAM_HEIGHT } : undefined}
-        tabIndex={capped ? 0 : undefined}
-        aria-label={capped ? 'Diagram, scroll to see all of it' : undefined}
+        tabIndex={scrolls ? 0 : undefined}
+        aria-label={scrolls ? 'Diagram, scroll to see all of it' : undefined}
       >
         <img
           src={svgDataUrl(sized?.svg ?? svg)}
           width={sized?.width}
           height={sized?.height}
+          style={wide ? { width: scrollWidth, maxWidth: 'none' } : undefined}
           alt="Diagram from the reply"
         />
       </div>

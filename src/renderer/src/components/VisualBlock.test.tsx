@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Markdown } from './Markdown'
 import { VisualsContext } from '../lib/visuals'
-import { clearMermaidCache, liveFrameSlots, MAX_DIAGRAM_HEIGHT, MAX_LIVE_FRAMES } from '../lib/visuals'
+import { clearMermaidCache, liveFrameSlots, MAX_DIAGRAM_HEIGHT, MAX_LIVE_FRAMES, MIN_DIAGRAM_SCALE } from '../lib/visuals'
 
 /**
  * Inline visuals in a reply: which fences render, the Rendered/Code toggle, the
@@ -123,6 +123,28 @@ describe('mermaid sizing', () => {
     expect(box.style.maxHeight).toBe('')
     fireEvent.click(screen.getByRole('button', { name: 'Collapse' }))
     expect(box.classList.contains('md-visual--capped')).toBe(true)
+  })
+
+  it('scrolls a very wide diagram sideways instead of shrinking it past readable', async () => {
+    // jsdom lays nothing out: give the diagram box an 800px content width.
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(828)
+    try {
+      renderMermaid.mockImplementation(async (source: string) => ({
+        svg: source.includes('Wide')
+          ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4000 70"></svg>'
+          : '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 70"></svg>'
+      }))
+      md('```mermaid\ngraph LR\n  Wide --> Chain\n```\n\n```mermaid\ngraph LR\n  Fits --> Column\n```')
+      const [wide, fits] = await screen.findAllByAltText('Diagram from the reply')
+      expect(wide.style.width).toBe(`${4000 * MIN_DIAGRAM_SCALE}px`)
+      expect(wide.style.maxWidth).toBe('none')
+      expect(wide.parentElement!.tabIndex).toBe(0)
+      // One that fits at a readable scale just shrinks to the column.
+      expect(fits.style.width).toBe('')
+      expect(fits.parentElement!.hasAttribute('tabindex')).toBe(false)
+    } finally {
+      width.mockRestore()
+    }
   })
 
   it('shows an SVG with no size of its own as it came', async () => {
