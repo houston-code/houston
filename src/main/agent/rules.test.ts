@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { GLOBAL_RULES_LABEL, MAX_RULES_CHARS, importTargets, loadProjectRules } from './rules'
+import {
+  GLOBAL_RULES_LABEL,
+  MAX_RULES_CHARS,
+  fitRules,
+  importTargets,
+  loadProjectRules,
+  neutralizeImports
+} from './rules'
 
 let workspace: string
 let home: string
@@ -119,6 +126,114 @@ describe('loadProjectRules', () => {
       writeFileSync(join(workspace, 'AGENTS.md'), '@~/.claude/CLAUDE.md')
       const rules = await loadProjectRules(workspace, { home })
       expect(rules.text).not.toContain('OTHER-TOOL-RULES')
+    })
+  })
+
+  describe('size cap', () => {
+    it('shrinks the global file first so project rules still fit', async () => {
+      writeFileSync(join(globalDir, 'AGENTS.md'), 'G'.repeat(MAX_RULES_CHARS + 1000))
+      writeFileSync(join(workspace, 'AGENTS.md'), 'PROJECT-RULE-KEPT')
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.text).toContain('PROJECT-RULE-KEPT')
+      expect(rules.files).toEqual([GLOBAL_RULES_LABEL, 'AGENTS.md'])
+      expect(rules.truncated).toEqual([GLOBAL_RULES_LABEL])
+      expect(rules.text).toContain(`shortened or left out: ${GLOBAL_RULES_LABEL}`)
+      expect(rules.text.length).toBeLessThanOrEqual(MAX_RULES_CHARS)
+    })
+
+    it('reports nothing truncated when everything fits', async () => {
+      writeFileSync(join(globalDir, 'AGENTS.md'), 'Global.')
+      writeFileSync(join(workspace, 'AGENTS.md'), 'Project.')
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.truncated).toEqual([])
+      expect(rules.text).not.toContain('[Rules over')
+    })
+  })
+
+  describe('fitRules', () => {
+    const g = (n: number) => ({ label: GLOBAL_RULES_LABEL, block: 'g'.repeat(n) })
+    const p = (label: string, n: number) => ({ label, block: label[0].repeat(n) })
+
+    it('drops the global block when too little of it would be left', () => {
+      const r = fitRules([g(300), p('AGENTS.md', 900)], 1000)
+      expect(r.files).toEqual(['AGENTS.md'])
+      expect(r.truncated).toEqual([GLOBAL_RULES_LABEL])
+      expect(r.text.startsWith('A'.repeat(900))).toBe(true)
+    })
+
+    it('cuts the tail when project and nested rules alone exceed the cap', () => {
+      const r = fitRules([g(500), p('AGENTS.md', 600), p('pkg/AGENTS.md', 600)], 1000)
+      expect(r.files).toEqual(['AGENTS.md', 'pkg/AGENTS.md'])
+      expect(r.truncated).toEqual([GLOBAL_RULES_LABEL, 'pkg/AGENTS.md'])
+      expect(r.text).toContain('[truncated]')
+      expect(r.text.length).toBeLessThanOrEqual(1000)
+    })
+
+    it('lists a fully dropped tail source as truncated but not as loaded', () => {
+      const r = fitRules([p('AGENTS.md', 1000), p('pkg/AGENTS.md', 50)], 1000)
+      expect(r.files).toEqual(['AGENTS.md'])
+      // AGENTS.md is shortened to leave room for the cut note; pkg is left out.
+      expect(r.truncated).toEqual(['AGENTS.md', 'pkg/AGENTS.md'])
+    })
+
+    it('leaves a lone oversized global block to the tail cut', () => {
+      const r = fitRules([g(1500)], 1000)
+      expect(r.files).toEqual([GLOBAL_RULES_LABEL])
+      expect(r.truncated).toEqual([GLOBAL_RULES_LABEL])
+      expect(r.text.startsWith('g'.repeat(800))).toBe(true)
+    })
+
+    it('keeps the text, cut note included, within the cap', () => {
+      for (const parts of [
+        [g(500), p('AGENTS.md', 600), p('pkg/AGENTS.md', 600)],
+        [g(300), p('AGENTS.md', 900)],
+        [g(1500)],
+        [p('AGENTS.md', 1000), p('pkg/AGENTS.md', 50)],
+        [g(5000), p('AGENTS.md', 400), p('a/AGENTS.md', 400), p('b/AGENTS.md', 400)]
+      ]) {
+        const r = fitRules(parts, 1000)
+        expect(r.text.length).toBeLessThanOrEqual(1000)
+        expect(r.text).toContain('[Rules over the 1000-character limit')
+      }
+    })
+
+    it('drops a source when only a few characters of it would fit', () => {
+      const r = fitRules([p('AGENTS.md', 790), p('pkg/AGENTS.md', 400)], 1000)
+      expect(r.files).toEqual(['AGENTS.md'])
+      expect(r.truncated).toEqual(['pkg/AGENTS.md'])
+      expect(r.text).not.toContain('pkg/AGENTS.md\n') // no stray fragment of its block
+    })
+  })
+
+  describe('concurrent expansion', () => {
+    it('expands correctly while other expansions run at the same time', async () => {
+      mkdirSync(join(workspace, 'docs'), { recursive: true })
+      for (const n of ['a', 'b', 'c']) writeFileSync(join(workspace, 'docs', `${n}.md`), `CONTENT-${n}`)
+      writeFileSync(join(workspace, 'AGENTS.md'), 'see @./docs/a.md and @./docs/b.md and @./docs/c.md end')
+      const runs = await Promise.all(
+        Array.from({ length: 8 }, (_, i) =>
+          i % 2 ? loadProjectRules(workspace, opts()) : Promise.resolve(neutralizeImports('x @~/y.md z')).then(() => loadProjectRules(workspace, opts()))
+        )
+      )
+      for (const r of runs) {
+        expect(r.text).toContain('see CONTENT-a and CONTENT-b and CONTENT-c end')
+      }
+    })
+  })
+
+  describe('neutralizeImports', () => {
+    it('wraps path imports in inline code so the loader skips them', async () => {
+      const out = neutralizeImports('keys in @~/.aws/credentials and @./x.md. Ping @alice')
+      expect(out).toBe('keys in `@~/.aws/credentials` and `@./x.md.` Ping @alice')
+      writeFileSync(join(home, 'secret.md'), 'TOP-SECRET')
+      writeFileSync(join(globalDir, 'AGENTS.md'), neutralizeImports('see @~/secret.md'))
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.text).not.toContain('TOP-SECRET')
+      expect(rules.text).toContain('`@~/secret.md`')
+    })
+
+    it('finds no import targets in neutralized text', () => {
+      expect(importTargets(neutralizeImports('a @~/x.md b @/abs/y.md'), '/b', '/h')).toEqual([])
     })
   })
 
@@ -247,11 +362,59 @@ describe('loadProjectRules', () => {
     })
 
     it('still loads a rules file symlinked to another file in the tree', async () => {
+      // Only CLAUDE.md exists for real; it points at another in-tree file.
+      mkdirSync(join(workspace, 'docs'), { recursive: true })
+      writeFileSync(join(workspace, 'docs', 'rules.md'), 'SHARED-RULES-OK')
+      symlinkSync(join(workspace, 'docs', 'rules.md'), join(workspace, 'CLAUDE.md'))
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.files).toEqual(['CLAUDE.md'])
+      expect(rules.text).toContain('SHARED-RULES-OK')
+    })
+
+    it('loads a CLAUDE.md symlinked to AGENTS.md once, not twice', async () => {
       writeFileSync(join(workspace, 'AGENTS.md'), 'SHARED-RULES-OK')
       symlinkSync(join(workspace, 'AGENTS.md'), join(workspace, 'CLAUDE.md'))
       const rules = await loadProjectRules(workspace, opts())
-      expect(rules.files).toContain('CLAUDE.md')
-      expect(rules.text).toContain('SHARED-RULES-OK')
+      expect(rules.files).toEqual(['AGENTS.md'])
+      expect(rules.text.split('SHARED-RULES-OK')).toHaveLength(2)
+    })
+
+    it('loads an AGENTS.md symlinked to CLAUDE.md once, not twice', async () => {
+      writeFileSync(join(workspace, 'CLAUDE.md'), 'SHARED-RULES-OK')
+      symlinkSync(join(workspace, 'CLAUDE.md'), join(workspace, 'AGENTS.md'))
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.files).toEqual(['AGENTS.md'])
+      expect(rules.text.split('SHARED-RULES-OK')).toHaveLength(2)
+    })
+
+    it('loads identical copies once', async () => {
+      writeFileSync(join(workspace, 'AGENTS.md'), 'Same rules.\n')
+      writeFileSync(join(workspace, 'CLAUDE.md'), 'Same rules.')
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.files).toEqual(['AGENTS.md'])
+      expect(rules.text.split('Same rules.')).toHaveLength(2)
+    })
+
+    it('still loads both files when they differ', async () => {
+      writeFileSync(join(workspace, 'AGENTS.md'), 'Agents rules.')
+      writeFileSync(join(workspace, 'CLAUDE.md'), 'Claude rules.')
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.files).toEqual(['AGENTS.md', 'CLAUDE.md'])
+    })
+
+    it('loads a nested copy of the root rules once', async () => {
+      writeFileSync(join(workspace, 'AGENTS.md'), 'Root rules.')
+      mkdirSync(join(workspace, 'pkg'), { recursive: true })
+      symlinkSync(join(workspace, 'AGENTS.md'), join(workspace, 'pkg', 'AGENTS.md'))
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.files).toEqual(['AGENTS.md'])
+    })
+
+    it('loads a global file that a project file links to once', async () => {
+      writeFileSync(join(globalDir, 'AGENTS.md'), 'My global rules.')
+      symlinkSync(join(globalDir, 'AGENTS.md'), join(workspace, 'AGENTS.md'))
+      const rules = await loadProjectRules(workspace, opts())
+      expect(rules.files).toEqual([GLOBAL_RULES_LABEL])
     })
 
     it('still allows an in-workspace import (legitimate split)', async () => {
