@@ -7,7 +7,7 @@
 
 # Privacy
 
-**Last updated: August 25, 2026**
+**Last updated: October 22, 2026**
 
 Houston is a locally-installed coding agent. You bring your own model and
 credentials, so almost every privacy question comes down to one thing: which
@@ -35,9 +35,12 @@ directory and sends none of it anywhere:
   activity, saved one file per conversation.
 - **Settings**: preferences, configured providers and endpoints, model
   selections, permission rules, and similar configuration.
-- **API keys and credentials**: stored in your operating system's secure
-  credential storage (for example, the OS keychain) where available, so they are
-  encrypted at rest rather than kept in plain configuration files.
+- **API keys and credentials**: the desktop app stores them in your operating
+  system's secure credential storage (for example, the OS keychain), so they are
+  encrypted at rest rather than kept in plain configuration files. The standalone
+  terminal CLI can't reach that storage, so it reads keys from environment variables
+  or from plain-text credential files in Houston's application-data directory, which
+  it writes readable only by your user account.
 - **Window and interface state**: window size, panel layout, and the like.
 
 You can delete any of it by removing the conversation or setting in the app, or
@@ -58,8 +61,12 @@ only to the destination you configured:
   flow.
 - **External tools (Model Context Protocol servers).** Data needed for a tool's
   calls goes to the server you configured.
+- **GitHub.** If you have the GitHub CLI (`gh`) installed and signed in, the GitHub
+  tools send their requests (for example, opening a pull request or reading an
+  issue) to GitHub through your own `gh`, under your GitHub account.
 - **Application updates.** Packaged builds contact the update service to check for
-  and download new versions. That involves standard network metadata such as your
+  and download new versions, and the terminal client checks once a day whether a
+  newer release exists (set `HOUSTON_NO_UPDATE_CHECK=1` to turn that off). That involves standard network metadata such as your
   IP address and app version, handled by that service. It does not send your
   conversations or project data. Like any download host, the service keeps
   aggregate counts of how often each released file is fetched; those totals are
