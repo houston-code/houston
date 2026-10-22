@@ -39,6 +39,10 @@ files:
   # helpers and DLLs. (The afterPack hook scrubs paths out of those; see
   # scripts/scrub-native-paths.mjs.)
   - '!node_modules/node-pty/bin/**'
+  # node-pty ships prebuilt addons for every platform it supports. The loader tries
+  # build/Release (rebuilt above for this target) and then only prebuilds/<platform>-<arch>,
+  # so keep that one as its fallback and drop every other platform's.
+  - '!node_modules/node-pty/prebuilds/!(${platform}-${arch})/**'
   - '!node_modules/node-pty/node-addon-api/**'
   - '!node_modules/node-pty/build/**/obj/**'
   - '!node_modules/node-pty/build/**/obj.target/**'
