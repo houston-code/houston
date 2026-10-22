@@ -10,6 +10,25 @@ export interface QueuedInput {
   images?: ImageAttachment[]
   /** Set when `text` is a first-party prompt (a ship button pressed mid-run). */
   invokedAs?: PromptInvocation
+  /**
+   * Steered into the live run: the loop holds it for its next step, and this entry
+   * is the durable copy until it lands. It leaves the queue the moment the run takes
+   * it; a run that ends first (Stop, an error, a quit) leaves it here as an ordinary
+   * follow-up, so a steer that never reached the model is never lost.
+   */
+  steer?: true
+}
+
+/**
+ * A conversation's queued input with the settings its combined turn is sent under
+ * (the newest message's win). Stored on the conversation so it survives a restart.
+ */
+export interface StoredQueue {
+  items: QueuedInput[]
+  providerId: string
+  model: string
+  approvalPolicy: ApprovalPolicy
+  reasoningEffort?: ReasoningEffort
 }
 
 /** Display-only view of a queued message sent to the renderer (no image payloads). */
@@ -17,7 +36,18 @@ export interface QueuedInputMeta {
   id: string
   text: string
   imageCount: number
+  /** Waiting to land in the running turn, rather than to be sent after it. */
+  steer?: boolean
 }
+
+/**
+ * What became of a message typed mid-run (see the agentSteer handler): steered into
+ * the live run, queued for after it, or `idle` when no run is live, so the caller
+ * sends it as a turn of its own. Every outcome but `idle` is already on disk.
+ */
+export type SteerOutcome =
+  | { status: 'steered' | 'queued'; items: QueuedInputMeta[] }
+  | { status: 'idle' }
 
 /** What the renderer asks the main process to queue while a run is in progress. */
 export interface QueueAddRequest {
@@ -39,7 +69,8 @@ export function toQueuedMeta(items: QueuedInput[]): QueuedInputMeta[] {
   return items.map((q) => ({
     id: q.id,
     text: q.invokedAs ? invocationText(q.invokedAs) : q.text,
-    imageCount: q.images?.length ?? 0
+    imageCount: q.images?.length ?? 0,
+    ...(q.steer ? { steer: true } : {})
   }))
 }
 

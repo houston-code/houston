@@ -82,24 +82,30 @@ describe('prompt visibility guard', () => {
     // user appears to have written (how the Stop-hook and verify turns used to).
     const loop = readFileSync(join(SRC, 'main/agent/loop.ts'), 'utf8')
     const pushes = loop.match(/messages\.push\(\{\s*role: 'user'/g) ?? []
-    expect(pushes).toHaveLength(1) // the steer loop: `for (const content of steers) messages.push({ role: 'user', content, steered: true })`
-    expect(loop).toMatch(/for \(const content of steers\) messages\.push\(\{ role: 'user', content, steered: true \}\)/)
+    expect(pushes).toHaveLength(1) // the steer loop: `for (const { text: content } of steers) messages.push({ role: 'user', content, steered: true })`
+    expect(loop).toMatch(
+      /for \(const \{ text: content \} of steers\) messages\.push\(\{ role: 'user', content, steered: true \}\)/
+    )
   })
 
   // Every renderer call that starts or queues a turn.
   const RENDERER_SEND_SITES: Record<string, { count: number; why: string }> = {
     'renderer/src/App.tsx': {
-      count: 10,
-      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" invocations, and the steer fallback (user text)'
+      count: 12,
+      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" invocations, and the mid-run steer, its idle send, and its off-chat queue (user text)'
     },
     'renderer/src/components/Composer.tsx': { count: 3, why: 'the /review invocation and two sends of composer text' },
     'renderer/src/hooks/useChat.ts': { count: 1, why: 'startAgent, forwarding invokedAs' },
-    'renderer/src/hooks/useInputQueue.ts': { count: 1, why: 'queueInput, forwarding invokedAs' }
+    'renderer/src/lib/midRunMessage.ts': { count: 1, why: 'a mid-run message sent as its own turn once the run ended (user text)' },
+    'renderer/src/hooks/useInputQueue.ts': {
+      count: 2,
+      why: 'queueInput, forwarding invokedAs, and steerAgent (user text only)'
+    }
   }
 
   it('knows every place the renderer starts or queues a turn', () => {
     expect(
-      occurrences(['renderer/src'], /\b(onSend|sendNow|dispatch|onInvoke|chat\.send|queue\.enqueue|startAgent|queueInput)\(/)
+      occurrences(['renderer/src'], /\b(onSend|sendNow|dispatch|onInvoke|chat\.send|queue\s*\.(?:enqueue|steer)|startAgent|queueInput|steerAgent)\(/)
     ).toEqual(counts(RENDERER_SEND_SITES))
   })
 

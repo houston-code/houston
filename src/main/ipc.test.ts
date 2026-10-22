@@ -19,7 +19,8 @@ const h = vi.hoisted(() => ({
   resolveQuestion: vi.fn(),
   setRunPolicy: vi.fn(),
   setRunEffort: vi.fn(),
-  steerRun: vi.fn<(runId: string, text: string) => boolean>(() => true),
+  steerRun: vi.fn<(runId: string, text: string, id?: string) => boolean>(() => true),
+  unsteerRun: vi.fn<(runId: string, id: string) => boolean>(() => true),
   saveMemory: vi.fn<(ws: string, scope: string, text: string) => Promise<string>>(
     async (_ws, scope) => `/AGENTS.md#${scope}`
   ),
@@ -74,6 +75,7 @@ vi.mock('./agent/loop', () => ({
   setRunPolicy: h.setRunPolicy,
   setRunEffort: h.setRunEffort,
   steerRun: h.steerRun,
+  unsteerRun: h.unsteerRun,
   runOwner: h.runOwner,
   activeRunForConversation: h.activeRun,
   pendingPromptsForConversation: vi.fn(() => []),
@@ -348,26 +350,79 @@ describe('run-control IPC ownership', () => {
   })
 
   describe('agentSteer', () => {
-    it('steers the run when the owning window calls', () => {
-      handler(IPC.agentSteer)(from(OWNER), RUN, 'use YAML instead')
-      expect(h.steerRun).toHaveBeenCalledWith(RUN, 'use YAML instead')
+    const steer = (sender: number, conversationId: string, userText: unknown, extra: object = {}): unknown =>
+      handler(IPC.agentSteer)(from(sender), {
+        conversationId,
+        userText,
+        providerId: 'p',
+        model: 'm',
+        approvalPolicy: 'ask',
+        ...extra
+      })
+    beforeEach(() => {
+      h.activeRun.mockImplementation((cid) => (cid.startsWith('live') ? RUN : null))
+    })
+    afterEach(() => {
+      h.activeRun.mockReset()
+      h.activeRun.mockReturnValue(null)
     })
 
-    it('rejects a mismatched-sender steer — the run is untouched', () => {
-      const r = handler(IPC.agentSteer)(from(OTHER), RUN, 'inject into another window’s run')
+    it('steers the live run when the owning window calls, keeping the queue entry as its copy', () => {
+      const r = steer(OWNER, 'live-1', 'use YAML instead') as { status: string; items: { id: string; steer?: boolean }[] }
+      expect(h.steerRun).toHaveBeenCalledWith(RUN, 'use YAML instead', expect.any(String))
+      expect(r.status).toBe('steered')
+      // The id the run holds is the queue entry's, so the landing can drop it.
+      expect(r.items).toEqual([expect.objectContaining({ id: h.steerRun.mock.calls[0][2], steer: true })])
+    })
+
+    it("queues a mismatched-sender's message instead of pushing it into another window's run", () => {
+      const r = steer(OTHER, 'live-2', 'inject into another window’s run') as { status: string; items: unknown[] }
       expect(h.steerRun).not.toHaveBeenCalled()
-      expect(r).toBe(false)
+      expect(r.status).toBe('queued')
+      expect(r.items).toEqual([expect.not.objectContaining({ steer: true })])
     })
 
-    it('ignores a non-string payload', () => {
-      const r = handler(IPC.agentSteer)(from(OWNER), RUN, { evil: true })
+    it('rejects a malformed request outright', () => {
+      expect(() => steer(OWNER, 'live-3', { evil: true })).toThrow('Invalid steer request.')
       expect(h.steerRun).not.toHaveBeenCalled()
-      expect(r).toBe(false)
     })
 
-    it('returns whether a live run accepted it (false → caller falls back to queuing)', () => {
+    // The run is live but declined it (too long, too many waiting, stopping): it is
+    // queued here, in the same step, so it can't be stranded or dropped.
+    it('queues what the live run declines', () => {
       h.steerRun.mockReturnValueOnce(false)
-      expect(handler(IPC.agentSteer)(from(OWNER), RUN, 'too late, run ended')).toBe(false)
+      const r = steer(OWNER, 'live-4', 'x'.repeat(5000)) as { status: string; items: { text: string }[] }
+      expect(r.status).toBe('queued')
+      expect(r.items[0].text).toHaveLength(5000)
+    })
+
+    it('queues a message with images rather than steering it (a steer is text only)', () => {
+      const image = { mediaType: 'image/png', data: 'aGk=' }
+      const r = steer(OWNER, 'live-5', 'see this', { images: [image] }) as { status: string }
+      expect(h.steerRun).not.toHaveBeenCalled()
+      expect(r.status).toBe('queued')
+    })
+
+    it('reports idle, storing nothing, when no run is live (the caller sends a turn)', () => {
+      expect(steer(OWNER, 'idle-1', 'run already ended')).toEqual({ status: 'idle' })
+      expect(h.steerRun).not.toHaveBeenCalled()
+      expect(handler(IPC.agentQueueList)(from(OWNER), 'idle-1')).toEqual([])
+    })
+
+    it('takes an unread steer back from the run when its chip is removed', () => {
+      const r = steer(OWNER, 'live-6', 'never mind') as { items: { id: string }[] }
+      const id = r.items[0].id
+      expect(handler(IPC.agentQueueRemove)(from(OWNER), 'live-6', id)).toEqual([])
+      expect(h.unsteerRun).toHaveBeenCalledWith(RUN, id)
+    })
+
+    it('takes every unread steer back when the queue is cleared', () => {
+      const a = (steer(OWNER, 'live-7', 'one') as { items: { id: string }[] }).items[0].id
+      h.steerRun.mockReturnValueOnce(false)
+      steer(OWNER, 'live-7', 'two (queued, not a steer)')
+      handler(IPC.agentQueueClear)(from(OWNER), 'live-7')
+      expect(h.unsteerRun.mock.calls).toEqual([[RUN, a]])
+      expect(handler(IPC.agentQueueList)(from(OWNER), 'live-7')).toEqual([])
     })
   })
 
@@ -751,6 +806,27 @@ describe('agentStart / agentRetry approval-policy validation', () => {
     // A different message is still appended.
     await send('r3', 'use port 4000')
     expect(getConversation(id)?.messages).toHaveLength(2)
+  })
+
+  // A send that races a live run it didn't know about used to be refused with an
+  // error, and the message, never saved, was gone on the next reload.
+  it('queues a send behind a live run instead of refusing it (agentStart)', async () => {
+    const id = freshConv()
+    h.activeRun.mockReturnValue('live-run')
+    const sent = vi.fn()
+    const sender = { id: SENDER, isDestroyed: () => false, send: sent }
+    const r = await handler(IPC.agentStart)({ sender }, {
+      runId: 'r9', conversationId: id, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: 'and add tests'
+    })
+    expect(r).toEqual({ queuedBehind: 'live-run' })
+    expect(h.runAndDrain).not.toHaveBeenCalled()
+    expect(getConversation(id)?.messages).toEqual([])
+    const items = handler(IPC.agentQueueList)(from(SENDER), id)
+    expect(items).toEqual([expect.objectContaining({ text: 'and add tests' })])
+    expect(sent).toHaveBeenCalledWith(IPC.agentQueueChanged, { conversationId: id, items })
+    // On disk, not just in memory: it is on the conversation itself.
+    expect(getConversation(id)?.queuedInput?.items).toEqual([expect.objectContaining({ text: 'and add tests' })])
+    handler(IPC.agentQueueClear)(from(SENDER), id)
   })
 
   it('persists a switched provider/model on retry (updateConversationMeta)', async () => {

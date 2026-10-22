@@ -1198,8 +1198,10 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           state.stopReason = e.stopReason
           if (e.stopReason === 'error' && !state.error) state.error = 'The run failed.'
           break
-        // The GUI's queued-input follow-up; an ACP run never queues input.
+        // The GUI's queued-input follow-up; an ACP run never queues input, nor
+        // steers one, so it has no steers to take back either.
         case 'turn_start':
+        case 'steers_returned':
           break
         // Sent only to runs that set announceTools (the headless --json init line).
         case 'run_info':

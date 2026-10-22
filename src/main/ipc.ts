@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
@@ -21,6 +22,7 @@ import {
   sanitizeElicitationResult,
   type AgentEvent,
   type AgentSendRequest,
+  type AgentStartResult,
   type ChatMessage,
   type ConversationSettingsPatch,
   type DeleteConversationResult,
@@ -29,7 +31,7 @@ import {
   type ReasoningEffort,
   type ToolApprovalDecision
 } from '@shared/agent'
-import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
+import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
 import { parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDataUrl } from '@shared/images'
@@ -73,6 +75,7 @@ import {
   setRunPolicy,
   setRunEffort,
   steerRun,
+  unsteerRun,
   runOwner,
   activeRunForConversation,
   pendingPromptsForConversation,
@@ -81,7 +84,7 @@ import {
   onActiveRunsChanged
 } from './agent/loop'
 import { killShell, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
-import { addToQueue, removeFromQueue, clearQueue, listQueue } from './agent/queue'
+import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds } from './agent/queue'
 import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
@@ -932,9 +935,9 @@ export function registerIpc(): void {
 
       const action = resolveDeleteAction(kind, response)
       if (!action.delete) return { deleted: false }
-      // Drop any buffered follow-ups so a deleted chat's queue can't linger in memory.
-      clearQueue(id)
       deleteConversation(id)
+      // Drop the cached queue too: it went with the file, and must not linger in memory.
+      forgetQueue(id)
       const worktree =
         action.removeWorktree && conv?.worktree ? await removeWorktree(conv.worktree) : null
       return { deleted: true, worktree }
@@ -974,7 +977,8 @@ export function registerIpc(): void {
     if (res.canceled || !res.filePath) return null
     // A side chat exports as its exchanges only: the side agent's own transcript is
     // internal resume state, often far larger than the exchanges themselves.
-    const { sideChat, ...rest } = conv
+    // Unsent queued input is not part of the conversation yet, so it stays home.
+    const { sideChat, queuedInput: _queuedInput, ...rest } = conv
     const exported = sideChat ? { ...rest, sideChat: { turns: sideChat.turns } } : rest
     writeFileSync(res.filePath, JSON.stringify(exported, null, 2), 'utf8')
     return res.filePath
@@ -1031,7 +1035,7 @@ export function registerIpc(): void {
   })
 
   // Agent: fire-and-forget; progress is streamed back over IPC.agentEvent.
-  ipcMain.handle(IPC.agentStart, async (event, req: AgentSendRequest) => {
+  ipcMain.handle(IPC.agentStart, async (event, req: AgentSendRequest): Promise<AgentStartResult | void> => {
     const conv = getConversation(req.conversationId)
     if (!conv) {
       emitEvent(event.sender, req.conversationId, {
@@ -1042,19 +1046,26 @@ export function registerIpc(): void {
       return
     }
 
-    // Refuse a second run while one is already active for this conversation —
-    // before appending the user message, so a rejected send doesn't leave an
-    // orphan turn in the log. Mid-run input is normally buffered via the queue,
-    // and the renderer re-adopts a live run on re-open; this is the backstop for
-    // any path that slips past those.
-    if (activeRunForConversation(conv.id)) {
-      emitEvent(event.sender, conv.id, {
-        runId: req.runId,
-        type: 'error',
-        message:
-          'This conversation already has a run in progress. Wait for it to finish or stop it before sending again.'
+    // Never a second run while one is already active for this conversation (their
+    // log writes would interleave). Mid-run input is normally steered or queued by the
+    // renderer, but a send can still race a run it didn't know about: the queued
+    // follow-up main starts the moment a turn ends, or a run still being re-adopted.
+    // Refusing that send used to drop the message (the bubble was never saved), so
+    // queue it instead, and tell the renderer which run it's waiting on.
+    const liveRunId = activeRunForConversation(conv.id)
+    if (liveRunId) {
+      const items = addToQueue({
+        conversationId: conv.id,
+        userText: req.userText,
+        images: req.images,
+        ...(req.invokedAs ? { invokedAs: req.invokedAs } : {}),
+        providerId: req.providerId,
+        model: req.model,
+        approvalPolicy: req.approvalPolicy,
+        ...(req.reasoningEffort ? { reasoningEffort: req.reasoningEffort } : {})
       })
-      return
+      emitQueueChanged(event.sender, conv.id, items)
+      return { queuedBehind: liveRunId }
     }
     // Likewise mid-rewind, before the message is appended to a log about to be replaced.
     if (rewindInProgress(conv.id)) {
@@ -1184,12 +1195,18 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.agentQueueAdd, (_event, req: QueueAddRequest): QueuedInputMeta[] =>
     addToQueue(req)
   )
-  ipcMain.handle(IPC.agentQueueRemove, (_event, conversationId: string, id: string): QueuedInputMeta[] =>
-    removeFromQueue(conversationId, id)
-  )
-  ipcMain.handle(IPC.agentQueueClear, (_event, conversationId: string): QueuedInputMeta[] =>
-    clearQueue(conversationId)
-  )
+  // Removing a steer that hasn't landed takes it back from the live run as well, so
+  // the chip's × means what it says.
+  ipcMain.handle(IPC.agentQueueRemove, (_event, conversationId: string, id: string): QueuedInputMeta[] => {
+    const runId = activeRunForConversation(conversationId)
+    if (runId) unsteerRun(runId, id)
+    return removeFromQueue(conversationId, id)
+  })
+  ipcMain.handle(IPC.agentQueueClear, (_event, conversationId: string): QueuedInputMeta[] => {
+    const runId = activeRunForConversation(conversationId)
+    if (runId) for (const id of queuedSteerIds(conversationId)) unsteerRun(runId, id)
+    return clearQueue(conversationId)
+  })
   ipcMain.handle(IPC.agentQueueList, (_event, conversationId: string): QueuedInputMeta[] =>
     listQueue(conversationId)
   )
@@ -1290,10 +1307,6 @@ export function registerIpc(): void {
     setRunEffort(runId, effort)
   })
 
-  // Steer the live run: inject a course correction the model reads before its next
-  // step (see steerRun). A run-control call like the others, so it is gated on run
-  // ownership — otherwise another window could push text into this run's context.
-  // steerRun trims + caps the text itself; the boundary only rejects a non-string.
   // Start a propose_session card as its own background chat. The approval policy is
   // the user's current one, coerced at this boundary like a normal send (an unknown
   // value would fail open downstream).
@@ -1362,10 +1375,31 @@ export function registerIpc(): void {
     }
   })
 
-  ipcMain.handle(IPC.agentSteer, (event, runId: string, text: unknown): boolean => {
-    if (typeof text !== 'string') return false
-    if (!callerOwnsRun(event, runId)) return false
-    return steerRun(runId, text)
+  // A message typed while the conversation's run is going: steer it into that run
+  // (the model reads it before its next step), else queue it for after the run.
+  // Decided here, in one synchronous step against the live run registry, because a
+  // renderer that steered first and queued on refusal raced the run's end: the
+  // fallback reached the queue after the finished run had already drained it, and
+  // sat there unsent. `idle` means no run is live, so the caller sends a turn.
+  //
+  // Steering is a run-control call like the others, gated on run ownership so
+  // another window can't push text into this run's context; that window's message is
+  // queued instead. Either way the message is in the queue, on disk, before this
+  // returns: a steer's entry is its durable copy until the run reads it (see
+  // QueuedInput.steer). A steer is text only, so one with images is queued.
+  ipcMain.handle(IPC.agentSteer, (event, req: QueueAddRequest): SteerOutcome => {
+    if (!req || typeof req.conversationId !== 'string' || typeof req.userText !== 'string') {
+      throw new Error('Invalid steer request.')
+    }
+    const runId = activeRunForConversation(req.conversationId)
+    if (!runId) return { status: 'idle' }
+    if (!req.images?.length && callerOwnsRun(event, runId)) {
+      const id = randomUUID()
+      if (steerRun(runId, req.userText, id)) {
+        return { status: 'steered', items: addToQueue(req, { id, steer: true }) }
+      }
+    }
+    return { status: 'queued', items: addToQueue(req) }
   })
 
   // The runId of the live run for a conversation, or null. The renderer queries

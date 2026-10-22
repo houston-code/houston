@@ -22,6 +22,9 @@
       "$ref": "#/$defs/event_steered"
     },
     {
+      "$ref": "#/$defs/event_steers_returned"
+    },
+    {
       "$ref": "#/$defs/event_tool_start"
     },
     {
@@ -353,6 +356,32 @@
         },
         "text": {
           "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
+    "event_steers_returned": {
+      "description": "Course corrections the run accepted but ended before reading, handed back after its terminal event.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "texts"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "steers_returned"
+        },
+        "texts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       }
     },

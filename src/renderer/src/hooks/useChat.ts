@@ -72,13 +72,6 @@ export interface ChatController {
   /** Push a reasoning-effort change into the live run (its next model turn). No-op when idle. */
   setEffort: (effort: ReasoningEffort) => void
   /**
-   * Steer the in-flight run: inject a course correction the model reads before its
-   * next step, instead of queuing it for after the run. No-op when nothing is live.
-   * Returns whether a live run accepted it (false → the caller should fall back to
-   * queuing the text as its own turn, so nothing the user typed is dropped).
-   */
-  steer: (text: string) => Promise<boolean>
-  /**
    * Restore the revert/redo affordance when re-opening a conversation — the
    * checkpoint state is otherwise built only from live events and lost on a
    * transcript rebuild. Pass the conversation's latest-run checkpoint, or null.
@@ -237,7 +230,7 @@ export function useChat(conversationId: string | null = null): ChatController {
     setCheckpoint(null)
     setErrored(false)
     try {
-      await window.api.startAgent({
+      const started = await window.api.startAgent({
         runId,
         conversationId: params.conversationId,
         userText: params.userText,
@@ -248,6 +241,15 @@ export function useChat(conversationId: string | null = null): ChatController {
         approvalPolicy: params.approvalPolicy,
         ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {})
       })
+      // A run was already live (one this window hadn't caught up with yet), so main
+      // queued the message behind it instead of starting a turn. Its chip is in the
+      // queue bar now; drop the bubble drawn for a turn that didn't start, and follow
+      // the live run so its events (and Stop) reach this view.
+      if (started?.queuedBehind) {
+        setItems((prev) => prev.filter((it) => it.id !== `u-${runId}`))
+        // Unless this view already adopted it (its turn_start beat this reply here).
+        if (runIdRef.current === runId) runIdRef.current = started.queuedBehind
+      }
     } catch {
       // The IPC call itself failed (bridge/serialization) before any run started —
       // otherwise the Stop button would stay lit forever with no run behind it.
@@ -329,12 +331,6 @@ export function useChat(conversationId: string | null = null): ChatController {
     if (runIdRef.current) void window.api.setAgentEffort(runIdRef.current, effort)
   }, [])
 
-  const steer = useCallback(async (text: string): Promise<boolean> => {
-    const runId = runIdRef.current
-    if (!runId) return false
-    return window.api.steerAgent(runId, text)
-  }, [])
-
   const revertCheckpoint = useCallback(async (): Promise<number> => {
     if (!checkpoint) return 0
     const restored = await window.api.restoreCheckpoint(checkpoint.runId)
@@ -410,7 +406,6 @@ export function useChat(conversationId: string | null = null): ChatController {
     resolvePlan,
     setPolicy,
     setEffort,
-    steer,
     seedCheckpoint,
     revertCheckpoint,
     reapplyCheckpoint,

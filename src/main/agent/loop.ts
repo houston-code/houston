@@ -315,9 +315,11 @@ interface RunState {
    * Course corrections typed while the turn is running, waiting for the next
    * iteration boundary. Queued rather than applied on arrival: a message can only
    * enter the window between model calls, never mid-stream, or the request the
-   * provider is already serving would disagree with the one we persisted.
+   * provider is already serving would disagree with the one we persisted. `id`
+   * names the caller's durable copy (the desktop's queue entry), echoed on the
+   * `steered` event so the caller can drop it once the steer has landed.
    */
-  steering: string[]
+  steering: { text: string; id?: string }[]
   approvals: Map<string, (r: ApprovalResolution) => void>
   /** Pending `ask_user` questions, keyed by callId, resolved with the user's answer. */
   questions: Map<string, (answer: string) => void>
@@ -552,14 +554,30 @@ export function cancelRun(runId: string): void {
  * so a caller can fall back to sending the text as its own turn rather than
  * dropping what the user typed.
  */
-export function steerRun(runId: string, text: string): boolean {
+export function steerRun(runId: string, text: string, id?: string): boolean {
   const run = runs.get(runId)
-  const trimmed = text.trim().slice(0, MAX_STEER_TEXT)
+  const trimmed = text.trim()
   if (!run || !trimmed || run.abort.signal.aborted) return false
-  // Refusing when the queue is full is not a dropped message: false sends the line
-  // to the caller's own follow-up queue, so it is delivered as its own turn instead.
+  // Refusing is never dropping: false sends the text to the caller's own follow-up
+  // queue, delivered whole as its own turn. That is the answer for a correction too
+  // long to push into a running window (cutting it would silently lose the rest) and
+  // for a full steering queue alike.
+  if (trimmed.length > MAX_STEER_TEXT) return false
   if (run.steering.length >= MAX_PENDING_STEERS) return false
-  run.steering.push(trimmed)
+  run.steering.push(id ? { text: trimmed, id } : { text: trimmed })
+  return true
+}
+
+/**
+ * Take back a steer that has not landed yet (the user removed it from the queue).
+ * Returns false when it is no longer waiting: the run already read it, or ended.
+ */
+export function unsteerRun(runId: string, id: string): boolean {
+  const run = runs.get(runId)
+  if (!run) return false
+  const i = run.steering.findIndex((s) => s.id === id)
+  if (i < 0) return false
+  run.steering.splice(i, 1)
   return true
 }
 
@@ -2674,7 +2692,7 @@ export async function startRun(
       // iteration is still in the window the model lands with.
       if (run.steering.length) {
         const steers = run.steering.splice(0)
-        for (const content of steers) messages.push({ role: 'user', content, steered: true })
+        for (const { text: content } of steers) messages.push({ role: 'user', content, steered: true })
         // Emit BEFORE persist. The live renderer needs the `steered` event to draw
         // the bubble, but `persist` clears the re-adopt replay buffer — so emitting
         // AFTER it left the steered event in the buffer even though the steer was
@@ -2682,7 +2700,7 @@ export async function startRun(
         // AND replayed the buffered event, showing it twice. Emitting first keeps the
         // invariant that the buffer holds only events not yet persisted (send() has
         // already delivered it live either way).
-        for (const content of steers) emit({ type: 'steered', text: content })
+        for (const { text, id } of steers) emit({ type: 'steered', text, ...(id ? { id } : {}) })
         persist(messages)
       }
 
@@ -4003,6 +4021,11 @@ export async function startRun(
       messages.splice(0, messages.length, ...repaired)
       persist(messages)
     }
+    // Steers accepted but never read: the run ended (Stop, an error, a step limit, a
+    // stall stop) before the next iteration boundary could take them. steerRun told
+    // the caller they were in, so it fell back to nothing; hand them back so they
+    // go out as a follow-up instead of vanishing with the run.
+    if (run.steering.length) emit({ type: 'steers_returned', texts: run.steering.splice(0).map((s) => s.text) })
     runs.delete(runId)
     // Only clear the conversation's slot if it still points at this run, so a
     // (guarded-against, but defensive) later run can't have its entry removed.

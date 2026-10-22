@@ -2125,8 +2125,10 @@ export interface TuiIo {
    *
    * Optional: off-TTY and in tests it's absent and the driver falls back to
    * `readLine` + ComposerBuffer, which reads one physical line at a time.
+   * `initial` opens the editor with that draft already typed (unsent text handed
+   * back after an interrupt).
    */
-  readComposer?: (prompt: string | (() => string)) => Promise<string | null>
+  readComposer?: (prompt: string | (() => string), initial?: string) => Promise<string | null>
   /**
    * Read a line without echoing it — for pasting an API key in the `/login` flow.
    * Resolves the typed value, or null on cancel (Ctrl-C) / EOF. Optional: off-TTY
@@ -2174,8 +2176,6 @@ export interface TuiIo {
    */
   onSteer?: (handler: (text: string) => boolean) => void
   takeQueued?: () => string[]
-  /** Drop anything queued (the run it followed was abandoned). */
-  clearQueued?: () => void
   /**
    * Register a handler for Shift-Tab (cycle the approval mode). Fires at the
    * composer and mid-run alike; the driver decides what cycling means.
@@ -2777,6 +2777,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let verbose = false
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
+  // What a run hands back unsent: steers it accepted but ended before reading
+  // (`steers_returned`), and, when the user interrupted it, the follow-ups typed
+  // while it ran. Nothing typed is dropped: after an interrupt it comes back as the
+  // next prompt's draft to edit or resend (sending it into the turn just abandoned
+  // would be worse); after any other ending it goes out as the next turn.
+  let returnedSteers: string[] = []
+  let interruptedQueued: string[] | null = null
+  let restoreDraft = ''
   const sessionCost: SessionCost = { inputTokens: 0, outputTokens: 0, cost: 0 }
   // Per-model tallies for /cost. The aggregate above still drives the status line;
   // this is what makes "which model spent it, and how much was cached?" answerable.
@@ -2827,9 +2835,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.cancelRun(activeRunId)
       deps.io.stopSpinner?.()
       flushStreamedText()
-      // Whatever was queued was a follow-up to the turn being thrown away; sending
-      // it into the wreckage would be worse than dropping it.
-      deps.io.clearQueued?.()
+      // Whatever was queued was a follow-up to the turn being thrown away: held back
+      // as the next prompt's draft rather than sent into the wreckage.
+      interruptedQueued = [...(interruptedQueued ?? []), ...(deps.io.takeQueued?.() ?? [])]
       // Show that the interrupt registered — otherwise an aborted turn just stops
       // with no feedback — then release any approval/question prompt blocked on
       // input so the aborted run doesn't leave the loop waiting on a dead read.
@@ -3002,13 +3010,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     } else if (deps.io.readComposer) {
       // A thunk, not a string: Shift-Tab can change the policy WHILE this read is
       // open, and the prompt has to say what will actually happen when you hit Enter.
-      const text = await deps.io.readComposer(() => composerPrompt(policy, paint))
+      const draft = restoreDraft
+      restoreDraft = ''
+      if (draft) deps.io.out(paint('· not sent (the turn was interrupted): back in the prompt to edit or send\n', 'dim'))
+      const text = await deps.io.readComposer(() => composerPrompt(policy, paint), draft || undefined)
       if (text === null) {
         resetComposer = consumeInterrupt() === 'reset'
       } else {
         raw = text
       }
     } else {
+      // No editor to put it back into: show it, so it can at least be copied.
+      if (restoreDraft) {
+        deps.io.out(paint(`· not sent (the turn was interrupted): ${stripControlChars(restoreDraft)}\n`, 'dim'))
+        restoreDraft = ''
+      }
       const composer = new ComposerBuffer()
       for (;;) {
         // In an open code fence, hint how to send so a stray ``` can't trap the
@@ -4196,6 +4212,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // terminal, and the next caller of steerRun may not be a keyboard.
           deps.io.out(paint(`\n· steering: ${stripControlChars(e.text)}\n`, 'cyan'))
           break
+        case 'steers_returned':
+          returnedSteers.push(...e.texts)
+          break
         default:
           assertNever(e, 'tui:unhandled agent event')
       }
@@ -4213,8 +4232,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Drain any approval/question prompts still in flight before the next composer read.
     await prompts
     activeRunId = null
-    // Anything typed while that turn ran becomes the next one.
-    pendingQueued = deps.io.takeQueued?.() ?? []
+    // Anything typed while that turn ran (steers it never read included) becomes the
+    // next one, or after an interrupt, the next prompt's draft.
+    const unsent = [...returnedSteers, ...(interruptedQueued ?? []), ...(deps.io.takeQueued?.() ?? [])]
+    const interrupted = interruptedQueued !== null
+    returnedSteers = []
+    interruptedQueued = null
+    if (interrupted) restoreDraft = unsent.join('\n\n')
+    else pendingQueued = unsent
 
     // A plan-mode turn hands off to execution through the present_plan flow: the agent
     // calls present_plan, the plan_ready case above renders it and collects an

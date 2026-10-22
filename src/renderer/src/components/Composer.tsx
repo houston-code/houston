@@ -118,6 +118,15 @@ export function runningPlaceholder(mac: boolean): string {
   return `↵ steers now, ${mac ? '⌘' : 'Ctrl'}+↵ queues for after this run.`
 }
 
+/**
+ * While the agent waits on its own question, Enter answers it: the run can't read a
+ * steer until the question is settled, so a steer typed then sat unseen. Exported for
+ * the placeholder test.
+ */
+export function answeringPlaceholder(mac: boolean): string {
+  return `↵ answers the agent's question, ${mac ? '⌘' : 'Ctrl'}+↵ queues for after this run.`
+}
+
 /** One row in the `+` attachment menu. */
 function AttachItem({
   icon,
@@ -166,6 +175,7 @@ export function Composer({
   onSend,
   onInvoke,
   onSteer,
+  answering = false,
   onSaveMemory,
   onCancel,
   editing,
@@ -210,6 +220,11 @@ export function Composer({
    * affordance; the queue is the only mid-run path.
    */
   onSteer?: (text: string) => void
+  /**
+   * The agent is waiting on an `ask_user` question, so onSteer answers it. Only
+   * changes the wording: the placeholder and the Enter button say "answer".
+   */
+  answering?: boolean
   /**
    * Save a `#`-captured standing instruction (`# always run the linter`) to the
    * project's or every project's rules file. Absent → `#` lines are sent as an
@@ -1094,7 +1109,9 @@ export function Composer({
               ? disabledReason ?? 'Pick a model and project folder to start…'
               : running
                 ? onSteer
-                  ? runningPlaceholder(isMacPlatform())
+                  ? answering
+                    ? answeringPlaceholder(isMacPlatform())
+                    : runningPlaceholder(isMacPlatform())
                   : 'Queue a follow-up…  (sent when the current run finishes)'
                 : 'Ask Houston…  (@ file, / command, or + to attach)'
           }
@@ -1161,8 +1178,12 @@ export function Composer({
                   <button
                     type="button"
                     className="composer__send composer__steer"
-                    aria-label="Steer"
-                    title="Steer (↵): the agent reads this before its next step"
+                    aria-label={answering ? 'Answer' : 'Steer'}
+                    title={
+                      answering
+                        ? "Answer (↵): sends this as your answer to the agent's question"
+                        : 'Steer (↵): the agent reads this before its next step'
+                    }
                     onClick={() => (text.trim() ? steer() : ref.current?.focus())}
                     disabled={disabled}
                   >

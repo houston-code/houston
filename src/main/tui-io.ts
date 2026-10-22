@@ -554,10 +554,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    * manual check). The decoder (tui-keys.ts) and editor (tui-editor.ts) are pure
    * and separately unit-tested.
    */
-  const readComposer = (prompt: string | (() => string)): Promise<string | null> => {
+  const readComposer = (prompt: string | (() => string), initial?: string): Promise<string | null> => {
     const promptNow = (): string => (typeof prompt === 'string' ? prompt : prompt())
     if (closed) return Promise.resolve(null)
-    // No TTY / no raw mode → the readline path still works (tests, pipes).
+    // No TTY / no raw mode → the readline path still works (tests, pipes). It can't
+    // be pre-filled; the driver has already shown any `initial` text above it.
     if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return plainRead(promptNow())
 
     return new Promise<string | null>((resolve) => {
@@ -565,7 +566,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       stopInterruptWatch()
       rl.pause()
 
-      let state: EditorState = initialEditorState(deps.history?.() ?? [])
+      let state: EditorState = initialEditorState(deps.history?.() ?? [], initial)
       let dec: DecoderState = initialDecoderState()
       // Vim keys are decided per read, and a read always starts in insert: a fresh
       // prompt is for typing, and coming back to one in normal mode would swallow
@@ -838,11 +839,6 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       queued = []
       draft = ''
       return out
-    },
-    /** Drop anything queued — the follow-ups belonged to a turn being abandoned. */
-    clearQueued: () => {
-      queued = []
-      draft = ''
     },
     onCycleMode: (handler) => {
       cycleModeHandler = handler

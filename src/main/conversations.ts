@@ -27,6 +27,7 @@ import { forkConversationData, type ImportedConversation } from '@shared/convers
 import { accumulateModelUsage } from '@shared/usage'
 import { invocationText } from '@shared/promptInvocation'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
+import type { StoredQueue } from '@shared/queue'
 import { clearConversationOverride } from './agent/overrides'
 import { redactSecrets } from './agent/redact'
 import { getUserDataDir } from './userData'
@@ -339,7 +340,8 @@ export function computeScorecard(): Scorecard {
  */
 function toMeta(conv: Conversation): ConversationMeta {
   // schemaVersion is a storage detail, and compaction carries a summary that can
-  // run to kilobytes — keep both out of the UI list payload.
+  // run to kilobytes — keep both out of the UI list payload. Queued input is read
+  // through the queue's own channel (agentQueueList), never the list.
   const {
     messages: _messages,
     lastError,
@@ -350,6 +352,7 @@ function toMeta(conv: Conversation): ConversationMeta {
     childReports: _childReports,
     sideChat: _sideChat,
     rewindBackup: _rewindBackup,
+    queuedInput: _queuedInput,
     ...rest
   } = conv
   return { ...rest, errored: !!lastError }
@@ -513,6 +516,30 @@ export function saveSideChat(id: string, sideChat: StoredSideChat | null): void 
   if (sideChat) conv.sideChat = sideChat
   else if (conv.sideChat === undefined) return
   else delete conv.sideChat
+  write(conv)
+}
+
+/**
+ * A chat's stored input queue, attachments loaded, or null when nothing is queued.
+ * Hydrates the queue alone: the message log's media stays on disk.
+ */
+export function getQueuedInput(id: string): StoredQueue | null {
+  const conv = read(id)
+  if (!conv?.queuedInput) return null
+  return hydrateMedia(conv.queuedInput, mediaDir(id))
+}
+
+/**
+ * Replace a chat's stored input queue (null clears it). See agent/queue.ts, which
+ * owns it. Bookkeeping: never bumps `updatedAt`, so queueing a message mid-run
+ * doesn't reorder the sidebar on its own.
+ */
+export function setQueuedInput(id: string, queue: StoredQueue | null): void {
+  const conv = read(id)
+  if (!conv) return
+  if (queue && queue.items.length) conv.queuedInput = queue
+  else if (conv.queuedInput === undefined) return
+  else delete conv.queuedInput
   write(conv)
 }
 
