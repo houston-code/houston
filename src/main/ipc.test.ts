@@ -79,8 +79,8 @@ vi.mock('./agent/loop', () => ({
   runOwner: h.runOwner,
   activeRunForConversation: h.activeRun,
   pendingPromptsForConversation: vi.fn(() => []),
-  runningConversationIds: vi.fn(() => []),
-  onActiveRunsChanged: vi.fn(() => () => {})
+  chatStatusSnapshot: vi.fn(() => ({})),
+  onChatStatusChanged: vi.fn(() => () => {})
 }))
 
 // Mock the drain module so agentStart/agentRetry's runAndDrain is a spy — the tests

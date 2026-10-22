@@ -50,6 +50,7 @@ import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/que
 import type { Scorecard } from '@shared/scorecard'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
+import type { ChatStatusMap } from '@shared/chatStatus'
 import type {
   UpdateCheckResult,
   UpdateDownloaded,
@@ -352,13 +353,13 @@ const api = {
    */
   getLiveTranscript: (conversationId: string): Promise<AgentEvent[]> =>
     ipcRenderer.invoke(IPC.agentLiveTranscript, conversationId),
-  /** The ids of every conversation with a live run (for the sidebar "running" dot). */
-  getRunningConversations: (): Promise<string[]> => ipcRenderer.invoke(IPC.agentRunningList),
-  /** Subscribe to changes in the running-conversation set. Returns an unsubscribe fn. */
-  onRunsChanged: (cb: (ids: string[]) => void): (() => void) => {
-    const listener = (_event: IpcRendererEvent, ids: string[]): void => cb(ids)
-    ipcRenderer.on(IPC.agentRunsChanged, listener)
-    return () => ipcRenderer.removeListener(IPC.agentRunsChanged, listener)
+  /** The live status of every conversation with a run (drives the sidebar signals). */
+  getChatStatus: (): Promise<ChatStatusMap> => ipcRenderer.invoke(IPC.chatStatusList),
+  /** Subscribe to chat-status changes. Returns an unsubscribe fn. */
+  onChatStatusChanged: (cb: (status: ChatStatusMap) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, status: ChatStatusMap): void => cb(status)
+    ipcRenderer.on(IPC.chatStatusChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.chatStatusChanged, listener)
   },
   /** The background shells (run_shell background mode) for the tasks indicator. */
   getBackgroundShells: (): Promise<BackgroundShellInfo[]> => ipcRenderer.invoke(IPC.shellList),
