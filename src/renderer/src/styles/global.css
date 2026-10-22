@@ -5403,6 +5403,26 @@ body:has(.coachmark) .get-started {
   margin: 0;
   font-size: 17px;
 }
+/* Settings save state, beside the title: quiet unless something needs a look. */
+.set-status {
+  margin: 0 auto 0 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.set-status--error {
+  color: var(--danger);
+}
+.set-status__undo {
+  font-size: 12px;
+}
+.set-foot__error {
+  margin-right: auto;
+  color: var(--danger);
+  font-size: 12px;
+}
 .modal__close {
   background: none;
   border: none;

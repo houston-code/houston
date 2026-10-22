@@ -3,13 +3,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import { SettingsModal } from './SettingsModal'
 
+/** The settings main would return: set by renderModal, updated by saveSettings. */
+let stored: AppSettings
+
 /**
  * Install a fake `window.api` with only the methods SettingsModal touches. Each
  * mutating call (setKey/deleteKey/listModels) is preceded by a saveSettings, so
  * saveSettings resolves to the settings it was handed back (the "fresh" result).
  */
 function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>> = {}) {
-  const saveSettings = vi.fn((s: AppSettings) => Promise.resolve(s))
+  const saveSettings = vi.fn((s: AppSettings) => {
+    stored = s
+    return Promise.resolve(s)
+  })
+  // What main holds: what the modal opened on, then whatever it last saved.
+  const getSettings = vi.fn(() => Promise.resolve(stored))
   const setKey = vi.fn((_id: string, _key: string) => Promise.resolve(makeSettings()))
   const deleteKey = vi.fn((_id: string) => Promise.resolve(makeSettings()))
   // listModels returns ModelOption[] (ids + optional capability metadata).
@@ -28,6 +36,7 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
   const testPermission = vi.fn(() => Promise.resolve({ decision: null, tier: null, userMatches: [] }))
   const api = {
     saveSettings,
+    getSettings,
     setKey,
     deleteKey,
     listModels,
@@ -83,9 +92,8 @@ function makeSettings(over: Partial<AppSettings> = {}): AppSettings {
 function renderModal(over: Partial<AppSettings> = {}, props: Partial<React.ComponentProps<typeof SettingsModal>> = {}) {
   const onClose = vi.fn()
   const onSaved = vi.fn()
-  const utils = render(
-    <SettingsModal initial={makeSettings(over)} onClose={onClose} onSaved={onSaved} {...props} />
-  )
+  stored = makeSettings(over)
+  const utils = render(<SettingsModal initial={stored} onClose={onClose} onSaved={onSaved} {...props} />)
   return { onClose, onSaved, ...utils }
 }
 
@@ -149,9 +157,6 @@ describe('SettingsModal cloud-hosted Claude providers', () => {
     const api = installApi()
     renderModal({ providers: [bedrockAws] })
     fireEvent.change(screen.getByLabelText('Region'), { target: { value: 'eu-west-1' } })
-    // Scoped to the footer: the API key row has a "Save" button of its own.
-    const foot = document.querySelector('.modal__foot') as HTMLElement
-    fireEvent.click(within(foot).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
     expect(saved.providers[0].region).toBe('eu-west-1')
@@ -306,7 +311,6 @@ describe('SettingsModal', () => {
     const group = screen.getByRole('radiogroup', { name: 'Default approval mode' })
     expect(within(group).getByRole('radio', { name: /Ask every time/ })).toBeChecked()
     fireEvent.click(within(group).getByRole('radio', { name: /Auto-approve edits/ }))
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).approvalPolicy).toBe('auto-edit')
   })
@@ -372,12 +376,11 @@ describe('SettingsModal', () => {
 
   it('sets whether web reads ask in full auto, asking once per site by default', async () => {
     const api = installApi()
-    const { container } = renderModal()
+    renderModal()
     fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
     const select = screen.getByLabelText('Web reads') as HTMLSelectElement
     expect(select.value).toBe('ask')
     fireEvent.change(select, { target: { value: 'allow' } })
-    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).webReads).toBe('allow')
   })
@@ -503,7 +506,6 @@ describe('SettingsModal', () => {
       renderModal({ formatOnSave: false })
       type('format on save')
       fireEvent.click(screen.getByRole('checkbox', { name: /run the matching formatter/i }))
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
       expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).formatOnSave).toBe(true)
     })
@@ -624,7 +626,6 @@ describe('SettingsModal', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
       fireEvent.click(screen.getByRole('button', { name: '+ Add rule' }))
       expect(screen.getByText('Added today in Settings · not used yet')).toBeInTheDocument()
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
       const saved = (api.saveSettings.mock.calls.at(-1)![0] as AppSettings).permissionRules
       expect(saved?.[0]).toMatchObject({ source: 'settings', addedAt: expect.any(Number) })
@@ -711,7 +712,6 @@ describe('SettingsModal', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
       // Back to the list, in the new order.
       expect([...document.querySelectorAll<HTMLInputElement>('.rule__match')].map((i) => i.value)).toEqual(['*', 'rm *', 'git *'])
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
       const saved = (api.saveSettings.mock.calls.at(-1)![0] as AppSettings).permissionRules
       expect(saved?.[0]).toMatchObject({ match: '*', source: 'settings', addedAt: expect.any(Number) })
@@ -757,7 +757,7 @@ describe('SettingsModal', () => {
 
     it('moves a rule up and down, and the warning follows the new order', async () => {
       const api = installApi()
-      const { container } = renderModal({ permissionRules: ordered })
+      renderModal({ permissionRules: ordered })
       fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
       expect(screen.getByRole('button', { name: 'Move rule 1 up' })).toBeDisabled()
       expect(screen.getByRole('button', { name: 'Move rule 3 down' })).toBeDisabled()
@@ -770,7 +770,6 @@ describe('SettingsModal', () => {
       expect(patterns()).toEqual(['*', 'rm *', 'https://a.example/*'])
       fireEvent.click(screen.getByRole('button', { name: 'Move rule 2 up' }))
 
-      fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
       const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
       expect(saved.permissionRules?.map((r) => r.match)).toEqual(['rm *', '*', 'https://a.example/*'])
@@ -810,7 +809,7 @@ describe('SettingsModal', () => {
 
   it('shows a rule\'s Exact flag and saves it when toggled, keeping it through edits', async () => {
     const api = installApi()
-    const { container } = renderModal({
+    renderModal({
       permissionRules: [
         { action: 'allow', tool: 'write_file', match: 'src', exact: true },
         { action: 'allow', tool: 'write_file', match: 'docs' }
@@ -823,7 +822,6 @@ describe('SettingsModal', () => {
     // Editing the pattern keeps the flag; toggling flips it on the other rule.
     fireEvent.change(screen.getByDisplayValue('src'), { target: { value: 'src/a.ts' } })
     fireEvent.click(boxes[1])
-    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
     expect(saved.permissionRules).toEqual([
@@ -850,7 +848,7 @@ describe('SettingsModal', () => {
     // The two exact commands collapse to the single generalized rule the helper returns.
     await waitFor(() => expect(document.querySelectorAll('.rule')).toHaveLength(1))
     expect(screen.getByDisplayValue('npm install')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('Removed 1 redundant rule. Save to apply.')
+    expect(screen.getByRole('status')).toHaveTextContent('Removed 1 redundant rule.')
   })
 
   it('says so when "Clean up rules" finds nothing to change', async () => {
@@ -974,7 +972,7 @@ describe('SettingsModal', () => {
 
   it('normalizes the models list on blur and persists manually added ids', async () => {
     const api = installApi()
-    const { container } = renderModal()
+    renderModal()
 
     const modelsArea = screen.getAllByPlaceholderText('one model id per line')[0] // anthropic
     fireEvent.focus(modelsArea)
@@ -986,7 +984,6 @@ describe('SettingsModal', () => {
     expect(modelsArea).toHaveValue('claude-sonnet\nclaude-opus')
 
     // Saving persists both ids for the anthropic provider.
-    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
     const provider = saved.providers.find((p) => p.id === 'anthropic')!
@@ -999,12 +996,11 @@ describe('SettingsModal', () => {
       ...anthropic,
       models: [{ id: 'claude-sonnet', caps: { tools: true, contextWindow: 1_000_000 }, addedAt: '2026-10-10' }]
     }
-    const { container } = renderModal({ providers: [withMeta, customEndpoint] })
+    renderModal({ providers: [withMeta, customEndpoint] })
     const modelsArea = screen.getAllByPlaceholderText('one model id per line')[0]
     fireEvent.focus(modelsArea)
     fireEvent.change(modelsArea, { target: { value: 'claude-sonnet\nclaude-opus' } })
     fireEvent.blur(modelsArea)
-    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     const saved = (api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings).providers.find((p) => p.id === 'anthropic')!
     expect(saved.models).toEqual([
@@ -1015,7 +1011,7 @@ describe('SettingsModal', () => {
 
   it('keeps an incomplete header line while typing and parses it on blur', async () => {
     const api = installApi()
-    const { container } = renderModal()
+    renderModal()
 
     // Custom headers is shown for the openai-compatible custom endpoint.
     const headersArea = screen.getByPlaceholderText('one per line (e.g. HTTP-Referer: https://myapp)')
@@ -1035,63 +1031,91 @@ describe('SettingsModal', () => {
     expect(headersArea).toHaveValue('Authorization: Bearer TOKEN')
 
     // Saving persists the parsed header for the custom endpoint.
-    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
     const provider = saved.providers.find((p) => p.id === 'custom-1234')!
     expect(provider.headers).toEqual({ Authorization: 'Bearer TOKEN' })
   })
 
-  it('saves all settings and closes when the footer Save is clicked', async () => {
-    const api = installApi()
-    const { onClose, onSaved, container } = renderModal({}, { initialTab: 'agent' })
-
-    // Edit a free-text field so we can assert it's carried into the save payload.
-    fireEvent.change(screen.getByPlaceholderText(/Extra instructions appended/), {
-      target: { value: 'be concise' }
+  describe('saving as you go', () => {
+    it('saves a toggle right away, as a patch over the stored settings, and reports it', async () => {
+      const api = installApi()
+      const { onSaved, onClose } = renderModal({ formatOnSave: false })
+      // Something else changed the stored settings meanwhile (an "Always allow" rule).
+      const rule = { action: 'allow' as const, tool: 'run_shell', match: 'npm test' }
+      api.getSettings.mockResolvedValue(makeSettings({ formatOnSave: false, permissionRules: [rule] }))
+      fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      fireEvent.click(screen.getByRole('checkbox', { name: /run the matching formatter/i }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1))
+      const saved = api.saveSettings.mock.calls[0][0] as AppSettings
+      expect(saved.formatOnSave).toBe(true)
+      // The rule saved elsewhere survives: only what this panel changed is written.
+      expect(saved.permissionRules).toEqual([rule])
+      expect(onSaved).toHaveBeenCalledWith(saved)
+      expect(await screen.findByText('Saved')).toBeInTheDocument()
+      expect(onClose).not.toHaveBeenCalled()
     })
-    // Several "Save" buttons exist (one per API key row); target the footer's
-    // accent Save specifically.
-    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
 
-    // The accent footer Save persists and propagates the fresh settings, then closes.
-    await waitFor(() => expect(onSaved).toHaveBeenCalled())
-    const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
-    expect(saved.systemPromptExtra).toBe('be concise')
-    expect(onClose).toHaveBeenCalled()
-  })
+    it('waits for a text field to lose focus before saving it', async () => {
+      const api = installApi()
+      renderModal({}, { initialTab: 'agent' })
+      const box = screen.getByPlaceholderText(/Extra instructions appended/)
+      box.focus()
+      fireEvent.change(box, { target: { value: 'be concise' } })
+      expect(await screen.findByText('Not saved yet')).toBeInTheDocument()
+      await new Promise((r) => setTimeout(r, 400))
+      expect(api.saveSettings).not.toHaveBeenCalled()
+      fireEvent.blur(box)
+      box.blur()
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).systemPromptExtra).toBe('be concise')
+    })
 
-  it('closes via the header close button and via the Cancel button', () => {
-    installApi()
-    const { onClose } = renderModal()
+    it('saves a removed setting as removed', async () => {
+      const api = installApi()
+      renderModal({ compactionThreshold: 50000 }, { initialTab: 'agent' })
+      fireEvent.change(screen.getByDisplayValue('50000'), { target: { value: '' } })
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      expect(api.saveSettings.mock.calls.at(-1)![0]).not.toHaveProperty('compactionThreshold')
+    })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Close settings' }))
-    expect(onClose).toHaveBeenCalledTimes(1)
+    it('undoes the last save once', async () => {
+      const api = installApi()
+      renderModal({ formatOnSave: false })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      const box = screen.getByRole('checkbox', { name: /run the matching formatter/i })
+      fireEvent.click(box)
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1))
+      fireEvent.click(await screen.findByRole('button', { name: 'Undo' }))
+      expect(box).not.toBeChecked()
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2))
+      expect((api.saveSettings.mock.calls[1][0] as AppSettings).formatOnSave).toBe(false)
+      // Undoing an undo is not offered.
+      await screen.findByText('Saved')
+      expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
+    })
 
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(onClose).toHaveBeenCalledTimes(2)
-  })
+    it('saves what is pending when Settings closes, and closes without asking', async () => {
+      const api = installApi()
+      const { onClose, unmount } = renderModal({}, { initialTab: 'agent' })
+      const box = screen.getByPlaceholderText(/Extra instructions appended/)
+      box.focus()
+      fireEvent.change(box, { target: { value: 'pending edit' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Close settings' }))
+      expect(onClose).toHaveBeenCalledTimes(1)
+      unmount()
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).systemPromptExtra).toBe('pending edit')
+    })
 
-  it('warns before discarding unsaved edits, and discards only on confirm', () => {
-    installApi()
-    const { onClose } = renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
-    fireEvent.click(screen.getByRole('button', { name: '+ Add rule' })) // now dirty
-
-    // Cancel while dirty asks to confirm instead of closing.
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    expect(onClose).not.toHaveBeenCalled()
-    expect(screen.getByText('Discard unsaved changes?')).toBeInTheDocument()
-
-    // Keep editing dismisses the prompt without closing.
-    fireEvent.click(screen.getByRole('button', { name: 'Keep editing' }))
-    expect(screen.queryByText('Discard unsaved changes?')).not.toBeInTheDocument()
-    expect(onClose).not.toHaveBeenCalled()
-
-    // Discard actually closes.
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
-    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
-    expect(onClose).toHaveBeenCalledTimes(1)
+    it('shows a failed save in the footer', async () => {
+      installApi({ saveSettings: vi.fn(() => Promise.reject(new Error('disk full'))) })
+      renderModal({ formatOnSave: false })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      fireEvent.click(screen.getByRole('checkbox', { name: /run the matching formatter/i }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not save settings: disk full')
+      expect(screen.getByText('Not saved')).toBeInTheDocument()
+    })
   })
 
   it('shows a key-save failure inline instead of a blocking alert', async () => {
@@ -1130,10 +1154,9 @@ describe('SettingsModal', () => {
 
   it('caps the subagent history kept per chat, clamped to 0 to 1024 MB', async () => {
     const api = installApi()
-    const { container } = renderModal({}, { initialTab: 'agent' })
+    renderModal({}, { initialTab: 'agent' })
     const box = screen.getByLabelText(/Subagent history kept per chat/) as HTMLInputElement
     fireEvent.change(box, { target: { value: '5000' } })
-    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).subagentHistoryMb).toBe(1024)
   })
@@ -1178,7 +1201,6 @@ describe('SettingsModal', () => {
     expect(select).toHaveValue('off')
     fireEvent.change(select, { target: { value: 'auto' } })
     expect(select).toHaveValue('auto')
-    fireEvent.click(within(document.querySelector('.modal__foot') as HTMLElement).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
     // The default is stored as unset, so a later default change still reaches this user.
@@ -1201,7 +1223,6 @@ describe('SettingsModal', () => {
     fireEvent.blur(box)
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
     fireEvent.change(screen.getByRole('combobox', { name: /run language servers/i }), { target: { value: 'off' } })
-    fireEvent.click(within(document.querySelector('.modal__foot') as HTMLElement).getByRole('button', { name: 'Save' }))
     await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
     const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
     expect(saved.lspServers).toEqual([{ id: 'lua', command: 'lua-language-server', extensions: ['lua'] }])
@@ -1400,7 +1421,6 @@ describe('SettingsModal', () => {
       fireEvent.blur(allow)
       expect(allow.value).toBe('corp.example\nother.example')
 
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
       const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
       expect(saved.sandboxEgress?.allow).toEqual(['corp.example', 'other.example'])
@@ -1414,7 +1434,6 @@ describe('SettingsModal', () => {
       fireEvent.change(screen.getByLabelText(/^Mode/), { target: { value: 'all' } })
       expect(screen.queryByLabelText(/Additional allowed domains/)).not.toBeInTheDocument()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
       const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
       expect(saved.sandboxEgress?.mode).toBe('all')
@@ -1435,37 +1454,22 @@ describe('SettingsModal', () => {
       // Opening with the saved theme applies it (no change yet).
       expect(document.documentElement.dataset.theme).toBe('dark')
 
-      // Picking a new option previews immediately, without touching Save.
+      // Picking a new option applies immediately.
       fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
       expect(document.documentElement.dataset.theme).toBe('light')
     })
 
-    it('reverts the preview to the open-time theme when closed without saving', () => {
-      installApi()
-      const { onSaved, unmount } = renderModal({ theme: 'dark' })
-      fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
-      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
-      expect(document.documentElement.dataset.theme).toBe('light')
-
-      // Closing without Save (modal unmounts) discards the preview.
-      unmount()
-      expect(document.documentElement.dataset.theme).toBe('dark')
-      expect(onSaved).not.toHaveBeenCalled()
-    })
-
-    it('keeps the previewed theme after Save and does not revert on close', async () => {
+    it('saves the chosen theme at once, and keeps it after closing', async () => {
       const api = installApi()
       const { onSaved, unmount } = renderModal({ theme: 'dark' })
       fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
       fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
 
-      // Footer Save persists the selection and propagates it upward.
-      const foot = document.querySelector('.modal__foot') as HTMLElement
-      fireEvent.click(within(foot).getByText('Save'))
+      // The choice is saved and propagated upward without a Save step.
       await waitFor(() => expect(onSaved).toHaveBeenCalled())
       expect((api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings).theme).toBe('light')
 
-      // The committed theme survives the close instead of snapping back.
+      // The saved theme survives the close.
       unmount()
       expect(document.documentElement.dataset.theme).toBe('light')
     })

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { useApplyTheme } from '../hooks/useApplyTheme'
-import { applyTheme } from '../lib/theme'
 import type { AppSettings, PermissionPolicyView } from '@shared/types'
 import { PAGES, PAGE_GROUPS, pageById, type TabId } from './settings/pages'
 import { NAV_ICON } from './settings/navIcons'
@@ -11,6 +10,7 @@ import { SearchableSection } from './settings/SearchableSection'
 import { highlightTerms, queryTerms } from './settings/search'
 import { isMacPlatform } from '../lib/shortcuts'
 import type { SettingsCtx } from './settings/context'
+import { useAutosave } from './settings/useAutosave'
 
 export { KeyboardTab } from './settings/KeyboardTab'
 export type { TabId } from './settings/pages'
@@ -43,13 +43,10 @@ export function SettingsModal({
   const [tab, setTab] = useState<TabId>(initialTab)
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
-  // A key/model action error, shown inline in the footer (vs a blocking alert()).
+  // An action's error (a key, a model fetch, a save), shown inline in the footer.
   const [formError, setFormError] = useState<string | null>(null)
   // Set to the platform when a key save failed because the OS secure store is unusable.
   const [storageBlocked, setStorageBlocked] = useState<string | null>(null)
-  // True once a close is requested while there are unsaved edits — the footer then
-  // asks to confirm rather than discarding silently.
-  const [confirmingClose, setConfirmingClose] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
   // The admin policy and the open project's config, read-only beside the user's own.
   const [policy, setPolicy] = useState<PermissionPolicyView | null>(null)
@@ -79,23 +76,16 @@ export function SettingsModal({
     []
   )
 
-  // A stable digest of the persisted-settings baseline (derived key flags stripped,
-  // since those change via the key actions, not "unsaved edits"). Updated whenever
-  // the working settings are persisted, so the dirty check reflects real edits.
-  const digest = (s: AppSettings): string =>
-    JSON.stringify({
-      ...s,
-      providers: s.providers.map((p) => ({ ...p, hasKey: false })),
-      searchKeyStatus: undefined
-    })
-  const savedDigest = useRef(digest(initial))
-  const isDirty = digest(settings) !== savedDigest.current
-
-  // Guard close (X / backdrop / Esc): warn once when there are unsaved edits.
-  const requestClose = (): void => {
-    if (isDirty) setConfirmingClose(true)
-    else onClose()
-  }
+  // Changes save as they are made (text fields when they lose focus); see useAutosave.
+  const autosave = useAutosave({
+    settings,
+    setSettings,
+    initial,
+    containerRef: bodyRef,
+    onSaved,
+    onError: setFormError
+  })
+  const requestClose = onClose
   useFocusTrap(modalRef, requestClose)
 
   // Mod+F (and / outside a text field) jump to the search box while Settings is
@@ -139,27 +129,12 @@ export function SettingsModal({
     return highlightTerms(body, query)
   })
 
-  // Live-preview the selected color theme while the modal is open, so the user
-  // sees the change before committing. If they close without saving we revert to
-  // whatever theme was active when the modal opened. `committed` guards the
-  // revert: once Save persists the selection it becomes the real theme, so the
-  // unmount cleanup must leave it in place. This is purely CSS-variable driven
-  // (data-theme on <html>), so the preview behaves identically on macOS, Linux,
-  // and Windows.
+  // Apply the chosen theme at once, as the rest of the app will once it saves.
   useApplyTheme(settings.theme ?? 'system')
-  const themeAtOpen = useRef<AppSettings['theme']>(initial.theme ?? 'system').current
-  const committed = useRef(false)
-  useEffect(
-    () => () => {
-      if (!committed.current) applyTheme(themeAtOpen ?? 'system')
-    },
-    [themeAtOpen]
-  )
 
-  // An API key lives in the OS secret store, not settings.json — so saving/removing
-  // one is its own action and must NOT persist the modal's other (unsaved) edits.
-  // We merge just the derived key flags from main's response into the working copy,
-  // keeping every pending edit intact so Cancel still discards them.
+  // An API key lives in the OS secret store, not settings.json, so saving or removing
+  // one is its own action. Merge just the derived key flags from main's response into
+  // the working copy, keeping any edit still being typed intact.
   const applyKeyResult = (fresh: AppSettings, id: string, has: boolean): void =>
     setSettings((s) => ({
       ...s,
@@ -204,23 +179,9 @@ export function SettingsModal({
     }
   }
 
-  // Persist the working copy for an action main performs against the saved
-  // settings. That commits the edits, including the previewed theme, so lock the
-  // theme in too and refresh the dirty baseline.
-  const persistNow = async (): Promise<void> => {
-    await window.api.saveSettings(settings)
-    committed.current = true
-    savedDigest.current = digest(settings)
-  }
-
-  const save = async (): Promise<void> => {
-    const fresh = await window.api.saveSettings(settings)
-    // Lock in the previewed theme: skip the revert-on-unmount below.
-    committed.current = true
-    savedDigest.current = digest(settings)
-    onSaved(fresh)
-    onClose()
-  }
+  // For an action main performs against the stored settings (fetching a provider's
+  // models, MCP OAuth): save whatever is pending first so it sees the edits.
+  const persistNow = autosave.flush
 
   const ctx: SettingsCtx = {
     settings,
@@ -262,6 +223,17 @@ export function SettingsModal({
       >
         <div className="modal__head">
           <h2 id="settings-title">Settings</h2>
+          <p className={`set-status set-status--${autosave.status}`} aria-live="polite">
+            {autosave.status === 'pending' && 'Not saved yet'}
+            {autosave.status === 'saving' && 'Saving…'}
+            {autosave.status === 'saved' && 'Saved'}
+            {autosave.status === 'error' && 'Not saved'}
+            {autosave.status === 'saved' && autosave.undo && (
+              <button className="link set-status__undo" onClick={autosave.undo}>
+                Undo
+              </button>
+            )}
+          </p>
           <button className="modal__close" onClick={requestClose} aria-label="Close settings">
             ✕
           </button>
@@ -370,39 +342,16 @@ export function SettingsModal({
           </div>
         </div>
 
-        <div className="modal__foot">
-          {storageBlocked && <SecureStorageNotice platform={storageBlocked} />}
-          {formError && (
-            <span
-              role="alert"
-              style={{ marginRight: 'auto', color: 'var(--danger)', fontSize: '12px' }}
-            >
-              {formError}
-            </span>
-          )}
-          {confirmingClose ? (
-            <>
-              <span style={{ marginRight: 'auto', color: 'var(--text-dim)', fontSize: '13px' }}>
-                Discard unsaved changes?
+        {(storageBlocked || formError) && (
+          <div className="modal__foot">
+            {storageBlocked && <SecureStorageNotice platform={storageBlocked} />}
+            {formError && (
+              <span role="alert" className="set-foot__error">
+                {formError}
               </span>
-              <button className="btn" onClick={() => setConfirmingClose(false)}>
-                Keep editing
-              </button>
-              <button className="btn btn--danger" onClick={onClose}>
-                Discard
-              </button>
-            </>
-          ) : (
-            <>
-              <button className="btn" onClick={requestClose}>
-                Cancel
-              </button>
-              <button className="btn btn--accent" onClick={save}>
-                Save
-              </button>
-            </>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   )

@@ -1577,6 +1577,10 @@ and a manual "Check for updates", diagnostics, legal). **Check for Updates…** 
 in the app menu on macOS and the Help menu on Windows and Linux. API keys
 are encrypted with the OS keychain and stay in the main process.
 
+Changes save as you make them, with no Save button: a switch, a choice, or a reorder
+at once, and a text field when you leave it (so a half-typed pattern is never saved).
+The title bar shows when a change is saved and offers **Undo** for the last one.
+
 The search box above the pages (focused when Settings opens; Cmd+F or Ctrl+F, or `/`,
 jumps back to it) finds a setting from any page: by its name or description, a
 common synonym ("proxy" finds Sandbox egress, "dark mode" finds Appearance), or a
