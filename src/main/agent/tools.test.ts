@@ -535,6 +535,28 @@ describe('write/read/edit', () => {
     expect(await run('read_file', { path: 'a/b.txt' })).toBe('1\thello')
   })
 
+  it('answers a read of a directory with its listing instead of an EISDIR error', async () => {
+    await run('write_file', { path: 'pkg/z.ts', content: 'z' })
+    await run('write_file', { path: 'pkg/a.ts', content: 'a' })
+    await run('write_file', { path: 'pkg/sub/c.ts', content: 'c' })
+    expect(await run('read_file', { path: 'pkg' })).toBe(
+      '[directory: pkg: read_file reads files, so here are its entries (as list_dir shows them)]\na.ts\nsub/\nz.ts'
+    )
+  })
+
+  it('reports an empty directory read as empty', async () => {
+    mkdirSync(join(workspace, 'empty'))
+    expect(await run('read_file', { path: 'empty' })).toMatch(/\[directory: empty: .*\]\n\[empty directory\]$/)
+  })
+
+  it('still reports a missing path as not found', async () => {
+    await expect(run('read_file', { path: 'nope/missing.txt' })).rejects.toThrow(/ENOENT/)
+  })
+
+  it('still refuses a directory outside the project', async () => {
+    await expect(run('read_file', { path: '..' })).rejects.toThrow()
+  })
+
   it('edits an exact string', async () => {
     await run('write_file', { path: 'x.txt', content: 'one two three' })
     await run('edit_file', { path: 'x.txt', old_string: 'two', new_string: 'TWO' })
