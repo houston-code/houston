@@ -24,9 +24,48 @@ export interface FileLockOptions {
   staleMs?: number
   /** Pause between attempts (default 25 ms). */
   retryMs?: number
+  /** The OS whose file-error codes to expect (default: this one). */
+  platform?: NodeJS.Platform
 }
 
+type Settings = Required<FileLockOptions>
+
 const sleep = (ms: number): Promise<void> => new Promise((res) => setTimeout(res, ms))
+
+const code = (err: unknown): string | undefined => (err as NodeJS.ErrnoException | undefined)?.code
+
+/**
+ * Windows won't create or delete a file that is mid-delete (unlinked while some
+ * handle on it is still open, such as another waiter's stat or read of the lock) or
+ * held open by another program (an antivirus scan, the search indexer). It reports
+ * that as EPERM, EACCES or EBUSY rather than EEXIST or ENOENT. Those states clear on
+ * their own, so they are waited out like a busy lock. Elsewhere the same codes are
+ * real permission errors.
+ */
+function isWindowsBusy(err: unknown, platform: NodeJS.Platform): boolean {
+  const c = code(err)
+  return platform === 'win32' && (c === 'EPERM' || c === 'EACCES' || c === 'EBUSY')
+}
+
+/**
+ * Run a cleanup step that removes a lock or guard file, retrying it for up to
+ * `timeoutMs` while Windows reports the file busy. A cleanup that gives up strands
+ * the file, and every waiter then times out until it goes stale, so a brief busy
+ * spell is worth waiting out. Any other failure means the file is gone already or is
+ * no longer ours, and is ignored.
+ */
+async function cleanUp(step: () => Promise<unknown>, s: Settings): Promise<void> {
+  const deadline = Date.now() + s.timeoutMs
+  for (;;) {
+    try {
+      await step()
+      return
+    } catch (err) {
+      if (!isWindowsBusy(err, s.platform) || Date.now() >= deadline) return
+    }
+    await sleep(s.retryMs)
+  }
+}
 
 /**
  * Remove an abandoned lock without ever removing a live one. Deleting by name is
@@ -38,14 +77,14 @@ const sleep = (ms: number): Promise<void> => new Promise((res) => setTimeout(res
  * stale before the delete. A guard left by a process that died is cleared after
  * `staleMs`, like the lock itself.
  */
-async function takeOverStale(lock: string, staleContent: string, staleMs: number): Promise<void> {
+async function takeOverStale(lock: string, staleContent: string, s: Settings): Promise<void> {
   const guard = `${lock}.takeover`
   try {
     await fs.writeFile(guard, '', { flag: 'wx' })
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') return
+    if (code(err) !== 'EEXIST') return
     try {
-      if (Date.now() - (await fs.stat(guard)).mtimeMs > staleMs) await fs.unlink(guard)
+      if (Date.now() - (await fs.stat(guard)).mtimeMs > s.staleMs) await fs.unlink(guard)
     } catch {
       /* gone already */
     }
@@ -53,11 +92,11 @@ async function takeOverStale(lock: string, staleContent: string, staleMs: number
   }
   try {
     const [st, content] = await Promise.all([fs.stat(lock), fs.readFile(lock, 'utf8')])
-    if (content === staleContent && Date.now() - st.mtimeMs > staleMs) await fs.unlink(lock)
+    if (content === staleContent && Date.now() - st.mtimeMs > s.staleMs) await fs.unlink(lock)
   } catch {
     /* released or taken over already */
   } finally {
-    await fs.unlink(guard).catch(() => undefined)
+    await cleanUp(() => fs.unlink(guard), s)
   }
 }
 
@@ -67,27 +106,36 @@ export async function withFileLock<T>(
   fn: () => T | Promise<T>,
   opts: FileLockOptions = {}
 ): Promise<T> {
-  const { timeoutMs = 5000, staleMs = 30_000, retryMs = 25 } = opts
+  const { timeoutMs = 5000, staleMs = 30_000, retryMs = 25, platform = process.platform } = opts
+  const s: Settings = { timeoutMs, staleMs, retryMs, platform }
   const lock = `${target}.lock`
   const token = randomUUID()
   const deadline = Date.now() + timeoutMs
   for (;;) {
+    let busy: unknown
     try {
       await fs.writeFile(lock, token, { flag: 'wx' })
       break
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+      if (code(err) !== 'EEXIST' && !isWindowsBusy(err, platform)) throw err
+      busy = err
     }
-    try {
-      const [st, content] = await Promise.all([fs.stat(lock), fs.readFile(lock, 'utf8')])
-      if (Date.now() - st.mtimeMs > staleMs) {
-        await takeOverStale(lock, content, staleMs) // abandoned by a process that died mid-save
-        continue
+    // A lock Windows refused to create is mid-delete or held open: nothing to inspect.
+    if (code(busy) === 'EEXIST') {
+      try {
+        const [st, content] = await Promise.all([fs.stat(lock), fs.readFile(lock, 'utf8')])
+        if (Date.now() - st.mtimeMs > staleMs) {
+          await takeOverStale(lock, content, s) // abandoned by a process that died mid-save
+          continue
+        }
+      } catch (err) {
+        // Released between our attempt and the check: try again now. Anything else
+        // (a lock we can't read yet) waits like a busy one rather than spinning.
+        if (code(err) === 'ENOENT') continue
       }
-    } catch {
-      continue // released between our attempt and the check: try again now
     }
     if (Date.now() >= deadline) {
+      if (code(busy) !== 'EEXIST') throw busy // Windows still refuses the create: say why
       throw new Error(`${target} is being saved by another Houston window. Try again.`)
     }
     await sleep(retryMs)
@@ -97,10 +145,8 @@ export async function withFileLock<T>(
   } finally {
     // Remove only our own lock: if ours was judged stale and taken over, the file
     // now belongs to someone else.
-    try {
+    await cleanUp(async () => {
       if ((await fs.readFile(lock, 'utf8')) === token) await fs.unlink(lock)
-    } catch {
-      /* already gone */
-    }
+    }, s)
   }
 }
