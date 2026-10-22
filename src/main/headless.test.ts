@@ -2,8 +2,15 @@ import { describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AppSettings } from '@shared/types'
-import type { AgentEvent, AgentRunRequest, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
+import type { AppSettings, ApprovalPolicy } from '@shared/types'
+import type {
+  AgentEvent,
+  AgentRunRequest,
+  ChatMessage,
+  ElicitationResult,
+  PlanDecision,
+  ReasoningEffort
+} from '@shared/agent'
 import { loadProjectConfig } from './agent/projectConfig'
 import {
   HEADLESS_EXIT,
@@ -270,6 +277,27 @@ const settings = (over: Partial<AppSettings> = {}): AppSettings =>
   }) as unknown as AppSettings
 
 describe('resolveHeadlessModel', () => {
+  it("prefers a resumed chat's model over the saved selection when no flag is given", () => {
+    const s = settings({ selected: { providerId: 'anthropic', model: 'claude' } })
+    expect(resolveHeadlessModel(s, {}, { providerId: 'ollama', model: 'llama' })).toEqual({
+      providerId: 'ollama',
+      model: 'llama'
+    })
+    // An explicit flag still wins, and a provider that is gone falls through.
+    expect(resolveHeadlessModel(s, { providerId: 'anthropic' }, { providerId: 'ollama', model: 'llama' })).toEqual({
+      providerId: 'anthropic',
+      model: 'claude'
+    })
+    expect(resolveHeadlessModel(s, { model: 'opus' }, { providerId: 'ollama', model: 'llama' })).toEqual({
+      providerId: 'anthropic',
+      model: 'opus'
+    })
+    expect(resolveHeadlessModel(s, {}, { providerId: 'gone', model: 'x' })).toEqual({
+      providerId: 'anthropic',
+      model: 'claude'
+    })
+  })
+
   it('uses an explicit provider + model', () => {
     expect(resolveHeadlessModel(settings(), { providerId: 'anthropic', model: 'opus' })).toEqual({
       providerId: 'anthropic',
@@ -711,16 +739,36 @@ describe('runHeadless', () => {
   })
 
   /** A session store fake + a startRun that echoes messages to onMessages. */
-  type StoredConv = { id: string; workspace: string; messages: ChatMessage[]; providerId?: string; model?: string }
+  type StoredConv = {
+    id: string
+    workspace: string
+    messages: ChatMessage[]
+    providerId?: string
+    model?: string
+    reasoningEffort?: ReasoningEffort
+    approvalPolicy?: ApprovalPolicy
+  }
   function withSession(seed: Array<StoredConv> = []) {
     const store = new Map<string, StoredConv>(seed.map((s) => [s.id, { ...s }]))
     let seq = 0
     const base = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
     const { d } = base
-    const startedWith: { conversationId?: string; messages: ChatMessage[] }[] = []
-    const setModelCalls: Array<[string, string, string]> = []
+    const startedWith: Array<
+      Pick<AgentRunRequest, 'conversationId' | 'providerId' | 'model' | 'approvalPolicy' | 'reasoningEffort' | 'overrides'> & {
+        messages: ChatMessage[]
+      }
+    > = []
+    const setSettingsCalls: Array<{ id: string } & Record<string, unknown>> = []
     d.startRun = async (req, send, onMessages) => {
-      startedWith.push({ conversationId: req.conversationId, messages: req.messages.map((m) => ({ ...m })) })
+      startedWith.push({
+        conversationId: req.conversationId,
+        providerId: req.providerId,
+        model: req.model,
+        approvalPolicy: req.approvalPolicy,
+        reasoningEffort: req.reasoningEffort,
+        overrides: req.overrides,
+        messages: req.messages.map((m) => ({ ...m }))
+      })
       onMessages?.([...req.messages, { role: 'assistant', content: 'ok' }])
       send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
     }
@@ -730,25 +778,22 @@ describe('runHeadless', () => {
         const recent = [...store.values()].filter((c) => c.workspace === workspace).at(-1)
         return recent ?? null
       },
-      create: ({ workspace, providerId, model }) => {
+      create: ({ workspace, ...chat }) => {
         const id = `conv-${++seq}`
-        store.set(id, { id, workspace, messages: [], providerId, model })
+        store.set(id, { id, workspace, messages: [], ...chat })
         return { id }
       },
       setMessages: (id, messages) => {
         const c = store.get(id)
         if (c) c.messages = messages
       },
-      setModel: (id, providerId, model) => {
-        setModelCalls.push([id, providerId, model])
+      setSettings: (id, patch) => {
+        setSettingsCalls.push({ id, ...patch })
         const c = store.get(id)
-        if (c) {
-          c.providerId = providerId
-          c.model = model
-        }
+        if (c) Object.assign(c, patch)
       }
     }
-    return { d, store, startedWith, setModelCalls, out: base.out, err: base.err }
+    return { d, store, startedWith, setSettingsCalls, out: base.out, err: base.err }
   }
 
   it('creates and persists a conversation for a plain run', async () => {
@@ -792,29 +837,81 @@ describe('runHeadless', () => {
     expect(startedWith[0].messages).toEqual([{ role: 'user', content: 'hi' }])
   })
 
-  it('rewrites a resumed session stored under a different model to the resolved model', async () => {
-    // Prior session was created under a different provider+model than this run resolves to.
-    const { d, store, setModelCalls } = withSession([
+  it('rewrites a resumed session whose provider is gone to the model that ran', async () => {
+    // Prior session ran on a provider this machine no longer has set up.
+    const { d, store, setSettingsCalls } = withSession([
       { id: 'a', workspace: '/proj', messages: [{ role: 'user', content: 'earlier' }], providerId: 'openai', model: 'gpt' }
     ])
-    // Default deps resolve to anthropic/claude (via settings.selected).
+    // So the run falls back to anthropic/claude (via settings.selected).
     await runHeadless({ ...baseOpts, resumeId: 'a' }, d)
-    expect(setModelCalls).toEqual([['a', 'anthropic', 'claude']])
+    expect(setSettingsCalls).toEqual([{ id: 'a', providerId: 'anthropic', model: 'claude' }])
     // Stored meta now tracks the model that actually ran (not the create-time one).
     expect(store.get('a')).toMatchObject({ providerId: 'anthropic', model: 'claude' })
   })
 
-  it('does not call setModel on the fresh-create path (create already stores the model)', async () => {
-    const { d, setModelCalls } = withSession()
-    await runHeadless(baseOpts, d)
-    expect(setModelCalls).toEqual([])
+  it("continues a resumed chat on its own model and effort when no flag sets them", async () => {
+    const { d, startedWith, store } = withSession([
+      {
+        id: 'a',
+        workspace: '/proj',
+        messages: [{ role: 'user', content: 'earlier' }],
+        providerId: 'ollama',
+        model: 'llama',
+        reasoningEffort: 'low'
+      }
+    ])
+    await runHeadless({ ...baseOpts, resumeId: 'a' }, d)
+    expect(startedWith[0]).toMatchObject({ providerId: 'ollama', model: 'llama', reasoningEffort: 'low' })
+    expect(store.get('a')).toMatchObject({ providerId: 'ollama', model: 'llama', reasoningEffort: 'low' })
   })
 
-  it('does not crash the run when setModel throws (best-effort persistence)', async () => {
+  it('lets --provider/--model and --effort win over the resumed chat, and records them', async () => {
+    const { d, startedWith, store } = withSession([
+      {
+        id: 'a',
+        workspace: '/proj',
+        messages: [],
+        providerId: 'ollama',
+        model: 'llama',
+        reasoningEffort: 'low'
+      }
+    ])
+    await runHeadless({ ...baseOpts, resumeId: 'a', providerId: 'anthropic', model: 'claude', effort: 'xhigh' }, d)
+    expect(startedWith[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
+    // The flag reaches the run as the per-run override, which wins over the chat's own.
+    expect(startedWith[0].overrides).toMatchObject({ reasoningEffort: 'xhigh' })
+    expect(store.get('a')).toMatchObject({ providerId: 'anthropic', model: 'claude', reasoningEffort: 'xhigh' })
+  })
+
+  it("never takes a resumed chat's approval policy, nor writes its own back", async () => {
+    // A chat used interactively in full-auto must not loosen an unattended run.
+    const { d, startedWith, store, setSettingsCalls } = withSession([
+      { id: 'a', workspace: '/proj', messages: [], providerId: 'anthropic', model: 'claude', approvalPolicy: 'full-auto' }
+    ])
+    await runHeadless({ ...baseOpts, resumeId: 'a' }, d)
+    expect(startedWith[0].approvalPolicy).toBe(baseOpts.approvalPolicy)
+    expect(setSettingsCalls.every((c) => !('approvalPolicy' in c))).toBe(true)
+    expect(store.get('a')?.approvalPolicy).toBe('full-auto')
+  })
+
+  it('stores --effort on a fresh session', async () => {
+    const { d, store } = withSession()
+    await runHeadless({ ...baseOpts, effort: 'medium' }, d)
+    expect(store.get('conv-1')).toMatchObject({ reasoningEffort: 'medium' })
+    expect(store.get('conv-1')).not.toHaveProperty('approvalPolicy')
+  })
+
+  it('does not call setSettings on the fresh-create path (create already stores them)', async () => {
+    const { d, setSettingsCalls } = withSession()
+    await runHeadless(baseOpts, d)
+    expect(setSettingsCalls).toEqual([])
+  })
+
+  it('does not crash the run when setSettings throws (best-effort persistence)', async () => {
     const { d } = withSession([
       { id: 'a', workspace: '/proj', messages: [{ role: 'user', content: 'earlier' }], providerId: 'openai', model: 'gpt' }
     ])
-    d.session!.setModel = () => {
+    d.session!.setSettings = () => {
       throw new Error('store write failed')
     }
     const code = await runHeadless({ ...baseOpts, resumeId: 'a' }, d)
@@ -1397,7 +1494,7 @@ describe('runHeadless --json result line', () => {
       load: () => null,
       create: () => ({ id: 'conv-1' }),
       setMessages: () => {},
-      setModel: () => {}
+      setSettings: () => {}
     }
     await runHeadless({ ...baseOpts, json: true }, d)
     expect(jsonLines(out).map((l) => l.type)).toEqual(['system', 'session', 'text', 'done', 'result'])

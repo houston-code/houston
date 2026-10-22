@@ -51,6 +51,11 @@ ships as a desktop app and as terminal clients.
     `--verify <command>` runs that command when the agent stops after editing
     files and sends a failure back for a bounded fix-up pass (it needs a policy
     that can edit, such as `--full-auto`). A bad value exits 2 before anything runs.
+  - **Resuming a chat.** `--continue` (this folder's most recent chat) or
+    `--resume <id>` runs on that chat's own model and reasoning effort unless
+    `--provider`, `--model` or `--effort` says otherwise. The approval mode always
+    comes from the flags (read-only unless `--full-auto`), never from the chat, so
+    a chat you use in full auto can't loosen an unattended run.
   - **Automation flags.** `--allowed-tools <list>` and `--disallowed-tools <list>`
     restrict the run's tools: comma-separated tool names (`read_file`), names
     ending in `*` (`mcp__github__*`), or names with a permission-rule pattern
