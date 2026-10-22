@@ -158,6 +158,29 @@ export function mergeProjectMcpServers(
 }
 
 /**
+ * Add a run's own MCP servers (the headless `--mcp-config`) to the configured ones,
+ * under a `run-` id prefix so they can never shadow or impersonate a configured
+ * server (a configured server wins a prefixed-id collision). Like project servers
+ * they carry their header/env values in the config itself (`origin: 'project'`)
+ * rather than the secret store, and they live for the run only.
+ */
+export function mergeRunMcpServers(
+  configured: McpServerConfig[] | undefined,
+  run: McpServerConfig[] | undefined
+): McpServerConfig[] | undefined {
+  if (!run?.length) return configured
+  const taken = new Set((configured ?? []).map((s) => s.id))
+  const merged = [...(configured ?? [])]
+  for (const s of run) {
+    const id = `run-${s.id}`
+    if (taken.has(id)) continue
+    taken.add(id)
+    merged.push({ ...s, id, origin: 'project' })
+  }
+  return merged
+}
+
+/**
  * Fingerprint of the parsed elevating subset, binding a trust decision to what
  * was actually shown/consented to. Computed over the NORMALIZED (parsed) config,
  * so cosmetic file changes (whitespace, key order of ignored fields) don't churn

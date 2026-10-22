@@ -97,12 +97,26 @@ Options:
   --allow-shell-network (-p) let shell commands reach the network this run
                         (default: offline, except under full-auto with
                         --on-approval allow)
-  --json                (-p) machine-readable: one JSON event per line, then a
-                        final {"type":"result",...} summary line
+  --json                (-p) machine-readable: an init line, one JSON event per
+                        line, then a {"type":"result",...} summary line
   --effort <level>      (-p) reasoning effort for this run: off | low | medium | high | xhigh
   --max-turns <n>       (-p) hard cap on model steps for this run
   --max-cost <usd>      (-p) tell the agent to wrap up once the run costs this much
   --verify <command>    (-p) after the agent edits, run this check and send failures back
+  --allowed-tools <list>
+                        (-p) only these tools: names, name*, or name(pattern),
+                        comma-separated, e.g. 'read_file,run_shell(git *)'
+  --disallowed-tools <list>
+                        (-p) never these tools (wins over --allowed-tools)
+  --append-system-prompt <text|@file>
+                        (-p) add instructions to the system prompt for this run
+  --output-schema <file|json>
+                        (-p) the final answer must be JSON matching this schema
+                        (--json puts it in the result line's structured_output)
+  --mcp-config <file>   (-p) extra MCP servers for this run only
+  --input-format stream-json
+                        (with --json) read one {"type":"user","content":"..."}
+                        line per turn from stdin until end of input
   --continue            reopen the folder's most recent session
   --resume <id>         reopen a specific session
   -h, --help            this help
@@ -111,6 +125,7 @@ Options:
 One-shot exit codes:
   0  the agent finished              1  error, stall, or --on-approval fail
   2  bad flag value or empty prompt  3  hit a budget (step cap or output limit)
+  4  the answer did not match --output-schema
 
 Providers:
   houston providers                    list configured providers and hosts to add
@@ -203,7 +218,7 @@ async function main(): Promise<number> {
 
   const mode = selectRunMode(argv, process.cwd(), Boolean(process.stdin.isTTY), stdinIsPiped())
   if (mode.kind === 'tui') return runTuiEntry(mode.options, { version: VERSION })
-  if (mode.kind === 'headless') return runHeadlessEntry(mode.options)
+  if (mode.kind === 'headless') return runHeadlessEntry(mode.options, { version: VERSION })
 
   process.stderr.write(USAGE)
   return 2

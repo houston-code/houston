@@ -4,6 +4,7 @@ import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { isatty } from 'node:tty'
 import { spawn, spawnSync } from 'node:child_process'
+import { createInterface } from 'node:readline'
 import type { McpServerConfig } from '@shared/types'
 import {
   isSupportedImageType,
@@ -126,6 +127,15 @@ export function readAllStdin(): Promise<string> {
     process.stdin.on('end', () => resolve(data))
     process.stdin.on('error', reject)
   })
+}
+
+/**
+ * The lines of stdin as they arrive (`--input-format stream-json`). Lines that come
+ * in while a turn runs wait in the stream until the next turn asks for them.
+ */
+export async function* readStdinLines(): AsyncIterable<string> {
+  const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
+  for await (const line of rl) yield line
 }
 
 /** Read a file, returning null if it doesn't exist / can't be read. */
@@ -661,7 +671,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
 }
 
 /** Run the one-shot headless client to completion. Returns the exit code. */
-export async function runHeadlessEntry(headless: HeadlessOptions): Promise<number> {
+export async function runHeadlessEntry(headless: HeadlessOptions, opts: { version?: string } = {}): Promise<number> {
   // spawn_session works headless too: children run concurrently in this process
   // and are awaited below so the one-shot exit doesn't kill them mid-run. The
   // scheduler backend is wired without starting timers — a headless run can
@@ -682,6 +692,8 @@ export async function runHeadlessEntry(headless: HeadlessOptions): Promise<numbe
       out: (s) => process.stdout.write(s),
       err: (s) => process.stderr.write(s),
       readStdin: readAllStdin,
+      readStdinLines,
+      ...(opts.version ? { version: opts.version } : {}),
       // Persist headless runs as conversations (shared with the TUI/GUI) so
       // --continue / --resume and an interactive `-i` handoff can pick them up.
       session: {

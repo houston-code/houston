@@ -36,6 +36,7 @@ import {
   isApprovalPolicy,
   type ApprovalPolicy,
   type ModelCaps,
+  type PermissionRule,
   type SelectedModel
 } from '@shared/types'
 import { modelDisplayName } from '@shared/models'
@@ -60,7 +61,8 @@ import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt } from './prompt'
 import { applyRunOverrides } from './run-overrides'
 import { loadProjectRules } from './rules'
-import { loadProjectConfig, mergeProjectMcpServers } from './projectConfig'
+import { loadProjectConfig, mergeProjectMcpServers, mergeRunMcpServers } from './projectConfig'
+import { scopeRefusalText, scopeVerdict, toolOffered } from './toolScope'
 import { loadManagedPolicy } from './managedPolicy'
 import {
   ASK_USER_NAME,
@@ -1065,7 +1067,11 @@ export async function startRun(
       askUser: req.unattended !== true,
       // The lsp_* tools, only when a server is installed for a language the project uses.
       lsp: lspManager.availableFor([workspace]).length > 0
-    }).map((t) => t.schema)
+    })
+      .map((t) => t.schema)
+      // The run's tool scope (headless --allowed-tools/--disallowed-tools) leaves out
+      // what it refuses outright, so the prompt never names a tool the model can't use.
+      .filter((s) => toolOffered(req.toolScope, s.name))
     // Merge Houston's built-in skills (e.g. houston-guide) with the workspace's
     // own for the agent runtime; `/skills` still lists only the workspace's. A
     // built-in tied to a tool this run doesn't offer (render-ui needs show_images)
@@ -1129,7 +1135,10 @@ export async function startRun(
       // without an OS sandbox is never told its commands are sandboxed.
       { platform: hostPlatform(), sandboxBackend: activeBackendId() },
       // Only the desktop app draws inline visuals in replies.
-      req.imageGallery === true ? { html: settings.htmlVisuals === true } : undefined
+      req.imageGallery === true ? { html: settings.htmlVisuals === true } : undefined,
+      req.appendSystemPrompt !== undefined || req.outputSchema !== undefined
+        ? { append: req.appendSystemPrompt, outputSchema: req.outputSchema }
+        : undefined
     )
     // Built-in tools plus any tools from connected MCP servers (best effort).
     // When a lot of MCP tools are connected, sending every schema on every turn
@@ -1139,11 +1148,17 @@ export async function startRun(
     // then rides along on later turns. At/below the threshold nothing changes.
     // A trusted folder's project MCP servers join the user's own under a `proj-`
     // id prefix (user servers win collisions); untrusted folders contribute none.
-    const mcpToolDefs = await getMcpToolDefs(
-      projectTrusted
-        ? mergeProjectMcpServers(settings.mcpServers, projectConfig.elevated.mcpServers)
-        : settings.mcpServers
-    )
+    // The headless --mcp-config servers join for this run only, never saved.
+    const mcpToolDefs = (
+      await getMcpToolDefs(
+        mergeRunMcpServers(
+          projectTrusted
+            ? mergeProjectMcpServers(settings.mcpServers, projectConfig.elevated.mcpServers)
+            : settings.mcpServers,
+          req.extraMcpServers
+        )
+      )
+    ).filter((d) => toolOffered(req.toolScope, d.schema.name))
     const lazyMcp = mcpToolDefs.length > MCP_LAZY_THRESHOLD
     const revealedMcp = new Set<string>()
     const findTools = lazyMcp ? makeFindToolsDef(mcpToolDefs, revealedMcp) : null
@@ -1166,6 +1181,17 @@ export async function startRun(
         .filter((d) => !lazyMcp || revealedMcp.has(d.schema.name))
         .map((d) => d.schema)
     ]
+    // Every tool the model can reach this run, deferred MCP tools included.
+    if (req.announceTools) {
+      emit({
+        type: 'run_info',
+        tools: [
+          ...builtinSchemas.map((t) => t.name),
+          ...(findTools ? [findTools.schema.name] : []),
+          ...mcpToolDefs.map((d) => d.schema.name)
+        ]
+      })
+    }
     // A prior run interrupted while a tool call was pending (commonly parked on an
     // approval prompt, or a long-blocking present_plan / ask_user, when the app
     // quit/crashed) leaves an assistant `tool_use` with no matching `tool_result` —
@@ -1457,7 +1483,22 @@ export async function startRun(
     // when it originates there: the admin block is checked first, so if it matches at
     // all it IS the winning rule. Gives the user an honest reason (their org, not a
     // stray local rule) and signals the deny is not one they can lift from Settings.
-    const ruleDenialText = (name: string, args: Record<string, unknown>): string =>
+    // Every permission-rule check goes through here: the run's tool scope (headless
+    // --allowed-tools/--disallowed-tools) refuses first, then the rules decide. So a
+    // scoped-out call is denied on every path (parallel reads, the sequential gate,
+    // a hook's rewrite, and subagent calls) whatever the policy or an allow rule says.
+    // find_tools (offered only when MCP tools are deferred) is a catalog over MCP tools
+    // the scope already filtered, so it stays callable whatever the scope names.
+    const inScope = (name: string, subject: string): boolean =>
+      (findTools !== null && name === findTools.schema.name) || !scopeVerdict(req.toolScope, name, subject, roots)
+    const matchRun = (name: string, subject: string): PermissionRule['action'] | null =>
+      inScope(name, subject) ? matchRule(permissionRules, name, subject, roots) : 'deny'
+    const ruleDenialText = (name: string, args: Record<string, unknown>): string => {
+      const subject = permissionSubject(name, args)
+      const refusal = inScope(name, subject) ? null : scopeVerdict(req.toolScope, name, subject, roots)
+      return refusal ? scopeRefusalText(refusal) : managedRuleDenialText(name, args)
+    }
+    const managedRuleDenialText = (name: string, args: Record<string, unknown>): string =>
       managedPolicy.permissionRules.length > 0 &&
       matchRule(managedPolicy.permissionRules, name, permissionSubject(name, args), roots) === 'deny'
         ? "Denied by your organization's managed policy."
@@ -1578,7 +1619,7 @@ export async function startRun(
         gateArgs: Record<string, unknown>,
         runCall: () => Promise<string>
       ): Promise<string> => {
-        const ruleAction = matchRule(permissionRules, name, permissionSubject(name, gateArgs), roots)
+        const ruleAction = matchRun(name, permissionSubject(name, gateArgs))
         if (ruleAction === 'deny') return ruleDenialText(name, gateArgs)
         const sensitiveRead = isSensitiveRead(kind, gateArgs)
         const shellEscapesWorkspace =
@@ -1671,7 +1712,7 @@ export async function startRun(
         runCommand: () => Promise<string>
       ): Promise<string> => {
         const subject = permissionSubject('run_shell', gateArgs)
-        const ruleAction = matchRule(permissionRules, 'run_shell', subject, roots)
+        const ruleAction = matchRun('run_shell', subject)
         if (ruleAction === 'deny') return ruleDenialText('run_shell', gateArgs)
         return promptGatedCall({
           subCallId: mintSubCallId(callId, 'shell'),
@@ -1695,7 +1736,7 @@ export async function startRun(
         gateArgs: Record<string, unknown>,
         runCall: () => Promise<string>
       ): Promise<string> => {
-        const ruleAction = matchRule(permissionRules, name, permissionSubject(name, gateArgs), roots)
+        const ruleAction = matchRun(name, permissionSubject(name, gateArgs))
         if (ruleAction === 'deny') return ruleDenialText(name, gateArgs)
         const { mustApprove } = decideApproval({
           ruleAction,
@@ -2184,12 +2225,7 @@ export async function startRun(
       if (call.name === ASK_USER_NAME) return false
       const tool = lookupTool(call.name)
       if (!tool) return false
-      const ruleAction = matchRule(
-        permissionRules,
-        call.name,
-        permissionSubject(call.name, call.arguments),
-        roots
-      )
+      const ruleAction = matchRun(call.name, permissionSubject(call.name, call.arguments))
       return isParallelizableRead(
         tool.kind,
         ruleAction,
@@ -3402,7 +3438,7 @@ export async function startRun(
         const toolDocs: DocumentAttachment[] = []
 
         const ruleAction = tool
-          ? matchRule(permissionRules, call.name, permissionSubject(call.name, call.arguments), roots)
+          ? matchRun(call.name, permissionSubject(call.name, call.arguments))
           : null
 
         // Validate arguments before any gating so a malformed call is repaired
@@ -3410,7 +3446,11 @@ export async function startRun(
         const invalid = tool ? validationFailure(call) : null
 
         if (!tool) {
-          output = `Unknown tool: ${call.name}`
+          // A tool the run's scope left out (an MCP tool is then not even registered)
+          // says so, rather than reading as a name the model made up.
+          output = inScope(call.name, permissionSubject(call.name, call.arguments))
+            ? `Unknown tool: ${call.name}`
+            : ruleDenialText(call.name, call.arguments)
           ok = false
         } else if (invalid) {
           output = invalid.output
@@ -3459,7 +3499,7 @@ export async function startRun(
           const execRuleAction =
             execArgs === call.arguments
               ? ruleAction
-              : matchRule(permissionRules, call.name, permissionSubject(call.name, execArgs), roots)
+              : matchRun(call.name, permissionSubject(call.name, execArgs))
           // A write over a file the agent hasn't read (or that changed since) is
           // refused by the tool itself; checking here as well means the user is never
           // asked to approve a call that is about to fail. The tool re-checks when it

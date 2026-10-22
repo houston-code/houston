@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { realpathSync } from 'node:fs'
+import { promises as fsp, realpathSync } from 'node:fs'
+import { resolve as resolvePath } from 'node:path'
 import {
   folderTrustState,
   isApprovalPolicy,
@@ -7,7 +8,10 @@ import {
   type ApprovalPolicy,
   type ProviderConfig
 } from '@shared/types'
-import { loadProjectConfig } from './agent/projectConfig'
+import { loadProjectConfig, parseProjectMcpServers } from './agent/projectConfig'
+import { parseToolList } from './agent/toolScope'
+import { getTool } from './agent/tools'
+import { formatSchemaErrors, schemaProblems, validateJson, type JsonSchema } from '@shared/jsonSchema'
 import { stripControlChars } from './tui-wrap'
 import { missingKeyHint } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
@@ -20,6 +24,7 @@ import { formatUsd } from '@shared/usage'
 import {
   isReasoningEffort,
   REASONING_EFFORTS,
+  systemNoteMessage,
   type AgentEvent,
   type AgentRunRequest,
   type ChatMessage,
@@ -28,8 +33,11 @@ import {
   type ReasoningEffort,
   type RunSettingsOverrides,
   type StopReason,
-  type ToolApprovalDecision
+  type ToolApprovalDecision,
+  type ToolScope,
+  type ToolScopeEntry
 } from '@shared/agent'
+import type { McpServerConfig } from '@shared/types'
 
 /**
  * One-shot headless mode: run a single prompt through the agent loop without the
@@ -55,11 +63,62 @@ export const HEADLESS_EXIT = {
   /** A bad flag value, or no prompt (an empty stdin). Nothing ran. */
   usage: 2,
   /** The run hit a budget (its step cap or the model's output limit) before finishing. */
-  limit: 3
+  limit: 3,
+  /** `--output-schema`: the final answer still didn't match the schema after one corrective turn. */
+  schema: 4
 } as const
 
-/** How a headless run ended: the `status` of the `--json` result line. */
-export type HeadlessStatus = 'success' | 'limit' | 'stalled' | 'approval_denied' | 'error'
+/**
+ * The version of the `--json` output contract: the `system`/`init` line, the
+ * event lines, and the `result` line, as described by
+ * docs/schemas/headless-events.schema.json. Bump it on any change a consumer could
+ * trip over (a field removed or renamed, a type or meaning changed); adding an
+ * optional field or a new event type does not need a bump.
+ */
+export const HEADLESS_SCHEMA_VERSION = 1
+
+/**
+ * How a headless run (or, with `--input-format stream-json`, one turn of it) ended:
+ * the `status` of the `--json` result line.
+ */
+export type HeadlessStatus =
+  | 'success'
+  | 'limit'
+  | 'stalled'
+  | 'approval_denied'
+  | 'error'
+  | 'schema_invalid'
+  | 'input_error'
+
+/**
+ * The first line a `--json` run prints: what the run is about to do, so a harness
+ * can check its setup (and the contract version) before reading any events.
+ */
+export interface HeadlessInit {
+  type: 'system'
+  subtype: 'init'
+  schemaVersion: number
+  /** The Houston build running the task. */
+  houstonVersion: string
+  cwd: string
+  /** Null when no provider or model could be resolved (the run then ends at once). */
+  providerId: string | null
+  model: string | null
+  approvalPolicy: ApprovalPolicy
+  onApproval: HeadlessApprovalMode
+  inputFormat: HeadlessInputFormat
+  /** The saved session this run belongs to, for a later `--resume`. */
+  conversationId?: string
+  /** The tools the model is offered, once the run assembled them (built-ins and MCP). */
+  tools?: string[]
+  /** `--allowed-tools` / `--disallowed-tools`, as given. */
+  allowedTools?: string[]
+  disallowedTools?: string[]
+  /** The ids of the `--mcp-config` servers, as the model's tool names carry them (`run-<id>`). */
+  mcpServers?: string[]
+  /** Whether the final answer must match an `--output-schema`. */
+  outputSchema: boolean
+}
 
 /**
  * The last line a `--json` run prints: one summary a harness can read instead of
@@ -67,6 +126,7 @@ export type HeadlessStatus = 'success' | 'limit' | 'stalled' | 'approval_denied'
  */
 export interface HeadlessResult {
   type: 'result'
+  schemaVersion: number
   status: HeadlessStatus
   /** The final `done` event's stop reason; null when the run never got that far. */
   stopReason: StopReason | null
@@ -87,7 +147,24 @@ export interface HeadlessResult {
    * The loop builds it, not the model, so a harness can check `finalText` against it.
    */
   receipt?: TurnReceipt
+  /** `--output-schema`: the final answer parsed as JSON, present only when it matched the schema. */
+  structured_output?: unknown
+  /** `--output-schema`: why the final answer didn't match, when it didn't. */
+  schemaErrors?: string[]
+  /** What went wrong, for a run that ended before the agent did anything (status `error` or `input_error`). */
+  error?: string
 }
+
+/**
+ * Where a headless run's prompts come from:
+ * - text:        one prompt, from `-p` or stdin, then the process exits.
+ * - stream-json: newline-delimited `{"type":"user","content":"..."}` lines on stdin,
+ *                each starting a turn once the previous one finishes; EOF ends the
+ *                session. Needs `--json`.
+ */
+export const HEADLESS_INPUT_FORMATS = ['text', 'stream-json'] as const
+
+export type HeadlessInputFormat = (typeof HEADLESS_INPUT_FORMATS)[number]
 
 /**
  * What headless does when the loop asks for a tool approval (there is no human
@@ -156,6 +233,22 @@ export interface HeadlessOptions {
   maxCostUsd?: number
   /** `--verify`: run this command at a natural stop after edits (verifyOnStop + verifyCommand). */
   verifyCommand?: string
+  /** `--input-format`: where prompts come from (default 'text'). */
+  inputFormat?: HeadlessInputFormat
+  /**
+   * `--output-schema`: a JSON Schema the final answer must match, as given: inline
+   * JSON (starts with `{`) or an absolute path to a file holding it. runHeadless
+   * reads and checks it before anything runs.
+   */
+  outputSchema?: string
+  /** `--allowed-tools`: the only tools (or tool calls) the run may use. */
+  allowedTools?: ToolScopeEntry[]
+  /** `--disallowed-tools`: tools (or tool calls) the run may never use. Wins over allowed. */
+  disallowedTools?: ToolScopeEntry[]
+  /** `--append-system-prompt`, each as given: text, or `@` and an absolute file path. */
+  appendSystemPrompt?: string[]
+  /** `--mcp-config`: absolute paths of files listing MCP servers for this run only. */
+  mcpConfig?: string[]
   /**
    * A flag carried a value it can't take. runHeadless reports it and exits with
    * HEADLESS_EXIT.usage before anything runs, rather than silently running with
@@ -197,7 +290,13 @@ const HEADLESS_FLAGS = new Set([
   '--effort',
   '--max-turns',
   '--max-cost',
-  '--verify'
+  '--verify',
+  '--input-format',
+  '--output-schema',
+  '--allowed-tools',
+  '--disallowed-tools',
+  '--append-system-prompt',
+  '--mcp-config'
 ])
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
@@ -242,6 +341,12 @@ export function parseHeadlessArgs(
   let maxTurns: number | undefined
   let maxCostUsd: number | undefined
   let verifyCommand: string | undefined
+  let inputFormat: HeadlessInputFormat | undefined
+  let outputSchema: string | undefined
+  let allowedTools: ToolScopeEntry[] | undefined
+  let disallowedTools: ToolScopeEntry[] | undefined
+  const appendSystemPrompt: string[] = []
+  const mcpConfig: string[] = []
   let usageError: string | undefined
   // Keep the first bad value: it's the one the caller reads about.
   const bad = (message: string): void => {
@@ -280,6 +385,38 @@ export function parseHeadlessArgs(
       const { value, next } = flagValue(argv, i)
       if (value !== undefined && value.trim() !== '') verifyCommand = value
       else bad('--verify needs a command to run, like --verify "npm test"')
+      i = next
+    } else if (name === '--input-format') {
+      const { value, next } = flagValue(argv, i)
+      if (isHeadlessInputFormat(value)) inputFormat = value
+      else bad(`--input-format must be one of ${HEADLESS_INPUT_FORMATS.join(', ')} (got ${quoted(value)})`)
+      i = next
+    } else if (name === '--output-schema') {
+      const { value, next } = flagValue(argv, i)
+      const v = value?.trim()
+      if (!v) bad('--output-schema needs a JSON Schema: a file path, or the schema itself as JSON')
+      else if (outputSchema !== undefined) bad('--output-schema can be given only once')
+      else outputSchema = v.startsWith('{') ? v : resolvePath(defaultCwd, v)
+      i = next
+    } else if (name === '--allowed-tools' || name === '--disallowed-tools') {
+      const { value, next } = flagValue(argv, i)
+      const parsed = parseToolList(value ?? '', name)
+      if ('error' in parsed) bad(parsed.error)
+      else if (name === '--allowed-tools') allowedTools = [...(allowedTools ?? []), ...parsed.entries]
+      else disallowedTools = [...(disallowedTools ?? []), ...parsed.entries]
+      i = next
+    } else if (name === '--append-system-prompt') {
+      const { value, next } = flagValue(argv, i)
+      if (value === undefined || !value.trim() || value.trim() === '@') {
+        bad('--append-system-prompt needs text, or @ and a file path, like --append-system-prompt @ci-rules.md')
+      } else {
+        appendSystemPrompt.push(value.startsWith('@') ? `@${resolvePath(defaultCwd, value.slice(1))}` : value)
+      }
+      i = next
+    } else if (name === '--mcp-config') {
+      const { value, next } = flagValue(argv, i)
+      if (value?.trim()) mcpConfig.push(resolvePath(defaultCwd, value.trim()))
+      else bad('--mcp-config needs the path of a JSON file listing MCP servers')
       i = next
     } else if (name === '--continue') {
       continueSession = true
@@ -322,13 +459,23 @@ export function parseHeadlessArgs(
     }
   }
 
+  // stream-json reads every prompt from stdin, one line per turn, so it is a
+  // headless run on its own (no -p needed) and takes no -p prompt.
+  if (inputFormat === 'stream-json') {
+    if (prompt !== undefined && prompt !== '' && prompt !== '-') {
+      bad('--input-format stream-json reads its prompts from stdin; drop the -p prompt')
+    }
+    if (!json) bad('--input-format stream-json needs --json output')
+    prompt = ''
+  }
   // `-p -` always reads stdin; a missing prompt does when stdin was piped in.
   const promptFromStdin =
-    prompt === '-' ||
+    inputFormat !== 'stream-json' &&
+    (prompt === '-' ||
     ((prompt === undefined || prompt === '') &&
       stdin.stdinPiped === true &&
-      (promptFlag || stdin.bareStdinPrompt === true))
-  if (!promptFromStdin && (prompt === undefined || prompt === '')) return null
+      (promptFlag || stdin.bareStdinPrompt === true)))
+  if (inputFormat !== 'stream-json' && !promptFromStdin && (prompt === undefined || prompt === '')) return null
   return {
     prompt: promptFromStdin ? '' : (prompt as string),
     cwd,
@@ -347,8 +494,19 @@ export function parseHeadlessArgs(
     ...(maxTurns !== undefined ? { maxTurns } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(verifyCommand !== undefined ? { verifyCommand } : {}),
+    ...(inputFormat !== undefined ? { inputFormat } : {}),
+    ...(outputSchema !== undefined ? { outputSchema } : {}),
+    ...(allowedTools !== undefined ? { allowedTools } : {}),
+    ...(disallowedTools !== undefined ? { disallowedTools } : {}),
+    ...(appendSystemPrompt.length ? { appendSystemPrompt } : {}),
+    ...(mcpConfig.length ? { mcpConfig } : {}),
     ...(usageError !== undefined ? { usageError } : {})
   }
+}
+
+/** Runtime guard: true when `v` is a known `--input-format`. */
+export function isHeadlessInputFormat(v: unknown): v is HeadlessInputFormat {
+  return typeof v === 'string' && (HEADLESS_INPUT_FORMATS as readonly string[]).includes(v)
 }
 
 /** A flag value as it appears in an error message. */
@@ -444,6 +602,16 @@ export interface HeadlessDeps {
   newId?: () => string
   /** Read all of stdin, for a prompt passed as `-p -` or piped in. */
   readStdin?: () => Promise<string>
+  /**
+   * The lines of stdin as they arrive, for `--input-format stream-json`. Each turn
+   * starts after the previous one finishes, so a driver can write the next line
+   * whenever it likes; the iterator ending (EOF) ends the session.
+   */
+  readStdinLines?: () => AsyncIterable<string>
+  /** Read a file named by a flag (`--output-schema`, `--mcp-config`, `--append-system-prompt @file`). */
+  readFile?: (path: string) => Promise<string>
+  /** The running Houston version, for the `--json` init line. */
+  version?: string
   /** Milliseconds clock for the result's `durationMs`; injected so tests are exact. */
   now?: () => number
   /**
@@ -467,21 +635,279 @@ export interface HeadlessDeps {
   }
 }
 
+/** Most MCP servers `--mcp-config` may add, matching the cap on a project's own. */
+const MAX_RUN_MCP_SERVERS = 10
+
+/** Largest `--output-schema` / `--append-system-prompt` / `--mcp-config` file read, in bytes. */
+const MAX_INPUT_FILE_BYTES = 256 * 1024
+
+/** Read a flag's file, refusing an oversized one before loading it. */
+async function readFlagFile(path: string): Promise<string> {
+  const { size } = await fsp.stat(path)
+  if (size > MAX_INPUT_FILE_BYTES) throw new Error(`larger than ${MAX_INPUT_FILE_BYTES / 1024} KB`)
+  return fsp.readFile(path, 'utf8')
+}
+
+/** What runHeadless reads and checks from the flags that name files or JSON, before anything runs. */
+interface ResolvedInputs {
+  outputSchema?: Record<string, unknown>
+  appendSystemPrompt?: string
+  mcpServers?: McpServerConfig[]
+  toolScope?: ToolScope
+}
+
 /**
- * Run one prompt to completion and return an exit code (see HEADLESS_EXIT). In
- * `--json` mode every agent event is emitted as a JSON line, then one final
- * `result` line (see HeadlessResult); otherwise assistant text streams to stdout
- * and tool activity to stderr. Approval prompts (from the gating policies, and
- * from the always-prompt cases every policy has: network/MCP first use,
- * unconfined or workspace-escaping shell) are resolved per `opts.onApproval`
- * since there's no human to ask — denied by default, approved under full-auto or
- * an explicit `--on-approval allow`.
+ * Read and validate the flag values that hold JSON or name files. Returns the
+ * values, or the usage error for the first bad one, so a schema typo or a missing
+ * file stops the run before any model call.
+ */
+export async function resolveHeadlessInputs(
+  opts: HeadlessOptions,
+  readFile: (path: string) => Promise<string>
+): Promise<ResolvedInputs | { error: string }> {
+  const read = async (path: string, flag: string): Promise<string | { error: string }> => {
+    try {
+      const text = await readFile(path)
+      if (Buffer.byteLength(text) > MAX_INPUT_FILE_BYTES) {
+        return { error: `${flag}: ${path} is larger than ${MAX_INPUT_FILE_BYTES / 1024} KB` }
+      }
+      return text
+    } catch (e) {
+      return { error: `${flag}: cannot read ${path} (${(e as NodeJS.ErrnoException).code ?? (e as Error).message})` }
+    }
+  }
+  const out: ResolvedInputs = {}
+
+  if (opts.outputSchema !== undefined) {
+    const inline = opts.outputSchema.startsWith('{')
+    const text = inline ? opts.outputSchema : await read(opts.outputSchema, '--output-schema')
+    if (typeof text !== 'string') return text
+    let schema: unknown
+    try {
+      schema = JSON.parse(text)
+    } catch (e) {
+      return { error: `--output-schema: ${inline ? 'the schema' : opts.outputSchema} is not valid JSON (${(e as Error).message})` }
+    }
+    const problems = typeof schema === 'object' && schema !== null && !Array.isArray(schema)
+      ? schemaProblems(schema)
+      : ['the schema must be a JSON object']
+    if (problems.length) return { error: `--output-schema: ${problems.join('; ')}` }
+    out.outputSchema = schema as Record<string, unknown>
+  }
+
+  if (opts.appendSystemPrompt?.length) {
+    const parts: string[] = []
+    for (const arg of opts.appendSystemPrompt) {
+      const text = arg.startsWith('@') ? await read(arg.slice(1), '--append-system-prompt') : arg
+      if (typeof text !== 'string') return text
+      if (!text.trim()) return { error: `--append-system-prompt: ${arg.startsWith('@') ? arg.slice(1) : 'the text'} is empty` }
+      parts.push(text.trim())
+    }
+    out.appendSystemPrompt = parts.join('\n\n')
+  }
+
+  if (opts.mcpConfig?.length) {
+    const servers: McpServerConfig[] = []
+    for (const path of opts.mcpConfig) {
+      const text = await read(path, '--mcp-config')
+      if (typeof text !== 'string') return text
+      let raw: unknown
+      try {
+        raw = JSON.parse(text)
+      } catch (e) {
+        return { error: `--mcp-config: ${path} is not valid JSON (${(e as Error).message})` }
+      }
+      const list = (raw as { mcpServers?: unknown } | null)?.mcpServers
+      if (!Array.isArray(list)) {
+        return { error: `--mcp-config: ${path} needs an "mcpServers" array, the same shape as .houston/settings.json` }
+      }
+      // The project-config parser is the validator (ids sanitized, a runnable target
+      // required, values typed); an entry it drops is reported rather than skipped.
+      for (const [i, entry] of list.entries()) {
+        const [server] = parseProjectMcpServers({ mcpServers: [entry] })
+        if (!server) {
+          return { error: `--mcp-config: ${path}: server ${i + 1} needs an "id" and a "command" or "url"` }
+        }
+        if (servers.some((s) => s.id === server.id)) {
+          return { error: `--mcp-config: two servers share the id "${server.id}"` }
+        }
+        servers.push(server)
+      }
+    }
+    if (servers.length > MAX_RUN_MCP_SERVERS) {
+      return { error: `--mcp-config: at most ${MAX_RUN_MCP_SERVERS} servers per run (got ${servers.length})` }
+    }
+    if (servers.length) out.mcpServers = servers
+  }
+
+  if (opts.allowedTools || opts.disallowedTools) {
+    // A misspelled name would quietly scope nothing: a disallowed typo denies no
+    // call, an allowed typo offers no tool. Built-in names are checked here; an MCP
+    // tool's name isn't known until its server connects, so `mcp__` names pass.
+    for (const [flag, list] of [
+      ['--allowed-tools', opts.allowedTools],
+      ['--disallowed-tools', opts.disallowedTools]
+    ] as const) {
+      const unknown = (list ?? []).find((e) => !e.tool.includes('*') && !e.tool.startsWith('mcp__') && !getTool(e.tool))
+      if (unknown) return { error: `${flag}: unknown tool "${unknown.tool}"` }
+    }
+    out.toolScope = {
+      ...(opts.allowedTools ? { allowed: opts.allowedTools } : {}),
+      ...(opts.disallowedTools ? { disallowed: opts.disallowedTools } : {})
+    }
+  }
+  return out
+}
+
+/** A scope entry the way the flag spelled it, for the init line. */
+const scopeEntryText = (e: ToolScopeEntry): string => (e.match === '*' ? e.tool : `${e.tool}(${e.match})`)
+
+/**
+ * The JSON value in a final answer: the whole text, else the body of a fenced code
+ * block, else the span from the first `{` or `[` to the matching last bracket.
+ * Undefined when none of those parses.
+ */
+export function extractJsonAnswer(text: string): { value: unknown } | undefined {
+  const tryParse = (s: string): { value: unknown } | undefined => {
+    try {
+      return { value: JSON.parse(s) }
+    } catch {
+      return undefined
+    }
+  }
+  const t = text.trim()
+  if (!t) return undefined
+  const whole = tryParse(t)
+  if (whole) return whole
+  const fence = /```[a-zA-Z]*\s*\n([\s\S]*?)\n?```/.exec(t)
+  if (fence) {
+    const inFence = tryParse(fence[1].trim())
+    if (inFence) return inFence
+  }
+  for (const [open, close] of [
+    ['{', '}'],
+    ['[', ']']
+  ]) {
+    const a = t.indexOf(open)
+    const b = t.lastIndexOf(close)
+    if (a >= 0 && b > a) {
+      const span = tryParse(t.slice(a, b + 1))
+      if (span) return span
+    }
+  }
+  return undefined
+}
+
+/** Check a final answer against the `--output-schema`: the parsed value, or why it failed. */
+export function checkStructuredAnswer(
+  schema: Record<string, unknown>,
+  finalText: string
+): { ok: true; value: unknown } | { ok: false; errors: string[] } {
+  const parsed = extractJsonAnswer(finalText)
+  if (!parsed) {
+    return { ok: false, errors: [finalText.trim() ? 'the final answer is not JSON' : 'there was no final answer'] }
+  }
+  const errors = validateJson(schema as JsonSchema, parsed.value)
+  if (errors.length) return { ok: false, errors: formatSchemaErrors(errors).split('\n') }
+  return { ok: true, value: parsed.value }
+}
+
+/** The note that asks for a corrected answer after one failed the `--output-schema`. */
+function schemaCorrectionNote(errors: string[]): ChatMessage {
+  return systemNoteMessage(
+    `Your final answer does not match the required output schema:\n${errors.map((e) => `- ${e}`).join('\n')}\n` +
+      'Reply now with only the corrected JSON value that matches the schema: no prose, no code fence, and no tool calls.'
+  )
+}
+
+/** A user turn of the headless client: text the caller wrote (`-p`, stdin, or a stream-json line). */
+const userTurn = (content: string): ChatMessage => ({ role: 'user', content })
+
+/**
+ * Parse one `--input-format stream-json` line into the prompt it carries. A line is
+ * `{"type":"user","content":"<prompt>"}`; anything else is an input error.
+ */
+export function parseStreamJsonLine(line: string): { prompt: string } | { error: string } {
+  let v: unknown
+  try {
+    v = JSON.parse(line)
+  } catch {
+    return { error: 'not valid JSON' }
+  }
+  const o = v as { type?: unknown; content?: unknown } | null
+  if (typeof o !== 'object' || o === null || Array.isArray(o) || o.type !== 'user') {
+    return { error: 'expected {"type":"user","content":"..."}' }
+  }
+  if (typeof o.content !== 'string' || !o.content.trim()) return { error: '"content" must be a non-empty string' }
+  return { prompt: o.content }
+}
+
+/** How one turn (one startRun) ended, folded from its events. */
+interface TurnTally {
+  errored: boolean
+  approvalDenied: boolean
+  limitReason?: HeadlessResult['limitReason']
+  stopReason: StopReason | null
+  inTok: number
+  outTok: number
+  cost: number
+  turns: number
+  finalText: string
+  receipt?: TurnReceipt
+}
+
+const emptyTally = (): TurnTally => ({
+  errored: false,
+  approvalDenied: false,
+  stopReason: null,
+  inTok: 0,
+  outTok: 0,
+  cost: 0,
+  turns: 0,
+  finalText: ''
+})
+
+/** A run that ended with `t`, before any output-schema check. */
+function tallyStatus(t: TurnTally): HeadlessStatus {
+  // A failure outranks a budget stop: a run that also hit an error or a refused
+  // approval didn't merely run out of room.
+  return t.errored
+    ? 'error'
+    : t.approvalDenied
+      ? 'approval_denied'
+      : t.limitReason === 'stalled'
+        ? 'stalled'
+        : t.limitReason
+          ? 'limit'
+          : 'success'
+}
+
+/**
+ * Run a headless session and return an exit code (see HEADLESS_EXIT): one prompt,
+ * or with `--input-format stream-json` one turn per stdin line until EOF. In
+ * `--json` mode the first line is a `system`/`init` line (see HeadlessInit), every
+ * agent event follows as a JSON line, and each turn ends with a `result` line (see
+ * HeadlessResult); otherwise assistant text streams to stdout and tool activity to
+ * stderr. Approval prompts (from the gating policies, and from the always-prompt
+ * cases every policy has: network/MCP first use, unconfined or workspace-escaping
+ * shell) are resolved per `opts.onApproval` since there's no human to ask: denied
+ * by default, approved under full-auto or an explicit `--on-approval allow`.
  */
 export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps): Promise<number> {
   // A bad flag value stops here, before any model call, so a typo in a budget
   // can't run with no budget at all.
   if (inputOpts.usageError) {
     deps.err(`${inputOpts.usageError}\n`)
+    return HEADLESS_EXIT.usage
+  }
+  const inputs = await resolveHeadlessInputs(inputOpts, deps.readFile ?? readFlagFile)
+  if ('error' in inputs) {
+    deps.err(`${inputs.error}\n`)
+    return HEADLESS_EXIT.usage
+  }
+  const streamInput = inputOpts.inputFormat === 'stream-json'
+  if (streamInput && !deps.readStdinLines) {
+    deps.err('--input-format stream-json is not available here: this host has no stdin reader.\n')
     return HEADLESS_EXIT.usage
   }
 
@@ -498,34 +924,75 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
   const now = deps.now ?? Date.now
   const settings = deps.getSettings()
 
-  // The `--json` summary line. Written for every run past flag validation, a
-  // failed preflight included, so a harness can always read the last line.
-  const writeResult = (r: Omit<HeadlessResult, 'type'>): void => {
-    if (opts.json) deps.out(`${JSON.stringify({ type: 'result', ...r } satisfies HeadlessResult)}\n`)
+  // --json: the init line goes first, once. It waits for the run's `run_info` (the
+  // tools the loop actually assembled) or, failing that, for the first other line,
+  // so the session line and any early error still come after it.
+  let initSent = false
+  let conversationId: string | undefined
+  let resolvedModel: { providerId: string; model: string } | null = null
+  const sendInit = (tools?: string[]): void => {
+    if (!opts.json || initSent) return
+    initSent = true
+    const init: HeadlessInit = {
+      type: 'system',
+      subtype: 'init',
+      schemaVersion: HEADLESS_SCHEMA_VERSION,
+      houstonVersion: deps.version ?? 'dev',
+      cwd: opts.cwd,
+      providerId: resolvedModel?.providerId ?? null,
+      model: resolvedModel?.model ?? null,
+      approvalPolicy: opts.approvalPolicy,
+      onApproval: opts.onApproval,
+      inputFormat: streamInput ? 'stream-json' : 'text',
+      ...(conversationId ? { conversationId } : {}),
+      ...(tools ? { tools } : {}),
+      ...(opts.allowedTools ? { allowedTools: opts.allowedTools.map(scopeEntryText) } : {}),
+      ...(opts.disallowedTools ? { disallowedTools: opts.disallowedTools.map(scopeEntryText) } : {}),
+      ...(inputs.mcpServers ? { mcpServers: inputs.mcpServers.map((s) => `run-${s.id}`) } : {}),
+      outputSchema: inputs.outputSchema !== undefined
+    }
+    deps.out(`${JSON.stringify(init)}\n`)
+    // Surface the conversation id so a script can capture it and later `--resume`
+    // this exact session: the only place it's observable (--continue is
+    // recency-based, and no agent event carries the persistent id).
+    if (conversationId) deps.out(`${JSON.stringify({ type: 'session', conversationId })}\n`)
   }
 
-  const resolved = resolveHeadlessModel(settings, opts)
-  if ('error' in resolved) {
-    deps.err(`${resolved.error}\n`)
+  // The `--json` summary line, one per turn. Written for every run past flag
+  // validation, a failed preflight included, so a harness can always read it.
+  const writeResult = (r: Omit<HeadlessResult, 'type' | 'schemaVersion'>): void => {
+    if (!opts.json) return
+    sendInit()
+    deps.out(
+      `${JSON.stringify({ type: 'result', schemaVersion: HEADLESS_SCHEMA_VERSION, ...r } satisfies HeadlessResult)}\n`
+    )
+  }
+  const writeEarlyResult = (status: HeadlessStatus, error: string): void =>
     writeResult({
-      status: 'error',
+      status,
       stopReason: null,
       turns: 0,
       costUsd: 0,
       inputTokens: 0,
       outputTokens: 0,
       durationMs: 0,
-      finalText: ''
+      finalText: '',
+      error
     })
+
+  const resolved = resolveHeadlessModel(settings, opts)
+  if ('error' in resolved) {
+    deps.err(`${resolved.error}\n`)
+    writeEarlyResult('error', resolved.error)
     return HEADLESS_EXIT.failed
   }
+  resolvedModel = resolved
 
   // Session continuity: with --continue / --resume, seed the prior conversation's
   // messages so the run picks up where a previous run (or a TUI session) left off;
   // otherwise start a fresh conversation. Persisted (when a store is wired) so the
   // next --continue — or an interactive `-i` /resume — can take over from here.
-  let conversationId: string | undefined
-  const messages: ChatMessage[] = []
+  let history: ChatMessage[] = []
   if (deps.session) {
     const wantsPrior = opts.continueSession || opts.resumeId !== undefined
     const prior = wantsPrior ? deps.session.load({ workspace: opts.cwd, id: opts.resumeId }) : null
@@ -534,7 +1001,7 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
     }
     if (prior) {
       conversationId = prior.id
-      messages.push(...prior.messages)
+      history = [...prior.messages]
       // The conversation stored its provider+model at create time, but this run
       // executes under the resolved --provider/--model (or settings.selected),
       // which can differ from what the resumed session was created with. Rewrite
@@ -554,16 +1021,9 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
       }).id
     }
   }
-  messages.push({ role: 'user', content: opts.prompt })
 
-  // Surface the conversation id so a script can capture it and later `--resume`
-  // this exact session — the only place it's observable (‑‑continue is
-  // recency-based, and no agent event carries the persistent id). JSON mode gets
-  // a typed line on stdout; text mode a stderr marker, keeping stdout clean.
-  if (conversationId) {
-    if (opts.json) deps.out(`${JSON.stringify({ type: 'session', conversationId })}\n`)
-    else deps.err(`· session ${conversationId}\n`)
-  }
+  // Text mode gets the session id as a stderr marker, keeping stdout clean.
+  if (conversationId && !opts.json) deps.err(`· session ${conversationId}\n`)
 
   // Verify-gate warning: the end-of-run verification command only runs after the
   // model modifies files, which a read-only ('plan') run never does — so a
@@ -609,299 +1069,363 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
     // Advisory only — never block a headless run on the trust note.
   }
 
-  const runId = (deps.newId ?? randomUUID)()
   const overrides = headlessOverrides(opts)
-  const req: AgentRunRequest = {
-    runId,
-    ...(conversationId ? { conversationId } : {}),
-    workspace: opts.cwd,
-    providerId: resolved.providerId,
-    model: resolved.model,
-    approvalPolicy: opts.approvalPolicy,
-    messages,
-    // No one can answer ask_user here, so the loop doesn't offer it.
-    unattended: true,
-    ...(opts.allowShellNetwork ? { allowShellNetwork: true } : {}),
-    ...(overrides ? { overrides } : {})
-  }
   // Plan mode runs no shell, so the grant would be moot there.
   if (opts.allowShellNetwork && opts.approvalPolicy !== 'plan' && !opts.json) {
     deps.err('· shell commands may reach the network this run (--allow-shell-network)\n')
   }
+  if (inputs.toolScope && !opts.json) {
+    const parts = [
+      ...(opts.allowedTools ? [`allowed: ${opts.allowedTools.map(scopeEntryText).join(', ')}`] : []),
+      ...(opts.disallowedTools ? [`disallowed: ${opts.disallowedTools.map(scopeEntryText).join(', ')}`] : [])
+    ]
+    deps.err(`· tools scoped for this run (${parts.join('; ')})\n`)
+  }
 
-  // How the run ended, for the exit code and the --json result line.
-  let errored = false
-  let approvalDenied = false
-  let limitReason: HeadlessResult['limitReason']
-  let stopReason: StopReason | null = null
   // Say once that approved shell commands run offline, the first time a prompt says so.
   let notedOffline = false
-  // Accumulate token/cost so text mode can print a one-line total on completion
-  // (JSON mode carries the raw `usage` events, then the totals on the result line).
-  let inTok = 0
-  let outTok = 0
-  let cost = 0
-  let turns = 0
-  // The closing answer: text streamed since the last tool call. Tool activity (or a
-  // verification pass that sends the agent back to work) means the text so far was
-  // narration, so it clears the buffer.
-  let finalText = ''
-  let receipt: TurnReceipt | undefined
   // Review findings print once per status change (see createFindingPrinter).
   const printFinding = createFindingPrinter()
-  // Text mode holds each model round's text until the round ends. stdout is the
-  // answer a script captures, and bytes written there can't be taken back, so a round
-  // that drops mid-stream and is redone (`turn_discarded`) would otherwise leave its
-  // partial copy ahead of the full one. While a round streams only its text and
-  // reasoning arrive, so any other event means the round is over and its text stays.
-  let roundText = ''
-  const releaseRound = (): void => {
-    if (roundText) deps.out(roundText)
-    roundText = ''
-  }
-  const send = (e: AgentEvent): void => {
-    if (opts.json) {
-      deps.out(`${JSON.stringify(e)}\n`)
-    } else if (e.type === 'turn_discarded') {
-      roundText = ''
-    } else if (e.type !== 'text' && e.type !== 'reasoning') {
-      releaseRound()
+
+  /**
+   * Run the agent once over `messages` and fold its events into a tally. `stepCap`
+   * caps this run's steps below the flags' own (the output-schema correction).
+   */
+  const runOnce = async (messages: ChatMessage[], stepCap?: number): Promise<TurnTally> => {
+    const t = emptyTally()
+    const runOverrides = stepCap !== undefined ? { ...(overrides ?? {}), maxIterations: stepCap } : overrides
+    const req: AgentRunRequest = {
+      runId: (deps.newId ?? randomUUID)(),
+      ...(conversationId ? { conversationId } : {}),
+      workspace: opts.cwd,
+      providerId: resolved.providerId,
+      model: resolved.model,
+      approvalPolicy: opts.approvalPolicy,
+      messages,
+      // No one can answer ask_user here, so the loop doesn't offer it.
+      unattended: true,
+      ...(opts.allowShellNetwork ? { allowShellNetwork: true } : {}),
+      ...(runOverrides ? { overrides: runOverrides } : {}),
+      ...(inputs.toolScope ? { toolScope: inputs.toolScope } : {}),
+      ...(inputs.appendSystemPrompt !== undefined ? { appendSystemPrompt: inputs.appendSystemPrompt } : {}),
+      ...(inputs.outputSchema !== undefined ? { outputSchema: inputs.outputSchema } : {}),
+      ...(inputs.mcpServers ? { extraMcpServers: inputs.mcpServers } : {}),
+      ...(opts.json ? { announceTools: true } : {})
     }
-    switch (e.type) {
-      case 'text':
-        finalText += e.delta
-        if (!opts.json) roundText += e.delta
-        break
-      case 'turn_discarded':
-        // The dropped round's text is the tail of the closing answer too (nothing but
-        // its own deltas arrived since it began), so the result line loses it as well.
-        finalText = finalText.slice(0, Math.max(0, finalText.length - e.textChars))
-        // Text mode dropped the round's held text above; --json consumers got the
-        // event itself and retract `textChars` from what they accumulated.
-        if (!opts.json) deps.err('· discarded a reply cut off mid-stream; redoing it\n')
-        break
-      case 'tool_start':
-        finalText = ''
-        if (!opts.json) deps.err(`· ${e.name}\n`)
-        break
-      case 'tool_result':
-        // Surface failures (successes are noise) so a script tailing stderr sees a
-        // tool error instead of silence — mirrors the TUI's ✗ marker.
-        if (!opts.json && !e.ok) deps.err(`· ${e.name} failed\n`)
-        break
-      case 'retry':
-        if (!opts.json) deps.err(`· retrying (${e.attempt}/${e.max})… ${e.message}\n`)
-        break
-      case 'model_fallback':
-        if (!opts.json) deps.err(`· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`)
-        break
-      case 'usage':
-        inTok += e.inputTokens
-        outTok += e.outputTokens
-        cost += e.cost
-        // One usage event per model round of the agent itself. A subagent's or a
-        // review's rounds arrive rolled up as one event with inputTokens 0 (kept off
-        // the context meter), so they add cost but not turns.
-        if (e.inputTokens > 0) turns++
-        break
-      case 'tool_approval':
-        // The full-auto shell-network consent gates only the sandbox's network, not the
-        // command (it runs either way), so it's not a permission wall — resolve it per
-        // --on-approval without ever flipping the failure flag. 'allow' lets shell reach
-        // the network this run; otherwise shell runs offline.
-        if (e.shellNetwork) {
-          const grant = opts.onApproval === 'allow'
-          if (!opts.json) {
-            deps.err(
-              grant
-                ? '· allowing shell network access for this run\n'
-                : '· shell commands will run offline (pass --allow-shell-network to permit network)\n'
-            )
+
+    // Text mode holds each model round's text until the round ends. stdout is the
+    // answer a script captures, and bytes written there can't be taken back, so a round
+    // that drops mid-stream and is redone (`turn_discarded`) would otherwise leave its
+    // partial copy ahead of the full one. While a round streams only its text and
+    // reasoning arrive, so any other event means the round is over and its text stays.
+    let roundText = ''
+    const releaseRound = (): void => {
+      if (roundText) deps.out(roundText)
+      roundText = ''
+    }
+    const send = (e: AgentEvent): void => {
+      if (opts.json) {
+        // The run's toolset feeds the init line rather than a line of its own.
+        if (e.type === 'run_info') sendInit(e.tools)
+        else {
+          sendInit()
+          deps.out(`${JSON.stringify(e)}\n`)
+        }
+      } else if (e.type === 'turn_discarded') {
+        roundText = ''
+      } else if (e.type !== 'text' && e.type !== 'reasoning') {
+        releaseRound()
+      }
+      switch (e.type) {
+        case 'text':
+          t.finalText += e.delta
+          if (!opts.json) roundText += e.delta
+          break
+        case 'turn_discarded':
+          // The dropped round's text is the tail of the closing answer too (nothing but
+          // its own deltas arrived since it began), so the result line loses it as well.
+          t.finalText = t.finalText.slice(0, Math.max(0, t.finalText.length - e.textChars))
+          // Text mode dropped the round's held text above; --json consumers got the
+          // event itself and retract `textChars` from what they accumulated.
+          if (!opts.json) deps.err('· discarded a reply cut off mid-stream; redoing it\n')
+          break
+        case 'tool_start':
+          t.finalText = ''
+          if (!opts.json) deps.err(`· ${e.name}\n`)
+          break
+        case 'tool_result':
+          // Surface failures (successes are noise) so a script tailing stderr sees a
+          // tool error instead of silence — mirrors the TUI's ✗ marker.
+          if (!opts.json && !e.ok) deps.err(`· ${e.name} failed\n`)
+          break
+        case 'retry':
+          if (!opts.json) deps.err(`· retrying (${e.attempt}/${e.max})… ${e.message}\n`)
+          break
+        case 'model_fallback':
+          if (!opts.json) deps.err(`· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`)
+          break
+        case 'usage':
+          t.inTok += e.inputTokens
+          t.outTok += e.outputTokens
+          t.cost += e.cost
+          // One usage event per model round of the agent itself. A subagent's or a
+          // review's rounds arrive rolled up as one event with inputTokens 0 (kept off
+          // the context meter), so they add cost but not turns.
+          if (e.inputTokens > 0) t.turns++
+          break
+        case 'tool_approval':
+          // The full-auto shell-network consent gates only the sandbox's network, not the
+          // command (it runs either way), so it's not a permission wall — resolve it per
+          // --on-approval without ever flipping the failure flag. 'allow' lets shell reach
+          // the network this run; otherwise shell runs offline.
+          if (e.shellNetwork) {
+            const grant = opts.onApproval === 'allow'
+            if (!opts.json) {
+              deps.err(
+                grant
+                  ? '· allowing shell network access for this run\n'
+                  : '· shell commands will run offline (pass --allow-shell-network to permit network)\n'
+              )
+            }
+            deps.resolveApproval(e.runId, e.callId, grant ? 'allow' : 'deny')
+            break
           }
-          deps.resolveApproval(e.runId, e.callId, grant ? 'allow' : 'deny')
+          // No human to answer the prompt: resolve per --on-approval. 'allow'
+          // approves the call; 'deny'/'fail' refuse it, so the policy's gates hold
+          // in unattended runs instead of being rubber-stamped ('fail' also flips
+          // the exit code so a script can tell the run hit a permission wall).
+          if (opts.onApproval === 'allow') {
+            if (!opts.json) deps.err(`· auto-approving ${e.name}\n`)
+            // 'allow' is plain "Allow", which runs shell offline until the run has the
+            // shell-network grant, and only --allow-shell-network gives that here.
+            if (e.shellOffline && !notedOffline && !opts.json) {
+              notedOffline = true
+              deps.err('· shell commands run without network (pass --allow-shell-network to permit it)\n')
+            }
+            deps.resolveApproval(e.runId, e.callId, 'allow')
+          } else {
+            if (!opts.json) {
+              deps.err(`· denying ${e.name} (no interactive user; pass --on-approval allow to permit gated calls)\n`)
+            }
+            if (opts.onApproval === 'fail') t.approvalDenied = true
+            deps.resolveApproval(e.runId, e.callId, 'deny')
+          }
+          break
+        case 'tool_question':
+          // A headless run is unattended, so the loop doesn't offer `ask_user` at all.
+          // This is the backstop for a model that calls it anyway: auto-answer so the
+          // call can't hang the run forever, with a clear signal to proceed on its own
+          // rather than a silent empty string.
+          if (!opts.json) deps.err('· no interactive user (headless): auto-answering ask_user\n')
+          deps.resolveQuestion(
+            e.runId,
+            e.callId,
+            '[No interactive user is available in headless mode. Proceed using your best judgment.]'
+          )
+          break
+        case 'limit':
+          // The loop ended by hitting a budget/guard rather than a natural stop.
+          // Surface every reason so a script can see WHY the run stopped short. A
+          // 'stalled' termination is a failure (the agent gave up looping); a budget
+          // stop (max-steps/max-output) gets its own exit code, so a harness can tell
+          // "ran out of room" from both a finished task and a crash.
+          t.limitReason = e.reason
+          if (!opts.json) {
+            const why =
+              e.reason === 'stalled'
+                ? 'stopped: the agent stalled (no forward progress)'
+                : e.reason === 'max-output'
+                  ? 'stopped: the model hit its output limit'
+                  : 'stopped: reached the maximum number of steps'
+            deps.err(`· ${why}\n`)
+          }
+          break
+        case 'receipt':
+          t.receipt = e.receipt
+          // Meta output like a notice: stderr, so stdout stays the model's answer. The
+          // labels are model-written commands, so control characters are kept off the terminal.
+          if (!opts.json) {
+            for (const line of formatReceiptLines(e.receipt)) deps.err(`· ${stripControlChars(line)}\n`)
+          }
+          break
+        case 'verification':
+          // The end-of-run verification command ran; report pass/fail. A failing
+          // pass is fed back for self-correction inside the loop (it doesn't end the
+          // run here), so this is informational — the final exit code follows 'done'.
+          // A failure sends the agent back to work, so the answer before it is no
+          // longer its last word; a pass follows the final answer and keeps it.
+          if (!e.passed) t.finalText = ''
+          if (!opts.json) deps.err(`· verification ${e.passed ? 'passed' : 'failed'}\n`)
+          break
+        case 'error':
+          t.errored = true
+          deps.err(`Error: ${e.message}\n`)
+          break
+        case 'done':
+          if (!opts.json) {
+            deps.out('\n')
+            if (t.inTok || t.outTok || t.cost) deps.err(`· ${t.inTok}+${t.outTok} tok · ${formatUsd(t.cost)}\n`)
+          }
+          t.stopReason = e.stopReason
+          if (e.stopReason === 'error' || e.stopReason === 'aborted') t.errored = true
+          break
+        case 'plan_ready':
+          // No interactive reviewer in headless. Print the plan (the deliverable of a
+          // plan-mode run) and reject so present_plan unblocks without editing anything,
+          // matching the read-only intent of the default policy. Re-run with --full-auto
+          // (which isn't Plan mode, so this is never reached) to actually make changes.
+          if (!opts.json) {
+            deps.out(`\n${e.plan.title}\n`)
+            if (e.plan.body) deps.out(`${e.plan.body}\n`)
+            if (e.plan.readiness) {
+              for (const line of formatReadinessLines(e.plan.readiness)) deps.err(`· ${stripControlChars(line)}\n`)
+            }
+            deps.err('· no interactive reviewer (headless): plan not executed; use --full-auto to make changes\n')
+          }
+          deps.resolvePlan(e.runId, e.callId, { kind: 'reject' })
+          break
+        case 'compaction':
+          if (!opts.json) deps.err(`· compacted ${e.summarized} messages\n`)
+          break
+        case 'notice':
+          // A user-addressed note (a hook's systemMessage, a budget extension). Meta output, so stderr —
+          // stdout stays the model's answer; --json already emitted the raw event.
+          if (!opts.json) deps.err(`· ${e.message}\n`)
+          break
+        case 'runtime_missing':
+          // Meta output like a notice: stderr, so stdout stays the model's answer.
+          if (!opts.json) deps.err(`${runtimeMissingLine(e)}\n`)
+          break
+        case 'tool_progress':
+          // Live progress from a long-running tool (a 16-turn subagent dispatch, a
+          // multi-dimension review) — without it the run reads as a stall between
+          // tool_start and its result. stderr, like the other tool activity.
+          if (!opts.json && e.message.trim()) deps.err(`·   ${e.message.trim()}\n`)
+          break
+        case 'subagent':
+          // A nested subagent row (e.g. one review dimension) starting/finishing.
+          if (!opts.json) deps.err(`·   ${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${e.label}\n`)
+          break
+        case 'review_finding': {
+          // A review finding as it's raised, then its verdict. stderr, like the rows above.
+          const line = opts.json ? null : printFinding(e.parentCallId, e.finding)
+          if (line) deps.err(`·     ${line}\n`)
           break
         }
-        // No human to answer the prompt: resolve per --on-approval. 'allow'
-        // approves the call; 'deny'/'fail' refuse it, so the policy's gates hold
-        // in unattended runs instead of being rubber-stamped ('fail' also flips
-        // the exit code so a script can tell the run hit a permission wall).
-        if (opts.onApproval === 'allow') {
-          if (!opts.json) deps.err(`· auto-approving ${e.name}\n`)
-          // 'allow' is plain "Allow", which runs shell offline until the run has the
-          // shell-network grant, and only --allow-shell-network gives that here.
-          if (e.shellOffline && !notedOffline && !opts.json) {
-            notedOffline = true
-            deps.err('· shell commands run without network (pass --allow-shell-network to permit it)\n')
-          }
-          deps.resolveApproval(e.runId, e.callId, 'allow')
-        } else {
+        case 'elicitation':
+          // No interactive user in headless mode — decline, so the MCP server takes
+          // its documented no-answer path instead of hanging the run. Deliberately
+          // NOT governed by --on-approval: that flag approves Houston's own tool
+          // calls; auto-accepting would send fabricated field values to an external
+          // server as if the user typed them.
           if (!opts.json) {
-            deps.err(`· denying ${e.name} (no interactive user; pass --on-approval allow to permit gated calls)\n`)
+            deps.err(`· declining input request from MCP server "${e.serverId}" (no interactive user in headless mode)\n`)
           }
-          if (opts.onApproval === 'fail') approvalDenied = true
-          deps.resolveApproval(e.runId, e.callId, 'deny')
-        }
-        break
-      case 'tool_question':
-        // A headless run is unattended, so the loop doesn't offer `ask_user` at all.
-        // This is the backstop for a model that calls it anyway: auto-answer so the
-        // call can't hang the run forever, with a clear signal to proceed on its own
-        // rather than a silent empty string.
-        if (!opts.json) deps.err('· no interactive user (headless): auto-answering ask_user\n')
-        deps.resolveQuestion(
-          e.runId,
-          e.callId,
-          '[No interactive user is available in headless mode. Proceed using your best judgment.]'
-        )
-        break
-      case 'limit':
-        // The loop ended by hitting a budget/guard rather than a natural stop.
-        // Surface every reason so a script can see WHY the run stopped short. A
-        // 'stalled' termination is a failure (the agent gave up looping); a budget
-        // stop (max-steps/max-output) gets its own exit code, so a harness can tell
-        // "ran out of room" from both a finished task and a crash.
-        limitReason = e.reason
-        if (!opts.json) {
-          const why =
-            e.reason === 'stalled'
-              ? 'stopped: the agent stalled (no forward progress)'
-              : e.reason === 'max-output'
-                ? 'stopped: the model hit its output limit'
-                : 'stopped: reached the maximum number of steps'
-          deps.err(`· ${why}\n`)
-        }
-        break
-      case 'receipt':
-        receipt = e.receipt
-        // Meta output like a notice: stderr, so stdout stays the model's answer. The
-        // labels are model-written commands, so control characters are kept off the terminal.
-        if (!opts.json) {
-          for (const line of formatReceiptLines(e.receipt)) deps.err(`· ${stripControlChars(line)}\n`)
-        }
-        break
-      case 'verification':
-        // The end-of-run verification command ran; report pass/fail. A failing
-        // pass is fed back for self-correction inside the loop (it doesn't end the
-        // run here), so this is informational — the final exit code follows 'done'.
-        // A failure sends the agent back to work, so the answer before it is no
-        // longer its last word; a pass follows the final answer and keeps it.
-        if (!e.passed) finalText = ''
-        if (!opts.json)
-          deps.err(`· verification ${e.passed ? 'passed' : 'failed'}\n`)
-        break
-      case 'error':
-        errored = true
-        deps.err(`Error: ${e.message}\n`)
-        break
-      case 'done':
-        if (!opts.json) {
-          deps.out('\n')
-          if (inTok || outTok || cost) deps.err(`· ${inTok}+${outTok} tok · ${formatUsd(cost)}\n`)
-        }
-        stopReason = e.stopReason
-        if (e.stopReason === 'error' || e.stopReason === 'aborted') errored = true
-        break
-      case 'plan_ready':
-        // No interactive reviewer in headless. Print the plan (the deliverable of a
-        // plan-mode run) and reject so present_plan unblocks without editing anything,
-        // matching the read-only intent of the default policy. Re-run with --full-auto
-        // (which isn't Plan mode, so this is never reached) to actually make changes.
-        if (!opts.json) {
-          deps.out(`\n${e.plan.title}\n`)
-          if (e.plan.body) deps.out(`${e.plan.body}\n`)
-          if (e.plan.readiness) {
-            for (const line of formatReadinessLines(e.plan.readiness)) deps.err(`· ${stripControlChars(line)}\n`)
-          }
-          deps.err('· no interactive reviewer (headless): plan not executed; use --full-auto to make changes\n')
-        }
-        deps.resolvePlan(e.runId, e.callId, { kind: 'reject' })
-        break
-      case 'compaction':
-        if (!opts.json) deps.err(`· compacted ${e.summarized} messages\n`)
-        break
-      case 'notice':
-        // A user-addressed note (a hook's systemMessage, a budget extension). Meta output, so stderr —
-        // stdout stays the model's answer; --json already emitted the raw event.
-        if (!opts.json) deps.err(`· ${e.message}\n`)
-        break
-      case 'runtime_missing':
-        // Meta output like a notice: stderr, so stdout stays the model's answer.
-        if (!opts.json) deps.err(`${runtimeMissingLine(e)}\n`)
-        break
-      case 'tool_progress':
-        // Live progress from a long-running tool (a 16-turn subagent dispatch, a
-        // multi-dimension review) — without it the run reads as a stall between
-        // tool_start and its result. stderr, like the other tool activity.
-        if (!opts.json && e.message.trim()) deps.err(`·   ${e.message.trim()}\n`)
-        break
-      case 'subagent':
-        // A nested subagent row (e.g. one review dimension) starting/finishing.
-        if (!opts.json) deps.err(`·   ${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${e.label}\n`)
-        break
-      case 'review_finding': {
-        // A review finding as it's raised, then its verdict. stderr, like the rows above.
-        const line = opts.json ? null : printFinding(e.parentCallId, e.finding)
-        if (line) deps.err(`·     ${line}\n`)
-        break
+          deps.resolveElicitation(e.runId, e.elicitId, { action: 'decline' })
+          break
+        // Internal/streaming events with no headless surface: the --json path above
+        // already emits each verbatim, and the human output doesn't show them.
+        // `steered` is here for the same reason — headless has no one at the keyboard
+        // to steer a turn, so it can only arrive on a run adopted from elsewhere.
+        // `run_info` feeds the --json init line above.
+        case 'reasoning':
+        case 'turn_start':
+        case 'steered':
+        case 'run_info':
+          break
+        default:
+          assertNever(e, 'headless:unhandled agent event')
       }
-      case 'elicitation':
-        // No interactive user in headless mode — decline, so the MCP server takes
-        // its documented no-answer path instead of hanging the run. Deliberately
-        // NOT governed by --on-approval: that flag approves Houston's own tool
-        // calls; auto-accepting would send fabricated field values to an external
-        // server as if the user typed them.
-        if (!opts.json) {
-          deps.err(`· declining input request from MCP server "${e.serverId}" (no interactive user in headless mode)\n`)
-        }
-        deps.resolveElicitation(e.runId, e.elicitId, { action: 'decline' })
-        break
-      // Internal/streaming events with no headless surface: the --json path above
-      // already emits each verbatim, and the human output doesn't show them.
-      // `steered` is here for the same reason — headless has no one at the keyboard
-      // to steer a turn, so it can only arrive on a run adopted from elsewhere.
-      case 'reasoning':
-      case 'turn_start':
-      case 'steered':
-        break
-      default:
-        assertNever(e, 'headless:unhandled agent event')
     }
+
+    let latest: ChatMessage[] | undefined
+    await deps.startRun(req, send, (m) => {
+      latest = m
+      if (deps.session && conversationId) deps.session.setMessages(conversationId, m)
+    })
+    // A run always ends on `done` or `error`, which releases the last round; this only
+    // guarantees held text can't be lost if one never comes.
+    if (!opts.json) releaseRound()
+    // The conversation as the run left it, for the next turn. A host that never
+    // reports messages gets the closing answer appended so the next turn has it.
+    history = latest ?? [...messages, ...(t.finalText ? [{ role: 'assistant' as const, content: t.finalText }] : [])]
+    return t
   }
 
-  const startedAt = now()
-  await deps.startRun(req, send, (m) => {
-    if (deps.session && conversationId) deps.session.setMessages(conversationId, m)
-  })
-  // A run always ends on `done` or `error`, which releases the last round; this only
-  // guarantees held text can't be lost if one never comes.
-  if (!opts.json) releaseRound()
+  /**
+   * One turn of the session: the user's prompt, then (with `--output-schema`) a
+   * single corrective round when the answer doesn't match. Writes the turn's result
+   * line and returns its exit code.
+   */
+  const runTurn = async (prompt: string): Promise<number> => {
+    const startedAt = now()
+    const t = await runOnce([...history, userTurn(prompt)])
+    let status = tallyStatus(t)
+    let check = inputs.outputSchema ? checkStructuredAnswer(inputs.outputSchema, t.finalText) : undefined
+    // Bounded: one more model round with no tool budget to speak of, and only after a
+    // run that otherwise finished. A run that failed or ran out of budget keeps that
+    // status; its answer is still checked and reported.
+    if (check && !check.ok && status === 'success') {
+      if (!opts.json) deps.err('· the final answer does not match --output-schema; asking for a corrected one\n')
+      const fix = await runOnce([...history, schemaCorrectionNote(check.errors)], 1)
+      t.inTok += fix.inTok
+      t.outTok += fix.outTok
+      t.cost += fix.cost
+      t.turns += fix.turns
+      t.receipt = fix.receipt ?? t.receipt
+      t.stopReason = fix.stopReason
+      t.finalText = fix.finalText
+      const fixStatus = tallyStatus(fix)
+      check = checkStructuredAnswer(inputs.outputSchema!, fix.finalText)
+      // The correction's own failure (an error, a refused approval) outranks the schema.
+      status = fixStatus === 'success' || fixStatus === 'limit' ? (check.ok ? 'success' : 'schema_invalid') : fixStatus
+      if (fix.limitReason) t.limitReason = fix.limitReason
+    }
+    if (check && !check.ok && !opts.json) {
+      deps.err(`· the final answer does not match --output-schema:\n${check.errors.map((e) => `·   ${e}`).join('\n')}\n`)
+    }
+    writeResult({
+      status,
+      stopReason: t.stopReason,
+      ...(t.limitReason ? { limitReason: t.limitReason } : {}),
+      turns: t.turns,
+      // Rounded past a millionth of a cent: the sum of per-round floats carries
+      // representation noise (0.024000000000000004) a harness shouldn't have to strip.
+      costUsd: Math.round(t.cost * 1e6) / 1e6,
+      inputTokens: t.inTok,
+      outputTokens: t.outTok,
+      durationMs: Math.max(0, now() - startedAt),
+      finalText: t.finalText,
+      ...(t.receipt ? { receipt: t.receipt } : {}),
+      ...(check ? (check.ok ? { structured_output: check.value } : { schemaErrors: check.errors }) : {})
+    })
+    return headlessExitCode(status)
+  }
 
-  // A failure outranks a budget stop: a run that also hit an error or a refused
-  // approval didn't merely run out of room.
-  const status: HeadlessStatus = errored
-    ? 'error'
-    : approvalDenied
-      ? 'approval_denied'
-      : limitReason === 'stalled'
-        ? 'stalled'
-        : limitReason
-          ? 'limit'
-          : 'success'
-  writeResult({
-    status,
-    stopReason,
-    ...(limitReason ? { limitReason } : {}),
-    turns,
-    // Rounded past a millionth of a cent: the sum of per-round floats carries
-    // representation noise (0.024000000000000004) a harness shouldn't have to strip.
-    costUsd: Math.round(cost * 1e6) / 1e6,
-    inputTokens: inTok,
-    outputTokens: outTok,
-    durationMs: Math.max(0, now() - startedAt),
-    finalText,
-    ...(receipt ? { receipt } : {})
-  })
-  return headlessExitCode(status)
+  if (!streamInput) return runTurn(opts.prompt)
+
+  // stream-json: one turn per line, each after the previous finishes; EOF ends the
+  // session. The exit code is the first turn's that did not succeed, else 0. A
+  // malformed line ends the session as a usage error: guessing at what a driver
+  // meant could run a task it never asked for.
+  let code: number = HEADLESS_EXIT.ok
+  let lineNo = 0
+  for await (const line of deps.readStdinLines!()) {
+    lineNo++
+    if (!line.trim()) continue
+    const parsed = parseStreamJsonLine(line)
+    if ('error' in parsed) {
+      const message = `stdin line ${lineNo}: ${parsed.error}`
+      deps.err(`${message}\n`)
+      writeEarlyResult('input_error', message)
+      return code === HEADLESS_EXIT.ok ? HEADLESS_EXIT.usage : code
+    }
+    const turnCode = await runTurn(parsed.prompt)
+    if (code === HEADLESS_EXIT.ok) code = turnCode
+  }
+  // A session that never got a turn still says how it ended.
+  if (!initSent) sendInit()
+  return code
 }
 
 /** The process exit code for a run that ended with `status`. */
@@ -915,6 +1439,10 @@ export function headlessExitCode(status: HeadlessStatus): number {
     case 'approval_denied':
     case 'error':
       return HEADLESS_EXIT.failed
+    case 'schema_invalid':
+      return HEADLESS_EXIT.schema
+    case 'input_error':
+      return HEADLESS_EXIT.usage
     default:
       return assertNever(status, 'headless:unhandled status')
   }
