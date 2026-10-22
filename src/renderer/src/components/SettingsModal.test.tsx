@@ -33,6 +33,8 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
   const getMcpStatuses = vi.fn(() => Promise.resolve([]))
   const getPermissionPolicy = vi.fn(() => Promise.resolve({ managed: [], project: null }))
   const getRuleUsage = vi.fn(() => Promise.resolve({}))
+  const exportSettingsFile = vi.fn(() => Promise.resolve(null))
+  const importSettingsFile = vi.fn(() => Promise.resolve(null))
   const testPermission = vi.fn(() => Promise.resolve({ decision: null, tier: null, userMatches: [] }))
   const api = {
     saveSettings,
@@ -49,6 +51,8 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
     getPermissionPolicy,
     getRuleUsage,
     testPermission,
+    exportSettingsFile,
+    importSettingsFile,
     ...overrides
   }
   window.api = api as unknown as typeof window.api
@@ -1035,6 +1039,92 @@ describe('SettingsModal', () => {
     const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
     const provider = saved.providers.find((p) => p.id === 'custom-1234')!
     expect(provider.headers).toEqual({ Authorization: 'Bearer TOKEN' })
+  })
+
+  describe('defaults, export, and import', () => {
+    it('marks a section whose preferences differ from the defaults, and resets it', async () => {
+      const api = installApi()
+      renderModal({ reasoningSummary: 'detailed', verbosity: 'medium' }, { initialTab: 'agent' })
+      const reset = screen.getByRole('button', { name: 'Reset Reasoning to defaults' })
+      expect(screen.getAllByText('Modified')).toHaveLength(1)
+      fireEvent.click(reset)
+      expect(screen.queryByText('Modified')).toBeNull()
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
+      expect(saved).not.toHaveProperty('reasoningSummary')
+      expect(saved).not.toHaveProperty('verbosity')
+    })
+
+    it('never marks the approval mode Modified, since its default depends on the machine', () => {
+      installApi()
+      renderModal({ approvalPolicy: 'full-auto' })
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      expect(screen.queryByRole('button', { name: 'Reset Approval mode to defaults' })).toBeNull()
+    })
+
+    it('exports only preferences to the file the user picks', async () => {
+      const exportSettingsFile = vi.fn(() => Promise.resolve('/tmp/houston-settings.json'))
+      installApi({ exportSettingsFile })
+      renderModal({ theme: 'dark', additionalRoots: ['/private/place'] })
+      fireEvent.click(screen.getByRole('button', { name: 'General' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Export…' }))
+      expect(await screen.findByText('Exported to /tmp/houston-settings.json.')).toBeInTheDocument()
+      const text = (exportSettingsFile.mock.calls[0] as unknown as [string])[0]
+      expect(JSON.parse(text).settings.theme).toBe('dark')
+      expect(text).not.toMatch(/private|providers/)
+    })
+
+    it('imports after a summary that calls out allow rules and hooks, and can be undone', async () => {
+      const file = JSON.stringify({
+        format: 'houston-settings',
+        version: 1,
+        settings: {
+          theme: 'light',
+          permissionRules: [{ action: 'allow', tool: 'run_shell', match: 'make *' }],
+          hooks: [{ event: 'Stop', matcher: '*', command: 'make lint' }],
+          providers: []
+        }
+      })
+      const api = installApi({ importSettingsFile: vi.fn(() => Promise.resolve(file)) })
+      renderModal({ theme: 'dark' })
+      fireEvent.click(screen.getByRole('button', { name: 'General' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Import…' }))
+      const panel = await screen.findByRole('group', { name: 'Confirm import' })
+      expect(panel).toHaveTextContent('Import replaces your theme, permission rules, hooks.')
+      expect(panel).toHaveTextContent('1 rule that allow calls without asking and 1 hook that runs shell commands')
+      expect(panel).toHaveTextContent('Not imported (not preferences): providers.')
+      expect(api.saveSettings).not.toHaveBeenCalled()
+      fireEvent.click(within(panel).getByRole('button', { name: 'Import' }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
+      expect(saved.theme).toBe('light')
+      expect(saved.hooks).toEqual([{ event: 'Stop', matcher: '*', command: 'make lint' }])
+      expect(await screen.findByRole('button', { name: 'Undo' })).toBeInTheDocument()
+    })
+
+    it('refuses a file that is not a valid export, changing nothing', async () => {
+      const api = installApi({ importSettingsFile: vi.fn(() => Promise.resolve('{"theme":"dark"}')) })
+      renderModal()
+      fireEvent.click(screen.getByRole('button', { name: 'General' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Import…' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('This is not a Houston settings export.')
+      expect(api.saveSettings).not.toHaveBeenCalled()
+    })
+
+    it('resets every preference after confirming, keeping rules and hooks', async () => {
+      const api = installApi()
+      const rules = [{ action: 'deny' as const, tool: '*', match: 'x' }]
+      renderModal({ theme: 'dark', formatOnSave: true, permissionRules: rules })
+      fireEvent.click(screen.getByRole('button', { name: 'General' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Reset preferences…' }))
+      const panel = screen.getByRole('group', { name: 'Confirm reset' })
+      fireEvent.click(within(panel).getByRole('button', { name: 'Reset' }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
+      expect(saved).not.toHaveProperty('theme')
+      expect(saved).not.toHaveProperty('formatOnSave')
+      expect(saved.permissionRules).toEqual(rules)
+    })
   })
 
   describe('saving as you go', () => {

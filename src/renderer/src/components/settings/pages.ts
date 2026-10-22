@@ -1,4 +1,5 @@
 import type { AppSettings } from '@shared/types'
+import type { ResettableKey } from '@shared/settingsPortable'
 import type { SectionComponent } from './context'
 import {
   AddProviderSection,
@@ -28,6 +29,7 @@ import {
   KeyboardSection,
   LegalSection,
   NotificationsSection,
+  PreferencesSection,
   UpdatesSection
 } from './sections/app'
 
@@ -59,6 +61,8 @@ export interface SectionEntry {
   Component: SectionComponent
   keywords?: string[]
   values?: (s: AppSettings) => Array<string | undefined>
+  /** The preferences this section sets, for its "Modified" mark and Reset. */
+  keys?: ResettableKey[]
 }
 
 export interface SettingsPage {
@@ -100,23 +104,27 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'system-prompt',
+        keys: ['systemPromptExtra'],
         Component: SystemPromptSection,
         keywords: ['instructions', 'custom instructions', 'prompt', 'rules for the agent'],
         values: (s) => [s.systemPromptExtra]
       },
       {
         id: 'context-window',
+        keys: ['compactionThreshold', 'shellOutputMaxBytes'],
         Component: ContextWindowSection,
         keywords: ['compaction', 'compact', 'tokens', 'output limit', 'truncate', 'memory']
       },
       {
         id: 'loop-control',
+        keys: ['maxIterations', 'autoExtendTurns', 'maxIterationsCeiling', 'costCeilingUsd', 'stallDetection', 'verifyOnStop', 'verifyCommand', 'subagentHistoryMb'],
         Component: LoopControlSection,
         keywords: ['steps', 'iterations', 'max turns', 'budget', 'cost limit', 'stall', 'loop detection', 'verify', 'tests'],
         values: (s) => [s.verifyCommand]
       },
       {
         id: 'reasoning',
+        keys: ['reasoningSummary', 'verbosity'],
         Component: ReasoningSection,
         keywords: ['thinking', 'effort', 'summary', 'verbosity']
       }
@@ -129,6 +137,7 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'web-search',
+        keys: ['searchProvider'],
         Component: WebSearchSection,
         keywords: ['internet', 'search engine', 'api key', 'browse'],
         values: (s) => [s.searchProvider]
@@ -140,17 +149,20 @@ export const PAGES: SettingsPage[] = [
       },
       {
         id: 'language-servers',
+        keys: ['lspEnabled'],
         Component: LanguageServersSection,
         keywords: ['lsp', 'code intelligence', 'go to definition', 'typescript', 'pyright'],
         values: (s) => (s.lspServers ?? []).flatMap((l) => [l.id, l.command])
       },
       {
         id: 'format-on-save',
+        keys: ['formatOnSave'],
         Component: FormatOnSaveSection,
         keywords: ['prettier', 'formatter', 'gofmt', 'black', 'ruff']
       },
       {
         id: 'diagnostics-on-save',
+        keys: ['diagnosticsOnSave'],
         Component: DiagnosticsSection,
         keywords: ['lint', 'eslint', 'errors', 'type check', 'problems']
       }
@@ -211,8 +223,14 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'notifications',
+        keys: ['desktopNotifications'],
         Component: NotificationsSection,
         keywords: ['alerts', 'desktop notifications', 'sound', 'bell']
+      },
+      {
+        id: 'preferences',
+        Component: PreferencesSection,
+        keywords: ['export', 'import', 'backup', 'restore', 'reset', 'defaults', 'sync', 'migrate']
       }
     ]
   },
@@ -223,6 +241,7 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
+        keys: ['theme', 'htmlVisuals'],
         Component: AppearanceSection,
         keywords: ['theme', 'dark mode', 'light mode', 'colors', 'visuals', 'html']
       }
@@ -235,6 +254,7 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'keyboard',
+        keys: ['keybindings'],
         Component: KeyboardSection,
         keywords: ['shortcuts', 'keybindings', 'hotkeys', 'keys', 'rebind']
       }
@@ -252,6 +272,7 @@ export const PAGES: SettingsPage[] = [
       },
       {
         id: 'web-reads',
+        keys: ['webReads'],
         Component: WebReadsSection,
         keywords: ['web fetch', 'web search', 'full auto', 'internet', 'browse', 'urls', 'sites']
       },
@@ -268,6 +289,7 @@ export const PAGES: SettingsPage[] = [
       },
       {
         id: 'sandbox-egress',
+        keys: ['sandboxEgress'],
         Component: SandboxEgressSection,
         keywords: ['network', 'internet', 'proxy', 'domains', 'firewall', 'allowlist', 'outbound'],
         values: (s) => [...(s.sandboxEgress?.allow ?? []), ...(s.sandboxEgress?.deny ?? [])]

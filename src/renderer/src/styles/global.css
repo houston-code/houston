@@ -6764,6 +6764,39 @@ body:has(.coachmark) .get-started {
 }
 .set-section__head {
   margin-bottom: var(--space-1);
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+/* "Modified" + Reset beside a section title whose preferences differ from the defaults. */
+.set-section__modified {
+  font-size: 11px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+.set-section__reset {
+  font-size: 12px;
+}
+/* An inline confirmation (import, reset), in place of a modal over the modal. */
+.confirm-panel {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 13px;
+}
+.confirm-panel p {
+  margin: 0 0 var(--space-2);
+}
+.confirm-panel__warn {
+  color: var(--warn);
+}
+.confirm-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
 }
 /* Same <h3> element + text, restyled. Scoped — must NOT touch the bare
    .modal__body h3 used by the Shortcuts / What's-New dialogs. */

@@ -106,6 +106,10 @@ export const IPC = {
   permissionsTest: 'permissions:test',
   /** When each permission rule last decided a call. */
   permissionsUsage: 'permissions:usage',
+  /** Write a preferences export to a file the user picks. */
+  settingsExportFile: 'settings:exportFile',
+  /** Read a preferences export from a file the user picks. */
+  settingsImportFile: 'settings:importFile',
   settingsSetKey: 'settings:setKey',
   settingsDeleteKey: 'settings:deleteKey',
   settingsListModels: 'settings:listModels',

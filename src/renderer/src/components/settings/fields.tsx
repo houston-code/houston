@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { LspServerConfig, ModelOption } from '@shared/types'
 import { parseHeaderLines } from '@shared/mcp'
 import type { FetchSummary } from '@shared/model-listing'
+import { useSectionMeta } from './SectionFrame'
 
 function modelsToText(models: ModelOption[]): string {
   return models.map((m) => m.id).join('\n')
@@ -297,10 +298,21 @@ export function SettingsSection({
   desc?: ReactNode
   children: ReactNode
 }): JSX.Element {
+  const meta = useSectionMeta()
   return (
     <section className="set-section">
       <div className="set-section__head">
         <h3>{title}</h3>
+        {meta?.modified && (
+          <>
+            <span className="set-section__modified" title="Changed from the default">
+              Modified
+            </span>
+            <button className="link set-section__reset" onClick={meta.onReset} aria-label={`Reset ${title} to defaults`}>
+              Reset
+            </button>
+          </>
+        )}
       </div>
       {desc != null && <p className="set-section__desc">{desc}</p>}
       <div className="set-section__body">{children}</div>

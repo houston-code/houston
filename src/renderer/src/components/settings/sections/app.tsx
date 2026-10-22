@@ -2,6 +2,14 @@ import { useEffect, useState } from 'react'
 import type { AppSettings } from '@shared/types'
 import { LICENSE_URL, PRIVACY_URL } from '@shared/legal'
 import { updateErrorHint, type UpdateCheckResult } from '@shared/update'
+import {
+  exportPreferences,
+  parsePreferencesImport,
+  resetPreferences,
+  RESETTABLE_PREFERENCES,
+  type ParsedImport,
+  type PreferenceKey
+} from '@shared/settingsPortable'
 import { SettingsSection } from '../fields'
 import { KeyboardTab } from '../KeyboardTab'
 import type { SettingsCtx } from '../context'
@@ -174,6 +182,173 @@ export function DiagnosticsCheckSection({ ctx }: { ctx: SettingsCtx }): JSX.Elem
       <button type="button" className="btn btn--sm" onClick={onShowDoctor}>
         Run diagnostics
       </button>
+    </SettingsSection>
+  )
+}
+
+/** How each preference is named in the import summary. */
+const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
+  approvalPolicy: 'approval mode',
+  webReads: 'web reads in full auto',
+  permissionRules: 'permission rules',
+  hooks: 'hooks',
+  systemPromptExtra: 'system prompt addition',
+  compactionThreshold: 'compaction threshold',
+  shellOutputMaxBytes: 'command output limit',
+  maxIterations: 'steps per turn',
+  autoExtendTurns: 'keep going while productive',
+  maxIterationsCeiling: 'step limit',
+  costCeilingUsd: 'cost reminder',
+  stallDetection: 'loop detection',
+  verifyOnStop: 'verify on finish',
+  verifyCommand: 'verification command',
+  subagentHistoryMb: 'subagent history',
+  reasoningSummary: 'reasoning summary',
+  verbosity: 'verbosity',
+  searchProvider: 'web search provider',
+  lspEnabled: 'language servers',
+  lspServers: 'extra language servers',
+  formatOnSave: 'format on save',
+  diagnosticsOnSave: 'diagnostics on save',
+  desktopNotifications: 'notifications',
+  theme: 'theme',
+  htmlVisuals: 'interactive visuals',
+  keybindings: 'keyboard shortcuts',
+  sandboxEgress: 'sandbox egress'
+}
+
+type ReadyImport = Extract<ParsedImport, { ok: true }>
+
+/**
+ * Export the preferences to a file, import them from one (after a summary of what
+ * it changes), or reset them to the defaults. Providers, keys, MCP servers, and
+ * this machine's folders are never part of it; see @shared/settingsPortable.
+ */
+export function PreferencesSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
+  const { settings, setSettings } = ctx
+  const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null)
+  const [pending, setPending] = useState<ReadyImport | null>(null)
+  const [confirmingReset, setConfirmingReset] = useState(false)
+
+  const doExport = async (): Promise<void> => {
+    setStatus(null)
+    try {
+      const path = await window.api.exportSettingsFile(exportPreferences(settings))
+      if (path) setStatus({ text: `Exported to ${path}.` })
+    } catch (e) {
+      setStatus({ text: `Could not export: ${(e as Error).message}`, error: true })
+    }
+  }
+
+  const doImport = async (): Promise<void> => {
+    setStatus(null)
+    setConfirmingReset(false)
+    try {
+      const text = await window.api.importSettingsFile()
+      if (text === null) return
+      const parsed = parsePreferencesImport(text)
+      if (!parsed.ok) setStatus({ text: parsed.error, error: true })
+      else if (parsed.keys.length === 0) setStatus({ text: 'That file holds no preferences to import.', error: true })
+      else setPending(parsed)
+    } catch (e) {
+      setStatus({ text: `Could not import: ${(e as Error).message}`, error: true })
+    }
+  }
+
+  // What the import brings that deserves a second look: rules that allow, hooks that run commands.
+  const allowRules = pending?.settings.permissionRules?.filter((r) => r.action === 'allow').length ?? 0
+  const hookCount = pending?.settings.hooks?.length ?? 0
+
+  return (
+    <SettingsSection
+      title="Your preferences"
+      desc="Move your preferences to another machine, or start over. Providers, API keys, MCP servers, and folders are not included."
+    >
+      <div className="field__row">
+        <button className="btn btn--sm" onClick={() => void doExport()}>
+          Export…
+        </button>
+        <button className="btn btn--sm" onClick={() => void doImport()}>
+          Import…
+        </button>
+        <button
+          className="btn btn--sm btn--danger"
+          onClick={() => {
+            setPending(null)
+            setConfirmingReset(true)
+          }}
+        >
+          Reset preferences…
+        </button>
+      </div>
+
+      {pending && (
+        <div className="confirm-panel" role="group" aria-label="Confirm import">
+          <p>
+            Import replaces your {pending.keys.map((k) => PREFERENCE_LABEL[k]).join(', ')}.
+          </p>
+          {(allowRules > 0 || hookCount > 0) && (
+            <p className="confirm-panel__warn">
+              It includes{' '}
+              {[
+                allowRules > 0 ? `${allowRules} ${allowRules === 1 ? 'rule' : 'rules'} that allow calls without asking` : '',
+                hookCount > 0 ? `${hookCount} ${hookCount === 1 ? 'hook that runs' : 'hooks that run'} shell commands` : ''
+              ]
+                .filter(Boolean)
+                .join(' and ')}
+              . Import only a file you trust.
+            </p>
+          )}
+          {pending.ignored.length > 0 && (
+            <p className="settings-dim">Not imported (not preferences): {pending.ignored.join(', ')}.</p>
+          )}
+          <div className="confirm-panel__actions">
+            <button className="btn btn--sm" onClick={() => setPending(null)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn--sm btn--accent"
+              onClick={() => {
+                setSettings((s) => ({ ...s, ...pending.settings }))
+                setPending(null)
+                setStatus({ text: 'Imported. Undo is at the top if you change your mind.' })
+              }}
+            >
+              Import
+            </button>
+          </div>
+        </div>
+      )}
+
+      {confirmingReset && (
+        <div className="confirm-panel" role="group" aria-label="Confirm reset">
+          <p>
+            Reset every preference to its default? Your providers, API keys, MCP servers, permission rules,
+            hooks, and approval mode stay as they are.
+          </p>
+          <div className="confirm-panel__actions">
+            <button className="btn btn--sm" onClick={() => setConfirmingReset(false)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn--sm btn--danger"
+              onClick={() => {
+                setSettings((s) => resetPreferences(s, RESETTABLE_PREFERENCES))
+                setConfirmingReset(false)
+                setStatus({ text: 'Preferences reset. Undo is at the top if you change your mind.' })
+              }}
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+      )}
+
+      {status && (
+        <p className={`field__hint${status.error ? ' field__hint--warn' : ''}`} role={status.error ? 'alert' : 'status'}>
+          {status.text}
+        </p>
+      )}
     </SettingsSection>
   )
 }

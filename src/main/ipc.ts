@@ -160,6 +160,9 @@ import {
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 
+/** A preferences export is a few KB; anything past this is not one. */
+const MAX_SETTINGS_FILE_BYTES = 2_000_000
+
 /** Longest pasted key accepted by testKey; real provider keys are far shorter. */
 const MAX_TEST_KEY_LENGTH = 4096
 /** Longest message text a rewind request may carry for its staleness check. */
@@ -758,6 +761,35 @@ export function registerIpc(): void {
     )
   })
   ipcMain.handle(IPC.permissionsUsage, () => getRuleUsage())
+
+  // Preferences export/import. The renderer builds and parses the content (see
+  // @shared/settingsPortable); main only moves bytes to and from a file the user picks.
+  ipcMain.handle(IPC.settingsExportFile, async (event, content: unknown): Promise<string | null> => {
+    if (typeof content !== 'string' || content.length > MAX_SETTINGS_FILE_BYTES) return null
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const res = await dialog.showSaveDialog(win!, {
+      title: 'Export settings',
+      defaultPath: 'houston-settings.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (res.canceled || !res.filePath) return null
+    writeFileSync(res.filePath, content, 'utf8')
+    return res.filePath
+  })
+  ipcMain.handle(IPC.settingsImportFile, async (event): Promise<string | null> => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+    const res = await dialog.showOpenDialog(win!, {
+      title: 'Import settings',
+      properties: ['openFile'],
+      filters: [{ name: 'JSON', extensions: ['json'] }]
+    })
+    if (res.canceled || res.filePaths.length === 0) return null
+    // Size-check before reading, so a huge file is refused without loading it.
+    if (statSync(res.filePaths[0]).size > MAX_SETTINGS_FILE_BYTES) {
+      throw new Error('That file is too large to be a settings export.')
+    }
+    return readFileSync(res.filePaths[0], 'utf8')
+  })
 
   // Wait for the encrypted write so a failed save reaches the renderer as an error.
   ipcMain.handle(IPC.settingsSetKey, async (_event, providerId: string, key: string) => {
