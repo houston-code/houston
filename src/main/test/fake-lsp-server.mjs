@@ -10,6 +10,8 @@
 //   FAKE_LSP_LOG=<abs>       append every received method to this file
 //   FAKE_LSP_NO_VERSION=1    publish diagnostics without a version
 //   FAKE_LSP_INIT_DELAY_MS   delay before answering initialize
+//   FAKE_LSP_DEF_IMPORT=1    definition of an imported name answers with its import line
+//                            first (as TypeScript's server does); asked there, the declaration
 //
 // Diagnostics: every line containing ERROR yields an error, every line containing WARN
 // yields a warning, at the column where the word starts.
@@ -163,6 +165,15 @@ function handle(msg) {
     case 'textDocument/definition': {
       const d = docs.get(p.textDocument.uri)
       const word = d ? wordAt(d.text, p.position) : ''
+      if (env.FAKE_LSP_DEF_IMPORT === '1' && d) {
+        const lines = d.text.split('\n')
+        const imp = lines.findIndex((l) => l.startsWith('import ') && new RegExp(`\\b${word}\\b`).test(l))
+        if (imp >= 0 && imp !== p.position.line) {
+          const col = lines[imp].indexOf(word)
+          const range = { start: { line: imp, character: col }, end: { line: imp, character: col + word.length } }
+          return send({ id: msg.id, result: [{ targetUri: p.textDocument.uri, targetRange: range, targetSelectionRange: range }] })
+        }
+      }
       const decl = occurrences(word).find((o) => {
         const line = docs.get(o.uri).text.split('\n')[o.range.start.line]
         return /function |const |let |class /.test(line)

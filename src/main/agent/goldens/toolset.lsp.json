@@ -1,0 +1,179 @@
+{
+  "promptLines": [
+    "- A language server is available for this project. To find where a symbol is defined, every place it is used, or its type, prefer lsp_definition, lsp_references, and lsp_hover over text search: they follow imports and skip same-named text. Rename a symbol with lsp_rename rather than editing each use by hand."
+  ],
+  "tools": [
+    {
+      "name": "lsp_definition",
+      "description": "Find where a symbol is defined, using the project's language server (type-aware: follows imports, re-exports, and overloads that text search can't). Give the file, the 1-based line, and the symbol as written there.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File containing the symbol, relative to the project root."
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-based line number of the symbol, as read_file shows it."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol as written on that line, e.g. \"parseConfig\"."
+          },
+          "occurrence": {
+            "type": "integer",
+            "description": "Which occurrence of symbol on that line, when it appears more than once (default 1)."
+          }
+        },
+        "required": [
+          "path",
+          "line",
+          "symbol"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "lsp_references",
+      "description": "List every reference to a symbol across the project, using the language server (only real uses of this symbol, not same-named text). Give the file, the 1-based line, and the symbol as written there.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File containing the symbol, relative to the project root."
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-based line number of the symbol, as read_file shows it."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol as written on that line, e.g. \"parseConfig\"."
+          },
+          "occurrence": {
+            "type": "integer",
+            "description": "Which occurrence of symbol on that line, when it appears more than once (default 1)."
+          },
+          "include_declaration": {
+            "type": "boolean",
+            "description": "Also list the declaration itself (default true)."
+          }
+        },
+        "required": [
+          "path",
+          "line",
+          "symbol"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "lsp_hover",
+      "description": "Show a symbol's type, signature, and documentation from the language server, as an editor's hover would. Give the file, the 1-based line, and the symbol as written there.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File containing the symbol, relative to the project root."
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-based line number of the symbol, as read_file shows it."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol as written on that line, e.g. \"parseConfig\"."
+          },
+          "occurrence": {
+            "type": "integer",
+            "description": "Which occurrence of symbol on that line, when it appears more than once (default 1)."
+          }
+        },
+        "required": [
+          "path",
+          "line",
+          "symbol"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "lsp_document_symbols",
+      "description": "Outline a file: its classes, functions, methods, and other symbols with their line numbers, from the language server.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File containing the symbol, relative to the project root."
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "lsp_workspace_symbols",
+      "description": "Find symbols (classes, functions, types, ...) by name across the project, from the language server. Give a file in the part of the project to search: the server searches the project that file belongs to.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The name or part of it, e.g. \"parseConfig\"."
+          },
+          "path": {
+            "type": "string",
+            "description": "Any file in the language to search, relative to the project root."
+          }
+        },
+        "required": [
+          "query",
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    {
+      "name": "lsp_rename",
+      "description": "Rename a symbol everywhere it is used, using the language server (a semantic rename: only this symbol, across files, including imports). Give the file, the 1-based line, and the symbol as written there, plus the new name. The edits are applied as one apply_patch, with the same approval and checkpoint (undo) as any patch.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "File containing the symbol, relative to the project root."
+          },
+          "line": {
+            "type": "integer",
+            "description": "1-based line number of the symbol, as read_file shows it."
+          },
+          "symbol": {
+            "type": "string",
+            "description": "The symbol as written on that line, e.g. \"parseConfig\"."
+          },
+          "occurrence": {
+            "type": "integer",
+            "description": "Which occurrence of symbol on that line, when it appears more than once (default 1)."
+          },
+          "new_name": {
+            "type": "string",
+            "description": "The new name."
+          }
+        },
+        "required": [
+          "path",
+          "line",
+          "symbol",
+          "new_name"
+        ],
+        "additionalProperties": false
+      }
+    }
+  ]
+}
