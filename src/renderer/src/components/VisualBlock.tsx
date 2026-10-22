@@ -1,11 +1,14 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { Block } from '@shared/markdown'
 import { CodeBlock } from './CodeBlock'
 import {
+  MAX_DIAGRAM_HEIGHT,
   MAX_MERMAID_CHARS,
   MAX_SVG_CHARS,
   clampFrameHeight,
+  diagramIsTall,
   liveFrameSlots,
+  naturalSizeSvg,
   renderMermaidCached,
   svgDataUrl,
   useColorScheme,
@@ -62,9 +65,55 @@ function MermaidView({ source, value }: { source: string; value: string }): JSX.
       </div>
     )
   }
+  return <Diagram svg={result.svg} />
+}
+
+/**
+ * A rendered diagram at its natural size: never wider than it was drawn, scaled down
+ * to fit the column, and capped in height (scrolling inside its box) until expanded.
+ */
+function Diagram({ svg }: { svg: string }): JSX.Element {
+  const sized = useMemo(() => naturalSizeSvg(svg), [svg])
+  const box = useRef<HTMLDivElement>(null)
+  const [columnWidth, setColumnWidth] = useState(0)
+  const [expanded, setExpanded] = useState(false)
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    // The content box: the image can't use the padding.
+    const measure = (): void => {
+      const cs = getComputedStyle(el)
+      setColumnWidth(el.clientWidth - (parseFloat(cs.paddingLeft) || 0) - (parseFloat(cs.paddingRight) || 0))
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const obs = new ResizeObserver(measure)
+    obs.observe(el)
+    return () => obs.disconnect()
+  }, [])
+  const tall = sized !== null && diagramIsTall(sized, columnWidth)
+  const capped = tall && !expanded
   return (
-    <div className="md-visual md-visual--diagram">
-      <img src={svgDataUrl(result.svg)} alt="Diagram from the reply" />
+    <div className="md-visual md-visual--diagram-wrap">
+      <div
+        ref={box}
+        className={`md-visual--diagram${capped ? ' md-visual--capped' : ''}`}
+        style={capped ? { maxHeight: MAX_DIAGRAM_HEIGHT } : undefined}
+        tabIndex={capped ? 0 : undefined}
+        aria-label={capped ? 'Diagram, scroll to see all of it' : undefined}
+      >
+        <img
+          src={svgDataUrl(sized?.svg ?? svg)}
+          width={sized?.width}
+          height={sized?.height}
+          alt="Diagram from the reply"
+        />
+      </div>
+      {tall && (
+        <button type="button" className="btn btn--sm md-visual__expand" aria-expanded={expanded} onClick={() => setExpanded((v) => !v)}>
+          {expanded ? 'Collapse' : 'Expand'}
+        </button>
+      )}
     </div>
   )
 }

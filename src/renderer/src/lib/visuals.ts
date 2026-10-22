@@ -37,6 +37,64 @@ export function svgDataUrl(svg: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
 }
 
+/** Tallest a diagram shows before it scrolls inside its box (Expand lifts the cap). */
+export const MAX_DIAGRAM_HEIGHT = 560
+
+export interface SizedSvg {
+  svg: string
+  /** Natural size in CSS pixels. */
+  width: number
+  height: number
+}
+
+const svgAttr = (tag: string, name: string): string | null =>
+  new RegExp(`\\s${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)')`, 'i').exec(tag)?.slice(1).find((v) => v !== undefined) ?? null
+
+/**
+ * Give an SVG a fixed natural size. Mermaid draws with `width="100%"` and only a
+ * viewBox, which leaves an <img> no intrinsic width, so a two-box diagram stretched
+ * across the whole chat. The size comes from the viewBox, or the root's own pixel
+ * width and height; null when neither says (the caller shows the SVG as it was).
+ */
+export function naturalSizeSvg(svg: string): SizedSvg | null {
+  const open = /<svg\b[^>]*>/i.exec(svg)
+  if (!open) return null
+  const tag = open[0]
+  const px = (v: string | null): number | null => {
+    const m = v && /^\s*(\d+(?:\.\d+)?)\s*(?:px)?\s*$/.exec(v)
+    return m ? Number(m[1]) : null
+  }
+  let width = px(svgAttr(tag, 'width'))
+  let height = px(svgAttr(tag, 'height'))
+  const box = svgAttr(tag, 'viewBox')
+    ?.trim()
+    .split(/[\s,]+/)
+    .map(Number)
+  if (box?.length === 4 && box.every(Number.isFinite) && box[2] > 0 && box[3] > 0) {
+    // One side given in pixels keeps the viewBox's aspect ratio.
+    if (width !== null && height === null) height = (width * box[3]) / box[2]
+    else if (height !== null && width === null) width = (height * box[2]) / box[3]
+    else if (width === null && height === null) [width, height] = [box[2], box[3]]
+  }
+  if (!width || !height || width <= 0 || height <= 0) return null
+  width = Math.ceil(width)
+  height = Math.ceil(height)
+  const sized = tag
+    .replace(/\s(?:width|height)\s*=\s*(?:"[^"]*"|'[^']*')/gi, '')
+    .replace(/^<svg\b/i, `<svg width="${width}" height="${height}"`)
+  return { svg: svg.slice(0, open.index) + sized + svg.slice(open.index + tag.length), width, height }
+}
+
+/**
+ * Whether a diagram, shown no wider than its natural size and scaled down to fit a
+ * column `columnWidth` wide, is taller than the cap. An unknown column (0) counts
+ * as wide enough for the natural size.
+ */
+export function diagramIsTall(size: { width: number; height: number }, columnWidth: number): boolean {
+  const scale = columnWidth > 0 ? Math.min(1, columnWidth / size.width) : 1
+  return size.height * scale > MAX_DIAGRAM_HEIGHT
+}
+
 /** Clamp a frame height reported by a visual's document. */
 export function clampFrameHeight(h: unknown): number | null {
   if (typeof h !== 'number' || !Number.isFinite(h)) return null
