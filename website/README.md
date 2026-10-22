@@ -37,6 +37,7 @@ website/
   public/             The deployed site (Cloudflare Pages output directory)
     index.html          Landing page
     privacy.html        Generated from docs/PRIVACY.md
+    docs/               Generated from docs/houston-guide.md at the latest release (see Docs below)
     contact.html        Contact addresses (GitHub issues first, then email by topic)
     404.html            Not-found page (Cloudflare serves this automatically)
     favicon.ico         Tab icon, 16/32/48 px (generated from assets/icon.png)
@@ -58,11 +59,15 @@ website/
     _headers            Cloudflare Pages security + cache headers
     _redirects          /download, /releases, /github short links
     robots.txt          all crawlers welcome, incl. named AI bots (GPTBot, ClaudeBot, …)
-    sitemap.xml         homepage, contact, and privacy pages, with lastmod
+    sitemap.xml         homepage, contact, privacy, and docs pages, with lastmod (docs entries generated)
     llms.txt            curated product summary for AI assistants (llmstxt.org)
   tools/              Build scripts (not deployed)
+    site-chrome.mjs       the header and footer the generated pages share
     build-legal.mjs       docs/PRIVACY.md → privacy.html
     build-legal.test.mjs  fails CI if the committed HTML drifts from docs/
+    build-docs.mjs        docs/houston-guide.md at a release → docs/*.html + sitemap entries
+    build-docs.test.mjs   fails CI if the pages drift from their release's guide, or if the
+                          working-tree guide uses Markdown the generator can't render
     download-links.test.mjs  fails CI if a download link's asset suffix matches no build (or the CLI)
     platform.test.mjs     platform.js recommendations for each browser/OS/CPU
     app.test.mjs          app.js on the real page: hero button downloads the detected build, else scrolls
@@ -128,7 +133,29 @@ and two corner radii. Build new UI from those rather than adding values;
 below 4.5:1 in either theme.
 
 The header, footer, and theme script are repeated in `index.html`, `404.html`,
-`contact.html`, and the template in `tools/build-legal.mjs`. Change them together.
+`contact.html`, and `tools/site-chrome.mjs` (used by the generated pages). Change them
+together, then re-run both generators.
+
+## Docs
+
+`/docs` is the product guide (`docs/houston-guide.md`) as of the **latest release**, not
+`main`, so it describes what people can install. Each `##` section is one page; the guide's
+intro, written for the agent that loads it as a skill, is left out. The app's
+**Help → Houston Guide** opens `/docs/`.
+
+- **On release:** Release - publish rebuilds the pages from the release commit for a
+  release marked latest and carries them to `main` in its sync PR. Nothing to do by hand.
+- **By hand** (after changing the generator, the chrome, or to recover a failed sync):
+  `node website/tools/build-docs.mjs` builds from the highest local `vX.Y.Z` tag
+  (`git fetch --tags` first). Commit `public/docs/` and `public/sitemap.xml`.
+- **Editing the guide** on `main` changes the site at the next release. Use only the
+  Markdown the generator supports (headings, paragraphs, lists, tables without alignment,
+  fenced code, emphasis, code spans, absolute links); the test fails on anything else.
+- **Page URLs** come from section headings, minus any parenthetical. Renaming a heading
+  moves its page.
+- **Topic groups** (the index sections, the sidebar, and previous/next order) are `GROUPS`
+  in `build-docs.mjs`. A new `##` section must be added to a group; the test fails until it
+  is. At release time an unplaced section lands in a "More" group rather than failing.
 
 ## Maintenance
 

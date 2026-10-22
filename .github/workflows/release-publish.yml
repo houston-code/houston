@@ -489,8 +489,9 @@ jobs:
             -f tag_name="$tag" -F draft=false -f make_latest="$LATEST" -F body=@release-body.md --silent
           echo "Published $tag (latest: $LATEST)."
 
-  # Brings the release to main: its CHANGELOG section (placed in version order), and for an
-  # X.Y.0 release the version in package.json and package-lock.json. The branch is pushed with
+  # Brings the release to main: its CHANGELOG section (placed in version order), for an
+  # X.Y.0 release the version in package.json and package-lock.json, and for the latest
+  # release the houstoncode.ai/docs pages built from its own guide. The branch is pushed with
   # the workflow's own token; the PR is opened with the release PAT (a PR opened by GITHUB_TOKEN
   # would run no checks) and queued with auto-merge, so it lands through the merge queue once
   # CI passes.
@@ -507,6 +508,7 @@ jobs:
       VERSION: ${{ needs.source.outputs.version }}
       SHA: ${{ needs.source.outputs.sha }}
       LINE: ${{ needs.source.outputs.line }}
+      LATEST: ${{ needs.source.outputs.latest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -538,14 +540,25 @@ jobs:
               npm version "$VERSION" --no-git-tag-version --allow-same-version --ignore-scripts
             fi
           fi
-          if git diff --quiet; then
-            echo "main already has the v$VERSION notes and version; nothing to sync."
+          # The site's docs describe the latest release, so they're rebuilt from this release's
+          # guide (main's generator, the release commit's docs/houston-guide.md). A patch to an
+          # older line leaves them on the newer release. A docs failure only warns: the notes and
+          # version still have to reach main.
+          if [ "$LATEST" = true ] && ! node website/tools/build-docs.mjs --ref "$SHA" --version "v$VERSION"; then
+            echo "::warning::Couldn't build the v$VERSION docs; houstoncode.ai/docs stays on the previous release. Run website/tools/build-docs.mjs by hand."
+            echo "**houstoncode.ai/docs wasn't updated:** website/tools/build-docs.mjs failed for v$VERSION (see the log). Run it by hand and open a PR." >> "$GITHUB_STEP_SUMMARY"
+            git checkout -- website/public
+            git clean -fdq website/public/docs
+          fi
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard website/public/docs)" ]; then
+            echo "main already has the v$VERSION notes, version, and docs; nothing to sync."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md package.json package-lock.json
+          git add -A website/public/docs website/public/sitemap.xml
           git commit -qm "chore(release): sync v$VERSION notes to main"
           echo "changed=true" >> "$GITHUB_OUTPUT"
       # Neither token is persisted to .git/config or in the environment of the step above. A push
@@ -571,7 +584,7 @@ jobs:
           else
             url=$(gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$branch" \
               --title "chore(release): sync v$VERSION notes to main" \
-              --body "Brings the published v$VERSION release notes to main's CHANGELOG.md (and, for an X.Y.0 release, the version). Opened by Release - publish.")
+              --body "Brings the published v$VERSION release notes to main's CHANGELOG.md (for an X.Y.0 release, the version too, and for the latest release, the houstoncode.ai/docs pages built from its guide). Opened by Release - publish.")
           fi
           echo "Sync PR: $url"
           # Queue it. Turning on auto-merge needs RELEASE_PR_TOKEN to have Contents: read and
