@@ -53,6 +53,8 @@ website/
       og.svg            Social-card source (real icon composited at render time)
       og.png            Social-card render (1200×630), generated from og.svg
       screens/          Real product screenshots (see capture tool below), PNG + WebP widths
+    .well-known/
+      security.txt      RFC 9116 security contact (/security.txt redirects here)
     _headers            Cloudflare Pages security + cache headers
     _redirects          /download, /releases, /github short links
     robots.txt          all crawlers welcome, incl. named AI bots (GPTBot, ClaudeBot, …)
@@ -64,6 +66,7 @@ website/
     download-links.test.mjs  fails CI if a download link's asset suffix matches no build (or the CLI)
     platform.test.mjs     platform.js recommendations for each browser/OS/CPU
     app.test.mjs          app.js on the real page: hero button downloads the detected build, else scrolls
+    security-txt.test.mjs fails CI if security.txt expires or points at an unmonitored contact
     headers.test.mjs      assets revalidate on every use (no fixed cache lifetime; files keep their names)
     palette.test.mjs      no colors outside the design tokens; every text pairing clears WCAG AA
     build-og.mjs          og.svg → og.png (via the repo's Playwright Chromium)
