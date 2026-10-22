@@ -98,6 +98,8 @@ test('⌘W is bound to a custom terminal-aware Close, not the default window clo
 })
 
 test('forces slim auto-hiding overlay scrollbars regardless of the OS setting', async () => {
+  // AppleShowScrollBars is a macOS default; Windows and Linux draw classic scrollbars.
+  test.skip(process.platform !== 'darwin', 'macOS-only scroller setting')
   const { app, close } = await launchApp()
 
   try {

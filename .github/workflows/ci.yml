@@ -239,9 +239,9 @@ jobs:
   #   - Every non-Linux leg runs the full unit suite (Linux runs it in `test`): macOS against
   #     the real Seatbelt sandbox backend, Windows against its own backend (Git Bash) and its
   #     path and permission semantics.
-  #   - macOS runs the packaged-app e2e (Playwright driving the built .app), the only check
-  #     that the asar archive, the afterPack vendored binaries, and the main/preload/renderer
-  #     bridge work together in the real artifact.
+  #   - Every leg runs the packaged-app e2e (Playwright driving the app it just built), the
+  #     only check that the asar archive, the afterPack vendored binaries, and the
+  #     main/preload/renderer bridge work together in the real artifact.
   # Which legs run is `plan`'s call: Linux on a PR (all four with the `full-ci` label),
   # Linux + macOS arm64 + Windows on a queue candidate, all four nightly, none for a
   # prose-only change. The legs themselves (runner labels, dist scripts) are LEGS in
@@ -307,10 +307,26 @@ jobs:
         env:
           DIST: ${{ matrix.dist }}
         run: bash scripts/dist-with-retry.sh "$DIST"
-      - if: runner.os == 'macOS'
-        run: npm run test:e2e
+      # Linux has no display on the runner, so the e2e runs under Xvfb. bubblewrap lets the
+      # agent-turn test's shell command run in the real Linux sandbox backend rather than
+      # unconfined. (This leg is ubuntu-22.04, which doesn't restrict unprivileged user
+      # namespaces, so unlike linux-sandbox it needs no AppArmor change.)
+      - name: Set up a display and bubblewrap for the e2e
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb bubblewrap
+      # The app was just packaged above, so run the suite against it without rebuilding.
+      - name: Packaged-app e2e
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then export TEMP="$RUNNER_TEMP" TMP="$RUNNER_TEMP"; fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a npm run test:e2e:packaged
+          else
+            npm run test:e2e:packaged
+          fi
       # Playwright's error context and traces, so a red e2e can be diagnosed from the run.
-      - if: failure() && runner.os == 'macOS'
+      - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e-results-${{ matrix.target }}
