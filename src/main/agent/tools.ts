@@ -103,6 +103,7 @@ import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
 import { resolveGh, runGh, type GhExec } from './github'
 import { runReadGit, captureTry, uncommittedDiffBase } from './gitRead'
+import { otherCheckout, otherCheckoutHint } from './other-checkout'
 import {
   PROPOSAL_ACCEPTED_PREFIX,
   PROPOSE_SESSION_NAME,
@@ -1742,10 +1743,11 @@ const runShell: ToolDef = {
 
     // Route through the persistent session only when the backend's shell can run the
     // bash prelude (`cd`/env threading). On a cmd.exe fallback it can't, so run directly.
-    const result = ctx.shellSession && backendSupportsSession()
+    const session = ctx.shellSession && backendSupportsSession() ? ctx.shellSession : undefined
+    const result = session
       ? await runInSession({
           command,
-          session: ctx.shellSession,
+          session,
           workspace: ctx.workspace,
           roots: rootsOf(ctx),
           allowNetwork: ctx.allowNetwork,
@@ -1805,6 +1807,13 @@ const runShell: ToolDef = {
     if (runtime) {
       parts.push(missingRuntimeHint(runtime))
       blocked ??= 'runtime-missing'
+    }
+    // The session's cwd carries over to the next command, so a `cd` into the main
+    // checkout (or a sibling worktree) of this same repository silently points every
+    // later git and file read at another branch. Say so while the shell sits there.
+    if (session && session.cwd !== ctx.workspace) {
+      const other = await otherCheckout(ctx.workspace, rootsOf(ctx), session.cwd)
+      if (other) parts.push(otherCheckoutHint(session.cwd, other, ctx.workspace))
     }
     ctx.recordEvidence?.({
       kind: 'shell',
