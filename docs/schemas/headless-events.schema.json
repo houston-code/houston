@@ -34,6 +34,15 @@
       "$ref": "#/$defs/event_subagent"
     },
     {
+      "$ref": "#/$defs/event_subagent_start"
+    },
+    {
+      "$ref": "#/$defs/event_subagent_step"
+    },
+    {
+      "$ref": "#/$defs/event_subagent_end"
+    },
+    {
       "$ref": "#/$defs/event_review_finding"
     },
     {
@@ -485,6 +494,183 @@
             "done",
             "error"
           ]
+        }
+      }
+    },
+    "event_subagent_start": {
+      "description": "A subagent began (a dispatched agent, a nested one, or a reviewer). `record` describes it: kind, label, model, the task it was given, its system prompt and tools; steps arrive in subagent_step events.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "parentCallId",
+        "record"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "subagent_start"
+        },
+        "parentCallId": {
+          "type": "string"
+        },
+        "record": {
+          "type": "object",
+          "required": [
+            "id",
+            "kind",
+            "label",
+            "model",
+            "prompt",
+            "status",
+            "steps"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "parentId": {
+              "type": "string"
+            },
+            "kind": {
+              "enum": [
+                "research",
+                "writable",
+                "reviewer"
+              ]
+            },
+            "label": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "prompt": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "steps": {
+              "type": "array"
+            }
+          }
+        }
+      }
+    },
+    "event_subagent_step": {
+      "description": "A subagent's step: a tool call (sent when it starts, then again with `ok` and an outcome when it finishes, same `index`), what it said alongside its calls, or a notice from Houston.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "parentCallId",
+        "recordId",
+        "step"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "subagent_step"
+        },
+        "parentCallId": {
+          "type": "string"
+        },
+        "recordId": {
+          "type": "string"
+        },
+        "step": {
+          "type": "object",
+          "required": [
+            "index",
+            "turn",
+            "kind",
+            "summary"
+          ],
+          "properties": {
+            "index": {
+              "type": "integer"
+            },
+            "turn": {
+              "type": "integer"
+            },
+            "kind": {
+              "enum": [
+                "tool",
+                "text",
+                "notice"
+              ]
+            },
+            "tool": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "ok": {
+              "type": "boolean"
+            },
+            "hint": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "event_subagent_end": {
+      "description": "A subagent finished: how it ended (done, error, aborted, step-limit, stalled), its usage, step budget and report.",
+      "type": "object",
+      "required": [
+        "runId",
+        "type",
+        "parentCallId",
+        "recordId",
+        "update"
+      ],
+      "properties": {
+        "runId": {
+          "type": "string"
+        },
+        "type": {
+          "const": "subagent_end"
+        },
+        "parentCallId": {
+          "type": "string"
+        },
+        "recordId": {
+          "type": "string"
+        },
+        "update": {
+          "type": "object",
+          "required": [
+            "status",
+            "endedAt"
+          ],
+          "properties": {
+            "status": {
+              "enum": [
+                "running",
+                "done",
+                "error",
+                "aborted",
+                "step-limit",
+                "stalled"
+              ]
+            },
+            "endedAt": {
+              "type": "number"
+            },
+            "report": {
+              "type": "string"
+            },
+            "resumeId": {
+              "type": "string"
+            }
+          }
         }
       }
     },

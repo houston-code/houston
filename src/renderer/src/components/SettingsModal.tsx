@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { DEFAULT_SUBAGENT_HISTORY_MB } from '@shared/subagents'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { useApplyTheme } from '../hooks/useApplyTheme'
@@ -1436,6 +1437,25 @@ export function SettingsModal({
                       />
                     </label>
                   )}
+                  <label className="field">
+                    <span>
+                      Subagent history kept per chat, in MB: each subagent&apos;s steps, result
+                      previews and diffs. Past this, the oldest keep their task, step list and
+                      report but drop step results and diffs. 0 keeps summaries only.
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      value={settings.subagentHistoryMb ?? DEFAULT_SUBAGENT_HISTORY_MB}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          subagentHistoryMb: Math.min(1024, Math.max(0, Number(e.target.value) || 0))
+                        }))
+                      }
+                    />
+                  </label>
                   <label className="field">
                     <span>
                       Also remind the model to wrap up once a turn&apos;s cumulative cost crosses this

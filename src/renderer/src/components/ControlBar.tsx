@@ -1,4 +1,5 @@
 import { APPROVAL_POLICY_LABEL, type AppSettings, type ApprovalPolicy, type SelectedModel } from '@shared/types'
+import type { SubagentSpend } from '@shared/subagents'
 import type { ConversationWorktree, ReasoningEffort, RepoInfo } from '@shared/agent'
 import {
   contextPercent,
@@ -51,12 +52,15 @@ export function ControlBar({
   onChangeReasoning,
   onChangeWorkspace,
   onOpenSettings,
-  onMakeDefault
+  onMakeDefault,
+  subagentSpend = []
 }: {
   settings: AppSettings
   selected: SelectedModel | null
   workspace: string | null
   usage: SessionUsage | null
+  /** What each subagent in this chat spent, for the cost breakdown. */
+  subagentSpend?: SubagentSpend[]
   /** True for a not-yet-started chat — show the editable worktree controls. */
   newChat: boolean
   /** Git info for the current workspace (drives the worktree controls), or null. */
@@ -272,7 +276,13 @@ export function ControlBar({
       )}
 
       {usage && (usage.context > 0 || usage.output > 0) && (
-        <CostBreakdown usage={usage} contextWindow={ctxWindow} meterPct={pct} meterClass={meterClass} />
+        <CostBreakdown
+          usage={usage}
+          contextWindow={ctxWindow}
+          meterPct={pct}
+          meterClass={meterClass}
+          agents={subagentSpend}
+        />
       )}
     </div>
   )

@@ -680,7 +680,7 @@ describe('progress, resume, and nesting', () => {
       onProgress: (m) => progress.push(m)
     })
     expect(progress).toHaveLength(2)
-    expect(progress[0]).toContain('turn 1/16')
+    expect(progress[0]).toContain('step 1')
     expect(progress[0]).toContain('note.txt')
     expect(progress[1]).toContain('Search "todo"')
   })

@@ -735,3 +735,39 @@ describe('runReview live findings', () => {
     expect(withLive).toBe(without)
   })
 })
+
+describe('runReview observeAgent', () => {
+  it('observes every reviewer, skeptic and verifier with a label, hooks, and its report', async () => {
+    const { fn, calls } = fakeAgent((o) => {
+      o.onStart?.({ system: o.systemOverride ?? '', tools: ['read_file'] })
+      o.onStep?.({ index: 0, turn: 1, kind: 'tool', summary: 'Read a.ts', ok: true })
+      o.onEnd?.({ status: 'done', budget: { used: 1, limit: 40, ceiling: 40 } })
+      if (isSkeptic(o)) return 'CONFIRMED - real'
+      if (isVerifier(o)) return 'No confirmed issues.'
+      return dimensionOf(o) === 'SECURITY' ? '- [SEVERITY: high] a.ts:1 - hole\n  Why: bad' : 'No issues found.'
+    })
+    const seen: { role: string; label: string; steps: number; started: boolean; report?: string }[] = []
+    await runReview(
+      base({
+        runAgent: fn,
+        effort: 'high',
+        observeAgent: (meta) => {
+          const entry: (typeof seen)[number] = { ...meta, steps: 0, started: false }
+          seen.push(entry)
+          return {
+            onStart: () => (entry.started = true),
+            onStep: () => entry.steps++,
+            done: (report) => (entry.report = report)
+          }
+        }
+      })
+    )
+    expect(seen.map((s) => s.label)).toEqual(
+      expect.arrayContaining(['Correctness reviewer', 'Security reviewer', 'Quality reviewer', 'Skeptic 1 of 3: hole'])
+    )
+    expect(seen.filter((s) => s.role === 'skeptic')).toHaveLength(3)
+    expect(seen.every((s) => s.started && s.steps === 1 && s.report !== undefined)).toBe(true)
+    // A review's agents keep the base budget rather than extending.
+    expect(calls.every((c) => c.budget?.autoExtend === false)).toBe(true)
+  })
+})

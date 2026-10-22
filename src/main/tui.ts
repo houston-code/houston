@@ -101,6 +101,7 @@ import {
 import { ComposerBuffer } from './tui-composer'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
+import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
 
 /**
  * Interactive terminal mode: a stay-resident REPL you converse with directly in
@@ -517,6 +518,9 @@ export function colorizeDiff(diff: string, paint: Painter, maxLines = 40): strin
 /** One-line result summary: a failure marker, or a dimmed snippet of the output's first content line. */
 /** How many lines of a failure are shown by default — enough to see the cause. */
 export const FAILURE_LINES = 10
+/** How many lines of a subagent's report show before collapsing (all under /verbose). */
+const REPORT_LINES = 24
+
 /** How many lines of a successful result `/verbose` shows before collapsing. */
 export const VERBOSE_LINES = 40
 
@@ -561,8 +565,23 @@ export function renderToolResult(
   ok: boolean,
   output: string,
   paint: Painter,
-  opts: { verbose?: boolean } = {}
+  opts: { verbose?: boolean; width?: number } = {}
 ): string {
+  // A subagent's report is the agent's answer: render it like one, without the note
+  // the loop appends for the model, capped so a long one doesn't flood the screen.
+  if (ok && isSubagentTool(name)) {
+    const { report } = splitSubagentReport(output)
+    if (!report.trim()) return ''
+    const width = Math.max(20, (opts.width ?? 80) - 4)
+    // Agent-written text: drop control characters (line by line, so newlines stay)
+    // before it reaches the terminal.
+    const clean = report.trim().split('\n').map(stripControlChars).join('\n')
+    const body = renderMarkdownAnsi(clean, { paint, width }).split('\n')
+    const max = opts.verbose ? body.length : REPORT_LINES
+    const shown = body.slice(0, max).map((l) => `    ${l}`)
+    if (body.length > max) shown.push(paint(`    … ${body.length - max} more lines (/output to see it all)`, 'dim'))
+    return shown.join('\n')
+  }
   // A prompt the run was stopped in front of, and a plan review's decision, come back
   // in the model's wording ("Denied by the user. They said: …", "The user REJECTED
   // this plan. Do not make any changes…"). Say what happened instead.
@@ -3804,6 +3823,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     const todoCalls = new Set<string>()
     // Review findings print once per status change (line mode can't update in place).
     const printFinding = createFindingPrinter()
+    // A subagent's start, finished steps and end (reviewers' steps only under /verbose).
+    const subagentLines = new SubagentTermLines({
+      get verbose() {
+        return verbose
+      }
+    })
     // Per-turn token/cost tally. The loop emits a `usage` event per model round
     // (and per subagent), which would be noisy to print each time — the live
     // session total already sits in the status line above the composer. So we sum
@@ -3923,7 +3948,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               break
             }
           }
-          const line = renderToolResult(e.name, e.ok, e.output, paint, { verbose })
+          const line = renderToolResult(e.name, e.ok, e.output, paint, { verbose, width: columns() })
           if (line) deps.io.out(`${line}\n`)
           toolArgs.delete(e.callId)
           break
@@ -3931,6 +3956,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_progress':
           if (e.message.trim()) deps.io.out(paint(`  … ${truncate(e.message.trim(), 80)}\n`, 'dim'))
           break
+        case 'subagent_start':
+        case 'subagent_step':
+        case 'subagent_end': {
+          const line = subagentLines.line(e)
+          if (line) {
+            const text = `  ${'  '.repeat(line.depth)}${truncate(line.text, Math.max(40, columns() - 6))}\n`
+            deps.io.out(line.tone === 'plain' ? text : paint(text, line.tone))
+          }
+          break
+        }
         case 'subagent':
           // Line mode can't update a row in place, so print discrete markers: a
           // start line, then a done/error line, indented under the parent tool.

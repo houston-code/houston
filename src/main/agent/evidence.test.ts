@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import { join } from 'node:path'
-import { RECEIPT_LABEL_MAX, RECEIPT_MAX_CHECKS, RECEIPT_MAX_FILES } from '@shared/evidence'
+import {
+  formatReceiptLines,
+  receiptSummary,
+  RECEIPT_LABEL_MAX,
+  RECEIPT_MAX_CHECKS,
+  RECEIPT_MAX_DELEGATED,
+  RECEIPT_MAX_FILES
+} from '@shared/evidence'
 import { classifyCommand, EvidenceLedger, parseTestCounts, type BrowserEvidence, type ShellEvidence } from './evidence'
 
 const shell = (command: string, over: Partial<ShellEvidence> = {}): ShellEvidence => ({
@@ -416,6 +423,40 @@ describe('EvidenceLedger background shells', () => {
 })
 
 describe('EvidenceLedger attribution and order', () => {
+  it('lists a subagent’s plain commands by name with exit code and who ran them', () => {
+    const l = new EvidenceLedger()
+    l.record(shell('node -e "require(1)"', { exitCode: 0 }), 'Writable subagent "Fix it"')
+    l.record(shell('ls', { exitCode: 2 }), 'Writable subagent "Fix it"')
+    l.record(shell('git status'))
+    const r = l.receipt()!
+    expect(r.delegated).toEqual([
+      { label: 'node -e "require(1)"', exitCode: 0, by: 'Writable subagent "Fix it"' },
+      { label: 'ls', exitCode: 2, by: 'Writable subagent "Fix it"' }
+    ])
+    // The agent's own plain command is only counted, as before.
+    expect(r.otherCommands).toBe(1)
+    expect(receiptSummary(r)).toBe('2 subagent commands ran')
+    expect(formatReceiptLines(r)).toContain('  ✓ Command: node -e "require(1)" (exit 0 · by Writable subagent "Fix it")')
+  })
+
+  it('caps delegated commands, counting the oldest it drops', () => {
+    const l = new EvidenceLedger()
+    for (let i = 0; i < RECEIPT_MAX_DELEGATED + 3; i++) l.record(shell(`echo ${i}`), 'agent')
+    const r = l.receipt()!
+    expect(r.delegated).toHaveLength(RECEIPT_MAX_DELEGATED)
+    expect(r.delegatedOmitted).toBe(3)
+    expect(r.delegated![0].label).toBe('echo 3')
+  })
+
+  it('credits files a subagent changed, until the agent itself changes them', () => {
+    const l = new EvidenceLedger()
+    l.recordFiles('/ws', ['a.ts', 'b.ts'], 'Writable subagent "x"')
+    l.recordFiles('/ws', ['b.ts'])
+    const r = l.receipt()!
+    expect(r.filesChanged).toEqual(['a.ts', 'b.ts'])
+    expect(r.filesBy).toEqual({ 'a.ts': 'Writable subagent "x"' })
+  })
+
   it('credits a subagent with what it ran', () => {
     const l = new EvidenceLedger()
     l.record(shell('pytest', { output: '3 passed in 0.1s' }), 'test-writer')

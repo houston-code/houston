@@ -64,6 +64,52 @@ describe('conversationToHtml receipts', () => {
   })
 })
 
+describe('conversationToHtml subagents', () => {
+  const messages = [
+    { role: 'assistant' as const, content: '', toolCalls: [{ id: 'c1', name: 'dispatch_agent', arguments: { prompt: 'p' } }] },
+    {
+      role: 'tool' as const,
+      content: '## Found\n\n[subagent ag1: pass resume: "ag1" to dispatch_agent to continue this agent with its context intact]',
+      toolCallId: 'c1',
+      toolName: 'dispatch_agent',
+      subagents: [
+        {
+          id: 'sa1',
+          kind: 'research' as const,
+          label: 'Trace <b>it</b>',
+          model: 'm',
+          modelSource: 'run' as const,
+          prompt: 'Find <script>alert(1)</script>',
+          tools: [],
+          status: 'done' as const,
+          startedAt: 0,
+          endedAt: 2000,
+          resumeId: 'ag1',
+          report: 'Found',
+          steps: [{ index: 0, turn: 1, kind: 'tool' as const, summary: 'Read a.ts', ok: true, hint: '3 lines' }]
+        }
+      ]
+    }
+  ]
+
+  it('shows what each subagent did, escaped, and the report without the resume note', () => {
+    const html = conversationToHtml(makeConversation({ messages }))
+    expect(html).toContain('<details class="turn__subagent"><summary>Trace &lt;b&gt;it&lt;/b&gt; (m, 1 step, 2s, ag1)</summary>')
+    expect(html).toContain('1. ✓ Read a.ts · 3 lines')
+    expect(html).toContain('Find &lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(html).not.toContain('<script>alert(1)')
+    const page = html.slice(0, html.indexOf(HTML_DATA_OPEN_TAG))
+    expect(page).not.toContain('pass resume')
+  })
+
+  it('keeps records out of the embedded data, and the saved content intact', () => {
+    const html = conversationToHtml(makeConversation({ messages }))
+    const data = html.slice(html.indexOf(HTML_DATA_OPEN_TAG), html.indexOf('</template>'))
+    expect(data).not.toContain('subagents')
+    expect(decodeHtmlEntities(data)).toContain('pass resume')
+  })
+})
+
 describe('conversationToHtml', () => {
   it('includes the title and message content', () => {
     const html = conversationToHtml(makeConversation())

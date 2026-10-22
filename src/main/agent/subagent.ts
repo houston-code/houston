@@ -24,6 +24,26 @@ import type { EvidenceDraft } from './evidence'
 import { isSandboxed } from '../sandbox'
 import { isSensitiveRead } from './sensitive-paths'
 import { isSensitiveWrite } from './permissions'
+import {
+  clipText,
+  stepHint,
+  SUBAGENT_CAPS,
+  type SubagentBudget,
+  type SubagentStatus,
+  type SubagentStep
+} from '@shared/subagents'
+import {
+  isDiscoveryTool,
+  isFinalStep,
+  PROGRESS_TOOLS,
+  resolveBudgetLimits,
+  resolveExtensionLimits,
+  shouldExtend,
+  shouldLand
+} from './budget'
+import { StallDetector, callSignature, resolveStallThresholds, type StallThresholds } from './stall'
+import { estimateTokens, evictStaleToolResults } from './compaction'
+import { previewWrite } from './writePreview'
 
 /**
  * A nested subagent: the main agent delegates a scoped task to a fresh loop with
@@ -104,8 +124,6 @@ function resolveSubAgentTools(
   const narrowed = base.filter((t) => allowed.includes(t))
   return narrowed.length ? narrowed : SUBAGENT_TOOLS
 }
-
-const MAX_SUBAGENT_ITERATIONS = 16
 
 /**
  * How deep dispatches may nest: the main agent (depth 0) can dispatch subagents
@@ -306,8 +324,60 @@ export interface SubAgentOptions {
    * read-only regardless of this agent's own tier, so nesting never widens write
    * authority.
    */
-  dispatchNested?: (prompt: string, agentName?: string, model?: string) => Promise<string>
+  dispatchNested?: (
+    prompt: string,
+    agentName?: string,
+    model?: string,
+    /** The calling agent's step that dispatched it, so its record can point at the child. */
+    stepIndex?: number,
+    /** The dispatch's short label. */
+    description?: string
+  ) => Promise<string>
+  /**
+   * The step budget. Unset fields take the main loop's defaults: `maxIterations` steps
+   * (DEFAULT_MAX_ITERATIONS), extended in `maxIterations`-sized chunks while the agent
+   * is still making progress, up to `ceiling`. `hardCap` (a custom agent's `max_turns`)
+   * replaces all of that with a fixed limit that never extends. Either way the agent
+   * is reminded to wrap up near the end, and its last step can't run tools, so it
+   * always ends on a report.
+   */
+  budget?: { maxIterations?: number; autoExtend?: boolean; ceiling?: number; hardCap?: number }
+  /** Loop detection, as in the main loop. Unset: on with default thresholds; `false`: off. */
+  stall?: false | Partial<StallThresholds>
+  /**
+   * The model's context window in tokens. When set, stale large tool results are
+   * stubbed out of the request once it nears the window (see evictStaleToolResults),
+   * so a long run doesn't overflow. The agent's own transcript keeps them.
+   */
+  contextWindow?: number
+  /**
+   * Called as each step starts and again when it finishes (same `index`), with what
+   * the agent said, each tool call and its outcome, and notices from Houston. Strings
+   * are redacted with `redact`. Writes carry their real diff when computed.
+   */
+  onStep?: (step: SubagentStep) => void
+  /** Called once, before the first step, with the system prompt and tools the agent runs with. */
+  onStart?: (info: { system: string; tools: string[] }) => void
+  /** Called once, when the agent stops, with how it ended and the budget it used. */
+  onEnd?: (end: { status: SubagentStatus; budget: SubagentBudget }) => void
 }
+
+/** The note pushed before a subagent's last step: its tools won't run, so report now. */
+export const SUBAGENT_FINAL_STEP_NOTE =
+  'This is your last step: tool calls made now will NOT run. Write your report now, in plain ' +
+  'text: what you found or changed, the specifics the caller needs, and what you did not get to.'
+
+/** The one-time reminder as a subagent nears its step limit. */
+export function subagentLandingReminder(stepsLeft: number): string {
+  const n = Math.max(0, stepsLeft)
+  return (
+    `You have about ${n === 1 ? '1 step' : `${n} steps`} left. Wrap up: finish what you are ` +
+    'doing and write your report. Do not start anything you cannot complete.'
+  )
+}
+
+/** Share of the context window at which stale tool results are stubbed out of the request. */
+const SUBAGENT_EVICT_AT = 0.6
 
 /** Run a subagent loop to completion and return its final report text. */
 export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
@@ -336,6 +406,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   if (opts.dispatchNested) {
     system += `\n\nYou may also delegate a focused read-only sub-search to your own nested subagent via dispatch_agent, useful to explore several areas in parallel without filling your context. Nested agents are always read-only and cannot dispatch further.`
   }
+  opts.onStart?.({ system, tools: tools.map((t) => t.name) })
   // Tool-execution context. Reads default their roots to [workspace]; the writable
   // tier passes the real roots (for edits) and a shell session. `allowNetwork` stays
   // false: it is the SHELL sandbox's egress switch, and a subagent's commands never
@@ -400,28 +471,104 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   let outputContinuations = 0
   let carried = ''
 
+  // The step budget: the main loop's adaptive one (a base cap that grows while the run
+  // is productive, up to a ceiling), or a custom agent's fixed `max_turns`.
+  const hardCap = opts.budget?.hardCap
+  const budget = resolveBudgetLimits({
+    maxIterations: hardCap ?? opts.budget?.maxIterations,
+    landingMargin: 2
+  })
+  const extension = resolveExtensionLimits(budget, {
+    autoExtend: hardCap === undefined && opts.budget?.autoExtend !== false,
+    ceiling: opts.budget?.ceiling
+  })
+  const budgetUsed = (used: number): SubagentBudget => ({
+    used,
+    limit: budget.maxIterations,
+    ceiling: extension.enabled ? extension.ceiling : budget.maxIterations,
+    ...(hardCap !== undefined ? { hardCap } : {})
+  })
+  // Progress signals for the extension decision, as the main loop keeps them.
+  const writeIterations = new Set<number>()
+  const discoveryIterations = new Set<number>()
+  const discoveryCalls = new Set<string>()
+  let lastStallNudge: number | null = null
+  let landed = false
+  const stall =
+    opts.stall === false ? null : new StallDetector(resolveStallThresholds(opts.stall || undefined))
+  let turnsTaken = 0
+
+  // Steps for the caller's record. Indexes are assigned here, in order.
+  let nextStep = 0
+  const step = (s: Omit<SubagentStep, 'index'>, index = nextStep++): number => {
+    if (opts.onStep) {
+      // What the agent said keeps more room than a tool's one-line label.
+      const cap = s.kind === 'text' ? SUBAGENT_CAPS.stepOutput : SUBAGENT_CAPS.stepSummary
+      const summary = clipText(redact(s.summary), cap).text
+      opts.onStep({ ...s, summary, index })
+    }
+    return index
+  }
+  const notice = (iter: number, text: string): void => {
+    step({ turn: iter + 1, kind: 'notice', summary: text })
+  }
+
   // Clean-completion exit: hand the transcript back (for resumability) and return.
-  const finish = (text: string): string => {
+  const finish = (text: string, status: SubagentStatus = 'done'): string => {
     opts.onTranscript?.(messages)
+    opts.onEnd?.({ status, budget: budgetUsed(turnsTaken) })
+    return text
+  }
+  const stop = (text: string, status: SubagentStatus): string => {
+    opts.onEnd?.({ status, budget: budgetUsed(turnsTaken) })
     return text
   }
 
-  // One live-progress line per tool call, reusing each tool's summarize() label
-  // (the same short form the main transcript shows) plus a turn counter so the
-  // parent UI shows both what the agent is doing and how far along it is.
-  const progress = (iter: number, call: { name: string; arguments: Record<string, unknown> }): void => {
-    if (!opts.onProgress) return
-    let label: string
+  // The tool's one-line label (the same short form the main transcript shows).
+  const labelFor = (call: { name: string; arguments: Record<string, unknown> }): string => {
     try {
-      label = getTool(call.name)?.summarize(call.arguments) ?? call.name
+      return getTool(call.name)?.summarize(call.arguments) ?? call.name
     } catch {
-      label = call.name
+      return call.name
     }
-    opts.onProgress(`turn ${iter + 1}/${MAX_SUBAGENT_ITERATIONS} · ${label}`)
   }
 
-  for (let iter = 0; iter < MAX_SUBAGENT_ITERATIONS; iter++) {
-    if (signal.aborted) return lastText.trim() || '[subagent aborted]'
+  // One live-progress line per tool call, plus the step number, so a caller that only
+  // reads progress lines still sees what the agent is doing and how far along it is.
+  const progress = (iter: number, call: { name: string; arguments: Record<string, unknown> }): void => {
+    opts.onProgress?.(`step ${iter + 1} · ${labelFor(call)}`)
+  }
+
+  // The request window: the transcript, with stale large tool results stubbed once it
+  // nears the model's context window. The transcript itself (and so a resume) keeps them.
+  const toolTokens = Math.ceil(JSON.stringify(tools).length / 4)
+  const requestMessages = (): ChatMessage[] => {
+    if (!opts.contextWindow) return messages
+    const size = estimateTokens(system, messages) + toolTokens
+    return size > opts.contextWindow * SUBAGENT_EVICT_AT ? evictStaleToolResults(messages) : messages
+  }
+
+  for (let iter = 0; iter < budget.maxIterations; iter++) {
+    if (signal.aborted) return stop(lastText.trim() || '[subagent aborted]', 'aborted')
+
+    // A run still making progress gets more room instead of a wrap-up reminder.
+    const ext = shouldExtend(
+      { iteration: iter, writeIterations, discoveryIterations, lastStallNudge, alreadyLanded: landed },
+      budget,
+      extension
+    )
+    if (ext.extend) {
+      budget.maxIterations = ext.maxIterations
+      notice(iter, `Still making progress, so the step limit grew to ${ext.maxIterations} (at most ${extension.ceiling})`)
+    }
+    const landing = shouldLand({ iteration: iter, costUsd: 0, alreadyLanded: landed }, budget)
+    if (landing.land) {
+      landed = true
+      messages.push(systemNoteMessage(subagentLandingReminder(landing.iterationsLeft)))
+    }
+    // The last step can't run tools, so the agent spends it on its report.
+    const finalStep = isFinalStep(iter, budget)
+    if (finalStep) messages.push(systemNoteMessage(SUBAGENT_FINAL_STEP_NOTE))
 
     let text = ''
     let calls: ToolCall[] = []
@@ -449,7 +596,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
           for await (const ev of provider.streamChat({
             model,
             system,
-            messages,
+            messages: requestMessages(),
             tools,
             ...(outputCapRaised ? raisedOutputCap(model) : {}),
             ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
@@ -466,15 +613,23 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         },
         {
           signal,
-          // Otherwise a subagent riding out a blip is indistinguishable from a hung one:
-          // its only channel to the user is this progress line.
-          onRetry: (n) => opts.onProgress?.(`turn ${iter + 1}/${MAX_SUBAGENT_ITERATIONS} · retrying (${n})`)
+          // Otherwise a subagent riding out a blip is indistinguishable from a hung one.
+          onRetry: (n) => {
+            opts.onProgress?.(`step ${iter + 1} · retrying (${n})`)
+            notice(iter, `The model request failed; retrying (${n})`)
+          }
         }
       )
     } catch (e) {
-      if (signal.aborted) return lastText.trim() || '[subagent aborted]'
-      return `[subagent error: ${(e as Error).message}]`
+      if (signal.aborted) return stop(lastText.trim() || '[subagent aborted]', 'aborted')
+      return stop(`[subagent error: ${(e as Error).message}]`, 'error')
     }
+    turnsTaken = iter + 1
+
+    // On the last step any tool call is dropped (the note said they won't run), so the
+    // transcript ends on text and stays valid to resume.
+    const droppedCalls = finalStep && calls.length > 0
+    if (droppedCalls) calls = []
 
     const outputLimited = stopReason === 'max_tokens'
     if (outputLimited) outputCapRaised = true
@@ -488,8 +643,10 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       calls.length === 0 &&
       outputLimited &&
       outputContinuations < MAX_OUTPUT_CONTINUATIONS &&
-      iter + 1 < MAX_SUBAGENT_ITERATIONS
-    if (!continueCutOff || text.trim()) {
+      iter + 1 < budget.maxIterations
+    // An empty assistant turn is one some providers reject, so a last step that only
+    // tried to call tools leaves nothing behind but the note before it.
+    if ((!continueCutOff && !(droppedCalls && !text.trim())) || text.trim()) {
       messages.push({
         role: 'assistant',
         content: text,
@@ -502,11 +659,21 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       outputContinuations++
       carried = answer
       messages.push(systemNoteMessage(continuationNote(text.trim() !== '')))
-      opts.onProgress?.(`turn ${iter + 1}/${MAX_SUBAGENT_ITERATIONS} · continuing past the output limit`)
+      opts.onProgress?.(`step ${iter + 1} · continuing past the output limit`)
+      notice(iter, 'Reply hit the output limit; continuing it')
       continue
     }
 
     if (calls.length === 0) {
+      if (droppedCalls) {
+        const report = answer.trim() || lastText.trim()
+        return finish(
+          report
+            ? `${report}\n\n[subagent stopped at its step limit; this is what it had]`
+            : '[subagent reached its step limit without a final answer]',
+          'step-limit'
+        )
+      }
       const report = answer.trim() || '[subagent returned no answer]'
       return finish(
         outputLimited ? `${report}\n\n[subagent report cut off at the model's output limit]` : report
@@ -514,10 +681,19 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     }
     // The continued text was an interim message ahead of these calls, not the report.
     carried = ''
+    if (text.trim()) step({ turn: iter + 1, kind: 'text', summary: text.trim() })
 
+    const iterErrors: string[] = []
     for (const call of calls) {
       progress(iter, call)
+      const startedAt = Date.now()
+      const stepIndex = step({ turn: iter + 1, kind: 'tool', tool: call.name, summary: labelFor(call), startedAt })
       const tool = allowedToolSet.has(call.name) ? getTool(call.name) : undefined
+      // The real diff of a write, computed before it runs (the "before" is gone after).
+      const preview =
+        opts.onStep && tool?.kind === 'write' && !call.incomplete
+          ? await previewWrite(call.name, call.arguments, roots)
+          : null
       // The schema the call is checked against: the tool's own, or the nested-dispatch
       // tool's when that capability is wired. Unknown and unavailable tools are refused
       // below and have nothing to check.
@@ -530,11 +706,15 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       if (schema && !call.incomplete) call.arguments = coerceToolArgs(call.arguments, schema)
       const issues = schema && !call.incomplete ? validateToolArgs(call.arguments, schema) : []
       let output: string
+      // Whether the call did what it was asked; refusals and errors don't.
+      let ok = true
       if (call.incomplete) {
         // The arguments didn't arrive whole: nothing can run, but the call is answered.
         output = incompleteCallResult(call, outputLimited)
+        ok = false
       } else if (schema && issues.length) {
         output = validationError(call.name, schema, issues)
+        ok = false
       } else if (call.name === 'dispatch_agent' && opts.dispatchNested) {
         // Nested dispatch is handled here (not via toolCtx) so the loop's injected
         // handler — which carries the depth cap and the read-only nested tier —
@@ -552,15 +732,23 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         if (call.arguments.resume !== undefined && call.arguments.resume !== null) {
           output =
             'resume is not available from within a subagent; dispatch a fresh nested agent instead.'
+          ok = false
         } else if (!nestedPrompt) {
           output = 'prompt is required.'
+          ok = false
         } else {
-          output = await opts.dispatchNested(nestedPrompt, agentName, nestedModel)
+          const description =
+            typeof call.arguments.description === 'string' && call.arguments.description.trim()
+              ? call.arguments.description.trim()
+              : undefined
+          output = await opts.dispatchNested(nestedPrompt, agentName, nestedModel, stepIndex, description)
+          ok = !/^\[subagent (error|aborted)/.test(output)
         }
       } else if (!tool) {
         output = writable
           ? `Tool not available to this subagent: ${call.name}`
           : `Tool not available to a read-only subagent: ${call.name}`
+        ok = false
       } else if (call.name === 'run_shell' && !shellSandboxed) {
         // On a host with no OS sandbox the command would run UNCONFINED, which the
         // main loop never does without the user's consent. With a gate wired, ask:
@@ -575,12 +763,14 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
             )
           } catch (e) {
             output = `Error: ${(e as Error).message}`
+            ok = false
           }
         } else {
           output =
             'run_shell is unavailable to a subagent on this host: it has no OS-enforced sandbox, so the ' +
             'command would run unconfined, and a background subagent cannot prompt for the required consent. ' +
             'Make the edits you can and note what still needs a command; the main agent can run it with approval.'
+          ok = false
         }
       } else if (tool.kind === 'network') {
         // Every network call is egress and goes through the dispatcher's consent
@@ -594,9 +784,11 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
             )
           } catch (e) {
             output = `Error: ${(e as Error).message}`
+            ok = false
           }
         } else {
           output = `Tool not available to this subagent: ${call.name} (no network access).`
+          ok = false
         }
       } else {
         // Snapshot write targets into the dispatching turn's checkpoint, exactly
@@ -606,6 +798,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         // call the gate refuses leaves no checkpoint entry behind.
         const cpRunId = tool.kind === 'write' ? opts.checkpointRunId : undefined
         const targets = cpRunId ? writeTargets(call.name, call.arguments) : []
+        let ran = false
         const runLocal = async (): Promise<string> => {
           for (const t of targets) await recordOriginal(cpRunId!, roots, t.path)
           const out = await tool.execute(call.arguments, toolCtx)
@@ -616,6 +809,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
           if (tool.kind === 'write' && opts.recordFiles) {
             opts.recordFiles(writeTargets(call.name, call.arguments).map((t) => t.path))
           }
+          ran = true
           return out
         }
         try {
@@ -639,13 +833,67 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         } catch (e) {
           output = `Error: ${(e as Error).message}`
         }
+        // A refusal by a rule or the user comes back as text without running the call.
+        ok = ran
       }
       // Strip secrets here at the single choke point every tool output passes through
       // (execution results, errors, and refusal notes alike) — mirroring the main
       // loop's flushResult — so the provider never sees the plaintext.
-      messages.push({ role: 'tool', content: redact(output), toolCallId: call.id, toolName: call.name })
+      const clean = redact(output)
+      messages.push({ role: 'tool', content: clean, toolCallId: call.id, toolName: call.name })
+
+      if (!ok) iterErrors.push(clean)
+      if (ok && PROGRESS_TOOLS.has(call.name)) writeIterations.add(iter)
+      if (ok && isDiscoveryTool(call.name, tool?.kind)) {
+        const sig = callSignature(call)
+        if (!discoveryCalls.has(sig)) {
+          discoveryCalls.add(sig)
+          discoveryIterations.add(iter)
+        }
+      }
+      if (opts.onStep) {
+        const durationMs = Date.now() - startedAt
+        const shown = clipText(clean, SUBAGENT_CAPS.stepOutput)
+        const diff = ok && preview?.length ? preview : undefined
+        step(
+          {
+            turn: iter + 1,
+            kind: 'tool',
+            tool: call.name,
+            summary: labelFor(call),
+            ok,
+            hint: stepHint(call.name, clean, ok, { preview: diff, durationMs }),
+            // A nested agent's work shows in its own record, not as raw output here.
+            ...(call.name === 'dispatch_agent' ? {} : { output: shown.text }),
+            ...(shown.truncated && call.name !== 'dispatch_agent' ? { outputTruncated: true } : {}),
+            ...(diff ? { preview: diff } : {}),
+            startedAt,
+            durationMs
+          },
+          stepIndex
+        )
+      }
+    }
+
+    // Loop detection, as in the main loop: one corrective nudge, then stop.
+    if (stall) {
+      const action = stall.observe({ calls, errors: iterErrors })
+      if (action.kind === 'nudge') {
+        lastStallNudge = iter
+        messages.push(systemNoteMessage(action.message))
+        notice(iter, 'Repeating itself; told to change approach')
+      } else if (action.kind === 'stop') {
+        const report = lastText.trim()
+        return finish(
+          report
+            ? `${report}\n\n[subagent stopped: it kept repeating the same step]`
+            : '[subagent stopped: it kept repeating the same step without reaching an answer]',
+          'stalled'
+        )
+      }
     }
   }
 
-  return finish(lastText.trim() || '[subagent reached its step limit without a final answer]')
+  // Unreachable in practice (the last step never runs tools), kept as a safe exit.
+  return finish(lastText.trim() || '[subagent reached its step limit without a final answer]', 'step-limit')
 }

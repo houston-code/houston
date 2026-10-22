@@ -13,6 +13,7 @@
  */
 
 import type { ChatMessage, Conversation, ToolCall } from './agent'
+import { isSubagentTool, recordHeadline, recordToMarkdown, splitSubagentReport, subagentTree } from './subagents'
 import { formatReceiptLines } from './evidence'
 
 /** Id of the `<template>` that holds the importable conversation JSON. */
@@ -84,8 +85,11 @@ function renderMessage(msg: ChatMessage): string {
   if (msg.toolName) {
     parts.push(`<div class="turn__tool">${escapeHtml(msg.toolName)}</div>`)
   }
-  if (msg.content) {
-    parts.push(`<pre class="turn__body">${escapeHtml(msg.content)}</pre>`)
+  // A subagent's report, without the note the loop appended for the model (the
+  // embedded data keeps the content exactly as saved).
+  const body = msg.toolName && isSubagentTool(msg.toolName) ? splitSubagentReport(msg.content).report : msg.content
+  if (body) {
+    parts.push(`<pre class="turn__body">${escapeHtml(body)}</pre>`)
   }
   if (msg.toolCalls && msg.toolCalls.length > 0) {
     parts.push('<div class="turn__toolcalls">')
@@ -96,6 +100,14 @@ function renderMessage(msg: ChatMessage): string {
   // Not in the embedded data (see portableMessage): an import never carries a receipt.
   if (msg.receipt) {
     parts.push(`<pre class="turn__receipt">${escapeHtml(formatReceiptLines(msg.receipt).join('\n'))}</pre>`)
+  }
+  // What each subagent did, collapsed. Like the receipt, Houston's record of the run:
+  // shown on the page, never carried into an import.
+  for (const node of subagentTree(msg.subagents ?? [])) {
+    parts.push(
+      `<details class="turn__subagent"><summary>${escapeHtml(recordHeadline(node.record))}</summary>` +
+        `<pre>${escapeHtml(recordToMarkdown(node))}</pre></details>`
+    )
   }
   parts.push('</section>')
   return parts.join('')
@@ -156,6 +168,9 @@ const STYLES = `
   .turn__tool { font-size: 0.8rem; color: #777; margin-bottom: 0.5rem; }
   .turn__body { margin: 0; white-space: pre-wrap; word-break: break-word; font: inherit; }
   .turn__toolcalls { margin-top: 0.75rem; }
+  .turn__subagent { margin: 0.75rem 0 0; padding: 0.5rem 0.75rem; border: 1px solid #d0d0d6; border-radius: 6px; }
+  .turn__subagent summary { cursor: pointer; font-size: 0.85rem; font-weight: 600; }
+  .turn__subagent pre { font: 0.8rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; margin: 0.5rem 0 0; }
   .turn__receipt {
     margin: 0.75rem 0 0;
     padding: 0.5rem 0.75rem;
@@ -191,6 +206,7 @@ const STYLES = `
     .toolcall__args, .turn--tool { background: #18181a; }
     .meta { color: #999; }
     .turn__receipt { border-color: #5a5040; color: #bbb; }
+    .turn__subagent { border-color: #3a3a40; }
   }
 `.trim()
 

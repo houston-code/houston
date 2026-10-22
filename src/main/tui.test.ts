@@ -2198,6 +2198,54 @@ describe('runTui', () => {
     expect(out).toContain('✓ Correctness')
   })
 
+  it('renders a subagent’s steps and its report as markdown, without the resume note', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'dispatch_agent', args: { description: 'Trace the flow', prompt: 'p' } },
+      { runId: 'x', type: 'subagent_start', parentCallId: 'c1', record: {
+        id: 'sa1',
+        kind: 'research',
+        label: 'Trace the flow',
+        model: 'claude-haiku-5-5',
+        modelSource: 'run',
+        prompt: 'p',
+        tools: ['read_file'],
+        status: 'running',
+        startedAt: 0,
+        steps: []
+      } },
+      { runId: 'x', type: 'subagent_step', parentCallId: 'c1', recordId: 'sa1', step: { index: 0, turn: 1, kind: 'tool', tool: 'read_file', summary: 'Read a.ts', ok: true, hint: '3 lines' } },
+      { runId: 'x', type: 'subagent_end', parentCallId: 'c1', recordId: 'sa1', update: { status: 'done', endedAt: 14_000, resumeId: 'ag1' } },
+      {
+        runId: 'x',
+        type: 'tool_result',
+        callId: 'c1',
+        name: 'dispatch_agent',
+        ok: true,
+        output: '## Findings\n\n- **unsafe** join\n\n[subagent ag1: pass resume: "ag1" to dispatch_agent to continue this agent with its context intact]'
+      },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('▷ Trace the flow (claude-haiku-5-5)')
+    expect(out).toContain('✓ Read a.ts · 3 lines')
+    expect(out).toContain('✓ Trace the flow: finished with a report (1 step, 14s, ag1)')
+    expect(out).toContain('Findings')
+    expect(out).toContain('unsafe')
+    expect(out).not.toContain('**unsafe**')
+    expect(out).not.toContain('pass resume')
+  })
+
+  it('strips control characters from a subagent report before printing it', () => {
+    const line = renderToolResult('dispatch_agent', true, 'Found it\x1b]52;c;ZXZpbA==\x07\nsecond line', (t) => t)
+    expect(line).toContain('Found it')
+    expect(line).toContain('second line')
+    // eslint-disable-next-line no-control-regex -- asserting no control characters survive
+    expect(line).not.toMatch(/[\x07\x1b]/)
+  })
+
   it('prints one line for a run of retries and settles it when the run gives up', async () => {
     const retry = (attempt: number): AgentEvent => ({ runId: 'x', type: 'retry', attempt, max: 6, message: '500 boom' })
     const { d } = deps([retry(1), retry(2), retry(3), { runId: 'x', type: 'error', message: '500 boom' }])

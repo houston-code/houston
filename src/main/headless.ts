@@ -39,6 +39,7 @@ import {
   type ToolScopeEntry
 } from '@shared/agent'
 import type { McpServerConfig } from '@shared/types'
+import { SubagentTermLines } from '@shared/subagents'
 
 /**
  * One-shot headless mode: run a single prompt through the agent loop without the
@@ -1125,6 +1126,7 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
   let notedOffline = false
   // Review findings print once per status change (see createFindingPrinter).
   const printFinding = createFindingPrinter()
+  const subagentLines = new SubagentTermLines()
 
   /**
    * Run the agent once over `messages` and fold its events into a tally. `stepCap`
@@ -1337,10 +1339,20 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // Meta output like a notice: stderr, so stdout stays the model's answer.
           if (!opts.json) deps.err(`${runtimeMissingLine(e)}\n`)
           break
+        case 'subagent_start':
+        case 'subagent_step':
+        case 'subagent_end': {
+          // A subagent's start, each finished step, and its end: what it is doing and
+          // how far along it is. stderr, like the other tool activity; --json already
+          // emitted the raw event.
+          const line = opts.json ? null : subagentLines.line(e)
+          if (line) deps.err(`·   ${'  '.repeat(line.depth - 1)}${line.text}\n`)
+          break
+        }
         case 'tool_progress':
-          // Live progress from a long-running tool (a 16-turn subagent dispatch, a
-          // multi-dimension review) — without it the run reads as a stall between
-          // tool_start and its result. stderr, like the other tool activity.
+          // Live progress from a long-running tool (a multi-dimension review) — without
+          // it the run reads as a stall between tool_start and its result. stderr, like
+          // the other tool activity.
           if (!opts.json && e.message.trim()) deps.err(`·   ${e.message.trim()}\n`)
           break
         case 'subagent':

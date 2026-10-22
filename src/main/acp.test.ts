@@ -237,6 +237,43 @@ describe('ACP server: protocol flow', () => {
     await h.end()
   })
 
+  it('shows a subagent’s start, steps and end as progress on its dispatch call', async () => {
+    const record = {
+      id: 'sa1',
+      kind: 'research' as const,
+      label: 'Trace the flow',
+      model: 'm',
+      modelSource: 'run' as const,
+      prompt: 'p',
+      tools: [],
+      status: 'running' as const,
+      startedAt: 0,
+      steps: []
+    }
+    const h = harness({
+      run: async (req, send) => {
+        const r = req.runId
+        send({ runId: r, type: 'tool_start', callId: 'd1', name: 'dispatch_agent', args: { description: 'Trace the flow', prompt: 'p' }, kind: 'read' })
+        send({ runId: r, type: 'subagent_start', parentCallId: 'd1', record })
+        send({ runId: r, type: 'subagent_step', parentCallId: 'd1', recordId: 'sa1', step: { index: 0, turn: 1, kind: 'tool', summary: 'Read a.ts', ok: true, hint: '3 lines' } })
+        send({ runId: r, type: 'subagent_end', parentCallId: 'd1', recordId: 'sa1', update: { status: 'done', endedAt: 2000 } })
+        send({ runId: r, type: 'tool_result', callId: 'd1', name: 'dispatch_agent', ok: true, output: 'report' })
+        send({ runId: r, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('go') })
+    const texts = h
+      .updates(sessionId)
+      .filter((u) => u.sessionUpdate === 'tool_call_update')
+      .flatMap((u) => (u.content ?? []) as { content?: { text?: string } }[])
+      .map((c) => c.content?.text ?? '')
+    const last = texts.filter((t) => t.includes('Trace the flow')).at(-1) ?? ''
+    expect(last).toContain('▷ Trace the flow (m)')
+    expect(last).toContain('  ✓ Read a.ts · 3 lines')
+    expect(last).toContain('✓ Trace the flow: finished with a report (1 step, 2s)')
+  })
+
   it('runs initialize, new session, prompt with streamed updates and a permission round-trip, then load', async () => {
     const h = harness({
       answer: (method) =>

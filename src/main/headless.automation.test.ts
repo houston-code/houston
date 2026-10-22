@@ -453,6 +453,37 @@ describe('the checked-in --json schema', () => {
     tool_start: { runId: 'r', type: 'tool_start', callId: 'c', name: 'read_file', args: { path: 'a' }, kind: 'read' },
     tool_progress: { runId: 'r', type: 'tool_progress', callId: 'c', message: 'working' },
     subagent: { runId: 'r', type: 'subagent', parentCallId: 'c', id: 's', label: 'security', status: 'done' },
+    subagent_start: {
+      runId: 'r',
+      type: 'subagent_start',
+      parentCallId: 'c',
+      record: {
+        id: 'sa1',
+        kind: 'research',
+        label: 'Trace the flow',
+        model: 'm',
+        modelSource: 'run',
+        prompt: 'p',
+        tools: ['read_file'],
+        status: 'running',
+        startedAt: 0,
+        steps: []
+      }
+    },
+    subagent_step: {
+      runId: 'r',
+      type: 'subagent_step',
+      parentCallId: 'c',
+      recordId: 'sa1',
+      step: { index: 0, turn: 1, kind: 'tool', tool: 'read_file', summary: 'Read a.ts', ok: true }
+    },
+    subagent_end: {
+      runId: 'r',
+      type: 'subagent_end',
+      parentCallId: 'c',
+      recordId: 'sa1',
+      update: { status: 'done', endedAt: 1 }
+    },
     review_finding: {
       runId: 'r',
       type: 'review_finding',

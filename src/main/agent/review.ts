@@ -494,6 +494,27 @@ export interface RunReviewOptions {
   gateLocal?: SubAgentOptions['gateLocal']
   /** Injected for tests; defaults to the real read-only subagent runner. */
   runAgent?: (opts: SubAgentOptions) => Promise<string>
+  /**
+   * Called as each nested agent (reviewer, skeptic, verifier) starts, so the caller can
+   * record its work (see SubagentRecord). Returns hooks for that agent's steps, usage and
+   * end, and `done`, called with its report once it returns.
+   */
+  observeAgent?: (meta: ReviewAgentMeta, opts: SubAgentOptions) => ReviewAgentObserver
+}
+
+/** Who a nested review agent is, for its record. */
+export interface ReviewAgentMeta {
+  role: 'reviewer' | 'skeptic' | 'verifier'
+  label: string
+}
+
+/** Hooks the caller attaches to one nested review agent. */
+export interface ReviewAgentObserver {
+  onStart?: SubAgentOptions['onStart']
+  onStep?: SubAgentOptions['onStep']
+  onEnd?: SubAgentOptions['onEnd']
+  onUsage?: SubAgentOptions['onUsage']
+  done: (report: string) => void
 }
 
 /**
@@ -525,19 +546,36 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   let modelCalls = 0
   let inputTokens = 0
   let outputTokens = 0
-  const run = (o: SubAgentOptions): Promise<string> => {
+  const run = (o: SubAgentOptions, meta?: ReviewAgentMeta): Promise<string> => {
     modelCalls++
+    const obs = meta && opts.observeAgent ? opts.observeAgent(meta, o) : undefined
     return baseRunAgent({
       ...o,
+      // A review fans out many agents at once, so each keeps the base step budget
+      // rather than growing while productive.
+      budget: { autoExtend: false, ...o.budget },
       redact, // each nested subagent scrubs its own tool outputs (see SubAgentOptions)
       ...(opts.gateLocal ? { gateLocal: opts.gateLocal } : {}),
       ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
+      ...(obs?.onStart ? { onStart: obs.onStart } : {}),
+      ...(obs?.onStep ? { onStep: obs.onStep } : {}),
+      ...(obs?.onEnd ? { onEnd: obs.onEnd } : {}),
       onUsage: (u) => {
         inputTokens += u.inputTokens ?? 0
         outputTokens += u.outputTokens ?? 0
+        obs?.onUsage?.(u)
         opts.onUsage?.(u) // forward each turn's usage so the loop can meter review cost
       }
-    })
+    }).then(
+      (r) => {
+        obs?.done(r)
+        return r
+      },
+      (e: unknown) => {
+        obs?.done(`[reviewer error: ${(e as Error).message}]`)
+        throw e
+      }
+    )
   }
   const costLine = (): string | null =>
     inputTokens + outputTokens > 0
@@ -567,15 +605,21 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   const reports = await Promise.all(
     dimensions.map(async (dimension) => {
       const chunkReports = await Promise.all(
-        inputs.map((chunk) =>
-          run({
-            provider,
-            model,
-            workspace,
-            signal,
-            prompt: reviewerPrompt(dimension, chunk),
-            systemOverride: reviewerSystem(dimension)
-          }).then((r) => r.trim())
+        inputs.map((chunk, i) =>
+          run(
+            {
+              provider,
+              model,
+              workspace,
+              signal,
+              prompt: reviewerPrompt(dimension, chunk),
+              systemOverride: reviewerSystem(dimension)
+            },
+            {
+              role: 'reviewer',
+              label: `${titleCase(dimension)} reviewer${inputs.length > 1 ? ` (part ${i + 1} of ${inputs.length})` : ''}`
+            }
+          ).then((r) => r.trim())
         )
       )
       const report = mergeChunkReports(chunkReports)
@@ -642,15 +686,18 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
           }
           tally()
           const votes = await Promise.all(
-            Array.from({ length: VOTES_PER_FINDING }, () =>
-              run({
-                provider,
-                model,
-                workspace,
-                signal,
-                prompt: skepticPrompt(f.text),
-                systemOverride: skepticSystem()
-              }).then((v) => {
+            Array.from({ length: VOTES_PER_FINDING }, (_, k) =>
+              run(
+                {
+                  provider,
+                  model,
+                  workspace,
+                  signal,
+                  prompt: skepticPrompt(f.text),
+                  systemOverride: skepticSystem()
+                },
+                { role: 'skeptic', label: `Skeptic ${k + 1} of ${VOTES_PER_FINDING}: ${row.title}` }
+              ).then((v) => {
                 cast++
                 if (isConfirmed(v)) confirms++
                 if (!signal.aborted) tally()
@@ -689,14 +736,17 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
   progress('Verifying candidate findings…')
   const pending = allParsed.map((p) => toReviewFinding(p.id, p, 'verifying', redact))
   for (const f of pending) finding(f)
-  const verified = await run({
-    provider,
-    model,
-    workspace,
-    signal,
-    prompt: verifierPrompt(diffContext, candidateText),
-    systemOverride: verifierSystem()
-  })
+  const verified = await run(
+    {
+      provider,
+      model,
+      workspace,
+      signal,
+      prompt: verifierPrompt(diffContext, candidateText),
+      systemOverride: verifierSystem()
+    },
+    { role: 'verifier', label: 'Verifier' }
+  )
   sub({ id: 'verify', label: 'Verified findings', status: 'done' })
   if (!signal.aborted) {
     for (const f of settleVerified(pending, verified, redact)) finding(f)
@@ -739,6 +789,8 @@ export interface ReviewWorkspaceOptions {
   /** Injected for tests. */
   gitExec?: GitExec
   runAgent?: (opts: SubAgentOptions) => Promise<string>
+  /** Record each nested agent's work (see RunReviewOptions.observeAgent). */
+  observeAgent?: RunReviewOptions['observeAgent']
 }
 
 /**
@@ -781,6 +833,7 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     redact: opts.redact,
     gateLocal: opts.gateLocal,
     signal: opts.signal,
-    runAgent: opts.runAgent
+    runAgent: opts.runAgent,
+    observeAgent: opts.observeAgent
   })
 }

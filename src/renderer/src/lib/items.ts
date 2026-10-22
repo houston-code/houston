@@ -16,6 +16,7 @@ import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocat
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
 import { planOutcome } from '@shared/promptOutcome'
 import { upsertFinding } from '@shared/reviewFindings'
+import { capSteps, upsertStep, type SubagentRecord } from '@shared/subagents'
 import { turnLabel, turnText } from '@shared/rewind'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
@@ -103,6 +104,12 @@ export interface ToolItem {
   subagents?: SubAgentRow[]
   /** Live review findings (review_changes), upserted by id as verification settles them. */
   findings?: ReviewFinding[]
+  /**
+   * What each subagent this call ran did (dispatched, nested, reviewers): streamed as
+   * it runs, then rebuilt from the tool result's saved records on reload. Flat; nested
+   * agents point at their parent (see subagentTree).
+   */
+  records?: SubagentRecord[]
   /** Images the tool produced (e.g. a view_localhost screenshot). */
   images?: ImageAttachment[]
 }
@@ -323,6 +330,15 @@ function updateTool(items: DisplayItem[], callId: string, patch: Partial<ToolIte
   return items.map((it) => (it.kind === 'tool' && it.id === callId ? { ...it, ...patch } : it))
 }
 
+/** Apply `fn` to the subagent records of tool call `callId` (no-op if the row is gone). */
+function mapRecords(
+  items: DisplayItem[],
+  callId: string,
+  fn: (records: SubagentRecord[]) => SubagentRecord[]
+): DisplayItem[] {
+  return items.map((it) => (it.kind === 'tool' && it.id === callId ? { ...it, records: fn(it.records ?? []) } : it))
+}
+
 /** Fold one streamed agent event into the display list. */
 export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] {
   switch (e.type) {
@@ -438,6 +454,27 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         return { ...it, subagents }
       })
     }
+    case 'subagent_start': {
+      // A subagent began under this call. Upsert by id, so a re-adopt replay of the
+      // same event doesn't add it twice.
+      return mapRecords(items, e.parentCallId, (records) => {
+        const at = records.findIndex((r) => r.id === e.record.id)
+        if (at < 0) return [...records, e.record]
+        const next = records.slice()
+        next[at] = { ...e.record, steps: records[at].steps }
+        return next
+      })
+    }
+    case 'subagent_step': {
+      return mapRecords(items, e.parentCallId, (records) =>
+        records.map((r) => (r.id === e.recordId ? capSteps({ ...r, steps: upsertStep(r.steps, e.step) }) : r))
+      )
+    }
+    case 'subagent_end': {
+      return mapRecords(items, e.parentCallId, (records) =>
+        records.map((r) => (r.id === e.recordId ? { ...r, ...e.update } : r))
+      )
+    }
     case 'review_finding': {
       // Add or update a finding under its review row (no-op if the row is gone).
       return items.map((it) =>
@@ -542,6 +579,13 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           next = {
             ...next,
             subagents: it.subagents.map((s) => (s.status === 'running' ? { ...s, status: 'done' as const } : s))
+          }
+        }
+        // A subagent that never reported its end (the run was stopped) isn't running.
+        if (it.records?.some((r) => r.status === 'running')) {
+          next = {
+            ...next,
+            records: it.records.map((r) => (r.status === 'running' ? { ...r, status: 'aborted' as const } : r))
           }
         }
         if (it.findings?.some((f) => f.status === 'verifying')) {
@@ -716,10 +760,17 @@ export function systemNoteSummary(content: string): string {
 
 /** Build display items from a saved conversation's message log. */
 export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
-  const resultByCallId = new Map<string, { output: string; images?: ImageAttachment[] }>()
+  const resultByCallId = new Map<
+    string,
+    { output: string; images?: ImageAttachment[]; subagents?: SubagentRecord[] }
+  >()
   for (const m of messages) {
     if (m.role === 'tool' && m.toolCallId) {
-      resultByCallId.set(m.toolCallId, { output: m.content, images: m.images })
+      resultByCallId.set(m.toolCallId, {
+        output: m.content,
+        images: m.images,
+        ...(Array.isArray(m.subagents) && m.subagents.length ? { subagents: m.subagents } : {})
+      })
     }
   }
 
@@ -789,7 +840,8 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
           args: tc.arguments,
           status,
           output,
-          ...(res?.images?.length ? { images: res.images } : {})
+          ...(res?.images?.length ? { images: res.images } : {}),
+          ...(res?.subagents ? { records: res.subagents } : {})
         })
         // Mirror the live transcript: a PR opening/merging gets its own notice.
         const pr = output ? prNoticeFromToolResult(tc.name, status === 'done', output) : null

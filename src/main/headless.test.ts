@@ -1530,6 +1530,49 @@ describe('live tool progress (text mode)', () => {
     expect(stderr).toContain('✓ Security')
   })
 
+  it('prints a subagent’s start, finished steps, and end to stderr, nested agents indented', async () => {
+    const { d, err, out } = deps([
+      { runId: 'run-1', type: 'tool_start', callId: 'c1', name: 'dispatch_agent', args: {} },
+      { runId: 'run-1', type: 'subagent_start', parentCallId: 'c1', record: {
+        id: 'sa1',
+        kind: 'research',
+        label: 'Trace the flow',
+        model: 'claude-haiku-5-5',
+        modelSource: 'run',
+        prompt: 'p',
+        tools: ['read_file'],
+        status: 'running',
+        startedAt: 0,
+        steps: []
+      } },
+      { runId: 'run-1', type: 'subagent_step', parentCallId: 'c1', recordId: 'sa1', step: { index: 0, turn: 1, kind: 'tool', tool: 'read_file', summary: 'Read a.ts' } },
+      { runId: 'run-1', type: 'subagent_step', parentCallId: 'c1', recordId: 'sa1', step: { index: 0, turn: 1, kind: 'tool', tool: 'read_file', summary: 'Read a.ts', ok: true, hint: '3 lines' } },
+      { runId: 'run-1', type: 'subagent_start', parentCallId: 'c1', record: { ...{
+        id: 'sa2',
+        kind: 'research',
+        label: 'Inner',
+        model: 'claude-haiku-5-5',
+        modelSource: 'run',
+        prompt: 'p',
+        tools: ['read_file'],
+        status: 'running',
+        startedAt: 0,
+        steps: []
+      }, parentId: 'sa1' } },
+      { runId: 'run-1', type: 'subagent_end', parentCallId: 'c1', recordId: 'sa1', update: { status: 'done', endedAt: 14_000, resumeId: 'ag1' } },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    await runHeadless(baseOpts, d)
+    const stderr = err.join('')
+    expect(stderr).toContain('·   ▷ Trace the flow (claude-haiku-5-5)')
+    expect(stderr).toContain('·     ✓ Read a.ts · 3 lines')
+    expect(stderr).toContain('·     ▷ Inner (claude-haiku-5-5)')
+    expect(stderr).toContain('·   ✓ Trace the flow: finished with a report (1 step, 14s, ag1)')
+    // The running step printed nothing; stdout stays the answer.
+    expect(stderr.match(/Read a\.ts/g)).toHaveLength(1)
+    expect(out.join('')).not.toContain('Trace the flow')
+  })
+
   it('prints each review finding and its verdict to stderr once per status change', async () => {
     const finding = (status: 'candidate' | 'verifying' | 'confirmed', cast: number): AgentEvent => ({
       runId: 'run-1',
