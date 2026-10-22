@@ -22,6 +22,10 @@ beforeAll(() => {
   const dir = mkdtempSync(join(tmpdir(), 'h-run-template-'))
   const git = gitIn(dir)
   git('init', '--quiet', '--initial-branch=main')
+  // Every commit otherwise spawns a detached `git maintenance run --auto`, which creates and
+  // removes .git/objects/maintenance.lock after the commit returns. A copy taken while it
+  // runs lists the lock, then fails to copy it once it is gone (ENOENT on .git/objects).
+  git('config', 'maintenance.auto', 'false')
   writeFileSync(join(dir, 'app.js'), 'bug\n')
   git('add', '.')
   git('commit', '--quiet', '-m', 'base')
