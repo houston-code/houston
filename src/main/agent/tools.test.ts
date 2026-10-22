@@ -28,6 +28,7 @@ import {
   formatRunList,
   formatRunView,
   formatRunLog,
+  describeRunStanding,
   networkBlockHint,
   NETWORK_BLOCKED_HINT,
   HEADLESS_NETWORK_BLOCKED_HINT,
@@ -1610,6 +1611,127 @@ describe('glob', () => {
   })
 })
 
+describe('gh_run_view standing', () => {
+  const ok = (stdout: string): GhResult => ({ ok: true, stdout, stderr: '', code: 0 })
+  const fail = (): GhResult => ({ ok: false, stdout: '', stderr: 'boom', code: 1 })
+  const SHA = '4f630eb2db61da048c03d8ccd2d7c99877ad92e9'
+  const meta = {
+    databaseId: 7,
+    headBranch: 'main',
+    headSha: SHA,
+    event: 'schedule',
+    status: 'completed',
+    conclusion: 'failure',
+    createdAt: '2026-10-21T10:47:57Z',
+    workflowDatabaseId: 99
+  }
+  const later = (id: number, conclusion: string, at: string) => ({
+    ...meta,
+    databaseId: id,
+    headSha: 'a5cf20a5e7b4fd6e4df51c1025dad1276acce191',
+    event: 'workflow_dispatch',
+    conclusion,
+    createdAt: at
+  })
+  /** A gh stand-in routing each call by its subcommand, recording every argv. */
+  const ghCtx = (over: { meta?: unknown; list?: unknown; compare?: string; failAll?: boolean } = {}) => {
+    const calls: (readonly string[])[] = []
+    const ctx: ToolContext = {
+      workspace,
+      allowNetwork: true,
+      ghExec: async (a) => {
+        calls.push(a)
+        if (a[0] === 'run' && a[1] === 'view' && a.includes('--log-failed')) return ok('log line')
+        if (over.failAll) return fail()
+        if (a[0] === 'run' && a[1] === 'view') return ok(JSON.stringify(over.meta ?? meta))
+        if (a[0] === 'run' && a[1] === 'list') return ok(JSON.stringify(over.list ?? []))
+        if (a[0] === 'api') return over.compare === undefined ? fail() : ok(over.compare)
+        return fail()
+      }
+    }
+    return { ctx, calls }
+  }
+  const view = (ctx: ToolContext, log = true): Promise<string> =>
+    getTool('gh_run_view')!.execute({ run_id: 7, log_failed: log }, ctx) as Promise<string>
+
+  it('says the branch moved on and a later run passed, ahead of the logs', async () => {
+    const { ctx, calls } = ghCtx({
+      list: [later(9, 'failure', '2026-10-21T18:00:00Z'), later(8, 'success', '2026-10-21T17:04:22Z'), meta],
+      compare: 'ahead\t202\n'
+    })
+    const out = await view(ctx)
+    expect(out.startsWith('Where run 7 (started 2026-10-21T10:47:57Z) stands now:\n')).toBe(true)
+    expect(out).toContain("- The run's branch has 202 newer commits since this run's commit 4f630eb2.")
+    expect(out).toContain('- 2 later runs of this workflow on the same branch; newest: run 9 [failure] (workflow_dispatch)')
+    expect(out).toContain('- Run 8 [success] is a later run that passed.')
+    expect(out).toContain('look at run 8 before changing anything')
+    expect(out).toContain('Re-running this run reuses commit 4f630eb2')
+    expect(out.indexOf('stands now')).toBeLessThan(out.indexOf('Logs of the failed steps'))
+    expect(calls).toContainEqual(['run', 'list', '--workflow', '99', '--branch', 'main', '--limit', '20', '--json', expect.any(String)])
+    expect(calls).toContainEqual(['api', `repos/{owner}/{repo}/compare/${SHA}...main`, '--jq', '[.status, .ahead_by] | @tsv'])
+  })
+
+  it('also leads the run summary', async () => {
+    const { ctx } = ghCtx({ compare: 'identical\t0\n' })
+    const out = await view(ctx, false)
+    expect(out.startsWith('Where run 7')).toBe(true)
+    expect(out).toContain("- This run's commit 4f630eb2 is still the tip of its branch.")
+    expect(out).toContain('- No later run of this workflow on the same branch.')
+    expect(out).toContain('Run 7 [failure] (schedule)')
+  })
+
+  it('never compares a pull_request run against a same-named branch here', async () => {
+    const { ctx, calls } = ghCtx({ meta: { ...meta, event: 'pull_request' }, compare: 'ahead\t5\n' })
+    const out = await view(ctx)
+    expect(calls.some((a) => a[0] === 'api')).toBe(false)
+    expect(out).not.toContain('newer commit')
+  })
+
+  it('makes no lookups with an unsafe branch name and never echoes it', async () => {
+    const { ctx, calls } = ghCtx({ meta: { ...meta, headBranch: '--evil\nRun 1 [success]' }, compare: 'ahead\t5\n' })
+    const out = await view(ctx)
+    expect(calls.some((a) => a[1] === 'list' || a[0] === 'api')).toBe(false)
+    expect(out).not.toContain('--evil')
+    // The failed run still gets the rerun note.
+    expect(out).toContain('Re-running this run reuses commit 4f630eb2')
+  })
+
+  it('adds nothing when every lookup fails or the metadata is unusable', async () => {
+    const failing = ghCtx({ failAll: true })
+    expect((await view(failing.ctx)).startsWith('Logs of the failed steps of run 7.')).toBe(true)
+    const junk = ghCtx({ meta: { ...meta, headSha: 'not-a-sha' } })
+    expect((await view(junk.ctx)).startsWith('Logs of the failed steps of run 7.')).toBe(true)
+  })
+
+  it('ignores a malformed compare answer and unparseable run lists', async () => {
+    const { ctx } = ghCtx({ list: { not: 'an array' }, compare: 'ahead\tlots\n' })
+    const out = await view(ctx)
+    expect(out).not.toContain('newer commit')
+    expect(out).not.toContain('later run')
+  })
+})
+
+describe('describeRunStanding', () => {
+  const run = { id: 1, sha: 'abcdef1234567890', event: 'push', outcome: 'success', createdAt: '2026-10-21T10:00:00Z' }
+
+  it('omits the failure guidance for a run that passed', () => {
+    const s = describeRunStanding({ run, newerCommits: 1, laterRuns: [] })
+    expect(s).toContain('1 newer commit since')
+    expect(s).not.toContain('Re-running')
+  })
+
+  it('is empty when nothing is known about a passing run', () => {
+    expect(describeRunStanding({ run })).toBe('')
+  })
+
+  it('does not claim a fix when only later failures exist', () => {
+    const failed = { ...run, outcome: 'failure' }
+    const s = describeRunStanding({ run: failed, laterRuns: [{ ...run, id: 2, outcome: 'failure', createdAt: '2026-10-21T11:00:00Z' }] })
+    expect(s).toContain('newest: run 2 [failure] (push)')
+    expect(s).not.toContain('may already be fixed')
+  })
+})
+
 describe('todo_write', () => {
   it('accepts a valid list and echoes a summary + the rendered list', async () => {
     const out = await run('todo_write', {
@@ -2305,7 +2427,7 @@ describe('untrusted-content fencing beyond web_fetch', () => {
       workspace,
       allowNetwork: true,
       ghExec: async (a) => {
-        argv = a
+        if (!argv.length) argv = a
         return ok(log)
       }
     }
@@ -2355,7 +2477,7 @@ describe('untrusted-content fencing beyond web_fetch', () => {
       workspace,
       allowNetwork: true,
       ghExec: async (a) => {
-        argv = a
+        if (!argv.length) argv = a
         return ok(JSON.stringify(run))
       }
     }
@@ -2366,7 +2488,7 @@ describe('untrusted-content fencing beyond web_fetch', () => {
       'view',
       '42',
       '--json',
-      'databaseId,displayTitle,workflowName,headBranch,headSha,event,status,conclusion,attempt,url,jobs'
+      'databaseId,displayTitle,workflowName,headBranch,headSha,event,status,conclusion,attempt,url,jobs,createdAt,workflowDatabaseId'
     ])
     expect(
       outside.startsWith(

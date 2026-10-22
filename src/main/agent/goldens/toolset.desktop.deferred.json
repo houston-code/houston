@@ -1091,7 +1091,7 @@
   },
   {
     "name": "gh_run_view",
-    "description": "View a GitHub Actions workflow run via the gh CLI. Returns the run's id, outcome, URL, and each job's id, outcome, and failed step numbers, then the workflow, title, branch, and job and step names inside an untrusted-content fence. Set log_failed:true to print the logs of only the failed steps instead, fenced (the fastest way to diagnose a CI failure). Get run ids from gh_run_list. Read-only, but requires approval (network).",
+    "description": "View a GitHub Actions workflow run via the gh CLI. Returns the run's id, outcome, URL, and each job's id, outcome, and failed step numbers, then the workflow, title, branch, and job and step names inside an untrusted-content fence. Set log_failed:true to print the logs of only the failed steps instead, fenced (the fastest way to diagnose a CI failure). Both start with where the run stands now: newer commits on its branch, later runs of the same workflow and whether one passed. Get run ids from gh_run_list. Read-only, but requires approval (network).",
     "parameters": {
       "type": "object",
       "properties": {
