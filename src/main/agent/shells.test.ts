@@ -204,6 +204,13 @@ describe('background shell registry', () => {
     20_000
   )
 
+  it('tags each preview server with the conversation that started it', async () => {
+    const child = node('process.exit(0)')
+    const id = registerShell('npm run dev', child, 'conv-1')
+    await onClose(child)
+    expect(listPreviewServers().find((s) => s.id === id)?.conversationId).toBe('conv-1')
+  })
+
   it('masks secrets in the listed command and the tail, including configured credentials', async () => {
     const known = 'k3y-' + 'Z'.repeat(24)
     configureAgentHost({ collectSecrets: () => [known] } as unknown as AgentHost)
