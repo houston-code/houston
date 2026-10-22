@@ -109,6 +109,54 @@ export const FORBIDDEN_TEXT_PATTERNS = [
   /REDIS SOURCE AVAILABLE LICENSE/i
 ]
 
+// Recognized SPDX ids outside the ship allowlist that are neither forbidden nor
+// vague. A field made only of these and allowlisted ids is trusted as declared:
+// its LICENSE text is not scanned, because the canonical texts themselves name
+// AGPL (MPL-2.0's "Secondary License" definition, GPL-3.0 section 13), so the
+// scan would misread every MPL/GPL package as AGPL. These ids still go through
+// tiers 2 and 3 (blocked in production, review in dev).
+const RECOGNIZED_NON_FORBIDDEN = new Set(
+  [
+    'GPL-2.0',
+    'GPL-2.0-only',
+    'GPL-2.0-or-later',
+    'GPL-3.0',
+    'GPL-3.0-only',
+    'GPL-3.0-or-later',
+    'LGPL-2.0',
+    'LGPL-2.0-only',
+    'LGPL-2.0-or-later',
+    'LGPL-2.1',
+    'LGPL-2.1-only',
+    'LGPL-2.1-or-later',
+    'LGPL-3.0',
+    'LGPL-3.0-only',
+    'LGPL-3.0-or-later',
+    'MPL-1.1',
+    'MPL-2.0',
+    'MPL-2.0-no-copyleft-exception',
+    'EPL-1.0',
+    'EPL-2.0',
+    'CDDL-1.0',
+    'CDDL-1.1'
+  ].map((s) => s.toUpperCase())
+)
+
+/**
+ * True when the license field is a well-formed expression of recognized ids only,
+ * so there is nothing vague for a LICENSE-text scan to upgrade.
+ */
+export function isRecognizedExpression(raw) {
+  const tree = parseLicenseExpression(typeof raw === 'string' ? raw.trim() : '')
+  if (!tree) return false
+  const recognized = (id) => {
+    const s = String(id).replace(/\+$/, '').toUpperCase()
+    return ALLOWED_TO_SHIP.has(s) || RECOGNIZED_NON_FORBIDDEN.has(s)
+  }
+  const every = (node) => (node.op ? every(node.left) && every(node.right) : recognized(node.id))
+  return every(tree)
+}
+
 /** True when a single SPDX-ish id is tier-1 forbidden. */
 export function isForbiddenId(id) {
   const s = String(id).replace(/\+$/, '')
@@ -227,8 +275,9 @@ export function classifyLicense(raw, { production }) {
  * entries: [{ name, version, license, production, dir?, source? }]
  * exceptions: parsed license-gate-exceptions.json entries.
  * readLicenseTextFor: entry -> license file text | null (injected for tests);
- * only consulted for entries that are not already 'ok', to upgrade a vague
- * license field to 'forbidden' when the shipped LICENSE text names one.
+ * only consulted for entries that are not already 'ok' and whose field is not a
+ * recognized expression, to upgrade a vague license field to 'forbidden' when
+ * the shipped LICENSE text names one.
  * Returns { errors, warnings, unusedExceptions } — errors must fail the gate.
  */
 export function evaluatePackages(entries, exceptions = [], { readLicenseTextFor = () => null } = {}) {
@@ -239,7 +288,7 @@ export function evaluatePackages(entries, exceptions = [], { readLicenseTextFor 
     let verdict = classifyLicense(entry.license, { production: entry.production })
     if (verdict === 'ok') continue
     let detail = ''
-    if (verdict !== 'forbidden') {
+    if (verdict !== 'forbidden' && !isRecognizedExpression(entry.license)) {
       const text = readLicenseTextFor(entry)
       if (detectForbiddenText(text)) {
         verdict = 'forbidden'

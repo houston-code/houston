@@ -215,6 +215,27 @@ describe('evaluatePackages', () => {
     expect(errors[0].verdict).toBe('forbidden')
   })
 
+  it('trusts a recognized MPL/GPL field whose canonical text mentions AGPL', () => {
+    // MPL-2.0 section 1.12 and GPL-3.0 section 13 both name the GNU Affero GPL.
+    const mplText = 'Mozilla Public License Version 2.0 ... the GNU Affero General Public License, Version 3.0'
+    const mplDev = { name: 'f', version: '1.0.0', license: 'MPL-2.0', production: false, dir: '/x' }
+    const mplProd = { ...mplDev, production: true }
+    const gplOrLater = { ...gplDev, license: 'GPL-3.0-or-later', dir: '/x' }
+    const res = evaluatePackages([mplDev, mplProd, gplOrLater], [], { readLicenseTextFor: () => mplText })
+    expect(res.warnings.map((w) => w.name).sort()).toEqual(['d', 'f'])
+    expect(res.errors).toHaveLength(1)
+    expect(res.errors[0].verdict).toBe('blocked')
+  })
+
+  it('still scans the text when a field mixes a recognized id with an unknown one', () => {
+    const mixed = { name: 'g', version: '1.0.0', license: 'MPL-2.0 AND LicenseRef-Custom', production: false, dir: '/x' }
+    const { errors } = evaluatePackages([mixed], [], {
+      readLicenseTextFor: () => 'GNU AFFERO GENERAL PUBLIC LICENSE\nVersion 3'
+    })
+    expect(errors).toHaveLength(1)
+    expect(errors[0].verdict).toBe('forbidden')
+  })
+
   it('does not read license text for cleanly allowed packages', () => {
     let reads = 0
     evaluatePackages([mit], [], {
