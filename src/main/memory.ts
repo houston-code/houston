@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MemoryScope } from '@shared/memory'
 import { writeFileAtomicSync } from './atomic-write'
+import { withFileLock } from './fileLock'
 import { GLOBAL_RULES_HEADING, globalRulesDir, readTextOrNull } from './globalRules'
 import { neutralizeImports } from './agent/rules'
 
@@ -56,6 +57,14 @@ export async function saveMemoryTo(
 ): Promise<string> {
   const note = storedNote(text)
   const file = join(dir, 'AGENTS.md')
+  mkdirSync(dir, { recursive: true })
+  // Read, append, and write under one lock: the desktop app and the terminal app
+  // share these files, and two saves at once would otherwise both read the old text
+  // and the second write would drop the first note.
+  return withFileLock(file, () => appendNote(file, note, title))
+}
+
+function appendNote(file: string, note: string, title: string): string {
   const existing = readTextOrNull(file)
   const heading = '## Notes'
   // The Notes heading itself, alone on its line: a bare substring search also hit
@@ -74,7 +83,6 @@ export async function saveMemoryTo(
   } else {
     next = `${existing.replace(/\s+$/, '')}\n\n${heading}\n\n- ${note}\n`
   }
-  mkdirSync(dir, { recursive: true })
   // Atomic write (temp + rename, with a unique temp name so two saves can't race on
   // it): a half-written rules file would be loaded on the very next turn, and a
   // truncated instruction is worse than none.

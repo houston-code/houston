@@ -122,6 +122,27 @@ describe('saveMemory scopes', () => {
     expect(rules.text).toContain('my AWS profile lives in `@~/.aws/credentials`')
   })
 
+  it('keeps both notes when another app saves while this one waits', async () => {
+    const file = join(ws, 'AGENTS.md')
+    await saveMemory(ws, 'project', 'first note')
+    // Another process holds the lock and appends its own note before releasing.
+    const { spawn } = await import('node:child_process')
+    const script = `
+      const fs = require('fs')
+      const [lock, target] = process.argv.slice(1)
+      fs.writeFileSync(lock, 'child', { flag: 'wx' })
+      process.stdout.write('held')
+      setTimeout(() => { fs.appendFileSync(target, '- note from the other app\\n'); fs.unlinkSync(lock) }, 200)
+    `
+    const child = spawn(process.execPath, ['-e', script, `${file}.lock`, file])
+    await new Promise((res) => child.stdout.once('data', res))
+    await saveMemory(ws, 'project', 'note from this app')
+    const out = readFileSync(file, 'utf8')
+    expect(out).toMatch(/^- first note$/m)
+    expect(out).toMatch(/^- note from the other app$/m)
+    expect(out).toMatch(/^- note from this app$/m)
+  })
+
   it('a saved global note is loaded into the rules on the next run', async () => {
     await saveMemory(ws, 'global', 'GLOBAL-NOTE-LOADED')
     const rules = await loadProjectRules(ws, { home })

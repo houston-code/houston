@@ -96,6 +96,7 @@ import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
+import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { useUpdateBanner } from './hooks/useUpdateBanner'
@@ -1480,14 +1481,7 @@ export default function App(): JSX.Element {
   // rules file — the files Houston already loads each run — and say where it landed.
   const onSaveMemory = useCallback(
     (scope: 'project' | 'global', text: string) => {
-      void window.api.saveMemory(workspace ?? '', scope, text).then((path) => {
-        chat.notify(
-          path
-            ? `Remembered: added to ${scope === 'project' ? 'this project' : 'every project'} (${path})`
-            : 'Could not save that instruction.',
-          path ? 'info' : 'error'
-        )
-      })
+      void saveMemoryAndNotify(window.api.saveMemory, chat.notify, workspace ?? '', scope, text)
     },
     [workspace, chat]
   )

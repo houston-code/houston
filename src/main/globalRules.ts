@@ -9,6 +9,7 @@ import {
   importTargets
 } from './agent/rules'
 import { writeFileAtomicSync } from './atomic-write'
+import { withFileLock } from './fileLock'
 
 /**
  * Houston's global rules file, `~/.houston/AGENTS.md`, and the one-time offer to
@@ -109,35 +110,35 @@ export function legacyRulesNoticeApplies(home: string = homedir()): boolean {
  * Houston-specific rules come after it and win where the two disagree. Idempotent:
  * a file that already imports the legacy one is left as is. Returns the file path.
  */
-export function importLegacyRules(home: string = homedir()): string {
+export async function importLegacyRules(home: string = homedir()): Promise<string> {
   const file = globalRulesFile(home)
   // Already there (including a symlink between the two files, where writing would
   // replace the link with a copy, or make the file import itself).
   if (alreadyHasLegacy(home)) return file
-  const current = readTextOrNull(file)
-  let next: string
-  if (current === null || !current.trim()) {
-    next = `${GLOBAL_RULES_HEADING}\n\n${LEGACY_RULES_IMPORT}\n`
-  } else {
-    const heading = /^# [^\n]*(?:\n|$)/.exec(current)
-    if (heading) {
-      const head = heading[0].endsWith('\n') ? heading[0] : `${heading[0]}\n`
-      const rest = current.slice(heading[0].length).replace(/^\n*/, '')
-      next = `${head}\n${LEGACY_RULES_IMPORT}\n${rest ? `\n${rest}` : ''}`
-    } else {
-      next = `${LEGACY_RULES_IMPORT}\n\n${current}`
-    }
-  }
   mkdirSync(globalRulesDir(home), { recursive: true })
-  writeFileAtomicSync(file, next)
-  return file
+  // Under the same lock a `#` note save takes, so the two can't overwrite each other.
+  return withFileLock(file, () => {
+    if (alreadyHasLegacy(home)) return file // added while we waited for the lock
+    writeFileAtomicSync(file, withLegacyImport(readTextOrNull(file)))
+    return file
+  })
+}
+
+/** `current` (the global file's text, or null) with the legacy import line added. */
+function withLegacyImport(current: string | null): string {
+  if (current === null || !current.trim()) return `${GLOBAL_RULES_HEADING}\n\n${LEGACY_RULES_IMPORT}\n`
+  const heading = /^# [^\n]*(?:\n|$)/.exec(current)
+  if (!heading) return `${LEGACY_RULES_IMPORT}\n\n${current}`
+  const head = heading[0].endsWith('\n') ? heading[0] : `${heading[0]}\n`
+  const rest = current.slice(heading[0].length).replace(/^\n*/, '')
+  return `${head}\n${LEGACY_RULES_IMPORT}\n${rest ? `\n${rest}` : ''}`
 }
 
 /** The settings operations {@link decideLegacyRulesNotice} needs (injected for tests). */
 export interface LegacyRulesDecideDeps {
   current: () => AppSettings
   dismiss: () => AppSettings
-  importRules?: () => string
+  importRules?: () => Promise<string>
 }
 
 /**
@@ -146,15 +147,15 @@ export interface LegacyRulesDecideDeps {
  * banner stays up to retry. Either successful answer dismisses it for good. Any
  * other value is ignored.
  */
-export function decideLegacyRulesNotice(
+export async function decideLegacyRulesNotice(
   choice: unknown,
   deps: LegacyRulesDecideDeps
-): LegacyRulesDecideResult {
+): Promise<LegacyRulesDecideResult> {
   if (choice !== 'import' && choice !== 'keep') return { settings: deps.current() }
   let file: string | undefined
   if (choice === 'import') {
     try {
-      file = (deps.importRules ?? (() => importLegacyRules()))()
+      file = await (deps.importRules ?? (() => importLegacyRules()))()
     } catch (err) {
       return { settings: deps.current(), error: (err as Error).message }
     }

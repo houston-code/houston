@@ -459,7 +459,7 @@ export function registerIpc(): void {
   // Answer it (see decideLegacyRulesNotice: a failed import is reported, not recorded).
   ipcMain.handle(
     IPC.legacyRulesNoticeDecide,
-    (_event, choice: unknown): LegacyRulesDecideResult =>
+    (_event, choice: unknown): Promise<LegacyRulesDecideResult> =>
       decideLegacyRulesNotice(choice, {
         current: getSettings,
         dismiss: () => {
