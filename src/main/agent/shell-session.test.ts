@@ -192,6 +192,34 @@ describe.skipIf(!BASH)('runInSession (end to end with real bash)', () => {
     expect(online.stdout.trim()).toBe('unset unset 5')
   })
 
+  it('falls back to the project root when the session directory was deleted', async () => {
+    mkdirSync(join(ws, 'build'))
+    const session = createShellSession(ws)
+    await runInSession({ command: 'cd build', session, workspace: ws, allowNetwork: false, run: bashRunner })
+    // Deleted while the session still points at it (on macOS and Linux a later
+    // command can even do it from inside: bash's pwd keeps reporting the old path).
+    // Removed between commands here, since Windows won't delete a shell's own cwd.
+    expect(canon(session.cwd)).toBe(canon(join(ws, 'build')))
+    rmSync(join(ws, 'build'), { recursive: true, force: true })
+
+    const cwds: string[] = []
+    const recording = (o: SandboxRunOptions): Promise<SandboxRunResult> => {
+      cwds.push(o.cwd)
+      return bashRunner(o)
+    }
+    const res = await runInSession({ command: 'echo ok', session, workspace: ws, allowNetwork: false, run: recording })
+    expect(cwds).toEqual([ws])
+    expect(res.exitCode).toBe(0)
+    expect(res.stdout.trim()).toBe('ok')
+    expect(res.stderr).toContain('no longer exists, so this command ran from the project root')
+    expect(canon(session.cwd)).toBe(canon(ws))
+
+    // Recovered: the next command runs normally, without the note.
+    const next = await runInSession({ command: 'echo again', session, workspace: ws, allowNetwork: false, run: bashRunner })
+    expect(next.stdout.trim()).toBe('again')
+    expect(next.stderr).toBe('')
+  })
+
   it('preserves the command exit code', async () => {
     const session = createShellSession(ws)
     const res = await runInSession({
