@@ -4,12 +4,14 @@ import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  formatBaseContext,
   formatGitContext,
   formatWorktreeContext,
   gitContext,
   gitDiff,
   isSafeGitRef,
   parseWorktreePorcelain,
+  readBaseRelation,
 } from './git'
 
 describe('formatGitContext', () => {
@@ -219,6 +221,137 @@ describe('formatWorktreeContext', () => {
     const s = formatWorktreeContext(entries, '/repo')
     expect(s).toContain('16 worktrees')
     expect(s).toContain('… and 5 more')
+  })
+
+  it('lists the current worktree first so truncation never hides it', () => {
+    const entries = [
+      main,
+      ...Array.from({ length: 15 }, (_, i) => ({
+        path: `/repo/wt-${i}`,
+        branch: `b${i}`,
+        detached: false,
+        bare: false,
+      })),
+    ]
+    const s = formatWorktreeContext(entries, '/repo/wt-14')
+    expect(s).toContain('/repo/wt-14 [b14] (current)')
+    expect(s.indexOf('/repo/wt-14')).toBeLessThan(s.indexOf('/repo/wt-0'))
+    expect(s).toContain('… and 5 more')
+  })
+
+  it('tells the agent to stay in its linked worktree', () => {
+    const entries = [main, { path: '/repo/wt-a', branch: 'feat/x', detached: false, bare: false }]
+    expect(formatWorktreeContext(entries, '/repo/wt-a')).toContain(
+      'You are working in the linked worktree "/repo/wt-a"'
+    )
+    // From the main worktree there is nothing to steer away from.
+    expect(formatWorktreeContext(entries, '/repo')).not.toContain('You are working in')
+  })
+})
+
+describe('formatBaseContext', () => {
+  it('warns loudly about an unrelated history', () => {
+    const s = formatBaseContext({ kind: 'unrelated', base: 'origin/main' })
+    expect(s).toContain('shares no history with origin/main')
+    expect(s).toContain("don't restore files from other commits")
+  })
+
+  it('reports how far behind the base the branch is', () => {
+    expect(formatBaseContext({ kind: 'behind', base: 'origin/main', behind: 1 })).toBe(
+      'Branch is 1 commit behind origin/main (as of the last fetch).'
+    )
+    expect(formatBaseContext({ kind: 'behind', base: 'origin/main', behind: 42 })).toContain('42 commits behind')
+  })
+
+  it('says nothing when up to date or unknown', () => {
+    expect(formatBaseContext({ kind: 'behind', base: 'origin/main', behind: 0 })).toBe('')
+    expect(formatBaseContext(null)).toBe('')
+  })
+})
+
+describe('readBaseRelation', () => {
+  const SHA = 'a'.repeat(40)
+  const fake =
+    (over: Record<string, string | Error>) =>
+    async (args: string[]): Promise<string> => {
+      const key = args.join(' ')
+      for (const [k, v] of Object.entries(over)) {
+        if (key === k) {
+          if (v instanceof Error) throw v
+          return v
+        }
+      }
+      if (args[0] === 'rev-parse' && args[1] === '--verify') return `${SHA}\n`
+      throw new Error(`unexpected: ${key}`)
+    }
+
+  it('falls back from a missing origin/HEAD to origin/main', async () => {
+    const exec = fake({
+      'rev-parse --abbrev-ref origin/HEAD': new Error('ambiguous'),
+      'merge-base HEAD origin/main': `${SHA}\n`,
+      'rev-list --count HEAD..origin/main': '3\n'
+    })
+    expect(await readBaseRelation('/ws', exec)).toEqual({ kind: 'behind', base: 'origin/main', behind: 3 })
+  })
+
+  it('reports unrelated when merge-base fails on two real commits', async () => {
+    const exec = fake({
+      'rev-parse --abbrev-ref origin/HEAD': 'origin/trunk\n',
+      'merge-base HEAD origin/trunk': new Error('exit 1')
+    })
+    expect(await readBaseRelation('/ws', exec)).toEqual({ kind: 'unrelated', base: 'origin/trunk' })
+  })
+
+  it('returns null with no remote default branch or an unborn HEAD', async () => {
+    const noRemote = fake({
+      'rev-parse --abbrev-ref origin/HEAD': new Error('ambiguous'),
+      'rev-parse --verify -q origin/main^{commit}': new Error('missing'),
+      'rev-parse --verify -q origin/master^{commit}': new Error('missing')
+    })
+    expect(await readBaseRelation('/ws', noRemote)).toBeNull()
+    const unborn = fake({ 'rev-parse --verify -q HEAD^{commit}': new Error('unborn') })
+    expect(await readBaseRelation('/ws', unborn)).toBeNull()
+  })
+
+  it('ignores an origin/HEAD that is not a remote ref', async () => {
+    const exec = fake({
+      'rev-parse --abbrev-ref origin/HEAD': '--upload-pack=evil\n',
+      'merge-base HEAD origin/main': `${SHA}\n`,
+      'rev-list --count HEAD..origin/main': '0\n'
+    })
+    expect(await readBaseRelation('/ws', exec)).toEqual({ kind: 'behind', base: 'origin/main', behind: 0 })
+  })
+})
+
+describe('gitContext base relation (real repo)', () => {
+  const run = (args: string[], cwd: string): void => {
+    execFileSync('git', args, { cwd, stdio: 'pipe' })
+  }
+  const commit = (cwd: string, file: string): void => {
+    writeFileSync(join(cwd, file), `${file}\n`)
+    run(['add', file], cwd)
+    run(['-c', 'user.email=t@example.com', '-c', 'user.name=Test', 'commit', '-qm', file], cwd)
+  }
+
+  it('flags a branch behind origin and one with unrelated history', { timeout: 30_000 }, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'houston-git-base-'))
+    try {
+      const remote = join(root, 'remote')
+      const clone = join(root, 'clone')
+      run(['init', '-q', '-b', 'main', remote], root)
+      commit(remote, 'a.txt')
+      run(['clone', '-q', remote, clone], root)
+      commit(remote, 'b.txt')
+      run(['fetch', '-q'], clone)
+      expect(await gitContext(clone)).toContain('Branch is 1 commit behind origin/main')
+
+      run(['checkout', '-q', '--orphan', 'old-history'], clone)
+      run(['rm', '-rfq', '.'], clone)
+      commit(clone, 'c.txt')
+      expect(await gitContext(clone)).toContain('shares no history with origin/main')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
