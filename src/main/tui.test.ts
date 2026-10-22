@@ -826,10 +826,17 @@ describe('recovering tool output', () => {
 })
 
 describe('formatSessionCost', () => {
-  it('formats tokens with grouping and cost to 4 dp', () => {
+  it('formats tokens with grouping and cost the way the desktop does', () => {
     expect(formatSessionCost({ inputTokens: 1234, outputTokens: 567, cost: 0.0123 })).toBe(
-      '1,234+567 tok · $0.0123'
+      '1,234+567 tok · $0.012'
     )
+  })
+
+  it('scales precision with the amount, and shows a free model as $0.00', () => {
+    const at = (cost: number): string => formatSessionCost({ inputTokens: 1, outputTokens: 1, cost })
+    expect(at(0)).toBe('1+1 tok · $0.00')
+    expect(at(0.0042)).toBe('1+1 tok · $0.0042')
+    expect(at(12.3456)).toBe('1+1 tok · $12.35')
   })
 })
 
@@ -869,7 +876,7 @@ describe('status line & progress', () => {
     )
     expect(line).toContain('anthropic/claude-opus-4-8')
     expect(line).toContain('ask')
-    expect(line).toContain('$0.5000')
+    expect(line).toContain('$0.500')
     expect(line).toContain('50%') // 500k of a 1M window
     expect(line).toMatch(/[▓░]/)
   })
@@ -1157,8 +1164,8 @@ describe('runTui', () => {
     const out = t.text()
     // One combined summary for the whole turn (30k+40k in, 100+200 out, $0.37),
     // carrying the running session total (same, as it's the only turn).
-    expect(out).toContain('· turn 70,000+300 tok · $0.3700')
-    expect(out).toContain('(session 70,000+300 tok · $0.3700)')
+    expect(out).toContain('· turn 70,000+300 tok · $0.370')
+    expect(out).toContain('(session 70,000+300 tok · $0.370)')
     // The old per-round lines (raw, unseparated counts) are gone.
     expect(out).not.toContain('30000+100')
     expect(out).not.toContain('40000+200')
@@ -1720,7 +1727,7 @@ describe('runTui', () => {
     // Two turns each report 100+50 / $0.01 → session total 200+100 / $0.02.
     // The breakdown replaced the single "session:" line; the totals are the point.
     expect(t.text()).toContain('200+100 tok')
-    expect(t.text()).toContain('$0.0200')
+    expect(t.text()).toContain('$0.020')
   })
 
   it('persists the session as a conversation on the first turn', async () => {
@@ -4419,7 +4426,7 @@ describe('/cost breakdown', () => {
     expect(out).toContain('10,000+500 tok')
     expect(out).toContain('(9,000 cached)')
     expect(out).toContain('(200 cache write)')
-    expect(out).toContain('$0.1200')
+    expect(out).toContain('$0.120')
   })
 
   it('adds a total only when more than one model billed', () => {
@@ -4433,7 +4440,7 @@ describe('/cost breakdown', () => {
       paintNo
     )
     expect(two).toContain('total')
-    expect(two).toContain('$3.0000')
+    expect(two).toContain('$3.00')
   })
 
   it('says so before anything has been spent', () => {

@@ -60,7 +60,7 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS } from '@shared/agent'
-import { contextWindowFor, contextPercent, accumulateModelUsage } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd } from '@shared/usage'
 import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
@@ -664,19 +664,19 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
       : ''
     const written = t.cacheWriteTokens ? paint(`  (${n(t.cacheWriteTokens)} cache write)`, 'dim') : ''
     lines.push(
-      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  $${t.cost.toFixed(4)}`
+      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatUsd(t.cost)}`
     )
   }
   if (tallies.length > 1) {
-    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  $${total.cost.toFixed(4)}`, 'dim'))
+    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatUsd(total.cost)}`, 'dim'))
   }
   return lines.join('\n')
 }
 
-/** Format a cost total, e.g. "1,234+567 tok · $0.0123". */
+/** Format a cost total, e.g. "1,234+567 tok · $0.012" (amounts as the desktop shows them). */
 export function formatSessionCost(c: SessionCost): string {
   const n = (v: number): string => v.toLocaleString('en-US')
-  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · $${c.cost.toFixed(4)}`
+  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatUsd(c.cost)}`
 }
 
 /** Status marker for a subagent row, printed as a discrete line in line mode. */
@@ -749,7 +749,7 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
     paint(`${s.providerId}/${s.model}`, 'cyan'),
     paint(s.policy, 'dim'),
     paint(shortCwd(s.cwd), 'dim'),
-    `$${s.cost.cost.toFixed(4)}`
+    formatUsd(s.cost.cost)
   ]
   if (pct !== null) {
     const tone = pct >= 90 ? 'red' : pct >= 70 ? 'yellow' : 'green'
