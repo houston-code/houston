@@ -1126,6 +1126,9 @@ inspection-only artifact (`houston-linux-x64` / `houston-mac-arm64` / `houston-m
 without building locally. A release is checked the same way before its release PR opens
 (`release-prepare.yml`) and then built, signed and published (`release-publish.yml`);
 [docs/RELEASING.md](docs/RELEASING.md) describes the process.
+Once the Release is public, its `distribute` job sends the standalone CLI to npm, the
+Homebrew tap and the AUR; each channel stays off until it is set up, as
+[`packaging/README.md`](packaging/README.md) describes.
 
 ## Updates
 
