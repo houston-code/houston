@@ -3229,8 +3229,9 @@ export async function startRun(
         // should trigger it, so a read-only shell command (ls/git log) never queues
         // a verify pass.
         if (r.call.name === 'run_shell') announceMissingRuntime(output)
-        // A file read now is usually edited next: let its language server load it in
-        // the background so post-edit diagnostics have a baseline (see noteRead).
+        // A file read now is usually edited next: if its language server is already
+        // running, open the file there in the background so post-edit diagnostics have a
+        // baseline (see noteRead; a read never starts a server).
         if (
           r.ok &&
           r.call.name === 'read_file' &&
@@ -3815,9 +3816,9 @@ export async function startRun(
                   signal: abort.signal
                 })
               }
-              // A shell command can change any file: re-sync the documents the language
-              // servers hold so their next answer is about the files as they are now.
-              if (tool.kind === 'shell') await lspManager.noteShell(roots)
+              // A shell command can change any file: the language servers re-read the
+              // documents they hold before their next answer (see noteShell).
+              if (tool.kind === 'shell') lspManager.noteShell(roots)
               // Invalidate cached reads that this mutation could have staled. A write
               // drops the entries depending on the path(s) it touched; a shell (or any
               // other non-read) call clears the cache wholesale, since a command can

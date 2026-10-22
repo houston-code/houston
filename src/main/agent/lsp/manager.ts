@@ -52,6 +52,8 @@ interface Entry {
   client: LspClient
   key: string
   idleTimer: ReturnType<typeof setTimeout> | null
+  /** A shell command ran since the open documents were last re-read from disk. */
+  stale: boolean
 }
 
 export interface LspManagerDeps {
@@ -200,7 +202,7 @@ export class LspManager {
         initTimeoutMs: this.deps.initTimeoutMs,
         requestTimeoutMs: this.deps.requestTimeoutMs
       })
-      const created: Entry = { client, key, idleTimer: null }
+      const created: Entry = { client, key, idleTimer: null, stale: false }
       client.onDeath(() => {
         if (created.idleTimer) clearTimeout(created.idleTimer)
         if (this.entries.get(key) === created) this.entries.delete(key)
@@ -223,6 +225,11 @@ export class LspManager {
     }
     if (entry.client.state !== 'ready') return null
     this.touch(entry)
+    if (entry.stale) {
+      // Re-read what a shell command may have changed before anyone asks the server.
+      entry.stale = false
+      await entry.client.refreshAll().catch(() => {})
+    }
     return entry.client
   }
 
@@ -249,30 +256,34 @@ export class LspManager {
   }
 
   /**
-   * The agent read `abs`: open it in the covering server in the background. A file is
-   * read before it is edited, so by the time the edit lands the server has loaded the
-   * project and published the file's diagnostics, the baseline the edit is compared
-   * against, and the post-edit check costs one publish instead of a cold start.
+   * The agent read `abs`: if the covering server is already running (an earlier edit or
+   * lsp_* call started it), open the file there in the background. A file is read before
+   * it is edited, so by the time the edit lands the server has published the file's
+   * diagnostics, the baseline the edit is compared against. A read never starts a
+   * server: a conversation that only reads shouldn't pay for loading a whole project.
    */
   async noteRead(abs: string, roots: string[]): Promise<void> {
-    if (!this.covers(abs, roots)) return
+    if (!this.enabled()) return
+    const spec = specForFile(this.registry(), abs)
+    if (!spec) return
+    const entry = this.entries.get(this.keyFor(spec, roots))
+    if (!entry || entry.client.state !== 'ready') return
     try {
-      const c = await this.clientFor(abs, roots)
+      const c = await this.clientForSpec(spec, roots)
       await c?.sync(abs)
     } catch {
       // Warming is best effort.
     }
   }
 
-  /** A shell command ran and may have changed any file: re-sync every open document. */
-  async noteShell(roots: string[]): Promise<void> {
-    for (const c of this.running(roots)) {
-      try {
-        await c.refreshAll()
-      } catch {
-        // Best effort, as above.
-      }
-    }
+  /**
+   * A shell command ran and may have changed any file. Marks the running servers so their
+   * open documents are re-read from disk the next time one is used (see clientForSpec),
+   * rather than reading them all after every command.
+   */
+  noteShell(roots: string[]): void {
+    const suffix = `\0${roots.join('\0')}`
+    for (const e of this.entries.values()) if (e.key.endsWith(suffix)) e.stale = true
   }
 
   private async stopEntry(entry: Entry): Promise<void> {

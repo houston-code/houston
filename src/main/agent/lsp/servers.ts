@@ -194,7 +194,10 @@ function nodeLocalBin(bin: string, roots: string[], opts: BinLookupOptions): str
   const exists = opts.exists ?? existsSync
   const win = (opts.platform ?? process.platform) === 'win32'
   for (const root of roots) {
-    for (const suffix of win ? ['.cmd', '.exe', ''] : ['']) {
+    // On Windows npm writes three shims: `bin` (sh), `bin.cmd`, and `bin.ps1`. Servers
+    // launch through the Git Bash sandbox shell, which runs the sh shim (or an .exe)
+    // but not a .cmd, so the .cmd is never picked.
+    for (const suffix of win ? ['', '.exe'] : ['']) {
       const p = join(root, 'node_modules', '.bin', bin + suffix)
       if (exists(p)) return p
     }
