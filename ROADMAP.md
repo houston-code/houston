@@ -305,16 +305,21 @@ stays the default; anything hosted would be opt-in.
   sandboxing, and a way to sync the diff back; parallel attempts need a comparison
   and apply UI on top of the existing worktree support.
 
-- **GitHub automation in the user's own CI.** Houston reaching GitHub today means the
-  `gh_*` tools (PRs, reviews, merges, issues, CI runs, repo creation) and the
-  `pr_sweep` board, all driving the user's local `gh` CLI, which owns auth. The next
-  step is a GitHub Action that runs the headless CLI (`houston -p`) in the user's own
-  workflows, for example to review a PR or answer an issue when mentioned, using the
-  repository's own secrets. A Houston-hosted GitHub App that installs into
-  repositories and acts on them without the user's own CI would follow, on top of the
-  hosted service below. *Why later:* the action needs packaging, a permission model
-  for unattended runs, and guidance on which events are safe to trigger it from; the
-  app also needs an OAuth app registration and a multi-tenant backend.
+- **GitHub automation beyond the action.** The [Houston GitHub Action](action/README.md)
+  (first released in v0.10.0) runs the headless CLI on the user's own runners with
+  their own model key: it answers `@houston` mentions from collaborators with write
+  access, reviews same-repository pull requests, and fixes failed CI runs on a new
+  branch with a pull request. Still open: **Windows runners** (Git for Windows' gpg
+  can't open the paths the CLI signature check passes it, and the action has no shell
+  sandbox there); **CI on fix pull requests by default** (a pull request opened with
+  the default `GITHUB_TOKEN` triggers no workflows, so today the user supplies a GitHub
+  App token); a **GitHub Marketplace listing** (it needs a dedicated repository with
+  `action.yml` at its root, such as a mirror of `action/`); and a **Houston-hosted
+  GitHub App** that installs into repositories and acts on them without the user's own
+  CI, on top of the hosted service below. *Why later:* Windows needs a native signature
+  check and a sandbox backend for unattended runs, a mirror repository adds a release
+  step to keep in sync, and the hosted app needs an OAuth app registration and a
+  multi-tenant backend.
 
 - **Per-editor extensions.** Editors that speak ACP already run Houston through
   `houston --acp` (see IDE integration under *Deferred: polish*). For editors that
