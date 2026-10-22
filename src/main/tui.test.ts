@@ -1943,6 +1943,35 @@ describe('runTui', () => {
     expect(out).toContain('✓ Correctness')
   })
 
+  it('prints one line for a run of retries and settles it when the run gives up', async () => {
+    const retry = (attempt: number): AgentEvent => ({ runId: 'x', type: 'retry', attempt, max: 6, message: '500 boom' })
+    const { d } = deps([retry(1), retry(2), retry(3), { runId: 'x', type: 'error', message: '500 boom' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out.match(/retrying \(/g)).toHaveLength(1)
+    expect(out).toContain('retrying (1/6)… 500 boom')
+    expect(out).toContain('tried 3 more times, then stopped')
+    expect(out.indexOf('then stopped')).toBeLessThan(out.indexOf('Error: 500 boom'))
+    expect(t.spinner).toContain('label:Retrying 3/6')
+  })
+
+  it('starts a new retry line after the request got through, and adds nothing to a plain error', async () => {
+    const retry: AgentEvent = { runId: 'x', type: 'retry', attempt: 1, max: 6, message: 'blip' }
+    const { d } = deps([retry, { runId: 'x', type: 'text', delta: 'ok\n\n' }, retry, { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text().match(/retrying \(/g)).toHaveLength(2)
+
+    const plain = deps([{ runId: 'x', type: 'error', message: 'bad request' }])
+    const t2 = fakeIo(['go', null])
+    plain.d.io = t2.io
+    await runTui(opts, plain.d)
+    expect(t2.text()).not.toContain('then stopped')
+  })
+
   // Parity with the GUI reducer (items.test.ts) and headless (headless.test.ts): a
   // turn the loop throws away mid-stream and redoes must leave one copy of the reply.
   // Line mode can't erase what it printed, so it drops what it hadn't and disowns
