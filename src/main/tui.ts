@@ -1535,7 +1535,7 @@ export function resolveModelArg(
 export const HELP_TEXT = [
   'Commands:',
   '  /help                 show this help',
-  '  /model [id]           list models, or switch this chat (add --default for new chats too)',
+  '  /model [id]           pick this chat\'s model from a list, or switch to one by id (--default: new chats too)',
   '  /login                set or replace a provider API key, or add a host',
   '  /approval [policy]    show or set this chat\'s approval mode (--default: new chats too)',
   '  /plan                 plan mode: read-only research & propose',
