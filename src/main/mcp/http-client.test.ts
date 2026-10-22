@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { version as PKG_VERSION } from '../../../package.json'
 import { McpHttpClient, extractSseData, pickJsonRpc, type FetchFn } from './http-client'
+import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
 
 describe('extractSseData', () => {
   it('pulls data payloads out of an SSE body', () => {
@@ -339,5 +341,92 @@ describe('McpHttpClient', () => {
       new Response('', { status: 401, headers: new Headers({ 'www-authenticate': 'Bearer realm="mcp"' }) })
     const client = new McpHttpClient(fetch)
     await expect(client.connect({ url: 'https://x/mcp' })).rejects.toThrow(/401/)
+  })
+})
+
+describe('McpHttpClient protocol-version negotiation', () => {
+  interface Post {
+    body: Record<string, unknown>
+    headers: Record<string, string>
+  }
+  /**
+   * A server that answers initialize with `initResult` and, on tools/list,
+   * streams an `elicitation/create` request ahead of the list result.
+   */
+  function negotiatingFetch(initResult: unknown, posts: Post[], gets: Array<Record<string, string>>): FetchFn {
+    return async (_u, init) => {
+      const headers = init.headers as Record<string, string>
+      if (init.method === 'GET') {
+        gets.push(headers)
+        return new Response('', { status: 405 })
+      }
+      const body = JSON.parse(init.body as string) as Record<string, unknown> & { id?: number; method?: string }
+      posts.push({ body, headers })
+      if (body.id === undefined || body.method === undefined) return new Response('', { status: 202 })
+      const json = (msgs: unknown[]): Response =>
+        new Response(msgs.map((m) => `data: ${JSON.stringify(m)}\n\n`).join(''), {
+          status: 200,
+          headers: new Headers({ 'content-type': 'text/event-stream' })
+        })
+      if (body.method === 'initialize') return json([{ jsonrpc: '2.0', id: body.id, result: initResult }])
+      if (body.method === 'tools/list')
+        return json([
+          { jsonrpc: '2.0', id: 'el1', method: 'elicitation/create', params: {} },
+          { jsonrpc: '2.0', id: body.id, result: { tools: [] } }
+        ])
+      return json([{ jsonrpc: '2.0', id: body.id, result: {} }])
+    }
+  }
+  const onElicit = async (): Promise<{ action: 'accept'; content: Record<string, unknown> }> => ({
+    action: 'accept',
+    content: { ok: true }
+  })
+  const replyTo = (posts: Post[], id: string): Record<string, unknown> | undefined =>
+    posts.find((p) => p.body.id === id && p.body.method === undefined)?.body
+
+  it('requests the latest version, then sends the negotiated one in the header', async () => {
+    const posts: Post[] = []
+    const gets: Array<Record<string, string>> = []
+    const client = new McpHttpClient(negotiatingFetch({ protocolVersion: '2025-03-26' }, posts, gets))
+    await client.connect({ url: 'https://x/mcp' })
+    await new Promise((r) => setTimeout(r, 10))
+    const [init, ...rest] = posts
+    expect(init.body.params).toMatchObject({
+      protocolVersion: LATEST_PROTOCOL_VERSION,
+      clientInfo: { name: 'Houston', version: PKG_VERSION }
+    })
+    // Nothing is agreed before initialize answers, so that POST goes without it.
+    expect(init.headers['mcp-protocol-version']).toBeUndefined()
+    expect(rest.length).toBeGreaterThan(0)
+    for (const p of rest) expect(p.headers['mcp-protocol-version']).toBe('2025-03-26')
+    expect(gets[0]?.['mcp-protocol-version']).toBe('2025-03-26')
+    client.close()
+  })
+
+  it('answers elicitation from a 2025-06-18 server', async () => {
+    const posts: Post[] = []
+    const client = new McpHttpClient(negotiatingFetch({ protocolVersion: '2025-06-18' }, posts, []))
+    await client.connect({ url: 'https://x/mcp', onElicit })
+    await new Promise((r) => setTimeout(r, 10))
+    expect((posts[0].body.params as { capabilities: unknown }).capabilities).toEqual({ elicitation: {} })
+    expect(replyTo(posts, 'el1')?.result).toEqual({ action: 'accept', content: { ok: true } })
+    expect(posts.at(-1)?.headers['mcp-protocol-version']).toBe('2025-06-18')
+    client.close()
+  })
+
+  it('declines elicitation from a server that negotiated 2024-11-05', async () => {
+    const posts: Post[] = []
+    const client = new McpHttpClient(negotiatingFetch({ protocolVersion: '2024-11-05' }, posts, []))
+    await client.connect({ url: 'https://x/mcp', onElicit })
+    await new Promise((r) => setTimeout(r, 10))
+    expect((replyTo(posts, 'el1')?.error as { code: number }).code).toBe(-32601)
+    client.close()
+  })
+
+  it('fails the connection on an unsupported version, before initialized is sent', async () => {
+    const posts: Post[] = []
+    const client = new McpHttpClient(negotiatingFetch({ protocolVersion: '2099-01-01' }, posts, []))
+    await expect(client.connect({ url: 'https://x/mcp' })).rejects.toThrow(McpUnsupportedProtocolError)
+    expect(posts.map((p) => p.body.method)).toEqual(['initialize'])
   })
 })

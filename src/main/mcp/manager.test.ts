@@ -166,7 +166,7 @@ function elicitingSpawn(seen: { initCapabilities?: unknown }): SpawnFn {
         if (msg.id === undefined) return true
         if (msg.method === 'initialize') {
           seen.initCapabilities = msg.params?.capabilities
-          emit({ jsonrpc: '2.0', id: msg.id, result: {} })
+          emit({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18' } })
         } else if (msg.method === 'tools/list') {
           emit({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'ask' }] } })
         } else if (msg.method === 'tools/call') {
@@ -540,6 +540,23 @@ describe('mcp manager elicitation', () => {
 
 describe('mcp manager statuses and hardening', () => {
   const noCtx = { workspace: '/tmp', allowNetwork: false } as ToolContext
+
+  it('reports an unsupported protocol version as an error status and closes the client', async () => {
+    _setMcpHttpClientFactory(
+      () =>
+        new McpHttpClient(async (_url, init) => {
+          const req = JSON.parse(init.body as string) as { id?: number; method: string }
+          const result = req.method === 'initialize' ? { protocolVersion: '2099-01-01' } : {}
+          const body = req.id === undefined ? '' : JSON.stringify({ jsonrpc: '2.0', id: req.id, result })
+          return new Response(body, { status: 200, headers: new Headers({ 'content-type': 'application/json' }) })
+        })
+    )
+    const defs = await getMcpToolDefs([cfg({ id: 'future', transport: 'http', command: '', url: 'https://x/mcp' })])
+    expect(defs).toEqual([])
+    const status = getMcpStatuses().find((st) => st.id === 'future')
+    expect(status?.state).toBe('error')
+    expect(status?.error).toMatch(/protocol version "2099-01-01".*not support/)
+  })
 
   it('reports connected / needs-auth / error statuses per server', async () => {
     useFactory(okSpawn())

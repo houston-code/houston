@@ -10,6 +10,12 @@ import {
   type McpToolInfo
 } from './client'
 import {
+  initializeParams,
+  negotiatedProtocolVersion,
+  supportsElicitation,
+  type McpProtocolVersion
+} from './version'
+import {
   ListRefresher,
   PendingRequests,
   handleServerMessage,
@@ -42,7 +48,6 @@ import { parseSseEvents } from './sse-client'
  * gated by the agent's approval flow (kind "mcp" always prompts).
  */
 
-const PROTOCOL_VERSION = '2025-06-18'
 const INIT_TIMEOUT_MS = 20_000
 const CALL_TIMEOUT_MS = 120_000
 /** First wait before reopening a dropped notification stream; doubles per failure. */
@@ -119,6 +124,8 @@ export class McpHttpClient implements McpConnection {
   /** Reopens of the notification stream since it was last healthy, for the backoff. */
   private streamReconnects = 0
   /** Answers `elicitation/create`; its presence declares the capability. */
+  /** The version agreed at initialize; set once the handshake answers. */
+  private protocolVersion?: McpProtocolVersion
   private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
   tools: McpToolInfo[] = []
   resources: McpResourceInfo[] = []
@@ -141,15 +148,13 @@ export class McpHttpClient implements McpConnection {
     this.onElicit = opts.onElicit
     const init = await this.rpc(
       'initialize',
-      {
-        protocolVersion: PROTOCOL_VERSION,
-        // Declare elicitation only when a responder is wired: declaring it and
-        // then -32601ing the request would be lying to the server.
-        capabilities: this.onElicit ? { elicitation: {} } : {},
-        clientInfo: { name: 'Houston', version: '0.1.0' }
-      },
+      initializeParams({ elicitation: !!this.onElicit }),
       INIT_TIMEOUT_MS
     )
+    this.protocolVersion = negotiatedProtocolVersion(init)
+    // A server that negotiated down to a version without elicitation never gets
+    // an elicitation answer: its requests fall through to the -32601 decline.
+    if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
     await this.notify('notifications/initialized', {})
     const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: McpToolInfo[] }
     this.tools = Array.isArray(listed?.tools) ? listed.tools : []
@@ -210,7 +215,9 @@ export class McpHttpClient implements McpConnection {
       ...this.extraHeaders,
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
-      'mcp-protocol-version': PROTOCOL_VERSION,
+      // Required on every request after initialize, carrying the NEGOTIATED version;
+      // the initialize POST itself goes without (nothing is agreed yet).
+      ...(this.protocolVersion ? { 'mcp-protocol-version': this.protocolVersion } : {}),
       ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {})
     }
   }
@@ -379,7 +386,7 @@ export class McpHttpClient implements McpConnection {
           headers: {
             ...this.extraHeaders,
             accept: 'text/event-stream',
-            'mcp-protocol-version': PROTOCOL_VERSION,
+            ...(this.protocolVersion ? { 'mcp-protocol-version': this.protocolVersion } : {}),
             ...(this.sessionId ? { 'mcp-session-id': this.sessionId } : {})
           },
           signal: controller.signal
