@@ -3277,8 +3277,9 @@ export async function startRun(
         // should trigger it, so a read-only shell command (ls/git log) never queues
         // a verify pass.
         if (r.call.name === 'run_shell') announceMissingRuntime(output)
-        // A file read now is usually edited next: let its language server load it in
-        // the background so post-edit diagnostics have a baseline (see noteRead).
+        // A file read now is usually edited next: if its language server is already
+        // running, open the file there in the background so post-edit diagnostics have a
+        // baseline (see noteRead; a read never starts a server).
         if (
           r.ok &&
           r.call.name === 'read_file' &&
@@ -3452,6 +3453,11 @@ export async function startRun(
         // which the path below reports without asking the server anything.
         let call = modelCall
         let materializedNote = ''
+        // Hooks scoped to the model's tool name (a matcher of `lsp_rename`), which the
+        // concrete call's name wouldn't select. A hook that matches both (`*`, a glob)
+        // already runs for the concrete call below, so it is left out here to run once.
+        let ownHooks: typeof hooks = []
+        let ownPreContext = ''
         const declared = lookupTool(modelCall.name)
         if (
           declared?.materialize &&
@@ -3467,6 +3473,11 @@ export async function startRun(
             )
             call = { ...modelCall, name: m.name, arguments: m.arguments }
             materializedNote = m.note ?? ''
+            ownHooks = hooks.filter(
+              (h) =>
+                matchingHooks([h], h.event, modelCall.name).length > 0 &&
+                matchingHooks([h], h.event, m.name).length === 0
+            )
           } catch (e) {
             await flushResult({
               call: modelCall,
@@ -3477,6 +3488,27 @@ export async function startRun(
             })
             continue
           }
+          // PreToolUse hooks scoped to the model's tool: a block stops the call before
+          // anything is gated or written; their added context reaches the result.
+          const ownPre = await runHooks(
+            ownHooks,
+            'PreToolUse',
+            { tool: modelCall.name, input: modelCall.arguments },
+            workspace,
+            abort.signal
+          )
+          emitHookNotice(ownPre)
+          if (ownPre.blocked) {
+            await flushResult({
+              call: modelCall,
+              output: `Blocked by a PreToolUse hook:\n${ownPre.message || '(no output)'}`,
+              ok: false,
+              images: [],
+              documents: []
+            })
+            continue
+          }
+          ownPreContext = ownPre.additionalContext ?? ''
         }
 
         const tool = lookupTool(call.name)
@@ -3863,9 +3895,9 @@ export async function startRun(
                   signal: abort.signal
                 })
               }
-              // A shell command can change any file: re-sync the documents the language
-              // servers hold so their next answer is about the files as they are now.
-              if (tool.kind === 'shell') await lspManager.noteShell(roots)
+              // A shell command can change any file: the language servers re-read the
+              // documents they hold before their next answer (see noteShell).
+              if (tool.kind === 'shell') lspManager.noteShell(roots)
               // Invalidate cached reads that this mutation could have staled. A write
               // drops the entries depending on the path(s) it touched; a shell (or any
               // other non-read) call clears the cache wholesale, since a command can
@@ -3884,6 +3916,19 @@ export async function startRun(
           }
         }
 
+        if (ok && call !== modelCall) {
+          // PostToolUse hooks scoped to the model's tool, after the concrete call succeeded.
+          const ownPost = await runHooks(
+            ownHooks,
+            'PostToolUse',
+            { tool: modelCall.name, input: modelCall.arguments, result: output },
+            workspace,
+            abort.signal
+          )
+          emitHookNotice(ownPost)
+          if (ownPost.message) output += `\n\n[PostToolUse hook]\n${ownPost.message}`
+        }
+        if (ownPreContext) output += `\n\n[PreToolUse hook]\n${ownPreContext}`
         await flushResult({
           call: modelCall,
           output: ok && materializedNote ? `${materializedNote} ${output}` : output,

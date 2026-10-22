@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -150,6 +150,15 @@ describe('server registry', () => {
     expect(r2).toMatchObject({ path: '/usr/bin/typescript-language-server', source: 'path' })
   })
 
+  it("on Windows, picks npm's sh shim over the .cmd that Git Bash can't run", () => {
+    const ts = BUILTIN_SERVERS.find((s) => s.id === 'typescript')!
+    const bin = join(root, 'node_modules', '.bin', 'typescript-language-server')
+    const exists = (p: string): boolean => p === bin || p === `${bin}.cmd`
+    expect(resolveServer(ts, { roots: [root], exists, env: { PATH: '' }, platform: 'win32' })?.path).toBe(bin)
+    const cmdOnly = (p: string): boolean => p === `${bin}.cmd`
+    expect(resolveServer(ts, { roots: [root], exists: cmdOnly, env: { PATH: '' }, platform: 'win32' })).toBeNull()
+  })
+
   it('detects a project by root marker or, for some languages, a top-level file', () => {
     const py = BUILTIN_SERVERS.find((s) => s.id === 'python')!
     const go = BUILTIN_SERVERS.find((s) => s.id === 'go')!
@@ -231,6 +240,19 @@ describe('LspClient against a fake server', () => {
     expect(c.state).toBe('dead')
     expect(c.deathReason).toMatch(/exited|closed|ended/)
     await expect(c.request('textDocument/hover', {})).rejects.toThrow(/not running/)
+  })
+
+  it('kills the whole process tree, not just the sandbox shell', async () => {
+    const spec = serverRegistry([FAKE_SERVER])[0]
+    const killTree = vi.fn((p: ChildProcess) => {
+      p.kill('SIGKILL')
+    })
+    const c = new LspClient({ server: resolveServer(spec)!, roots: [root], spawn: fakeSpawn(), killTree })
+    clients.push(c)
+    await c.start()
+    c.kill()
+    expect(killTree).toHaveBeenCalledTimes(1)
+    expect(c.state).toBe('stopped')
   })
 
   it('reports a server that fails to initialize', async () => {
@@ -362,7 +384,10 @@ describe('LspManager', () => {
     await m.noteWrite(file, [root])
     expect(c.openText(file)).toBe('two\n')
     writeFileSync(file, 'three\n')
-    await m.noteShell([root])
+    // A shell command only marks the server; the documents are re-read on next use.
+    m.noteShell([root])
+    expect(c.openText(file)).toBe('two\n')
+    expect(await m.clientFor(file, [root])).toBe(c)
     expect(c.openText(file)).toBe('three\n')
     rmSync(file)
     await m.noteWrite(file, [root])
@@ -428,8 +453,13 @@ describe('post-edit diagnostics', () => {
     const file = join(root, 'a.fk')
     const before = 'ERROR old\n'
     writeFileSync(file, before)
+    // A read never starts a server...
     await m.noteRead(file, [root])
+    expect(m.runningCount()).toBe(0)
+    // ...but warms one that is already running.
     const c = (await m.clientFor(file, [root]))!
+    await m.noteRead(file, [root])
+    expect(c.isOpen(file)).toBe(true)
     await vi.waitFor(() => expect(c.currentDiagnostics(file)).toHaveLength(1))
     writeFileSync(file, 'ERROR old\nERROR new\n')
     const r = await lspEditDiagnostics({ manager: m, abs: file, rel: 'a.fk', roots: [root], before, settleMs: 20 })
@@ -437,6 +467,20 @@ describe('post-edit diagnostics', () => {
     const methods = readFileSync(log, 'utf8').trim().split('\n')
     expect(methods.filter((x) => x === 'textDocument/didOpen')).toHaveLength(1)
     expect(methods.filter((x) => x === 'textDocument/didChange')).toHaveLength(1)
+  })
+
+  it('waits out a stale unversioned publish for the text before the change', async () => {
+    const m = makeManager({ FAKE_LSP_STALE: '1', FAKE_LSP_NO_VERSION: '1', FAKE_LSP_DIAG_DELAY_MS: '400' })
+    const file = join(root, 'a.fk')
+    const before = 'ERROR old\n'
+    writeFileSync(file, before)
+    const c = (await m.clientFor(file, [root]))!
+    await c.sync(file)
+    await vi.waitFor(() => expect(c.currentDiagnostics(file)).toHaveLength(1))
+    writeFileSync(file, 'ERROR old\nERROR new\n')
+    // The stale verdict (one error) lands at once; the real one (two) 400ms later.
+    const r = await lspEditDiagnostics({ manager: m, abs: file, rel: 'a.fk', roots: [root], before, settleMs: 50 })
+    expect(r.block).toContain('1 new error')
   })
 
   it('does not take diagnostics published for an older version as current', async () => {

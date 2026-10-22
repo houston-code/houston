@@ -464,8 +464,10 @@ check the agent's edits the way an editor would. After the agent writes a file t
 server covers, the tool result lists the errors the edit introduced (and up to five
 new warnings), so the agent can fix them in the same turn. Problems the file already
 had before the edit are left out, and a clean edit adds nothing. This is on by
-default whenever a server is installed; the agent reading a file starts its server in
-the background, so the check after the edit is usually quick.
+default whenever a server is installed. The first check in a conversation starts the
+server (a large project can take several seconds to load); after that, a file the
+agent reads is opened in the running server in the background, so later checks are
+usually quick.
 
 The same servers give the agent type-aware navigation tools, offered only when a
 server is installed for a language the project uses (so a project without one pays

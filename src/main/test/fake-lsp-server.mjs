@@ -12,6 +12,7 @@
 //   FAKE_LSP_INIT_DELAY_MS   delay before answering initialize
 //   FAKE_LSP_DEF_IMPORT=1    definition of an imported name answers with its import line
 //                            first (as TypeScript's server does); asked there, the declaration
+//   FAKE_LSP_STALE=1         on a change, first publish (unversioned) the verdict on the old text
 //
 // Diagnostics: every line containing ERROR yields an error, every line containing WARN
 // yields a warning, at the column where the word starts.
@@ -81,8 +82,16 @@ function publish(uri) {
   setTimeout(() => {
     const cur = docs.get(uri)
     if (!cur || cur.version !== version) return // superseded
+    send({
+      method: 'textDocument/publishDiagnostics',
+      params: { uri, ...(env.FAKE_LSP_NO_VERSION === '1' ? {} : { version }), diagnostics: diagnosticsOf(cur.text) }
+    })
+  }, Number(env.FAKE_LSP_DIAG_DELAY_MS ?? 20))
+}
+
+function diagnosticsOf(text) {
     const diagnostics = []
-    cur.text.split('\n').forEach((line, i) => {
+    text.split('\n').forEach((line, i) => {
       for (const [word, severity, message] of [
         ['ERROR', 1, 'something is broken'],
         ['WARN', 2, 'something looks off']
@@ -99,11 +108,7 @@ function publish(uri) {
         }
       }
     })
-    send({
-      method: 'textDocument/publishDiagnostics',
-      params: { uri, ...(env.FAKE_LSP_NO_VERSION === '1' ? {} : { version }), diagnostics }
-    })
-  }, Number(env.FAKE_LSP_DIAG_DELAY_MS ?? 20))
+    return diagnostics
 }
 
 function symbolsIn(uri) {
@@ -155,6 +160,10 @@ function handle(msg) {
     case 'textDocument/didChange': {
       const d = docs.get(p.textDocument.uri)
       if (!d) return
+      // A verdict on the previous text that was already on its way out, unversioned.
+      if (env.FAKE_LSP_STALE === '1') {
+        send({ method: 'textDocument/publishDiagnostics', params: { uri: p.textDocument.uri, diagnostics: diagnosticsOf(d.text) } })
+      }
       d.text = p.contentChanges[p.contentChanges.length - 1].text
       d.version = p.textDocument.version
       return publish(p.textDocument.uri)

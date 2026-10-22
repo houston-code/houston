@@ -13,6 +13,7 @@
  */
 import type { ChildProcess } from 'node:child_process'
 import { promises as fs } from 'node:fs'
+import { killProcessTree } from '../../sandbox'
 import { JsonRpcConnection } from './jsonrpc'
 import { extKey, type ResolvedServer } from './servers'
 import { fromUri, toUri } from './uri'
@@ -53,6 +54,12 @@ export interface LspClientOptions {
   requestTimeoutMs?: number
   /** Most documents kept open at once; the least recently used is closed past this. */
   maxOpenDocuments?: number
+  /**
+   * Kill the server and everything under it (default: the sandbox's killProcessTree,
+   * a process-group kill on POSIX and `taskkill /T` on Windows, where killing only the
+   * sandbox shell would leave the server running).
+   */
+  killTree?: (proc: ChildProcess) => void
 }
 
 interface OpenDoc {
@@ -76,6 +83,13 @@ type Waiter = () => void
 const DEFAULT_INIT_TIMEOUT_MS = 60_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_OPEN = 50
+/**
+ * The settle window for a publish that carries no document version. Such a publish
+ * could be the server's verdict on the text from before the change, already in flight
+ * when the change went out, so the window is long enough for the real one to follow
+ * and supersede it.
+ */
+export const UNVERSIONED_SETTLE_MS = 1000
 
 export type ClientState = 'idle' | 'starting' | 'ready' | 'dead' | 'stopped'
 
@@ -229,14 +243,9 @@ export class LspClient {
     const p = this.proc
     if (!p || p.exitCode !== null || p.signalCode !== null) return
     try {
-      if (p.pid !== undefined && process.platform !== 'win32') process.kill(-p.pid, 'SIGKILL')
-      else p.kill('SIGKILL')
+      ;(this.opts.killTree ?? killProcessTree)(p)
     } catch {
-      try {
-        p.kill('SIGKILL')
-      } catch {
-        // Already gone.
-      }
+      // Already gone.
     }
   }
 
@@ -371,10 +380,12 @@ export class LspClient {
 
   /** Re-sync every open document from disk (after a shell command that may have changed any file). */
   async refreshAll(): Promise<void> {
-    for (const uri of [...this.docs.keys()]) {
-      const abs = fromUri(uri)
-      if (abs) await this.refreshFromDisk(abs)
-    }
+    await Promise.all(
+      [...this.docs.keys()].map((uri) => {
+        const abs = fromUri(uri)
+        return abs ? this.refreshFromDisk(abs) : undefined
+      })
+    )
   }
 
   close(abs: string): void {
@@ -454,7 +465,11 @@ export class LspClient {
         if (this.state !== 'ready') return finish(fresh() ? (this.diags.get(uri)?.diagnostics ?? []) : null)
         if (!fresh()) return
         if (settleTimer) clearTimeout(settleTimer)
-        settleTimer = setTimeout(() => finish(this.diags.get(uri)?.diagnostics ?? []), settleMs)
+        const versioned = this.diags.get(uri)?.version !== undefined
+        settleTimer = setTimeout(
+          () => finish(this.diags.get(uri)?.diagnostics ?? []),
+          versioned ? settleMs : Math.max(settleMs, UNVERSIONED_SETTLE_MS)
+        )
       }
       const overall = setTimeout(() => finish(fresh() ? (this.diags.get(uri)?.diagnostics ?? []) : null), timeoutMs)
       set.add(check)
