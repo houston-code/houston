@@ -46,12 +46,14 @@ describe('CI revert guard', () => {
   })
 
   it('checks the merge result against the PR base, not the PR branch in isolation', () => {
-    // actions/checkout on a pull_request event lands on refs/pull/N/merge — this PR
-    // already merged into its base — so HEAD is the tree that merging would produce.
-    // Comparing origin/<base>..HEAD is therefore the real before/after. The base is main, or
-    // a release line for a backport or release PR, which a main comparison would misjudge.
-    expect(revertGuardJob).toContain('BASE: ${{ github.base_ref }}')
-    expect(revertGuardJob).toContain('node scripts/merge-revert-guard.mjs "origin/$BASE" HEAD')
+    // actions/checkout on a pull_request event lands on refs/pull/N/merge, this PR
+    // already merged into its base, so HEAD is the tree that merging would produce and
+    // HEAD^1 the tree it was built on. That pair is the real before/after for a PR on main,
+    // on a release line, or in a stack. A freshly fetched base branch is not: main moving
+    // after the merge ref was built (always, for a stacked PR, whose merge ref sits on a
+    // snapshot of main) makes everything that landed since look like a revert.
+    expect(revertGuardJob).toContain('run: node scripts/merge-revert-guard.mjs HEAD^1 HEAD')
+    expect(revertGuardJob).not.toContain('"origin/$BASE"')
   })
 
   it('fetches enough history for the guard to see recent work on the base', () => {
@@ -60,7 +62,6 @@ describe('CI revert guard', () => {
     // open. A depth-1 checkout would make that scan silently empty, and an empty scan
     // means the guard finds nothing and passes everything.
     expect(revertGuardJob).toContain('fetch-depth: 0')
-    expect(revertGuardJob).toContain('git fetch --no-tags --depth=100 origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"')
   })
 
   it('honors the intentional-revert label as the documented override', () => {
