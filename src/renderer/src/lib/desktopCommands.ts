@@ -1,8 +1,9 @@
 import { isReasoningEffort, type ReasoningEffort } from '@shared/agent'
 import { parseApprovalPolicy, type ApprovalPolicy } from '@shared/types'
+import { pageForWords, type TabId } from '../components/settings/pageIds'
 
-/** The Settings pages a command can open on. */
-export type SettingsSection = 'models' | 'mcp' | 'hooks' | 'permissions' | 'appearance'
+/** The Settings page a command opens on. */
+export type SettingsSection = TabId
 
 /**
  * What the desktop app does for one of the built-in commands it shares with the
@@ -13,7 +14,8 @@ export type SettingsSection = 'models' | 'mcp' | 'hooks' | 'permissions' | 'appe
  * here instead of being sent to the model as a message.
  */
 export type DesktopCommandAction =
-  | { kind: 'settings'; section: SettingsSection }
+  /** `query`: open on a settings search for these words. */
+  | { kind: 'settings'; section: SettingsSection; query?: string }
   | { kind: 'model'; query: string }
   | { kind: 'changes' }
   | { kind: 'undo' }
@@ -33,8 +35,12 @@ export type DesktopCommandAction =
 export function desktopCommandAction(name: string, args: string): DesktopCommandAction | null {
   const arg = args.trim()
   switch (name) {
-    case 'settings':
-      return { kind: 'settings', section: 'models' }
+    case 'settings': {
+      // `/settings permissions` opens that page; any other words open a search.
+      if (!arg) return { kind: 'settings', section: 'models' }
+      const page = pageForWords(arg)
+      return page ? { kind: 'settings', section: page } : { kind: 'settings', section: 'models', query: arg }
+    }
     case 'login':
       return { kind: 'settings', section: 'models' }
     case 'mcp':

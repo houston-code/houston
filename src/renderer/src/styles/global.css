@@ -5403,6 +5403,124 @@ body:has(.coachmark) .get-started {
   margin: 0;
   font-size: 17px;
 }
+/* ---- Settings as a full-window page ----
+   Covers the window like the app's own surface (no backdrop, no floating box),
+   with the same 38px draggable strip as the main titlebar so the window can still
+   be moved, and room on the left for the macOS window controls. */
+.settings-page {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  outline: none;
+}
+.settings-page__frame {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.settings-page__head {
+  height: 38px;
+  box-sizing: border-box;
+  padding: 0 14px;
+  background: var(--bg-elevated);
+  -webkit-app-region: drag;
+}
+.settings-page__head > * {
+  -webkit-app-region: no-drag;
+}
+/* Centered window title, as the main titlebar does; the status keeps to the right. */
+.settings-page__head {
+  position: relative;
+  justify-content: flex-end;
+}
+.settings-page__title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: none;
+}
+.settings-page__head .set-status {
+  margin: 0;
+}
+/* "Back to app": the first row of the sidebar, quiet like a nav item. */
+.set-nav__back {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  margin: 0 0 var(--space-3);
+  padding: 6px 10px 6px 8px;
+  background: none;
+  border: none;
+  border-radius: 8px;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.modal__nav .set-nav__back {
+  display: flex;
+  box-shadow: none;
+}
+.set-nav__back:hover {
+  background: var(--bg-input);
+  color: var(--text);
+}
+.set-nav__back:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+/* The page title replaces the first section's hairline as its top edge. */
+.set-page__title + .set-section {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+/* Each page opens with its own title, so it's clear where you are. */
+.set-page__title {
+  margin: 0 0 var(--space-5);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.settings-page--mac .settings-page__head {
+  padding-left: 84px;
+}
+.settings-page .modal__main {
+  flex: 1;
+  min-height: 0;
+}
+.settings-page .modal__nav {
+  width: 232px;
+  padding: 14px 10px;
+  background: var(--bg-elevated);
+}
+.settings-page .modal__body {
+  padding: 24px clamp(18px, 4vw, 48px) 48px;
+}
+/* Long lines read poorly at window width: keep the content to a readable measure. */
+.settings-page .modal__body > * {
+  max-width: 760px;
+}
+.settings-page .modal__foot {
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+}
+@media (max-width: 860px) {
+  .settings-page .modal__nav {
+    width: 196px;
+  }
+}
+
 /* Settings save state, beside the title: quiet unless something needs a look. */
 .set-status {
   margin: 0 auto 0 12px;
@@ -6592,6 +6710,15 @@ body:has(.coachmark) .get-started {
 }
 .set-nav__group + .set-nav__group {
   margin-top: var(--space-3);
+}
+/* About sits apart at the foot of the nav, under a hairline, not as a group. */
+.set-nav__footer {
+  margin-top: auto;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.set-nav__group + .set-nav__footer {
+  margin-top: auto;
 }
 .set-nav__heading {
   padding: 0 10px 2px;

@@ -205,6 +205,8 @@ export default function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false)
   // The section Settings opens on: a command like /theme lands on its own section.
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('models')
+  // A settings search to open on (`/settings <words>`).
+  const [settingsQuery, setSettingsQuery] = useState('')
   const [doctorOpen, setDoctorOpen] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
@@ -1680,6 +1682,7 @@ export default function App(): JSX.Element {
       switch (action.kind) {
         case 'settings':
           setSettingsSection(action.section)
+          setSettingsQuery(action.query ?? '')
           setSettingsOpen(true)
           return
         case 'model': {
@@ -2669,10 +2672,12 @@ export default function App(): JSX.Element {
           <SettingsModal
             initial={savedSettings ?? settings}
             initialTab={settingsSection}
+            initialQuery={settingsQuery}
             workspace={workspace}
             onClose={() => {
               setSettingsOpen(false)
               setSettingsSection('models')
+              setSettingsQuery('')
             }}
             onSaved={(s) => setSettings(s)}
             onShowScorecard={() => {
