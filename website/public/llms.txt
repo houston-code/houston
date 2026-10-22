@@ -21,6 +21,7 @@
 - Structural code search with a bundled ripgrep and ast-grep (syntax-tree matching), plus type-aware navigation (definitions, references, rename) and post-edit error checks through any installed language server (TypeScript, Python, Go, Rust, C/C++).
 - See its own localhost: start a dev server, screenshot the page, read the console, and iterate. A live preview panel docks beside the chat.
 - Subagents (read-only research, or approval-gated edits) and adversarial multi-agent review of your diff for correctness, security, and quality.
+- Clients: the desktop app, an interactive terminal, one-shot headless runs for scripts and CI, an Agent Client Protocol server (`houston --acp`) for ACP-capable editors, and a GitHub Action that answers @houston mentions, reviews pull requests, and fixes failed CI on your own runners.
 - Model Context Protocol (MCP) servers over stdio, HTTP, or SSE, including OAuth sign-in for hosted servers; custom agents (read-only by default) and on-demand skills defined in Markdown.
 
 ## Links

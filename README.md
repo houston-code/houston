@@ -71,8 +71,10 @@ Open source under the [Apache License 2.0](LICENSE).
   calls, declarations, and JSX without the false positives of a regex. Pass the
   language (`ts`, `tsx`, `py`, `rust`, …).
 - **Web search.** Pick a search provider and supply its API key (Settings →
-  *Web search*) and the agent can `web_search` the web for current information.
-  Like `web_fetch`, it requires approval since it leaves the machine.
+  *Tools* → *Web search*) and the agent can `web_search` the web for current
+  information. Like `web_fetch`, it asks before it leaves the machine (once per chat
+  in full auto, unless Settings → *Permissions* → *Web reads in full auto* lets it
+  run without asking).
 - **See its own localhost.** After starting a dev server (a background
   `run_shell`), the agent can `view_localhost` to load the page in an offscreen
   Electron window, screenshot it, and read back the browser console, closing the
@@ -80,8 +82,8 @@ Open source under the [Apache License 2.0](LICENSE).
   comes back through the same vision pipeline as pasted images, so a
   vision-capable model views it directly, and it shows inline in the transcript.
   Only loopback hosts (`localhost`, `127.0.0.1`, `::1`) are allowed (public URLs
-  go through `web_fetch`), and, being local network egress, it always prompts for
-  approval like `web_fetch`. Pass a `selector` to capture just one element. It can
+  go through `web_fetch`), and, being local network egress, it asks for approval
+  (once per host in full auto, and once more for a call that clicks or types). Pass a `selector` to capture just one element. It can
   also run steps first (fill a field, click, press a key, wait for an element,
   check that some text is or isn't shown) to try a flow such as logging in and get a
   pass or fail for each step, or capture the page at several viewports and color
@@ -121,18 +123,20 @@ Open source under the [Apache License 2.0](LICENSE).
   folder in a detected editor or reveals it in the file manager.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message, with no need to paste or describe where things live.
-- **Slash commands.** Type `/` for a command menu. Built-ins: `/new` (or `/clear`,
-  new chat), `/compact` (summarize older turns to free up context now), `/plan`
-  `/ask` `/auto` `/full` (switch approval mode), `/review` (adversarial review),
-  `/doctor` (check your setup), `/skills` and `/agents` (list them), `/agent <name>
-  <task>` (hand a task to one of your agents), and `/help`.
+- **Slash commands.** Type `/` for a command menu. The desktop app and the terminal
+  share one set of built-ins, among them `/new` (or `/clear`), `/compact` (summarize
+  older turns to free up context now), `/plan` `/ask` `/auto` `/full` (switch
+  approval mode), `/model`, `/reasoning`, `/review` (adversarial review), `/rewind`,
+  `/undo` and `/redo`, `/cost`, `/doctor` (check your setup), `/skills` and
+  `/agents` (list them), `/agent <name> <task>` (hand a task to one of your agents),
+  and `/help`; see the [terminal table](#interactive-terminal) for the rest.
   Any Markdown file in `.houston/commands/` (or `~/.houston/commands/` for every
   project) becomes a custom command: its contents are a prompt template
   (`$ARGUMENTS` is filled in with whatever you type after the command name, `$1`,
   `$2`, … with the individual words).
 - **Remember an instruction.** Start a message with `#` (`# always run the linter
   before committing`) and Houston appends it to the rules file it already reads,
-  `AGENTS.md` in the project or in `~/.claude` for everywhere.
+  `AGENTS.md` in the project or `~/.houston/AGENTS.md` for everywhere.
 - **Steer or queue while it works.** Keep typing while a run is in progress. **Enter**
   steers the running turn: the agent reads your message before its next step, and
   the message is labelled **Steered**. **⌘+Enter** (Ctrl+Enter on Windows and Linux)
@@ -160,8 +164,10 @@ Open source under the [Apache License 2.0](LICENSE).
   subagent's shell commands never get network access. On a host without an OS-enforced sandbox,
   each shell command the subagent runs would be unconfined, so it too is routed
   back to you as its own approval prompt, exactly like an unconfined command
-  from the main agent. While a subagent works, its row shows
-  live turn-by-turn progress in every client. Each report ends with an id the
+  from the main agent. While a subagent works, its row lists each step as it happens
+  (in every client); afterwards it expands to the rendered report, every step with
+  its result or diff, and the exact task, model, and tools it ran with, and **Open
+  transcript** shows the whole run. This record is saved with the chat. Each report ends with an id the
   agent can `resume` to send a follow-up into that subagent's context; a dispatch
   can pass `model` to run routine legwork on a cheaper sibling model, and a
   subagent can fan out one level of nested read-only researchers of its own.
@@ -250,7 +256,10 @@ Open source under the [Apache License 2.0](LICENSE).
   tools are connected, Houston **loads their schemas lazily**: above a threshold
   the agent gets a compact catalog plus a `find_tools` meta-tool and pulls in only
   the tool definitions it needs, instead of paying to send every schema on every
-  request (which matters when you bring your own metered API key).
+  request (which matters when you bring your own metered API key). Less common
+  built-in tools (the GitHub tools, scheduled runs, sessions, the localhost preview,
+  mockups, notebook editing, `ast_grep`, review, and writable subagents) load on
+  demand the same way, with approvals and rules applying exactly as before.
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
   watch it tick off items.
@@ -259,7 +268,7 @@ Open source under the [Apache License 2.0](LICENSE).
   opens/merges a pull request while the window isn't focused, and clicking it
   brings the app back. PR events also show inline in the transcript: a notice
   banner when `gh_pr_create` opens a PR and when a `gh_pr_view` shows it merged.
-  On by default; toggle it in Settings → *Appearance*.
+  On by default; toggle it in Settings → *General*.
 - **Rich transcript.** Replies render as full **Markdown**: headings, lists,
   tables, blockquotes, and syntax-styled code blocks with one-click copy. Tool
   activity collapses into a compact, grouped list (one tidy row per call,
@@ -302,6 +311,9 @@ Open source under the [Apache License 2.0](LICENSE).
   keys come from environment variables. See [Standalone CLI](#standalone-cli-no-desktop-app).
 - **GitHub Action.** Answer `@houston` mentions, review pull requests, and fix failed CI
   runs in GitHub Actions, on your runners with your key. See [GitHub Action](#github-action).
+- **Use it from your editor.** `houston --acp` speaks the Agent Client Protocol, so
+  any ACP-capable editor can run Houston as its agent, with the same sandbox,
+  approvals, and permission rules. See [Editor integration](#editor-integration-acp).
 - **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only:
   the agent researches and proposes a plan, with writes and shell commands
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
@@ -321,7 +333,7 @@ Open source under the [Apache License 2.0](LICENSE).
   asks at session start, and headless runs just note what's being ignored. The
   decision is bound to a fingerprint of the elevating config, so if the project
   later changes it (a pull adds a hook, say), trust drops and Houston asks again.
-  Review or reverse decisions any time: Settings > Workspace > Trusted folders
+  Review or reverse decisions any time: Settings > Permissions > Trusted folders
   (with a Forget button per folder), or `/trust` in the terminal (`/trust forget`
   clears the decision and asks again immediately).
   Trusted `allow` rules sit below your own rules, project hooks run after yours,
@@ -362,8 +374,8 @@ Open source under the [Apache License 2.0](LICENSE).
   with no `require`/`process`/network, hooks can't block or alter a call, and a
   throwing or slow plugin is caught and ignored. To *block* a tool, use a
   *PreToolUse* shell hook instead.
-- **Format on save (optional).** Turn on *Format on save* (Settings → *Tools &
-  Permissions*) and Houston runs the matching formatter on each file the agent writes:
+- **Format on save (optional).** Turn on *Format on save* (Settings → *Tools*)
+  and Houston runs the matching formatter on each file the agent writes:
   Prettier for JS/TS/JSON/CSS/Markdown, `gofmt`, `rustfmt`, and `ruff`/`black` for
   Python. The formatters are **optional, not bundled**: install the ones you want on
   your `PATH` and Houston uses them when present (it silently skips a file when its
@@ -449,9 +461,10 @@ Open source under the [Apache License 2.0](LICENSE).
   so it never overflows the model's context window. The threshold is sized from the
   selected model's context window, and the summary is saved with the conversation.
   The full transcript stays on screen: only what's sent to the model is compacted.
-  Set a fixed threshold or disable it in Settings → *Context window*.
+  Set a fixed threshold or disable it in Settings → *Agent Behavior* → *Context
+  window*.
 - **Multiple folders.** Beyond the project folder, add extra directories in
-  Settings → *Additional folders* that the agent may read and write; they're
+  Settings → *Workspace* → *Additional folders* that the agent may read and write; they're
   added to the file tools' allowed roots and the shell sandbox so it can work
   across more than one repo at once.
 - **Git-aware.** If the project is a git repo, Houston folds the current branch
@@ -500,10 +513,12 @@ Open source under the [Apache License 2.0](LICENSE).
     current project directory and pushed).
 
   It drives your local `gh`, so no token is stored
-  in the app and `gh` owns the credentials. Each call is **network**-gated
-  (always prompts for approval) and the mutating ones (PR/issue create, comment,
-  and state changes, PR review, merge, and checkout, repo create) are refused in
-  plan mode. Because these tools run `gh` *outside* the shell sandbox, they reach
+  in the app and `gh` owns the credentials. Reads (listing and viewing PRs, issues,
+  checks, and CI runs) run without asking in full auto; calls that post or update
+  something share one approval per repository, and merging, closing, checking out,
+  and creating a repository each ask on their own. The mutating ones (PR/issue
+  create, comment, and state changes, PR review, merge, and checkout, repo create)
+  are refused in plan mode. Because these tools run `gh` *outside* the shell sandbox, they reach
   the network on approval, unlike a raw `gh` in `run_shell`, which the sandbox keeps
   offline until the run is granted shell network. Houston tells the agent in its
   system prompt when `gh` is available, so it reaches for these instead of raw
@@ -821,17 +836,20 @@ turns on vim keys. A line starting with `!` runs in your own shell, and `#` save
 standing instruction. The [guide](docs/houston-guide.md#the-terminal-composer) lists
 every key.
 
-Slash commands adjust the session without restarting:
+Slash commands adjust the session without restarting (the desktop app accepts the
+same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 
 | Command | Effect |
 | --- | --- |
-| `/model [id]` | list configured models, or switch this chat's model (`providerId`, `providerId/model`, or a bare model id; add `--default` to also make it the default) |
+| `/model [id]` | pick this chat's model from a list, or switch straight to one (`providerId`, `providerId/model`, or a bare model id; add `--default` to also make it the default) |
 | `/login` (`/providers`) | set or update a provider's API key |
 | `/approval [policy]` | show or set this chat's policy (`plan` \| `ask` \| `auto-edit` \| `full-auto`; `--default` also sets the default) |
-| `/plan` | switch to plan mode |
+| `/plan`, `/ask`, `/auto`, `/full` | switch approval mode directly |
 | `/reasoning [level]` | show or set this chat's reasoning effort (`off` \| `low` \| `medium` \| `high` \| `xhigh`; `--default` also sets the default) |
 | `/clear`, `/new` | start a fresh conversation |
 | `/compact` | summarize older turns to free up context now |
+| `/retry` | run your last message again after a turn that failed |
+| `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/resume [query]` | list (or search by title) and reopen a saved session |
 | `/fork` | branch the current session into a copy, leaving the original intact |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
@@ -1114,7 +1132,7 @@ without building locally. A release is checked the same way before its release P
 Packaged builds check for updates via `electron-updater`, against the GitHub
 Releases feed configured in [`electron-builder.yml`](electron-builder.yml)
 (`publish:`). The check runs on launch, again every 6 hours while the app stays open,
-and on demand from **Settings → Updates** ("Check for updates") or the
+and on demand from **Settings → About → Updates** ("Check for updates") or the
 **Check for Updates…** menu item (the app menu on macOS, **Help** on Windows and Linux); when a newer version exists, a persistent banner
 appears at the top of the window until you dismiss it or update. (No-op in
 dev; set `HOUSTON_DISABLE_UPDATER=1` to turn it off.)
@@ -1214,10 +1232,12 @@ the agent loop and UI never depend on a specific provider.
 - **Human in the loop.** Writes and shell commands require approval unless you
   opt into a more autonomous policy. A new install starts in *full auto* only where
   the OS sandbox confines shell commands (macOS, Linux with bubblewrap), and in *ask*
-  elsewhere; an existing install keeps its saved mode. Network egress (`web_fetch`,
-  `web_search`, `view_localhost`) prompts per destination, even in *full auto*, since
-  it leaves the machine; choose *allow-for-the-run* to stop further prompts for that
-  destination that run. MCP and GitHub tool calls always ask. A shell command that can throw away
+  elsewhere; an existing install keeps its saved mode. Network egress prompts per
+  destination, even in *full auto*, since it leaves the machine (`web_fetch` once per
+  site, `web_search` once per chat, `view_localhost` once per host, GitHub writes once
+  per repository); *allow-for-the-run* covers only that destination. GitHub reads run
+  without asking in *full auto*, merges, closes, checkouts, and repository creation
+  always ask, and MCP tool calls always ask. A shell command that can throw away
   work in the project (`git reset --hard`, a forced `git clean`, `rm -r` of source, a
   forced or deleting push), and reading or changing a credential file (a `.env`, a
   private key), ask in every mode, since the sandbox protects everything but the

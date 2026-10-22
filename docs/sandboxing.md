@@ -106,7 +106,7 @@ the hostname is visible either way, which is exactly the granularity a per-domai
 allow/deny needs. Bodies stay opaque; no masking (MITM) proxy, no trust-store changes.
 
 The policy ([`src/shared/egress.ts`](../src/shared/egress.ts), user-visible in
-Settings → Sandbox egress) is: deny entries win over every allow; user allow entries
+Settings → Permissions → Sandbox egress) is: deny entries win over every allow; user allow entries
 extend a built-in allowlist of dev infrastructure (package registries, VCS hosts);
 every entry covers its subdomains on label boundaries; anything else is refused with
 an `EGRESS_BLOCKED` body that names the host. The proxy re-reads settings per request,
