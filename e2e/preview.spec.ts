@@ -1,23 +1,11 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
-import electronPath from 'electron'
-import { _electron as electron, expect, test, type ElectronApplication } from '@playwright/test'
+import { expect, test, type ElectronApplication } from '@playwright/test'
+import { launchApp } from './launch'
 
-const ROOT = join(__dirname, '..')
 const ART = process.env.PREVIEW_ART_DIR ?? mkdtempSync(join(tmpdir(), 'houston-preview-'))
-
-function resolveLaunch(): { executablePath: string; args: string[] } {
-  for (const dir of ['mac-arm64', 'mac', 'mac-universal']) {
-    const bin = join(ROOT, 'release', dir, 'Houston.app', 'Contents', 'MacOS', 'Houston')
-    if (existsSync(bin)) return { executablePath: bin, args: [] }
-  }
-  return {
-    executablePath: electronPath as unknown as string,
-    args: [join(ROOT, 'out', 'main', 'index.js')]
-  }
-}
 
 // A tiny loopback dev server with a recognizable page, so a screenshot of the
 // pane unambiguously proves the live page rendered (not just that a box exists).
@@ -73,14 +61,8 @@ async function inspectPanes(
 }
 
 test('preview dock renders a live dev server and enforces its limits', async () => {
-  const { executablePath, args } = resolveLaunch()
-  const userDataDir = mkdtempSync(join(tmpdir(), 'houston-e2e-'))
   const real = await startFakeServer('HOUSTON PREVIEW OK')
-
-  const app: ElectronApplication = await electron.launch({
-    executablePath,
-    args: [...args, `--user-data-dir=${userDataDir}`]
-  })
+  const { app, close } = await launchApp()
 
   try {
     const window = await app.firstWindow()
@@ -148,8 +130,7 @@ test('preview dock renders a live dev server and enforces its limits', async () 
 
     console.log('ARTIFACTS_DIR', ART)
   } finally {
-    await app.close()
+    await close()
     real.close()
-    rmSync(userDataDir, { recursive: true, force: true })
   }
 })

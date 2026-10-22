@@ -216,10 +216,12 @@ once the prompt no longer says what to fix, the shortest path to a green
 rather than merely forbidden. Set `verifyFiles` if a task's spec is spread over
 more than the default `test.mjs`.
 
-There's also an end-to-end smoke test in [`e2e/`](e2e/) that launches the real
-Electron app with Playwright and checks the UI mounts. `npm run test:e2e` builds
-first, then prefers the packaged app from `npm run dist` (in `release/`) and
-falls back to the `out/` bundle:
+There's also an end-to-end suite in [`e2e/`](e2e/) that launches the real
+Electron app with Playwright. `npm run test:e2e` builds first, then prefers the
+packaged app from `npm run dist` (in `release/`) and falls back to the `out/`
+bundle. In CI a missing packaged app is a failure, not a fallback. Launch the app
+through `launchApp()` in [`e2e/launch.ts`](e2e/launch.ts), which isolates userData
+and turns the updater off:
 
 ```bash
 npm run test:e2e

@@ -5,7 +5,7 @@ import { defineConfig } from '@playwright/test'
  * the suite drives the real app via Playwright's `_electron` launcher. It needs
  * the app built; `npm run test:e2e` builds first, then the spec prefers the
  * packaged app from `npm run dist` (in `release/`) and falls back to the
- * unpackaged `out/` bundle (see `e2e/smoke.spec.ts`).
+ * unpackaged `out/` bundle locally; in CI a missing packaged app fails (see `e2e/launch.ts`).
  */
 export default defineConfig({
   testDir: './e2e',
