@@ -8,6 +8,7 @@ import {
 } from '@shared/usage'
 import { anthropicThinksByDefault } from '@shared/model-facts'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
+import { Icon } from './Icon'
 import { branchNameError, canCreateWorktree } from '../lib/worktree'
 import { baseName } from '../lib/paths'
 import { ModelPicker } from './ModelPicker'
@@ -118,8 +119,9 @@ export function ControlBar({
         className="control control--ws"
         onClick={onChangeWorkspace}
         title="Change project folder"
+        aria-label={folderLabel ? `Project folder: ${folderLabel}. Change` : 'Choose project folder'}
       >
-        <span className="control__icon">📁</span>
+        <Icon name="folder" className="control__icon" />
         <span className="control__text">{folderLabel ?? 'Choose folder…'}</span>
       </button>
 
@@ -157,8 +159,9 @@ export function ControlBar({
                 repoInfo.currentBranch ?? 'detached HEAD'
               }`}
             >
+              <Icon name="gitBranch" size={13} className="control__icon" />
               <span className="control__text">
-                ⑂ {repoInfo.currentBranch ?? 'detached HEAD'}
+                {repoInfo.currentBranch ?? 'detached HEAD'}
                 {repoInfo.unborn ? ' (no commits yet)' : ''}
               </span>
             </span>
@@ -175,7 +178,8 @@ export function ControlBar({
                 checked={worktreeMode}
                 onChange={(e) => onToggleWorktree(e.target.checked)}
               />
-              <span>⑂ New worktree</span>
+              <Icon name="gitBranch" size={13} className="control__icon" />
+              <span>New worktree</span>
             </label>
           )}
 
@@ -201,7 +205,8 @@ export function ControlBar({
           className="control control--branch"
           title={`This chat runs in a worktree on branch ${currentWorktree.branch}`}
         >
-          <span className="control__text">⑂ {currentWorktree.branch}</span>
+          <Icon name="gitBranch" size={13} className="control__icon" />
+          <span className="control__text">{currentWorktree.branch}</span>
         </span>
       )}
 

@@ -317,7 +317,8 @@ function ConvRow({
             <>
               {baseName(conv.worktree.repoRoot)}{' '}
               <span className="conv__branch" title={`Worktree on branch ${conv.worktree.branch}`}>
-                ⑂ {conv.worktree.branch}
+                <Icon name="gitBranch" size={11} className="conv__branch-icon" />
+                {conv.worktree.branch}
               </span>
             </>
           ) : (
@@ -368,7 +369,7 @@ function ConvRow({
                 close()
               }}
             >
-              ⑂ Fork
+              <Icon name="gitBranch" /> Fork
             </button>
             <button
               className="menu__item"
@@ -814,7 +815,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           title="Settings"
           aria-label="Settings"
         >
-          ⚙︎
+          <Icon name="settings" size={16} />
         </button>
       </aside>
     )
@@ -884,7 +885,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           <Icon name="import" /> Import chat
         </button>
         <button className="btn btn--sm sidebar__settings" onClick={props.onOpenSettings}>
-          ⚙︎ Settings
+          <Icon name="settings" /> Settings
         </button>
       </div>
     </aside>

@@ -4,6 +4,7 @@ import { chooseShipAction, type ShipAction } from '@shared/shipAction'
 import { useInitGitRepo } from '../hooks/useInitGitRepo'
 import { DiffView } from './DiffView'
 import { useFocusTrap } from '../lib/useFocusTrap'
+import { Icon } from './Icon'
 
 /** Below this many files the list starts fully expanded; above it, collapsed. */
 const AUTO_EXPAND_LIMIT = 8
@@ -137,8 +138,9 @@ export function DiffPanel({
             onClick={() => void load()}
             disabled={loading}
             title="Refresh"
+            aria-label="Refresh"
           >
-            ⟳
+            <Icon name="refresh" />
           </button>
           <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close" data-autofocus>
             ✕

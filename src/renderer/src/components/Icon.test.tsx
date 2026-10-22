@@ -26,4 +26,9 @@ describe('Icon', () => {
     expect(svg).toHaveAttribute('height', '20')
     expect(svg).toHaveClass('icon', 'extra')
   })
+
+  it.each(['settings', 'refresh', 'diff'] as const)('draws the %s icon', (name) => {
+    const { container } = render(<Icon name={name} />)
+    expect(container.querySelector(`svg[data-icon="${name}"]`)!.children.length).toBeGreaterThan(0)
+  })
 })
