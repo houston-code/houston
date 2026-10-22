@@ -76,25 +76,33 @@ async function cleanUp(step: () => Promise<unknown>, s: Settings): Promise<void>
  * can create a new one, and only a guard holder removes it, so the check can't go
  * stale before the delete. A guard left by a process that died is cleared after
  * `staleMs`, like the lock itself.
+ *
+ * Resolves true once the abandoned lock is gone (removed here, or released
+ * meanwhile), so the caller can retry it at once. False means it is still there or
+ * the guard is busy (another waiter is taking over, or Windows refused a step), and
+ * the caller waits as for a busy lock: retrying at once would spin until that waiter
+ * finishes, or for up to `staleMs` if it died holding the guard.
  */
-async function takeOverStale(lock: string, staleContent: string, s: Settings): Promise<void> {
+async function takeOverStale(lock: string, staleContent: string, s: Settings): Promise<boolean> {
   const guard = `${lock}.takeover`
   try {
     await fs.writeFile(guard, '', { flag: 'wx' })
   } catch (err) {
-    if (code(err) !== 'EEXIST') return
+    if (code(err) !== 'EEXIST') return false
     try {
       if (Date.now() - (await fs.stat(guard)).mtimeMs > s.staleMs) await fs.unlink(guard)
     } catch {
       /* gone already */
     }
-    return // another waiter is taking over; retry the lock
+    return false // another waiter is taking over
   }
   try {
     const [st, content] = await Promise.all([fs.stat(lock), fs.readFile(lock, 'utf8')])
-    if (content === staleContent && Date.now() - st.mtimeMs > s.staleMs) await fs.unlink(lock)
-  } catch {
-    /* released or taken over already */
+    if (content !== staleContent || Date.now() - st.mtimeMs <= s.staleMs) return false // taken over already
+    await fs.unlink(lock)
+    return true
+  } catch (err) {
+    return code(err) === 'ENOENT' // released meanwhile
   } finally {
     await cleanUp(() => fs.unlink(guard), s)
   }
@@ -124,10 +132,9 @@ export async function withFileLock<T>(
     if (code(busy) === 'EEXIST') {
       try {
         const [st, content] = await Promise.all([fs.stat(lock), fs.readFile(lock, 'utf8')])
-        if (Date.now() - st.mtimeMs > staleMs) {
-          await takeOverStale(lock, content, s) // abandoned by a process that died mid-save
-          continue
-        }
+        // Abandoned by a process that died mid-save: retry at once if the takeover
+        // cleared it, otherwise wait below like a busy lock.
+        if (Date.now() - st.mtimeMs > staleMs && (await takeOverStale(lock, content, s))) continue
       } catch (err) {
         // Released between our attempt and the check: try again now. Anything else
         // (a lock we can't read yet) waits like a busy one rather than spinning.

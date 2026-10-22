@@ -119,6 +119,38 @@ describe('withFileLock', () => {
     }
   })
 
+  it('waits out another waiter mid-takeover and honors the timeout instead of spinning', async () => {
+    writeFileSync(`${target}.lock`, 'dead')
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(`${target}.lock`, old, old)
+    writeFileSync(`${target}.lock.takeover`, '') // fresh: its holder is still at it
+    let ran = false
+    const start = Date.now()
+    await expect(
+      withFileLock(
+        target,
+        () => {
+          ran = true
+        },
+        { timeoutMs: 80, retryMs: 10, staleMs: 3_000 }
+      )
+    ).rejects.toThrow(/being saved by another Houston window/)
+    expect(Date.now() - start).toBeLessThan(1_500) // not held until the guard goes stale
+    expect(ran).toBe(false)
+    expect(readFileSync(`${target}.lock`, 'utf8')).toBe('dead') // the guard holder's to remove
+    expect(existsSync(`${target}.lock.takeover`)).toBe(true)
+  })
+
+  it('clears a takeover guard left by a waiter that died, then takes over', async () => {
+    const old = new Date(Date.now() - 60_000)
+    for (const f of [`${target}.lock`, `${target}.lock.takeover`]) {
+      writeFileSync(f, 'dead')
+      utimesSync(f, old, old)
+    }
+    expect(await withFileLock(target, () => 'ok', { staleMs: 30_000, retryMs: 1 })).toBe('ok')
+    expect(readdirSync(dir)).toEqual([])
+  })
+
   it('gives up on a busy lock after the timeout without running the callback', async () => {
     writeFileSync(`${target}.lock`, 'busy')
     let ran = false
@@ -251,6 +283,18 @@ describe('withFileLock with Windows file errors', () => {
     expect(await withFileLock(target, () => 'ok', { platform: 'win32', retryMs: 1 })).toBe('ok')
     expect(remove.calls).toBe(3)
     expect(existsSync(`${target}.lock`)).toBe(false)
+  })
+
+  it('waits between takeovers while Windows refuses to remove the stale lock', async () => {
+    writeFileSync(`${target}.lock`, 'dead')
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(`${target}.lock`, old, old)
+    const remove = failOn('unlink', `${target}.lock`, 'EPERM', (n) => n <= 2)
+    const start = Date.now()
+    expect(await withFileLock(target, () => 'ok', { platform: 'win32', retryMs: 50 })).toBe('ok')
+    expect(Date.now() - start).toBeGreaterThanOrEqual(80) // slept after each refusal
+    expect(remove.calls).toBe(4) // two refused, the takeover, our release
+    expect(readdirSync(dir)).toEqual([])
   })
 
   it('keeps trying to remove the takeover guard while Windows reports it busy', async () => {
