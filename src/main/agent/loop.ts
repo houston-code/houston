@@ -28,7 +28,8 @@ import {
   sanitizeApprovalNote,
   MAX_STEER_TEXT,
   MAX_PENDING_STEERS,
-  isReasoningEffort
+  isReasoningEffort,
+  MAX_UNANSWERED_RUNS
 } from '@shared/agent'
 import type { FileDiffPreview } from '@shared/diff'
 import {
@@ -55,6 +56,7 @@ import {
   setModelUnavailable
 } from '../agentHost'
 import { createSecretRedactor } from './redact'
+import { log } from '../logger'
 import { runQuarantineExtraction } from './untrusted'
 import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
@@ -831,6 +833,84 @@ function startingTurn(messages: ChatMessage[]): { index: number; fp: string } | 
 }
 
 /**
+ * Why a run ended without finishing, for the app log. `aborted` is the user's Stop;
+ * the rest are the failure paths of {@link startRun}, so a run that ended with no
+ * reply can be told apart in `houston.log` (a provider failure, a rejected start,
+ * a model that can't call tools) without the conversation itself.
+ */
+export type RunEndClass =
+  | 'aborted'
+  | 'run-in-progress'
+  | 'rewind-in-progress'
+  | 'workspace-missing'
+  | 'unknown-provider'
+  | 'provider-unusable'
+  | 'hook-blocked'
+  | 'context-overflow'
+  | 'model-not-found'
+  | 'tools-unsupported'
+  | 'provider-error'
+  | 'unexpected'
+
+/** Longest error detail one run-end log line carries. */
+const RUN_END_DETAIL_MAX = 300
+
+/**
+ * Log how a run ended without finishing: which conversation, run, provider and
+ * model, and the class of the failure. Never the conversation's messages: `detail`
+ * is only ever an error's own text, already passed through the run's secret
+ * redactor where it has one (the logger's redactor runs on it again). A Stop is
+ * routine, so it logs at INFO; every failure at WARN.
+ */
+function logRunEnd(
+  where: { runId: string; conversationId?: string; providerId: string; model: string },
+  cls: RunEndClass,
+  detail?: string
+): void {
+  // Ids come from the client: keep each one a single short token, so one can't
+  // pose as another field of the line.
+  const id = (v: string | undefined): string => (v ? v.replace(/\s+/g, '_').slice(0, 120) : '-')
+  const parts = [
+    `agent run ended without finishing: class=${cls}`,
+    `conversation=${id(where.conversationId)}`,
+    `run=${id(where.runId)}`,
+    `provider=${id(where.providerId)}`,
+    `model=${id(where.model)}`
+  ]
+  if (detail) {
+    const clipped = detail.length > RUN_END_DETAIL_MAX ? `${detail.slice(0, RUN_END_DETAIL_MAX - 1)}\u2026` : detail
+    parts.push(`detail=${JSON.stringify(clipped)}`)
+  }
+  const line = parts.join(' ')
+  if (cls === 'aborted') log.info(line)
+  else log.warn(line)
+}
+
+/** A provider failure for the log: its HTTP status and error name, when known, then its (redacted) text. */
+function providerFailureDetail(e: unknown, text: string): string {
+  const status = (e as { status?: unknown } | null)?.status
+  const name = e instanceof Error ? e.name : typeof e
+  return `${typeof status === 'number' ? `status=${status} ` : ''}${name}: ${text}`
+}
+
+/**
+ * The log with a record of a run that ended without a reply, put on its last
+ * message (the one the run started from) so every client can say why on reload.
+ * Display-only; providers never read it.
+ */
+export function withUnansweredRecord(
+  messages: ChatMessage[],
+  end: { reason: 'error' | 'aborted'; message?: string },
+  now: Date = new Date()
+): ChatMessage[] {
+  const last = messages.at(-1)
+  if (!last) return messages
+  const record = { reason: end.reason, ...(end.message ? { message: end.message } : {}), at: now.toISOString() }
+  const unanswered = [...(last.unanswered ?? []), record].slice(-MAX_UNANSWERED_RUNS)
+  return [...messages.slice(0, -1), { ...last, unanswered }]
+}
+
+/**
  * Run the agent loop, streaming events via `send`. Never throws — errors become events.
  * `onMessages` is called whenever the message log grows, so the caller can persist it.
  */
@@ -851,13 +931,19 @@ export async function startRun(
   // onMessages writes would corrupt the persisted log. The UI also guards this
   // (it re-adopts a live run on re-open rather than starting a new one), but a
   // second start must fail loudly here regardless of how it was triggered.
+  //
+  // Neither refusal touches the conversation: the log belongs to the run (or rewind)
+  // in progress, and writing to it here is the interleaving this guard prevents. The
+  // app log is this case's record.
   if (conversationId && runsByConversation.has(conversationId)) {
+    logRunEnd({ ...req, runId }, 'run-in-progress')
     send({ runId, type: 'error', message: 'A run is already in progress for this conversation.' })
     return
   }
   // A rewind rewrites the log and the files under it; a run started mid-rewind would
   // work from the log it is about to replace.
   if (conversationId && rewindInProgress(conversationId)) {
+    logRunEnd({ ...req, runId }, 'rewind-in-progress')
     send({ runId, type: 'error', message: 'This conversation is being rewound. Send again once it finishes.' })
     return
   }
@@ -911,12 +997,25 @@ export async function startRun(
   // installed and built before its provider failed still shows what it did. Cleared
   // before it runs, so the receipt's own emit can't re-enter it.
   let beforeEnd: (() => void) | undefined
+  // How the run ended, when it didn't finish: the error it failed on (classified by
+  // the `fail` call that emitted it) or the user's Stop. Logged, and recorded on the
+  // turn when the run left no reply, by the `finally` below.
+  let ended: { cls: RunEndClass; message?: string; detail?: string } | undefined
+  // The class (and log detail) of the error `emit` is about to send; set by `fail`.
+  let failing: { cls: RunEndClass; detail?: string } | undefined
+  // The model serving the run, for the log line; moves with a fallback hop.
+  let serving = { providerId: req.providerId, model: req.model }
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void => {
     if ((e.type === 'done' || e.type === 'error') && beforeEnd) {
       const finish = beforeEnd
       beforeEnd = undefined
       finish()
+    }
+    if (!ended && e.type === 'error') {
+      ended = { cls: failing?.cls ?? 'unexpected', message: e.message, detail: failing?.detail ?? e.message }
+    } else if (!ended && e.type === 'done' && e.stopReason === 'aborted') {
+      ended = { cls: 'aborted' }
     }
     const full = { ...(e as object), runId } as AgentEvent
     // Buffer what streams this round so a renderer that re-opens the conversation
@@ -935,9 +1034,22 @@ export async function startRun(
     onMessages?.(msgs)
   }
 
+  // End the run on an error of a known class. `detail` is what the app log gets in
+  // place of the user-facing message, when the raw cause says more.
+  const fail = (
+    cls: RunEndClass,
+    e: { message: string; modelUnavailable?: { providerId: string; model: string } },
+    detail?: string
+  ): void => {
+    failing = { cls, ...(detail !== undefined ? { detail } : {}) }
+    emit({ type: 'error', ...e })
+  }
+
   // Hoisted above the try so the `finally` can backfill results for any tool call
   // left dangling by an interruption (see the repair calls below).
   const messages: ChatMessage[] = [...req.messages]
+  // Replies already in the log, so the `finally` can tell whether this run added one.
+  const repliesAtStart = req.messages.filter((m) => m.role === 'assistant').length
   // Scrubs an unexpected error's message before it reaches the client (see the catch
   // below). Swapped for the run's secret redactor once that is built.
   let scrubError = (text: string): string => text
@@ -949,13 +1061,13 @@ export async function startRun(
     try {
       workspace = realpathSync(req.workspace)
     } catch {
-      emit({ type: 'error', message: 'The selected project folder does not exist.' })
+      fail('workspace-missing', { message: 'The selected project folder does not exist.' })
       return
     }
 
     const providerConfig = getProvider(req.providerId)
     if (!providerConfig) {
-      emit({ type: 'error', message: `Unknown provider: ${req.providerId}` })
+      fail('unknown-provider', { message: `Unknown provider: ${req.providerId}` })
       return
     }
     // Everything about "which model is serving this run" travels together: swap one
@@ -998,9 +1110,9 @@ export async function startRun(
       // Reproduce the specific key error rather than the generic skip above.
       try {
         createProvider(providerConfig)
-        emit({ type: 'error', message: `Unknown provider: ${req.providerId}` })
+        fail('unknown-provider', { message: `Unknown provider: ${req.providerId}` })
       } catch (e) {
-        emit({ type: 'error', message: (e as Error).message })
+        fail('provider-unusable', { message: (e as Error).message })
       }
       return
     }
@@ -1038,6 +1150,7 @@ export async function startRun(
         beforeHop?.()
         emit({ type: 'model_fallback', from: route.label, to: resolved.label, reason })
         route = resolved
+        serving = { providerId: resolved.providerId, model: resolved.model }
         return true
       }
       return false
@@ -2660,10 +2773,12 @@ export async function startRun(
     // gets its note shown.
     emitHookNotice(promptSubmit)
     if (promptSubmit.blocked) {
-      emit({
-        type: 'error',
-        message: `Blocked by a UserPromptSubmit hook:\n${promptSubmit.message || '(no output)'}`
-      })
+      // The hook's output can quote the prompt, so the log gets the class alone.
+      fail(
+        'hook-blocked',
+        { message: `Blocked by a UserPromptSubmit hook:\n${promptSubmit.message || '(no output)'}` },
+        ''
+      )
       return
     }
     if (promptSubmit.additionalContext && lastUser && typeof lastUser.content === 'string') {
@@ -2891,6 +3006,8 @@ export async function startRun(
             emit({ type: 'done', stopReason: 'aborted' })
             return
           }
+          // What the app log records of this failure, should it end the run.
+          const logDetail = (): string => providerFailureDetail(e, redact(describeProviderError(e)))
           // Context overflow: the request is simply too big for the window. Retrying
           // it unchanged is futile and failing the run is worse than shrinking it, so
           // (when nothing has streamed) shrink it and retry: stub stale tool results
@@ -2925,13 +3042,12 @@ export async function startRun(
               attempt = -1 // fresh transient-retry budget for the new model
               continue streaming
             }
-            emit({
-              type: 'error',
+            fail('context-overflow', {
               message:
                 "The conversation is too large for this model's context window, even after " +
                 'compacting older messages. Start a new conversation, remove large attachments, ' +
                 'or switch to a model with a larger context window.'
-            })
+            }, logDetail())
             return
           }
           // The provider doesn't serve this model id: mistyped, retired, or not open to
@@ -2948,25 +3064,23 @@ export async function startRun(
               continue streaming
             }
             const providerName = getProvider(missing.providerId)?.label ?? missing.providerId
-            emit({
-              type: 'error',
+            fail('model-not-found', {
               message:
                 `${providerName} doesn't recognize the model "${missing.model}": it may be mistyped, ` +
                 'retired, or not available to this key. Pick another model and retry.',
               modelUnavailable: { providerId: missing.providerId, model: missing.model }
-            })
+            }, logDetail())
             return
           }
           // The model can't do tool calling, which the agent requires. The raw API
           // string ("<model> does not support tools") is opaque — point the user at
           // a tool-capable model instead. Fatal, so don't retry.
           if (isToolsUnsupportedError(e)) {
-            emit({
-              type: 'error',
+            fail('tools-unsupported', {
               message:
                 `The selected model "${route.model}" doesn't support tool calling, which this agent ` +
                 'requires. Pick a tool-capable model (e.g. qwen2.5-coder, llama3.1, mistral-nemo).'
-            })
+            }, logDetail())
             return
           }
           const reason = redact(describeProviderError(e))
@@ -3008,7 +3122,7 @@ export async function startRun(
               attempt = -1 // fresh transient-retry budget for the new model
               continue streaming
             }
-            emit({ type: 'error', message: reason })
+            fail('provider-error', { message: reason }, logDetail())
             return
           }
           discardPartial()
@@ -4015,7 +4129,7 @@ export async function startRun(
       emit({ type: 'done', stopReason: 'aborted' })
     } else {
       const detail = e instanceof Error ? e.message : String(e)
-      emit({ type: 'error', message: scrubError(`The turn stopped on an unexpected error: ${detail}`) })
+      fail('unexpected', { message: scrubError(`The turn stopped on an unexpected error: ${detail}`) })
     }
   } finally {
     // A turn stopped mid-tool — the user hit Stop, or an exception unwound after
@@ -4027,6 +4141,22 @@ export async function startRun(
     if (repaired !== messages) {
       messages.splice(0, messages.length, ...repaired)
       persist(messages)
+    }
+    // A run that failed or was stopped leaves a trace in the app log, and, when it
+    // ended before the model replied, a record on the turn it started from: without
+    // one, a message that got no answer looks the same after a reload whether the
+    // provider failed, the model couldn't call tools, or the user hit Stop.
+    if (ended) {
+      logRunEnd({ runId, conversationId, ...serving }, ended.cls, ended.detail)
+      const replies = messages.filter((m) => m.role === 'assistant').length
+      if (replies === repliesAtStart && messages.length) {
+        const recorded = withUnansweredRecord(
+          messages,
+          ended.cls === 'aborted' ? { reason: 'aborted' } : { reason: 'error', message: ended.message }
+        )
+        messages.splice(0, messages.length, ...recorded)
+        persist(messages)
+      }
     }
     // Steers accepted but never read: the run ended (Stop, an error, a step limit, a
     // stall stop) before the next iteration boundary could take them. steerRun told

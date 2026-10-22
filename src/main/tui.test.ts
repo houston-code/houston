@@ -101,7 +101,8 @@ import {
   type ResumeEntry,
   renderRewindPoints,
   parseRewindSelection,
-  parseRewindMode
+  parseRewindMode,
+  unansweredNotice
 } from './tui'
 import type { PickerOutcome, PickerSpec } from './tui-picker'
 import { COMMANDS } from './tui-complete'
@@ -5551,5 +5552,27 @@ describe('propose_session in the terminal', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('proposed a session: Update API docs. /proposals to start it')
+  })
+})
+
+describe('unansweredNotice', () => {
+  it('says why the last message got no reply, from its latest record', () => {
+    const at = '2026-10-22T00:00:00.000Z'
+    expect(unansweredNotice([{ role: 'user', content: 'hi' }])).toBeNull()
+    expect(
+      unansweredNotice([{ role: 'user', content: 'hi', unanswered: [{ reason: 'error', message: 'boom\u001b[31m', at }] }])
+    ).toBe('· the last message got no reply: boom[31m')
+    expect(
+      unansweredNotice([
+        { role: 'user', content: 'hi', unanswered: [{ reason: 'error', message: 'boom', at }, { reason: 'aborted', at }] }
+      ])
+    ).toBe('· the last message got no reply: it was stopped')
+    // Only the last message counts: an earlier record was followed by more turns.
+    expect(
+      unansweredNotice([
+        { role: 'user', content: 'hi', unanswered: [{ reason: 'aborted', at }] },
+        { role: 'user', content: 'again' }
+      ])
+    ).toBeNull()
   })
 })

@@ -7,6 +7,7 @@ import {
   type ReviewFinding
 } from '@shared/agent'
 import {
+  endsWithRecordedError,
   itemsFromMessages,
   lastUserText,
   rewindTargets,
@@ -24,6 +25,28 @@ import { rewindableTurnIndices } from '@shared/rewind'
 import { describeTool } from './toolDisplay'
 
 describe('itemsFromMessages', () => {
+  it('shows why a message got no reply, one notice per run that ended without one', () => {
+    const messages: ChatMessage[] = [
+      {
+        role: 'user',
+        content: 'do it',
+        unanswered: [
+          { reason: 'error', message: 'Provider overloaded', at: '2026-10-22T00:00:00.000Z' },
+          { reason: 'aborted', at: '2026-10-22T00:01:00.000Z' }
+        ]
+      }
+    ]
+    const items = itemsFromMessages(messages)
+    expect(items.map((i) => i.kind)).toEqual(['user', 'notice', 'notice'])
+    expect(items[1]).toMatchObject({ kind: 'notice', text: 'Provider overloaded', tone: 'error' })
+    expect(items[2]).toMatchObject({ kind: 'notice', text: 'Stopped.', tone: 'info' })
+    expect(endsWithRecordedError(messages, 'Provider overloaded')).toBe(false) // the latest was a Stop
+    const failedLast: ChatMessage[] = [{ ...messages[0], unanswered: messages[0].unanswered?.slice(0, 1) }]
+    expect(endsWithRecordedError(failedLast, 'Provider overloaded')).toBe(true)
+    expect(endsWithRecordedError(failedLast, 'something else')).toBe(false)
+    expect(endsWithRecordedError([{ role: 'user', content: 'x' }], 'Provider overloaded')).toBe(false)
+  })
+
   it('flags the compaction summary turn so it renders as markdown', () => {
     const summary = '- did a thing\n- learned a fact'
     const messages: ChatMessage[] = [

@@ -20,9 +20,15 @@ function sameUserTurn(a: ChatMessage, b: ChatMessage): boolean {
  * that message instead of stacking an identical copy the model would then read twice.
  * A different message is appended as before: the user may be adding to what they
  * asked, and adjacent user turns are folded together on the way to the provider.
+ *
+ * The replaced message's record of why its earlier runs got no reply moves onto the
+ * resend, so retrying doesn't erase the history of what failed.
  */
 export function appendUserTurn(messages: ChatMessage[], next: ChatMessage): ChatMessage[] {
   const last = messages.at(-1)
-  if (last && sameUserTurn(last, next)) return [...messages.slice(0, -1), next]
+  if (last && sameUserTurn(last, next)) {
+    const kept = last.unanswered?.length ? { ...next, unanswered: last.unanswered } : next
+    return [...messages.slice(0, -1), kept]
+  }
   return [...messages, next]
 }

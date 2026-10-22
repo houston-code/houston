@@ -131,7 +131,29 @@ export interface ChatMessage {
    * see it.
    */
   steered?: boolean
+  /**
+   * Present on the message a run started from when that run ended without a reply:
+   * it failed, or the user stopped it, before the model wrote anything. One entry
+   * per such run, oldest first (capped at {@link MAX_UNANSWERED_RUNS}), written by
+   * the loop so a turn that got no answer still says why after a reload. A resend of
+   * the same message carries them over (see `appendUserTurn`). Display-only;
+   * providers never see it.
+   */
+  unanswered?: UnansweredRun[]
 }
+
+/** Why one run ended without a reply (see {@link ChatMessage.unanswered}). */
+export interface UnansweredRun {
+  /** `error`: the run failed. `aborted`: the user stopped it. */
+  reason: 'error' | 'aborted'
+  /** The error the run ended on, as shown to the user. Absent for a stop. */
+  message?: string
+  /** When the run ended (ISO 8601). */
+  at: string
+}
+
+/** Most {@link UnansweredRun} records one message keeps; older ones are dropped. */
+export const MAX_UNANSWERED_RUNS = 5
 
 /**
  * Prefix on the synthetic `user` message that stands in for a compacted head (see

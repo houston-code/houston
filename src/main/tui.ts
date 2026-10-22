@@ -1018,6 +1018,19 @@ export function renderWorkingTree(
   return [head, ...rows, total].join('\n')
 }
 
+/**
+ * The line that tells a reopened chat its last message got no reply, and why (the
+ * error its latest run ended on, or a Stop). Null when the last message was answered.
+ * The GUI shows the same record as a notice under the message.
+ */
+export function unansweredNotice(messages: ChatMessage[]): string | null {
+  const latest = messages.at(-1)?.unanswered?.at(-1)
+  if (!latest) return null
+  return latest.reason === 'error' && latest.message
+    ? `· the last message got no reply: ${stripControlChars(latest.message)}`
+    : '· the last message got no reply: it was stopped'
+}
+
 /** Render a numbered picker of recent conversations for `/resume`. */
 export function renderConversationList(convs: ResumeEntry[], now: number, paint: Painter): string {
   if (!convs.length) return paint('No saved sessions in this folder yet.', 'dim')
@@ -2913,6 +2926,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.out(
         paint(`· continuing "${entry!.title}" (${messages.length} message(s))\n`, 'dim')
       )
+      const unanswered = unansweredNotice(messages)
+      if (unanswered) deps.io.out(paint(`${unanswered}\n`, 'yellow'))
       adoptChatSettings(conv)
     } else if (wanted) {
       deps.io.out(paint(`· no saved session "${wanted}" in this folder; starting fresh\n`, 'yellow'))
@@ -3181,6 +3196,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         conversationId = id
         messages = conv.messages
         deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
+        const unanswered = unansweredNotice(messages)
+        if (unanswered) deps.io.out(paint(`${unanswered}\n`, 'yellow'))
         adoptChatSettings(conv)
         continue
       }

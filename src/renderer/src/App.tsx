@@ -80,7 +80,14 @@ import { deliverMidRunMessage } from './lib/midRunMessage'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
 import type { ShipAction } from '@shared/shipAction'
 import { saveComposerDraft } from './lib/composerDraft'
-import { itemsFromMessages, lastUserText, rewindTargets, showsHandoff, type RewindItemTarget } from './lib/items'
+import {
+  endsWithRecordedError,
+  itemsFromMessages,
+  lastUserText,
+  rewindTargets,
+  showsHandoff,
+  type RewindItemTarget
+} from './lib/items'
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
 import { activeTaskCount } from './components/BackgroundTasks'
@@ -670,7 +677,7 @@ export default function App(): JSX.Element {
             ...itemsFromMessages(conv.messages.slice(forked))
           ]
         : itemsFromMessages(conv.messages)
-      if (conv.lastError) {
+      if (conv.lastError && !endsWithRecordedError(conv.messages, conv.lastError.message)) {
         items.push({ kind: 'notice', id: `lasterror-${id}`, text: conv.lastError.message, tone: 'error' })
       }
       chat.reset(

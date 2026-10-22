@@ -19,7 +19,8 @@ import {
   MAX_APPROVAL_NOTE,
   SYSTEM_NOTE_PREFIX,
   MAX_STEER_TEXT,
-  MAX_PENDING_STEERS
+  MAX_PENDING_STEERS,
+  MAX_UNANSWERED_RUNS
 } from '@shared/agent'
 import type { ApprovalPolicy, PermissionRule } from '@shared/types'
 import {
@@ -262,7 +263,8 @@ const {
   onActiveRunsChanged,
   MAX_PROPOSALS_PER_TURN,
   earlierProposalTitles,
-  childReportsNote
+  childReportsNote,
+  withUnansweredRecord
 } = await import('./loop')
 
 /** A provider that replays one pre-scripted turn per streamChat call. */
@@ -8613,5 +8615,196 @@ describe('steerRun: a steer the run never reads is handed back', () => {
     expect(results).toEqual([true, false, false])
     expect(r.events.filter((e) => e.type === 'steered').map((e) => (e as { text: string }).text)).toEqual(['keep me'])
     expect(unsteerRun(runId, 'a')).toBe(false) // the run is over
+  })
+})
+
+describe('a run that ends without a reply', () => {
+  // The app log lives under userData; the logger writes nothing until it is set.
+  let userData: string
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'houston-runend-'))
+    setUserDataDir(userData)
+  })
+  afterEach(async () => {
+    resetUserDataDir()
+    await removeUserData(userData)
+  })
+
+  const logLines = (): string[] => {
+    const path = join(userData, 'logs', 'houston.log')
+    return existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean) : []
+  }
+  const runEndLines = (): string[] => logLines().filter((l) => l.includes('agent run ended without finishing'))
+  const prompt = 'please refactor the payment module quietly'
+
+  it('logs and records a provider error before the first token', async () => {
+    h.secrets = ['sk-live-runend-secret-value']
+    const r = await run({
+      conversationId: 'conv-runend-provider',
+      userText: prompt,
+      turns: [[{ type: 'error', message: 'bad request for key sk-live-runend-secret-value', status: 400 }]]
+    })
+    expect(r.events.at(-1)?.type).toBe('error')
+
+    const [line, ...rest] = runEndLines()
+    expect(rest).toEqual([])
+    expect(line).toContain('[WARN]')
+    expect(line).toContain('class=provider-error')
+    expect(line).toContain('conversation=conv-runend-provider')
+    expect(line).toContain('provider=anthropic')
+    expect(line).toContain('model=claude-test')
+    expect(line).toContain('status=400')
+    expect(line).not.toContain('sk-live-runend-secret-value') // redacted
+    expect(line).not.toContain(prompt) // never the conversation's content
+
+    // The persisted log records why the user's message got no answer.
+    expect(r.messages).toHaveLength(1)
+    const last = r.messages[0]
+    expect(last.content).toBe(prompt)
+    expect(last.unanswered).toHaveLength(1)
+    expect(last.unanswered?.[0]).toMatchObject({ reason: 'error' })
+    expect(last.unanswered?.[0].message).toContain('bad request')
+    expect(last.unanswered?.[0].message).not.toContain('sk-live-runend-secret-value')
+    expect(Number.isNaN(Date.parse(last.unanswered?.[0].at ?? ''))).toBe(false)
+  })
+
+  it('logs and records a model that cannot call tools', async () => {
+    const r = await run({
+      conversationId: 'conv-runend-tools',
+      userText: prompt,
+      turns: [[{ type: 'error', message: 'registry.ollama.ai/library/llama2:latest does not support tools' }]]
+    })
+    const shown = (r.events.at(-1) as { message: string }).message
+
+    const [line] = runEndLines()
+    expect(line).toContain('class=tools-unsupported')
+    expect(line).toContain('conversation=conv-runend-tools')
+    // The raw cause goes to the log, where the user-facing message replaced it.
+    expect(line).toContain('does not support tools')
+    expect(line).not.toContain(prompt)
+
+    expect(r.messages.at(-1)?.unanswered).toEqual([{ reason: 'error', message: shown, at: expect.any(String) }])
+  })
+
+  it('logs and records a Stop before the model answered', async () => {
+    h.provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat(req: ChatRequest) {
+        await new Promise<void>((resolve) => req.signal?.addEventListener('abort', () => resolve()))
+        throw new Error('Request was aborted.')
+      }
+    }
+    let persisted: ChatMessage[] = []
+    const events: AgentEvent[] = []
+    const runId = 'run-runend-abort'
+    const started = startRun(
+      {
+        runId,
+        conversationId: 'conv-runend-abort',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: prompt }]
+      },
+      (e) => events.push(e),
+      (m) => {
+        persisted = m
+      }
+    )
+    await vi.waitFor(() => expect(activeRunForConversation('conv-runend-abort')).toBe(runId))
+    // Let the run reach the provider call before stopping it.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    cancelRun(runId)
+    await started
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
+
+    const [line] = runEndLines()
+    expect(line).toContain('[INFO]')
+    expect(line).toContain('class=aborted')
+    expect(line).toContain('conversation=conv-runend-abort')
+    expect(line).not.toContain(prompt)
+
+    expect(persisted.at(-1)?.content).toBe(prompt)
+    expect(persisted.at(-1)?.unanswered).toEqual([{ reason: 'aborted', at: expect.any(String) }])
+  })
+
+  it('logs a start refused because a run is already in progress, without touching that run\'s log', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    h.provider = {
+      async *streamChat() {
+        await gate
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const base = {
+      conversationId: 'conv-runend-busy',
+      workspace: ws,
+      providerId: 'anthropic',
+      model: 'claude-test',
+      approvalPolicy: 'ask' as const
+    }
+    let livePersisted: ChatMessage[] = []
+    const live = startRun({ ...base, runId: 'run-busy-A', messages: [{ role: 'user', content: 'first' }] }, () => {}, (m) => {
+      livePersisted = m
+    })
+
+    const refusedEvents: AgentEvent[] = []
+    const refusedPersists: ChatMessage[][] = []
+    await startRun(
+      { ...base, runId: 'run-busy-B', messages: [{ role: 'user', content: prompt }] },
+      (e) => refusedEvents.push(e),
+      (m) => refusedPersists.push(m)
+    )
+    expect(refusedEvents).toEqual([
+      { runId: 'run-busy-B', type: 'error', message: 'A run is already in progress for this conversation.' }
+    ])
+
+    const [line] = runEndLines()
+    expect(line).toContain('[WARN]')
+    expect(line).toContain('class=run-in-progress')
+    expect(line).toContain('conversation=conv-runend-busy')
+    expect(line).toContain('run=run-busy-B')
+    expect(line).not.toContain(prompt)
+    // The live run owns the conversation's log: the refused start writes nothing to
+    // it, so the app log is this case's durable record.
+    expect(refusedPersists).toEqual([])
+
+    release()
+    await live
+    // The live run answered; it ends normally, so nothing else is logged or recorded.
+    expect(runEndLines()).toHaveLength(1)
+    expect(livePersisted.some((m) => m.unanswered)).toBe(false)
+  })
+
+  it('records nothing on a run that answered', async () => {
+    const r = await run({
+      conversationId: 'conv-runend-ok',
+      turns: [[{ type: 'text', text: 'hi' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    expect(runEndLines()).toEqual([])
+    expect(r.messages.some((m) => m.unanswered)).toBe(false)
+  })
+})
+
+describe('withUnansweredRecord', () => {
+  it('appends to the last message, keeping only the newest records', () => {
+    const now = new Date('2026-10-22T00:00:00.000Z')
+    let log: ChatMessage[] = [{ role: 'assistant', content: 'earlier' }, { role: 'user', content: 'go' }]
+    for (let i = 0; i < MAX_UNANSWERED_RUNS + 2; i++) {
+      log = withUnansweredRecord(log, { reason: 'error', message: `fail ${i}` }, now)
+    }
+    log = withUnansweredRecord(log, { reason: 'aborted' }, now)
+    expect(log[0]).toEqual({ role: 'assistant', content: 'earlier' })
+    expect(log[1].content).toBe('go')
+    const records = log[1].unanswered ?? []
+    expect(records).toHaveLength(MAX_UNANSWERED_RUNS)
+    expect(records.at(-1)).toEqual({ reason: 'aborted', at: now.toISOString() })
+    expect(records[0]).toEqual({ reason: 'error', message: 'fail 3', at: now.toISOString() })
+    expect(withUnansweredRecord([], { reason: 'aborted' }, now)).toEqual([])
   })
 })

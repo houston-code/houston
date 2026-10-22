@@ -16,6 +16,16 @@ describe('appendUserTurn', () => {
     expect(appendUserTurn(history, user('start the dev server'))).toEqual(history)
   })
 
+  it('keeps the record of why the replaced message got no answer', () => {
+    const failed = { reason: 'error' as const, message: 'overloaded', at: '2026-10-22T00:00:00.000Z' }
+    const history: ChatMessage[] = [user('start the dev server', { unanswered: [failed] })]
+    expect(appendUserTurn(history, user('start the dev server'))).toEqual([
+      user('start the dev server', { unanswered: [failed] })
+    ])
+    // A different message leaves the record where it was.
+    expect(appendUserTurn(history, user('use port 4000'))).toEqual([...history, user('use port 4000')])
+  })
+
   it('appends a different message after an unanswered one', () => {
     const history: ChatMessage[] = [user('start the dev server')]
     expect(appendUserTurn(history, user('use port 4000'))).toEqual([...history, user('use port 4000')])
