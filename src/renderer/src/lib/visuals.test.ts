@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MAX_DIAGRAM_HEIGHT, diagramIsTall, naturalSizeSvg } from './visuals'
+import { MAX_DIAGRAM_HEIGHT, MIN_DIAGRAM_SCALE, diagramIsTall, diagramScale, naturalSizeSvg } from './visuals'
 
 /** Diagram sizing: an SVG gets its natural pixel size, and tall ones are capped. */
 
@@ -38,16 +38,33 @@ describe('naturalSizeSvg', () => {
   })
 })
 
-describe('diagramIsTall', () => {
-  it('measures the height at the size it will show: natural, or scaled down to the column', () => {
-    expect(diagramIsTall({ width: 100, height: 200 }, 900)).toBe(false)
-    expect(diagramIsTall({ width: 100, height: MAX_DIAGRAM_HEIGHT + 1 }, 900)).toBe(true)
-    // A wide diagram shrinks to fit, so its height shrinks too.
-    expect(diagramIsTall({ width: 2000, height: 1000 }, 800)).toBe(false)
-    expect(diagramIsTall({ width: 2000, height: 3000 }, 800)).toBe(true)
+describe('diagramScale', () => {
+  it('never scales up, and scales down to fit the column', () => {
+    expect(diagramScale({ width: 100, height: 50 }, 900)).toBe(1)
+    expect(diagramScale({ width: 1000, height: 50 }, 800)).toBe(0.8)
+  })
+
+  it('stops shrinking at the smallest readable scale', () => {
+    expect(diagramScale({ width: 4000, height: 70 }, 800)).toBe(MIN_DIAGRAM_SCALE)
   })
 
   it('assumes the natural size before the column is measured', () => {
-    expect(diagramIsTall({ width: 2000, height: 1000 }, 0)).toBe(true)
+    expect(diagramScale({ width: 4000, height: 70 }, 0)).toBe(1)
+  })
+})
+
+describe('diagramIsTall', () => {
+  it('measures the height at the scale it will show', () => {
+    expect(diagramIsTall({ width: 100, height: 200 }, 900)).toBe(false)
+    expect(diagramIsTall({ width: 100, height: MAX_DIAGRAM_HEIGHT + 1 }, 900)).toBe(true)
+    // A wide diagram shrinks to fit, so its height shrinks too.
+    expect(diagramIsTall({ width: 1000, height: 650 }, 800)).toBe(false)
+    expect(diagramIsTall({ width: 1000, height: 800 }, 800)).toBe(true)
+    // ...but only as far as the smallest scale.
+    expect(diagramIsTall({ width: 4000, height: 1000 }, 800)).toBe(true)
+  })
+
+  it('assumes the natural size before the column is measured', () => {
+    expect(diagramIsTall({ width: 1000, height: 650 }, 0)).toBe(true)
   })
 })

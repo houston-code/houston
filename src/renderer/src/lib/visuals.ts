@@ -86,13 +86,24 @@ export function naturalSizeSvg(svg: string): SizedSvg | null {
 }
 
 /**
- * Whether a diagram, shown no wider than its natural size and scaled down to fit a
- * column `columnWidth` wide, is taller than the cap. An unknown column (0) counts
+ * Smallest a wide diagram shrinks to fit the column. Below this its labels can't be
+ * read, so it stays at this scale and scrolls sideways instead.
+ */
+export const MIN_DIAGRAM_SCALE = 0.6
+
+/**
+ * How much a diagram is scaled to show in a column `columnWidth` wide: never up,
+ * down to fit, but no further than MIN_DIAGRAM_SCALE. An unknown column (0) counts
  * as wide enough for the natural size.
  */
+export function diagramScale(size: { width: number; height: number }, columnWidth: number): number {
+  if (columnWidth <= 0) return 1
+  return Math.max(MIN_DIAGRAM_SCALE, Math.min(1, columnWidth / size.width))
+}
+
+/** Whether a diagram, at the scale it shows in this column, is taller than the cap. */
 export function diagramIsTall(size: { width: number; height: number }, columnWidth: number): boolean {
-  const scale = columnWidth > 0 ? Math.min(1, columnWidth / size.width) : 1
-  return size.height * scale > MAX_DIAGRAM_HEIGHT
+  return size.height * diagramScale(size, columnWidth) > MAX_DIAGRAM_HEIGHT
 }
 
 /** Clamp a frame height reported by a visual's document. */
