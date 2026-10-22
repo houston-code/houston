@@ -1,5 +1,5 @@
 <!--
-  MAINTAINER NOTE — this is a descriptive document, not a contract. It explains
+  MAINTAINER NOTE: this is a descriptive document, not a contract. It explains
   what Houston does with data so users can decide what to point it at. Keep it in
   sync with the app's actual behavior: if you ever add telemetry, crash
   reporting, or any server-side component, update this file before that ships.

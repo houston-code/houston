@@ -2,7 +2,7 @@
 
 The marketing + download site for Houston, served at **houstoncode.ai**.
 
-It's a **static site — no build step, no framework, no dependencies.** Plain HTML,
+It's a **static site: no build step, no framework, no dependencies.** Plain HTML,
 one stylesheet, one small progressive-enhancement script. The binaries are **not**
 hosted here: download buttons resolve to the public
 [GitHub Releases feed](https://github.com/houston-code/houston/releases/latest), fetched live by `assets/app.js` (with a static fallback link
@@ -10,10 +10,10 @@ if the API is unreachable).
 
 ## Preview locally
 
-The site uses root-absolute paths (`/assets/…`), so serve it from a web root —
+The site uses root-absolute paths (`/assets/…`), so serve it from a web root;
 opening `public/index.html` as a `file://` won't resolve assets.
 
-Faithful Cloudflare Pages preview (recommended — also applies `_redirects`,
+Faithful Cloudflare Pages preview (recommended; it also applies `_redirects`,
 `_headers`, and `404.html`, exactly like production):
 
 ```
@@ -77,7 +77,7 @@ website/
 ## Screenshots
 
 `public/assets/screens/*.png` are real captures of the app, taken against a throwaway
-profile, a disposable demo workspace, and a **local** model (Ollama) — so they show
+profile, a disposable demo workspace, and a **local** model (Ollama), so they show
 the genuine UI with no API keys, private code, or paid inference. To regenerate:
 
 ```
@@ -94,12 +94,12 @@ match the page's theme (from `shot-modelpicker-dark.png` / `-light.png`), so
 regenerate both together. Then re-run `build-screens.mjs` to re-encode the WebP
 widths the hero's `srcset` serves (the PNGs stay as the fallback), and re-run
 `build-og.mjs`, since `assets/og.png` embeds the dark one.
-A populated "agent running tools" shot needs a frontier model key — local models
+A populated "agent running tools" shot needs a frontier model key: local models
 emit text but don't drive Houston's native tool execution.
 
 ## Deploy on Cloudflare Pages
 
-Binaries stay on GitHub Releases, so this is a pure static deploy — no build command.
+Binaries stay on GitHub Releases, so this is a pure static deploy with no build command.
 
 1. **Cloudflare dashboard → Workers & Pages → Create → Pages → Connect to Git.**
    Authorize the `houston-code/houston` repo.
@@ -114,7 +114,7 @@ Binaries stay on GitHub Releases, so this is a pure static deploy — no build c
    `houstoncode.ai` (and `www.houstoncode.ai`). If the domain's DNS is already on
    Cloudflare, the records are added for you; TLS is issued automatically.
 
-That's the whole setup — no secrets, no CI wiring.
+That's the whole setup: no secrets, no CI wiring.
 
 ## Design system
 

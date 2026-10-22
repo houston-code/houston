@@ -1,4 +1,4 @@
-# Houston — repo guidance
+# Houston: repo guidance
 
 Notes for anyone changing this repository, human or agent. This file carries the rules
 that are easy to break by accident and expensive to unbreak. [README.md](README.md) has
@@ -53,9 +53,9 @@ them from drifting:
 
 ## Agent-behavior goldens
 
-`src/main/agent/golden.test.ts` pins the agent's behavior surface — the system prompt
+`src/main/agent/golden.test.ts` pins the agent's behavior surface (the system prompt
 (per client config and model family), the tool schemas sent to the model, provider
-request assembly, and the `AgentEvent` stream — against golden files in
+request assembly, and the `AgentEvent` stream) against golden files in
 `src/main/agent/goldens/`. Any change to `prompt.ts`, tool descriptions or schemas in
 `tools.ts`, or `loop.ts` request/event wiring fails this test, and that failure is the
 feature.
@@ -135,8 +135,8 @@ change; that is the whole workflow. The built-in slash commands it documents com
 their menus from.
 
 **`guide-content.ts` is generated and must never be committed** (it is in `.gitignore`).
-Every consumer regenerates it first — `postinstall`, `pretypecheck`, `prelint`, `build`,
-`build:cli`, and Vitest's `globalSetup` — so the constant cannot go stale and you never run
+Every consumer regenerates it first (`postinstall`, `pretypecheck`, `prelint`, `build`,
+`build:cli`, and Vitest's `globalSetup`), so the constant cannot go stale and you never run
 `npm run gen:guide` by hand. It was committed until 2026-07, and because `JSON.stringify`
 puts the whole guide on one ~37KB line, concurrent PRs conflicted there with no hunk
 granularity, so resolving by picking a side dropped the other PR's docs entirely.
@@ -147,10 +147,10 @@ Houston executes a model's tool calls on the user's machine, so a handful of mod
 the product's actual safety boundary rather than ordinary code. Changes there need tests
 for the *denied* path, not only the allowed one, and a security pass before the PR opens:
 
-- `src/main/agent/tools.ts` — file-tool path containment (`realpathWithinRoots`). A path
+- `src/main/agent/tools.ts`: file-tool path containment (`realpathWithinRoots`). A path
   that resolves outside the workspace roots, including through a symlink or a dangling
   one, must be refused.
-- `src/main/agent/permissions.ts` — permission-rule matching. Subject and pattern are
+- `src/main/agent/permissions.ts`: permission-rule matching. Subject and pattern are
   canonicalized per kind before comparison (paths anchored to the roots, URL authority
   lowercased, shell commands dequoted and `$'...'` decoded) so a re-spelling of a denied
   subject cannot slip past a rule. An allow reads a shell command the other way: a
@@ -176,18 +176,18 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   `CDPATH` is set. A command holding a line continuation (backslash-newline) is read
   twice, split as written and with its continuations joined: a deny fires on either
   reading and an allow must cover both, so splitting a word across lines dodges neither.
-- `src/main/sandbox/` — the per-OS sandbox backends and their conformance suite. The
+- `src/main/sandbox/`: the per-OS sandbox backends and their conformance suite. The
   `linux-sandbox` CI job is the only one that exercises the real bubblewrap backend; the
   `test` job can only skip it.
-- `src/main/agent/egress.ts`, `redact.ts`, and `src/main/secrets.ts` — per-destination
+- `src/main/agent/egress.ts`, `redact.ts`, and `src/main/secrets.ts`: per-destination
   network consent, and the scrub that keeps credentials out of transcripts, logs, and
   subagent output.
-- `src/main/agent/untrusted.ts` — text outsiders wrote (fetched pages, web search results,
+- `src/main/agent/untrusted.ts`: text outsiders wrote (fetched pages, web search results,
   GitHub issue, pull request, and CI text, MCP results) is attacker-controlled data that lands
   in a context holding file, shell, and network tools. The nonce fence and the classifier
   around it are not advisory; keep them non-optional, and route any new tool that returns
   such text through `presentUntrusted` / `presentUntrustedInline`.
-- `src/main/agent/lsp/` — language servers run project code without an approval prompt,
+- `src/main/agent/lsp/`: language servers run project code without an approval prompt,
   so they launch only through the sandbox (off where it can't confine them unless the user
   opts in), every location a server returns must pass `resolveInRoots`, credential-file
   lines are never quoted, a server's `workspace/applyEdit` is always refused, and
