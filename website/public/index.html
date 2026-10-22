@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Houston: a cross-platform coding agent, bring your own model</title>
+  <title>Houston: open-source AI coding agent, bring your own model</title>
   <meta name="description" content="Houston is a cross-platform desktop coding agent. Point it at Claude, GPT, Gemini, any OpenAI-compatible API, or a local model, give it a project folder, and let it read, edit, search, and run code. Every action is gated by approval and, where supported, sandboxed." />
   <link rel="canonical" href="https://houstoncode.ai/" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
@@ -37,6 +37,7 @@
         "@type": "SoftwareApplication",
         "@id": "https://houstoncode.ai/#app",
         "name": "Houston",
+        "alternateName": ["Houston Code", "Houston coding agent"],
         "applicationCategory": "DeveloperApplication",
         "operatingSystem": "macOS 13+, Windows 10+, Linux x64",
         "description": "A cross-platform desktop coding agent. Bring your own model (Claude, GPT, Gemini, any OpenAI-compatible API, or a local model) and let it read, edit, search, and run code under an approval flow.",
@@ -64,14 +65,16 @@
         "@type": "Organization",
         "@id": "https://houstoncode.ai/#org",
         "name": "Houston",
+        "alternateName": "Houston Code",
         "url": "https://houstoncode.ai/",
         "logo": "https://houstoncode.ai/assets/icon.png",
-        "sameAs": ["https://github.com/houston-code/houston"]
+        "sameAs": ["https://github.com/houston-code", "https://github.com/houston-code/houston"]
       },
       {
         "@type": "WebSite",
         "@id": "https://houstoncode.ai/#website",
         "name": "Houston",
+        "alternateName": "Houston Code",
         "url": "https://houstoncode.ai/",
         "publisher": { "@id": "https://houstoncode.ai/#org" }
       },
@@ -143,8 +146,7 @@
   <main id="main">
     <section class="hero">
       <div class="wrap">
-        <p class="eyebrow">Open-source AI coding agent</p>
-        <h1>Powerful enough to ship, safe enough to trust</h1>
+        <h1><span class="eyebrow">Houston: open-source AI coding agent</span> Powerful enough to ship, safe enough to trust</h1>
         <p class="lede">Bring your own model: Claude, GPT, Gemini, any OpenAI-compatible API, or a local one. Houston reads, edits, searches, and runs code in your project, behind an approval flow you control.</p>
         <div class="hero-cta">
           <a class="btn btn-primary btn-lg" id="hero-download" href="#download">
