@@ -6,6 +6,34 @@ import { getUserDataDir } from './userData'
 import { getMcpStatuses } from './mcp/manager'
 import { activeBackendId, isSandboxed } from './sandbox'
 import { providerKeyEnvVars } from '@shared/provider-keys'
+import { LspManager } from './agent/lsp/manager'
+import { rootUsesLanguage, serverRegistry } from './agent/lsp/servers'
+
+/** Language-server facts for `/doctor`: install status, and whether the workspace uses each language. */
+export function languageServerFacts(
+  cwd: string,
+  settings: { lspEnabled?: boolean; lspServers?: import('@shared/types').LspServerConfig[] }
+): Pick<DoctorFacts, 'languageServers' | 'languageServersBlocked'> {
+  // A throwaway manager: it only resolves binaries, it never starts a server.
+  const probe = new LspManager()
+  probe.configure(settings)
+  const specs = new Map(serverRegistry(settings.lspServers).map((s) => [s.id, s]))
+  const blocked = probe.blockedReason()
+  return {
+    languageServers: probe.statuses([cwd]).map((st) => {
+      const spec = specs.get(st.id)
+      return {
+        id: st.id,
+        name: st.name,
+        path: st.path,
+        ...(st.source ? { source: st.source } : {}),
+        usedByProject: spec ? rootUsesLanguage(spec, cwd) : false,
+        installHint: st.installHint
+      }
+    }),
+    ...(blocked ? { languageServersBlocked: blocked } : {})
+  }
+}
 
 /**
  * Resolve a binary on PATH, or null. Absolute `where.exe` on Windows: a bare
@@ -76,6 +104,7 @@ export function gatherDoctorFacts(
       { name: 'gh', path: findBinary('gh'), purpose: 'the GitHub tools' },
       { name: 'rg', path: findBinary('rg'), purpose: 'faster search_files' }
     ],
-    update: opts.update
+    update: opts.update,
+    ...languageServerFacts(cwd, s)
   }
 }

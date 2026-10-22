@@ -19,6 +19,11 @@ describe('renderMarkdownAnsi', () => {
     expect(out).not.toContain('`')
   })
 
+  it('separates top-level blocks with a blank line, keeping list items tight', () => {
+    const out = render('```ts\nconst x = 1\n```\n> a quote\n\n## Next\n- one\n- two')
+    expect(out.split('\n')).toEqual(['┌ ts', '│ const x = 1', '', '│ a quote', '', '## Next', '', '• one', '• two'])
+  })
+
   it('renders a bulleted list with bullets', () => {
     const out = render('- one\n- two')
     expect(out).toContain('• one')
@@ -127,6 +132,12 @@ describe('splitFinalizedBlocks', () => {
 })
 
 describe('MarkdownStream', () => {
+  it('keeps the reply\'s blank lines between streamed blocks, with none before the first', () => {
+    const s = new MarkdownStream({ paint, width: 0 })
+    const out = s.push('```\ncode\n```\n\n') + s.push('> quote\n\n') + s.flush() + s.push('tail') + s.flush()
+    expect(out).toBe('│ code\n\n│ quote\n\ntail\n')
+  })
+
   it('emits finalized blocks on push and the remainder on flush', () => {
     const s = new MarkdownStream({ paint, width: 0 })
     // No blank line yet → nothing emitted.

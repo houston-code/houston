@@ -42,6 +42,8 @@ export type IconName =
   | 'split'
   | 'chevronRight'
   | 'warning'
+  | 'settings'
+  | 'refresh'
   | 'rewind'
 
 const PATHS: Record<IconName, ReactNode> = {
@@ -135,12 +137,15 @@ const PATHS: Record<IconName, ReactNode> = {
       <path d="M10.2 8v1.1a1.6 1.6 0 0 0 3.1-.6A5.3 5.3 0 1 0 11 12.6" />
     </>
   ),
-  // Plus over minus — added/removed lines, i.e. a diff / uncommitted changes.
+  // A page with plus over minus — added/removed lines, i.e. a diff / uncommitted
+  // changes. The page outline gives it the same visual weight as its titlebar
+  // neighbours; a bare ± read as a speck.
   diff: (
     <>
-      <path d="M8 3.6v3" />
-      <path d="M6.5 5.1h3" />
-      <path d="M6.5 11h3" />
+      <path d="M3.5 2.5h9v11h-9z" />
+      <path d="M8 4.7v3" />
+      <path d="M6.5 6.2h3" />
+      <path d="M6.5 10.3h3" />
     </>
   ),
   // Clipboard with a clip — paste from clipboard.
@@ -263,6 +268,20 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M2.5 4.5h11v7h-11z" />
       <path d="m2.5 4.5 5.5 4.2 5.5-4.2" />
+    </>
+  ),
+  // A toothed cog — settings.
+  settings: (
+    <>
+      <path d="M12.71 6.65 14.22 7.01 14.22 8.99 12.71 9.35 12.29 10.38 13.1 11.7 11.7 13.1 10.38 12.29 9.35 12.71 8.99 14.22 7.01 14.22 6.65 12.71 5.62 12.29 4.3 13.1 2.9 11.7 3.71 10.38 3.29 9.35 1.78 8.99 1.78 7.01 3.29 6.65 3.71 5.62 2.9 4.3 4.3 2.9 5.62 3.71 6.65 3.29 7.01 1.78 8.99 1.78 9.35 3.29 10.38 3.71 11.7 2.9 13.1 4.3 12.29 5.62z" />
+      <circle cx="8" cy="8" r="2" />
+    </>
+  ),
+  // A circular arrow — refresh / retry.
+  refresh: (
+    <>
+      <path d="M13 8a5 5 0 1 1-1.46-3.54" />
+      <path d="M12.2 2.2v2.6H9.6" />
     </>
   )
 }

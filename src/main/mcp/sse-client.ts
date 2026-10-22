@@ -10,6 +10,12 @@ import {
   type McpToolInfo
 } from './client'
 import {
+  initializeParams,
+  negotiatedProtocolVersion,
+  supportsElicitation,
+  type McpProtocolVersion
+} from './version'
+import {
   ListRefresher,
   PendingRequests,
   handleServerMessage,
@@ -38,7 +44,6 @@ import {
  * calls are still gated by the agent's approval flow (kind "mcp" always prompts).
  */
 
-const PROTOCOL_VERSION = '2024-11-05'
 const INIT_TIMEOUT_MS = 20_000
 const CALL_TIMEOUT_MS = 120_000
 
@@ -173,6 +178,8 @@ export class McpSseClient implements McpConnection {
   /** Resolves once the server's `endpoint` event has set `postUrl`. */
   private endpointReady?: Promise<void>
   /** Answers `elicitation/create`; its presence declares the capability. */
+  /** The version agreed at initialize; set once the handshake answers. */
+  private protocolVersion?: McpProtocolVersion
   private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
   tools: McpToolInfo[] = []
   resources: McpResourceInfo[] = []
@@ -215,15 +222,13 @@ export class McpSseClient implements McpConnection {
     await this.waitForEndpoint(INIT_TIMEOUT_MS)
     const init = await this.rpc(
       'initialize',
-      {
-        protocolVersion: PROTOCOL_VERSION,
-        // Declare elicitation only when a responder is wired: declaring it and
-        // then -32601ing the request would be lying to the server.
-        capabilities: this.onElicit ? { elicitation: {} } : {},
-        clientInfo: { name: 'Houston', version: '0.1.0' }
-      },
+      initializeParams({ elicitation: !!this.onElicit }),
       INIT_TIMEOUT_MS
     )
+    this.protocolVersion = negotiatedProtocolVersion(init)
+    // A server that negotiated down to a version without elicitation never gets
+    // an elicitation answer: its requests fall through to the -32601 decline.
+    if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
     await this.notify('notifications/initialized', {})
     const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: McpToolInfo[] }
     this.tools = Array.isArray(listed?.tools) ? listed.tools : []
@@ -301,7 +306,8 @@ export class McpSseClient implements McpConnection {
       ...this.extraHeaders,
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
-      'mcp-protocol-version': PROTOCOL_VERSION
+      // The negotiated version, once there is one (the initialize POST goes without).
+      ...(this.protocolVersion ? { 'mcp-protocol-version': this.protocolVersion } : {})
     }
   }
 

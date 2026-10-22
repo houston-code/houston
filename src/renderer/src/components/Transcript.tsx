@@ -102,14 +102,12 @@ function UserBubble({
   images,
   isSummary,
   invokedAs,
-  steered,
   actions
 }: {
   text: string
   images?: ImageAttachment[]
   isSummary?: boolean
   invokedAs?: PromptInvocation
-  steered?: boolean
   /** Hover actions beside the copy button (the rewind menu). */
   actions?: ReactNode
 }): JSX.Element {
@@ -129,12 +127,9 @@ function UserBubble({
   }
   if (invokedAs && !images?.length) return <InvokedBubble text={text} invokedAs={invokedAs} actions={actions} />
   return (
-    <div className={`msg msg--user${steered ? ' msg--steered' : ''}`}>
-      {steered && (
-        <div className="msg__steered-label">
-          <Icon name="steer" size={12} /> Steered
-        </div>
-      )}
+    // A message steered into a running turn reads like any other: where it lands in
+    // the transcript already shows it arrived mid-run.
+    <div className="msg msg--user">
       {text.trim() !== '' && <CopyButton text={text} className="msg__copy--user" />}
       {actions}
       <div className="msg__body">
@@ -435,7 +430,6 @@ export function Transcript({
                     images={node.item.images}
                     isSummary={node.item.isSummary}
                     invokedAs={node.item.invokedAs}
-                    steered={node.item.steered}
                     actions={target && rewind ? <RewindMenu target={target} handlers={rewind} /> : undefined}
                   />
                 )

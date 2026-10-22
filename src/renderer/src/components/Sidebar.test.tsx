@@ -207,8 +207,9 @@ describe('Sidebar — expanded rendering', () => {
     const meta = row.querySelector('.conv__meta') as HTMLElement
     // Repo basename (from repoRoot) precedes the branch on the meta line.
     expect(meta).toHaveTextContent('houston')
-    const branch = within(meta).getByText('⑂ feat/x')
+    const branch = within(meta).getByText('feat/x')
     expect(branch).toHaveClass('conv__branch')
+    expect(branch.querySelector('svg[data-icon="gitBranch"]')).toBeInTheDocument()
   })
 
   it('shows the workspace basename (no branch) for a non-worktree chat', () => {
@@ -419,7 +420,7 @@ describe('Sidebar — row overflow menu', () => {
     expect(props.onSetPinned).toHaveBeenCalledWith('a', true)
 
     openConvMenu('Alpha')
-    fireEvent.click(screen.getByText('⑂ Fork'))
+    fireEvent.click(screen.getByText('Fork'))
     expect(props.onFork).toHaveBeenCalledWith('a')
 
     openConvMenu('Alpha')

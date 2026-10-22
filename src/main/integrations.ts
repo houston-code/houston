@@ -2,6 +2,7 @@ import { resolveGh, runGh } from './agent/github'
 import { FORMATTERS, canRunTool, type Formatter } from './agent/format'
 import { backendShellSyntax, type ShellSyntax } from './sandbox'
 import type { FormatterStatus, IntegrationsInfo } from '@shared/types'
+import { LspManager, type LspSettings } from './agent/lsp/manager'
 
 /**
  * Runtime status of OPTIONAL integrations — the `gh` CLI and the format-on-save
@@ -22,6 +23,18 @@ export interface IntegrationsDeps {
   formatters?: Record<string, Formatter[]>
   /** The sandbox shell's syntax (default: the active backend's). */
   shellSyntax?: ShellSyntax
+  /** Language-server status; omitted from the result when not given. */
+  languageServers?: () => Pick<IntegrationsInfo, 'languageServers' | 'languageServersBlocked'>
+}
+
+/** Language-server status for these settings: each server's binary resolved on PATH (nothing is started). */
+export function languageServerIntegration(
+  settings: LspSettings
+): Pick<IntegrationsInfo, 'languageServers' | 'languageServersBlocked'> {
+  const probe = new LspManager()
+  probe.configure(settings)
+  const blocked = probe.blockedReason()
+  return { languageServers: probe.statuses(), ...(blocked ? { languageServersBlocked: blocked } : {}) }
 }
 
 /** Default auth probe: `gh auth status` exits 0 iff at least one account is logged in. */
@@ -67,6 +80,7 @@ export async function getIntegrations(deps: IntegrationsDeps = {}): Promise<Inte
     gh: { installed, authenticated },
     formatters: formatterStatuses(registry, hasBin),
     // cmd.exe can't be handed a safely quoted formatter command (see planToolRun).
-    formattersNeedGitBash: (deps.shellSyntax ?? backendShellSyntax()) === 'cmd'
+    formattersNeedGitBash: (deps.shellSyntax ?? backendShellSyntax()) === 'cmd',
+    ...(deps.languageServers ? deps.languageServers() : {})
   }
 }

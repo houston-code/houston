@@ -51,6 +51,14 @@ describe('sanitizeTitle', () => {
     expect(sanitizeTitle('1. Set up CI')).toBe('Set up CI')
     expect(sanitizeTitle('Fix `parseArgs` crash')).toBe('Fix parseArgs crash')
     expect(sanitizeTitle('Fix the **auth** test')).toBe('Fix the auth test')
+    expect(sanitizeTitle('Update [README](./README.md) setup steps')).toBe('Update README setup steps')
+    expect(sanitizeTitle('[Fix login](https://x.dev/1) redirect')).toBe('Fix login redirect')
+    expect(sanitizeTitle('Add ![logo](logo.png) to header')).toBe('Add to header')
+  })
+
+  it('leaves brackets that are not a link alone', () => {
+    expect(sanitizeTitle('Handle [object Object] in logs')).toBe('Handle [object Object] in logs')
+    expect(sanitizeTitle('Fix arr[0] (off by one)')).toBe('Fix arr[0] (off by one)')
   })
 
   it('drops a leading "Title:" label', () => {

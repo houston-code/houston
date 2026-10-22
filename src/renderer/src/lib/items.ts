@@ -40,7 +40,7 @@ export interface UserItem {
   invokedAs?: PromptInvocation
   /**
    * A course correction steered into a running turn (rather than sent as its own
-   * turn). Labelled in the transcript so it's clear it changed the run in progress.
+   * turn). Rendered like any other user message; kept for the record.
    * Set live from the `steered` event and, on reload, from the saved message.
    */
   steered?: boolean

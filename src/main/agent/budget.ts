@@ -203,7 +203,8 @@ export const PROGRESS_TOOLS: ReadonlySet<string> = new Set([
   'multi_edit',
   'apply_patch',
   'notebook_edit',
-  'dispatch_writable_agent'
+  'dispatch_writable_agent',
+  'lsp_rename'
 ])
 
 /**

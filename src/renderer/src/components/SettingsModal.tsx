@@ -17,6 +17,7 @@ import type {
   AppSettings,
   Hook,
   IntegrationsInfo,
+  LspServerConfig,
   McpServerConfig,
   McpServerStatus,
   ModelOption,
@@ -300,6 +301,78 @@ function HeadersField({
         setText(headersToText(parsed))
       }}
     />
+  )
+}
+
+/**
+ * JSON editor for extra language servers. Same local-text-while-focused pattern as
+ * the fields above; parsed on blur, and kept as typed (with an error shown) when it
+ * isn't a JSON array of server entries, so a half-finished edit is never lost.
+ */
+function LspServersField({
+  servers,
+  onChange
+}: {
+  servers: LspServerConfig[] | undefined
+  onChange: (servers: LspServerConfig[]) => void
+}): JSX.Element {
+  const toText = (list: LspServerConfig[] | undefined): string =>
+    list && list.length ? JSON.stringify(list, null, 2) : ''
+  const [text, setText] = useState(() => toText(servers))
+  const [error, setError] = useState<string | null>(null)
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!focused.current) setText(toText(servers))
+  }, [servers])
+
+  return (
+    <label className="field">
+      <span>Extra language servers (JSON)</span>
+      <textarea
+        rows={4}
+        value={text}
+        spellCheck={false}
+        placeholder='[{ "id": "lua", "command": "lua-language-server", "extensions": ["lua"] }]'
+        onFocus={() => {
+          focused.current = true
+        }}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          focused.current = false
+          if (!text.trim()) {
+            setError(null)
+            onChange([])
+            return
+          }
+          try {
+            const parsed: unknown = JSON.parse(text)
+            const valid =
+              Array.isArray(parsed) &&
+              parsed.every(
+                (e) =>
+                  e &&
+                  typeof e === 'object' &&
+                  typeof (e as LspServerConfig).id === 'string' &&
+                  typeof (e as LspServerConfig).command === 'string' &&
+                  Array.isArray((e as LspServerConfig).extensions)
+              )
+            if (!valid) {
+              setError('Expected a list of entries, each with "id", "command", and "extensions".')
+              return
+            }
+            setError(null)
+            onChange(parsed as LspServerConfig[])
+          } catch {
+            setError('That is not valid JSON.')
+          }
+        }}
+      />
+      {error && (
+        <span className="field__hint field__hint--warn" role="alert">
+          {error}
+        </span>
+      )}
+    </label>
   )
 }
 
@@ -933,6 +1006,9 @@ export function SettingsModal({
       ? 'ok'
       : 'warn'
 
+  const lspFound = integrations?.languageServers?.filter((l) => l.path) ?? []
+  const lspTone = integrations != null && !integrations.languageServersBlocked && lspFound.length > 0 ? 'ok' : 'warn'
+
   return (
     <div className="modal-backdrop" onClick={requestClose}>
       <div
@@ -952,11 +1028,13 @@ export function SettingsModal({
         </div>
 
         <div className="modal__main">
-          <nav className="modal__nav">
+          <nav className="modal__nav" aria-label="Settings sections">
             {TABS.map((t) => (
               <button
                 key={t.id}
                 className={t.id === tab ? 'is-active' : ''}
+                // The highlighted section is otherwise only a color and a rail.
+                aria-current={t.id === tab ? 'page' : undefined}
                 onClick={() => setTab(t.id)}
               >
                 <span className="set-nav__icon" aria-hidden="true">
@@ -1836,6 +1914,76 @@ export function SettingsModal({
                       )}
                     </>
                   )}
+                  {integrations?.languageServers && (
+                    <>
+                      <div className="integration">
+                        <span className="integration__name">Language servers (code intelligence)</span>
+                        <span
+                          className={`integration__status pill integration__status--${lspTone} pill--${lspTone}`}
+                        >
+                          {integrations.languageServersBlocked === 'disabled'
+                            ? 'Off'
+                            : integrations.languageServersBlocked === 'needs-git-bash'
+                              ? 'Needs Git for Windows'
+                              : integrations.languageServersBlocked === 'unsandboxed'
+                                ? 'Off: no sandbox'
+                                : `${lspFound.length} of ${integrations.languageServers.length} found`}
+                        </span>
+                      </div>
+                      <p className="field__hint">
+                        {integrations.languageServers.map((l, i) => (
+                          <span key={l.id}>
+                            {i > 0 && ', '}
+                            <code>{l.id}</code> {l.path ? '✓' : '✗'}
+                          </span>
+                        ))}
+                        . A language server gives the agent type-aware diagnostics after each edit and
+                        go-to-definition, references, and rename. Install the ones you want on your{' '}
+                        <code>PATH</code> (a project&apos;s own <code>node_modules/.bin</code> also
+                        counts), for example{' '}
+                        <code>npm install -g typescript-language-server typescript</code>.
+                      </p>
+                    </>
+                  )}
+                </SettingsSection>
+
+                <SettingsSection title="Language servers">
+                  <label className="field">
+                    <span>Run language servers</span>
+                    <select
+                      value={
+                        settings.lspEnabled === undefined ? 'auto' : settings.lspEnabled ? 'on' : 'off'
+                      }
+                      onChange={(e) => {
+                        const v = e.target.value
+                        setSettings((s) => ({
+                          ...s,
+                          lspEnabled: v === 'auto' ? undefined : v === 'on'
+                        }))
+                      }}
+                    >
+                      <option value="auto">Automatic: when the sandbox can confine them</option>
+                      <option value="on">Always, even without a sandbox</option>
+                      <option value="off">Never</option>
+                    </select>
+                  </label>
+                  <p className="field__hint">
+                    Servers start on demand, one per language and project, run sandboxed with no
+                    network, and stop after ten idle minutes. A server can run code from the project
+                    (a TypeScript plugin, a Rust build script), which is why Automatic keeps them off
+                    on a host with no sandbox.
+                  </p>
+                  <LspServersField
+                    servers={settings.lspServers}
+                    onChange={(list) => setSettings((s) => ({ ...s, lspServers: list.length ? list : undefined }))}
+                  />
+                  <p className="field__hint">
+                    Optional. Each entry needs <code>id</code>, <code>command</code> (a name on{' '}
+                    <code>PATH</code> or an absolute path), and <code>extensions</code>; add{' '}
+                    <code>args</code>, <code>languageId</code>, or <code>rootMarkers</code> as needed.
+                    Reusing a built-in id (<code>typescript</code>, <code>python</code>,{' '}
+                    <code>go</code>, <code>rust</code>, <code>clangd</code>) replaces it.
+                  </p>
                 </SettingsSection>
 
                 <SettingsSection title="Format on save">
@@ -1857,22 +2005,36 @@ export function SettingsModal({
                 </SettingsSection>
 
                 <SettingsSection title="Diagnostics on save">
-                  <label className="field field--checkbox">
-                    <input
-                      type="checkbox"
-                      checked={settings.diagnosticsOnSave ?? false}
-                      onChange={(e) =>
-                        setSettings((s) => ({ ...s, diagnosticsOnSave: e.target.checked }))
+                  <label className="field">
+                    <span>After the agent writes a file</span>
+                    <select
+                      value={
+                        settings.diagnosticsOnSave === undefined
+                          ? 'auto'
+                          : settings.diagnosticsOnSave
+                            ? 'on'
+                            : 'off'
                       }
-                    />
-                    <span>
-                      After the agent writes a file, run a fast checker on it (<code>eslint</code>{' '}
-                      for JS/TS, <code>ruff</code>/<code>pyflakes</code> for Python,{' '}
-                      <code>gofmt</code> for Go) and show any problems to the agent so it can
-                      self-correct in the same turn. Read-only: never edits the file. Only runs when
-                      the checker is installed; off by default.
-                    </span>
+                      onChange={(e) => {
+                        const v = e.target.value
+                        setSettings((s) => ({
+                          ...s,
+                          diagnosticsOnSave: v === 'auto' ? undefined : v === 'on'
+                        }))
+                      }}
+                    >
+                      <option value="auto">Check with a language server when one covers the file</option>
+                      <option value="on">Language server, or else a fast checker</option>
+                      <option value="off">Don&apos;t check</option>
+                    </select>
                   </label>
+                  <p className="field__hint">
+                    Shows the agent the problems its edit introduced (errors, and a few warnings) so
+                    it can fix them in the same turn. Problems the file already had are left out.
+                    The fast checkers are <code>eslint</code> for JS/TS, <code>ruff</code>/
+                    <code>pyflakes</code> for Python, and <code>gofmt</code> for Go, used for files
+                    no language server covers. Read-only: never edits the file.
+                  </p>
                 </SettingsSection>
 
                 <SettingsSection

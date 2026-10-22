@@ -693,6 +693,9 @@ body.is-resizing {
 .conv__branch {
   color: var(--accent);
 }
+.conv__branch-icon {
+  margin-right: 3px;
+}
 .conv__menu-wrap {
   position: relative;
   flex-shrink: 0;
@@ -815,12 +818,21 @@ body.is-resizing {
   /* Fixed width so the menu doesn't jump narrower as the search filters the list. */
   width: 400px;
   max-width: calc(100vw - 16px);
+  /* Only the list scrolls, so the search field below it stays on screen. */
+  overflow: hidden;
 }
-/* Filter field pinned above the list; focus lands here when the menu opens. */
+.model-menu__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Filter field pinned below the list, nearest the model button; focus lands here
+   when the menu opens. */
 .model-menu__search {
+  flex: none;
   width: 100%;
   box-sizing: border-box;
-  margin: 2px 0 4px;
+  margin: 4px 0 2px;
   padding: 5px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -923,6 +935,7 @@ body.is-resizing {
 }
 /* One line naming the providers with no models yet, instead of an empty group each. */
 .model-menu__footnote {
+  flex: none;
   padding: 6px 9px 3px;
   border-top: 1px solid var(--border);
   margin-top: 4px;
@@ -965,7 +978,9 @@ body.is-resizing {
 .sidebar__settings {
   width: 100%;
 }
-.sidebar__share {
+.sidebar__share,
+.sidebar__import,
+.sidebar__settings {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1214,7 +1229,6 @@ body.is-resizing {
 }
 .control__icon {
   flex-shrink: 0;
-  font-size: 11px;
 }
 .control__text {
   white-space: nowrap;
@@ -1994,23 +2008,6 @@ body.is-resizing {
 .msg--user {
   display: flex;
   justify-content: flex-end;
-}
-/* A message steered into a running turn: labelled, with an accent edge, so it reads
-   as a course correction to the run in progress rather than a new turn. */
-.msg--steered {
-  flex-direction: column;
-  align-items: flex-end;
-}
-.msg--user.msg--steered .msg__body {
-  border-color: var(--accent);
-}
-.msg__steered-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 4px;
-  font-size: 11px;
-  color: var(--accent);
 }
 .msg--user .msg__body {
   max-width: 86%;

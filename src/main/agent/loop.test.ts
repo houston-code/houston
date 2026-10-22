@@ -7653,3 +7653,123 @@ describe('turn receipt', () => {
     expect(r.messages.at(-1)?.receipt?.filesChanged).toEqual(['kept.txt'])
   })
 })
+
+describe('lsp_rename through the write gate', () => {
+  // A stand-in for the language server: renames the three `foo`s in a.ts and b.ts, plus any
+  // extra file a test names. The loop only sees it through lspManager.clientFor.
+  async function stubServer(extraUris: string[] = []): Promise<void> {
+    const { lspManager } = await import('./lsp/manager')
+    const { toUri } = await import('./lsp/uri')
+    const root = realpathSync(ws)
+    const edit = (uri: string, line: number, col: number) => ({
+      uri,
+      edit: { range: { start: { line, character: col }, end: { line, character: col + 3 } }, newText: 'bar' }
+    })
+    const all = [
+      edit(toUri(join(root, 'a.ts')), 0, 16),
+      edit(toUri(join(root, 'b.ts')), 0, 9),
+      edit(toUri(join(root, 'b.ts')), 1, 12),
+      ...extraUris.map((u) => edit(u, 0, 0))]
+    const changes: Record<string, unknown[]> = {}
+    for (const e of all) (changes[e.uri] ??= []).push(e.edit)
+    const client = {
+      server: { spec: { name: 'Stub' } },
+      serverCapabilities: { renameProvider: true },
+      sync: async () => 1,
+      request: async (method: string) => (method === 'textDocument/rename' ? { changes } : null)
+    }
+    vi.spyOn(lspManager, 'clientFor').mockResolvedValue(client as never)
+  }
+
+  const renameCall = {
+    type: 'tool_call' as const,
+    call: { id: 'r1', name: 'lsp_rename', arguments: { path: 'a.ts', line: 1, symbol: 'foo', new_name: 'bar' } }
+  }
+
+  beforeEach(() => {
+    writeFileSync(join(ws, 'a.ts'), 'export function foo() {}\n')
+    writeFileSync(join(ws, 'b.ts'), "import { foo } from './a'\nconsole.log(foo())\n")
+  })
+
+  it('asks for approval as the apply_patch it amounts to, and applies nothing when denied', async () => {
+    await stubServer()
+    const r = await run({
+      policy: 'ask',
+      onApproval: (_id, decide) => decide('deny'),
+      turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    const approval = r.events.find((e) => e.type === 'tool_approval')
+    expect(approval).toMatchObject({ name: 'apply_patch' })
+    const patch = String((approval as unknown as { args: { patch: string } }).args.patch)
+    expect(patch).toContain('*** Update File: a.ts')
+    expect(patch).toContain('*** Update File: b.ts')
+    expect(readFileSync(join(ws, 'b.ts'), 'utf8')).toContain('foo()')
+    // The transcript keeps the model's own call, answered under its own name.
+    const result = r.messages.find((m) => m.role === 'tool')
+    expect(result).toMatchObject({ toolCallId: 'r1', toolName: 'lsp_rename' })
+    expect(String(result?.content)).toMatch(/^Denied/)
+  })
+
+  it('applies every edit when allowed, with a checkpoint that reverts all of them', async () => {
+    await stubServer()
+    const r = await run({
+      policy: 'ask',
+      conversationId: 'conv-lsp-rename',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    expect(readFileSync(join(ws, 'a.ts'), 'utf8')).toBe('export function bar() {}\n')
+    expect(readFileSync(join(ws, 'b.ts'), 'utf8')).toBe("import { bar } from './a'\nconsole.log(bar())\n")
+    const result = r.messages.find((m) => m.role === 'tool')
+    expect(String(result?.content)).toMatch(/^Renamed "foo" to "bar": 3 edits in 2 files\. Applied patch/)
+    const cp = await getConversationCheckpoint('conv-lsp-rename')
+    expect(cp?.files).toBe(2)
+    await restoreCheckpoint(cp!.runId)
+    expect(readFileSync(join(ws, 'b.ts'), 'utf8')).toContain('foo()')
+  })
+
+  it('refuses a rename that reaches outside the workspace, before asking anyone', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'houston-lsp-outside-'))
+    try {
+      writeFileSync(join(outside, 'c.ts'), 'foo\n')
+      const { toUri } = await import('./lsp/uri')
+      await stubServer([toUri(join(realpathSync(outside), 'c.ts'))])
+      const r = await run({
+        policy: 'full-auto',
+        turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+      })
+      expect(types(r)).not.toContain('tool_approval')
+      expect(String(r.messages.find((m) => m.role === 'tool')?.content)).toMatch(/outside the project/)
+      expect(readFileSync(join(outside, 'c.ts'), 'utf8')).toBe('foo\n')
+      expect(readFileSync(join(ws, 'a.ts'), 'utf8')).toContain('foo')
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('honors apply_patch permission rules for the files the rename touches', async () => {
+    await stubServer()
+    h.settings.permissionRules = [{ action: 'deny', tool: 'apply_patch', match: 'b.ts' }]
+    try {
+      const r = await run({
+        policy: 'full-auto',
+        turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+      })
+      expect(String(r.messages.find((m) => m.role === 'tool')?.content)).toMatch(/denied/i)
+      expect(readFileSync(join(ws, 'a.ts'), 'utf8')).toContain('foo')
+    } finally {
+      h.settings.permissionRules = []
+    }
+  })
+
+  it('does not ask the server anything in plan mode', async () => {
+    const { lspManager } = await import('./lsp/manager')
+    const spy = vi.spyOn(lspManager, 'clientFor')
+    const r = await run({
+      policy: 'plan',
+      turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    expect(spy).not.toHaveBeenCalled()
+    expect(String(r.messages.find((m) => m.role === 'tool')?.content)).toMatch(/Plan mode/)
+  })
+})

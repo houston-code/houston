@@ -60,7 +60,7 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS } from '@shared/agent'
-import { contextWindowFor, contextPercent, accumulateModelUsage } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd } from '@shared/usage'
 import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { pickDefaultModel } from '@shared/models'
@@ -339,7 +339,9 @@ export function toolArgHint(args: Record<string, unknown>): string {
  */
 export function renderApprovalPrompt(
   ev: Extract<AgentEvent, { type: 'tool_approval' }>,
-  paint: Painter
+  paint: Painter,
+  /** The arrow-key picker lists the choices itself; the typed-answer keys would repeat them. */
+  opts: { picker?: boolean } = {}
 ): string {
   // The one-time full-auto shell-network consent gates the sandbox's network, not the
   // command — frame it as a network grant so "deny" reads as "run offline", not "block".
@@ -349,7 +351,8 @@ export function renderApprovalPrompt(
       '  Shell runs in a sandbox that can read your files; declining runs commands offline.',
       'dim'
     )
-    return `\n${head}\n  ${ev.summary}\n${note}\n${paint('  [y] allow network   [n] no network   [a] allow for run', 'dim')}`
+    const keys = opts.picker ? '' : `\n${paint('  [y] allow network   [n] no network   [a] allow for run', 'dim')}`
+    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
   }
   const warn =
     ev.kind === 'shell' && ev.sandboxed === false
@@ -366,11 +369,38 @@ export function renderApprovalPrompt(
     : ''
   const head = paint(`Approve ${ev.name}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
-  return (
-    `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}\n` +
-    paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim') +
-    paint('\n  …or type why not, and that goes back to the agent', 'dim')
-  )
+  const keys = opts.picker
+    ? ''
+    : `\n${paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim')}` +
+      paint('\n  …or type why not, and that goes back to the agent', 'dim')
+  return `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}${keys}`
+}
+
+/**
+ * The line recording how an approval was answered, as the desktop's card shows its
+ * outcome once decided. Without it the scrollback kept only the menu, and Esc
+ * (which denies) left no sign of what happened.
+ */
+export function approvalOutcome(
+  decision: ToolApprovalDecision,
+  opts: { shellNetwork?: boolean; note?: string } = {}
+): string {
+  if (opts.shellNetwork) {
+    if (decision === 'deny') return 'Running offline'
+    return decision === 'always' ? 'Network allowed for this run' : 'Network allowed'
+  }
+  switch (decision) {
+    case 'allow':
+      return 'Allowed'
+    case 'always':
+      return 'Allowed for this run'
+    case 'rule-allow':
+      return 'Always allowed (rule saved)'
+    case 'rule-deny':
+      return 'Always denied (rule saved)'
+    case 'deny':
+      return opts.note ? `Denied: ${opts.note}` : 'Denied'
+  }
 }
 
 /**
@@ -647,19 +677,19 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
       : ''
     const written = t.cacheWriteTokens ? paint(`  (${n(t.cacheWriteTokens)} cache write)`, 'dim') : ''
     lines.push(
-      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  $${t.cost.toFixed(4)}`
+      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatUsd(t.cost)}`
     )
   }
   if (tallies.length > 1) {
-    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  $${total.cost.toFixed(4)}`, 'dim'))
+    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatUsd(total.cost)}`, 'dim'))
   }
   return lines.join('\n')
 }
 
-/** Format a cost total, e.g. "1,234+567 tok · $0.0123". */
+/** Format a cost total, e.g. "1,234+567 tok · $0.012" (amounts as the desktop shows them). */
 export function formatSessionCost(c: SessionCost): string {
   const n = (v: number): string => v.toLocaleString('en-US')
-  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · $${c.cost.toFixed(4)}`
+  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatUsd(c.cost)}`
 }
 
 /** Status marker for a subagent row, printed as a discrete line in line mode. */
@@ -712,10 +742,16 @@ export interface StatusState {
   contextTokens: number
 }
 
+/** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
+export function homeRelative(path: string, home = process.env.HOME ?? process.env.USERPROFILE): string {
+  if (!home) return path
+  if (path === home || path.startsWith(`${home}/`) || path.startsWith(`${home}\\`)) return `~${path.slice(home.length)}`
+  return path
+}
+
 /** Shorten a path for the status line: `~` for home, and only the last two segments. */
 export function shortCwd(cwd: string, home = process.env.HOME): string {
-  let p = cwd
-  if (home && (p === home || p.startsWith(`${home}/`))) p = `~${p.slice(home.length)}`
+  const p = homeRelative(cwd, home)
   const segs = p.split('/').filter(Boolean)
   if (segs.length <= 2) return p
   return `${p.startsWith('~') ? '~/' : '…/'}${segs.slice(-2).join('/')}`
@@ -732,7 +768,7 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
     paint(`${s.providerId}/${s.model}`, 'cyan'),
     paint(s.policy, 'dim'),
     paint(shortCwd(s.cwd), 'dim'),
-    `$${s.cost.cost.toFixed(4)}`
+    formatUsd(s.cost.cost)
   ]
   if (pct !== null) {
     const tone = pct >= 90 ? 'red' : pct >= 70 ? 'yellow' : 'green'
@@ -1486,7 +1522,7 @@ export const HELP_TEXT = [
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
-  '  /theme [name]         list or switch color theme (default | bright | mono)',
+  `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
   '  /image [path]         attach an image from your clipboard, or a file',
   '  /cwd                  show the working directory',
   '  /share                copy an invite to Houston to send a friend',
@@ -2801,7 +2837,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
 
   deps.io.out(
     `${paint('Houston', 'bold', 'cyan')} ${paint(deps.version ? `v${deps.version}` : '', 'dim')} ${paint('(interactive)', 'dim')}\n` +
-      `${paint(`  cwd:      ${opts.cwd}`, 'dim')}\n` +
+      // `~` for the home folder keeps the usual path on one line; /cwd prints it in full.
+      `${paint(`  cwd:      ${homeRelative(opts.cwd)}`, 'dim')}\n` +
       `${paint(
         providerId && model
           ? `  model:    ${providerId} / ${model}`
@@ -3582,6 +3619,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // (and per subagent), which would be noisy to print each time — the live
     // session total already sits in the status line above the composer. So we sum
     // the round usages here and print one compact summary when the turn ends.
+    // Back-to-back retries of one request: the first prints a line and later ones
+    // only relabel the spinner, as the desktop updates one line in place instead of
+    // stacking six. Any other output ends the streak.
+    let retryStreak = 0
     let turnInputTokens = 0
     let turnOutputTokens = 0
     let turnCost = 0
@@ -3620,6 +3661,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // bell + notification honor the user's existing "notify me" setting.
       if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
       if (e.type === 'text') {
+        retryStreak = 0 // the request got through
         const s = md.push(e.delta)
         if (s) roundShown = true
         deps.io.out(s)
@@ -3632,6 +3674,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // Any event but reasoning means the streaming round is over (or gone).
       const roundWasShown = roundShown
       if (e.type !== 'reasoning') roundShown = false
+      // Usage and a discarded partial round belong to the retry they surround.
+      if (e.type !== 'retry' && e.type !== 'error' && e.type !== 'usage' && e.type !== 'turn_discarded') {
+        retryStreak = 0
+      }
       switch (e.type) {
         case 'reasoning':
           deps.io.setSpinnerLabel?.('Thinking')
@@ -3712,8 +3758,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
         case 'retry':
-          deps.io.setSpinnerLabel?.('Retrying')
-          deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
+          deps.io.setSpinnerLabel?.(`Retrying ${e.attempt}/${e.max}`)
+          if (retryStreak === 0) deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
+          retryStreak = e.attempt
           break
         case 'model_fallback':
           deps.io.setSpinnerLabel?.('Switching model')
@@ -3722,7 +3769,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_approval':
           enqueue(async () => {
             // Context (name, kind, unsandboxed warning) + the diff for a write.
-            deps.io.out(`${renderApprovalPrompt(e, paint)}\n`)
+            deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select })}\n`)
             if (e.kind === 'write') {
               // Prefer the main process's preview: it is diffed against the files'
               // actual contents, so an overwrite shows what changed rather than the
@@ -3748,6 +3795,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               // reason" there would be nonsense, so keep that prompt to three options.
               const r = await deps.io.select({
                 title: 'Choose:',
+                // Esc is a refusal here (the safe default), so the footer says so.
+                escLabel: e.shellNetwork ? 'run offline' : 'deny',
                 options: e.shellNetwork
                   ? [
                       { label: 'Allow network', value: 'allow' },
@@ -3780,6 +3829,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               decision = parsed.decision
               note = parsed.note
             }
+            const outcome = approvalOutcome(decision, { shellNetwork: e.shellNetwork, note })
+            deps.io.out(paint(`  ↳ ${stripControlChars(outcome)}\n`, decision === 'deny' || decision === 'rule-deny' ? 'yellow' : 'dim'))
             deps.resolveApproval(e.runId, e.callId, decision, note)
           })
           break
@@ -3879,6 +3930,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           if (e.inputTokens) contextTokens = e.inputTokens
           break
         case 'error':
+          // The run gave up mid-streak: say the retries are over, so the line above
+          // doesn't read as still in progress.
+          if (retryStreak > 0) {
+            deps.io.out(
+              paint(`\n· tried ${retryStreak} more time${retryStreak === 1 ? '' : 's'}, then stopped\n`, 'yellow')
+            )
+          }
           deps.io.out(paint(`\nError: ${e.message}\n`, 'red'))
           break
         case 'limit':

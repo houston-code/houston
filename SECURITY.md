@@ -2,29 +2,29 @@
 
 Houston is a desktop coding agent that can read, edit, and execute code on your
 machine, and can send code and prompts to whichever model provider you configure.
-Security reports are taken seriously — thank you for helping keep users safe.
+Security reports are taken seriously. Thank you for helping keep users safe.
 
 ## Reporting a vulnerability
 
-Please report security vulnerabilities **privately** — do not open a public issue,
+Please report security vulnerabilities **privately**. Do not open a public issue,
 pull request, or discussion for a suspected vulnerability.
 
 - Use GitHub's private vulnerability reporting: open the repository's **Security**
   tab and choose **Report a vulnerability**
   (<https://github.com/houston-code/houston/security/advisories/new>). This creates a
   private advisory visible only to the maintainers and you.
-- If you can't use GitHub's flow — or prefer email — write to
+- If you can't use GitHub's flow, or prefer email, write to
   **security@houstoncode.ai**, which is monitored privately by the maintainers.
 
 Please include, as far as you can:
 
-- the affected version (see **Houston → About**, or the title-bar version) and your
-  operating system;
+- the affected version (shown in **Settings → Updates**, or **Houston → About** on
+  macOS; `houston -v` for the terminal CLI) and your operating system;
 - a description of the issue and its security impact;
 - clear steps to reproduce, ideally with a minimal proof of concept;
 - any relevant logs, screenshots, or crash output.
 
-Please do not include live secrets (API keys, tokens) in a report — redact them.
+Please do not include live secrets (API keys, tokens) in a report; redact them.
 
 ## What to expect
 

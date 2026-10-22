@@ -11,11 +11,15 @@ import {
   type StoredSideChat,
   type TokenUsage
 } from '@shared/agent'
-import type { ModelCaps } from '@shared/types'
+import type { ModelCaps, PermissionRule } from '@shared/types'
 import { turnCostUsd } from '@shared/usage'
 import { runSubAgent, type SubAgentOptions } from './agent/subagent'
 import { createSecretRedactor } from './agent/redact'
-import { collectSecrets, getProvider } from './agentHost'
+import { matchRule, permissionSubject } from './agent/permissions'
+import { isSensitiveRead } from './agent/sensitive-paths'
+import { loadManagedPolicy } from './agent/managedPolicy'
+import { loadProjectConfig } from './agent/projectConfig'
+import { collectSecrets, getProvider, getSettings } from './agentHost'
 import { createProvider } from './providers'
 import { addUsage, getConversation, saveSideChat } from './conversations'
 
@@ -173,6 +177,12 @@ export interface SideChatDeps {
   /** Run the subagent (defaults to the real one). */
   runSubAgent?: (opts: SubAgentOptions) => Promise<string>
   /**
+   * The permission rules the side chat's reads answer to, highest tier first. Defaults
+   * to the managed policy, the project's guardrails, and the user's own rules, the
+   * tiers a main-chat read is matched against.
+   */
+  permissionRules?: (workspace: string) => Promise<PermissionRule[]>
+  /**
    * Scrub stored secrets from the question and from every tool output before they
    * reach the provider, as the main loop does. Defaults to identity (tests).
    */
@@ -245,6 +255,7 @@ export async function askSideChat(
       systemOverride: SIDE_CHAT_SYSTEM,
       // Read-only, always: the side chat may read the project but never change it.
       writable: false,
+      gateLocal: sideChatGate(await (deps.permissionRules ?? defaultPermissionRules)(conv.workspace), [conv.workspace]),
       redact,
       ...(resumable ? { priorMessages: stored.transcript } : {}),
       onTranscript: (messages) => {
@@ -325,6 +336,38 @@ export function sideOutcome(report: string, aborted: boolean): { answer: string 
  * desktop IPC and the terminal so they can't drift. Build it per question, so the
  * redactor covers a key added since the last one.
  */
+/** The rule tiers a main-chat read is matched against, minus a trusted folder's allows. */
+async function defaultPermissionRules(workspace: string): Promise<PermissionRule[]> {
+  const [managed, project] = await Promise.all([loadManagedPolicy(), loadProjectConfig(workspace)])
+  return [...managed.permissionRules, ...project.permissionRules, ...(getSettings().permissionRules ?? [])]
+}
+
+/**
+ * The side chat's gate for its reads. It can't ask the user anything, so a `deny` or
+ * `ask` rule refuses the call, and so does a credential-file read no `allow` rule
+ * covers; everything else runs. Without it a managed or project deny on a path the
+ * main chat honors was skipped here.
+ */
+export function sideChatGate(rules: PermissionRule[], roots: string[]): NonNullable<SubAgentOptions['gateLocal']> {
+  return async (name, kind, args, run) => {
+    const action = matchRule(rules, name, permissionSubject(name, args), roots)
+    if (action === 'deny') return 'Denied by a permission rule. Do not retry; answer without it.'
+    if (action === 'ask') {
+      return (
+        "A permission rule asks the user before this call, and the side chat can't ask. Do not retry; " +
+        'say what you would need to check and that the main chat can do it with approval.'
+      )
+    }
+    if (action !== 'allow' && isSensitiveRead(kind, args)) {
+      return (
+        `Reading ${String(args.path)} needs the user's approval because it looks like a credential or ` +
+        "secret file, and the side chat can't ask for it. Do not retry; answer without it."
+      )
+    }
+    return run()
+  }
+}
+
 export function hostSideChatDeps(onChange?: (conversationId: string) => void): SideChatDeps {
   return {
     getConversation,

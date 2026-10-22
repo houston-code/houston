@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -255,6 +256,10 @@ export function Composer({
   // A transient one-line status under the field (e.g. "No uncommitted changes").
   const [notice, setNotice] = useState<string | null>(null)
   const ref = useRef<HTMLTextAreaElement>(null)
+  // Ids tying the textarea to its open suggestion list for screen readers.
+  const menuId = useId()
+  const cmdMenuId = `${menuId}-commands`
+  const fileMenuId = `${menuId}-files`
   const fileInputRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const plusRef = useRef<HTMLButtonElement>(null)
@@ -970,10 +975,13 @@ export function Composer({
           </div>
         )}
         {showCmdMenu && (
-          <ul className="mention-menu">
+          <ul className="mention-menu" id={cmdMenuId} role="listbox" aria-label="Commands">
             {cmdMatches.map((cmd, i) => (
               <li
                 key={cmd.name}
+                id={`${cmdMenuId}-${i}`}
+                role="option"
+                aria-selected={i === cmdIndex}
                 className={`mention-item ${i === cmdIndex ? 'mention-item--active' : ''}`}
                 onMouseDown={(e) => {
                   e.preventDefault()
@@ -987,10 +995,13 @@ export function Composer({
           </ul>
         )}
         {showMentionMenu && (
-          <ul className="mention-menu">
+          <ul className="mention-menu" id={fileMenuId} role="listbox" aria-label="Files">
             {suggestions.map((path, i) => (
               <li
                 key={path}
+                id={`${fileMenuId}-${i}`}
+                role="option"
+                aria-selected={i === mentionIndex}
                 className={`mention-item ${i === mentionIndex ? 'mention-item--active' : ''}`}
                 onMouseDown={(e) => {
                   e.preventDefault()
@@ -1061,6 +1072,14 @@ export function Composer({
           ref={ref}
           className="composer__input"
           data-tour="composer"
+          // The placeholder changes with state and vanishes once typing starts, so it
+          // can't be the field's name.
+          aria-label="Message"
+          aria-autocomplete="list"
+          aria-controls={showCmdMenu ? cmdMenuId : showMentionMenu ? fileMenuId : undefined}
+          aria-activedescendant={
+            showCmdMenu ? `${cmdMenuId}-${cmdIndex}` : showMentionMenu ? `${fileMenuId}-${mentionIndex}` : undefined
+          }
           placeholder={
             disabled
               ? disabledReason ?? 'Pick a model and project folder to start…'

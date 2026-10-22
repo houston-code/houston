@@ -2,30 +2,31 @@
 
 Houston covers a broad span of coding-agent features (see the **Features** list in
 the [README](./README.md)). This file tracks the items that are intentionally
-**not done yet**: either out of scope for a macOS desktop app, or a larger effort
-than the work so far has covered. Each notes *why*
+**not done yet**: either a non-goal for a local, bring-your-own-model app, or a
+larger effort than the work so far has covered. Each notes *why*
 it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
-## Deferred — larger effort
+## Deferred: larger effort
 
 - **Programmatic SDK.** A stable, importable API for embedding the agent in other
   Node programs (beyond the one-shot CLI below). *Why deferred:* needs a versioned
-  public surface. The packaging groundwork now exists — the standalone CLI
+  public surface. The packaging groundwork now exists: the standalone CLI
   (`npm run build:cli`, see the README) already bundles the engine without
-  Electron via the userData/credentials/agentHost seams — but an SDK is an API
+  Electron via the userData/credentials/agentHost seams, but an SDK is an API
   commitment, not just a bundle. One-shot headless runs (`Houston -p "<prompt>"`)
   already cover scripting/CI.
 
-- **Terminal-first TUI (interactive) — foundation shipped, polish remaining.**
+- **Terminal-first TUI (interactive): foundation shipped, polish remaining.**
   A stay-resident, interactive terminal client you converse with directly
-  (`Houston -i`, see the README) — also available Electron-free as the standalone
+  (`Houston -i`, see the README), also available Electron-free as the standalone
   CLI (single-file Node bundle; runs on headless servers, ~60 MB RSS). *Shipped:*
   a line-streaming REPL over the shared
-  agent core — live output, inline approvals (with a diff preview on writes and an
+  agent core: live output, inline approvals (with a diff preview on writes and an
   unsandboxed-shell warning), `ask_user` elicitation, slash commands, a session
   cost meter, and sessions persisted as conversations (resumable, shared with the
-  GUI), plus Tab completion of slash commands and `@`-file mentions. Themes, vim
-  keybindings, and a persistent status line have since shipped in the REPL too.
+  GUI), plus Tab completion of slash commands and `@`-file mentions. A raw-mode
+  composer (multi-line editing, bracketed paste, Ctrl-R history search, vim keys),
+  steering, themes, and a persistent status line have since shipped in the REPL too.
   *Still deferred:* a **full-screen** TUI (alternate-buffer rendering). *Why
   deferred:* the full-screen layer means a terminal UI framework (e.g. Ink), which
   is ESM-only against a CJS main bundle, an integration that needs verifying before
@@ -34,7 +35,7 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 - **Composer screenshot capture.** The composer's `+` attachment menu attaches
   files, a folder, the working-tree diff, a clipboard payload, and a link (and
   reuses the existing `@`-mention and image-upload flows). A "take a screenshot"
-  action — capture a screen or window and attach it as an image — is not yet
+  action (capture a screen or window and attach it as an image) is not yet
   wired. *Why deferred:* needs a capture subsystem (Electron `desktopCapturer`
   plus a source picker), and the per-OS paths differ enough to need real
   cross-platform testing: macOS requires the Screen-Recording permission (TCC),
@@ -46,7 +47,7 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   integrated terminal's recent buffer as message context. *Why deferred:* the
   buffer lives in the renderer's xterm instance(s), so surfacing it to the
   composer needs a shared most-recent-output store (and a choice of which terminal
-  when several are open) — cross-component plumbing beyond the current attachment
+  when several are open), cross-component plumbing beyond the current attachment
   set.
 
 - **SSRF hardening: pin resolved IPs on the Electron surfaces (DNS-rebinding).**
@@ -64,17 +65,17 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   much smaller: both accept loopback only, so there's no attacker-supplied public host
   to rebind in the first place.
 
-- **Extend untrusted-content handling past `web_fetch`.** Fetched pages are fenced,
-  scored for injection signals, and isolated when they look like an attempt (see
-  `src/main/agent/untrusted.ts`). The system prompt says the same rule covers file
-  contents, MCP results, and other tool output, but those still arrive unfenced and
-  unscored — so for them the posture remains advisory. MCP results are the sharpest
-  gap: a third-party server is as attacker-controlled as a web page, and its output
-  crosses the same trust boundary. *Why deferred:* the fence is cheap to apply
-  anywhere, but the quarantine path needs a per-source judgment about what a "report"
-  even means (a fenced JSON tool result is not prose to summarize), and blanket
-  fencing of every file read would add noise to the common path for little gain,
-  since the file contents mostly come from the user's own repo. Wants a per-source
+- **Extend untrusted-content handling to file contents and other tool output.**
+  Text outsiders write is fenced as untrusted (a fresh nonce per call): fetched
+  pages, web search results, GitHub issue, pull request, and CI text, and MCP tool
+  results and resources (see `src/main/agent/untrusted.ts`). Web pages and MCP
+  results that score as an injection attempt are also read in isolation, by a model
+  call with no tools and no history. The system prompt says the same rule covers
+  file contents and other tool output (shell output, for one), but those still
+  arrive unfenced and unscored, so for them the posture remains advisory. *Why
+  deferred:* blanket fencing of every file read would add noise to the common path
+  for little gain, since file contents mostly come from the user's own repo, and a
+  cloned third-party repo or a command that prints remote text needs a per-source
   trust model rather than one flag. Two known limits of what shipped: the classifier
   is a heuristic that anyone who reads this repo can word around, and the isolated
   reader can still be induced to write a misleading report (it just has no tools to
@@ -82,16 +83,16 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
 
 - **Egress-allowlist follow-ups.** The per-domain forward proxy for shell egress has
   shipped (macOS + Linux: direct sockets denied in the sandbox profile, granted network
-  routed through a loopback proxy that enforces the Settings allowlist — see
+  routed through a loopback proxy that enforces the Settings allowlist; see
   docs/sandboxing.md). What remains, deliberately deferred: **interactive per-host
   grants** (a denied destination could offer a one-click "allow this domain for the
-  run" prompt instead of requiring a Settings edit — needs a mid-command consent UX
+  run" prompt instead of requiring a Settings edit; needs a mid-command consent UX
   that doesn't hang the running process); **Linux shared-loopback proxied mode**
   (proxied commands run in per-command network namespaces, so a sandboxed dev server
   isn't reachable from the Preview panel or later commands; bridging inbound loopback
   across namespaces wants a port-forwarding companion to the existing outbound
   forwarder); and **body-level masking for shell egress** (HTTPS bodies stay opaque to
-  the proxy by design — only the CONNECT hostname is visible — so credential masking
+  the proxy by design, since only the CONNECT hostname is visible, so credential masking
   covers Houston's own network tools, not raw shell traffic).
 
 - **Mid-run resume after a crash/restart.** Re-enter an interrupted tool loop
@@ -104,11 +105,12 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   and a concurrent (rather than sequential) approval UI.
 
 - **Additional build targets.** The cross-platform execution backends and builds have
-  shipped (macOS Seatbelt, Linux bubblewrap, Windows — see the README). The remaining
-  gap is *more arches/installers*, each of which just needs its own CI runner: x64
-  (Intel) macOS, arm64 Windows (`windows-11-arm`), arm64 Linux, and an `.rpm` target.
-  macOS is now code-signed (Developer ID) and notarized; **Windows Authenticode signing**
-  is the remaining code-signing follow-up so the first-run SmartScreen warning goes away.
+  shipped (macOS Seatbelt on Apple Silicon and Intel, Linux bubblewrap, Windows; see the
+  README). The remaining gap is *more arches/installers*, each of which just needs its
+  own CI runner: arm64 Windows (`windows-11-arm`), arm64 Linux, and an `.rpm` target.
+  macOS is code-signed (Developer ID) and notarized; **Windows Authenticode signing**
+  is the remaining code-signing follow-up so the first-run SmartScreen warning goes away
+  and Windows can auto-install updates. It needs a paid OV/EV code-signing certificate.
 
 - **Multi-agent orchestration beyond delegation.** Delegation itself has shipped
   in stages. Subagents come in two tiers: `dispatch_agent` (and custom
@@ -120,7 +122,7 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   [`subagent.ts`](src/main/agent/subagent.ts)). Calls that leave that envelope
   propagate back to the user as their own approval prompts, each shown live in
   the transcript: every network request (either tier may `web_fetch`/`web_search`,
-  gated per destination, mirroring the main loop's egress consent — a subagent's
+  gated per destination, mirroring the main loop's egress consent; a subagent's
   shell commands stay offline), and, on a host with no OS sandbox, each shell
   command, matching the main loop's invariant that an unconfined command never
   runs without per-command consent. On top of that, dispatches stream live
@@ -130,52 +132,46 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   front-matter); subagents can fan out one level of nested read-only researchers;
   `spawn_session` works on all three clients; and `schedule_run` gives
   recurring/one-time background runs. *Still deferred:* a full **orchestration
-  runtime** — scripted multi-agent workflows (deterministic fan-out/join
+  runtime**: scripted multi-agent workflows (deterministic fan-out/join
   pipelines), named agent teams with roles, and a manager view that supervises
   many concurrent agents across sessions. *Why deferred:* those need a
   first-class run-graph model, cross-session messaging, and their own
-  supervision/consent UX — a product-scale design, not an increment on the
+  supervision/consent UX, a product-scale design, not an increment on the
   dispatch tools.
 
-- **Interactive MCP elicitation, and server prompts as slash commands.** Remote
-  MCP support now covers OAuth sign-in, server-initiated notifications
-  (`list_changed` refreshes tools/resources/prompts live, progress keeps long
-  calls alive), and prompt discovery via the `mcp_list_prompts` /
-  `mcp_get_prompt` meta-tools. Two follow-ups remain. (1) *Elicitation:* when a
-  server asks the user a question mid-call (`elicitation/create`), Houston
-  currently declines it cleanly at the protocol level (JSON-RPC method-not-found,
-  so the server never hangs and can take its no-answer path) instead of showing
-  the user a prompt. Full support means declaring the capability and wiring a new
-  blocking agent event through all three clients (GUI dialog, TUI prompt,
-  headless auto-decline), per the client-parity rule. (2) *Prompts as commands:*
-  surfacing each server prompt as a first-class `/` slash command needs menu +
-  completion plumbing in both interactive clients; the meta-tools already give
-  the agent the same data. *Why deferred:* both are cross-client interaction
-  surfaces, not protocol work; shipping them half-wired would hang runs or drift
-  the clients apart.
+- **MCP server prompts as slash commands.** Remote MCP support covers OAuth sign-in,
+  server-initiated notifications (`list_changed` refreshes tools/resources/prompts
+  live, progress keeps long calls alive), interactive elicitation in all three clients
+  (a form in the desktop app, an inline prompt in the terminal, an automatic decline
+  in headless and background runs), and prompt discovery via the `mcp_list_prompts` /
+  `mcp_get_prompt` meta-tools. What remains is surfacing each server prompt as a
+  first-class `/` slash command. *Why deferred:* it needs menu + completion plumbing in
+  both interactive clients, kept in parity, and the meta-tools already give the agent
+  the same data.
 
 - **Persistent code index / semantic (embeddings) search.** Houston searches the
-  project *live* — a bundled **ripgrep** (`search_files`), a bundled **ast-grep**
+  project *live*, with a bundled **ripgrep** (`search_files`), a bundled **ast-grep**
   (`ast_grep`) for structural/AST queries, plus `glob` and the model's own
-  reasoning over what it reads — rather than building and maintaining a persistent
+  reasoning over what it reads, rather than building and maintaining a persistent
   code index, a symbol/dependency repo-map, a cached tree-sitter parse tree, or an
   embeddings/vector store for semantic retrieval. *Why this is deliberate, not
   missing:* (1) a background index is a correctness liability in an agent that is
-  itself editing the tree mid-turn — it goes stale against the agent's own writes
+  itself editing the tree mid-turn: it goes stale against the agent's own writes
   and needs constant re-sync; (2) it's a heavyweight, always-on subsystem for a
   single-user desktop app; (3) semantic search needs an embeddings provider + API
   key, which cuts against bring-your-own-model and the privacy stance
-  (keys stay in the Keychain; nothing is shipped off-machine to be indexed). Modern
+  (keys stay in the OS keychain; nothing is shipped off-machine to be indexed). Modern
   long-context models navigate unfamiliar code well from exact search +
   `read_file` + `run_shell`, so an index mostly buys latency, not capability.
   *What's shipped vs still deferred:* the opt-in, on-demand **structural** layer is
-  done — `ast_grep` vendors ast-grep (via [`binaries.ts`](src/main/binaries.ts))
+  done: `ast_grep` vendors ast-grep (via [`binaries.ts`](src/main/binaries.ts))
   for structural/symbol queries. What remains deferred is the persistent index
   itself: a symbol/dependency repo-map, a cached tree-sitter parse tree, or an
   embeddings/vector store for semantic retrieval (a semantic-search **MCP server**
   is the natural way to add that without baking an indexer into the core).
-  LSP-backed go-to-definition / find-references is the other large lever, tracked
-  under IDE integration below.
+  Type-aware navigation is shipped separately through language servers (the `lsp_*`
+  tools and post-edit diagnostics, when a server is installed), which answer from the
+  live tree rather than a stored index.
 
 - **Landlock fallback for the Linux sandbox.** On Linux, `run_shell` is confined by
   bubblewrap; when bubblewrap is unusable (not installed, or unprivileged user
@@ -187,8 +183,9 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   kernel versions; the approval prompt is a working stopgap in the meantime.
 
 - **Cross-session memory the agent maintains itself.** The agent's durable knowledge
-  of a project today is what the user writes in `AGENTS.md` / `CLAUDE.md`; within a run
-  it also keeps a working-memory block, but nothing it learns in one session is carried,
+  of a project today is what the user writes in `AGENTS.md` / `CLAUDE.md` (by hand, or
+  with a `#` line in the composer, which appends a standing instruction there); within a
+  run it also keeps a working-memory block, but nothing it learns in one session is carried,
   on its own, into the next. A self-maintained memory (a per-project store the agent
   writes to and that is recalled automatically) would close that. *Why deferred:* it
   needs a stable per-repo identity key (the groundwork exists in
@@ -213,32 +210,33 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   repository or one destination. *Why deferred:* it adds a structured matcher to the rule
   schema and the Settings editor, beyond the current single-glob model.
 
-## Deferred — polish
+## Deferred: polish
 
-- **Open a specific file from the diff, changes list, and tool results.** The
-  project-level opener already exists: each chat's ⋯ menu has an "Open in" submenu
+- **Open a specific file in an editor from the diff, changes list, and tool results.**
+  The project-level opener already exists: each chat's ⋯ menu has an "Open in" submenu
   that launches the chat's working directory in a detected editor, or reveals it in
-  the file manager. The next step is opening a *single file*
-  (and ideally a line) from the surfaces that already carry it as **structured** data:
+  the file manager. The Files panel and the image viewer can also open a single file
+  in its OS default app. The next step is opening a *single file* in *your editor*
+  (and ideally at a line) from the surfaces that already carry it as **structured** data:
   a diff hunk, the changed-files list, an edit/write tool-result card. The path is
   known exactly, so there's no prose parsing and no false-positive risk. *What's still
-  needed:* (1) the backend opens a *directory* only
+  needed:* (1) the editor launcher opens a *directory* only
   ([`openInEditor.ts`](src/main/openInEditor.ts)); a file+line open needs each
   editor's goto syntax, which only the **CLI** carries (`code -g file:line`, `zed
   file:line:col`, Xcode `xed --line`). That's in tension with the current macOS launch
   strategy, which deliberately prefers `open -a <app>` (resolve by app name via
-  LaunchServices) over a bare `code` on PATH — a VS Code fork's shim can shadow it —
+  LaunchServices) over a bare `code` on PATH (a VS Code fork's shim can shadow it),
   and `open -a` can't pass a line. So line-accurate opens want a careful per-editor
   path (the CLI when it's unambiguously the right editor, or a URL scheme), not the
   project opener reused as-is. (2) A single click needs a *default* editor to open
-  into — there's no room to pick one per click, unlike the submenu — so a
+  into (there's no room to pick one per click, unlike the submenu), so a
   preferred-editor setting returns with it.
 
 - **Linkify file paths in transcript prose.** Turn `path:line` references inside the
   agent's free-form replies into clickable links, reusing the file opener above.
   *Why still deferred:* it needs reliable path-detection in prose to avoid linkifying
   things that merely look like paths, plus changes to the actively-evolving Markdown
-  renderer ([`Markdown.tsx`](src/renderer/src/components/Markdown.tsx)) — the
+  renderer ([`Markdown.tsx`](src/renderer/src/components/Markdown.tsx)), the
   genuinely hard part, and separable from the structured-surface opens above.
 
 - **`.gitignore`-aware search & `glob`.** Neither `search_files` nor `glob` honors
@@ -252,35 +250,12 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   `.gitignore` files, negations, etc.). Low marginal value given the existing
   dir/dotfile skips.
 
-- **Customizable keybindings.** A user-editable key map beyond the built-in
-  shortcuts (⌘N / ⌘, / Esc). Would add a keybindings file/UI and a resolver.
-
 - **Custom-command status line.** A status line whose content comes from a
   user-configured shell command, beyond the built-in
   live-activity status bar.
 
 - **IDE integration.** VS Code / JetBrains extensions. Out of scope for a
   standalone desktop app, but listed for completeness.
-
-- **More gh-backed GitHub tools (merge, review, lifecycle).** The shipped gh
-  tools cover PRs (create/list/view/comment/checkout/checks), issues
-  (list/view/create/comment), CI runs (list/view), and repo creation. Three
-  deliberately-deferred additions remain — all *in scope* (gh-driven,
-  `kind:'network'` behind the approval gate), just not built yet:
-  - **`gh_pr_merge`.** Merge a pull request. *Why deferred:* it's the riskiest
-    mutating GitHub op, and on a repo without enforced branch protection a direct
-    `gh pr merge` silently lands a PR whose checks never passed. Doing it safely
-    wants an explicit confirm, a merge-method choice (merge/squash/rebase), and a
-    required-checks guard — more than a thin wrapper.
-  - **`gh_pr_review` (approve / request-changes / comment).** Submit a *formal*
-    PR review verdict. *Why deferred:* an agent recording an `approve` is a
-    trust-sensitive action distinct from a plain comment (which `gh_pr_comment`
-    already covers), and it deserves a UX that makes the verdict explicit rather
-    than being mistaken for a normal comment.
-  - **PR / issue lifecycle (`close` / `reopen` / mark-ready).** *Why deferred:*
-    low marginal value over the existing create/comment tools; each is a quick
-    add when a real workflow needs it, so they're bundled here rather than shipped
-    piecemeal.
 
 - **Integrated-terminal enhancements.** The in-app terminal ships today as a
   resizable, multi-tab panel of full PTY sessions (interactive programs, colours,
@@ -289,7 +264,7 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   - **Per-conversation terminals.** Bind terminal tabs to the active conversation
     (and its worktree) instead of sharing one window-global set. *Why deferred:*
     needs a per-conversation session model and lifecycle (spawn/teardown on chat
-    switch, or keep-alive policy) — more than a tweak to the current global registry.
+    switch, or keep-alive policy), more than a tweak to the current global registry.
   - **Scrollback persistence across restarts.** Today a tab's scrollback lives only
     in its xterm instance and is lost when the app quits. *Why deferred:* a PTY has
     no history of its own, so this needs a persisted per-tab output buffer with a
@@ -302,7 +277,7 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
     user has `cd`'d. *Why deferred:* needs an escape-sequence handler and shell-side
     integration, and degrades unevenly across shells.
 
-## Out of scope — non-goals
+## Out of scope: non-goals
 
 These are capabilities that conflict with Houston's **bring-your-own-model**
 stance or require a hosted backend. They're
@@ -310,8 +285,9 @@ deliberately **not** on the roadmap (recorded here so the gap analysis is honest
 and nothing is silently dropped):
 
 - **Subscription / OAuth sign-in.**
-  Houston is **bring-your-own-API-key** by design — keys are stored in the macOS
-  Keychain and used directly. Subscription sign-in (vendor OAuth, included usage,
+  Houston is **bring-your-own-API-key** by design: keys are encrypted with the OS
+  credential store and used directly (or, for Bedrock and Vertex, your cloud
+  account's own credentials). Subscription sign-in (vendor OAuth, included usage,
   workspace RBAC) is a different account / billing model that doesn't fit a
   BYO-key local app.
 
@@ -323,20 +299,21 @@ and nothing is silently dropped):
   hosted code review that runs on GitHub's infrastructure, or an "install GitHub
   app" OAuth flow. *What ships instead:* first-class pull-request tools
   (`gh_pr_create` / `gh_pr_list` / `gh_pr_view` / `gh_pr_comment` /
-  `gh_pr_checkout` / `gh_pr_checks`), issue tools (`gh_issue_list` /
-  `gh_issue_view` / `gh_issue_create` / `gh_issue_comment`), CI-run tools
+  `gh_pr_review` / `gh_pr_checkout` / `gh_pr_checks` / `gh_pr_merge` /
+  `gh_pr_set_state`), issue tools (`gh_issue_list` / `gh_issue_view` /
+  `gh_issue_create` / `gh_issue_comment` / `gh_issue_set_state`), CI-run tools
   (`gh_run_list` / `gh_run_view`), `gh_repo_create` for new repositories, and the
   `pr_sweep` board (batch-author PRs from tasks, or
-  process a batch of existing PRs), all driving the user's local `gh` CLI — no
+  process a batch of existing PRs), all driving the user's local `gh` CLI: no
   hosted backend, no app-level token storage (`gh` owns auth), which keeps
   Houston entirely on the user's machine. The remaining non-goal is specifically the
   *hosted* bot/app side, which needs a multi-tenant backend and an OAuth app
   registration that don't fit a single-user desktop app.
 
 - **IDE / editor embedding** (VS Code/JetBrains extensions). Houston is a
-  standalone GUI desktop app — it has its own themes, status bar, and shortcuts; an
+  standalone GUI desktop app with its own themes, status bar, and shortcuts; an
   editor-embedded surface is a different product. (IDE extension also listed under
-  *Deferred — polish*.)
+  *Deferred: polish*.)
 
 - **Record & Replay / Computer-Use skill capture.** Turning a demonstrated
   desktop workflow into a reusable skill needs OS-level computer-use automation,

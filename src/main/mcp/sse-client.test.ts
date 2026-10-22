@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import { version as PKG_VERSION } from '../../../package.json'
 import {
   McpSseClient,
   parseSseEvents,
@@ -6,6 +7,7 @@ import {
   type SseConnectFn,
   type SseEvent
 } from './sse-client'
+import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
 
 describe('parseSseEvents', () => {
   it('splits events on a blank line and reads event/data', () => {
@@ -283,5 +285,87 @@ describe('McpSseClient', () => {
     const fetch: FetchFn = async () => new Response('', { status: 401 })
     const client = new McpSseClient(connect, fetch)
     await expect(client.connect({ url: 'https://x/sse' })).rejects.toThrow(/401/)
+  })
+})
+
+describe('McpSseClient protocol-version negotiation', () => {
+  interface Post {
+    body: Record<string, unknown>
+    headers: Record<string, string>
+  }
+  function negotiatingServer(initResult: unknown): {
+    connect: SseConnectFn
+    fetch: FetchFn
+    posts: Post[]
+    emit: (msg: unknown) => void
+  } {
+    let onEvent: ((e: SseEvent) => void) | null = null
+    const posts: Post[] = []
+    const emit = (msg: unknown): void => onEvent?.({ event: 'message', data: JSON.stringify(msg) })
+    const connect: SseConnectFn = (_url, _headers, handlers) => {
+      onEvent = handlers.onEvent
+      queueMicrotask(() => onEvent?.({ event: 'endpoint', data: '/messages' }))
+      return { close: () => {} }
+    }
+    const fetch: FetchFn = async (_url, init) => {
+      const body = JSON.parse(init.body as string) as Record<string, unknown> & { id?: number; method?: string }
+      posts.push({ body, headers: init.headers as Record<string, string> })
+      if (body.id !== undefined && body.method !== undefined) {
+        const result =
+          body.method === 'initialize' ? initResult : body.method === 'tools/list' ? { tools: [] } : {}
+        queueMicrotask(() => emit({ jsonrpc: '2.0', id: body.id, result }))
+      }
+      return new Response('', { status: 202 })
+    }
+    return { connect, fetch, posts, emit }
+  }
+  const onElicit = async (): Promise<{ action: 'accept'; content: Record<string, unknown> }> => ({
+    action: 'accept',
+    content: { ok: true }
+  })
+  const replyTo = (posts: Post[], id: string): Record<string, unknown> | undefined =>
+    posts.find((p) => p.body.id === id && p.body.method === undefined)?.body
+
+  it('requests the latest version, then sends the negotiated one in the header', async () => {
+    const s = negotiatingServer({ protocolVersion: '2024-11-05' })
+    const client = new McpSseClient(s.connect, s.fetch)
+    await client.connect({ url: 'https://x/sse' })
+    const [init, ...rest] = s.posts
+    expect(init.body.params).toMatchObject({
+      protocolVersion: LATEST_PROTOCOL_VERSION,
+      clientInfo: { name: 'Houston', version: PKG_VERSION }
+    })
+    expect(init.headers['mcp-protocol-version']).toBeUndefined()
+    expect(rest.length).toBeGreaterThan(0)
+    for (const p of rest) expect(p.headers['mcp-protocol-version']).toBe('2024-11-05')
+    client.close()
+  })
+
+  it('answers elicitation from a 2025-06-18 server', async () => {
+    const s = negotiatingServer({ protocolVersion: '2025-06-18' })
+    const client = new McpSseClient(s.connect, s.fetch)
+    await client.connect({ url: 'https://x/sse', onElicit })
+    expect((s.posts[0].body.params as { capabilities: unknown }).capabilities).toEqual({ elicitation: {} })
+    s.emit({ jsonrpc: '2.0', id: 'el1', method: 'elicitation/create', params: {} })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(replyTo(s.posts, 'el1')?.result).toEqual({ action: 'accept', content: { ok: true } })
+    client.close()
+  })
+
+  it('declines elicitation from a server that negotiated 2024-11-05', async () => {
+    const s = negotiatingServer({ protocolVersion: '2024-11-05' })
+    const client = new McpSseClient(s.connect, s.fetch)
+    await client.connect({ url: 'https://x/sse', onElicit })
+    s.emit({ jsonrpc: '2.0', id: 'el1', method: 'elicitation/create', params: {} })
+    await new Promise((r) => setTimeout(r, 10))
+    expect((replyTo(s.posts, 'el1')?.error as { code: number }).code).toBe(-32601)
+    client.close()
+  })
+
+  it('fails the connection on an unsupported version, before initialized is sent', async () => {
+    const s = negotiatingServer({ protocolVersion: '1.0' })
+    const client = new McpSseClient(s.connect, s.fetch)
+    await expect(client.connect({ url: 'https://x/sse' })).rejects.toThrow(McpUnsupportedProtocolError)
+    expect(s.posts.map((p) => p.body.method)).toEqual(['initialize'])
   })
 })
