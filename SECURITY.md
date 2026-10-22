@@ -72,8 +72,9 @@ directly from the tool's purpose and are gated by explicit user consent:
 
 Even so, *full auto* is defended in depth rather than treated as a blank cheque, because
 the sandbox can read your whole filesystem: network egress is granted **per destination**
-(not all-or-nothing), the first shell command takes a **one-time network consent** so
-blanket outbound access is never automatic (a decline runs commands offline), and
+(not all-or-nothing), shell commands run **offline until you allow network** for the
+chat (Houston asks the first time a command fails without it, so blanket outbound access
+is never automatic, and a decline keeps commands offline), and
 Houston's own network tools (`web_fetch` / `web_search`) **refuse to send** a URL or query
 that carries a recognized credential. Granted shell network is additionally confined to a
 **per-domain egress allowlist** on macOS and Linux: the OS sandbox blocks direct sockets

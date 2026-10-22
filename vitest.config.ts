@@ -67,7 +67,8 @@ export default defineConfig({
             'src/cli/**/*.test.ts',
             'src/shared/**/*.test.ts',
             'scripts/**/*.test.mjs',
-            'website/tools/**/*.test.mjs'
+            'website/tools/**/*.test.mjs',
+            'action/**/*.test.mjs'
           ],
           setupFiles: ['./src/main/test/setup.ts']
         }

@@ -1,0 +1,46 @@
+# Answer @houston mentions on issues and pull requests.
+#
+# Only someone with write access starts a run: the action checks the commenter's
+# author_association and then their actual repository permission. The thread itself is
+# read through Houston's gh tools, which hand it to the model as untrusted data.
+name: Houston (respond)
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  issues:
+    types: [opened]
+
+permissions: {}
+
+concurrency:
+  group: houston-respond-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  respond:
+    # A cheap first filter, so unrelated comments don't start a runner. The action applies
+    # the real checks (mention outside code and quotes, write access) itself.
+    if: >-
+      contains(github.event.comment.body || github.event.issue.body, '@houston')
+      && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+        github.event.comment.author_association || github.event.issue.author_association)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      # The default branch, never a pull request's head: this event runs with the
+      # repository's secrets, so fork code must not run here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Pin the full commit SHA of the release tag in your workflow (see action/README.md).
+      - uses: houston-code/houston/action@v0.10.0 # zizmor: ignore[unpinned-uses] example only
+        with:
+          api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          max-cost: '1'

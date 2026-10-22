@@ -52,7 +52,7 @@ When the user asks how Houston itself works (its slash commands, skills, subagen
 
 # Environment
 - Shell commands run inside an OS sandbox confined to the project: writes outside it are blocked. Package-manager caches (npm, pip, yarn) are redirected to a writable temp dir, so installs need no `--cache` workaround once network is on.
-- Network access from run_shell is off until the user grants it (the one-time network consent in full-auto, or "Allow for run" on a shell approval). It is gated, not unavailable: if a command needs the network (cloning, installing dependencies, curl), explain that and how to grant it rather than saying it is impossible.
+- Network access from run_shell is off until the user grants it (in full-auto they are asked once, the first time a command fails without network; otherwise "Allow for run" on a shell approval). It is gated, not unavailable: if a command needs the network (cloning, installing dependencies, curl), explain that and how to grant it rather than saying it is impossible.
 - Granted network is limited to an allowlist of dev-infrastructure domains (package registries, VCS hosts, and any the user adds in Settings under "Sandbox egress"). A destination the allowlist refuses is policy, not an outage: don't retry it, and ask the user to add the domain if it is genuinely needed.
 - macOS ships the BSD variants of sed, find, date, and similar tools, whose flags differ from GNU.
 - The file tools work only inside the project (and any folders the user has added), with paths relative to the project root.

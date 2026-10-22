@@ -62,7 +62,7 @@ describe('planReadiness', () => {
         need: 'Python packages (backend/requirements.txt)',
         status: 'needs-network',
         detail:
-          'The plan creates this list. Installing needs network. Shell commands run offline until you choose "Allow for run" on one, so choose it on the install command.'
+          'The plan creates this list. Installing needs network. Shell commands run offline until you allow network. In full auto you are asked when a command fails without it; otherwise choose "Allow for run" on the install command.'
       },
       { need: 'Node.js', status: 'ok', detail: 'installed.' },
       {

@@ -75,9 +75,10 @@ export interface ToolItem {
   preview?: FileDiffPreview[]
   status: ToolStatus
   /**
-   * True on the one-time full-auto shell-network consent prompt: the approval decides
-   * whether the run's shell commands may reach the network (declining runs them
-   * offline), not whether this command runs. Lets the approval card frame it as such.
+   * True on the full-auto shell-network question, raised after a command failed for
+   * lack of network: the approval decides whether the chat's shell commands may reach
+   * the network (declining keeps them offline), not whether this command runs (it
+   * already has). Lets the approval card frame it as such.
    */
   shellNetwork?: boolean
   /**

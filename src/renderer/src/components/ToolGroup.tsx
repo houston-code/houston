@@ -427,15 +427,15 @@ function ToolRow({
       {awaiting && item.shellNetwork && (
         <div className="tool-row__approval">
           <p className="tool-row__approval-note">
-            Shell commands this run will be able to reach the network. They already run in
-            a sandbox that can read your files, so this bounds where that data could go.
-            Declining runs commands offline.
+            This command could not reach the network. Shell commands in this chat run offline
+            until you allow it. Allowing applies to the rest of this chat, not just this
+            command.
           </p>
           <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'always')}>
-            Allow network for run
+            Allow network for this chat
           </button>
-          <button className="btn btn--sm btn--danger" onClick={() => onApprove(item.id, 'deny')}>
-            No network
+          <button className="btn btn--sm" onClick={() => onApprove(item.id, 'deny')}>
+            Keep offline
           </button>
         </div>
       )}

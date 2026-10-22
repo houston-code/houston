@@ -417,12 +417,16 @@ jobs:
             --only-binary :all: -r .github/workflow-lint/requirements.txt
       - name: actionlint
         run: actionlint -color
+      # The GitHub Action's example workflows live outside .github/workflows, so they are
+      # named explicitly (each tool only finds workflows there on its own).
+      - name: actionlint (action examples)
+        run: actionlint -color action/examples/*.yml
       # Online mode (a token) adds the impostor-commit and known-vulnerable-actions audits,
       # which check every pinned SHA against its upstream repository.
       - name: zizmor
         env:
           GH_TOKEN: ${{ github.token }}
-        run: zizmor --format github --min-severity low --config .github/zizmor.yml .github/workflows .github/actions
+        run: zizmor --format github --min-severity low --config .github/zizmor.yml .github/workflows .github/actions action action/examples/*.yml
 
   # The required `build` check: one stable name over the whole platform matrix, the SBOM
   # gate, and workflow-lint, so adding or renaming a matrix leg never needs a ruleset change.

@@ -672,6 +672,34 @@ describe('ToolGroup', () => {
     expect(screen.queryByLabelText('Reason for denying, sent to the agent')).not.toBeInTheDocument()
   })
 
+  it('frames the shell-network question as a one-time choice for this chat', () => {
+    const onApprove = vi.fn()
+    render(
+      <ToolGroup
+        items={[
+          tool({
+            id: 'call-13',
+            name: 'run_shell',
+            status: 'awaiting-approval',
+            shellNetwork: true,
+            args: { command: 'npm install' }
+          })
+        ]}
+        onApprove={onApprove}
+      />
+    )
+    const note = screen.getByText(/could not reach the network/)
+    expect(note).toHaveTextContent(
+      'This command could not reach the network. Shell commands in this chat run offline until you allow it. ' +
+        'Allowing applies to the rest of this chat, not just this command.'
+    )
+    expect(note.textContent).not.toContain('\u2014')
+    fireEvent.click(screen.getByRole('button', { name: 'Allow network for this chat' }))
+    expect(onApprove).toHaveBeenCalledWith('call-13', 'always')
+    fireEvent.click(screen.getByRole('button', { name: 'Keep offline' }))
+    expect(onApprove).toHaveBeenCalledWith('call-13', 'deny')
+  })
+
   // "Allow" runs a shell command offline until the run has a shell-network grant;
   // only "Allow for run" grants it, so the card has to say so before the user picks.
   it('tells the user a shell command runs offline and which choice grants network', () => {
