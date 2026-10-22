@@ -943,6 +943,12 @@ or retire a stale "Trust".
 guardrails and every user's own rules. It too can only tighten, and lives in a
 root-owned location the user cannot edit.
 
+Settings > Permissions > **All sources** lists every tier in the order it is checked:
+the administrator's policy, the open project's guardrails, your own rules, the
+project's allow rules (with whether they are in effect), and finally the chat's
+approval mode. The project's hooks and MCP servers show read-only on the Hooks and
+MCP Servers pages; edit them in `.houston/settings.json`.
+
 ## Skills
 
 A skill is a reusable instruction bundle at `.houston/skills/<name>/SKILL.md`,

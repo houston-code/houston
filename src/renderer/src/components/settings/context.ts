@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react'
-import type { AppSettings } from '@shared/types'
+import type { AppSettings, PermissionPolicyView } from '@shared/types'
 
 /**
  * What every settings section reads and writes. The shell owns the working copy
@@ -30,6 +30,10 @@ export interface SettingsCtx {
   onShowScorecard?: () => void
   /** Open the setup health check (/doctor). */
   onShowDoctor?: () => void
+  /** The open project's folder, or null with none open. */
+  workspace: string | null
+  /** Admin + project permission config shown beside the user's (null until loaded). */
+  policy: PermissionPolicyView | null
 }
 
 /** One settings section: a self-contained `SettingsSection` (or nothing). */

@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, type ApprovalPolicy, type PermissionRule } from '@shared/types'
 import { lintPermissionRules, moveRule, type RuleIssue } from '@shared/permissionLint'
 import { SettingsSection } from '../fields'
+import { ReadOnlyRules, TrustBadge } from './project'
 import { groupPermissionRules, ruleMatchesFilter } from '../permissionRules'
 import type { SettingsCtx } from '../context'
 
@@ -176,7 +177,7 @@ function RuleRow({
  */
 export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
-  const [view, setView] = useState<'order' | 'tool'>('order')
+  const [view, setView] = useState<'order' | 'tool' | 'sources'>('order')
   const [ruleFilter, setRuleFilter] = useState('')
   const [cleaningRules, setCleaningRules] = useState(false)
   // What the last "Clean up rules" did, so a no-op click isn't mistaken for a dead button.
@@ -223,6 +224,9 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
     }
   }
 
+  const managed = ctx.policy?.managed ?? []
+  const project = ctx.policy?.project ?? null
+  const hasOtherSources = managed.length > 0 || project !== null
   const issues = useMemo(() => lintPermissionRules(rules), [rules])
   const warningCount = [...issues.values()].filter((list) => list.some(isWarning)).length
   const filtering = ruleFilter.trim() !== ''
@@ -268,20 +272,25 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
           Checked top to bottom before the approval mode; the first matching rule decides.{' '}
           <strong>Allow</strong> runs without asking, <strong>Ask</strong> always prompts,{' '}
           <strong>Deny</strong> refuses. A pattern is a glob over the command, path, URL, or
-          query; an <strong>Exact</strong> rule matches only that one target. A project&apos;s{' '}
-          <code>.houston/settings.json</code> may add stricter rules that are checked first.
+          query; an <strong>Exact</strong> rule matches only that one target. An administrator
+          policy or a project&apos;s <code>.houston/settings.json</code> may add rules that are
+          checked first: see <strong>All sources</strong>.
         </>
       }
     >
-      {rules.length > 0 && (
+      {(rules.length > 0 || hasOtherSources) && (
         <div className="rule-toolbar">
-          <input
-            className="rule-filter"
-            placeholder="Filter rules…"
-            aria-label="Filter rules"
-            value={ruleFilter}
-            onChange={(e) => setRuleFilter(e.target.value)}
-          />
+          {view !== 'sources' ? (
+            <input
+              className="rule-filter"
+              placeholder="Filter rules…"
+              aria-label="Filter rules"
+              value={ruleFilter}
+              onChange={(e) => setRuleFilter(e.target.value)}
+            />
+          ) : (
+            <span className="rule-toolbar__spacer" />
+          )}
           <div className="seg" role="group" aria-label="Rule view">
             <button
               className={`seg__btn${view === 'order' ? ' is-active' : ''}`}
@@ -298,19 +307,76 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
             >
               By tool
             </button>
+            <button
+              className={`seg__btn${view === 'sources' ? ' is-active' : ''}`}
+              aria-pressed={view === 'sources'}
+              onClick={() => setView('sources')}
+              title="Every rule that applies, from the administrator and this project too, in the order they are checked"
+            >
+              All sources
+            </button>
           </div>
-          <span className="rule-toolbar__count">
-            {rules.length} {rules.length === 1 ? 'rule' : 'rules'}
-          </span>
-          <button
-            className="btn btn--sm"
-            onClick={cleanupRules}
-            disabled={cleaningRules}
-            title="Re-generalize run_shell rules and remove duplicates"
-          >
-            {cleaningRules ? 'Cleaning…' : 'Clean up rules'}
-          </button>
+          {view !== 'sources' && (
+            <>
+              <span className="rule-toolbar__count">
+                {rules.length} {rules.length === 1 ? 'rule' : 'rules'}
+              </span>
+              <button
+                className="btn btn--sm"
+                onClick={cleanupRules}
+                disabled={cleaningRules}
+                title="Re-generalize run_shell rules and remove duplicates"
+              >
+                {cleaningRules ? 'Cleaning…' : 'Clean up rules'}
+              </button>
+            </>
+          )}
         </div>
+      )}
+      {view === 'sources' && (
+        <ol className="rule-tiers">
+          {managed.length > 0 && (
+            <li className="rule-tier">
+              <h4 className="rule-tier__title">Administrator policy</h4>
+              <p className="rule-tier__desc">Set on this device by an administrator; can only restrict.</p>
+              <ReadOnlyRules rules={managed} empty="" />
+            </li>
+          )}
+          {project && (
+            <li className="rule-tier">
+              <h4 className="rule-tier__title">This project&apos;s guardrails</h4>
+              <p className="rule-tier__desc">
+                Deny and ask rules from <code>.houston/settings.json</code>; always applied.
+              </p>
+              <ReadOnlyRules rules={project.rules} empty="None." />
+            </li>
+          )}
+          <li className="rule-tier rule-tier--yours">
+            <h4 className="rule-tier__title">Your rules</h4>
+            <p className="rule-tier__desc">
+              {rules.length} {rules.length === 1 ? 'rule' : 'rules'}.{' '}
+              <button className="link" onClick={() => setView('order')}>
+                Edit
+              </button>
+            </p>
+          </li>
+          {project && project.allowRules.length > 0 && (
+            <li className="rule-tier">
+              <h4 className="rule-tier__title">This project&apos;s allow rules</h4>
+              <p className="rule-tier__desc">
+                Fill gaps your rules leave; never override them. <TrustBadge trust={project.trust} />
+              </p>
+              <ReadOnlyRules rules={project.allowRules} empty="" />
+            </li>
+          )}
+          <li className="rule-tier">
+            <h4 className="rule-tier__title">Then the chat&apos;s approval mode</h4>
+            <p className="rule-tier__desc">
+              When no rule matches. New chats start in{' '}
+              <strong>{APPROVAL_POLICY_LABEL[settings.approvalPolicy]}</strong>.
+            </p>
+          </li>
+        </ol>
       )}
       {cleanupStatus && (
         <p className="rule-cleanup-status" role="status">
@@ -323,7 +389,9 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
         </p>
       )}
 
-      {rules.length > 0 && visible.length === 0 && <p className="rule-empty">No rules match the filter.</p>}
+      {view !== 'sources' && rules.length > 0 && visible.length === 0 && (
+        <p className="rule-empty">No rules match the filter.</p>
+      )}
 
       {view === 'order' && visible.length > 0 && (
         <div className="rule-list">{visible.map(({ rule, index }) => row(rule, index, true, true))}</div>
@@ -357,25 +425,27 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
           </details>
         ))}
 
-      <div className="rule-add-other">
-        <input
-          list="tool-names"
-          className="rule__tool"
-          placeholder="tool (or *)"
-          aria-label="Tool for the new rule"
-          value={newRuleTool}
-          onChange={(e) => setNewRuleTool(e.target.value.trim())}
-        />
-        <button
-          className="btn btn--sm"
-          onClick={() => {
-            addRuleFor(newRuleTool || 'run_shell')
-            setNewRuleTool('')
-          }}
-        >
-          + Add rule
-        </button>
-      </div>
+      {view !== 'sources' && (
+        <div className="rule-add-other">
+          <input
+            list="tool-names"
+            className="rule__tool"
+            placeholder="tool (or *)"
+            aria-label="Tool for the new rule"
+            value={newRuleTool}
+            onChange={(e) => setNewRuleTool(e.target.value.trim())}
+          />
+          <button
+            className="btn btn--sm"
+            onClick={() => {
+              addRuleFor(newRuleTool || 'run_shell')
+              setNewRuleTool('')
+            }}
+          >
+            + Add rule
+          </button>
+        </div>
+      )}
     </SettingsSection>
   )
 }

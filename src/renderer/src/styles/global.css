@@ -6196,6 +6196,100 @@ body:has(.coachmark) .get-started {
 .rule-summary--warn {
   color: var(--warn);
 }
+.rule-toolbar__spacer {
+  flex: 1;
+}
+/* "All sources": every rule tier in the order the matcher reads them. */
+.rule-tiers {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  counter-reset: tier;
+}
+.rule-tier {
+  position: relative;
+  padding: 0 0 var(--space-3) 28px;
+  counter-increment: tier;
+}
+.rule-tier::before {
+  content: counter(tier);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.rule-tier--yours::before {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.rule-tier__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.rule-tier__desc {
+  margin: 2px 0 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.trust-badge {
+  margin-left: 4px;
+}
+.set-section__body > .trust-badge {
+  display: inline-flex;
+  margin: 0 0 var(--space-2);
+}
+.ro-rules {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ro-rule {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.ro-rule__action {
+  flex-shrink: 0;
+  min-width: 44px;
+  font-weight: 600;
+  text-transform: capitalize;
+  color: var(--text-dim);
+}
+.ro-rule__action--deny {
+  color: var(--danger);
+}
+.ro-rule__action--ask {
+  color: var(--warn);
+}
+.ro-rule__action--allow {
+  color: var(--ok);
+}
+.ro-rule__tool {
+  flex-shrink: 0;
+  font-family: var(--mono);
+}
+.ro-rule__match {
+  min-width: 0;
+  font-family: var(--mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Segmented control: a small exclusive button group. */
 .seg {
   display: inline-flex;

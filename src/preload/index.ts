@@ -13,6 +13,7 @@ import type {
   MenuCommand,
   MenuState,
   ModelOption,
+  PermissionPolicyView,
   PermissionRule
 } from '@shared/types'
 import type { EditorStatus, OpenResult } from '@shared/editors'
@@ -138,6 +139,9 @@ const api = {
   /** Tidy a permission-rule list (re-generalize run_shell allows + dedupe) for the panel. */
   cleanupPermissionRules: (rules: PermissionRule[]): Promise<PermissionRule[]> =>
     ipcRenderer.invoke(IPC.permissionsCleanup, rules),
+  /** The admin policy and this project's permission config, shown read-only in Settings. */
+  getPermissionPolicy: (workspace: string | null): Promise<PermissionPolicyView> =>
+    ipcRenderer.invoke(IPC.permissionsPolicy, workspace),
   setKey: (providerId: string, key: string): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.settingsSetKey, providerId, key),
   deleteKey: (providerId: string): Promise<AppSettings> =>

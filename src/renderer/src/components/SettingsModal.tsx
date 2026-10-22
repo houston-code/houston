@@ -3,7 +3,7 @@ import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { useApplyTheme } from '../hooks/useApplyTheme'
 import { applyTheme } from '../lib/theme'
-import type { AppSettings } from '@shared/types'
+import type { AppSettings, PermissionPolicyView } from '@shared/types'
 import { PAGES, PAGE_GROUPS, pageById, type TabId } from './settings/pages'
 import { NAV_ICON } from './settings/navIcons'
 import { TOOL_NAMES } from './settings/permissionRules'
@@ -19,6 +19,7 @@ export function SettingsModal({
   initial,
   initialTab = 'models',
   initialQuery = '',
+  workspace = null,
   onClose,
   onSaved,
   onShowScorecard,
@@ -29,6 +30,8 @@ export function SettingsModal({
   initialTab?: TabId
   /** Open with this settings search already typed (e.g. `/settings proxy`). */
   initialQuery?: string
+  /** The open project, whose own permission config is shown beside the user's. */
+  workspace?: string | null
   onClose: () => void
   onSaved: (s: AppSettings) => void
   /** Open the local-only per-model loop scorecard (from the Models tab). */
@@ -48,6 +51,20 @@ export function SettingsModal({
   // asks to confirm rather than discarding silently.
   const [confirmingClose, setConfirmingClose] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
+  // The admin policy and the open project's config, read-only beside the user's own.
+  const [policy, setPolicy] = useState<PermissionPolicyView | null>(null)
+  useEffect(() => {
+    let alive = true
+    void window.api
+      .getPermissionPolicy(workspace)
+      .then((p) => {
+        if (alive) setPolicy(p)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [workspace])
   const bodyRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
   // Settings search. While it has words, the body lists every matching section
@@ -217,7 +234,9 @@ export function SettingsModal({
     removeKey,
     persistNow,
     onShowScorecard,
-    onShowDoctor
+    onShowDoctor,
+    workspace,
+    policy
   }
   const page = pageById(tab)
   const pageMatches = (id: TabId): number =>

@@ -23,6 +23,7 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
   // Default cleanup echoes its input; individual tests override to assert the tidy-up.
   const cleanupPermissionRules = vi.fn((rules: unknown) => Promise.resolve(rules))
   const getMcpStatuses = vi.fn(() => Promise.resolve([]))
+  const getPermissionPolicy = vi.fn(() => Promise.resolve({ managed: [], project: null }))
   const api = {
     saveSettings,
     setKey,
@@ -34,6 +35,7 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
     getIntegrations,
     cleanupPermissionRules,
     getMcpStatuses,
+    getPermissionPolicy,
     ...overrides
   }
   window.api = api as unknown as typeof window.api
@@ -538,6 +540,65 @@ describe('SettingsModal', () => {
       renderModal({}, { initialQuery: 'notifications' })
       expect(search().value).toBe('notifications')
       expect(visibleHeadings()).toEqual(['Notifications'])
+    })
+  })
+
+  describe('admin and project rules', () => {
+    const policy = {
+      managed: [{ action: 'deny' as const, tool: '*', match: 'curl *' }],
+      project: {
+        rules: [{ action: 'ask' as const, tool: 'run_shell', match: 'git push*' }],
+        allowRules: [{ action: 'allow' as const, tool: 'run_shell', match: 'npm test' }],
+        hooks: [{ event: 'PostToolUse' as const, matcher: 'edit_file', command: 'npm run fmt' }],
+        mcpServers: [{ id: 'db', transport: 'stdio' as const, target: 'npx db-mcp' }],
+        trust: 'undecided' as const
+      }
+    }
+
+    it('asks main for the open project and lists every tier in the order checked', async () => {
+      const getPermissionPolicy = vi.fn(() => Promise.resolve(policy))
+      installApi({ getPermissionPolicy })
+      renderModal({ permissionRules: [{ action: 'allow', tool: 'run_shell', match: 'git status' }] }, { workspace: '/repo' })
+      expect(getPermissionPolicy).toHaveBeenCalledWith('/repo')
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      fireEvent.click(await screen.findByRole('button', { name: 'All sources' }))
+      const tiers = [...document.querySelectorAll('.rule-tier__title')].map((t) => t.textContent)
+      expect(tiers).toEqual([
+        'Administrator policy',
+        "This project's guardrails",
+        'Your rules',
+        "This project's allow rules",
+        "Then the chat's approval mode"
+      ])
+      expect(screen.getByText('curl *')).toBeInTheDocument()
+      expect(screen.getByText('git push*')).toBeInTheDocument()
+      expect(screen.getByText('Ignored until you trust this folder')).toBeInTheDocument()
+      // Your own rules are summarized here, edited in the ordered view.
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+      expect(screen.getByDisplayValue('git status')).toBeInTheDocument()
+    })
+
+    it("shows the project's hooks and MCP servers read-only on their pages", async () => {
+      installApi({ getPermissionPolicy: vi.fn(() => Promise.resolve({ ...policy, project: { ...policy.project, trust: 'trusted' as const } })) })
+      renderModal({}, { workspace: '/repo' })
+      fireEvent.click(screen.getByRole('button', { name: 'Hooks' }))
+      expect(await screen.findByRole('heading', { name: "This project's hooks" })).toBeInTheDocument()
+      expect(screen.getByText('npm run fmt')).toBeInTheDocument()
+      expect(screen.getByText('In effect: you trust this folder')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
+      expect(screen.getByRole('heading', { name: "This project's MCP servers" })).toBeInTheDocument()
+      expect(screen.getByText('npx db-mcp')).toBeInTheDocument()
+    })
+
+    it('offers no All sources view or project sections when nothing else applies', async () => {
+      const getPermissionPolicy = vi.fn(() => Promise.resolve({ managed: [], project: null }))
+      installApi({ getPermissionPolicy })
+      renderModal()
+      await waitFor(() => expect(getPermissionPolicy).toHaveBeenCalledWith(null))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      expect(screen.queryByRole('button', { name: 'All sources' })).toBeNull()
+      fireEvent.click(screen.getByRole('button', { name: 'Hooks' }))
+      expect(screen.queryByRole('heading', { name: "This project's hooks" })).toBeNull()
     })
   })
 
