@@ -6,6 +6,9 @@ import { _electron as electron, test, type ElectronApplication } from '@playwrig
 
 export const ROOT = join(__dirname, '..')
 
+/** How long `close()` waits for a clean quit before killing the app. */
+const CLOSE_TIMEOUT_MS = 15_000
+
 /** Where a packaged app from `npm run dist*` lives in `release/`, per platform. */
 interface PackagedApp {
   /** The app's own executable. */
@@ -126,7 +129,19 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
     packaged: target.packaged,
     async close() {
       try {
-        await app.close()
+        // A test that fails mid-turn leaves work running, and quitting with work running
+        // raises the "Quit anyway?" confirmation that nothing here answers, so a plain
+        // app.close() would hang until the worker is torn down and bury the real failure.
+        // Give a clean quit a bounded window, then kill the process.
+        let timer: NodeJS.Timeout | undefined
+        const quit = app.close().then(() => true)
+        const timedOut = new Promise<false>((r) => (timer = setTimeout(() => r(false), CLOSE_TIMEOUT_MS)))
+        const closed = await Promise.race([quit, timedOut])
+        clearTimeout(timer)
+        if (!closed) {
+          app.process().kill('SIGKILL')
+          await quit.catch(() => {})
+        }
       } finally {
         if (owned) rmSync(userDataDir, { recursive: true, force: true })
       }

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { expect, test } from '@playwright/test'
 import { launchApp } from './launch'
-import { startMockProvider } from './mock-provider'
+import { startMockProvider, useMockProvider } from './mock-provider'
 
 const MODEL = 'e2e-model'
 
@@ -46,39 +46,8 @@ test('an agent turn runs search, ast-grep and an approved shell command', async 
     const page = await app.firstWindow()
     await expect(page.locator('.app')).toBeVisible()
 
-    // Point the app at the mock and open the fixture folder. Settings go through the
-    // app's own IPC rather than a pre-seeded settings.json, which first-run migrations
-    // would rewrite. 'ask' is the default policy: reads run, the shell command needs a click.
-    await page.evaluate(
-      async ({ baseUrl, model, workspace }) => {
-        type Api = {
-          getSettings(): Promise<Record<string, unknown> & { providers: unknown[] }>
-          saveSettings(s: unknown): Promise<unknown>
-        }
-        const api = (globalThis as unknown as { api: Api }).api
-        const s = await api.getSettings()
-        s.providers = [
-          ...s.providers,
-          {
-            id: 'e2e-mock',
-            kind: 'openai-compatible',
-            label: 'E2E mock',
-            baseUrl,
-            models: [{ id: model }],
-            defaultModel: model,
-            requiresKey: false,
-            hasKey: false
-          }
-        ]
-        s.selected = { providerId: 'e2e-mock', model }
-        s.recentWorkspaces = [workspace]
-        s.approvalPolicy = 'ask'
-        await api.saveSettings(s)
-      },
-      { baseUrl: mock.baseUrl, model: MODEL, workspace }
-    )
-    await page.reload()
-    await expect(page.locator('.app')).toBeVisible()
+    // 'ask' is the default policy: reads run, the shell command needs a click.
+    await useMockProvider(page, { baseUrl: mock.baseUrl, model: MODEL, workspace })
 
     const composer = page.locator('textarea.composer__input')
     await expect(composer).toBeEnabled()
