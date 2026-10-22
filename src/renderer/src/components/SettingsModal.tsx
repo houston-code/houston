@@ -620,18 +620,21 @@ export function KeyboardTab({
 
 export function SettingsModal({
   initial,
+  initialTab = 'models',
   onClose,
   onSaved,
   onShowScorecard
 }: {
   initial: AppSettings
+  /** The section to open on (e.g. Appearance for /theme). */
+  initialTab?: TabId
   onClose: () => void
   onSaved: (s: AppSettings) => void
   /** Open the local-only per-model loop scorecard (from the Models tab). */
   onShowScorecard?: () => void
 }): JSX.Element {
   const [settings, setSettings] = useState<AppSettings>(initial)
-  const [tab, setTab] = useState<TabId>('models')
+  const [tab, setTab] = useState<TabId>(initialTab)
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
   // Per provider: what its last "fetch from provider" changed, until the list is edited.

@@ -230,6 +230,30 @@ export function isApprovalPolicy(v: unknown): v is ApprovalPolicy {
 }
 
 /**
+ * Each policy's name as the user sees it, in both clients: the desktop's approval
+ * menu and the terminal's `/approval` both print these, never the ids.
+ */
+export const APPROVAL_POLICY_LABEL: Record<ApprovalPolicy, string> = {
+  plan: 'Plan mode (read-only)',
+  ask: 'Ask every time',
+  'auto-edit': 'Auto-approve edits',
+  'full-auto': 'Full auto'
+}
+
+/**
+ * The approval policy a typed word names: an id (`auto-edit`), or the short command
+ * names both clients accept (`/auto`, `/full`). Case-insensitive; null when it names
+ * none, so a typo never silently picks a policy.
+ */
+export function parseApprovalPolicy(word: string): ApprovalPolicy | null {
+  const w = word.trim().toLowerCase()
+  if (isApprovalPolicy(w)) return w
+  if (w === 'auto') return 'auto-edit'
+  if (w === 'full') return 'full-auto'
+  return null
+}
+
+/**
  * An MCP (Model Context Protocol) server Houston connects to — a local process
  * over stdio, or a remote endpoint over streamable HTTP or the legacy HTTP+SSE
  * transport. Its tools are exposed to the agent namespaced as `mcp__<id>__<tool>`.

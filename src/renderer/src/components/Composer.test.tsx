@@ -85,6 +85,26 @@ describe('Composer', () => {
     expect(props.onSend).toHaveBeenCalledWith('こんにちは', undefined)
   })
 
+  it('answers a terminal-only command instead of sending it to the model', () => {
+    const props = baseProps()
+    render(<Composer {...props} />)
+    const input = type('/vim')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onSend).not.toHaveBeenCalled()
+    expect(props.onCommand).not.toHaveBeenCalled()
+    expect(screen.getByText(/\/vim is a terminal command/)).toBeInTheDocument()
+  })
+
+  it('runs a command typed by its terminal alias', () => {
+    const changes: Command = { name: 'changes', description: 'What changed' }
+    const props = baseProps({ commands: [changes] })
+    render(<Composer {...props} />)
+    const input = type('/diff ')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onCommand).toHaveBeenCalledWith(expect.objectContaining({ name: 'changes' }), '')
+    expect(props.onSend).not.toHaveBeenCalled()
+  })
+
   it('dismisses the command menu on an outside click', () => {
     render(<Composer {...baseProps()} />)
     type('/ne')

@@ -28,7 +28,7 @@ import {
   type InvokedTurn,
   type PromptInvocation
 } from '@shared/promptInvocation'
-import { resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
+import { formatTokens, formatUsd, resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import {
@@ -119,6 +119,7 @@ import {
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
 import { Icon } from './components/Icon'
+import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
 import type { WhatsNew } from '@shared/update'
 
 // These overlays aren't on the initial render path, so load them as separate
@@ -192,6 +193,8 @@ export default function App(): JSX.Element {
   savedSettingsRef.current = savedSettings
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  // The section Settings opens on: a command like /theme lands on its own section.
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('models')
   const [doctorOpen, setDoctorOpen] = useState(false)
   const [changesOpen, setChangesOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
@@ -1622,6 +1625,141 @@ export default function App(): JSX.Element {
     [workspace, chat]
   )
 
+  /**
+   * A command the desktop shares with the terminal: do it with the desktop's own
+   * surface for the job (see desktopCommandAction), and say so when it can't run.
+   */
+  const runSharedCommand = useCallback(
+    (action: DesktopCommandAction) => {
+      switch (action.kind) {
+        case 'settings':
+          setSettingsSection(action.section)
+          setSettingsOpen(true)
+          return
+        case 'model': {
+          const q = action.query.toLowerCase()
+          if (q && settings) {
+            // An exact id, provider/id, or display name switches straight away;
+            // anything else opens the picker on that search.
+            for (const p of settings.providers) {
+              if (p.requiresKey && !p.hasKey) continue
+              const m = p.models.find(
+                (x) =>
+                  x.id.toLowerCase() === q ||
+                  `${p.id}/${x.id}`.toLowerCase() === q ||
+                  (x.label ?? modelDisplayName(p.kind, x.id)).toLowerCase() === q
+              )
+              if (m) {
+                void onSelectModel({ providerId: p.id, model: m.id })
+                chat.notify(`Model: ${m.label ?? modelDisplayName(p.kind, m.id)}`)
+                return
+              }
+            }
+          }
+          setPaletteSeed(action.query || 'model')
+          setPaletteOpen(true)
+          return
+        }
+        case 'changes':
+          setChangesOpen(true)
+          return
+        case 'undo':
+          if (chat.running) chat.notify('/undo can run once this turn ends.')
+          else if (chat.checkpoint && !chat.checkpoint.reverted) void onRevert()
+          else chat.notify('Nothing to undo: the last turn changed no files, or it was already undone.')
+          return
+        case 'redo':
+          if (chat.checkpoint?.reverted && !chat.running) void onReapply()
+          else chat.notify('Nothing to redo: /redo puts back what /undo reverted.')
+          return
+        case 'retry':
+          if (chat.errored && !chat.running) onRetry()
+          else chat.notify('Nothing to retry: /retry runs your last message again after a turn fails.')
+          return
+        case 'fork':
+          if (currentId) void onForkConversation(currentId)
+          else chat.notify('Nothing to fork yet: send a message first.')
+          return
+        case 'resume':
+          setPaletteSeed(action.query)
+          setPaletteOpen(true)
+          return
+        case 'btw':
+        case 'btw-clear': {
+          if (!currentId) {
+            chat.notify('The side chat needs a saved chat: send a message first.')
+            return
+          }
+          setSideChatOpen(true)
+          if (action.kind === 'btw-clear') void window.api.clearSideChat(currentId)
+          else if (action.question && settings?.selected) {
+            const { providerId, model } = settings.selected
+            void window.api
+              .askSideChat(currentId, action.question, providerId, model)
+              .catch((e: unknown) => chat.notify(`Side chat: ${(e as Error).message}`, 'error'))
+          }
+          return
+        }
+        case 'cost': {
+          const u = chat.usage
+          chat.notify(
+            u && (u.context > 0 || u.output > 0)
+              ? `This chat: ${formatTokens(u.context)} context · ${formatTokens(u.output)} out` +
+                  (u.cost > 0 ? ` · about ${formatUsd(u.cost)}` : '') +
+                  '. Hover the token count under the message box for a per-model breakdown.'
+              : 'No usage yet in this chat.'
+          )
+          return
+        }
+        case 'cwd':
+          chat.notify(workspace ? `Working folder: ${workspace}` : 'No folder is open.')
+          return
+        case 'share':
+          void window.api.shareFromMenu()
+          return
+        case 'approval':
+          if (action.policy) {
+            void onChangePolicy(action.policy)
+            chat.notify(`Approval mode: ${POLICY_LABEL[action.policy]}`)
+          } else {
+            const current = settings?.approvalPolicy ?? 'ask'
+            chat.notify(
+              (action.invalid ? `No approval mode "${action.invalid}". ` : '') +
+                `Approval mode: ${POLICY_LABEL[current]}. Switch with /plan, /ask, /auto or /full.`,
+              action.invalid ? 'error' : undefined
+            )
+          }
+          return
+        case 'reasoning':
+          if (action.effort) {
+            void onChangeReasoning(action.effort)
+            chat.notify(`Thinking effort: ${action.effort}`)
+          } else {
+            chat.notify(
+              (action.invalid ? `No thinking effort "${action.invalid}". ` : '') +
+                `Thinking effort: ${settings?.reasoningEffort ?? DEFAULT_REASONING_EFFORT}. ` +
+                'Set it with /reasoning off, low, medium, high or xhigh.',
+              action.invalid ? 'error' : undefined
+            )
+          }
+          return
+      }
+    },
+    [
+      settings,
+      chat,
+      currentId,
+      workspace,
+      onSelectModel,
+      onRevert,
+      onReapply,
+      onRetry,
+      onForkConversation,
+      onChangePolicy,
+      onChangeReasoning
+    ]
+  )
+
   const onCommand = useCallback(
     (cmd: Command, args: string) => {
       // Only built-in action commands reach here; custom (template) commands are
@@ -1651,9 +1789,12 @@ export default function App(): JSX.Element {
         const policy = POLICY_COMMANDS[cmd.name]
         void onChangePolicy(policy)
         chat.notify(`Approval mode: ${POLICY_LABEL[policy]}`)
+      } else {
+        const action = desktopCommandAction(cmd.name, args)
+        if (action) runSharedCommand(action)
       }
     },
-    [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, commands, currentId]
+    [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, commands, currentId, runSharedCommand]
   )
 
   // ---- Keyboard shortcuts, command palette, mode cycling ----
@@ -2479,7 +2620,11 @@ export default function App(): JSX.Element {
         {settingsOpen && (
           <SettingsModal
             initial={savedSettings ?? settings}
-            onClose={() => setSettingsOpen(false)}
+            initialTab={settingsSection}
+            onClose={() => {
+              setSettingsOpen(false)
+              setSettingsSection('models')
+            }}
             onSaved={(s) => setSettings(s)}
             onShowScorecard={() => {
               setSettingsOpen(false)

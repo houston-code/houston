@@ -423,6 +423,14 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/approval', s)).toEqual({ kind: 'handled' })
   })
 
+  it("takes the desktop's one-word approval commands and short names", () => {
+    expect(parseSlashCommand('/ask', s)).toEqual({ kind: 'set-approval', policy: 'ask' })
+    expect(parseSlashCommand('/auto', s)).toEqual({ kind: 'set-approval', policy: 'auto-edit' })
+    expect(parseSlashCommand('/full', s)).toEqual({ kind: 'set-approval', policy: 'full-auto' })
+    expect(parseSlashCommand('/approval full', s)).toEqual({ kind: 'set-approval', policy: 'full-auto' })
+    expect(parseSlashCommand('/retry', s)).toEqual({ kind: 'retry' })
+  })
+
   it('sets a model when the arg resolves', () => {
     expect(parseSlashCommand('/model ollama', s)).toEqual({
       kind: 'set-model',
@@ -1292,6 +1300,37 @@ describe('runTui', () => {
     expect(rec.runs[1].messages).toEqual([{ role: 'user', content: 'start the dev server' }])
   })
 
+  it('/retry sends the failed message again, in place, as the desktop Retry does', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'error', message: 'boom' }])
+    const t = fakeIo(['start the dev server', '/retry', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(2)
+    expect(rec.runs[1].messages).toEqual([{ role: 'user', content: 'start the dev server' }])
+    expect(t.text()).toContain('retrying your last message')
+  })
+
+  it('/retry says so when there is nothing to retry', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {}, (req) => [
+      ...req.messages,
+      { role: 'assistant', content: 'done' }
+    ])
+    const t = fakeIo(['hello', '/retry', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(1)
+    expect(t.text()).toContain('nothing to retry')
+  })
+
+  it('names approval modes the way the desktop does', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/auto', '/approval', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('approval → Auto-approve edits')
+    expect(t.text()).toContain('approval: Auto-approve edits  (switch with /plan, /ask, /auto, /full)')
+  })
+
   it('prompts for and records an approval decision', async () => {
     const { d, rec } = deps([
       { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
@@ -1548,7 +1587,7 @@ describe('runTui', () => {
     await runTui(opts, d)
     expect(rec.runs[0]).toMatchObject({ policy: 'plan' })
     expect(saved).toEqual([{ approvalPolicy: 'ask' }])
-    expect(t.text()).toContain('approval policy → ask (new chats too)')
+    expect(t.text()).toContain('approval → Ask every time (new chats too)')
   })
 
   it('splits --default off wherever it appears', () => {

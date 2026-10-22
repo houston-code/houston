@@ -28,6 +28,7 @@ import {
   parseSlashCommand,
 
   resolveCommand,
+  terminalOnlyNote,
   type Command
 } from '@shared/commands'
 import { commandTurn, type InvokedTurn } from '@shared/promptInvocation'
@@ -709,6 +710,14 @@ export function Composer({
         }
         return
       }
+      // A terminal-only built-in (/vim, /exit, …): say so, and where the app does
+      // it, rather than send the command to the model as a message.
+      const note = terminalOnlyNote(parsed.name)
+      if (note && !parsed.args) {
+        flashNotice(note)
+        setCmdDismissed(true)
+        return
+      }
       // Unknown command — fall through and send it as a normal message.
     }
     // A `#`-capture ("# always run the linter") is a standing instruction, not a
@@ -757,7 +766,7 @@ export function Composer({
     // A command is run, and a `#` line is saved as a rule, not steered: as steering
     // either would reach the model as plain text.
     const parsed = parseSlashCommand(trimmed)
-    if (parsed && resolveCommand(commands, parsed.name)) {
+    if (parsed && (resolveCommand(commands, parsed.name) || (!parsed.args && terminalOnlyNote(parsed.name)))) {
       submit()
       return
     }
