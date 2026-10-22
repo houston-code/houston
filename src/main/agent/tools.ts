@@ -4480,13 +4480,147 @@ export function formatRunLog(runId: string, log: string): string {
   })
 }
 
+/** The run fields {@link readRunStanding} needs (also part of gh_run_view's summary JSON). */
+const RUN_STANDING_FIELDS = 'databaseId,headBranch,headSha,event,status,conclusion,createdAt,workflowDatabaseId'
+
+/** A run as {@link describeRunStanding} sees it: validated scalars only, never free text. */
+export interface RunPoint {
+  id: number
+  sha: string
+  event: string
+  outcome: string
+  createdAt: string
+}
+
+/** Where a run sits relative to its branch now. Every field is optional (best-effort lookups). */
+export interface RunStanding {
+  run: RunPoint
+  /** Commits on the run's branch since the run's commit; undefined when not looked up. */
+  newerCommits?: number
+  /** Later runs of the same workflow on the same branch, newest first. */
+  laterRuns?: RunPoint[]
+}
+
+const HEX_SHA = /^[0-9a-f]{7,64}$/
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/
+
+/** A run record from gh's JSON reduced to {@link RunPoint}, or null if any field is off. */
+function runPoint(v: unknown): RunPoint | null {
+  if (!isRecord(v)) return null
+  const id = v.databaseId
+  if (typeof id !== 'number' || !Number.isSafeInteger(id) || id < 0) return null
+  const sha = typeof v.headSha === 'string' && HEX_SHA.test(v.headSha) ? v.headSha : ''
+  const createdAt = typeof v.createdAt === 'string' && ISO_TIME.test(v.createdAt) ? v.createdAt : ''
+  if (!sha || !createdAt) return null
+  return { id, sha, event: ghEnum(v.event), outcome: runOutcome(v), createdAt }
+}
+
+const FAILED_OUTCOMES = new Set(['failure', 'timed_out', 'cancelled', 'startup_failure'])
+
+/**
+ * Render where a run stands now, outside any fence: only ids, SHAs, counts, and
+ * outcomes, never a branch or workflow name. '' when nothing is known. Pure.
+ *
+ * The point is to stop a fix aimed at the wrong target. An agent handed an old failed
+ * run will otherwise "fix" it in the local checkout and re-run it, when the branch has
+ * moved on, a later run already passed, and a re-run reuses the run's own commit.
+ */
+export function describeRunStanding(st: RunStanding): string {
+  const short = st.run.sha.slice(0, 8)
+  const lines: string[] = []
+  if (st.newerCommits !== undefined) {
+    lines.push(
+      st.newerCommits === 0
+        ? `- This run's commit ${short} is still the tip of its branch.`
+        : `- The run's branch has ${st.newerCommits} newer commit${st.newerCommits === 1 ? '' : 's'} since this run's commit ${short}.`
+    )
+  }
+  const later = st.laterRuns ?? []
+  const passed = later.find((r) => r.outcome === 'success')
+  if (st.laterRuns !== undefined) {
+    if (later.length === 0) lines.push('- No later run of this workflow on the same branch.')
+    else {
+      const newest = later[0]
+      lines.push(
+        `- ${later.length} later run${later.length === 1 ? '' : 's'} of this workflow on the same branch; newest: run ${newest.id} [${newest.outcome}]${newest.event ? ` (${newest.event})` : ''}, commit ${newest.sha.slice(0, 8)}, ${newest.createdAt}.`
+      )
+      if (passed && passed !== newest) lines.push(`- Run ${passed.id} [success] is a later run that passed.`)
+    }
+  }
+  if (FAILED_OUTCOMES.has(st.run.outcome)) {
+    if (passed) {
+      lines.push(
+        `- A later run passed, so this failure may already be fixed: look at run ${passed.id} before changing anything.`
+      )
+    }
+    lines.push(
+      `- Re-running this run reuses commit ${short}, so it cannot pick up anything newer. Edits in the local checkout ` +
+        "do not reach it either: a fix gets to CI as a commit or PR on the run's branch, then a new run."
+    )
+  }
+  return lines.length ? `Where run ${st.run.id} (started ${st.run.createdAt}) stands now:\n${lines.join('\n')}` : ''
+}
+
+/**
+ * Look up {@link RunStanding} for a run's JSON (`RUN_STANDING_FIELDS`) and render it, or ''.
+ * Best-effort: any failed or unparseable lookup just leaves its line out. The branch name is
+ * untrusted (a fork PR names it), so it must be a safe ref, goes to gh only as one argv
+ * entry or URL-encoded, and never appears in the output.
+ */
+async function readRunStanding(runJson: unknown, run: GhExec, ctx: ToolContext): Promise<string> {
+  const point = runPoint(runJson)
+  if (!point || !isRecord(runJson)) return ''
+  const st: RunStanding = { run: point }
+  const branch = typeof runJson.headBranch === 'string' && isSafeGitRef(runJson.headBranch) ? runJson.headBranch : ''
+  const workflow = runJson.workflowDatabaseId
+  if (branch && typeof workflow === 'number' && Number.isSafeInteger(workflow) && workflow > 0) {
+    const r = await run(
+      ['run', 'list', '--workflow', String(workflow), '--branch', branch, '--limit', '20', '--json', RUN_STANDING_FIELDS],
+      ctx.workspace,
+      ctx.signal
+    ).catch(() => null)
+    if (r?.ok) {
+      try {
+        const list: unknown = JSON.parse(r.stdout)
+        if (Array.isArray(list)) {
+          st.laterRuns = list
+            .map(runPoint)
+            .filter((p): p is RunPoint => p !== null && p.id !== point.id && p.createdAt > point.createdAt)
+            .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+        }
+      } catch {
+        // leave laterRuns unknown
+      }
+    }
+  }
+  // A pull_request run's branch can live in a fork, so the same name here may be another
+  // branch entirely: only compare for runs of this repository's own branches.
+  if (branch && !point.event.startsWith('pull_request')) {
+    const r = await run(
+      ['api', `repos/{owner}/{repo}/compare/${point.sha}...${encodeURIComponent(branch)}`, '--jq', '[.status, .ahead_by] | @tsv'],
+      ctx.workspace,
+      ctx.signal
+    ).catch(() => null)
+    const m = r?.ok ? /^(identical|ahead|behind|diverged)\t(\d+)\s*$/.exec(r.stdout) : null
+    // `ahead_by` counts the branch's commits not in the run's commit; diverged (a force-push
+    // dropped the run's commit) still means the branch has that many commits the run never saw.
+    if (m) st.newerCommits = Number(m[2])
+  }
+  return describeRunStanding(st)
+}
+
+/** Prepend the standing section (when there is one) to a gh_run_view result. */
+function withStanding(standing: string, body: string): string {
+  return standing ? `${standing}\n\n${body}` : body
+}
+
 const ghRunView: ToolDef = {
   kind: 'network',
   summarize: (a) => `View CI run ${idArg(a, 'run_id') || '?'}`,
   schema: {
     name: 'gh_run_view',
     description:
-      'View a GitHub Actions workflow run via the gh CLI. Returns the run\'s id, outcome, URL, and each job\'s id, outcome, and failed step numbers, then the workflow, title, branch, and job and step names inside an untrusted-content fence. Set log_failed:true to print the logs of only the failed steps instead, fenced (the fastest way to diagnose a CI failure). Get run ids from gh_run_list. Read-only, but requires approval (network).',
+      'View a GitHub Actions workflow run via the gh CLI. Returns the run\'s id, outcome, URL, and each job\'s id, outcome, and failed step numbers, then the workflow, title, branch, and job and step names inside an untrusted-content fence. Set log_failed:true to print the logs of only the failed steps instead, fenced (the fastest way to diagnose a CI failure). Both start with where the run stands now: newer commits on its branch, later runs of the same workflow and whether one passed. Get run ids from gh_run_list. Read-only, but requires approval (network).',
     parameters: objectSchema(
       {
         run_id: { type: 'number', description: 'The run id (databaseId from gh_run_list).' },
@@ -4501,10 +4635,21 @@ const ghRunView: ToolDef = {
   async execute(args, ctx) {
     const [runId] = intArg(args, 'run_id', 'run_id (the run id)', true)
     const run = ghRunner(ctx)
+    const parse = (json: string): unknown => {
+      try {
+        return JSON.parse(json)
+      } catch {
+        return null
+      }
+    }
     if (args.log_failed === true) {
       const r = await run(['run', 'view', runId, '--log-failed'], ctx.workspace, ctx.signal)
       if (!r.ok) return ghReadFailure(r)
-      return formatRunLog(runId, r.stdout)
+      const meta = await run(['run', 'view', runId, '--json', RUN_STANDING_FIELDS], ctx.workspace, ctx.signal).catch(
+        () => null
+      )
+      const standing = meta?.ok ? await readRunStanding(parse(meta.stdout), run, ctx) : ''
+      return withStanding(standing, formatRunLog(runId, r.stdout))
     }
     const r = await run(
       [
@@ -4512,13 +4657,13 @@ const ghRunView: ToolDef = {
         'view',
         runId,
         '--json',
-        'databaseId,displayTitle,workflowName,headBranch,headSha,event,status,conclusion,attempt,url,jobs'
+        'databaseId,displayTitle,workflowName,headBranch,headSha,event,status,conclusion,attempt,url,jobs,createdAt,workflowDatabaseId'
       ],
       ctx.workspace,
       ctx.signal
     )
     if (!r.ok) return ghReadFailure(r)
-    return formatRunView(r.stdout)
+    return withStanding(await readRunStanding(parse(r.stdout), run, ctx), formatRunView(r.stdout))
   }
 }
 
