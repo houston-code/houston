@@ -1326,11 +1326,12 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
         // Internal/streaming events with no headless surface: the --json path above
         // already emits each verbatim, and the human output doesn't show them.
         // `steered` is here for the same reason — headless has no one at the keyboard
-        // to steer a turn, so it can only arrive on a run adopted from elsewhere.
-        // `run_info` feeds the --json init line above.
+        // to steer a turn, so it can only arrive on a run adopted from elsewhere, and
+        // `steers_returned` with it. `run_info` feeds the --json init line above.
         case 'reasoning':
         case 'turn_start':
         case 'steered':
+        case 'steers_returned':
         case 'run_info':
           break
         default:

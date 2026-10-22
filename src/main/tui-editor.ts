@@ -73,11 +73,13 @@ export type EditorOutcome =
 export const PASTE_COLLAPSE_LINES = 5
 export const PASTE_COLLAPSE_CHARS = 800
 
-export function initialEditorState(history: string[] = []): EditorState {
+export function initialEditorState(history: string[] = [], draft = ''): EditorState {
+  // A pre-filled draft opens with the cursor at its end, ready to edit or send.
+  const lines = draft.split('\n')
   return {
-    lines: [''],
-    row: 0,
-    col: 0,
+    lines,
+    row: lines.length - 1,
+    col: [...lines[lines.length - 1]].length,
     history,
     histIndex: null,
     stash: null,

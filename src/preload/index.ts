@@ -26,6 +26,7 @@ import type { ClipboardContent, PickedFile } from '@shared/composerContext'
 import type {
   AgentEvent,
   AgentSendRequest,
+  AgentStartResult,
   BackgroundShellInfo,
   KillShellOutcome,
   ChatMessage,
@@ -43,7 +44,7 @@ import type {
   RepoInfo,
   ToolApprovalDecision
 } from '@shared/agent'
-import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
+import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
 import type { Scorecard } from '@shared/scorecard'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
@@ -248,7 +249,8 @@ const api = {
   },
 
   // Agent
-  startAgent: (req: AgentSendRequest): Promise<void> => ipcRenderer.invoke(IPC.agentStart, req),
+  /** Resolves with `queuedBehind` when a live run was already going and the message was queued. */
+  startAgent: (req: AgentSendRequest): Promise<AgentStartResult | void> => ipcRenderer.invoke(IPC.agentStart, req),
   retryAgent: (req: {
     runId: string
     conversationId: string
@@ -305,9 +307,11 @@ const api = {
     ipcRenderer.invoke(IPC.agentSetPolicy, runId, policy),
   setAgentEffort: (runId: string, effort: ReasoningEffort): Promise<void> =>
     ipcRenderer.invoke(IPC.agentSetEffort, runId, effort),
-  /** Steer the live run: inject `text` into the model's context before its next step. */
-  steerAgent: (runId: string, text: string): Promise<boolean> =>
-    ipcRenderer.invoke(IPC.agentSteer, runId, text),
+  /**
+   * A message typed mid-run: steered into the conversation's live run, else queued
+   * for after it (`idle` when no run is live, so the caller sends it as a turn).
+   */
+  steerAgent: (req: QueueAddRequest): Promise<SteerOutcome> => ipcRenderer.invoke(IPC.agentSteer, req),
   /**
    * The runId of the live run for a conversation, or null. Used to re-adopt a
    * backgrounded run when its conversation is re-opened, instead of starting a

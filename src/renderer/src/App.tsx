@@ -75,6 +75,8 @@ import { usePreviewServers } from './hooks/usePreviewServers'
 import { ownedByChat } from './lib/chatScope'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
+import { queueBarLabel } from './lib/queueBar'
+import { deliverMidRunMessage } from './lib/midRunMessage'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
 import type { ShipAction } from '@shared/shipAction'
 import { saveComposerDraft } from './lib/composerDraft'
@@ -1489,30 +1491,61 @@ export default function App(): JSX.Element {
     [workspace, chat]
   )
 
-  // Steer the running turn: inject the text into the live run before its next step,
-  // rather than queuing it for after. If the run finished between typing and the
-  // click, fall back to queuing so nothing the user typed is dropped.
+  // The open conversation, readable from an async continuation that must not act on
+  // a chat the user has since navigated away from.
+  const currentIdRef = useRef(currentId)
+  currentIdRef.current = currentId
+
+  // The agent's open `ask_user` question, if it is waiting on one. While it is, the
+  // run can't read a steer (it is blocked on the answer), so Enter answers it instead.
+  const openQuestion = useMemo(() => {
+    if (!chat.running) return null
+    for (let i = chat.items.length - 1; i >= 0; i--) {
+      const it = chat.items[i]
+      if (it.kind === 'question' && it.answer === undefined) return it
+    }
+    return null
+  }, [chat.running, chat.items])
+
+  // Enter mid-run: answer the open question, or else steer the running turn (the
+  // model reads it before its next step). Main decides steer vs queue against the
+  // live run in one step and has the message on disk before replying, so it shows
+  // as a chip until it lands and can't vanish with a run that ends first.
   const onSteer = useCallback(
     (text: string) => {
-      // The conversation this steer belongs to, captured now: if the run declines it
-      // (it ended between typing and the round-trip) the fallback resolves async, and
-      // the user may have switched chats by then — the text must queue into THIS one,
-      // not wherever they navigated.
-      const targetConv = currentId
-      void chat.steer(text).then((accepted) => {
-        if (!accepted && settings?.selected && targetConv) {
-          queue.enqueue({
-            conversationId: targetConv,
-            text,
-            providerId: settings.selected.providerId,
-            model: settings.selected.model,
+      const selected = settings?.selected
+      const send = selected
+        ? {
+            providerId: selected.providerId,
+            model: selected.model,
             approvalPolicy: settings.approvalPolicy,
             reasoningEffort: settings.reasoningEffort
-          })
+          }
+        : null
+      void deliverMidRunMessage(text, {
+        openQuestionId: openQuestion?.id ?? null,
+        // Captured now: the reply is async, and the text belongs to the conversation
+        // it was typed in, not wherever the user is by then.
+        conversationId: currentId,
+        canSend: !!send,
+        answer: chat.answerQuestion,
+        steer: (conversationId, t) =>
+          send ? queue.steer({ conversationId, text: t, ...send }) : Promise.reject(new Error('No model selected.')),
+        isOpen: (cid) => currentIdRef.current === cid,
+        sendNow: (t) => void sendNow(t),
+        enqueue: (conversationId, t) => {
+          if (send) queue.enqueue({ conversationId, text: t, ...send })
+        },
+        giveBack: (t, cid, failed) => {
+          // Shown in that chat's message box, even if the user has moved on.
+          prefillComposer(t)
+          if (failed && cid && currentIdRef.current === cid) {
+            chat.notify("Couldn't send that message, so it's back in the message box.", 'error')
+          }
         }
       })
     },
-    [chat, settings, queue, currentId]
+    [chat, settings, queue, currentId, openQuestion, prefillComposer, sendNow]
   )
 
   // Hand shipping off to the agent: close the panel and send the chosen action's
@@ -2449,22 +2482,22 @@ export default function App(): JSX.Element {
 
         {queue.queued.length > 0 && (
           <div className="queue-bar">
-            <span className="queue-bar__label">
-              {queue.queued.length} queued ·{' '}
-              {chat.running ? 'sent when this run finishes' : 'the run stopped: send them now or clear them'}
-            </span>
+            <span className="queue-bar__label">{queueBarLabel(queue.queued, chat.running)}</span>
             <ul className="queue-bar__items">
               {queue.queued.map((q) => {
                 const label =
                   q.text.trim() ||
                   (q.imageCount ? `🖼 ${q.imageCount} image${q.imageCount === 1 ? '' : 's'}` : '')
+                // A steer is the agent's to read at its next step; × takes it back.
+                const removeLabel = q.steer ? 'Take back this steer' : 'Remove from queue'
                 return (
-                  <li key={q.id} className="queue-chip" title={label}>
+                  <li key={q.id} className={`queue-chip${q.steer ? ' queue-chip--steer' : ''}`} title={label}>
+                    {q.steer && <Icon name="steer" size={12} />}
                     <span className="queue-chip__text">{label}</span>
                     <button
                       className="queue-chip__remove"
-                      title="Remove from queue"
-                      aria-label="Remove from queue"
+                      title={removeLabel}
+                      aria-label={removeLabel}
                       onClick={() => queue.remove(q.id)}
                     >
                       ✕
@@ -2539,6 +2572,7 @@ export default function App(): JSX.Element {
             onSend={onSend}
             onInvoke={onInvoke}
             onSteer={onSteer}
+            answering={openQuestion !== null}
             onSaveMemory={onSaveMemory}
             onCancel={chat.cancel}
             editing={editing ? { label: editing.target.label, mode: editing.mode } : undefined}

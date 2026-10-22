@@ -449,6 +449,7 @@ describe('the checked-in --json schema', () => {
     text: { runId: 'r', type: 'text', delta: 'Hi' },
     reasoning: { runId: 'r', type: 'reasoning', delta: 'hmm' },
     steered: { runId: 'r', type: 'steered', text: 'also do x' },
+    steers_returned: { runId: 'r', type: 'steers_returned', texts: ['also do x'] },
     tool_start: { runId: 'r', type: 'tool_start', callId: 'c', name: 'read_file', args: { path: 'a' }, kind: 'read' },
     tool_progress: { runId: 'r', type: 'tool_progress', callId: 'c', message: 'working' },
     subagent: { runId: 'r', type: 'subagent', parentCallId: 'c', id: 's', label: 'security', status: 'done' },

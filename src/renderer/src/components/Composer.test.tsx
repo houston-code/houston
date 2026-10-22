@@ -704,6 +704,22 @@ describe('Composer + attachment menu', () => {
       )
     })
 
+    // While the agent waits on its own question, Enter answers it: a steer typed then
+    // sat unread until the question was settled, and looked like it had vanished.
+    it('says Enter answers the question while the agent is waiting on one', () => {
+      const props = baseProps({ running: true, onSteer: vi.fn(), answering: true })
+      render(<Composer {...props} />)
+      expect(screen.getByRole('textbox')).toHaveAttribute(
+        'placeholder',
+        expect.stringMatching(/^↵ answers the agent's question, (⌘|Ctrl)\+↵ queues for after this run\.$/)
+      )
+      expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull()
+      const input = type('Postgres, with a read replica')
+      fireEvent.click(screen.getByRole('button', { name: 'Answer' }))
+      expect(props.onSteer).toHaveBeenCalledWith('Postgres, with a read replica')
+      expect(input.value).toBe('')
+    })
+
     it('Enter steers while running', () => {
       const props = baseProps({ running: true, onSteer: vi.fn() })
       render(<Composer {...props} />)

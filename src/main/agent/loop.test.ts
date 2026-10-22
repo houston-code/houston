@@ -246,6 +246,7 @@ const {
   setRunPolicy,
   setRunEffort,
   steerRun,
+  unsteerRun,
   activeRunForConversation,
   pendingPromptsForConversation,
   liveTranscriptForConversation,
@@ -7340,12 +7341,17 @@ describe('steerRun', () => {
    * count because steers wait for an iteration boundary, and a turn stuck in a long
    * tool call would otherwise collect them without limit.
    */
-  it('caps a correction rather than letting it flood the window', async () => {
+  // Too long is refused, not cut: cutting kept the first 2000 characters and dropped
+  // the rest without a word. Refused, the caller queues it whole as its own turn.
+  it('refuses a correction over the length cap instead of cutting it short', async () => {
     const r = recording(twoSteps)
     h.provider = r.provider
     const runId = 'run-steer-cap'
+    const results: boolean[] = []
     const send = (e: AgentEvent): void => {
-      if (e.type === 'tool_result' && e.callId === 'w1') steerRun(runId, 'x'.repeat(MAX_STEER_TEXT + 500))
+      if (e.type === 'tool_result' && e.callId === 'w1') {
+        results.push(steerRun(runId, 'x'.repeat(MAX_STEER_TEXT + 500)), steerRun(runId, 'y'.repeat(MAX_STEER_TEXT)))
+      }
     }
     await startRun(
       {
@@ -7359,8 +7365,10 @@ describe('steerRun', () => {
       send,
       () => {}
     )
-    const pushed = (r.requests[1] ?? []).find((m) => m.role === 'user' && m.content.startsWith('xxx'))
-    expect(pushed?.content).toHaveLength(MAX_STEER_TEXT)
+    expect(results).toEqual([false, true]) // at the cap is fine; past it goes to the queue
+    const window = r.requests[1] ?? []
+    expect(window.some((m) => m.role === 'user' && m.content.startsWith('xxx'))).toBe(false)
+    expect(window.find((m) => m.role === 'user' && m.content.startsWith('yyy'))?.content).toHaveLength(MAX_STEER_TEXT)
   })
 
   // Refusing is not dropping: false routes the line to the caller's own queue.
@@ -8178,5 +8186,176 @@ describe('lsp_rename through the write gate', () => {
     })
     expect(spy).not.toHaveBeenCalled()
     expect(String(r.messages.find((m) => m.role === 'tool')?.content)).toMatch(/Plan mode/)
+  })
+})
+
+// A steer the run accepted must reach the model or come back to the caller: never
+// neither. steerRun returning true is what stops a client falling back to its
+// queue, so a run that then ends without reading it (it was blocked on a question,
+// it was stopped, its provider failed) used to drop the user's words outright.
+describe('steerRun: a steer the run never reads is handed back', () => {
+  async function runWith(
+    runId: string,
+    onEvent: (e: AgentEvent) => void
+  ): Promise<{ events: AgentEvent[]; persisted: ChatMessage[] }> {
+    const events: AgentEvent[] = []
+    let persisted: ChatMessage[] = []
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      (e) => {
+        events.push(e)
+        onEvent(e)
+      },
+      (m) => {
+        persisted = [...m]
+      }
+    )
+    return { events, persisted }
+  }
+  const returned = (events: AgentEvent[]): string[] =>
+    events.flatMap((e) => (e.type === 'steers_returned' ? e.texts : []))
+  const networkError = (): Error => Object.assign(new Error('fetch failed: ECONNRESET'), { code: 'ECONNRESET' })
+
+  it('while an ask_user question waits, then the run is stopped', async () => {
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'q1', name: 'ask_user', arguments: { question: 'Which?' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ]
+    ])
+    const runId = 'run-steer-question-stop'
+    const r = await runWith(runId, (e) => {
+      if (e.type === 'tool_question') {
+        setTimeout(() => {
+          expect(steerRun(runId, 'my steer', 's1')).toBe(true)
+          cancelRun(runId)
+        }, 0)
+      }
+    })
+    expect(r.events.some((e) => e.type === 'steered')).toBe(false)
+    expect(returned(r.events)).toEqual(['my steer'])
+    // After the terminal event, so a client has already settled the run's end.
+    expect(r.events.at(-1)?.type).toBe('steers_returned')
+    expect(r.events.findIndex((e) => e.type === 'done')).toBeGreaterThan(-1)
+  })
+
+  // The answered case: the steer lands right after the answer, in order.
+  it('while an ask_user question waits, lands right after the answer', async () => {
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'q1', name: 'ask_user', arguments: { question: 'Which?' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const runId = 'run-steer-question-answer'
+    const r = await runWith(runId, (e) => {
+      if (e.type === 'tool_question') {
+        setTimeout(() => {
+          steerRun(runId, 'my steer', 's1')
+          resolveQuestion(runId, 'q1', 'Postgres')
+        }, 0)
+      }
+    })
+    expect(r.events.find((e) => e.type === 'steered')).toMatchObject({ text: 'my steer', id: 's1' })
+    expect(returned(r.events)).toEqual([])
+    const tail = r.persisted.slice(-3).map((m) => [m.role, m.content])
+    expect(tail).toEqual([
+      ['tool', 'Postgres'],
+      ['user', 'my steer'],
+      ['assistant', 'ok']
+    ])
+  })
+
+  it('during a network retry, when the retries run out', async () => {
+    h.provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat() {
+        throw networkError()
+      }
+    }
+    const runId = 'run-steer-retry-exhausted'
+    const r = await runWith(runId, (e) => {
+      if (e.type === 'retry' && e.attempt === 1) steerRun(runId, 'my steer')
+    })
+    expect(r.events.some((e) => e.type === 'error')).toBe(true)
+    expect(returned(r.events)).toEqual(['my steer'])
+  })
+
+  it('during a network retry, when the run is stopped', async () => {
+    h.provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat() {
+        throw networkError()
+      }
+    }
+    const runId = 'run-steer-retry-stop'
+    const r = await runWith(runId, (e) => {
+      if (e.type === 'retry' && e.attempt === 1) {
+        steerRun(runId, 'my steer')
+        cancelRun(runId)
+      }
+    })
+    expect(returned(r.events)).toEqual(['my steer'])
+  })
+
+  it('while the model streams, when the provider then fails for good', async () => {
+    let n = 0
+    h.provider = {
+      async *streamChat() {
+        if (n++ === 0) {
+          yield { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'a.txt', content: 'x' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'partial' }
+        throw Object.assign(new Error('400 invalid_request_error'), { status: 400 })
+      }
+    }
+    const runId = 'run-steer-fatal'
+    const r = await runWith(runId, (e) => {
+      if (e.type === 'tool_approval') setTimeout(() => resolveApproval(runId, e.callId, 'allow'), 0)
+      if (e.type === 'text') steerRun(runId, 'my steer')
+    })
+    expect(r.events.some((e) => e.type === 'error')).toBe(true)
+    expect(returned(r.events)).toEqual(['my steer'])
+  })
+
+  it('emits nothing extra when every steer landed', async () => {
+    h.provider = scripted([[{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]])
+    const r = await runWith('run-steer-none', () => {})
+    expect(returned(r.events)).toEqual([])
+  })
+
+  it('unsteerRun takes back a steer that has not landed, and only that one', async () => {
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'q1', name: 'ask_user', arguments: { question: 'Which?' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const runId = 'run-unsteer'
+    const results: boolean[] = []
+    const r = await runWith(runId, (e) => {
+      if (e.type === 'tool_question') {
+        setTimeout(() => {
+          steerRun(runId, 'keep me', 'a')
+          steerRun(runId, 'take me back', 'b')
+          results.push(unsteerRun(runId, 'b'), unsteerRun(runId, 'b'), unsteerRun(runId, 'nope'))
+          resolveQuestion(runId, 'q1', 'Postgres')
+        }, 0)
+      }
+    })
+    expect(results).toEqual([true, false, false])
+    expect(r.events.filter((e) => e.type === 'steered').map((e) => (e as { text: string }).text)).toEqual(['keep me'])
+    expect(unsteerRun(runId, 'a')).toBe(false) // the run is over
   })
 })

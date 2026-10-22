@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { QueueAddRequest, QueuedInputMeta } from '@shared/queue'
+import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
 import { useInputQueue } from './useInputQueue'
 
 type QueueChangedHandler = (p: { conversationId: string; items: QueuedInputMeta[] }) => void
@@ -16,6 +16,10 @@ function installApi(initial: Record<string, QueuedInputMeta[]> = {}) {
     dequeueInput: vi.fn((_cid: string, _id: string) => Promise.resolve([] as QueuedInputMeta[])),
     clearQueue: vi.fn((_cid: string) => Promise.resolve([] as QueuedInputMeta[])),
     flushQueue: vi.fn((_cid: string) => Promise.resolve()),
+    steerAgent: vi.fn(
+      (req: QueueAddRequest): Promise<SteerOutcome> =>
+        Promise.resolve({ status: 'steered', items: [{ id: 's1', text: req.userText, imageCount: 0, steer: true }] })
+    ),
     onQueueChanged: vi.fn((cb: QueueChangedHandler) => {
       onChanged = cb
       return () => {}
@@ -141,5 +145,55 @@ describe('useInputQueue', () => {
 
     rerender({ id: null })
     await waitFor(() => expect(result.current.queued).toEqual([]))
+  })
+
+  // A steer is shown in the bar the moment main has it, so it can't look like it
+  // vanished while the run is busy (waiting on a question, a retry, a long tool).
+  it('steers through main and shows the steer in the bar at once', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useInputQueue('c1'))
+    let outcome: SteerOutcome | undefined
+    await act(async () => {
+      outcome = await result.current.steer({ conversationId: 'c1', text: 'use YAML', ...ENQUEUE })
+    })
+    expect(api.steerAgent).toHaveBeenCalledWith({
+      conversationId: 'c1',
+      userText: 'use YAML',
+      providerId: 'anthropic',
+      model: 'claude',
+      approvalPolicy: 'ask'
+    })
+    expect(outcome?.status).toBe('steered')
+    expect(result.current.queued).toEqual([{ id: 's1', text: 'use YAML', imageCount: 0, steer: true }])
+  })
+
+  it('passes `idle` back untouched, for the caller to send as a turn', async () => {
+    const { api } = installApi({ c1: [{ id: 'a', text: 'held', imageCount: 0 }] })
+    api.steerAgent.mockResolvedValueOnce({ status: 'idle' })
+    const { result } = renderHook(() => useInputQueue('c1'))
+    await waitFor(() => expect(result.current.queued).toHaveLength(1))
+    let outcome: SteerOutcome | undefined
+    await act(async () => {
+      outcome = await result.current.steer({ conversationId: 'c1', text: 'late', ...ENQUEUE })
+    })
+    expect(outcome).toEqual({ status: 'idle' })
+    expect(result.current.queued).toEqual([{ id: 'a', text: 'held', imageCount: 0 }])
+  })
+
+  it("doesn't paint another chat's bar with a steer that resolves after navigating", async () => {
+    const { api } = installApi()
+    let reply: (o: SteerOutcome) => void = () => {}
+    api.steerAgent.mockReturnValueOnce(new Promise((r) => (reply = r)))
+    const { result, rerender } = renderHook(({ id }) => useInputQueue(id), { initialProps: { id: 'c1' } })
+    let pending: Promise<SteerOutcome> = Promise.resolve({ status: 'idle' })
+    act(() => {
+      pending = result.current.steer({ conversationId: 'c1', text: 'mine', ...ENQUEUE })
+    })
+    rerender({ id: 'c2' })
+    await act(async () => {
+      reply({ status: 'queued', items: [{ id: 'q', text: 'mine', imageCount: 0 }] })
+      await pending
+    })
+    expect(result.current.queued).toEqual([])
   })
 })

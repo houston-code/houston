@@ -3,7 +3,7 @@ import type { AgentEvent, AgentRunRequest, ChatMessage } from '@shared/agent'
 import { combineQueued, type QueuedInputMeta } from '@shared/queue'
 import { startRun } from './loop'
 import { maybeGenerateTitle } from './title'
-import { takeQueue } from './queue'
+import { removeFromQueue, settleSteers, takeQueue } from './queue'
 import {
   getConversation,
   setConversationError,
@@ -52,6 +52,13 @@ export async function runAndDrain(
       errorMessage = e.message
     } else if (e.type === 'done') terminal = e.stopReason === 'aborted' ? 'aborted' : 'natural'
     io.emit(conversationId, e)
+    // A steer has landed: the run is about to persist it into the log, so its queue
+    // entry has done its job. Dropped on a microtask, after that persist: if the app
+    // dies between the two writes, the message shows twice rather than not at all.
+    if (e.type === 'steered' && e.id) {
+      const id = e.id
+      queueMicrotask(() => io.emitQueueChanged(conversationId, removeFromQueue(conversationId, id)))
+    }
   }
   // A new run supersedes any prior failure: clear the persisted "last turn failed"
   // marker up front, so a reload mid-run doesn't resurrect a stale banner. It's
@@ -78,6 +85,12 @@ export async function runAndDrain(
     (msgs) => setMessages(conversationId, msgs),
     owner
   )
+  // Steers the run never read are still in the queue (it is their durable copy);
+  // with the run gone they are plain follow-ups: sent next on a natural finish, held
+  // for the user on Stop or an error, like anything else queued. The loop's own
+  // `steers_returned` event is for clients without that copy (the terminal UI).
+  const settled = settleSteers(conversationId)
+  if (settled) io.emitQueueChanged(conversationId, settled)
   if (terminal === 'natural') {
     // Fallback: if the turn-start attempt missed (timeout, blip), try once more now
     // that the reply is available as extra context. No-op if already titled or the

@@ -248,6 +248,7 @@ export interface Provider {
 
 import type { ApprovalPolicy, McpServerConfig } from './types'
 import type { ImageAttachment } from './images'
+import type { StoredQueue } from './queue'
 
 /**
  * A git worktree Houston created to back a conversation. Lets a chat work on its
@@ -540,6 +541,11 @@ export interface Conversation extends ConversationMeta {
   usage?: ConversationUsage
   /** Present when the most recent run failed; powers the persisted Retry banner. */
   lastError?: ConversationError
+  /**
+   * Messages typed while a run was going and not yet sent (see agent/queue.ts),
+   * kept here so a quit or crash can't lose them. Absent when nothing is queued.
+   */
+  queuedInput?: StoredQueue
   /** Present once the loop has compacted this chat; see {@link ConversationCompaction}. */
   compaction?: ConversationCompaction
   /** Present once the chat has run; see {@link PromptSnapshot}. */
@@ -751,6 +757,14 @@ export interface AgentSendRequest {
   model: string
   approvalPolicy: ApprovalPolicy
   reasoningEffort?: ReasoningEffort
+}
+
+/**
+ * What starting a turn did, when it didn't start one: the conversation already had
+ * a live run, so the message was queued behind it (`queuedBehind` names that run).
+ */
+export interface AgentStartResult {
+  queuedBehind: string
 }
 
 /** The settings a chat keeps for itself; see {@link ConversationMeta.reasoningEffort}. */
@@ -986,9 +1000,16 @@ export type AgentEvent =
    * A course correction the user typed while the turn was running, now in the
    * model's window (see `steerRun`). Emitted at the iteration boundary where it
    * actually lands, not when it was typed, so the transcript shows it in the order
-   * the model read it rather than the order it was received.
+   * the model read it rather than the order it was received. `id` is the queue
+   * entry that held it until now (desktop steers only).
    */
-  | { runId: string; type: 'steered'; text: string }
+  | { runId: string; type: 'steered'; text: string; id?: string }
+  /**
+   * Steers the run accepted but ended before reading (Stop, an error, a limit),
+   * emitted as the run unwinds, after its terminal event. A client that kept no
+   * copy of its own (the terminal UI) takes these back so nothing typed is lost.
+   */
+  | { runId: string; type: 'steers_returned'; texts: string[] }
   | {
       runId: string
       type: 'tool_start'

@@ -1,6 +1,6 @@
 import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
-import type { AgentEvent, AgentSendRequest, ToolApprovalDecision } from '@shared/agent'
+import type { AgentEvent, AgentSendRequest, AgentStartResult, ToolApprovalDecision } from '@shared/agent'
 import { useChat } from './useChat'
 
 type EventHandler = (e: AgentEvent) => void
@@ -18,7 +18,7 @@ function installApi() {
       handler = cb
       return unsubscribe
     }),
-    startAgent: vi.fn((_req: AgentSendRequest) => Promise.resolve()),
+    startAgent: vi.fn((_req: AgentSendRequest): Promise<AgentStartResult | void> => Promise.resolve()),
     retryAgent: vi.fn((_req: unknown) => Promise.resolve()),
     cancelAgent: vi.fn((_runId: string) => Promise.resolve()),
     approveTool: vi.fn((_runId: string, _callId: string, _decision: ToolApprovalDecision, _note?: string) =>
@@ -26,7 +26,6 @@ function installApi() {
     ),
     setAgentPolicy: vi.fn((_runId: string, _policy: string) => Promise.resolve()),
     setAgentEffort: vi.fn((_runId: string, _effort: string) => Promise.resolve()),
-    steerAgent: vi.fn((_runId: string, _text: string) => Promise.resolve(true)),
     restoreCheckpoint: vi.fn((_runId: string) => Promise.resolve(3)),
     reapplyCheckpoint: vi.fn((_runId: string) => Promise.resolve(2))
   }
@@ -346,30 +345,46 @@ describe('useChat', () => {
     expect(api.setAgentPolicy).not.toHaveBeenCalled()
   })
 
-  it('steers the live run through the bridge, and reports acceptance', async () => {
+  // The send raced a run this view didn't know about, so main queued it instead of
+  // starting a turn: the bubble for a turn that never started goes, and the view
+  // follows the live run so its events and Stop reach it.
+  it('follows the live run and drops its own bubble when main queued the send', async () => {
     const { api, emit } = installApi()
+    api.startAgent.mockResolvedValueOnce({ queuedBehind: 'live-run' })
     const { result } = renderHook(() => useChat())
-    const runId = await sendAndGetRunId(result, api)
-    emit({ runId, type: 'text', delta: 'working' }) // a run is live
-
-    let accepted: boolean | undefined
     await act(async () => {
-      accepted = await result.current.steer('use YAML instead')
+      await result.current.send({ ...SEND })
     })
-    expect(api.steerAgent).toHaveBeenCalledWith(runId, 'use YAML instead')
-    expect(accepted).toBe(true)
+    expect(result.current.items.some((it) => it.kind === 'user' && it.text === 'hello')).toBe(false)
+    expect(result.current.running).toBe(true)
+    emit({ runId: 'live-run', type: 'text', delta: 'from the live run' })
+    expect(result.current.items.some((it) => it.kind === 'assistant' && it.text.includes('from the live run'))).toBe(
+      true
+    )
+    act(() => result.current.cancel())
+    expect(api.cancelAgent).toHaveBeenCalledWith('live-run')
   })
 
-  it('steer is a no-op returning false when no run is active', async () => {
-    const { api } = installApi()
-    const { result } = renderHook(() => useChat())
-
-    let accepted: boolean | undefined
-    await act(async () => {
-      accepted = await result.current.steer('nothing to steer')
+  it('keeps an already-adopted run when main queued the send behind it', async () => {
+    const { api, emit } = installApi()
+    let reply: (r: AgentStartResult) => void = () => {}
+    api.startAgent.mockReturnValueOnce(new Promise((r) => (reply = r)))
+    const { result } = renderHook(() => useChat('c1'))
+    let sent: Promise<void> = Promise.resolve()
+    act(() => {
+      sent = result.current.send({ ...SEND })
     })
-    expect(api.steerAgent).not.toHaveBeenCalled()
-    expect(accepted).toBe(false)
+    // The queued follow-up's turn_start lands before main's reply to the send.
+    emit({ runId: 'drained', type: 'turn_start', conversationId: 'c1', userText: 'earlier' })
+    await act(async () => {
+      reply({ queuedBehind: 'drained' })
+      await sent
+    })
+    expect(result.current.items.filter((it) => it.kind === 'user').map((it) => (it as { text: string }).text)).toEqual([
+      'earlier'
+    ])
+    act(() => result.current.cancel())
+    expect(api.cancelAgent).toHaveBeenCalledWith('drained')
   })
 
   it('reverts and re-applies a checkpoint through the bridge', async () => {

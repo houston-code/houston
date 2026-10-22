@@ -681,9 +681,11 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     case 'usage':
     case 'turn_start':
     case 'run_info':
+    case 'steers_returned':
       // Not transcript items: usage totals are folded into the store/control bar,
-      // turn_start is adopted by App, and run_info goes only to the headless client
-      // that asks for it (announceTools). No display change here.
+      // turn_start is adopted by App, run_info goes only to the headless client
+      // that asks for it (announceTools), and a returned steer is already in the
+      // queue bar (main keeps the desktop's steers there). No display change here.
       return items
     default: {
       // Exhaustiveness guard: a new AgentEvent variant fails to compile here until

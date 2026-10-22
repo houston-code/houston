@@ -173,5 +173,7 @@ export function forkConversationData(src: Conversation, id: string, now: number)
   delete fork.sideChat
   // An undo of the source's last rewind would restore the source's files, not the fork's.
   delete fork.rewindBackup
+  // Unsent input was typed into the source chat; it goes out there, not twice.
+  delete fork.queuedInput
   return fork
 }

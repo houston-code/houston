@@ -549,9 +549,20 @@ button sits where Send normally is with Queue beside it, and a steered message i
 labelled **Steered** in the transcript. A `/command` or a `# rule` typed mid-run is run
 or saved, never steered.
 
-If the turn finishes before your message lands (you typed it as the agent was
-wrapping up), nothing is lost: it is sent as the next message automatically, with
-no second `Enter`. Several such messages go together as one.
+Until a steered message reaches the model it waits as a chip above the message box,
+marked with the steer icon, and its × takes it back. While the agent is waiting on a
+question it asked you, `Enter` answers that question instead (the box says so), since
+the agent can't read anything else until it has your answer. A message longer than a
+steer allows (2,000 characters) is queued for after the run instead of being cut.
+
+A message you sent is never dropped. If the turn finishes before your message lands
+(you typed it as the agent was wrapping up), it is sent as the next message
+automatically, with no second `Enter`, and several such messages go together as one.
+If the turn ends any other way (you press Stop, the provider fails after its retries,
+the turn hits its step limit), your message stays as a queued chip to send or clear.
+Queued messages are saved with the chat, so quitting or restarting Houston keeps them.
+In the terminal, a message typed before you interrupt a turn is put back in the prompt
+for you to edit or send.
 
 - `Esc` clears what you have typed. On an empty line, `Esc` stops the run (so does
   `Ctrl-C`).

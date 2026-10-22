@@ -1,6 +1,20 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { QueueAddRequest } from '@shared/queue'
-import { addToQueue, clearQueue, listQueue, removeFromQueue, takeQueue } from './queue'
+import {
+  addToQueue,
+  clearQueue,
+  listQueue,
+  queuedSteerIds,
+  removeFromQueue,
+  resetQueueCache,
+  settleSteers,
+  takeQueue
+} from './queue'
+import { createConversation, forkConversation, getConversation, listConversations } from '../conversations'
+import { resetUserDataDir, setUserDataDir } from '../userData'
 
 function add(conversationId: string, userText: string, over: Partial<QueueAddRequest> = {}) {
   return addToQueue({
@@ -94,5 +108,115 @@ describe('main queue manager', () => {
     expect(listQueue('conv-y').map((q) => q.text)).toEqual(['y-msg'])
     clearQueue('conv-x')
     clearQueue('conv-y')
+  })
+})
+
+describe('steer entries', () => {
+  it('flags a steer, lists its id, and settles it into a plain follow-up', () => {
+    const cid = 'conv-steer-flag'
+    addToQueue({ conversationId: cid, userText: 's', providerId: 'p', model: 'm', approvalPolicy: 'ask' }, { id: 'x', steer: true })
+    add(cid, 'plain')
+    expect(listQueue(cid).map((q) => q.steer === true)).toEqual([true, false])
+    expect(queuedSteerIds(cid)).toEqual(['x'])
+    expect(settleSteers(cid)?.map((q) => q.steer)).toEqual([undefined, undefined])
+    expect(queuedSteerIds(cid)).toEqual([])
+    expect(settleSteers(cid)).toBeNull() // nothing left to settle
+    clearQueue(cid)
+  })
+})
+
+// Queued input outlives the process: a quit, a crash, or a restart to install an
+// update used to drop everything queued (and every steer waiting on a run).
+describe('queue persistence', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-queue-'))
+    setUserDataDir(dir)
+    resetQueueCache()
+  })
+  afterEach(() => {
+    resetQueueCache()
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const conv = (): string => createConversation({ workspace: '/ws', providerId: 'p', model: 'm' }).id
+
+  it('survives a restart, attachments and send settings included', () => {
+    const cid = conv()
+    const png = { mediaType: 'image/png', data: 'aGk=' } // stored as bytes, so real base64
+    add(cid, 'first', { images: [png], reasoningEffort: 'low' })
+    add(cid, 'second', { approvalPolicy: 'full-auto' })
+    resetQueueCache() // a fresh process
+    expect(listQueue(cid)).toEqual([
+      { id: expect.any(String), text: 'first', imageCount: 1 },
+      { id: expect.any(String), text: 'second', imageCount: 0 }
+    ])
+    const taken = takeQueue(cid)
+    expect(taken?.items[0].images).toEqual([png])
+    expect(taken).toMatchObject({ providerId: 'anthropic', model: 'claude', approvalPolicy: 'full-auto' })
+    resetQueueCache()
+    expect(listQueue(cid)).toEqual([]) // taking it cleared the disk copy too
+    expect(getConversation(cid)?.queuedInput).toBeUndefined()
+  })
+
+  it('reads a steer back as a plain follow-up: its run did not survive the restart', () => {
+    const cid = conv()
+    addToQueue({ conversationId: cid, userText: 's', providerId: 'p', model: 'm', approvalPolicy: 'ask' }, { id: 'x', steer: true })
+    resetQueueCache()
+    expect(listQueue(cid)).toEqual([{ id: 'x', text: 's', imageCount: 0 }])
+  })
+
+  it('writes removals and clears through to disk', () => {
+    const cid = conv()
+    const [a] = add(cid, 'a')
+    add(cid, 'b')
+    removeFromQueue(cid, a.id)
+    resetQueueCache()
+    expect(listQueue(cid).map((q) => q.text)).toEqual(['b'])
+    clearQueue(cid)
+    resetQueueCache()
+    expect(listQueue(cid)).toEqual([])
+  })
+
+  it('drops a malformed stored queue rather than crashing or failing open', () => {
+    const cid = conv()
+    add(cid, 'ok')
+    const path = join(dir, 'conversations', `${cid}.json`)
+    const raw = JSON.parse(readFileSync(path, 'utf8'))
+    raw.queuedInput.approvalPolicy = 'yolo'
+    raw.queuedInput.items.push({ id: 7, text: null }, 'junk')
+    writeFileSync(path, JSON.stringify(raw))
+    resetQueueCache()
+    expect(listQueue(cid).map((q) => q.text)).toEqual(['ok'])
+    expect(takeQueue(cid)?.approvalPolicy).toBe('plan')
+
+    raw.queuedInput = { items: 'nope' }
+    writeFileSync(path, JSON.stringify(raw))
+    resetQueueCache()
+    expect(listQueue(cid)).toEqual([])
+  })
+
+  it('stays with its own chat when the chat is forked', () => {
+    const cid = conv()
+    add(cid, 'unsent')
+    const fork = forkConversation(cid)!
+    resetQueueCache()
+    expect(listQueue(fork.id)).toEqual([])
+    expect(listQueue(cid).map((q) => q.text)).toEqual(['unsent'])
+  })
+
+  it('stays out of the sidebar list payload', () => {
+    const cid = conv()
+    add(cid, 'private draft')
+    const meta = listConversations().find((c) => c.id === cid)
+    expect(meta).toBeDefined()
+    expect(meta).not.toHaveProperty('queuedInput')
+  })
+
+  it("doesn't touch the chat's place in the sidebar", () => {
+    const cid = conv()
+    const before = getConversation(cid)!.updatedAt
+    add(cid, 'later')
+    expect(getConversation(cid)!.updatedAt).toBe(before)
   })
 })

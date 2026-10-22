@@ -1469,6 +1469,15 @@ body.is-resizing {
   border-radius: 12px;
   padding: 2px 6px 2px 10px;
 }
+/* A steer waiting for the running turn's next step, told apart from a follow-up. */
+.queue-chip--steer {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.queue-chip--steer svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
 .queue-chip__text {
   overflow: hidden;
   text-overflow: ellipsis;

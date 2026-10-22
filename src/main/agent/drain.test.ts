@@ -22,7 +22,10 @@ vi.mock('../conversations', () => ({
   getConversation: h.getConversation,
   setMessages: h.setMessages,
   setConversationError: h.setConversationError,
-  updateConversationMeta: h.updateConversationMeta
+  updateConversationMeta: h.updateConversationMeta,
+  // The queue's disk copy (covered in queue.test.ts); nothing stored here.
+  getQueuedInput: () => null,
+  setQueuedInput: () => {}
 }))
 
 /** Make startRun end every run with the given stop reason (or an error event). */
@@ -231,5 +234,70 @@ describe('runAndDrain', () => {
     expect(h.maybeGenerateTitle).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: cid, providerId: 'anthropic', model: 'claude' })
     )
+  })
+
+  // A steer's queue entry is its durable copy until the run reads it (QueuedInput.steer).
+  describe('steers', () => {
+    const steerIn = (cid: string, text: string, id: string): void => {
+      addToQueue(
+        { conversationId: cid, userText: text, providerId: 'anthropic', model: 'm', approvalPolicy: 'ask' },
+        { id, steer: true }
+      )
+    }
+
+    it('drops the queue entry once the run has read the steer, after its persist', async () => {
+      const cid = 'conv-steer-landed'
+      steerIn(cid, 'use YAML', 's1')
+      let listedAtEmit: string[] = []
+      h.startRun.mockImplementation(async (req: { runId: string }, send: (e: AgentEvent) => void) => {
+        send({ runId: req.runId, type: 'steered', text: 'use YAML', id: 's1' })
+        // Still there while the run persists the steer into the log (same tick).
+        listedAtEmit = listQueue(cid).map((q) => q.id)
+        await Promise.resolve()
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      })
+      const sink = io()
+      await runAndDrain(sink, cid, runReq(cid))
+      await settle()
+      expect(listedAtEmit).toEqual(['s1'])
+      expect(listQueue(cid)).toEqual([])
+      expect(sink.emitQueueChanged).toHaveBeenCalledWith(cid, [])
+      // Landed, so it is not also sent again as a follow-up.
+      expect(h.startRun).toHaveBeenCalledTimes(1)
+    })
+
+    it('holds a steer the run never read as a plain follow-up when the run fails', async () => {
+      const cid = 'conv-steer-error'
+      steerIn(cid, 'also add tests', 's2')
+      endRunsWith({ error: 'network down' })
+      const sink = io()
+      await runAndDrain(sink, cid, runReq(cid))
+      await settle()
+      const held = [{ id: 's2', text: 'also add tests', imageCount: 0 }] // no `steer`: nothing is running
+      expect(listQueue(cid)).toEqual(held)
+      expect(sink.emitQueueChanged).toHaveBeenCalledWith(cid, held)
+      expect(h.startRun).toHaveBeenCalledTimes(1) // held for the user, not auto-sent
+      clearQueue(cid)
+    })
+
+    it('holds a steer the run never read when the run is stopped', async () => {
+      const cid = 'conv-steer-stop'
+      steerIn(cid, 'wait', 's3')
+      endRunsWith({ done: 'aborted' })
+      await runAndDrain(io(), cid, runReq(cid))
+      await settle()
+      expect(listQueue(cid)).toEqual([{ id: 's3', text: 'wait', imageCount: 0 }])
+      clearQueue(cid)
+    })
+
+    it('sends a steer the run never read as the next turn when the run finishes', async () => {
+      const cid = 'conv-steer-natural'
+      steerIn(cid, 'and the docs', 's4')
+      endRunsWith({ done: 'end_turn' })
+      await runAndDrain(io(), cid, runReq(cid))
+      await settle()
+      expect(h.startRun).toHaveBeenCalledTimes(2)
+      expect(h.startRun.mock.calls[1][0].messages).toEqual([{ role: 'user', content: 'and the docs' }])
+    })
   })
 })

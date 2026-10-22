@@ -3,7 +3,7 @@ import type { ImageAttachment } from '@shared/images'
 import type { PromptInvocation } from '@shared/promptInvocation'
 import type { ApprovalPolicy } from '@shared/types'
 import type { ReasoningEffort } from '@shared/agent'
-import type { QueuedInputMeta } from '@shared/queue'
+import type { QueuedInputMeta, SteerOutcome } from '@shared/queue'
 
 export interface InputQueue {
   /** Messages queued for the open conversation, awaiting its run finishing. */
@@ -25,7 +25,22 @@ export interface InputQueue {
      */
     conversationId?: string
   }) => void
-  /** Drop one queued message by id. */
+  /**
+   * Hand a message typed mid-run to the main process, which steers it into the live
+   * run or queues it for after, as one decision (see the agentSteer handler). Either
+   * way it is on disk and in this bar before the promise resolves; `idle` means no
+   * run is live and the caller should send it as a turn. Rejects only when the
+   * bridge itself fails, so the caller can give the text back.
+   */
+  steer: (input: {
+    conversationId: string
+    text: string
+    providerId: string
+    model: string
+    approvalPolicy: ApprovalPolicy
+    reasoningEffort?: ReasoningEffort
+  }) => Promise<SteerOutcome>
+  /** Drop one queued message by id (a steer not yet read is taken back from the run). */
   remove: (id: string) => void
   /** Discard the open conversation's queue. */
   clear: () => void
@@ -88,6 +103,19 @@ export function useInputQueue(conversationId: string | null): InputQueue {
       })
   }, [])
 
+  const steer = useCallback<InputQueue['steer']>(async (input) => {
+    const outcome = await window.api.steerAgent({
+      conversationId: input.conversationId,
+      userText: input.text,
+      providerId: input.providerId,
+      model: input.model,
+      approvalPolicy: input.approvalPolicy,
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {})
+    })
+    if (outcome.status !== 'idle' && convIdRef.current === input.conversationId) setQueued(outcome.items)
+    return outcome
+  }, [])
+
   const remove = useCallback((id: string) => {
     const cid = convIdRef.current
     if (!cid) return
@@ -112,5 +140,5 @@ export function useInputQueue(conversationId: string | null): InputQueue {
     void window.api.flushQueue(cid)
   }, [])
 
-  return { queued, enqueue, remove, clear, flush }
+  return { queued, enqueue, steer, remove, clear, flush }
 }

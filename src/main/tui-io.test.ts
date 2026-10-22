@@ -854,14 +854,6 @@ describe('mid-run input', () => {
     expect(interrupts).toBe(1)
   })
 
-  it('clearQueued drops everything', () => {
-    const t = harness()
-    t.io.startSpinner!('Working')
-    t.stdin.push('doomed\r')
-    t.io.clearQueued!()
-    expect(t.io.takeQueued!()).toEqual([])
-  })
-
   it('flattens a pasted block onto the one-line draft', () => {
     const t = harness()
     t.io.startSpinner!('Working')

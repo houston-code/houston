@@ -4061,7 +4061,6 @@ describe('queued follow-ups', () => {
     const base = fakeIo(inputs)
     let i = 0
     base.io.takeQueued = () => queued[i++] ?? []
-    base.io.clearQueued = () => {}
     return base
   }
 
@@ -4100,19 +4099,53 @@ describe('queued follow-ups', () => {
     expect(rec.runs).toHaveLength(1)
   })
 
-  // The queue was a follow-up to work being thrown away.
-  it('drops the queue when the run is interrupted', async () => {
-    const { d } = deps(done)
-    const t = fakeIo(['go', null])
-    let cleared = 0
-    t.io.takeQueued = () => []
-    t.io.clearQueued = () => cleared++
+  // The queue was a follow-up to work being thrown away: not sent into it, but not
+  // dropped either. It comes back for the user to edit or resend.
+  it('holds the queue back, unsent, when the run is interrupted', async () => {
+    const { d, rec } = deps(done)
+    const t = queueIo(['go', null], [['wait, use YAML']])
     d.io = t.io
-    d.startRun = async (_req, _send) => {
-      t.fireInterrupt() // Ctrl-C mid-run
+    const run = d.startRun
+    d.startRun = async (req, send, onMessages) => {
+      await run(req, send, onMessages)
+      t.fireInterrupt() // Ctrl-C mid-run, after a follow-up was typed
     }
     await runTui(opts, d)
-    expect(cleared).toBe(1)
+    expect(rec.runs).toHaveLength(1) // not sent as a turn
+    expect(t.text()).toContain('not sent (the turn was interrupted): wait, use YAML')
+  })
+
+  it('pre-fills the next prompt with what an interrupt held back', async () => {
+    const { d } = deps(done)
+    const t = queueIo(['go', null], [['wait, use YAML']])
+    const reads: Array<string | undefined> = []
+    const lines: Array<string | null> = ['go', null]
+    t.io.readComposer = async (_prompt, initial) => {
+      reads.push(initial)
+      return lines.shift() ?? null
+    }
+    d.io = t.io
+    d.startRun = async () => {
+      t.fireInterrupt()
+    }
+    await runTui(opts, d)
+    expect(reads).toEqual([undefined, 'wait, use YAML'])
+  })
+
+  // A steer the run accepted but ended before reading comes back as a follow-up.
+  it('sends steers the run handed back as the next turn', async () => {
+    const { d, rec } = deps(done)
+    const t = queueIo(['first', null], [[]])
+    d.io = t.io
+    const run = d.startRun
+    d.startRun = async (req, send, onMessages) => {
+      await run(req, send, onMessages)
+      // The first turn ends on an error with a steer it never read.
+      if (rec.runs.length === 1) send({ runId: req.runId, type: 'steers_returned', texts: ['also check the docs'] })
+    }
+    await runTui(opts, d)
+    expect(rec.runs).toHaveLength(2)
+    expect(rec.runs[1].messages.at(-1)?.content).toBe('also check the docs')
   })
 })
 
