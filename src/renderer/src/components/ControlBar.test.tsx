@@ -112,7 +112,10 @@ describe('ControlBar', () => {
 
   it('shows only the folder name for a Windows workspace path', () => {
     render(<ControlBar {...baseProps()} workspace={'C:\\Users\\me\\projects\\houston'} />)
-    expect(screen.getByTitle('Change project folder')).toHaveTextContent(/^📁houston$/)
+    const ws = screen.getByTitle('Change project folder')
+    expect(ws).toHaveTextContent(/^houston$/)
+    expect(ws).toHaveAccessibleName('Project folder: houston. Change')
+    expect(ws.querySelector('svg[data-icon="folder"]')).toBeInTheDocument()
   })
 
   it('prompts to set an API key only when the selected provider lacks one', () => {
@@ -183,7 +186,7 @@ describe('ControlBar', () => {
   it('shows the base picker before the New worktree toggle', () => {
     render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={true} />)
     const base = screen.getByLabelText('Base branch')
-    const toggle = screen.getByText('⑂ New worktree')
+    const toggle = screen.getByText('New worktree')
     // DOCUMENT_POSITION_FOLLOWING (4) means `toggle` comes after `base`.
     expect(base.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
@@ -223,23 +226,23 @@ describe('ControlBar', () => {
     expect(screen.queryByLabelText('New branch name')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Base branch')).not.toBeInTheDocument()
     // The toggle itself is still present so the user can turn it back on.
-    expect(screen.getByText('⑂ New worktree')).toBeInTheDocument()
+    expect(screen.getByText('New worktree')).toBeInTheDocument()
   })
 
   it('shows the current branch (read-only) when the worktree toggle is off', () => {
     // Without a worktree the chat works on the repo's current branch — make that
     // obvious so the user knows which branch will be touched.
     render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={false} />)
-    expect(screen.getByText('⑂ main')).toBeInTheDocument()
+    expect(screen.getByText('main')).toBeInTheDocument()
   })
 
   it('offers no worktree in a fresh repo with no commits anywhere, labeling the branch', () => {
     const fresh: RepoInfo = { ...repo, currentBranch: 'main', unborn: true, branches: [] }
     render(<ControlBar {...baseProps()} newChat={true} repoInfo={fresh} worktreeMode={true} />)
-    expect(screen.queryByText('⑂ New worktree')).not.toBeInTheDocument()
+    expect(screen.queryByText('New worktree')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('Base branch')).not.toBeInTheDocument()
     expect(screen.queryByLabelText('New branch name')).not.toBeInTheDocument()
-    expect(screen.getByText('⑂ main (no commits yet)')).toBeInTheDocument()
+    expect(screen.getByText('main (no commits yet)')).toBeInTheDocument()
   })
 
   it('never lists an unborn current branch as a base', () => {
@@ -253,7 +256,7 @@ describe('ControlBar', () => {
         baseBranch="lucid"
       />
     )
-    expect(screen.getByText('⑂ New worktree')).toBeInTheDocument()
+    expect(screen.getByText('New worktree')).toBeInTheDocument()
     expect(screen.queryByRole('option', { name: /main/ })).not.toBeInTheDocument()
     expect((screen.getByLabelText('Base branch') as HTMLSelectElement).value).toBe('lucid')
   })
@@ -289,7 +292,7 @@ describe('ControlBar', () => {
         currentWorktree={{ path: '/wt', branch: 'houston/feat', repoRoot: '/repo' }}
       />
     )
-    expect(screen.getByText('⑂ houston/feat')).toBeInTheDocument()
+    expect(screen.getByText('houston/feat')).toBeInTheDocument()
   })
 
   it('keeps a long branch name on one line, truncated, with the full name on hover', () => {
@@ -297,7 +300,7 @@ describe('ControlBar', () => {
     render(
       <ControlBar {...baseProps()} newChat={false} currentWorktree={{ path: '/wt', branch, repoRoot: '/repo' }} />
     )
-    const text = screen.getByText(`⑂ ${branch}`)
+    const text = screen.getByText(branch)
     expect(text).toHaveClass('control__text')
     expect(text.parentElement).toHaveAttribute('title', expect.stringContaining(branch))
   })

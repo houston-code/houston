@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ModelScorecard, Scorecard as ScorecardData } from '@shared/scorecard'
 import { formatTokens, formatUsd } from '@shared/usage'
 import { useFocusTrap } from '../lib/useFocusTrap'
+import { Icon } from './Icon'
 
 /**
  * A slide-over panel showing a LOCAL-ONLY per-model "loop scorecard": how each
@@ -77,8 +78,9 @@ export function Scorecard({ onClose }: { onClose: () => void }): JSX.Element {
             onClick={() => void reload()}
             disabled={loading}
             title="Refresh"
+            aria-label="Refresh"
           >
-            ⟳
+            <Icon name="refresh" />
           </button>
           <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close" data-autofocus>
             ✕

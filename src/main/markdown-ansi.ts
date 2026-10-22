@@ -91,8 +91,13 @@ function renderListItem(
   opts: MarkdownOpts,
   depth: number
 ): string {
-  const marker = ordered ? `${index}.` : '•'
-  const bullet = opts.paint(marker, 'cyan')
+  // A GFM task item keeps its bullet and shows its box after it: "• [x] done".
+  const box = item.checked === undefined ? '' : item.checked ? '[x]' : '[ ]'
+  const listMarker = ordered ? `${index}.` : '•'
+  const marker = box ? `${listMarker} ${box}` : listMarker
+  const bullet = box
+    ? `${opts.paint(listMarker, 'cyan')} ${item.checked ? opts.paint(box, 'green') : opts.paint(box, 'dim')}`
+    : opts.paint(marker, 'cyan')
   const pad = ' '.repeat(marker.length + 1)
   // Every line of the body is prefixed below (indent + bullet or its padding), so it
   // must wrap that much narrower. Wrapping at the full width and indenting after made

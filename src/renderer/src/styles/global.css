@@ -37,7 +37,7 @@
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
   /* Syntax-highlight token colors for the Files preview code pane (Graphite). */
-  --syn-comment: #6b7280;
+  --syn-comment: #8b93a1;
   --syn-keyword: #c792ea;
   --syn-string: #9ece6a;
   --syn-number: #ff9e64;
@@ -82,15 +82,16 @@
   --shadow-accent: 0 4px 12px rgba(79, 70, 229, 0.25);
   /* A softer, warmer drop for floating menus against the off-white canvas. */
   --shadow-popover: 0 12px 28px rgba(47, 40, 30, 0.18);
-  /* Syntax tokens deepened for AA contrast on the warm light code surface. */
-  --syn-comment: #8a8f98;
+  /* Syntax tokens deepened for AA contrast (4.5:1) on the warm light code surface
+     (--bg-code) and the elevated panels; syntaxContrast.test.ts holds them to it. */
+  --syn-comment: #646973;
   --syn-keyword: #8839ef;
-  --syn-string: #2f7d32;
-  --syn-number: #b4540a;
-  --syn-function: #1e66f5;
-  --syn-type: #9a6700;
+  --syn-string: #2a7030;
+  --syn-number: #a14a08;
+  --syn-function: #1a56d6;
+  --syn-type: #8a5c00;
   --syn-tag: #c01c28;
-  --syn-attr: #9a6700;
+  --syn-attr: #8a5c00;
   --syn-meta: #0e7490;
 }
 /* Respect the OS "reduce motion" preference: disable the blink/spin animations
@@ -692,6 +693,9 @@ body.is-resizing {
 .conv__branch {
   color: var(--accent);
 }
+.conv__branch-icon {
+  margin-right: 3px;
+}
 .conv__menu-wrap {
   position: relative;
   flex-shrink: 0;
@@ -814,12 +818,21 @@ body.is-resizing {
   /* Fixed width so the menu doesn't jump narrower as the search filters the list. */
   width: 400px;
   max-width: calc(100vw - 16px);
+  /* Only the list scrolls, so the search field below it stays on screen. */
+  overflow: hidden;
 }
-/* Filter field pinned above the list; focus lands here when the menu opens. */
+.model-menu__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Filter field pinned below the list, nearest the model button; focus lands here
+   when the menu opens. */
 .model-menu__search {
+  flex: none;
   width: 100%;
   box-sizing: border-box;
-  margin: 2px 0 4px;
+  margin: 4px 0 2px;
   padding: 5px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -922,6 +935,7 @@ body.is-resizing {
 }
 /* One line naming the providers with no models yet, instead of an empty group each. */
 .model-menu__footnote {
+  flex: none;
   padding: 6px 9px 3px;
   border-top: 1px solid var(--border);
   margin-top: 4px;
@@ -964,7 +978,9 @@ body.is-resizing {
 .sidebar__settings {
   width: 100%;
 }
-.sidebar__share {
+.sidebar__share,
+.sidebar__import,
+.sidebar__settings {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1213,7 +1229,6 @@ body.is-resizing {
 }
 .control__icon {
   flex-shrink: 0;
-  font-size: 11px;
 }
 .control__text {
   white-space: nowrap;
@@ -1994,23 +2009,6 @@ body.is-resizing {
   display: flex;
   justify-content: flex-end;
 }
-/* A message steered into a running turn: labelled, with an accent edge, so it reads
-   as a course correction to the run in progress rather than a new turn. */
-.msg--steered {
-  flex-direction: column;
-  align-items: flex-end;
-}
-.msg--user.msg--steered .msg__body {
-  border-color: var(--accent);
-}
-.msg__steered-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 4px;
-  font-size: 11px;
-  color: var(--accent);
-}
 .msg--user .msg__body {
   max-width: 86%;
   background: var(--bg-input);
@@ -2235,6 +2233,38 @@ h6.md-h {
 }
 .md-list .md-list {
   margin: 4px 0 4px;
+}
+/* GFM task items: the box replaces the bullet and hangs in the list's indent. */
+.md-task {
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-left: -20px;
+}
+.md-task__box {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--text-dim);
+  border-radius: 4px;
+  transform: translateY(2px);
+}
+.md-task__box.is-checked {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: #fff;
+}
+.md-task__box .icon {
+  stroke-width: 2.2;
+}
+.md-task__body {
+  flex: 1;
+  min-width: 0;
 }
 .md-link {
   color: var(--accent);
@@ -3473,7 +3503,8 @@ pre.diff {
   font-weight: 700;
   line-height: 1;
   color: #fff;
-  background: var(--accent);
+  /* --accent-fill, not --accent: white on dark mode's bright --accent is 3.2:1. */
+  background: var(--accent-fill);
   border: 1.5px solid var(--bg-elevated);
   border-radius: 999px;
 }

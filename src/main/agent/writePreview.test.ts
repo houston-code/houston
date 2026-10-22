@@ -283,3 +283,56 @@ describe('previewWrite — a change late in a long file', () => {
     expect(diff.some((l) => l.type === 'skip')).toBe(true)
   })
 })
+
+// The same guard for the other ways a change can sit deep in a big file: past the
+// LCS size limit, in a moved file, and in a notebook.
+describe('previewWrite: the change is shown wherever it sits', () => {
+  const changesOf = (p: Awaited<ReturnType<typeof previewWrite>>): string[] =>
+    p![0].diff.filter((l) => l.type === 'add' || l.type === 'del').map((l) => l.text)
+
+  it('shows a one-line edit in a file too long for the full LCS diff', async () => {
+    write('huge.ts', Array.from({ length: 3000 }, (_, i) => `line ${i}`).join('\n') + '\n')
+    const p = await previewWrite(
+      'edit_file',
+      { path: 'huge.ts', old_string: 'line 2800\n', new_string: 'line 2800 CHANGED\n' },
+      roots()
+    )
+    expect(changesOf(p)).toEqual(['line 2800', 'line 2800 CHANGED'])
+    expect(p![0].truncated).toBeFalsy()
+  })
+
+  it('folds a moved file down to its edit', async () => {
+    const body = Array.from({ length: 600 }, (_, i) => `line ${i}`)
+    write('old.ts', body.join('\n') + '\n')
+    const patch = [
+      '*** Begin Patch',
+      '*** Update File: old.ts',
+      '*** Move to: new.ts',
+      '@@',
+      ' line 549',
+      '-line 550',
+      '+line 550 CHANGED',
+      ' line 551',
+      '*** End Patch'
+    ].join('\n')
+    const p = await previewWrite('apply_patch', { patch }, roots())
+    expect(changesOf(p)).toEqual(['line 550', 'line 550 CHANGED'])
+    expect(p![0].diff.some((l) => l.type === 'skip')).toBe(true)
+    expect(p![0].truncated).toBeFalsy()
+  })
+
+  it('folds a notebook down to the edited cell', async () => {
+    const cells = Array.from({ length: 300 }, (_, i) => ({
+      cell_type: 'code',
+      metadata: {},
+      source: [`x${i} = ${i}`],
+      outputs: [],
+      execution_count: null
+    }))
+    write('big.ipynb', JSON.stringify({ cells, metadata: {}, nbformat: 4, nbformat_minor: 5 }))
+    const p = await previewWrite('notebook_edit', { path: 'big.ipynb', cell: 290, source: 'x289 = -1' }, roots())
+    expect(changesOf(p)).toEqual(['x289 = 289', 'x289 = -1'])
+    expect(p![0].diff.some((l) => l.type === 'skip')).toBe(true)
+    expect(p![0].truncated).toBeFalsy()
+  })
+})

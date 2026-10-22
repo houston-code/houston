@@ -45,6 +45,12 @@ import { parseSseEvents } from './sse-client'
 const PROTOCOL_VERSION = '2025-06-18'
 const INIT_TIMEOUT_MS = 20_000
 const CALL_TIMEOUT_MS = 120_000
+/** First wait before reopening a dropped notification stream; doubles per failure. */
+const STREAM_RETRY_BASE_MS = 1_000
+/** Longest wait between reopen attempts. */
+const STREAM_RETRY_MAX_MS = 60_000
+/** A stream that stayed open this long resets the backoff when it drops. */
+const STREAM_HEALTHY_MS = 30_000
 
 /** Pull each SSE event's `data:` payload out of a raw event-stream body. */
 export function extractSseData(body: string): string[] {
@@ -110,6 +116,8 @@ export class McpHttpClient implements McpConnection {
   })
   /** Aborts the standing GET notification stream on close. */
   private streamAbort?: AbortController
+  /** Reopens of the notification stream since it was last healthy, for the backoff. */
+  private streamReconnects = 0
   /** Answers `elicitation/create`; its presence declares the capability. */
   private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
   tools: McpToolInfo[] = []
@@ -353,11 +361,18 @@ export class McpHttpClient implements McpConnection {
    * Hold the transport's optional GET event-stream open so server-initiated
    * messages (list_changed, pings) reach us between calls. Servers that don't
    * offer one answer 405 and lose nothing.
+   *
+   * The stream is reopened when it drops (a proxy's idle timeout, a server restart,
+   * a network blip), with backoff, since otherwise every later notification was
+   * lost until the whole connection was rebuilt. A reopened stream re-fetches the
+   * declared lists, because a change announced while it was down never arrived.
    */
   private openNotificationStream(): void {
+    if (this.closed) return
     const controller = new AbortController()
     this.streamAbort = controller
     void (async () => {
+      let reopen = true
       try {
         const res = await this.fetchFn(this.url, {
           method: 'GET',
@@ -369,14 +384,45 @@ export class McpHttpClient implements McpConnection {
           },
           signal: controller.signal
         })
-        if (!res.ok || !res.body) return
-        if (!(res.headers.get('content-type') ?? '').includes('text/event-stream')) return
+        if (res.status === 404 && this.sessionId) {
+          // The session expired (as on a POST): the manager reconnects from scratch.
+          await res.text().catch(() => '')
+          this.closed = true
+          this.pending.failAll('MCP notification stream failed: the server expired the session')
+          reopen = false
+          return
+        }
+        if (!res.ok || !res.body || !(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+          // No stream on offer (405 and the like) is final; a server error may pass.
+          await res.text().catch(() => '')
+          reopen = res.status >= 500 || res.status === 429
+          return
+        }
+        if (this.streamReconnects > 0) {
+          for (const kind of ['tools', 'resources', 'prompts'] as const) this.refresher.schedule(kind)
+        }
+        const openedAt = Date.now()
         await this.readEventStream(res.body)
+        // A stream that stayed up a while was healthy: start the backoff over.
+        if (Date.now() - openedAt >= STREAM_HEALTHY_MS) this.streamReconnects = 0
       } catch {
-        // The notification stream is optional; running without one loses nothing
-        // beyond between-call notifications.
+        // A network failure: reopen like a dropped stream.
+      } finally {
+        if (reopen) this.scheduleStreamReopen(controller)
       }
     })()
+  }
+
+  /** Reopen the notification stream after a backoff, unless the client closed meanwhile. */
+  private scheduleStreamReopen(controller: AbortController): void {
+    if (this.closed || controller.signal.aborted) return
+    const delay = Math.min(STREAM_RETRY_MAX_MS, STREAM_RETRY_BASE_MS * 2 ** this.streamReconnects)
+    this.streamReconnects++
+    const timer = setTimeout(() => {
+      if (!this.closed && !controller.signal.aborted) this.openNotificationStream()
+    }, delay)
+    timer.unref?.()
+    controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true })
   }
 
   /** POST a payload for which no reply is expected (notifications, request replies). */

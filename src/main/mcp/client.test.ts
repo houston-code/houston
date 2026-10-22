@@ -320,3 +320,46 @@ describe('McpClient (fake stdio server)', () => {
     expect(client.isClosed).toBe(true)
   })
 })
+
+describe('McpClient (real stdio process)', () => {
+  // A server that logs a lot to stderr before answering, as the stdio transport allows.
+  // Its stderr pipe holds only ~64 KB, so if the client never reads it the server
+  // blocks on the write and never replies.
+  const chattyServer = String.raw`
+    process.stderr.write('x'.repeat(1024 * 1024) + '\nstarted\n', () => {
+      let buf = ''
+      process.stdin.on('data', (c) => {
+        buf += c
+        let nl
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const msg = JSON.parse(buf.slice(0, nl))
+          buf = buf.slice(nl + 1)
+          if (msg.id === undefined) continue
+          const result = msg.method === 'tools/list' ? { tools: [{ name: 'echo' }] } : { capabilities: {} }
+          process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\n')
+        }
+      })
+    })
+  `
+
+  it('keeps reading a server that writes more stderr than a pipe holds', async () => {
+    const client = new McpClient()
+    try {
+      await client.connect({ command: process.execPath, args: ['-e', chattyServer] })
+      expect(client.tools.map((t) => t.name)).toEqual(['echo'])
+    } finally {
+      client.close()
+    }
+  }, 15_000)
+
+  it("names the server's last stderr line when it exits", async () => {
+    const client = new McpClient()
+    await expect(
+      client.connect({
+        command: process.execPath,
+        args: ['-e', "process.stderr.write('booting\\nError: missing API_TOKEN\\n'); process.exit(1)"]
+      })
+    ).rejects.toThrow('MCP server process exited: Error: missing API_TOKEN')
+    client.close()
+  }, 15_000)
+})
