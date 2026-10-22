@@ -40,7 +40,7 @@
     <div class="wrap">
       <a class="back" href="/">&larr; Back to home</a>
       <h1>Privacy</h1>
-      <p class="doc-meta"><strong>Last updated: October 22, 2026</strong></p>
+      <p class="doc-meta"><strong>Last updated: October 23, 2026</strong></p>
       <p>Houston is a locally-installed coding agent. You bring your own model and credentials, so almost every privacy question comes down to one thing: which providers you choose to connect. This document explains what Houston stores, what it sends, and where.</p>
       <h2>The short version</h2>
       <ul>
@@ -64,7 +64,7 @@
 <li><strong>Web search and web fetch.</strong> Search queries and fetched URLs go to the search provider or website involved. These actions are gated by Houston's approval flow.</li>
 <li><strong>External tools (Model Context Protocol servers).</strong> Data needed for a tool's calls goes to the server you configured.</li>
 <li><strong>GitHub.</strong> If you have the GitHub CLI (<code>gh</code>) installed and signed in, the GitHub tools send their requests (for example, opening a pull request or reading an issue) to GitHub through your own <code>gh</code>, under your GitHub account.</li>
-<li><strong>Application updates.</strong> Packaged builds contact the update service to check for and download new versions, and the terminal client checks once a day whether a newer release exists (set <code>HOUSTON_NO_UPDATE_CHECK=1</code> to turn that off). That involves standard network metadata such as your IP address and app version, handled by that service. It does not send your conversations or project data. Like any download host, the service keeps aggregate counts of how often each released file is fetched; those totals are held by that service, contain no personal data, and involve no in-app tracking.</li>
+<li><strong>Application updates.</strong> Packaged builds contact the update service to check for and download new versions, and the terminal client checks once a day whether a newer release exists, for interactive sessions and one-shot (<code>-p</code>) runs alike (set <code>HOUSTON_NO_UPDATE_CHECK=1</code> to turn that off). That involves standard network metadata such as your IP address and app version, handled by that service. It does not send your conversations or project data. Like any download host, the service keeps aggregate counts of how often each released file is fetched; those totals are held by that service, contain no personal data, and involve no in-app tracking.</li>
 </ul>
       <p>Each of these third parties handles your data under its own policies, which vary by provider and plan: whether they log it, how long they keep it, and whether they use it to train or improve their models. Review a provider's policy before connecting it, and pick providers and settings that suit the sensitivity of your data. Houston is not an intermediary for that traffic. It flows directly from your device to the destination you chose, so the provider is the party to ask about retention, deletion, or access.</p>
       <h2>Data residency</h2>

@@ -2424,7 +2424,7 @@ export interface TuiDeps {
    * result is surfaced at the next composer draw, so a slow feed can't delay
    * startup and a write can't land in the middle of the composer's region.
    */
-  checkUpdate?: () => Promise<{ latest: string; url: string; headline?: string } | null>
+  checkUpdate?: () => Promise<{ latest: string; url: string; headline?: string; hint?: string } | null>
   /**
    * Optional one-time "global rules moved" check: true when the notice should be
    * shown this launch. The host records it as shown when it says so, so it prints
@@ -2910,7 +2910,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const head = u.headline ? `: ${u.headline}` : ''
         updateNotice =
           paint(`· update available: ${u.latest} (you have ${deps.version ?? 'this build'})${head}`, 'yellow') +
-          paint(`\n  ${u.url}`, 'dim')
+          // The upgrade command for how this copy was installed, when the host knows it.
+          paint(`\n  ${u.hint ?? u.url}`, 'dim')
       })
       .catch(() => {
         /* a failed update check is a non-event */
