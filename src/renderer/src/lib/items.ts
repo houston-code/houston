@@ -800,6 +800,25 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
       // Saved on the turn's last assistant message, after everything that turn did.
       if (m.receipt) items.push({ kind: 'receipt', id: nextId(), receipt: m.receipt })
     }
+    // Runs started from this message that ended with no reply: the notice each one
+    // showed live (the error it failed on, or "Stopped."), so a reload still says why.
+    for (const r of m.unanswered ?? []) {
+      items.push(
+        r.reason === 'aborted' || !r.message
+          ? { kind: 'notice', id: nextId(), text: 'Stopped.', tone: 'info' }
+          : { kind: 'notice', id: nextId(), text: r.message, tone: 'error' }
+      )
+    }
   }
   return items
+}
+
+/**
+ * Whether the log's last message already records `message` as the error its latest
+ * run ended on, so the reopened chat shows it there and not a second time as the
+ * conversation's last-error notice.
+ */
+export function endsWithRecordedError(messages: ChatMessage[], message: string): boolean {
+  const latest = messages.at(-1)?.unanswered?.at(-1)
+  return latest?.reason === 'error' && latest.message === message
 }
