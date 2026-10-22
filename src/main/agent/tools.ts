@@ -104,7 +104,7 @@ import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
 
 export { numberedRead }
-import { resolveGh, runGh, type GhExec } from './github'
+import { ghRepoEnv, ghRepoKey, resolveGh, runGh, type GhExec } from './github'
 import { runReadGit, captureTry, uncommittedDiffBase } from './gitRead'
 import { otherCheckout, otherCheckoutHint } from './other-checkout'
 import {
@@ -244,6 +244,13 @@ export interface ToolContext {
   checkTodos?: (todos: Todo[]) => string[]
   /** Run a `gh` subcommand (injected by the loop; falls back to PATH resolution). */
   ghExec?: GhExec
+  /**
+   * The repository this `gh_*` call was approved for (see ghRepoKey), which the loop
+   * resolved for its network key; null when it found none. gh is pinned to it, so the
+   * call can only act on the repository the user approved. Absent outside the loop's
+   * approval path; the call then resolves it itself.
+   */
+  ghRepo?: string | null
   /** Ask the user a structured question and resolve with their answer (injected by the loop). */
   askUser?: (q: AgentQuestion) => Promise<string>
   /**
@@ -3176,8 +3183,13 @@ function ghRawUntrusted(raw: string): string {
  * Resolve the gh runner for a call: the loop-injected one, else a freshly
  * resolved binary. Throws a guiding error (surfaced as a failed tool call) when
  * `gh` isn't installed, so the model can tell the user how to fix it.
+ *
+ * Every call but `gh_repo_create` (`pin: false`, it names its own new repository) is
+ * pinned to the repository it was approved for via `GH_REPO`, so neither a remote nor a
+ * `gh-resolved` value changed after the prompt can point gh somewhere else. With no
+ * GitHub repository to pin to, the call is refused rather than left to gh's choice.
  */
-function ghRunner(ctx: ToolContext): GhExec {
+function ghRunner(ctx: ToolContext, { pin = true }: { pin?: boolean } = {}): GhExec {
   let exec = ctx.ghExec
   if (!exec) {
     const ghPath = resolveGh()
@@ -3192,9 +3204,16 @@ function ghRunner(ctx: ToolContext): GhExec {
   // Every argument gh sends goes to GitHub (a PR or issue title and body, a comment, a
   // review, a repository description, a search filter), so a credential in any of them
   // is refused the way a web_fetch URL is (see assertNoEgressSecret).
-  return (argv, cwd, signal) => {
+  return async (argv, cwd, signal) => {
     for (const a of argv) assertNoEgressSecret(a, ctx, 'GitHub request')
-    return run(argv, cwd, signal)
+    if (!pin) return run(argv, cwd, signal)
+    const repo = ctx.ghRepo !== undefined ? ctx.ghRepo : await ghRepoKey(ctx.workspace)
+    if (!repo) {
+      throw new Error(
+        'No GitHub repository found for this folder: none of its git remotes points at a GitHub repository gh is signed in to. Add one (e.g. `git remote add origin https://github.com/<owner>/<repo>.git`) or set GH_REPO, then try again.'
+      )
+    }
+    return run(argv, cwd, signal, ghRepoEnv(repo))
   }
 }
 
@@ -3675,7 +3694,7 @@ const ghRepoCreate: ToolDef = {
     } else if (clone) {
       argv.push('--clone')
     }
-    return ghWriteOutput(await ghRunner(ctx)(argv, ctx.workspace, ctx.signal), `Created repository ${name}.`, GH_WRITE_URL.repo)
+    return ghWriteOutput(await ghRunner(ctx, { pin: false })(argv, ctx.workspace, ctx.signal), `Created repository ${name}.`, GH_WRITE_URL.repo)
   }
 }
 
