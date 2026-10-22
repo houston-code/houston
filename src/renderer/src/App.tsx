@@ -40,7 +40,8 @@ import {
   suggestBranch
 } from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
-import { useRunningConversations } from './hooks/useRunningConversations'
+import { useChatStatus } from './hooks/useChatStatus'
+import { useWindowFocused } from './hooks/useWindowFocused'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
 import { useBackgroundShells } from './hooks/useBackgroundShells'
 import { useTerminals } from './hooks/useTerminals'
@@ -397,9 +398,31 @@ export default function App(): JSX.Element {
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
 
-  // Conversations with a live run, used to mark them "running" in the sidebar
-  // (including chats running in the background, not just the open one).
-  const runningIds = useRunningConversations()
+  // Live status of every conversation with a run (running, blocking prompts), used
+  // to mark chats in the sidebar, including ones running in the background.
+  const chatStatus = useChatStatus()
+  // Read when a chat opens: its unread anchor must be taken before the open marks it read.
+  const chatStatusRef = useRef(chatStatus)
+  chatStatusRef.current = chatStatus
+  // Where the open chat's unseen output starts (the "New" divider), set on open.
+  const [newFrom, setNewFrom] = useState<{ conversationId: string; itemId: string } | null>(null)
+  // A short confirmation with an Undo (marking a chat unread leaves it).
+  const [undoToast, setUndoToast] = useState<{ text: string; undo: () => void } | null>(null)
+  useEffect(() => {
+    if (!undoToast) return
+    const t = setTimeout(() => setUndoToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [undoToast])
+  // The running set only changes when a run starts or ends, not when a prompt comes
+  // or goes, so key it by its members: the refresh below must not fire per prompt.
+  const runningKey = Object.keys(chatStatus)
+    .filter((id) => chatStatus[id].running)
+    .sort()
+    .join('\n')
+  const runningIds = useMemo<ReadonlySet<string>>(
+    () => new Set(runningKey ? runningKey.split('\n') : []),
+    [runningKey]
+  )
 
   // Refresh the conversation list whenever the running set changes so a background
   // run finishing updates its title/usage — and its `errored` flag, which the
@@ -659,6 +682,7 @@ export default function App(): JSX.Element {
         window.api.getCheckpoint(id)
       ])
       if (!conv) return
+      const unreadAnchor = chatStatusRef.current[id]?.unread?.anchor
       const saved = savedSettingsRef.current
       const own = saved ? chatSettingsFor(conv, saved) : null
       setChatSettings(own?.settings ?? null)
@@ -682,9 +706,17 @@ export default function App(): JSX.Element {
               tone: 'handoff' as const,
               openConversationId: conv.spawnedFrom.conversationId
             },
-            ...itemsFromMessages(conv.messages.slice(forked))
+            ...itemsFromMessages(conv.messages.slice(forked), forked)
           ]
         : itemsFromMessages(conv.messages)
+      // Land on what's new: the first reply at or after the unread anchor.
+      const firstNew =
+        unreadAnchor === undefined
+          ? undefined
+          : items.find(
+              (it) => it.kind === 'assistant' && it.messageIndex !== undefined && it.messageIndex >= unreadAnchor
+            )
+      setNewFrom(firstNew ? { conversationId: id, itemId: firstNew.id } : null)
       if (conv.lastError && !endsWithRecordedError(conv.messages, conv.lastError.message)) {
         items.push({ kind: 'notice', id: `lasterror-${id}`, text: conv.lastError.message, tone: 'error' })
       }
@@ -828,6 +860,69 @@ export default function App(): JSX.Element {
     },
     [refreshConversations]
   )
+
+  // Tell main which chat this window shows and whether it has focus: a focused view
+  // marks the chat read, and a turn that finishes out of view leaves it unread.
+  const windowFocused = useWindowFocused()
+  useEffect(() => {
+    window.api.setChatViewing?.(currentId, windowFocused)
+  }, [currentId, windowFocused])
+
+  // Mark a chat unread (or read), optionally from one of its replies. Marking the open
+  // chat unread also leaves it, as a mail client moves on: staying would mark it read
+  // again straight away. An Undo toast takes it back and reopens the chat.
+  const onSetUnread = useCallback(
+    (id: string, unread: boolean, fromReply?: number) => {
+      void window.api.setChatUnread(id, unread, fromReply)
+      if (unread && id === currentId) {
+        const meta = conversations.find((c) => c.id === id)
+        const ws = meta?.workspace ?? workspace
+        if (ws) enterNewChat(ws)
+        else setCurrentId(null)
+        setUndoToast({
+          text:
+            fromReply === undefined
+              ? `Marked “${meta?.title ?? 'chat'}” unread.`
+              : `Marked “${meta?.title ?? 'chat'}” unread from that reply.`,
+          undo: () => {
+            void window.api.setChatUnread(id, false)
+            void selectConversation(id)
+          }
+        })
+      }
+    },
+    [currentId, conversations, workspace, enterNewChat, selectConversation]
+  )
+  const onMarkAllRead = useCallback(() => void window.api.markAllChatsRead(), [])
+
+  // A clicked desktop notification opens the chat it was about.
+  useEffect(
+    () => window.api.onChatOpenRequest?.((id) => void selectConversation(id)),
+    [selectConversation]
+  )
+
+  // Other chats waiting on the user, in sidebar recency order, for the titlebar's
+  // "N need you" pill; each click opens the next one after the open chat.
+  const waitingIds = useMemo(
+    () =>
+      conversations
+        .filter((c) => c.id !== currentId && (chatStatus[c.id]?.pending.length ?? 0) > 0)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((c) => c.id),
+    [conversations, chatStatus, currentId]
+  )
+  const openNextWaiting = useCallback(() => {
+    const next = waitingIds[0]
+    if (next) void selectConversation(next)
+  }, [waitingIds, selectConversation])
+  const onToggleUnreadFirst = useCallback(async () => {
+    const current = await window.api.getSettings()
+    const fresh = await window.api.saveSettings({
+      ...current,
+      sidebarUnreadFirst: !current.sidebarUnreadFirst
+    })
+    setSettings(fresh)
+  }, [])
 
   const onSetArchived = useCallback(
     async (id: string, archived: boolean) => {
@@ -2016,6 +2111,26 @@ export default function App(): JSX.Element {
         keywords: 'summarize context',
         run: () => void onCompact()
       })
+      // Not while the chat waits on the user: answering is what clears that.
+      if ((chatStatus[currentId]?.pending.length ?? 0) === 0) {
+        const id = currentId
+        items.push({
+          id: 'act-mark-unread',
+          title: 'Mark chat as unread',
+          section: 'Actions',
+          keywords: 'new later remind flag',
+          run: () => onSetUnread(id, true)
+        })
+      }
+    }
+    if (Object.values(chatStatus).some((st) => st.unread !== undefined)) {
+      items.push({
+        id: 'act-mark-all-read',
+        title: 'Mark all chats as read',
+        section: 'Actions',
+        keywords: 'unread clear seen',
+        run: onMarkAllRead
+      })
     }
     for (const p of APPROVAL_POLICIES) {
       items.push({
@@ -2077,7 +2192,10 @@ export default function App(): JSX.Element {
     onChangePolicy,
     onSelectModel,
     selectConversation,
-    onboarding.startTour
+    onboarding.startTour,
+    chatStatus,
+    onSetUnread,
+    onMarkAllRead
   ])
 
   // Every overlay's open state in one place (see lib/overlays.ts), read live by the
@@ -2309,7 +2427,7 @@ export default function App(): JSX.Element {
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         toggleShortcut={shortcutHint('toggle-sidebar', mac, shortcuts)}
-        runningIds={runningIds}
+        chatStatus={chatStatus}
         onSelect={selectConversation}
         onNew={onNewChat}
         onDelete={onDeleteConversation}
@@ -2321,6 +2439,10 @@ export default function App(): JSX.Element {
         onRename={onRenameConversation}
         onSetPinned={onSetPinned}
         onSetArchived={onSetArchived}
+        onSetUnread={onSetUnread}
+        onMarkAllRead={onMarkAllRead}
+        unreadFirst={settings.sidebarUnreadFirst ?? false}
+        onToggleUnreadFirst={onToggleUnreadFirst}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         statusCounts={statusCounts}
@@ -2369,6 +2491,7 @@ export default function App(): JSX.Element {
           onToggleSideChat={currentId ? () => setSideChatOpen((o) => !o) : undefined}
           sideChatOpen={sideChatVisible}
           terminalShortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
+          needsYou={{ count: waitingIds.length, onNext: openNextWaiting }}
         />
 
         <UpdateBanner
@@ -2433,6 +2556,10 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
+              ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
+              : {})}
+            {...(newFrom && newFrom.conversationId === currentId ? { newFromId: newFrom.itemId } : {})}
           />
         )}
 
@@ -2750,6 +2877,21 @@ export default function App(): JSX.Element {
         )}
       </Suspense>
 
+      {undoToast && (
+        <div className="undo-toast" role="status">
+          <span>{undoToast.text}</span>
+          <button
+            type="button"
+            className="undo-toast__btn"
+            onClick={() => {
+              undoToast.undo()
+              setUndoToast(null)
+            }}
+          >
+            Undo
+          </button>
+        </div>
+      )}
       <TipHost
         relevant={tipsRelevant}
         seen={onboarding.state.seenTips}

@@ -108,6 +108,17 @@ Open source under the [Apache License 2.0](LICENSE).
   started, so switching chats switches the pages. The pages render in isolated, sandboxed,
   loopback-pinned views with the same network guards as `view_localhost`, so
   untrusted dev-server output can't reach your network.
+- **Chat status at a glance.** Every chat in the sidebar carries a status dot: amber
+  when it is waiting on you (an approval, a question, a plan, a server asking for input,
+  with the reason under the title), a grey pulse while it works, red when its last run
+  failed, and blue when it finished while you were elsewhere. Mark any chat unread or
+  read from its ⋯ menu or with ⌥U (Alt+U), or from a specific reply with **Mark unread
+  from here**. Reopening an unread chat lands on a "New" divider above what you missed.
+  Mark everything read from the filter menu, or sort the chats that want attention to
+  the top. Collapsed groups, the collapsed sidebar, and the app icon (Dock badge, or a
+  taskbar dot on Windows) count what is waiting; a title-bar pill jumps to the next
+  chat that needs you, and clicking a notification opens its chat. `/resume` in the
+  terminal marks chats the desktop app has unread or failed.
 - **Background tasks.** The tasks button in the titlebar shows a pulsing count while
   terminals or commands the agent backgrounded in the open chat are running, and opens
   a **Tasks** tab in the same right-hand dock as Preview. Another chat's backgrounded
@@ -177,7 +188,7 @@ Open source under the [Apache License 2.0](LICENSE).
   `spawn_session` spins off a *separate* chat: the agent hands it a task, optionally
   on its own git branch and worktree, and sets it running autonomously in the
   background. It appears in the sidebar nested under the chat that started it, with a
-  live running indicator, seeded with
+  live status dot, seeded with
   the handed-off context as its first message (open it to watch, answer an
   approval, or take over), or with a copy of the current chat when the agent
   forks it. The spawned session inherits your current approval policy, so it is

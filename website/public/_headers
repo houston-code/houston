@@ -20,3 +20,9 @@
 /install.sh
   Content-Type: text/plain; charset=utf-8
   Cache-Control: public, max-age=0, must-revalidate
+
+# The security contact carries an RFC 9116 Expires date, so a renewal has to reach
+# scanners on the next deploy rather than after a cache lifetime.
+/.well-known/security.txt
+  Content-Type: text/plain; charset=utf-8
+  Cache-Control: public, max-age=0, must-revalidate

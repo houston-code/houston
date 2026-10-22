@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { UnreadOutcome } from '@shared/chatStatus'
 import { realpathSync } from 'node:fs'
 import {
   APPROVAL_POLICIES,
@@ -835,6 +836,8 @@ export interface ResumeEntry {
   id: string
   title: string
   updatedAt: number
+  /** Set when the desktop app has the chat unread: how its last turn ended. */
+  unread?: UnreadOutcome
 }
 
 /** Persistence hooks, injected so the driver stays testable without a real store. */
@@ -1056,7 +1059,10 @@ export function renderConversationList(convs: ResumeEntry[], now: number, paint:
   const lines = [paint('Recent sessions:', 'bold')]
   convs.forEach((c, i) => {
     const when = paint(formatRelativeTime(c.updatedAt, now), 'dim')
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${c.title}  ${when}`)
+    // The same states the desktop sidebar shows: failed in red, unread in blue.
+    const mark =
+      c.unread === 'error' ? `  ${paint('failed', 'red')}` : c.unread ? `  ${paint('● unread', 'blue')}` : ''
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${c.title}  ${when}${mark}`)
   })
   lines.push(paint('  Enter a number to resume, or anything else to cancel', 'dim'))
   return lines.join('\n')

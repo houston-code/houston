@@ -170,10 +170,18 @@ export const IPC = {
   agentPendingPrompts: 'agent:pendingPrompts',
   /** Query the live run's streamed-but-unpersisted transcript, to replay on re-adopt (mid-turn re-open). */
   agentLiveTranscript: 'agent:liveTranscript',
-  /** Query the ids of every conversation with a live run (drives the sidebar "running" dot). */
-  agentRunningList: 'agent:runningList',
-  /** Main → renderer: the set of conversations with a live run changed (started/ended). */
-  agentRunsChanged: 'agent:runsChanged',
+  /** Query the live status (running, blocking prompts) of every conversation with a run. */
+  chatStatusList: 'chat:statusList',
+  /** Main → renderer: a run started or ended, or a prompt began or stopped blocking one. */
+  chatStatusChanged: 'chat:statusChanged',
+  /** Renderer → main: which chat this window shows, and whether the window is focused. */
+  chatViewing: 'chat:viewing',
+  /** Renderer → main: mark a chat unread (optionally from its Nth reply) or read. */
+  chatSetUnread: 'chat:setUnread',
+  /** Renderer → main: mark every chat read. */
+  chatMarkAllRead: 'chat:markAllRead',
+  /** Main → renderer: open this chat (its desktop notification was clicked). */
+  chatOpenRequest: 'chat:openRequest',
   agentEvent: 'agent:event',
   // Session proposals (propose_session cards)
   /** Renderer → main: start a proposed session as its own chat. */

@@ -50,6 +50,7 @@ import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/que
 import type { Scorecard } from '@shared/scorecard'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
+import type { ChatStatusMap } from '@shared/chatStatus'
 import type {
   UpdateCheckResult,
   UpdateDownloaded,
@@ -352,13 +353,27 @@ const api = {
    */
   getLiveTranscript: (conversationId: string): Promise<AgentEvent[]> =>
     ipcRenderer.invoke(IPC.agentLiveTranscript, conversationId),
-  /** The ids of every conversation with a live run (for the sidebar "running" dot). */
-  getRunningConversations: (): Promise<string[]> => ipcRenderer.invoke(IPC.agentRunningList),
-  /** Subscribe to changes in the running-conversation set. Returns an unsubscribe fn. */
-  onRunsChanged: (cb: (ids: string[]) => void): (() => void) => {
-    const listener = (_event: IpcRendererEvent, ids: string[]): void => cb(ids)
-    ipcRenderer.on(IPC.agentRunsChanged, listener)
-    return () => ipcRenderer.removeListener(IPC.agentRunsChanged, listener)
+  /** The live status of every conversation with a run (drives the sidebar signals). */
+  getChatStatus: (): Promise<ChatStatusMap> => ipcRenderer.invoke(IPC.chatStatusList),
+  /** Subscribe to chat-status changes. Returns an unsubscribe fn. */
+  onChatStatusChanged: (cb: (status: ChatStatusMap) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, status: ChatStatusMap): void => cb(status)
+    ipcRenderer.on(IPC.chatStatusChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.chatStatusChanged, listener)
+  },
+  /** Tell main which chat this window shows and whether it is focused (a focused view marks it read). */
+  setChatViewing: (conversationId: string | null, focused: boolean): void =>
+    ipcRenderer.send(IPC.chatViewing, conversationId, focused),
+  /** Mark a chat unread (from its reply number `fromReply`, 0-based, when given) or read. */
+  setChatUnread: (conversationId: string, unread: boolean, fromReply?: number): Promise<void> =>
+    ipcRenderer.invoke(IPC.chatSetUnread, conversationId, unread, fromReply),
+  /** Mark every chat read. */
+  markAllChatsRead: (): Promise<void> => ipcRenderer.invoke(IPC.chatMarkAllRead),
+  /** Main asks to open a chat (its desktop notification was clicked). Returns an unsubscribe fn. */
+  onChatOpenRequest: (cb: (conversationId: string) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, id: string): void => cb(id)
+    ipcRenderer.on(IPC.chatOpenRequest, listener)
+    return () => ipcRenderer.removeListener(IPC.chatOpenRequest, listener)
   },
   /** The background shells (run_shell background mode) for the tasks indicator. */
   getBackgroundShells: (): Promise<BackgroundShellInfo[]> => ipcRenderer.invoke(IPC.shellList),

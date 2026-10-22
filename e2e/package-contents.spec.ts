@@ -148,6 +148,17 @@ test('node-pty is unpacked from the asar and built for this arch', () => {
   expect(binaryArch(addon), 'node-pty was built for the wrong arch').toBe(process.arch)
 })
 
+test("node-pty ships only this platform's prebuilds", () => {
+  skipUnlessPackaged()
+  // The loader's fallback is prebuilds/<platform>-<arch> and nothing else, so another
+  // platform's prebuilds are dead weight (the Windows ones also carry their own DLLs and
+  // helper executables). electron-builder.yml keeps only the target's.
+  const prebuilds = join(packaged!.resources, 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds')
+  const present = existsSync(prebuilds) ? readdirSync(prebuilds) : []
+  const own = `${process.platform}-${process.arch}`
+  expect(present.filter((d) => d !== own), 'other platforms\' node-pty prebuilds are packaged').toEqual([])
+})
+
 test('the macOS bundle declares its id, version and minimum OS', () => {
   test.skip(process.platform !== 'darwin', 'Info.plist is macOS-only')
   skipUnlessPackaged()

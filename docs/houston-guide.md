@@ -49,6 +49,26 @@ The full GUI:
   commands (stop them, read their output, see which port each one holds)
 - Settings
 
+**Chat status.** Each chat in the sidebar has a status dot:
+
+| Dot | Means |
+| --- | --- |
+| amber | it's waiting on you (an approval, a question, a plan to review) |
+| grey pulse | it's working |
+| red | its last run failed |
+| blue | it has a reply you haven't seen |
+
+- **Read and unread.** A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read. The
+  filter menu marks every chat read, or sorts the ones that want attention first.
+- **Picking up where you left off.** A reply's hover actions include **Mark unread from
+  here**, and reopening an unread chat lands on a "New" divider above the first reply
+  you haven't seen.
+- **Seeing what's waiting at a glance.** A collapsed group's header, the collapsed
+  sidebar, and the app icon count what's waiting (the Dock badge on macOS, a dot on the
+  Windows taskbar button; turn it off under Settings, Notifications). A "N need you"
+  pill in the title bar opens the next chat waiting on you, and clicking a desktop
+  notification opens the chat it's about.
+
 ### Interactive terminal
 
 `houston -i` keeps a chat open in your terminal.
@@ -1458,8 +1478,9 @@ A subagent reports back into the current turn. `spawn_session` instead spins off
 
 - It appears in the sidebar with a live indicator, under the chat that started it,
   seeded with the handed-off context.
-- The arrow beside the parent folds them away. A folded parent says how many are still
-  running, and Houston remembers what you folded across restarts.
+- The arrow beside the parent folds them away. A folded parent shows the most urgent
+  state among them, such as "1 needs input" or "2 running", and Houston remembers what
+  you folded across restarts.
 - A session you pin or move into a group stays where you put it.
 - Its "Handoff from …" banner links back to the parent chat.
 

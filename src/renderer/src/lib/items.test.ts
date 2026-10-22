@@ -25,6 +25,20 @@ import { rewindableTurnIndices } from '@shared/rewind'
 import { describeTool } from './toolDisplay'
 
 describe('itemsFromMessages', () => {
+  it('tags each reply with its index in the full log, offset for a slice', () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 't', name: 'read_file', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 't', toolName: 'read_file' },
+      { role: 'assistant', content: 'done' }
+    ]
+    const replies = (items: ReturnType<typeof itemsFromMessages>): (number | undefined)[] =>
+      items.flatMap((i) => (i.kind === 'assistant' ? [i.messageIndex] : []))
+    expect(replies(itemsFromMessages(messages))).toEqual([1, 4])
+    expect(replies(itemsFromMessages(messages.slice(3), 3))).toEqual([4])
+  })
+
   it('shows why a message got no reply, one notice per run that ended without one', () => {
     const messages: ChatMessage[] = [
       {

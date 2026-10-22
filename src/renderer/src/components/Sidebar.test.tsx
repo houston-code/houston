@@ -1,6 +1,7 @@
 import { createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import type { ChatStatusMap } from '@shared/chatStatus'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
 import { Sidebar, type SidebarProps } from './Sidebar'
@@ -18,6 +19,11 @@ function makeConv(overrides: Partial<ConversationMeta> = {}): ConversationMeta {
   }
 }
 
+/** A chat-status map with each id running and nothing pending. */
+function running(...ids: string[]): ChatStatusMap {
+  return Object.fromEntries(ids.map((id) => [id, { running: true, pending: [] }]))
+}
+
 function baseProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
   return {
     conversations: [],
@@ -27,7 +33,7 @@ function baseProps(overrides: Partial<SidebarProps> = {}): SidebarProps {
     currentId: null,
     collapsed: false,
     onToggleCollapse: vi.fn(),
-    runningIds: new Set<string>(),
+    chatStatus: {},
     onSelect: vi.fn(),
     onNew: vi.fn(),
     onDelete: vi.fn(),
@@ -111,42 +117,196 @@ describe('Sidebar — expanded rendering', () => {
       ],
       // Beta is the open chat; Alpha is running in the background.
       currentId: 'b',
-      runningIds: new Set(['a'])
+      chatStatus: running('a')
     })
     render(<Sidebar {...props} />)
 
     const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
     const beta = screen.getByText('Beta').closest('.conv') as HTMLElement
     // The running (background) chat shows the indicator; the idle open one doesn't.
-    expect(within(alpha).getByLabelText('Running')).toBeInTheDocument()
-    expect(within(beta).queryByLabelText('Running')).not.toBeInTheDocument()
+    expect(within(alpha).getByLabelText('Working')).toBeInTheDocument()
+    expect(within(beta).queryByLabelText('Working')).not.toBeInTheDocument()
   })
 
-  it('reserves the running-dot slot on every row so the title never shifts', () => {
+  it('reserves the status-dot slot on every row so the title never shifts', () => {
     const props = baseProps({
       conversations: [
         makeConv({ id: 'a', title: 'Alpha' }),
         makeConv({ id: 'b', title: 'Beta' })
       ],
-      runningIds: new Set(['a'])
+      chatStatus: running('a')
     })
     render(<Sidebar {...props} />)
 
-    // Both rows carry the dot element; only the running one is marked active.
+    // Both rows carry the dot element; only the running one shows a signal.
     const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
     const beta = screen.getByText('Beta').closest('.conv') as HTMLElement
-    expect(alpha.querySelector('.conv__running')).not.toBeNull()
-    expect(beta.querySelector('.conv__running')).not.toBeNull()
-    expect(alpha.querySelector('.conv__running')).toHaveAttribute('data-running')
-    expect(beta.querySelector('.conv__running')).not.toHaveAttribute('data-running')
+    expect(alpha.querySelector('.conv__status')).toHaveAttribute('data-signal', 'working')
+    expect(beta.querySelector('.conv__status')).toHaveAttribute('data-signal', 'idle')
   })
 
-  it('shows no running indicator when nothing is running', () => {
+  it('shows no status indicator when nothing is live', () => {
     const props = baseProps({
       conversations: [makeConv({ id: 'a', title: 'Alpha' })]
     })
     render(<Sidebar {...props} />)
-    expect(screen.queryByLabelText('Running')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Working')).not.toBeInTheDocument()
+    expect(screen.queryByRole('img', { name: /Needs input|Failed|Unread/ })).not.toBeInTheDocument()
+  })
+
+  it('marks a chat blocked on a prompt as needing input, with the reason in its meta line', () => {
+    const props = baseProps({
+      conversations: [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })],
+      chatStatus: {
+        a: { running: true, pending: [{ kind: 'approval', label: 'run_shell' }] },
+        b: { running: true, pending: [] }
+      }
+    })
+    render(<Sidebar {...props} />)
+    const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    expect(alpha).toHaveAttribute('data-signal', 'input')
+    expect(within(alpha).getByLabelText('Needs input')).toBeInTheDocument()
+    expect(within(alpha).getByText(/Needs approval: run_shell/)).toBeInTheDocument()
+    // The row's accessible name carries the reason, not just the title.
+    expect(alpha).toHaveAttribute('aria-label', 'Alpha, Needs approval: run_shell')
+    const beta = screen.getByText('Beta').closest('.conv') as HTMLElement
+    expect(beta).toHaveAttribute('data-signal', 'working')
+    expect(beta).toHaveAttribute('aria-label', 'Beta, Working')
+  })
+
+  it('shows needs input on the open chat too, since it still waits on the user', () => {
+    const props = baseProps({
+      conversations: [makeConv({ id: 'a', title: 'Alpha' })],
+      currentId: 'a',
+      chatStatus: { a: { running: true, pending: [{ kind: 'question' }] } }
+    })
+    render(<Sidebar {...props} />)
+    expect(screen.getByText('Alpha').closest('.conv')).toHaveAttribute('data-signal', 'input')
+    expect(screen.getByText(/Has a question/)).toBeInTheDocument()
+  })
+
+  it('rings a failed chat, with the error in its meta line, except while it is open', () => {
+    const conversations = [makeConv({ id: 'a', title: 'Alpha' })]
+    const chatStatus: ChatStatusMap = {
+      a: { running: false, pending: [], unread: { since: 1, outcome: 'error', note: 'rate limited' } }
+    }
+    const { rerender } = render(<Sidebar {...baseProps({ conversations, chatStatus })} />)
+    const alpha = (): HTMLElement => screen.getByText('Alpha').closest('.conv') as HTMLElement
+    expect(alpha()).toHaveAttribute('data-signal', 'error')
+    expect(within(alpha()).getByText(/Failed: rate limited/)).toBeInTheDocument()
+    rerender(<Sidebar {...baseProps({ conversations, chatStatus, currentId: 'a' })} />)
+    expect(alpha()).toHaveAttribute('data-signal', 'idle')
+  })
+
+  it('marks an unread chat with a blue dot and says what is new', () => {
+    const conversations = [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })]
+    const chatStatus: ChatStatusMap = {
+      a: { running: false, pending: [], unread: { since: 1, outcome: 'done', note: 'Opened PR #412' } },
+      b: { running: false, pending: [], unread: { since: 1, outcome: 'limit' } }
+    }
+    render(<Sidebar {...baseProps({ conversations, chatStatus })} />)
+    const row = (t: string): HTMLElement => screen.getByText(t).closest('.conv') as HTMLElement
+    expect(row('Alpha')).toHaveAttribute('data-signal', 'unread')
+    expect(within(row('Alpha')).getByText(/Opened PR #412/)).toBeInTheDocument()
+    expect(within(row('Beta')).getByText(/Stopped at step limit/)).toBeInTheDocument()
+  })
+
+  it('shows working over unread while a new run is going', () => {
+    const chatStatus: ChatStatusMap = {
+      a: { running: true, pending: [], unread: { since: 1, outcome: 'done' } }
+    }
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], chatStatus })} />)
+    expect(screen.getByText('Alpha').closest('.conv')).toHaveAttribute('data-signal', 'working')
+  })
+
+  it('offers Mark as unread / Mark as read in the row menu and from the keyboard', () => {
+    const onSetUnread = vi.fn()
+    const conversations = [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })]
+    const chatStatus: ChatStatusMap = { b: { running: false, pending: [], unread: { since: 1, outcome: 'done' } } }
+    render(<Sidebar {...baseProps({ conversations, chatStatus, onSetUnread })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Alpha' }))
+    fireEvent.click(screen.getByRole('button', { name: /Mark as unread/ }))
+    expect(onSetUnread).toHaveBeenLastCalledWith('a', true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Beta' }))
+    fireEvent.click(screen.getByRole('button', { name: /Mark as read/ }))
+    expect(onSetUnread).toHaveBeenLastCalledWith('b', false)
+
+    // Option/Alt+U on a focused row toggles it (matched on the physical key).
+    const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    fireEvent.keyDown(alpha, { key: '¨', code: 'KeyU', altKey: true })
+    expect(onSetUnread).toHaveBeenLastCalledWith('a', true)
+  })
+
+  it('offers Mark as unread on the open chat, which shows no unread dot', () => {
+    const chatStatus: ChatStatusMap = { a: { running: false, pending: [], unread: { since: 1, outcome: 'done' } } }
+    render(
+      <Sidebar
+        {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], chatStatus, currentId: 'a', onSetUnread: vi.fn() })}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Alpha' }))
+    expect(screen.getByRole('button', { name: /Mark as unread/ })).toBeInTheDocument()
+  })
+
+  it('does not offer read toggles on a chat waiting for input', () => {
+    const onSetUnread = vi.fn()
+    const chatStatus: ChatStatusMap = { a: { running: true, pending: [{ kind: 'question' }] } }
+    render(
+      <Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], chatStatus, onSetUnread })} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Alpha' }))
+    expect(screen.queryByRole('button', { name: /Mark as (un)?read/ })).not.toBeInTheDocument()
+    fireEvent.keyDown(screen.getByText('Alpha').closest('.conv') as HTMLElement, { code: 'KeyU', altKey: true })
+    expect(onSetUnread).not.toHaveBeenCalled()
+  })
+
+  it('marks everything read and toggles unread-first from the filter menu', () => {
+    const onMarkAllRead = vi.fn()
+    const onToggleUnreadFirst = vi.fn()
+    const chatStatus: ChatStatusMap = {
+      a: { running: false, pending: [], unread: { since: 1, outcome: 'done' } },
+      b: { running: false, pending: [], unread: { since: 1, outcome: 'error' } }
+    }
+    render(
+      <Sidebar
+        {...baseProps({
+          conversations: [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })],
+          chatStatus,
+          onMarkAllRead,
+          onToggleUnreadFirst
+        })}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
+    const markAll = screen.getByRole('menuitem', { name: /Mark all as read/ })
+    expect(markAll).toHaveTextContent('2')
+    fireEvent.click(markAll)
+    expect(onMarkAllRead).toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Show unread first/ }))
+    expect(onToggleUnreadFirst).toHaveBeenCalled()
+  })
+
+  it('disables Mark all as read when nothing is unread', () => {
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], onMarkAllRead: vi.fn() })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
+    expect(screen.getByRole('menuitem', { name: /Mark all as read/ })).toBeDisabled()
+  })
+
+  it('floats chats wanting attention to the top when unread-first is on', () => {
+    const conversations = [
+      makeConv({ id: 'a', title: 'Alpha', updatedAt: 3 }),
+      makeConv({ id: 'b', title: 'Beta', updatedAt: 2 }),
+      makeConv({ id: 'c', title: 'Gamma', updatedAt: 1 })
+    ]
+    const chatStatus: ChatStatusMap = { c: { running: false, pending: [], unread: { since: 1, outcome: 'done' } } }
+    const titles = (): string[] => [...document.querySelectorAll('.conv__title')].map((el) => el.textContent ?? '')
+    const { rerender } = render(<Sidebar {...baseProps({ conversations, chatStatus })} />)
+    expect(titles()).toEqual(['Alpha', 'Beta', 'Gamma'])
+    rerender(<Sidebar {...baseProps({ conversations, chatStatus, unreadFirst: true })} />)
+    expect(titles()).toEqual(['Gamma', 'Alpha', 'Beta'])
   })
 
   it('selecting a conversation fires onSelect with its id', () => {
@@ -1016,16 +1176,36 @@ describe('Sidebar: spawned chats nest under their parent', () => {
   })
 
   it('folds them away and shows how many are running instead', () => {
-    render(<FoldingSidebar {...baseProps({ conversations: convs, runningIds: new Set(['k2']) })} />)
+    render(<FoldingSidebar {...baseProps({ conversations: convs, chatStatus: running('k2') })} />)
     const toggle = screen.getByRole('button', { name: 'Hide 2 spawned sessions' })
     expect(toggle).toHaveAttribute('aria-expanded', 'true')
     fireEvent.click(toggle)
     expect(screen.queryByText('Update API docs')).toBeNull()
-    // Running reads in the running dot's accent, not the warning colour.
-    expect(screen.getByText('1 running')).toHaveClass('conv__tag--running')
+    expect(screen.getByText('1 running')).toHaveClass('conv__tag--working')
+    // Folded, the parent's dot stands for its hidden running child.
+    expect(screen.getByText('Add OAuth').closest('.conv')).toHaveAttribute('data-signal', 'working')
     fireEvent.click(screen.getByRole('button', { name: 'Show 2 spawned sessions' }))
     expect(screen.queryByText('1 running')).toBeNull()
     expect(screen.getByText('Update API docs')).toBeInTheDocument()
+  })
+
+  it("raises a folded parent to its children's strongest signal and names it in the tag", () => {
+    render(
+      <FoldingSidebar
+        {...baseProps({
+          conversations: convs,
+          chatStatus: { ...running('k1'), k2: { running: true, pending: [{ kind: 'plan', label: 'p' }] } }
+        })}
+      />
+    )
+    const parentRow = (): HTMLElement => screen.getByText('Add OAuth').closest('.conv') as HTMLElement
+    // Open: the parent shows only its own (idle) state; the children show theirs.
+    expect(parentRow()).toHaveAttribute('data-signal', 'idle')
+    expect(screen.getByText('Fix flaky e2e').closest('.conv')).toHaveAttribute('data-signal', 'input')
+    fireEvent.click(screen.getByRole('button', { name: 'Hide 2 spawned sessions' }))
+    // Folded: needs input outranks running, in both the dot and the tag.
+    expect(parentRow()).toHaveAttribute('data-signal', 'input')
+    expect(screen.getByText('1 needs input')).toHaveClass('conv__tag--input')
   })
 
   it('shows a neutral count when nothing under a folded parent is running', () => {
@@ -1040,27 +1220,37 @@ describe('Sidebar: spawned chats nest under their parent', () => {
     expect(screen.getByText('Update API docs')).toBeInTheDocument()
   })
 
-  it("keeps titles in line: a sibling without spawned chats reserves the arrow's slot", () => {
+  it("keeps titles in line: every row leads with the fold arrow's slot, before the dot", () => {
     const other = makeConv({ id: 'x', title: 'Bump deps', updatedAt: 5 })
-    const { container, unmount } = render(<FoldingSidebar {...baseProps({ conversations: [...convs, other] })} />)
+    const pinned = makeConv({ id: 'y', title: 'Pinned one', updatedAt: 6, pinned: true })
+    render(<FoldingSidebar {...baseProps({ conversations: [...convs, other, pinned] })} />)
     const row = (title: string): HTMLElement => screen.getByText(title).closest('.conv') as HTMLElement
-    expect(row('Bump deps').querySelector('.conv__nest-spacer')).not.toBeNull()
-    expect(row('Add OAuth').querySelector('.conv__nest-toggle')).not.toBeNull()
-    // Nested rows: none of these siblings has children, so no slot is reserved.
-    expect(row('Fix flaky e2e').querySelector('.conv__nest-spacer')).toBeNull()
-    unmount()
-    // A list with no nesting at all looks exactly as before.
-    render(<FoldingSidebar {...baseProps({ conversations: [other] })} />)
-    expect(container.ownerDocument.querySelector('.conv__nest-spacer')).toBeNull()
+    const lead = (title: string): string[] =>
+      [...row(title).children].slice(0, 2).map((el) => el.className.split(' ')[0])
+    // Parent: the arrow, then the dot. Every other row: an empty slot, then the dot,
+    // at every level and in every section, whether or not anything nests anywhere.
+    expect(lead('Add OAuth')).toEqual(['conv__nest-toggle', 'conv__status'])
+    expect(lead('Bump deps')).toEqual(['conv__nest-spacer', 'conv__status'])
+    expect(lead('Fix flaky e2e')).toEqual(['conv__nest-spacer', 'conv__status'])
+    expect(lead('Pinned one')).toEqual(['conv__nest-spacer', 'conv__status'])
+  })
+
+  it('keeps a pinned chat in line: the pin marker trails the title instead of leading it', () => {
+    render(
+      <Sidebar
+        {...baseProps({ conversations: [makeConv({ id: 'p', title: 'Important', pinned: true })] })}
+      />
+    )
+    const row = screen.getByText('Important').closest('.conv') as HTMLElement
+    const kids = [...row.children]
+    const main = kids.findIndex((el) => el.classList.contains('conv__main'))
+    const pin = kids.findIndex((el) => el.classList.contains('conv__pin'))
+    expect(pin).toBeGreaterThan(main)
   })
 
   it('keeps titles in line across sections: a group with no nesting still reserves the slot', () => {
     const grouped = makeConv({ id: 'w', title: 'Work item', updatedAt: 5, groupId: 'g1' })
-    render(
-      <FoldingSidebar
-        {...baseProps({ groups: [{ id: 'g1', name: 'Work' }], conversations: [grouped, ...convs] })}
-      />
-    )
+    render(<FoldingSidebar {...baseProps({ groups: [{ id: 'g1', name: 'Work' }], conversations: [grouped] })} />)
     const row = screen.getByText('Work item').closest('.conv') as HTMLElement
     expect(row.querySelector('.conv__nest-spacer')).not.toBeNull()
   })
@@ -1091,5 +1281,52 @@ describe('Sidebar: fold state comes from the app', () => {
     render(<Sidebar {...baseProps({ conversations: [parent, kid], onToggleParentCollapsed })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Hide 1 spawned session' }))
     expect(onToggleParentCollapsed).toHaveBeenCalledWith('p')
+  })
+})
+
+describe('Sidebar: attention outside the rows', () => {
+  const unread: ChatStatusMap = {
+    a: { running: false, pending: [], unread: { since: 1, outcome: 'done' } },
+    b: { running: true, pending: [{ kind: 'question' }] },
+    c: { running: true, pending: [] }
+  }
+  const convs = [
+    makeConv({ id: 'a', title: 'Alpha', groupId: 'g1' }),
+    makeConv({ id: 'b', title: 'Beta', groupId: 'g1' }),
+    makeConv({ id: 'c', title: 'Gamma', groupId: 'g1' })
+  ]
+
+  it("puts a collapsed group's strongest waiting state and count on its header", () => {
+    const { rerender } = render(
+      <Sidebar {...baseProps({ conversations: convs, chatStatus: unread, groups: [{ id: 'g1', name: 'Work', collapsed: true }] })} />
+    )
+    const badge = screen.getByRole('img', { name: '1 needs input' })
+    expect(badge.querySelector('.conv__status')).toHaveAttribute('data-signal', 'input')
+    // Expanded, the rows speak for themselves.
+    rerender(<Sidebar {...baseProps({ conversations: convs, chatStatus: unread, groups: [{ id: 'g1', name: 'Work' }] })} />)
+    expect(screen.queryByRole('img', { name: '1 needs input' })).not.toBeInTheDocument()
+  })
+
+  it('never aggregates working into a header', () => {
+    render(
+      <Sidebar
+        {...baseProps({
+          conversations: [convs[2]],
+          chatStatus: { c: unread.c },
+          groups: [{ id: 'g1', name: 'Work', collapsed: true }]
+        })}
+      />
+    )
+    expect(document.querySelector('.section-head__attention')).toBeNull()
+  })
+
+  it('badges the collapsed rail with chats needing input, else an unread pip', () => {
+    const { rerender } = render(<Sidebar {...baseProps({ collapsed: true, chatStatus: unread })} />)
+    expect(screen.getByRole('button', { name: 'Expand sidebar, 1 chat needs input' })).toHaveTextContent('1')
+    rerender(<Sidebar {...baseProps({ collapsed: true, chatStatus: { a: unread.a } })} />)
+    const btn = screen.getByRole('button', { name: 'Expand sidebar, 1 unread' })
+    expect(btn.querySelector('.sidebar__rail-pip')).not.toBeNull()
+    rerender(<Sidebar {...baseProps({ collapsed: true })} />)
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
   })
 })

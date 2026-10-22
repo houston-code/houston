@@ -718,6 +718,12 @@ export interface AppSettings {
    * focused window. On by default.
    */
   desktopNotifications?: boolean
+  /**
+   * Show a count on the app icon (the macOS Dock badge, the Linux launcher count, a
+   * dot on the Windows taskbar button) of chats that need input, failed, or have
+   * unread replies. On by default.
+   */
+  appBadge?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
   /**
@@ -746,6 +752,11 @@ export interface AppSettings {
    * Absent = every parent expanded. Ids of deleted chats are pruned on the next fold.
    */
   collapsedSpawnParents?: string[]
+  /**
+   * Sort chats that want attention (needs input, failed, unread) to the top of each
+   * sidebar section. Absent = off (the usual recency / manual order).
+   */
+  sidebarUnreadFirst?: boolean
   /**
    * Width (px) of the left sidebar. Clamped to [SIDEBAR_MIN_WIDTH,
    * SIDEBAR_MAX_WIDTH] on read; falls back to SIDEBAR_DEFAULT_WIDTH when unset.

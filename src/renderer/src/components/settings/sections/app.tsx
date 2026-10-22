@@ -68,6 +68,18 @@ export function NotificationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
           window. On by default.
         </span>
       </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.appBadge ?? true}
+          onChange={(e) => setSettings((s) => ({ ...s, appBadge: e.target.checked }))}
+        />
+        <span>
+          Show a count on the app icon of chats that need your input, failed, or have
+          replies you haven’t seen (the Dock on macOS, a dot on the taskbar button on
+          Windows). On by default.
+        </span>
+      </label>
     </SettingsSection>
   )
 }
@@ -211,6 +223,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   formatOnSave: 'format on save',
   diagnosticsOnSave: 'diagnostics on save',
   desktopNotifications: 'notifications',
+  appBadge: 'app icon badge',
   theme: 'theme',
   htmlVisuals: 'interactive visuals',
   keybindings: 'keyboard shortcuts',

@@ -23,6 +23,7 @@ import {
   MAX_UNANSWERED_RUNS
 } from '@shared/agent'
 import type { ApprovalPolicy, PermissionRule } from '@shared/types'
+import type { ChatStatusMap } from '@shared/chatStatus'
 import {
   HEADLESS_NETWORK_BLOCKED_HINT,
   NETWORK_BLOCKED_HINT,
@@ -266,6 +267,8 @@ const {
   activeRunCount,
   runningConversationIds,
   onActiveRunsChanged,
+  chatStatusSnapshot,
+  onChatStatusChanged,
   MAX_PROPOSALS_PER_TURN,
   earlierProposalTitles,
   childReportsNote,
@@ -3055,6 +3058,37 @@ describe('one run per conversation', () => {
     gates[1]()
     await startB
     expect(activeRunCount()).toBe(0)
+  })
+
+  it('reports a blocking approval in the chat status and clears it once answered', async () => {
+    const seen: ChatStatusMap[] = []
+    const off = onChatStatusChanged((s) => seen.push(s))
+    let atPrompt: ChatStatusMap | undefined
+    await run({
+      conversationId: 'conv-status-A',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 's.txt', content: 'a' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_callId, decide) => {
+        atPrompt = chatStatusSnapshot()
+        decide('allow')
+      }
+    })
+    // While the approval was open, the chat read as running AND blocked on it.
+    expect(atPrompt?.['conv-status-A']).toEqual({
+      running: true,
+      pending: [{ kind: 'approval', label: 'write_file' }]
+    })
+    // Listeners saw the blocked state, then the answered one, then the run ending.
+    expect(seen.some((s) => s['conv-status-A']?.pending.length === 1)).toBe(true)
+    expect(seen.some((s) => s['conv-status-A']?.running && s['conv-status-A'].pending.length === 0)).toBe(true)
+    expect(seen.at(-1)).toEqual({})
+    expect(chatStatusSnapshot()).toEqual({})
+    off()
   })
 
   it('reports running conversation ids and notifies listeners as runs start/end', async () => {

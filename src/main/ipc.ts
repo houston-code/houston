@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
+import { app, ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
@@ -66,6 +66,12 @@ import { getMcpStatuses } from './mcp/manager'
 import { openExternalSafely } from './safeExternal'
 import { shareHouston, shareHoustonFromMenu, shareHoustonVia } from './share'
 import type { ShareResult, ShareTarget } from '@shared/share'
+import { replyMessageIndexes, type ChatStatusMap } from '@shared/chatStatus'
+import { createChatAttention, type ChatAttention } from './chatAttention'
+import { join } from 'node:path'
+import { getUserDataDir } from './userData'
+import { ReadStateStore } from './readState'
+import { applyAppBadge, attentionCount, dotPng } from './appBadge'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
 import {
@@ -82,8 +88,8 @@ import {
   activeRunForConversation,
   pendingPromptsForConversation,
   liveTranscriptForConversation,
-  runningConversationIds,
-  onActiveRunsChanged
+  chatStatusSnapshot,
+  onChatStatusChanged
 } from './agent/loop'
 import { killShell, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds } from './agent/queue'
@@ -125,6 +131,7 @@ import {
   searchConversations,
   getConversation,
   peekConversation,
+  conversationExists,
   createConversation,
   forkConversation,
   deleteConversation,
@@ -236,11 +243,39 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
   return mergeRunningTotals(e, total)
 }
 
+let badgeIcon: Electron.NativeImage | null = null
+
+/** Put the count of chats wanting the user on the app icon (or clear it). */
+function updateAppBadge(status: ChatStatusMap): void {
+  try {
+    applyAppBadge(
+      {
+        platform: process.platform,
+        setBadgeCount: (n) => app.setBadgeCount(n),
+        windows: () => BrowserWindow.getAllWindows(),
+        overlayIcon: () => (badgeIcon ??= nativeImage.createFromBuffer(dotPng()))
+      },
+      attentionCount(status),
+      getSettings().appBadge !== false
+    )
+  } catch {
+    // A platform without a badge (some Linux desktops) is not an error worth surfacing.
+  }
+}
+
+/**
+ * Unread tracking and the combined chat status (live runs + unread marks) the sidebar
+ * shows. Created in {@link registerIpc}; every run event passes through it so a run
+ * that ends out of view leaves its chat unread.
+ */
+let attention: ChatAttention | null = null
+
 /** Stream one agent event to the renderer, persisting usage totals along the way. */
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
   const ev = applyRunningUsage(conversationId, e)
   if (!sender.isDestroyed()) sender.send(IPC.agentEvent, ev)
   maybeNotify(sender, conversationId, ev)
+  attention?.noteEvent(conversationId, ev)
 }
 
 /**
@@ -256,7 +291,8 @@ function maybeNotify(sender: WebContents, conversationId: string, e: AgentEvent)
   const conv = peekConversation(conversationId)
   notifyAgentEvent(e, BrowserWindow.fromWebContents(sender), {
     enabled: true,
-    workspaceName: workspaceLabel(conv?.workspace)
+    workspaceName: workspaceLabel(conv?.workspace),
+    conversationId
   })
 }
 
@@ -305,6 +341,7 @@ function makeBroadcastIo(): DrainIO {
       toEach((wc) => wc.send(IPC.agentEvent, ev))
       const primary = BrowserWindow.getAllWindows()[0]?.webContents
       if (primary) maybeNotify(primary, conversationId, ev)
+      attention?.noteEvent(conversationId, ev)
     },
     emitQueueChanged: (conversationId, items) =>
       toEach((wc) => wc.send(IPC.agentQueueChanged, { conversationId, items })),
@@ -733,7 +770,12 @@ export function registerIpc(): void {
 
   ipcMain.handle(IPC.settingsGet, () => getSettings())
 
-  ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => saveSettings(next))
+  ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => {
+    const saved = saveSettings(next)
+    // The badge setting may have changed; reapply it against the current status.
+    if (attention) updateAppBadge(attention.snapshot())
+    return saved
+  })
 
   // Pure transform for the Settings "Clean up rules" button — no state read/write.
   ipcMain.handle(IPC.permissionsCleanup, (_event, rules: PermissionRule[]) =>
@@ -994,6 +1036,7 @@ export function registerIpc(): void {
       deleteConversation(id)
       // Drop the cached queue too: it went with the file, and must not linger in memory.
       forgetQueue(id)
+      attention?.forget(id)
       const worktree =
         action.removeWorktree && conv?.worktree ? await removeWorktree(conv.worktree) : null
       return { deleted: true, worktree }
@@ -1481,19 +1524,61 @@ export function registerIpc(): void {
     liveTranscriptForConversation(conversationId)
   )
 
-  // The ids of every conversation with a live run, for the sidebar "running" dot.
-  // The renderer reads this once on load, then keeps it current via the
-  // IPC.agentRunsChanged broadcast below.
-  ipcMain.handle(IPC.agentRunningList, (): string[] => runningConversationIds())
-
-  // Push the running set to every renderer whenever a run starts or ends, so the
-  // sidebar dot stays live without polling. Broadcast (not sender-scoped) because
-  // a run can finish while a different window is focused.
-  onActiveRunsChanged((ids) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.agentRunsChanged, ids)
+  // Unread marks persist in userData; entries for chats deleted while the app was
+  // closed (or by another process) are pruned on startup.
+  const readState = new ReadStateStore(join(getUserDataDir(), 'read-state.json'))
+  readState.prune(conversationExists)
+  const chat = createChatAttention({
+    store: readState,
+    liveStatus: chatStatusSnapshot,
+    activeRun: activeRunForConversation,
+    messageCount: (id) => peekConversation(id)?.messages.length,
+    exists: conversationExists,
+    // Broadcast (not sender-scoped): a run can block or finish while a different
+    // window is focused, and every window's sidebar shows every chat.
+    broadcast: (status) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.webContents.isDestroyed()) win.webContents.send(IPC.chatStatusChanged, status)
+      }
+      updateAppBadge(status)
     }
   })
+  attention = chat
+  // Unread marks come back from disk on launch; show them on the app icon now rather
+  // than waiting for the first status change.
+  updateAppBadge(chat.snapshot())
+
+  // The status of every chat with something to show (a live run, its blocking
+  // prompts, or an unread mark), for the sidebar's per-chat signal. The renderer reads
+  // this once on load, then follows the IPC.chatStatusChanged broadcast.
+  ipcMain.handle(IPC.chatStatusList, (): ChatStatusMap => chat.snapshot())
+  onChatStatusChanged((live) => chat.onLiveChanged(live))
+
+  // Each window says which chat it shows and whether it has focus; a focused view
+  // marks the chat read. A closed window stops counting as a viewer.
+  const viewerIds = new Set<number>()
+  ipcMain.on(IPC.chatViewing, (event, conversationId: unknown, focused: unknown) => {
+    const id = event.sender.id
+    if (!viewerIds.has(id)) {
+      viewerIds.add(id)
+      event.sender.once('destroyed', () => {
+        viewerIds.delete(id)
+        chat.dropViewer(id)
+      })
+    }
+    chat.setViewing(id, typeof conversationId === 'string' ? conversationId : null, focused === true)
+  })
+  // "Mark unread from here" names a reply by its position among the transcript's
+  // replies (the renderer has no message log); it's resolved to a log index here.
+  ipcMain.handle(IPC.chatSetUnread, (_event, conversationId: unknown, unread: unknown, fromReply: unknown) => {
+    if (typeof conversationId !== 'string') return
+    const anchor =
+      typeof fromReply === 'number' && Number.isInteger(fromReply) && fromReply >= 0
+        ? replyMessageIndexes(peekConversation(conversationId)?.messages ?? [])[fromReply]
+        : undefined
+    chat.setUnread(conversationId, unread === true, anchor)
+  })
+  ipcMain.handle(IPC.chatMarkAllRead, () => chat.markAllRead())
 
   // The background shells (run_shell background mode) for the tasks indicator —
   // queried once on load, then kept current via the shellsChanged broadcast.

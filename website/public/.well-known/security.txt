@@ -1,0 +1,16 @@
+# Houston security contact. RFC 9116.
+#
+# Reports are read. security@houstoncode.ai is a monitored mailbox, and private
+# vulnerability reporting is enabled on the repository, so the advisory link below
+# opens a private thread visible only to the maintainers and the reporter.
+#
+# Expires must stay in the future or this file is not valid per RFC 9116 section 2.5.
+# website/tools/security-txt.test.mjs fails once it lapses: renew the date, do not
+# delete the check.
+
+Contact: mailto:security@houstoncode.ai
+Contact: https://github.com/houston-code/houston/security/advisories/new
+Expires: 2027-10-23T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://houstoncode.ai/.well-known/security.txt
+Policy: https://github.com/houston-code/houston/blob/main/SECURITY.md

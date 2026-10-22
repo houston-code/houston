@@ -28,6 +28,14 @@
   --danger: #e0626b;
   --ok: #43b884;
   --warn: #d99a2b;
+  /* Chat status signals (sidebar dots, the approval card). Working is a quiet grey:
+     it is the common state and asks nothing of the user. The rest want attention. */
+  --sig-working: #a3a6b0;
+  --sig-input: #e8a33d;
+  --sig-unread: #5b9bff;
+  /* Unread as a filled surface under white text (the jump pill): deepened for AA. */
+  --sig-unread-fill: #2f6fe0;
+  --sig-error: var(--danger);
   /* Shadows read as noise on a near-black canvas — Graphite stays flat. */
   --shadow-card: none;
   --shadow-accent: none;
@@ -77,6 +85,12 @@
   --danger: #be1a1a;
   --ok: #0f6e30;
   --warn: #964306;
+  /* Signals deepened so each dot clears 3:1 against the warm sidebar surfaces. */
+  --sig-working: #77736b;
+  --sig-input: #b0731a;
+  --sig-unread: #2563eb;
+  --sig-unread-fill: #2563eb;
+  --sig-error: var(--danger);
   /* Soft warm elevation for cards, and an indigo glow for accent buttons/bubbles. */
   --shadow-card: 0 1px 3px rgba(47, 40, 30, 0.08);
   --shadow-accent: 0 4px 12px rgba(79, 70, 229, 0.25);
@@ -387,6 +401,7 @@ body.is-resizing {
   padding: 38px 6px 10px;
 }
 .sidebar__rail-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -492,9 +507,21 @@ body.is-resizing {
 }
 /* A folded parent's tag: spawned sessions still running read in the running dot's
    accent; a plain count of them stays neutral. */
-.conv__tag--running {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+/* A folded parent's tag takes the color of its children's strongest signal. */
+.conv__tag--input {
+  color: var(--sig-input);
+  border-color: color-mix(in srgb, var(--sig-input) 45%, var(--border));
+}
+.conv__tag--error {
+  color: var(--sig-error);
+  border-color: color-mix(in srgb, var(--sig-error) 45%, var(--border));
+}
+.conv__tag--working {
+  color: var(--text-dim);
+}
+.conv__tag--unread {
+  color: var(--sig-unread);
+  border-color: color-mix(in srgb, var(--sig-unread) 45%, var(--border));
 }
 .conv__tag--count {
   color: var(--text-dim);
@@ -566,6 +593,45 @@ body.is-resizing {
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
 }
+/* A collapsed section's strongest waiting state and how many chats show it. */
+.section-head__attention {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding-right: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-dim);
+}
+/* The collapsed rail's expand button: an amber count of chats needing input, or a
+   blue pip when something is only unread. */
+.sidebar__rail-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--sig-input);
+  color: #1a1206;
+  font-size: 9.5px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.sidebar__rail-pip {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sig-unread);
+}
 .section-head--pinned .section-head__name {
   color: var(--warn);
 }
@@ -607,32 +673,37 @@ body.is-resizing {
   font-size: 10px;
   flex-shrink: 0;
 }
+/* The guide line sits under the fold arrow's center (row padding 10px, slot pulled
+   6px left, half of its 16px width = 12px). */
 .conv-children {
-  margin-left: 14px;
+  margin-left: 12px;
   padding-left: 6px;
   border-left: 1px solid var(--border);
 }
-/* The fold arrow and its placeholder share one slot size, so titles at a level
-   line up whether or not their row has spawned chats under it. */
+/* The fold arrow's slot leads every row (the arrow on a parent, an empty spacer
+   elsewhere), so parents, pinned chats, and plain rows share one dot and title edge
+   at every level. */
 .conv__nest-toggle,
 .conv__nest-spacer {
   flex: 0 0 auto;
   width: 16px;
   height: 16px;
-  margin-left: -4px;
+  margin-left: -6px;
 }
 .conv__nest-toggle {
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--text-dim);
-  font-size: 13px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
   cursor: pointer;
   border-radius: 4px;
+}
+.conv__nest-toggle svg {
   transition: transform 0.12s ease;
 }
-.conv__nest-toggle--open {
+.conv__nest-toggle--open svg {
   transform: rotate(90deg);
 }
 .conv__nest-toggle:hover {
@@ -643,22 +714,59 @@ body.is-resizing {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-/* Leading "running" dot: a chat with a live agent run. Same accent + cadence as
-   the status-bar busy dot, so a running chat reads consistently in both places.
-   The pulse is neutralized by the global prefers-reduced-motion rule above. */
-.conv__running {
-  width: 7px;
-  height: 7px;
+/* The row's status dot: one 8px slot per row, always laid out so the title never
+   shifts. Shape and motion differ per signal as well as color, so the state never
+   rests on color alone: needs input is solid with a halo, failed a ring with a core,
+   working a pulse, unread a plain solid dot. The pulse is neutralized by the global
+   prefers-reduced-motion rule above; the ring variant below keeps working distinct. */
+.conv__status {
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background: var(--accent);
   flex-shrink: 0;
-  /* Always occupies its slot (so the title never shifts); the dot only becomes
-     visible — and starts pulsing — while the chat has a live run. */
+  box-sizing: border-box;
   visibility: hidden;
 }
-.conv__running[data-running] {
+.conv__status[data-signal='input'] {
   visibility: visible;
+  background: var(--sig-input);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sig-input) 28%, transparent);
+}
+.conv__status[data-signal='error'] {
+  visibility: visible;
+  border: 2px solid var(--sig-error);
+  background: radial-gradient(circle, var(--sig-error) 0 1.5px, transparent 2px);
+}
+.conv__status[data-signal='working'] {
+  visibility: visible;
+  background: var(--sig-working);
   animation: conv-pulse 1.2s ease-in-out infinite;
+}
+.conv__status[data-signal='unread'] {
+  visibility: visible;
+  background: var(--sig-unread);
+}
+@media (prefers-reduced-motion: reduce) {
+  .conv__status[data-signal='working'] {
+    background: transparent;
+    border: 2px solid var(--sig-working);
+  }
+}
+/* Rows that want attention read heavier, so they stand out without the dot. */
+.conv[data-signal='input'] .conv__title,
+.conv[data-signal='error'] .conv__title,
+.conv[data-signal='unread'] .conv__title {
+  font-weight: 600;
+}
+.conv__reason {
+  font-weight: 500;
+  color: var(--text);
+}
+.conv[data-signal='input'] .conv__reason {
+  color: var(--sig-input);
+}
+.conv[data-signal='error'] .conv__reason {
+  color: var(--sig-error);
 }
 @keyframes conv-pulse {
   0%,
@@ -755,6 +863,13 @@ body.is-resizing {
 }
 .menu__item:hover {
   background: var(--bg-hover);
+}
+.menu__item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.menu__item:disabled:hover {
+  background: none;
 }
 .menu__item--indent {
   padding-left: 18px;
@@ -2229,6 +2344,37 @@ body.is-resizing {
   color: var(--text-dim);
   border-color: var(--border);
 }
+/* "Mark unread from here" sits just right of the assistant's copy button. */
+.msg__mark-unread {
+  left: 26px;
+}
+.msg__mark-unread:focus-visible {
+  opacity: 1;
+}
+.msg__mark-unread:hover {
+  color: var(--sig-unread);
+  border-color: var(--sig-unread);
+}
+/* Where unseen output starts: a labelled rule in the unread blue, above the first
+   reply the user hasn't seen. */
+.transcript__new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  color: var(--sig-unread);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.transcript__new::before,
+.transcript__new::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--sig-unread) 60%, transparent);
+}
 
 /* ---- Markdown ---- */
 .md > *:first-child {
@@ -2555,6 +2701,67 @@ h6.md-h {
 }
 
 /* ---- Scroll-to-bottom ---- */
+/* Confirms an action that moved the user away (marking the open chat unread). */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: var(--shadow-popover, 0 8px 24px rgba(0, 0, 0, 0.35));
+}
+.undo-toast span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.undo-toast__btn {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.undo-toast__btn:hover {
+  background: var(--bg-hover);
+}
+.undo-toast__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* Shown once the "New" divider scrolls out of view above. */
+.jump-new {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 14px;
+  background: var(--sig-unread-fill);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.jump-new:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .jump-bottom {
   position: absolute;
   bottom: 16px;
@@ -2626,8 +2833,10 @@ h6.md-h {
 .tool-row__glyph--denied {
   color: var(--danger);
 }
+/* Same amber as the sidebar's "needs input" dot, so the row's signal and the thing
+   to answer read as one state. */
 .tool-row__glyph--awaiting-approval {
-  color: var(--warn);
+  color: var(--sig-input);
 }
 .tool-row__spinner {
   width: 12px;
@@ -3199,6 +3408,16 @@ button.finding__head:focus-visible,
   border-color: var(--border);
   box-shadow: none;
   gap: 8px;
+}
+.question__prompt-label::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--sig-input);
+  vertical-align: 1px;
 }
 .question__prompt-label {
   font-size: 11px;
@@ -3824,6 +4043,38 @@ body.is-resizing .preview-dock__resizer::after {
    live, so "something is working" reads the same as the sidebar's running dot. */
 .bgtasks__count[data-running] {
   animation: conv-pulse 1.2s ease-in-out infinite;
+  /* Working reads in the same quiet grey as a working chat's dot. */
+  background: var(--sig-working);
+  color: var(--bg);
+}
+/* "N need you": other chats waiting on the user; opens the next one. */
+.titlebar__needs-you {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--sig-input) 50%, var(--border));
+  border-radius: 999px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.titlebar__needs-you:hover {
+  background: var(--bg-hover);
+}
+.titlebar__needs-you:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.titlebar__needs-you-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sig-input);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sig-input) 28%, transparent);
 }
 @media (prefers-reduced-motion: reduce) {
   .bgtasks__count[data-running],

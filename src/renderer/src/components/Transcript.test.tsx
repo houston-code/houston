@@ -543,3 +543,85 @@ describe('Transcript rewind menu', () => {
     expect(screen.queryByRole('button', { name: 'Rewind to this message' })).toBeNull()
   })
 })
+
+describe('Transcript: unread from a reply', () => {
+  const noop = (): void => {}
+
+  it('offers "Mark unread from here" on finished replies, numbered among the replies', () => {
+    const onMarkUnreadFrom = vi.fn()
+    render(
+      <Transcript
+        items={[
+          userItem({ id: 'u1' }),
+          assistantItem({ id: 'a1', text: 'first' }),
+          toolItem({ id: 't1' }),
+          assistantItem({ id: 'a2', text: 'second' }),
+          assistantItem({ id: 'a3', text: 'still going', streaming: true })
+        ]}
+        onApprove={noop}
+        onAnswer={noop}
+        onElicit={noop}
+        onMarkUnreadFrom={onMarkUnreadFrom}
+      />
+    )
+    const buttons = screen.getAllByRole('button', { name: 'Mark unread from here' })
+    // The streaming reply has no button; the two finished ones do.
+    expect(buttons).toHaveLength(2)
+    fireEvent.click(buttons[1])
+    expect(onMarkUnreadFrom).toHaveBeenCalledWith(1)
+  })
+
+  it('hides the button without a handler', () => {
+    renderTranscript([assistantItem()])
+    expect(screen.queryByRole('button', { name: 'Mark unread from here' })).not.toBeInTheDocument()
+  })
+
+  it('puts a "New" divider above the first unseen reply', () => {
+    const { container } = render(
+      <Transcript
+        items={[
+          userItem({ id: 'u1' }),
+          assistantItem({ id: 'a1', text: 'seen' }),
+          userItem({ id: 'u2', text: 'again' }),
+          assistantItem({ id: 'a2', text: 'unseen' })
+        ]}
+        onApprove={noop}
+        onAnswer={noop}
+        onElicit={noop}
+        newFromId="a2"
+      />
+    )
+    const divider = screen.getByRole('separator', { name: 'New since you last looked' })
+    expect(divider).toHaveTextContent('New')
+    // Directly above the unseen reply, after the user turn that prompted it.
+    const next = divider.nextElementSibling as HTMLElement
+    expect(next).toHaveTextContent('unseen')
+    expect(container.querySelectorAll('.transcript__new')).toHaveLength(1)
+  })
+
+  it('shows no divider when nothing is unseen', () => {
+    renderTranscript([assistantItem()])
+    expect(screen.queryByRole('separator')).not.toBeInTheDocument()
+  })
+
+  it('offers a jump back once the divider scrolls out of view above', () => {
+    const { container } = render(
+      <Transcript
+        items={[assistantItem({ id: 'a1', text: 'unseen' })]}
+        onApprove={noop}
+        onAnswer={noop}
+        onElicit={noop}
+        newFromId="a1"
+      />
+    )
+    const scroller = container.querySelector('.transcript') as HTMLElement
+    const divider = container.querySelector('.transcript__new') as HTMLElement
+    scroller.getBoundingClientRect = () => ({ top: 100, bottom: 600 }) as DOMRect
+    divider.getBoundingClientRect = () => ({ top: 20, bottom: 40 }) as DOMRect
+    fireEvent.scroll(scroller)
+    expect(screen.getByRole('button', { name: /Jump to first unread/ })).toBeInTheDocument()
+    divider.getBoundingClientRect = () => ({ top: 200, bottom: 220 }) as DOMRect
+    fireEvent.scroll(scroller)
+    expect(screen.queryByRole('button', { name: /Jump to first unread/ })).not.toBeInTheDocument()
+  })
+})
