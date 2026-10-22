@@ -20,7 +20,11 @@ ships as a desktop app and as terminal clients.
 
 - **Desktop app.** The full GUI: chat sidebar, diffs, a right-hand dock with the
   live Preview and a Tasks list of background commands (stop them, read their
-  output, see which port each holds), settings.
+  output, see which port each holds), settings. Each chat in the sidebar has a status
+  dot: amber when it waits on you (an approval, a question, a plan to review), a grey
+  pulse while it works, red when its last run failed, and blue when it has a reply you
+  haven't seen. A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read, and the
+  filter menu marks every chat read or sorts the ones that want attention first.
 - **Interactive terminal (`houston -i`).** A stay-resident REPL in the terminal.
   `--continue` reopens this folder's most recent chat at launch, `--resume <id>` a
   specific one.
@@ -1062,8 +1066,9 @@ persist as ordinary conversations you can open later with `/resume` or
 exiting.
 
 In the sidebar, a spawned session sits under the chat that started it (the arrow
-beside the parent folds them away, a folded parent says how many are still
-running, and Houston remembers what you folded across restarts). A session you pin or move into a group stays where you put it. Its
+beside the parent folds them away, a folded parent shows the most urgent state
+among them, such as "1 needs input" or "2 running", and Houston remembers what you
+folded across restarts). A session you pin or move into a group stays where you put it. Its
 "Handoff from …" banner links back to the parent chat.
 
 A spawned session starts fresh with its prompt, or, with context "fork", with a

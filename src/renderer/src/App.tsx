@@ -41,6 +41,7 @@ import {
 } from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
 import { useChatStatus } from './hooks/useChatStatus'
+import { useWindowFocused } from './hooks/useWindowFocused'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
 import { useBackgroundShells } from './hooks/useBackgroundShells'
 import { useTerminals } from './hooks/useTerminals'
@@ -838,6 +839,36 @@ export default function App(): JSX.Element {
     },
     [refreshConversations]
   )
+
+  // Tell main which chat this window shows and whether it has focus: a focused view
+  // marks the chat read, and a turn that finishes out of view leaves it unread.
+  const windowFocused = useWindowFocused()
+  useEffect(() => {
+    window.api.setChatViewing?.(currentId, windowFocused)
+  }, [currentId, windowFocused])
+
+  // Mark a chat unread (or read). Marking the open chat unread also leaves it, as a
+  // mail client moves on: staying would mark it read again straight away.
+  const onSetUnread = useCallback(
+    (id: string, unread: boolean) => {
+      void window.api.setChatUnread(id, unread)
+      if (unread && id === currentId) {
+        const ws = conversations.find((c) => c.id === id)?.workspace ?? workspace
+        if (ws) enterNewChat(ws)
+        else setCurrentId(null)
+      }
+    },
+    [currentId, conversations, workspace, enterNewChat]
+  )
+  const onMarkAllRead = useCallback(() => void window.api.markAllChatsRead(), [])
+  const onToggleUnreadFirst = useCallback(async () => {
+    const current = await window.api.getSettings()
+    const fresh = await window.api.saveSettings({
+      ...current,
+      sidebarUnreadFirst: !current.sidebarUnreadFirst
+    })
+    setSettings(fresh)
+  }, [])
 
   const onSetArchived = useCallback(
     async (id: string, archived: boolean) => {
@@ -2026,6 +2057,26 @@ export default function App(): JSX.Element {
         keywords: 'summarize context',
         run: () => void onCompact()
       })
+      // Not while the chat waits on the user: answering is what clears that.
+      if ((chatStatus[currentId]?.pending.length ?? 0) === 0) {
+        const id = currentId
+        items.push({
+          id: 'act-mark-unread',
+          title: 'Mark chat as unread',
+          section: 'Actions',
+          keywords: 'new later remind flag',
+          run: () => onSetUnread(id, true)
+        })
+      }
+    }
+    if (Object.values(chatStatus).some((st) => st.unread !== undefined)) {
+      items.push({
+        id: 'act-mark-all-read',
+        title: 'Mark all chats as read',
+        section: 'Actions',
+        keywords: 'unread clear seen',
+        run: onMarkAllRead
+      })
     }
     for (const p of APPROVAL_POLICIES) {
       items.push({
@@ -2087,7 +2138,10 @@ export default function App(): JSX.Element {
     onChangePolicy,
     onSelectModel,
     selectConversation,
-    onboarding.startTour
+    onboarding.startTour,
+    chatStatus,
+    onSetUnread,
+    onMarkAllRead
   ])
 
   // Every overlay's open state in one place (see lib/overlays.ts), read live by the
@@ -2331,6 +2385,10 @@ export default function App(): JSX.Element {
         onRename={onRenameConversation}
         onSetPinned={onSetPinned}
         onSetArchived={onSetArchived}
+        onSetUnread={onSetUnread}
+        onMarkAllRead={onMarkAllRead}
+        unreadFirst={settings.sidebarUnreadFirst ?? false}
+        onToggleUnreadFirst={onToggleUnreadFirst}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         statusCounts={statusCounts}

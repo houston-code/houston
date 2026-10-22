@@ -747,6 +747,11 @@ export interface AppSettings {
    */
   collapsedSpawnParents?: string[]
   /**
+   * Sort chats that want attention (needs input, failed, unread) to the top of each
+   * sidebar section. Absent = off (the usual recency / manual order).
+   */
+  sidebarUnreadFirst?: boolean
+  /**
    * Width (px) of the left sidebar. Clamped to [SIDEBAR_MIN_WIDTH,
    * SIDEBAR_MAX_WIDTH] on read; falls back to SIDEBAR_DEFAULT_WIDTH when unset.
    */

@@ -23,16 +23,40 @@ export interface PendingPrompt {
   label?: string
 }
 
-/** The live state of one conversation, as the main process sees it. */
+/** How the turn behind an unread mark ended, or that the user marked it by hand. */
+export type UnreadOutcome = 'done' | 'limit' | 'error' | 'manual'
+
+/**
+ * A chat the user hasn't seen since its last turn finished (or that they marked
+ * unread). Kept by the main process across restarts.
+ */
+export interface UnreadInfo {
+  /** Epoch ms the chat became unread. */
+  since: number
+  outcome: UnreadOutcome
+  /** A short line describing what's new: an opened PR, or the error a run failed on. */
+  note?: string
+  /**
+   * Index in the conversation's message log where the unseen part starts (the
+   * finished turn's first message, or the reply the user marked unread from). The
+   * transcript scrolls there with a "New" divider on the next open.
+   */
+  anchor?: number
+}
+
+/** The state of one conversation, as the main process sees it. */
 export interface ChatLiveStatus {
   running: boolean
   /** Prompts the live run is blocked on, oldest first. Empty when nothing is waiting. */
   pending: PendingPrompt[]
+  /** Present while the chat has something the user hasn't seen. */
+  unread?: UnreadInfo
 }
 
 /**
- * Live state per conversation id. Only conversations with something live appear:
- * an absent id is idle, so the map stays small however many chats exist.
+ * State per conversation id. Only conversations with something to show appear (a
+ * live run, or something unseen): an absent id is idle and read, so the map stays
+ * small however many chats exist.
  */
 export type ChatStatusMap = Record<string, ChatLiveStatus>
 
@@ -97,6 +121,39 @@ export function pendingReason(pending: readonly PendingPrompt[]): string | undef
     case 'elicitation':
       if (n > 1) return `${n} input requests waiting`
       return first.label ? `${first.label} is asking for input` : 'Server is asking for input'
+  }
+}
+
+/**
+ * The signal for a chat from its status entry alone: failed and unread come from its
+ * unread mark (a failed run is an unread one whose outcome was an error).
+ */
+export function statusSignal(status: ChatLiveStatus | undefined, active: boolean): ChatSignal {
+  return chatSignal(status, {
+    failed: status?.unread?.outcome === 'error',
+    unread: status?.unread !== undefined,
+    active
+  })
+}
+
+/**
+ * The meta-line reason for a chat's signal, or undefined when the signal speaks for
+ * itself (working, idle).
+ */
+export function signalReason(status: ChatLiveStatus | undefined, signal: ChatSignal): string | undefined {
+  if (!status) return undefined
+  if (signal === 'input') return pendingReason(status.pending)
+  const u = status.unread
+  if (!u || (signal !== 'error' && signal !== 'unread')) return undefined
+  switch (u.outcome) {
+    case 'error':
+      return u.note ? `Failed: ${u.note}` : 'Failed'
+    case 'limit':
+      return u.note ?? 'Stopped at step limit'
+    case 'manual':
+      return 'Marked unread'
+    case 'done':
+      return u.note ?? 'Finished'
   }
 }
 

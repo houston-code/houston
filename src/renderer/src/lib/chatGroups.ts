@@ -105,7 +105,12 @@ export function buildSidebarSections(
   conversations: ConversationMeta[],
   groups: ChatGroup[],
   /** Collapsed state for the built-in sections ('pinned', 'ungrouped'). */
-  collapsedSections: Record<string, boolean> = {}
+  collapsedSections: Record<string, boolean> = {},
+  /**
+   * When given, chats it flags (or whose spawned chats it flags) float to the top of
+   * their section, keeping the usual order within each half.
+   */
+  wantsAttention?: (id: string) => boolean
 ): SidebarSection[] {
   const groupById = new Map(groups.map((g) => [g.id, g]))
   const pinned: ConversationMeta[] = []
@@ -124,7 +129,20 @@ export function buildSidebarSections(
     latest.set(c.id, value)
     return value
   }
-  const order = bySectionOrder(recency)
+  const byRecency = bySectionOrder(recency)
+  // Decided once per chat, not on every comparison (each walks the chat's subtree).
+  const flaggedIds = new Set(
+    wantsAttention
+      ? conversations
+          .filter((c) => wantsAttention(c.id) || descendantsOf(c.id, children).some((d) => wantsAttention(d.id)))
+          .map((c) => c.id)
+      : []
+  )
+  const flagged = (c: ConversationMeta): boolean => flaggedIds.has(c.id)
+  const order = wantsAttention
+    ? (a: ConversationMeta, b: ConversationMeta): number =>
+        Number(flagged(b)) - Number(flagged(a)) || byRecency(a, b)
+    : byRecency
 
   for (const c of conversations) {
     if (parentOf.has(c.id)) continue

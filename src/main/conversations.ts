@@ -245,6 +245,11 @@ export function peekConversation(id: string): Conversation | null {
   return read(id)
 }
 
+/** Whether a conversation's file exists, without reading it. */
+export function conversationExists(id: string): boolean {
+  return isConversationId(id) && existsSync(filePath(id))
+}
+
 /**
  * Duplicate a conversation into a new one with a fresh id, a "(fork)" title, and a
  * copy of the full message log — so the user can branch off and explore a
