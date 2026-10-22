@@ -6371,6 +6371,109 @@ body:has(.coachmark) .get-started {
   color: var(--text-dim);
 }
 
+/* ---- Settings search: box above the nav, per-page match counts, results ---- */
+.set-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 0 var(--space-3);
+}
+.set-search__icon {
+  position: absolute;
+  left: 9px;
+  color: var(--text-dim);
+  pointer-events: none;
+}
+.set-search__input {
+  width: 100%;
+  min-height: 32px;
+  padding: 6px 44px 6px 28px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.set-search__input::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+.set-search__input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+.set-search__kbd {
+  position: absolute;
+  right: 7px;
+  font-family: var(--font);
+  font-size: 10px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 4px;
+  pointer-events: none;
+}
+.modal__nav button.is-dim {
+  opacity: 0.45;
+}
+.set-nav__count {
+  justify-self: end;
+  grid-column: 3;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-radius: 999px;
+  padding: 0 7px;
+}
+.modal__nav button:has(.set-nav__count) {
+  grid-template-columns: 16px 1fr auto;
+}
+.set-results__page:not([hidden]) ~ .set-results__page:not([hidden]) {
+  margin-top: var(--space-6);
+}
+.set-results__title {
+  margin: 0 0 var(--space-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.set-results__title .link {
+  color: var(--text-dim);
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+}
+.set-results__title .link:hover {
+  color: var(--accent);
+}
+/* Within a result page, sections separate as they do on the page itself: a
+   hairline above every visible section that has a visible one before it. */
+.set-result .set-section {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+.set-result:not([hidden]) ~ .set-result:not([hidden]) .set-section {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+.set-results__empty {
+  padding: var(--space-6) 0;
+  text-align: center;
+  font-size: 13px;
+}
+.set-results__empty p {
+  margin: 0 0 var(--space-1);
+}
+::highlight(settings-search) {
+  background-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  color: inherit;
+}
+
 /* ---- Radio choices with a one-line hint (approval mode) ---- */
 .choice-list {
   display: flex;

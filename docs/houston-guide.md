@@ -1554,13 +1554,19 @@ tracking parameters.
 
 ## Settings and keys
 
-Settings covers providers and keys, web search, approval mode and permission
-rules, hooks, MCP servers, additional folders, context threshold, appearance
-(theme, notifications), updates (installed version and a manual "Check for updates";
-also **Check for Updates…** in the app menu on macOS or the Help menu on Windows and
-Linux), language servers, and optional integrations (`gh`, formatters, language
-servers). API keys
+Settings is grouped into pages: **AI** (Providers & Models, Agent Behavior, Tools,
+MCP Servers, Hooks), **Workspace** (additional folders), **App** (General,
+Appearance, Keyboard), **Security** (Permissions: the default approval mode,
+permission rules, trusted folders, sandbox egress), and **About** (installed version
+and a manual "Check for updates", diagnostics, legal). **Check for Updates…** is also
+in the app menu on macOS and the Help menu on Windows and Linux. API keys
 are encrypted with the OS keychain and stay in the main process.
+
+The search box above the pages (focused when Settings opens; Cmd+F or Ctrl+F, or `/`,
+jumps back to it) finds a setting from any page: by its name or description, a
+common synonym ("proxy" finds Sandbox egress, "dark mode" finds Appearance), or a
+value you entered (a model id, an MCP server, a rule pattern). Results stay editable
+in place, the nav shows how many each page has, and Esc clears the search.
 
 If a key won't save because the OS keychain is unavailable, Settings (and the Get started
 checklist's Connect panel) says how to fix it

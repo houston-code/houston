@@ -420,6 +420,127 @@ describe('SettingsModal', () => {
     expect(screen.getByDisplayValue('git status')).toBeInTheDocument()
   })
 
+  describe('settings search', () => {
+    const search = (): HTMLInputElement => screen.getByRole('searchbox', { name: 'Search settings' }) as HTMLInputElement
+    const type = (q: string): void => {
+      fireEvent.change(search(), { target: { value: q } })
+    }
+    const visibleHeadings = (): string[] =>
+      [...document.querySelectorAll<HTMLElement>('.set-section h3')]
+        .filter((h) => !h.closest('[hidden]'))
+        .map((h) => h.textContent ?? '')
+    const resultPages = (): string[] =>
+      [...document.querySelectorAll<HTMLElement>('.set-results__page')]
+        .filter((p) => !p.hidden)
+        .map((p) => p.getAttribute('aria-label') ?? '')
+
+    it('focuses the search box when Settings opens', async () => {
+      installApi()
+      renderModal()
+      await waitFor(() => expect(document.activeElement).toBe(search()))
+    })
+
+    it('finds a section by a synonym and lists it under its page, across pages', () => {
+      installApi()
+      renderModal()
+      type('proxy')
+      expect(visibleHeadings()).toEqual(['Sandbox egress'])
+      expect(resultPages()).toEqual(['Permissions'])
+      // The current page is replaced by the results: its sections are hidden.
+      expect(screen.getByText('My Local').closest('[hidden]')).not.toBeNull()
+      expect(screen.getByText('1 result')).toBeInTheDocument()
+    })
+
+    it('finds sections by their own text, needing every word', () => {
+      installApi()
+      renderModal()
+      type('format save')
+      expect(visibleHeadings()).toContain('Format on save')
+      expect(visibleHeadings()).not.toContain('Appearance')
+    })
+
+    it("finds the user's own values: a rule pattern, a model id, an MCP server", () => {
+      installApi()
+      renderModal({
+        permissionRules: [{ action: 'deny', tool: 'run_shell', match: 'deploy-prod *' }],
+        mcpServers: [{ id: 'linearbot', command: 'npx', args: [], enabled: true }]
+      })
+      type('deploy-prod')
+      expect(visibleHeadings()).toEqual(['Permissions'])
+      type('claude-sonnet')
+      expect(visibleHeadings()).toEqual(['Providers & models'])
+      type('linearbot')
+      expect(visibleHeadings()).toEqual(['MCP servers'])
+    })
+
+    it('counts matches per page in the nav and dims pages with none', () => {
+      installApi()
+      renderModal()
+      type('api key')
+      const nav = screen.getByRole('navigation', { name: 'Settings sections' })
+      const models = within(nav).getByRole('button', { name: /Providers & Models/ })
+      expect(within(models).getByLabelText(/match/)).toBeInTheDocument()
+      expect(within(nav).getByRole('button', { name: /^Keyboard/ })).toHaveClass('is-dim')
+      expect(within(nav).queryAllByRole('button').some((b) => b.getAttribute('aria-current') === 'page')).toBe(false)
+    })
+
+    it('says so when nothing matches', () => {
+      installApi()
+      renderModal()
+      type('zzqx')
+      expect(screen.getByText('No settings match “zzqx”.')).toBeInTheDocument()
+      expect(screen.getByText('0 results')).toBeInTheDocument()
+    })
+
+    it('keeps the results live: a setting edited in the results is saved', async () => {
+      const api = installApi()
+      renderModal({ formatOnSave: false })
+      type('format on save')
+      fireEvent.click(screen.getByRole('checkbox', { name: /run the matching formatter/i }))
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).formatOnSave).toBe(true)
+    })
+
+    it("jumps to a result's page from its heading, clearing the search", () => {
+      installApi()
+      renderModal()
+      type('proxy')
+      const heading = document.querySelector('.set-results__page:not([hidden]) .set-results__title') as HTMLElement
+      fireEvent.click(within(heading).getByRole('button', { name: 'Permissions' }))
+      expect(search().value).toBe('')
+      expect(screen.getByRole('heading', { name: 'Approval mode' })).toBeInTheDocument()
+    })
+
+    it('clears a non-empty search on Escape instead of closing', () => {
+      installApi()
+      const { onClose } = renderModal()
+      type('theme')
+      fireEvent.keyDown(search(), { key: 'Escape' })
+      expect(search().value).toBe('')
+      expect(onClose).not.toHaveBeenCalled()
+      // A second Escape, with the box empty, closes as usual.
+      fireEvent.keyDown(search(), { key: 'Escape' })
+      expect(onClose).toHaveBeenCalled()
+    })
+
+    it('focuses the search box on Mod+F from anywhere in Settings', () => {
+      installApi()
+      renderModal()
+      const other = screen.getByRole('button', { name: 'Keyboard' })
+      other.focus()
+      fireEvent.keyDown(other, { key: 'f', metaKey: true, ctrlKey: true })
+      expect(document.activeElement).toBe(search())
+    })
+
+    it('opens with a query already typed', () => {
+      installApi()
+      renderModal({}, { initialQuery: 'notifications' })
+      expect(search().value).toBe('notifications')
+      expect(visibleHeadings()).toEqual(['Notifications'])
+    })
+  })
+
   describe('rule order', () => {
     const ordered = [
       { action: 'allow' as const, tool: 'run_shell', match: '*' },

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { useApplyTheme } from '../hooks/useApplyTheme'
@@ -7,6 +7,9 @@ import type { AppSettings } from '@shared/types'
 import { PAGES, PAGE_GROUPS, pageById, type TabId } from './settings/pages'
 import { NAV_ICON } from './settings/navIcons'
 import { TOOL_NAMES } from './settings/permissionRules'
+import { SearchableSection } from './settings/SearchableSection'
+import { highlightTerms, queryTerms } from './settings/search'
+import { isMacPlatform } from '../lib/shortcuts'
 import type { SettingsCtx } from './settings/context'
 
 export { KeyboardTab } from './settings/KeyboardTab'
@@ -15,6 +18,7 @@ export type { TabId } from './settings/pages'
 export function SettingsModal({
   initial,
   initialTab = 'models',
+  initialQuery = '',
   onClose,
   onSaved,
   onShowScorecard,
@@ -23,6 +27,8 @@ export function SettingsModal({
   initial: AppSettings
   /** The section to open on (e.g. Appearance for /theme). */
   initialTab?: TabId
+  /** Open with this settings search already typed (e.g. `/settings proxy`). */
+  initialQuery?: string
   onClose: () => void
   onSaved: (s: AppSettings) => void
   /** Open the local-only per-model loop scorecard (from the Models tab). */
@@ -42,6 +48,19 @@ export function SettingsModal({
   // asks to confirm rather than discarding silently.
   const [confirmingClose, setConfirmingClose] = useState(false)
   const modalRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
+  // Settings search. While it has words, the body lists every matching section
+  // across all pages instead of the selected page.
+  const [query, setQuery] = useState(initialQuery)
+  const terms = queryTerms(query)
+  const searching = terms.length > 0
+  const [matches, setMatches] = useState<Record<string, boolean>>({})
+  const onResult = useCallback(
+    (id: string, matched: boolean) =>
+      setMatches((m) => (m[id] === matched ? m : { ...m, [id]: matched })),
+    []
+  )
 
   // A stable digest of the persisted-settings baseline (derived key flags stripped,
   // since those change via the key actions, not "unsaved edits"). Updated whenever
@@ -61,6 +80,47 @@ export function SettingsModal({
     else onClose()
   }
   useFocusTrap(modalRef, requestClose)
+
+  // Mod+F (and / outside a text field) jump to the search box while Settings is
+  // open, ahead of the app's own find-in-chat shortcut.
+  useEffect(() => {
+    const mac = isMacPlatform()
+    const onKey = (e: KeyboardEvent): void => {
+      const mod = mac ? e.metaKey : e.ctrlKey
+      const typing =
+        e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [contenteditable="true"]') !== null
+      if ((mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'f') || (e.key === '/' && !typing && !mod)) {
+        e.preventDefault()
+        e.stopImmediatePropagation()
+        searchRef.current?.focus()
+        searchRef.current?.select()
+      }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
+
+  // Esc in a non-empty search box clears it rather than closing Settings. A native
+  // listener on the box runs before the dialog's own Esc (the focus trap).
+  useEffect(() => {
+    const input = searchRef.current
+    if (!input) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape' && input.value !== '') {
+        e.stopPropagation()
+        setQuery('')
+      }
+    }
+    input.addEventListener('keydown', onKey)
+    return () => input.removeEventListener('keydown', onKey)
+  }, [])
+
+  // Mark every match in the visible results.
+  useEffect(() => {
+    const body = bodyRef.current
+    if (!body || !searching) return
+    return highlightTerms(body, query)
+  })
 
   // Live-preview the selected color theme while the modal is open, so the user
   // sees the change before committing. If they close without saving we revert to
@@ -160,6 +220,15 @@ export function SettingsModal({
     onShowDoctor
   }
   const page = pageById(tab)
+  const pageMatches = (id: TabId): number =>
+    pageById(id).sections.filter((sec) => matches[sec.id]).length
+  const resultCount = PAGES.reduce((n, p) => n + pageMatches(p.id), 0)
+  const goToPage = (id: TabId): void => {
+    setQuery('')
+    setTab(id)
+    bodyRef.current?.scrollTo?.({ top: 0 })
+  }
+  const mac = isMacPlatform()
 
   return (
     <div className="modal-backdrop" onClick={requestClose}>
@@ -181,6 +250,28 @@ export function SettingsModal({
 
         <div className="modal__main">
           <nav className="modal__nav" aria-label="Settings sections">
+            <div className="set-search" role="search">
+              <svg className="set-search__icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+                <circle cx="7" cy="7" r="4.5" />
+                <path d="M10.5 10.5L14 14" />
+              </svg>
+              <input
+                ref={searchRef}
+                type="search"
+                className="set-search__input"
+                placeholder="Search settings"
+                aria-label="Search settings"
+                aria-controls="settings-body"
+                data-autofocus
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              {!query && (
+                <kbd className="set-search__kbd" aria-hidden="true">
+                  {mac ? '⌘F' : 'Ctrl+F'}
+                </kbd>
+              )}
+            </div>
             {PAGE_GROUPS.map((group) => {
               const pages = PAGES.filter((p) => p.group === group)
               // A group of one page named like the group needs no header of its own.
@@ -188,35 +279,75 @@ export function SettingsModal({
               return (
                 <div className="set-nav__group" key={group}>
                   {headed && <div className="set-nav__heading">{group}</div>}
-                  {pages.map((t) => (
-                    <button
-                      key={t.id}
-                      className={t.id === tab ? 'is-active' : ''}
-                      // The highlighted section is otherwise only a color and a rail.
-                      aria-current={t.id === tab ? 'page' : undefined}
-                      onClick={() => setTab(t.id)}
-                    >
-                      <span className="set-nav__icon" aria-hidden="true">
-                        {NAV_ICON[t.id]}
-                      </span>
-                      {t.label}
-                    </button>
-                  ))}
+                  {pages.map((t) => {
+                    const count = searching ? pageMatches(t.id) : 0
+                    const active = !searching && t.id === tab
+                    return (
+                      <button
+                        key={t.id}
+                        className={`${active ? 'is-active' : ''}${searching && count === 0 ? ' is-dim' : ''}`}
+                        // The highlighted section is otherwise only a color and a rail.
+                        aria-current={active ? 'page' : undefined}
+                        onClick={() => goToPage(t.id)}
+                      >
+                        <span className="set-nav__icon" aria-hidden="true">
+                          {NAV_ICON[t.id]}
+                        </span>
+                        {t.label}
+                        {searching && count > 0 && (
+                          <span className="set-nav__count" aria-label={`${count} ${count === 1 ? 'match' : 'matches'}`}>
+                            {count}
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
                 </div>
               )
             })}
           </nav>
 
-          <div className="modal__body">
+          <div className="modal__body" id="settings-body" ref={bodyRef}>
             {/* Tool-name suggestions shared by the rule and hook editors. */}
             <datalist id="tool-names">
               {TOOL_NAMES.map((t) => (
                 <option key={t} value={t} />
               ))}
             </datalist>
-            {page.sections.map((Section, i) => (
-              <Section key={`${page.id}-${i}`} ctx={ctx} />
-            ))}
+            <p className="sr-only" aria-live="polite">
+              {searching ? `${resultCount} ${resultCount === 1 ? 'result' : 'results'}` : ''}
+            </p>
+            {searching ? (
+              <>
+                {PAGES.map((p) => (
+                  <section key={p.id} className="set-results__page" hidden={pageMatches(p.id) === 0} aria-label={p.label}>
+                    <h2 className="set-results__title">
+                      <button className="link" onClick={() => goToPage(p.id)}>
+                        {p.label}
+                      </button>
+                    </h2>
+                    {p.sections.map((entry) => (
+                      <SearchableSection
+                        key={entry.id}
+                        entry={entry}
+                        pageLabel={p.label}
+                        terms={terms}
+                        ctx={ctx}
+                        onResult={onResult}
+                      />
+                    ))}
+                  </section>
+                ))}
+                {resultCount === 0 && (
+                  <div className="set-results__empty">
+                    <p>No settings match &ldquo;{query.trim()}&rdquo;.</p>
+                    <p className="settings-dim">Try a broader word, like &ldquo;key&rdquo;, &ldquo;network&rdquo;, or &ldquo;theme&rdquo;.</p>
+                  </div>
+                )}
+              </>
+            ) : (
+              page.sections.map(({ id, Component }) => <Component key={`${page.id}-${id}`} ctx={ctx} />)
+            )}
           </div>
         </div>
 
