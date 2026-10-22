@@ -7,6 +7,8 @@ import type {
   ApprovalPolicy,
   FolderTrustStatus,
   IntegrationsInfo,
+  LegacyRulesChoice,
+  LegacyRulesDecideResult,
   McpServerStatus,
   MenuCommand,
   MenuState,
@@ -66,6 +68,11 @@ const api = {
   /** Save a `#`-captured standing instruction; resolves to the file path written, or null. */
   saveMemory: (workspace: string, scope: MemoryScope, text: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.memorySave, workspace, scope, text),
+  /** Whether to show the one-time "global rules moved to ~/.houston/AGENTS.md" notice. */
+  getLegacyRulesNotice: (): Promise<boolean> => ipcRenderer.invoke(IPC.legacyRulesNoticeStatus),
+  /** Answer that notice: import ~/.claude/CLAUDE.md into it, or keep the rules separate. */
+  decideLegacyRulesNotice: (choice: LegacyRulesChoice): Promise<LegacyRulesDecideResult> =>
+    ipcRenderer.invoke(IPC.legacyRulesNoticeDecide, choice),
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.workspacePick),
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directoryPick),
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>

@@ -10,7 +10,11 @@ import { SKIP_DIRS } from './search'
  * follow a project's conventions without the user re-explaining them every time.
  *
  * Houston assembles a small hierarchy, lowest precedence first:
- *   1. Global user rules at `~/.claude/CLAUDE.md` (apply to every project).
+ *   1. Global user rules at `~/.houston/AGENTS.md` (apply to every project).
+ *      Houston's own file: a rules file another tool keeps under its own home
+ *      directory is written for that tool, so it is never loaded implicitly.
+ *      Anyone who wants one shared can `@import` it from here (see
+ *      ../globalRules.ts, which offers exactly that once).
  *   2. Project rules: `AGENTS.md` then `CLAUDE.md` at the workspace root.
  *   3. Nested rules: `AGENTS.md`/`CLAUDE.md` discovered in subdirectories
  *      (shallowest first), so per-package conventions in a monorepo are picked
@@ -24,6 +28,15 @@ import { SKIP_DIRS } from './search'
 
 /** Filenames read from each directory, in precedence order. */
 export const RULES_FILES = ['AGENTS.md', 'CLAUDE.md'] as const
+
+/** Houston's per-user directory under the home dir, holding the global rules file. */
+export const GLOBAL_RULES_DIRNAME = '.houston'
+
+/** The global rules filename inside {@link GLOBAL_RULES_DIRNAME}. */
+export const GLOBAL_RULES_FILE = 'AGENTS.md'
+
+/** How the global rules file is labeled in the prompt and in `files`. */
+export const GLOBAL_RULES_LABEL = `~/${GLOBAL_RULES_DIRNAME}/${GLOBAL_RULES_FILE} (global)`
 
 /** Cap the combined rules text so a huge file can't crowd out the context window. */
 export const MAX_RULES_CHARS = 32_000
@@ -45,7 +58,7 @@ export interface ProjectRules {
 }
 
 export interface LoadRulesOptions {
-  /** Directory holding the global user rules file (default `~/.claude`). */
+  /** Directory holding the global user rules file (default `~/.houston`). */
   globalDir?: string
   /** Home directory used to resolve `~/…` in @imports (default `os.homedir()`). */
   home?: string
@@ -122,7 +135,7 @@ function isWithinRoot(root: string, abs: string): boolean {
  * `@/etc/passwd`, `@../../secret`, or a symlink pointing out of the tree must NOT
  * be readable, or opening a repo would exfiltrate host files. realpath defeats
  * symlink escapes. `confineRoot === null` means a trusted source (the global
- * ~/.claude/CLAUDE.md), which may import from anywhere.
+ * ~/.houston/AGENTS.md), which may import from anywhere.
  */
 function importAllowed(abs: string, confineRoot: string | null): boolean {
   if (confineRoot === null) return true
@@ -141,6 +154,33 @@ function importAllowed(abs: string, confineRoot: string | null): boolean {
 // simply fails and the token is left untouched). Trailing punctuation is trimmed
 // before resolving so "see @./notes.md." still works.
 const IMPORT_RE = /(^|\s)@([^\s`]*\/[^\s`]*|~[^\s`]*)/g
+
+/** Trim the trailing punctuation an import token may carry ("see @./notes.md."). */
+function trimSpec(rawSpec: string): string {
+  return rawSpec.replace(/[.,;:!?)\]}]+$/, '')
+}
+
+/**
+ * The absolute paths `text`'s own @imports point at (not transitively), skipping
+ * fenced code exactly as the expander does. Used to ask "does this file already
+ * import X?" without loading anything.
+ */
+export function importTargets(text: string, baseDir: string, home: string): string[] {
+  const targets: string[] = []
+  let inFence = false
+  for (const line of text.split('\n')) {
+    if (/^\s*```/.test(line)) {
+      inFence = !inFence
+      continue
+    }
+    if (inFence || !line.includes('@')) continue
+    for (const m of line.matchAll(IMPORT_RE)) {
+      const spec = trimSpec(m[2])
+      if (spec) targets.push(resolveImport(spec, baseDir, home))
+    }
+  }
+  return targets
+}
 
 /**
  * Expand @import tokens in `text`, recursively. Missing/oversized/cyclic imports
@@ -179,7 +219,7 @@ async function expandImports(
     let m: RegExpExecArray | null
     while ((m = IMPORT_RE.exec(line)) !== null) {
       const [full, lead, rawSpec] = m
-      const trimmed = rawSpec.replace(/[.,;:!?)\]}]+$/, '')
+      const trimmed = trimSpec(rawSpec)
       if (!trimmed) continue
       const abs = resolveImport(trimmed, baseDir, home)
       if (visited.has(abs)) continue
@@ -244,7 +284,7 @@ export async function loadProjectRules(
   opts: LoadRulesOptions = {}
 ): Promise<ProjectRules> {
   const home = opts.home ?? homedir()
-  const globalDir = opts.globalDir ?? join(home, '.claude')
+  const globalDir = opts.globalDir ?? join(home, GLOBAL_RULES_DIRNAME)
   const maxNestedDepth = opts.maxNestedDepth ?? MAX_NESTED_DEPTH
   const maxNestedFiles = opts.maxNestedFiles ?? MAX_NESTED_RULES_FILES
   const visited = new Set<string>()
@@ -255,7 +295,7 @@ export async function loadProjectRules(
     maxNestedDepth > 0 ? await discoverNestedRules(workspace, maxNestedDepth, maxNestedFiles) : []
 
   // Canonical workspace root used to confine workspace-sourced @imports. Only the
-  // global ~/.claude/CLAUDE.md is trusted to import from outside the workspace
+  // global ~/.houston/AGENTS.md is trusted to import from outside the workspace
   // (confineRoot null); project + nested files are attacker-controlled in an
   // untrusted repo and may import only files inside the tree.
   let confineRoot = workspace
@@ -266,7 +306,7 @@ export async function loadProjectRules(
   }
 
   const sources: { path: string; label: string; confineRoot: string | null }[] = [
-    { path: join(globalDir, 'CLAUDE.md'), label: '~/.claude/CLAUDE.md (global)', confineRoot: null },
+    { path: join(globalDir, GLOBAL_RULES_FILE), label: GLOBAL_RULES_LABEL, confineRoot: null },
     ...RULES_FILES.map((name) => ({ path: join(workspace, name), label: name, confineRoot })),
     ...nested.map((n) => ({ ...n, confineRoot }))
   ]

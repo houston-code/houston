@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { MAX_RULES_CHARS, loadProjectRules } from './rules'
+import { join, resolve } from 'node:path'
+import { GLOBAL_RULES_LABEL, MAX_RULES_CHARS, importTargets, loadProjectRules } from './rules'
 
 let workspace: string
 let home: string
@@ -10,10 +10,10 @@ let globalDir: string
 
 beforeEach(() => {
   workspace = mkdtempSync(join(tmpdir(), 'houston-rules-'))
-  // Isolate the global rules dir so the developer's real ~/.claude/CLAUDE.md
+  // Isolate the global rules dir so the developer's real ~/.houston/AGENTS.md
   // never leaks into these tests.
   home = mkdtempSync(join(tmpdir(), 'houston-home-'))
-  globalDir = join(home, '.claude')
+  globalDir = join(home, '.houston')
   mkdirSync(globalDir, { recursive: true })
 })
 
@@ -67,21 +67,69 @@ describe('loadProjectRules', () => {
   })
 
   describe('global rules', () => {
-    it('loads ~/.claude/CLAUDE.md before project rules', async () => {
-      writeFileSync(join(globalDir, 'CLAUDE.md'), 'Global house style.')
+    it('loads ~/.houston/AGENTS.md before project rules', async () => {
+      writeFileSync(join(globalDir, 'AGENTS.md'), 'Global house style.')
       writeFileSync(join(workspace, 'CLAUDE.md'), 'Project rules.')
       const rules = await loadProjectRules(workspace, opts())
-      expect(rules.files).toEqual(['~/.claude/CLAUDE.md (global)', 'CLAUDE.md'])
+      expect(rules.files).toEqual([GLOBAL_RULES_LABEL, 'CLAUDE.md'])
       expect(rules.text.indexOf('Global house style.')).toBeLessThan(
         rules.text.indexOf('Project rules.')
       )
     })
 
     it('works with only global rules present', async () => {
-      writeFileSync(join(globalDir, 'CLAUDE.md'), 'Only global.')
+      writeFileSync(join(globalDir, 'AGENTS.md'), 'Only global.')
       const rules = await loadProjectRules(workspace, opts())
-      expect(rules.files).toEqual(['~/.claude/CLAUDE.md (global)'])
+      expect(rules.files).toEqual([GLOBAL_RULES_LABEL])
       expect(rules.text).toContain('Only global.')
+    })
+
+    it('defaults the global dir to ~/.houston under the home dir', async () => {
+      writeFileSync(join(globalDir, 'AGENTS.md'), 'Default-dir global.')
+      const rules = await loadProjectRules(workspace, { home })
+      expect(rules.files[0]).toBe('~/.houston/AGENTS.md (global)')
+      expect(rules.text).toContain('Default-dir global.')
+    })
+
+    it('does NOT load ~/.claude/CLAUDE.md on its own', async () => {
+      mkdirSync(join(home, '.claude'), { recursive: true })
+      writeFileSync(join(home, '.claude', 'CLAUDE.md'), 'OTHER-TOOL-RULES')
+      const rules = await loadProjectRules(workspace, { home })
+      expect(rules.text).not.toContain('OTHER-TOOL-RULES')
+      expect(rules.files).toEqual([])
+    })
+
+    it('loads ~/.claude/CLAUDE.md when the global file imports it', async () => {
+      mkdirSync(join(home, '.claude'), { recursive: true })
+      writeFileSync(join(home, '.claude', 'CLAUDE.md'), 'OTHER-TOOL-RULES')
+      writeFileSync(join(globalDir, 'AGENTS.md'), '@~/.claude/CLAUDE.md\n\nHouston rule.')
+      writeFileSync(join(workspace, 'AGENTS.md'), 'Project rule.')
+      const rules = await loadProjectRules(workspace, { home })
+      expect(rules.text).toContain('OTHER-TOOL-RULES')
+      // Precedence is unchanged: global (with its import) < project.
+      expect(rules.text.indexOf('OTHER-TOOL-RULES')).toBeLessThan(rules.text.indexOf('Houston rule.'))
+      expect(rules.text.indexOf('Houston rule.')).toBeLessThan(rules.text.indexOf('Project rule.'))
+    })
+
+    it('a workspace rules file cannot import ~/.claude/CLAUDE.md', async () => {
+      // The old file is reachable only from the TRUSTED global file, never from a
+      // workspace file (confinement).
+      mkdirSync(join(home, '.claude'), { recursive: true })
+      writeFileSync(join(home, '.claude', 'CLAUDE.md'), 'OTHER-TOOL-RULES')
+      writeFileSync(join(workspace, 'AGENTS.md'), '@~/.claude/CLAUDE.md')
+      const rules = await loadProjectRules(workspace, { home })
+      expect(rules.text).not.toContain('OTHER-TOOL-RULES')
+    })
+  })
+
+  describe('importTargets', () => {
+    it('resolves ~/, relative, and absolute imports, skipping fences and bare mentions', () => {
+      const text = ['@~/a.md and @./b.md.', '```', '@~/fenced.md', '```', 'see @/abs/c.md', '@param'].join('\n')
+      expect(importTargets(text, '/base', '/home/u')).toEqual([
+        join('/home/u', 'a.md'),
+        resolve('/base', 'b.md'),
+        '/abs/c.md'
+      ])
     })
   })
 
@@ -108,7 +156,7 @@ describe('loadProjectRules', () => {
       // ~/ imports are only honored from the user's own global rules file. A
       // workspace file doing the same is blocked (see the confinement tests below).
       writeFileSync(join(home, 'shared.md'), 'Shared snippet.')
-      writeFileSync(join(globalDir, 'CLAUDE.md'), 'Pull in @~/shared.md here.')
+      writeFileSync(join(globalDir, 'AGENTS.md'), 'Pull in @~/shared.md here.')
       const rules = await loadProjectRules(workspace, opts())
       expect(rules.text).toContain('Shared snippet.')
     })
@@ -216,7 +264,7 @@ describe('loadProjectRules', () => {
 
     it('the trusted global file may still import a home path', async () => {
       writeFileSync(join(home, 'extra.md'), 'GLOBAL-EXTRA-OK')
-      writeFileSync(join(globalDir, 'CLAUDE.md'), 'Global. @~/extra.md')
+      writeFileSync(join(globalDir, 'AGENTS.md'), 'Global. @~/extra.md')
       const rules = await loadProjectRules(workspace, opts())
       expect(rules.text).toContain('GLOBAL-EXTRA-OK')
     })

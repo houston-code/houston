@@ -766,3 +766,14 @@ export interface IntegrationsInfo {
    */
   languageServersBlocked?: 'disabled' | 'unsandboxed' | 'needs-git-bash'
 }
+
+/** The user's answer to the one-time "global rules moved" notice. */
+export type LegacyRulesChoice = 'import' | 'keep'
+
+/** Result of answering that notice. `error` is set (and nothing is persisted) when the import write failed. */
+export interface LegacyRulesDecideResult {
+  settings: AppSettings
+  /** The global rules file written, after a successful import. */
+  file?: string
+  error?: string
+}

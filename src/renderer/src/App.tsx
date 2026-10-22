@@ -95,6 +95,7 @@ import { SideChatPanel } from './components/SideChatPanel'
 import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
+import { GlobalRulesNotice } from './components/GlobalRulesNotice'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { useUpdateBanner } from './hooks/useUpdateBanner'
@@ -2260,6 +2261,8 @@ export default function App(): JSX.Element {
           onNotNow={onTrustNotNow}
           onDecided={setSettings}
         />
+
+        <GlobalRulesNotice onDecided={setSettings} />
 
         <GitInitBanner
           // Re-evaluate cleanly per workspace: a new folder gets its own banner state.

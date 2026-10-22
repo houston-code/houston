@@ -519,13 +519,15 @@ Open source under the [Apache License 2.0](LICENSE).
   conversation: it's recorded as tool use in the message log, so it persists with
   the chat and needs no separate store.
 - **Project-aware.** Houston loads a small rules hierarchy into the system prompt:
-  your global `~/.claude/CLAUDE.md` first, then the project's own `AGENTS.md` /
+  your global `~/.houston/AGENTS.md` first, then the project's own `AGENTS.md` /
   `CLAUDE.md` at its root, then any `AGENTS.md` / `CLAUDE.md` found in
   subdirectories (so per-package conventions in a monorepo are picked up
   automatically, shallowest first), so the agent follows your conventions,
   build/test commands, and house rules without you re-explaining them each time.
   Any rules file can also pull in others with `@path` imports (relative, `~/…`, or
-  absolute), to split or share common rules across files.
+  absolute), to split or share common rules across files. To reuse an existing
+  global rules file such as `~/.claude/CLAUDE.md`, add `@~/.claude/CLAUDE.md` to
+  `~/.houston/AGENTS.md`; Houston offers to do this once when it finds one.
 - **Token usage & cost at a glance.** The control bar above the composer shows the
   current context size, the output tokens used this session, and an **estimated
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show

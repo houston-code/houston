@@ -2,7 +2,14 @@ import { ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, 
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
-import type { AppSettings, ApprovalPolicy, FolderTrustStatus, MenuState, PermissionRule } from '@shared/types'
+import type {
+  AppSettings,
+  ApprovalPolicy,
+  FolderTrustStatus,
+  LegacyRulesDecideResult,
+  MenuState,
+  PermissionRule
+} from '@shared/types'
 import { isApprovalPolicy } from '@shared/types'
 import { cleanupPermissionRules } from './agent/permissions'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
@@ -80,6 +87,8 @@ import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
 import type { DoctorFacts } from '@shared/doctor'
 import { saveMemory } from './memory'
+import { decideLegacyRulesNotice, legacyRulesNoticeApplies } from './globalRules'
+import { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } from './legacyRulesNotice'
 import { MAX_MEMORY_NOTE } from '@shared/memory'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import {
@@ -422,7 +431,7 @@ export function registerIpc(): void {
     return gatherDoctorFacts(cwd, { version: APP_VERSION, update: null })
   })
   // `#`-capture: save a standing instruction to the workspace's AGENTS.md (project)
-  // or ~/.claude/AGENTS.md (global) — the files Houston already loads every run.
+  // or ~/.houston/AGENTS.md (global), the files Houston already loads every run.
   // Returns the path written, or null when the input is malformed. Text is capped
   // here rather than trusting the renderer.
   ipcMain.handle(
@@ -439,6 +448,25 @@ export function registerIpc(): void {
       if (!trimmed) return null
       return saveMemory(workspace, scope, trimmed)
     }
+  )
+
+  // One-time "global rules moved" notice: shown while ~/.claude/CLAUDE.md exists,
+  // ~/.houston/AGENTS.md doesn't import it, and the user hasn't answered yet.
+  ipcMain.handle(
+    IPC.legacyRulesNoticeStatus,
+    (): boolean => !isLegacyRulesNoticeDismissed() && legacyRulesNoticeApplies()
+  )
+  // Answer it (see decideLegacyRulesNotice: a failed import is reported, not recorded).
+  ipcMain.handle(
+    IPC.legacyRulesNoticeDecide,
+    (_event, choice: unknown): LegacyRulesDecideResult =>
+      decideLegacyRulesNotice(choice, {
+        current: getSettings,
+        dismiss: () => {
+          dismissLegacyRulesNotice()
+          return getSettings()
+        }
+      })
   )
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
