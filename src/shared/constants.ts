@@ -180,6 +180,8 @@ export const IPC = {
   chatSetUnread: 'chat:setUnread',
   /** Renderer → main: mark every chat read. */
   chatMarkAllRead: 'chat:markAllRead',
+  /** Main → renderer: open this chat (its desktop notification was clicked). */
+  chatOpenRequest: 'chat:openRequest',
   agentEvent: 'agent:event',
   // Session proposals (propose_session cards)
   /** Renderer → main: start a proposed session as its own chat. */

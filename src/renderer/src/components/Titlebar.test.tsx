@@ -102,3 +102,19 @@ describe('Titlebar side chat button', () => {
     expect(screen.queryByRole('button', { name: 'Side chat' })).toBeNull()
   })
 })
+
+describe('Titlebar needs-you pill', () => {
+  it('shows how many other chats wait on the user and opens the next', () => {
+    const onNext = vi.fn()
+    const { rerender } = render(<Titlebar title="Houston" needsYou={{ count: 2, onNext }} />)
+    fireEvent.click(screen.getByRole('button', { name: /2 need you/ }))
+    expect(onNext).toHaveBeenCalled()
+    rerender(<Titlebar title="Houston" needsYou={{ count: 1, onNext }} />)
+    expect(screen.getByRole('button', { name: /1 needs you/ })).toBeInTheDocument()
+  })
+
+  it('hides at zero', () => {
+    render(<Titlebar title="Houston" needsYou={{ count: 0, onNext: vi.fn() }} />)
+    expect(screen.queryByRole('button', { name: /need/ })).not.toBeInTheDocument()
+  })
+})

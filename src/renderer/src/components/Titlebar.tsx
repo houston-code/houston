@@ -28,7 +28,8 @@ export function Titlebar({
   terminalOpen,
   onToggleSideChat,
   sideChatOpen,
-  terminalShortcut
+  terminalShortcut,
+  needsYou
 }: {
   title: string
   /** Background work (terminals + backgrounded shells) for the indicator's count. */
@@ -52,6 +53,11 @@ export function Titlebar({
   sideChatOpen?: boolean
   /** The terminal toggle's shortcut as displayed on this platform (e.g. ⌃`, Ctrl+`). */
   terminalShortcut?: string
+  /**
+   * Other chats waiting on the user (approval, question, plan, input request): shows
+   * a "N need you" pill that opens the next one. Absent or 0 hides it.
+   */
+  needsYou?: { count: number; onNext: () => void }
 }): JSX.Element {
   const hasChanges = !!changes && changes.fileCount > 0
   return (
@@ -59,6 +65,14 @@ export function Titlebar({
       <span className="titlebar__title">{title}</span>
       <div className="titlebar__actions">
         <TooltipProvider>
+          {needsYou && needsYou.count > 0 && (
+            <Tooltip label="Open the next chat waiting on you">
+              <button type="button" className="titlebar__needs-you" onClick={needsYou.onNext}>
+                <span className="titlebar__needs-you-dot" aria-hidden="true" />
+                {needsYou.count === 1 ? '1 needs you' : `${needsYou.count} need you`}
+              </button>
+            </Tooltip>
+          )}
           {tasks && onToggleTasks && (
             <BackgroundTasks tasks={tasks} active={!!tasksOpen} onToggle={onToggleTasks} />
           )}

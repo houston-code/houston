@@ -128,6 +128,7 @@ describe('import checks per preference', () => {
     ['formatOnSave', true, 'true'],
     ['diagnosticsOnSave', false, 0],
     ['desktopNotifications', false, null],
+    ['appBadge', false, 'yes'],
     ['theme', 'dark', 'sepia'],
     ['htmlVisuals', true, {}],
     ['keybindings', { 'open-settings': 'Mod+,', 'toggle-sidebar': null }, { 'open-settings': 5 }],

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
+import { app, ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
 import { IPC } from '@shared/constants'
@@ -71,6 +71,7 @@ import { createChatAttention, type ChatAttention } from './chatAttention'
 import { join } from 'node:path'
 import { getUserDataDir } from './userData'
 import { ReadStateStore } from './readState'
+import { applyAppBadge, attentionCount, dotPng } from './appBadge'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
 import {
@@ -242,6 +243,26 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
   return mergeRunningTotals(e, total)
 }
 
+let badgeIcon: Electron.NativeImage | null = null
+
+/** Put the count of chats wanting the user on the app icon (or clear it). */
+function updateAppBadge(status: ChatStatusMap): void {
+  try {
+    applyAppBadge(
+      {
+        platform: process.platform,
+        setBadgeCount: (n) => app.setBadgeCount(n),
+        windows: () => BrowserWindow.getAllWindows(),
+        overlayIcon: () => (badgeIcon ??= nativeImage.createFromBuffer(dotPng()))
+      },
+      attentionCount(status),
+      getSettings().appBadge !== false
+    )
+  } catch {
+    // A platform without a badge (some Linux desktops) is not an error worth surfacing.
+  }
+}
+
 /**
  * Unread tracking and the combined chat status (live runs + unread marks) the sidebar
  * shows. Created in {@link registerIpc}; every run event passes through it so a run
@@ -270,7 +291,8 @@ function maybeNotify(sender: WebContents, conversationId: string, e: AgentEvent)
   const conv = peekConversation(conversationId)
   notifyAgentEvent(e, BrowserWindow.fromWebContents(sender), {
     enabled: true,
-    workspaceName: workspaceLabel(conv?.workspace)
+    workspaceName: workspaceLabel(conv?.workspace),
+    conversationId
   })
 }
 
@@ -748,7 +770,12 @@ export function registerIpc(): void {
 
   ipcMain.handle(IPC.settingsGet, () => getSettings())
 
-  ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => saveSettings(next))
+  ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => {
+    const saved = saveSettings(next)
+    // The badge setting may have changed; reapply it against the current status.
+    if (attention) updateAppBadge(attention.snapshot())
+    return saved
+  })
 
   // Pure transform for the Settings "Clean up rules" button — no state read/write.
   ipcMain.handle(IPC.permissionsCleanup, (_event, rules: PermissionRule[]) =>
@@ -1513,9 +1540,13 @@ export function registerIpc(): void {
       for (const win of BrowserWindow.getAllWindows()) {
         if (!win.webContents.isDestroyed()) win.webContents.send(IPC.chatStatusChanged, status)
       }
+      updateAppBadge(status)
     }
   })
   attention = chat
+  // Unread marks come back from disk on launch; show them on the app icon now rather
+  // than waiting for the first status change.
+  updateAppBadge(chat.snapshot())
 
   // The status of every chat with something to show (a live run, its blocking
   // prompts, or an unread mark), for the sidebar's per-chat signal. The renderer reads

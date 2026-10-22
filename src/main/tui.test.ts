@@ -1029,6 +1029,21 @@ describe('resume picker', () => {
     expect(out).toContain('2. Second')
     expect(renderConversationList([], 100, makePainter(false))).toContain('No saved sessions')
   })
+  it("marks chats the desktop app has unread or failed, like the sidebar", () => {
+    const out = renderConversationList(
+      [
+        { id: 'a', title: 'Plain', updatedAt: 1 },
+        { id: 'b', title: 'Done', updatedAt: 1, unread: 'done' },
+        { id: 'c', title: 'Broke', updatedAt: 1, unread: 'error' }
+      ],
+      100,
+      makePainter(false)
+    )
+    const line = (t: string): string => out.split('\n').find((l) => l.includes(t)) ?? ''
+    expect(line('Plain')).not.toMatch(/unread|failed/)
+    expect(line('Done')).toContain('● unread')
+    expect(line('Broke')).toContain('failed')
+  })
   it('maps a valid index to its id, else null', () => {
     expect(parseResumeSelection('2', convs)).toBe('b')
     expect(parseResumeSelection('0', convs)).toBeNull()

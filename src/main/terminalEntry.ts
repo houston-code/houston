@@ -55,8 +55,16 @@ import {
   updateSettings
 } from './store'
 import { getUserDataDir } from './userData'
+import { ReadStateStore } from './readState'
 import { log } from './logger'
-import { runTui, makePainter, mediaTypeForImagePath, type BackgroundSession, type TuiOptions } from './tui'
+import {
+  runTui,
+  makePainter,
+  mediaTypeForImagePath,
+  type BackgroundSession,
+  type ResumeEntry,
+  type TuiOptions
+} from './tui'
 import type { DoctorFacts } from './tui-doctor'
 import { gatherDoctorFacts } from './doctor'
 import { saveMemory } from './memory'
@@ -99,6 +107,17 @@ import {
   reportChildToParent,
   saveSideChat
 } from './conversations'
+
+/** Resume-picker rows, each marked with the desktop app's unread state for it. */
+function withUnread(convs: { id: string; title: string; updatedAt: number }[]): ResumeEntry[] {
+  const unread = new ReadStateStore(join(getUserDataDir(), 'read-state.json')).snapshot()
+  return convs.map((c) => ({
+    id: c.id,
+    title: c.title,
+    updatedAt: c.updatedAt,
+    ...(unread[c.id] ? { unread: unread[c.id].outcome } : {})
+  }))
+}
 
 /**
  * Terminal-facing entry points — the full wiring of the interactive TUI (`-i`)
@@ -639,19 +658,23 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
         // Keep the chat's stored settings current after a `/model`, `/reasoning` or
         // `/approval` change (the GUI's per-send updateConversationMeta counterpart).
         setSettings: (id, patch) => updateConversationMeta(id, patch),
-        // Recent conversations for this folder, newest first, for the `/resume` picker.
+        // Recent conversations for this folder, newest first, for the `/resume` picker,
+        // marked with the desktop app's unread state (read fresh each time, and only
+        // read: the app owns that file and would overwrite a write from here).
         list: (workspace) =>
-          listConversations()
-            .filter((c) => c.workspace === workspace)
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .slice(0, 20)
-            .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
+          withUnread(
+            listConversations()
+              .filter((c) => c.workspace === workspace)
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .slice(0, 20)
+          ),
         search: (workspace, query) =>
-          searchConversations(query)
-            .filter((c) => c.workspace === workspace)
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .slice(0, 20)
-            .map((c) => ({ id: c.id, title: c.title, updatedAt: c.updatedAt })),
+          withUnread(
+            searchConversations(query)
+              .filter((c) => c.workspace === workspace)
+              .sort((a, b) => b.updatedAt - a.updatedAt)
+              .slice(0, 20)
+          ),
         fork: (id) => {
           const forked = forkConversation(id)
           return forked ? { id: forked.id } : null

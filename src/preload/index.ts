@@ -369,6 +369,12 @@ const api = {
     ipcRenderer.invoke(IPC.chatSetUnread, conversationId, unread, fromReply),
   /** Mark every chat read. */
   markAllChatsRead: (): Promise<void> => ipcRenderer.invoke(IPC.chatMarkAllRead),
+  /** Main asks to open a chat (its desktop notification was clicked). Returns an unsubscribe fn. */
+  onChatOpenRequest: (cb: (conversationId: string) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, id: string): void => cb(id)
+    ipcRenderer.on(IPC.chatOpenRequest, listener)
+    return () => ipcRenderer.removeListener(IPC.chatOpenRequest, listener)
+  },
   /** The background shells (run_shell background mode) for the tasks indicator. */
   getBackgroundShells: (): Promise<BackgroundShellInfo[]> => ipcRenderer.invoke(IPC.shellList),
   /** Stop a background shell, or the processes it left running after it exited. */

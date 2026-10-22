@@ -14,6 +14,8 @@ const h = vi.hoisted(() => ({
   removeWorktree: vi.fn(),
   // channel -> the handler registered via ipcMain.handle, captured at registerIpc().
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
+  // The app-icon badge, set at registration from the restored unread marks.
+  setBadgeCount: vi.fn(),
   cancelRun: vi.fn(),
   resolveApproval: vi.fn(),
   resolveQuestion: vi.fn(),
@@ -56,7 +58,13 @@ vi.mock('electron', () => ({
     handle: (channel: string, fn: (...args: unknown[]) => unknown) => h.handlers.set(channel, fn),
     on: () => {}
   },
-  app: { getVersion: () => '0.0.0-test', getPath: () => '/tmp', getName: () => 'Houston', on: () => {} },
+  app: {
+    getVersion: () => '0.0.0-test',
+    getPath: () => '/tmp',
+    getName: () => 'Houston',
+    on: () => {},
+    setBadgeCount: h.setBadgeCount
+  },
   dialog: { showMessageBox: h.showMessageBox },
   clipboard: h.clipboard,
   nativeImage: h.nativeImage,
@@ -1003,5 +1011,14 @@ describe('background shell IPC (Tasks panel)', () => {
     expect(await call(IPC.shellStop, id)).toBe('killed')
     await closed
     expect(await call(IPC.shellStop, id)).toBe('already-exited')
+  })
+})
+
+describe('app-icon badge on launch', () => {
+  it('is applied at registration, from the unread marks restored from disk', () => {
+    h.setBadgeCount.mockClear()
+    registerIpc()
+    // Windows has no badge count (it uses a taskbar overlay on open windows instead).
+    if (process.platform !== 'win32') expect(h.setBadgeCount).toHaveBeenCalledTimes(1)
   })
 })
