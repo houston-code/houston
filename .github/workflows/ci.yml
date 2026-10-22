@@ -96,7 +96,11 @@ jobs:
       - run: npm run typecheck
       # JUnit for the uploaded report; github-actions for inline failure annotations (naming
       # any reporter turns off vitest's automatic one, so it is listed explicitly).
-      - run: npm test -- --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
+      # --coverage enforces the per-directory floors in vitest.config.ts. Linux only: the
+      # suite is the same on every OS, so the macOS and Windows legs in `package` skip the
+      # instrumentation cost. text-summary keeps the log short; run `npm run
+      # test:coverage` locally for the per-file table and HTML report.
+      - run: npm test -- --coverage --coverage.reporter=text-summary --reporter=default --reporter=github-actions --reporter=junit --outputFile.junit=reports/junit.xml
       - name: Upload test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

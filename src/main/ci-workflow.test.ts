@@ -231,6 +231,12 @@ describe('CI validates every PR before it can merge', () => {
     }
   })
 
+  it('enforces the coverage floors in the Linux test job', () => {
+    // The per-directory thresholds in vitest.config.ts only bite when coverage runs;
+    // without --coverage here they would silently never gate anything.
+    expect(job('test')).toMatch(/run: npm test -- --coverage /)
+  })
+
   it('re-tests main after each merge', () => {
     // Queue merges are real pushes, so this trigger fires and main is checked after the
     // fact — the backstop for a broken two-PR combination that per-PR CI cannot see.

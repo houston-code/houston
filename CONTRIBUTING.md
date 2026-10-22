@@ -69,6 +69,20 @@ shared code run under Node, the React renderer runs under jsdom with
 `*.eval.ts`. Renderer component tests use `.test.tsx` and render with
 `@testing-library/react`; hooks use `renderHook`.
 
+### Coverage
+
+```bash
+npm run test:coverage
+```
+
+This runs the suite with v8 coverage and writes a per-file table plus HTML and
+lcov reports under `coverage/`. Every file under `src/` counts, including files
+no test imports (those count as 0%), so the numbers reflect the whole product.
+`vitest.config.ts` sets a coverage floor per directory (`src/main`,
+`src/renderer`, `src/shared`, `src/cli`) about a point below the measured
+values, and CI fails a PR that drops any of them. If your change raises a
+directory's coverage, raise its floor in the same PR so the gain is locked in.
+
 ### Agent-behavior goldens
 
 `src/main/agent/golden.test.ts` runs scripted scenarios through the real agent
