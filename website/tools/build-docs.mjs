@@ -133,7 +133,8 @@ function splitRow(line) {
   let cell = "";
   for (const part of codeSpans(line.trim().replace(/^\||\|$/g, ""))) {
     if ("code" in part) {
-      cell += "`" + part.code.replace(/\|/g, "\u0001") + "`";
+      // GFM unescapes \| inside a table's code spans too (GitHub splits cells first).
+      cell += "`" + part.code.replace(/\\\|/g, "|").replace(/\|/g, "\u0001") + "`";
       continue;
     }
     const pieces = part.text.replace(/\\\|/g, "\u0001").split("|");
@@ -510,8 +511,20 @@ export function buildDocs(md, version) {
       prev ? `<a class="docs-prev" href="/docs/${prev.slug}"><span>Previous</span>${inline(prev.title)}</a>` : "",
       next ? `<a class="docs-next" href="/docs/${next.slug}"><span>Next</span>${inline(next.title)}</a>` : "",
     ].join("");
+    // A page with several subsections opens with an "On this page" list of them.
+    const subs = [...content.matchAll(/<h2 id="([^"]+)">([\s\S]*?)<\/h2>/g)];
+    const toc =
+      subs.length >= 2
+        ? `
+        <nav class="docs-toc" aria-labelledby="toc-${s.slug}">
+          <h2 id="toc-${s.slug}">On this page</h2>
+          <ul>
+${subs.map(([, id, title]) => `            <li><a href="#${id}">${title.replace(/<a\b[^>]*>|<\/a>/g, "")}</a></li>`).join("\n")}
+          </ul>
+        </nav>`
+        : "";
     const body = `        <a class="docs-crumb" href="/docs/">Houston docs</a>
-        <h1>${inline(s.title)}</h1>
+        <h1>${inline(s.title)}</h1>${toc}
         <div class="prose">
 ${content}
         </div>

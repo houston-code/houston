@@ -368,7 +368,7 @@ section { padding: 96px 0; }
    the topic list moves into a sticky column on the left. */
 .docs { padding: 48px 0 96px; }
 .docs-layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 56px; align-items: start; }
-.docs-content { grid-column: 2; grid-row: 1; min-width: 0; max-width: 760px; }
+.docs-content { grid-column: 2; grid-row: 1; min-width: 0; max-width: 720px; }
 .docs-nav {
   grid-column: 1; grid-row: 1; position: sticky; top: 84px;
   max-height: calc(100vh - 108px); overflow-y: auto; padding-right: 8px;
@@ -392,9 +392,12 @@ section { padding: 96px 0; }
 .docs-crumb { display: inline-block; margin-bottom: 12px; font-size: var(--fs-2); font-weight: 500; }
 .docs-content h1 { font-size: var(--fs-4); }
 .docs-lede { margin-top: 12px; color: var(--n4); }
-.prose h2 { font-size: var(--fs-3); margin-top: 40px; }
+.prose { line-height: 1.7; }
+.prose h2 { font-size: var(--fs-3); margin-top: 48px; padding-top: 28px; border-top: 1px solid var(--n3); }
+.prose > h2:first-child { margin-top: 32px; }
 .prose h3 { font-size: var(--fs-3); font-weight: 500; margin-top: 28px; }
 .prose p { margin-top: 16px; }
+.prose > p:first-child { margin-top: 20px; }
 .prose ul, .prose ol { margin: 16px 0 0; padding-left: 22px; }
 .prose li + li { margin-top: 8px; }
 .prose li > ul, .prose li > ol { margin-top: 8px; }
@@ -415,6 +418,11 @@ section { padding: 96px 0; }
 .prose th, .prose td { padding: 8px 12px 8px 0; border-bottom: 1px solid var(--n3); text-align: left; vertical-align: top; }
 .prose th { font-weight: 600; }
 .prose td code { white-space: nowrap; }
+
+.docs-toc { margin-top: 24px; padding: 16px 20px; border: 1px solid var(--n3); border-radius: var(--r-2); background: var(--n2); }
+.docs-toc h2 { font-size: var(--fs-1); font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--n4); }
+.docs-toc ul { margin: 8px 0 0; padding: 0; list-style: none; columns: 2; column-gap: 24px; }
+.docs-toc li { break-inside: avoid; padding: 3px 0; font-size: var(--fs-2); line-height: 1.4; }
 
 .docs-pager { display: flex; justify-content: space-between; gap: 16px; margin-top: 56px; padding-top: 24px; border-top: 1px solid var(--n3); }
 .docs-pager a { display: flex; flex-direction: column; gap: 2px; max-width: 48%; font-weight: 500; }
@@ -471,6 +479,7 @@ section { padding: 96px 0; }
   .highlights { gap: 10px 20px; }
 }
 @media (max-width: 560px) {
+  .docs-toc ul { columns: 1; }
   .download-grid { grid-template-columns: 1fr; }
   .cli-cmds > div { grid-template-columns: 1fr; gap: 4px; }
   /* One column: put the visitor's build first instead of making them scroll for it. */

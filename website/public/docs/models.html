@@ -79,6 +79,15 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Models</h1>
+        <nav class="docs-toc" aria-labelledby="toc-models">
+          <h2 id="toc-models">On this page</h2>
+          <ul>
+            <li><a href="#claude-through-your-cloud-account">Claude through your cloud account</a></li>
+            <li><a href="#gpt-models-on-azure-openai">GPT models on Azure OpenAI</a></li>
+            <li><a href="#dropped-connections">Dropped connections</a></li>
+            <li><a href="#fallback-models">Fallback models</a></li>
+          </ul>
+        </nav>
         <div class="prose">
 <p>Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in Settings, fetch its live model list, and pick a model. The picker shows each model's context window and capability badges (tool calling, vision, reasoning) and warns before you pick one that cannot call tools. Keys are stored encrypted by the OS keychain and never touch the renderer. The selection is shared across clients: picking a model in the desktop app or switching with <code>/model</code> in the terminal saves it as the default for future sessions.</p>
 <p>If a provider answers that it doesn't serve a model (the id is mistyped, the model was retired, or your key can't use it), the turn ends with a message saying so instead of the raw error, and the model is marked &quot;Not found&quot; in the picker (&quot;(not found)&quot; in <code>/model</code>) until it answers a request again. Pick another model and retry.</p>
