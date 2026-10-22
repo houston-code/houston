@@ -8,7 +8,9 @@ import {
   headlessUpdateNoticeAllowed,
   shortenHeadline,
   updateCheckEnabled,
-  CHECK_INTERVAL_MS
+  CHECK_INTERVAL_MS,
+  FETCH_TIMEOUT_MS,
+  RETRY_AFTER_FAILURE_MS
 } from './update-check'
 import { DOWNLOAD_URL } from '@shared/update'
 
@@ -100,8 +102,8 @@ describe('checkForUpdate', () => {
     const boom = vi.fn(async () => {
       throw new Error('getaddrinfo ENOTFOUND')
     }) as unknown as typeof globalThis.fetch
-    await expect(checkForUpdate(CURRENT, { fetch: boom, path, env: {} })).resolves.toBeNull()
-    expect(JSON.parse(readFileSync(path, 'utf8')).checkedAt).toBeTypeOf('number')
+    await expect(checkForUpdate(CURRENT, { fetch: boom, path, env: {}, now: () => 5000 })).resolves.toBeNull()
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ checkedAt: 0, failedAt: 5000 })
   })
 
   it('swallows a non-ok response and an unparseable body', async () => {
@@ -265,5 +267,83 @@ describe('formatHeadlessUpdateNotice', () => {
         'update with: npm i -g @houston-code/cli@latest'
       )
     ).toBe('houston: update available: 0.10.0 (you have 0.9.0). Update with: npm i -g @houston-code/cli@latest\n')
+  })
+})
+
+describe('checkForUpdate after a failed check', () => {
+  const boom = (): typeof globalThis.fetch =>
+    vi.fn(async () => {
+      throw new Error('The operation was aborted due to timeout')
+    }) as unknown as typeof globalThis.fetch
+
+  // A slow moment at launch used to wipe yesterday's answer and silence the notice a day.
+  it('keeps reporting the last known update when a later check fails', async () => {
+    const path = tmpCache()
+    writeFileSync(path, JSON.stringify({ checkedAt: 1000, latest: '0.3.0', headline: 'Faster' }))
+    const later = 1000 + CHECK_INTERVAL_MS + 1
+    const got = await checkForUpdate(CURRENT, { fetch: boom(), path, env: {}, now: () => later })
+    expect(got).toMatchObject({ latest: '0.3.0', headline: 'Faster' })
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({
+      checkedAt: 1000,
+      latest: '0.3.0',
+      headline: 'Faster',
+      failedAt: later
+    })
+  })
+
+  it('waits an hour after a failure before asking again, still answering from the cache', async () => {
+    const path = tmpCache()
+    writeFileSync(path, JSON.stringify({ checkedAt: 0, latest: '0.3.0', failedAt: 50_000 }))
+    const f = feed({ tag_name: 'v0.4.0' })
+    const got = await checkForUpdate(CURRENT, { fetch: f, path, env: {}, now: () => 50_000 + RETRY_AFTER_FAILURE_MS - 1 })
+    expect(got).toMatchObject({ latest: '0.3.0' })
+    expect(f).not.toHaveBeenCalled()
+  })
+
+  it('asks again an hour after a failure, not a day', async () => {
+    const path = tmpCache()
+    writeFileSync(path, JSON.stringify({ checkedAt: 0, failedAt: 50_000 }))
+    const f = feed({ tag_name: 'v0.4.0' })
+    const got = await checkForUpdate(CURRENT, { fetch: f, path, env: {}, now: () => 50_000 + RETRY_AFTER_FAILURE_MS + 1 })
+    expect(got).toMatchObject({ latest: '0.4.0' })
+    expect(f).toHaveBeenCalledOnce()
+    // A success clears the failure and starts the daily interval.
+    expect(JSON.parse(readFileSync(path, 'utf8'))).toEqual({ checkedAt: 50_000 + RETRY_AFTER_FAILURE_MS + 1, latest: '0.4.0' })
+  })
+
+  it('treats a non-ok response (rate limited) as a failure too', async () => {
+    const path = tmpCache()
+    writeFileSync(path, JSON.stringify({ checkedAt: 1000, latest: '0.3.0' }))
+    const got = await checkForUpdate(CURRENT, { fetch: feed({}, false), path, env: {}, now: () => 1000 + CHECK_INTERVAL_MS + 1 })
+    expect(got).toMatchObject({ latest: '0.3.0' })
+    expect(JSON.parse(readFileSync(path, 'utf8')).failedAt).toBe(1000 + CHECK_INTERVAL_MS + 1)
+  })
+
+  it('ignores a malformed failedAt in the cache', async () => {
+    const path = tmpCache()
+    writeFileSync(path, JSON.stringify({ checkedAt: 0, failedAt: 'soon' }))
+    const f = feed({ tag_name: 'v0.4.0' })
+    await checkForUpdate(CURRENT, { fetch: f, path, env: {}, now: () => 10 })
+    expect(f).toHaveBeenCalledOnce()
+  })
+})
+
+describe('checkForUpdate timeout', () => {
+  const timeoutOf = async (deps: { timeoutMs?: number }): Promise<number> => {
+    const spy = vi.spyOn(AbortSignal, 'timeout')
+    try {
+      await checkForUpdate(CURRENT, { fetch: feed({ tag_name: 'v0.3.0' }), path: tmpCache(), env: {}, ...deps })
+      return spy.mock.calls[0][0]
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
+  it('waits FETCH_TIMEOUT_MS by default', async () => {
+    expect(await timeoutOf({})).toBe(FETCH_TIMEOUT_MS)
+  })
+
+  it('takes a caller-supplied timeout', async () => {
+    expect(await timeoutOf({ timeoutMs: 10_000 })).toBe(10_000)
   })
 })

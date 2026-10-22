@@ -23,10 +23,19 @@ import { log } from './logger'
 /** The public releases feed (source repo is private; distribution is not). */
 const LATEST_RELEASE_API = 'https://api.github.com/repos/houston-code/houston/releases/latest'
 
-/** How long a check result is reused before asking again. */
+/** How long a successful check is reused before asking again. */
 export const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
-/** Give up quickly: this races the user's first prompt, and losing is fine. */
-const FETCH_TIMEOUT_MS = 3000
+/**
+ * How long a failed check (offline, timed out, rate limited) waits before trying again.
+ * Much shorter than a day: one slow moment at launch used to silence the notice for 24h.
+ */
+export const RETRY_AFTER_FAILURE_MS = 60 * 60 * 1000
+/**
+ * Default wait for the feed. A one-shot run only prints the answer if it is in before the
+ * run ends, so it gains nothing from waiting longer; an interactive session never blocks
+ * on the check and passes a longer timeout.
+ */
+export const FETCH_TIMEOUT_MS = 3000
 
 export interface UpdateAvailable {
   /** The newest published version. */
@@ -43,9 +52,12 @@ export interface UpdateAvailable {
  * cache file cannot point an "update available" banner at an attacker's download.
  */
 interface CheckCache {
+  /** When the feed last answered. 0 when it never has. */
   checkedAt: number
   latest?: string
   headline?: string
+  /** When the last attempt failed, if it did; the answer above is kept through failures. */
+  failedAt?: number
 }
 
 function cachePath(): string {
@@ -62,6 +74,7 @@ function readCache(path: string): CheckCache | null {
     // headline is printed to the terminal.
     return {
       checkedAt: c.checkedAt,
+      ...(typeof c.failedAt === 'number' ? { failedAt: c.failedAt } : {}),
       ...(typeof c.latest === 'string' ? { latest: c.latest } : {}),
       ...(typeof c.headline === 'string' ? { headline: stripControlChars(c.headline).slice(0, 120) } : {})
     }
@@ -143,6 +156,8 @@ export interface UpdateCheckDeps {
   now?: () => number
   path?: string
   env?: NodeJS.ProcessEnv
+  /** How long to wait for the feed; defaults to FETCH_TIMEOUT_MS. */
+  timeoutMs?: number
 }
 
 /**
@@ -163,32 +178,45 @@ export async function checkForUpdate(
   const doFetch = deps.fetch ?? globalThis.fetch
 
   const cached = readCache(path)
-  if (cached && now() - cached.checkedAt < CHECK_INTERVAL_MS) {
-    // Reuse the day's answer rather than asking again on every launch.
-    return cached.latest && isNewerVersion(cached.latest, currentVersion)
-      ? { latest: cached.latest, url: DOWNLOAD_URL, ...(cached.headline ? { headline: cached.headline } : {}) }
+  const fromCache = (c: CheckCache): UpdateAvailable | null =>
+    c.latest && isNewerVersion(c.latest, currentVersion)
+      ? { latest: c.latest, url: DOWNLOAD_URL, ...(c.headline ? { headline: c.headline } : {}) }
       : null
+  // Reuse the day's answer rather than asking again on every launch, and after a failure
+  // wait an hour rather than retrying on every launch, still reporting what was last known.
+  if (
+    cached &&
+    ((cached.checkedAt > 0 && now() - cached.checkedAt < CHECK_INTERVAL_MS) ||
+      (cached.failedAt !== undefined && now() - cached.failedAt < RETRY_AFTER_FAILURE_MS))
+  ) {
+    return fromCache(cached)
   }
 
   let release: { latest: string; headline?: string } | null = null
   try {
     const res = await doFetch(LATEST_RELEASE_API, {
       headers: { accept: 'application/vnd.github+json', 'user-agent': `houston/${currentVersion}` },
-      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+      signal: AbortSignal.timeout(deps.timeoutMs ?? FETCH_TIMEOUT_MS)
     })
     if (res.ok) release = parseRelease(await res.json())
   } catch {
     // Offline, DNS down, timed out, rate limited: a failed check is a non-event.
   }
 
-  // Record the attempt either way, so a broken network doesn't retry every launch.
+  if (!release) {
+    // Record the failure so a broken network doesn't retry on every launch, but keep the
+    // last answer: an update found yesterday must not vanish because today's check failed.
+    writeCache(path, { ...(cached ?? { checkedAt: 0 }), failedAt: now() })
+    return cached ? fromCache(cached) : null
+  }
+
   writeCache(path, {
     checkedAt: now(),
-    ...(release?.latest ? { latest: release.latest } : {}),
-    ...(release?.headline ? { headline: release.headline } : {})
+    latest: release.latest,
+    ...(release.headline ? { headline: release.headline } : {})
   })
 
-  if (!release || !isNewerVersion(release.latest, currentVersion)) return null
+  if (!isNewerVersion(release.latest, currentVersion)) return null
   return {
     latest: release.latest,
     url: DOWNLOAD_URL,

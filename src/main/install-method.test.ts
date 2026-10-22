@@ -44,7 +44,8 @@ describe('upgradeHint', () => {
       fix: 'npm i -g @houston-code/cli@latest'
     })
     expect(upgradeHint('bun').fix).toBe('bun add -g @houston-code/cli@latest')
-    expect(upgradeHint('homebrew').fix).toBe('brew upgrade houston')
+    // brew update first: Homebrew refreshes formula lists at most once a day on its own.
+    expect(upgradeHint('homebrew').fix).toBe('brew update && brew upgrade houston')
     expect(upgradeHint('aur').fix).toBe('paru -Syu houston-bin (or your AUR helper)')
     expect(upgradeHint('install-script').fix).toBe('curl -fsSL https://houstoncode.ai/install.sh | sh')
     expect(upgradeHint('source').fix).toBe('git pull && npm run build:cli')
