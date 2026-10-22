@@ -182,9 +182,6 @@ describe('SettingsModal', () => {
     expect(screen.getByText('Anthropic')).toBeInTheDocument()
     expect(screen.getByText('My Local')).toBeInTheDocument()
     expect(screen.getByText('key set ✓')).toBeInTheDocument() // anthropic.hasKey
-
-    // The mounted modal fetches and shows its version (Appearance tab uses it later).
-    await waitFor(() => expect(window.api.getVersion).toHaveBeenCalled())
   })
 
   it('marks the open section in a labelled nav', () => {
@@ -317,6 +314,18 @@ describe('SettingsModal', () => {
     await waitFor(() => expect(screen.getByText('Installed & signed in')).toBeInTheDocument())
     // No enable hint when it's already usable.
     expect(screen.queryByText('cli.github.com')).not.toBeInTheDocument()
+  })
+
+  it('sets whether web reads ask in full auto, asking once per site by default', async () => {
+    const api = installApi()
+    const { container } = renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    const select = screen.getByLabelText('Web reads') as HTMLSelectElement
+    expect(select.value).toBe('ask')
+    fireEvent.change(select, { target: { value: 'allow' } })
+    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).webReads).toBe('allow')
   })
 
   it('adds a permission rule when "+ Add rule" is clicked', () => {
@@ -677,6 +686,17 @@ describe('SettingsModal', () => {
     await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true))
   })
 
+  it('caps the subagent history kept per chat, clamped to 0 to 1024 MB', async () => {
+    const api = installApi()
+    const { container } = renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Models & Inference' }))
+    const box = screen.getByLabelText(/Subagent history kept per chat/) as HTMLInputElement
+    fireEvent.change(box, { target: { value: '5000' } })
+    fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).subagentHistoryMb).toBe(1024)
+  })
+
   it('shows keep-going off for a previously chosen step cap, and on by default', () => {
     installApi()
     renderModal({ maxIterations: 25 })
@@ -1015,6 +1035,8 @@ describe('SettingsModal', () => {
       const api = installApi()
       renderModal()
       fireEvent.click(screen.getByRole('button', { name: 'Updates' }))
+      // The page fetches and shows the installed version.
+      expect(await screen.findByText('Houston 1.2.3')).toBeInTheDocument()
       fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }))
       await waitFor(() => expect(api.checkForUpdates).toHaveBeenCalled())
       expect(await screen.findByText('You’re on the latest version.')).toBeInTheDocument()
