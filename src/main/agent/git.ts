@@ -101,6 +101,11 @@ export function parseWorktreePorcelain(out: string): WorktreeEntry[] {
  * Format the main-worktree path and linked-worktree list into a compact prompt
  * line, or '' when the repo has only a single worktree (nothing worth surfacing).
  * `workspace` is the current working directory, flagged in the list. Pure.
+ *
+ * When the workspace is a linked worktree it is listed first (so a long list never
+ * truncates it away) and the agent is told to stay in it: the main worktree's path
+ * is the most prominent one here, and a model that `cd`s into it reads a different
+ * checkout on a different branch while believing it is looking at its own.
  */
 export function formatWorktreeContext(entries: WorktreeEntry[], workspace: string): string {
   // The first entry is the main worktree; "linked" worktrees are the rest.
@@ -110,14 +115,79 @@ export function formatWorktreeContext(entries: WorktreeEntry[], workspace: strin
   const ws = norm(workspace)
   let out = `Git worktrees: this repo has ${entries.length} worktrees; main worktree is at "${main.path}".`
   const linked = entries.slice(1)
-  const shown = linked.slice(0, MAX_WORKTREES).map((w) => {
+  const current = linked.find((w) => norm(w.path) === ws)
+  const ordered = current ? [current, ...linked.filter((w) => w !== current)] : linked
+  const shown = ordered.slice(0, MAX_WORKTREES).map((w) => {
     const ref = w.bare ? 'bare' : w.detached ? 'detached' : (w.branch ?? 'detached')
-    const here = norm(w.path) === ws ? ' (current)' : ''
+    const here = w === current ? ' (current)' : ''
     return `  ${w.path} [${ref}]${here}`
   })
+  if (current) {
+    out +=
+      `\nYou are working in the linked worktree "${current.path}". Run commands, git and file edits there; ` +
+      `the main worktree is a separate checkout on its own branch, so do not cd into it or read it as this branch's state.`
+  }
   out += `\nLinked worktrees:\n${shown.join('\n')}`
   if (linked.length > MAX_WORKTREES) out += `\n… and ${linked.length - MAX_WORKTREES} more`
   return out
+}
+
+/** How HEAD relates to the remote default branch, from local refs only (no fetch). */
+export type BaseRelation =
+  | { kind: 'unrelated'; base: string }
+  | { kind: 'behind'; base: string; behind: number }
+
+/**
+ * Format how the branch relates to the remote default branch, or '' when it is up to
+ * date (or nothing is known). Pure.
+ *
+ * An unrelated history is the case worth shouting about: a branch cut before the
+ * repository's history was rewritten or replaced shares no commit with the remote, so
+ * files the remote has are simply absent here. An agent that doesn't know this reads
+ * "file missing" as damage and starts restoring files from other commits.
+ */
+export function formatBaseContext(rel: BaseRelation | null): string {
+  if (!rel) return ''
+  if (rel.kind === 'unrelated') {
+    return (
+      `Warning: this branch shares no history with ${rel.base} (it was cut from a different, likely rewritten, history), ` +
+      `so files and commits on ${rel.base} can be missing here. That is not damage to repair: don't restore files from ` +
+      `other commits. Tell the user, and base new work on ${rel.base}.`
+    )
+  }
+  if (rel.behind <= 0) return ''
+  return `Branch is ${rel.behind} commit${rel.behind === 1 ? '' : 's'} behind ${rel.base} (as of the last fetch).`
+}
+
+/**
+ * The remote default branch (`origin/HEAD`, else `origin/main` / `origin/master`) and
+ * HEAD's relation to it, from local refs only. null when there is no such ref, HEAD has
+ * no commit, or git's answers don't parse (best-effort, never throws).
+ */
+export async function readBaseRelation(workspace: string, exec: GitExec): Promise<BaseRelation | null> {
+  const verify = async (ref: string): Promise<boolean> =>
+    /^[0-9a-f]{7,64}$/.test((await exec(['rev-parse', '--verify', '-q', `${ref}^{commit}`], workspace).catch(() => '')).trim())
+  if (!(await verify('HEAD'))) return null
+  let base: string | null = null
+  const head = (await exec(['rev-parse', '--abbrev-ref', 'origin/HEAD'], workspace).catch(() => '')).trim()
+  for (const ref of [head, 'origin/main', 'origin/master']) {
+    if (ref.startsWith('origin/') && isSafeGitRef(ref) && (await verify(ref))) {
+      base = ref
+      break
+    }
+  }
+  if (!base) return null
+  let mergeBase: string
+  try {
+    mergeBase = (await exec(['merge-base', 'HEAD', base], workspace)).trim()
+  } catch {
+    // Both refs resolve to commits (verified above), so a failing merge-base means
+    // there is no common ancestor.
+    return { kind: 'unrelated', base }
+  }
+  if (!/^[0-9a-f]{7,64}$/.test(mergeBase)) return null
+  const count = Number.parseInt((await exec(['rev-list', '--count', `HEAD..${base}`], workspace).catch(() => '')).trim(), 10)
+  return Number.isFinite(count) ? { kind: 'behind', base, behind: count } : null
 }
 
 /** Read the workspace's git context, or '' if it isn't a git repo. `exec` is injectable for tests. */
@@ -148,8 +218,13 @@ export async function gitContext(workspace: string, exec: GitExec = runGit): Pro
   } catch {
     // worktree listing is best-effort (old git, edge state) — omit it.
   }
-  const base = formatGitContext(branch, status)
-  return worktrees ? `${base}\n${worktrees}` : base
+  let relation: BaseRelation | null = null
+  try {
+    relation = await readBaseRelation(workspace, exec)
+  } catch {
+    // best-effort, like the worktree listing
+  }
+  return [formatGitContext(branch, status), formatBaseContext(relation), worktrees].filter(Boolean).join('\n')
 }
 
 /** The uncommitted change set for a workspace, used as input to a review. */
