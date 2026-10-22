@@ -98,7 +98,7 @@ describe('parseHeadlessArgs: automation flags', () => {
   it('reads --output-schema as inline JSON or a path resolved against the current directory', () => {
     expect(parse('-p', 'x', '--output-schema', '{"type":"object"}')?.outputSchema).toBe('{"type":"object"}')
     expect(parse('-p', 'x', '--output-schema', 'schema.json')?.outputSchema).toBe(resolve(CWD, 'schema.json'))
-    expect(parse('-p', 'x', '--output-schema=/abs/s.json')?.outputSchema).toBe('/abs/s.json')
+    expect(parse('-p', 'x', '--output-schema=/abs/s.json')?.outputSchema).toBe(resolve('/abs/s.json'))
     expect(parse('-p', 'x', '--output-schema')?.usageError).toMatch(/needs a JSON Schema/)
     expect(parse('-p', 'x', '--output-schema', 'a.json', '--output-schema', 'b.json')?.usageError).toMatch(/only once/)
   })
