@@ -376,7 +376,11 @@ section { padding: 96px 0; }
 .docs-nav h2 { font-size: var(--fs-2); letter-spacing: 0; }
 .docs-nav h2 a { color: var(--n5); }
 .docs-version { margin-top: 4px; font-size: var(--fs-1); color: var(--n4); }
-.docs-nav ul { margin: 16px 0 0; padding: 0; list-style: none; }
+.docs-nav h3 {
+  margin: 24px 0 6px; padding: 0 10px;
+  font-size: var(--fs-1); font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--n4);
+}
+.docs-nav ul { margin: 0; padding: 0; list-style: none; }
 .docs-nav li a {
   display: block; padding: 5px 10px; border-radius: var(--r-1);
   font-size: var(--fs-2); line-height: 1.35; color: var(--n4);
@@ -417,7 +421,9 @@ section { padding: 96px 0; }
 .docs-pager span { font-size: var(--fs-1); font-weight: 400; color: var(--n4); }
 .docs-next { margin-left: auto; text-align: right; }
 
-.docs-topics { margin: 32px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+.docs-group { margin-top: 40px; padding: 0; }
+.docs-group h2 { font-size: var(--fs-3); }
+.docs-topics { margin: 16px 0 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
 .docs-topics li { padding: 16px; border: 1px solid var(--n3); border-radius: var(--r-2); background: var(--n2); }
 .docs-topics a { font-weight: 600; }
 .docs-topics p { margin-top: 6px; font-size: var(--fs-2); color: var(--n4); }

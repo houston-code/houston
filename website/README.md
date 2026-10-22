@@ -150,6 +150,9 @@ intro, written for the agent that loads it as a skill, is left out. The app's
   fenced code, emphasis, code spans, absolute links); the test fails on anything else.
 - **Page URLs** come from section headings, minus any parenthetical. Renaming a heading
   moves its page.
+- **Topic groups** (the index sections, the sidebar, and previous/next order) are `GROUPS`
+  in `build-docs.mjs`. A new `##` section must be added to a group; the test fails until it
+  is. At release time an unplaced section lands in a "More" group rather than failing.
 
 ## Maintenance
 

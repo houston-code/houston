@@ -7,10 +7,12 @@ import {
   DOCS_DIR,
   SITEMAP,
   GUIDE_PATH,
+  GROUPS,
   blocks,
   buildDocs,
   committedVersion,
   describe as describePage,
+  groupSections,
   guideAt,
   inline,
   latestReleaseTag,
@@ -98,6 +100,12 @@ describe("the working-tree guide", () => {
       expect(p.description.length, p.file).toBeLessThanOrEqual(160);
       expect(p.output).toContain(`<link rel="canonical" href="https://houstoncode.ai/docs/${p.slug === "index" ? "" : p.slug}" />`);
     }
+  });
+
+  it("places every section in a topic group", () => {
+    const placed = new Set(GROUPS.flatMap((g) => g.slugs));
+    const unplaced = splitGuide(readFileSync(resolve(ROOT, GUIDE_PATH), "utf8")).filter((s) => !placed.has(s.slug));
+    expect(unplaced.map((s) => s.slug), "add these slugs to GROUPS in build-docs.mjs").toEqual([]);
   });
 
   it("has no em dashes in what visitors read", () => {
@@ -231,6 +239,28 @@ describe("page metadata", () => {
     expect(one.output).not.toContain("docs-prev");
     expect(two.output).toContain('<a class="docs-prev" href="/docs/one">');
     expect(two.output).toContain('<a href="/docs/two" aria-current="page">Two</a>');
+  });
+});
+
+describe("groupSections", () => {
+  it("lists each slug once across the groups", () => {
+    const slugs = GROUPS.flatMap((g) => g.slugs);
+    expect(new Set(slugs).size).toBe(slugs.length);
+  });
+
+  it("orders sections by group, drops empty groups, and puts unplaced ones in More", () => {
+    const sections = [{ slug: "new-thing" }, { slug: "hooks" }, { slug: "models" }];
+    expect(groupSections(sections).map((g) => [g.title, g.sections.map((s) => s.slug)])).toEqual([
+      ["Getting started", ["models"]],
+      ["Extending Houston", ["hooks"]],
+      ["More", ["new-thing"]],
+    ]);
+  });
+
+  it("follows the group order for previous and next", () => {
+    const [, ...pages] = buildDocs("## Hooks\n\nH.\n\n## Models\n\nM.\n", "v1.0.0");
+    expect(pages.map((p) => p.slug)).toEqual(["models", "hooks"]);
+    expect(pages[0].output).toContain('<a class="docs-next" href="/docs/hooks">');
   });
 });
 

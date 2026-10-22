@@ -84,52 +84,71 @@
 <p>A turn that is plainly making progress doesn't have to stop there. If several of its recent steps edited files successfully, or most of them turned up something new (a file it hadn't read, a search or command it hadn't run), and it hasn't been caught looping, it gets another round of steps instead of the wrap-up, and the transcript says so. Going back over calls it already made doesn't count. This keeps going up to a hard limit (200 steps by default), so a big job such as scaffolding a new project, or a long debugging session, finishes in one go. Stopping the run works as usual at any point. Settings &gt; Loop control has the per-turn step count, the keep-going-while-productive switch, and the hard limit. If you had already set your own step count, it stays a hard stop until you turn the switch on.</p>
 <p>A single reply also has an output limit. When a reply is cut off there, the agent picks it up exactly where it stopped (up to three times in a row) instead of leaving a half-finished answer, and the transcript notes each time. A tool call the limit cut off is never run on partial input: it is answered as &quot;not run&quot; and the agent redoes the work in smaller pieces. Either way, later replies in the turn ask for the model's full output allowance where Houston knows it.</p>
         </div>
-        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/typing-while-it-works"><span>Previous</span>Typing while it works (steering)</a><a class="docs-next" href="/docs/undoing-a-turn-and-seeing-what-changed"><span>Next</span>Undoing a turn, and seeing what changed</a></nav>
+        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/typing-while-it-works"><span>Previous</span>Typing while it works (steering)</a><a class="docs-next" href="/docs/how-hard-the-model-thinks"><span>Next</span>How hard the model thinks (/reasoning)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
         <p class="docs-version">For v0.9.0</p>
-        <ul>
-          <li><a href="/docs/what-houston-is">What Houston is</a></li>
-          <li><a href="/docs/clients">Clients (where Houston runs)</a></li>
-          <li><a href="/docs/models">Models</a></li>
-          <li><a href="/docs/slash-commands">Slash commands</a></li>
-          <li><a href="/docs/the-terminal-composer">The terminal composer</a></li>
-          <li><a href="/docs/seeing-what-the-tools-did">Seeing what the tools did</a></li>
-          <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
-          <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
-          <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
-          <li><a href="/docs/typing-while-it-works">Typing while it works (steering)</a></li>
-          <li><a href="/docs/how-long-a-turn-runs" aria-current="page">How long a turn runs</a></li>
-          <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
-          <li><a href="/docs/being-told-when-it-needs-you">Being told when it needs you</a></li>
-          <li><a href="/docs/how-hard-the-model-thinks">How hard the model thinks (/reasoning)</a></li>
-          <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
-          <li><a href="/docs/version-and-updates">Version and updates</a></li>
-          <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
-          <li><a href="/docs/running-your-own-commands">Running your own commands (!)</a></li>
-          <li><a href="/docs/approval-modes-and-permissions">Approval modes and permissions</a></li>
-          <li><a href="/docs/skills">Skills</a></li>
-          <li><a href="/docs/custom-subagents">Custom subagents</a></li>
-          <li><a href="/docs/spawn-separate-sessions">Spawn separate sessions</a></li>
-          <li><a href="/docs/proposed-sessions">Proposed sessions</a></li>
-          <li><a href="/docs/side-chat">Side chat (/btw)</a></li>
-          <li><a href="/docs/watching-work-you-sent-off">Watching work you sent off (/spawned)</a></li>
-          <li><a href="/docs/scheduled-runs">Scheduled runs</a></li>
-          <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
-          <li><a href="/docs/hooks">Hooks</a></li>
-          <li><a href="/docs/plugins">Plugins</a></li>
-          <li><a href="/docs/mcp-servers">MCP servers</a></li>
-          <li><a href="/docs/shell-sandbox-and-network">Shell sandbox and network</a></li>
-          <li><a href="/docs/github-tools">GitHub tools</a></li>
-          <li><a href="/docs/remembering-an-instruction">Remembering an instruction (#)</a></li>
-          <li><a href="/docs/project-rules">Project rules</a></li>
-          <li><a href="/docs/context-worktrees-and-history">Context, worktrees, and history</a></li>
-          <li><a href="/docs/help-menu">Help menu</a></li>
-          <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
-          <li><a href="/docs/settings-and-keys">Settings and keys</a></li>
-          <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
-          <li><a href="/docs/license-and-legal">License and legal</a></li>
+        <h3 id="nav-getting-started">Getting started</h3>
+        <ul aria-labelledby="nav-getting-started">
+            <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
+            <li><a href="/docs/what-houston-is">What Houston is</a></li>
+            <li><a href="/docs/clients">Clients (where Houston runs)</a></li>
+            <li><a href="/docs/models">Models</a></li>
+            <li><a href="/docs/settings-and-keys">Settings and keys</a></li>
+        </ul>
+        <h3 id="nav-working-with-the-agent">Working with the agent</h3>
+        <ul aria-labelledby="nav-working-with-the-agent">
+            <li><a href="/docs/the-terminal-composer">The terminal composer</a></li>
+            <li><a href="/docs/slash-commands">Slash commands</a></li>
+            <li><a href="/docs/typing-while-it-works">Typing while it works (steering)</a></li>
+            <li><a href="/docs/how-long-a-turn-runs" aria-current="page">How long a turn runs</a></li>
+            <li><a href="/docs/how-hard-the-model-thinks">How hard the model thinks (/reasoning)</a></li>
+            <li><a href="/docs/being-told-when-it-needs-you">Being told when it needs you</a></li>
+            <li><a href="/docs/running-your-own-commands">Running your own commands (!)</a></li>
+            <li><a href="/docs/remembering-an-instruction">Remembering an instruction (#)</a></li>
+            <li><a href="/docs/side-chat">Side chat (/btw)</a></li>
+        </ul>
+        <h3 id="nav-reviewing-and-undoing-changes">Reviewing and undoing changes</h3>
+        <ul aria-labelledby="nav-reviewing-and-undoing-changes">
+            <li><a href="/docs/seeing-what-the-tools-did">Seeing what the tools did</a></li>
+            <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
+            <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
+            <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
+            <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+        </ul>
+        <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
+        <ul aria-labelledby="nav-permissions-and-safety">
+            <li><a href="/docs/approval-modes-and-permissions">Approval modes and permissions</a></li>
+            <li><a href="/docs/shell-sandbox-and-network">Shell sandbox and network</a></li>
+            <li><a href="/docs/project-rules">Project rules</a></li>
+        </ul>
+        <h3 id="nav-sessions-and-automation">Sessions and automation</h3>
+        <ul aria-labelledby="nav-sessions-and-automation">
+            <li><a href="/docs/context-worktrees-and-history">Context, worktrees, and history</a></li>
+            <li><a href="/docs/spawn-separate-sessions">Spawn separate sessions</a></li>
+            <li><a href="/docs/proposed-sessions">Proposed sessions</a></li>
+            <li><a href="/docs/watching-work-you-sent-off">Watching work you sent off (/spawned)</a></li>
+            <li><a href="/docs/scheduled-runs">Scheduled runs</a></li>
+        </ul>
+        <h3 id="nav-extending-houston">Extending Houston</h3>
+        <ul aria-labelledby="nav-extending-houston">
+            <li><a href="/docs/skills">Skills</a></li>
+            <li><a href="/docs/custom-subagents">Custom subagents</a></li>
+            <li><a href="/docs/hooks">Hooks</a></li>
+            <li><a href="/docs/plugins">Plugins</a></li>
+            <li><a href="/docs/mcp-servers">MCP servers</a></li>
+            <li><a href="/docs/github-tools">GitHub tools</a></li>
+        </ul>
+        <h3 id="nav-reference">Reference</h3>
+        <ul aria-labelledby="nav-reference">
+            <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
+            <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
+            <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/help-menu">Help menu</a></li>
+            <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
+            <li><a href="/docs/license-and-legal">License and legal</a></li>
         </ul>
       </nav>
     </div>

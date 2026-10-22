@@ -25,6 +25,12 @@
     <priority>0.8</priority>
   </url>
   <url>
+    <loc>https://houstoncode.ai/docs/getting-started-in-the-desktop-app</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
     <loc>https://houstoncode.ai/docs/what-houston-is</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
@@ -43,7 +49,7 @@
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/slash-commands</loc>
+    <loc>https://houstoncode.ai/docs/settings-and-keys</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
@@ -55,25 +61,7 @@
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/seeing-what-the-tools-did</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://houstoncode.ai/docs/what-actually-ran</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://houstoncode.ai/docs/diagrams-and-visuals-in-replies</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://houstoncode.ai/docs/editing-files-while-it-works</loc>
+    <loc>https://houstoncode.ai/docs/slash-commands</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
@@ -91,7 +79,7 @@
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/undoing-a-turn-and-seeing-what-changed</loc>
+    <loc>https://houstoncode.ai/docs/how-hard-the-model-thinks</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
@@ -103,31 +91,55 @@
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/how-hard-the-model-thinks</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://houstoncode.ai/docs/what-a-session-cost</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://houstoncode.ai/docs/version-and-updates</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://houstoncode.ai/docs/checking-your-setup</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
     <loc>https://houstoncode.ai/docs/running-your-own-commands</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/remembering-an-instruction</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/side-chat</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/seeing-what-the-tools-did</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/what-actually-ran</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/editing-files-while-it-works</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/undoing-a-turn-and-seeing-what-changed</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/review-and-multi-step-tools</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/diagrams-and-visuals-in-replies</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
@@ -139,13 +151,19 @@
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/skills</loc>
+    <loc>https://houstoncode.ai/docs/shell-sandbox-and-network</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/custom-subagents</loc>
+    <loc>https://houstoncode.ai/docs/project-rules</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/context-worktrees-and-history</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
@@ -163,12 +181,6 @@
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/side-chat</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
     <loc>https://houstoncode.ai/docs/watching-work-you-sent-off</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
@@ -181,7 +193,13 @@
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/review-and-multi-step-tools</loc>
+    <loc>https://houstoncode.ai/docs/skills</loc>
+    <lastmod>2026-10-21</lastmod>
+    <changefreq>monthly</changefreq>
+    <priority>0.5</priority>
+  </url>
+  <url>
+    <loc>https://houstoncode.ai/docs/custom-subagents</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
@@ -205,31 +223,25 @@
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/shell-sandbox-and-network</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
     <loc>https://houstoncode.ai/docs/github-tools</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/remembering-an-instruction</loc>
+    <loc>https://houstoncode.ai/docs/what-a-session-cost</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/project-rules</loc>
+    <loc>https://houstoncode.ai/docs/checking-your-setup</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
   </url>
   <url>
-    <loc>https://houstoncode.ai/docs/context-worktrees-and-history</loc>
+    <loc>https://houstoncode.ai/docs/version-and-updates</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>
@@ -242,18 +254,6 @@
   </url>
   <url>
     <loc>https://houstoncode.ai/docs/sharing-houston</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://houstoncode.ai/docs/settings-and-keys</loc>
-    <lastmod>2026-10-21</lastmod>
-    <changefreq>monthly</changefreq>
-    <priority>0.5</priority>
-  </url>
-  <url>
-    <loc>https://houstoncode.ai/docs/getting-started-in-the-desktop-app</loc>
     <lastmod>2026-10-21</lastmod>
     <changefreq>monthly</changefreq>
     <priority>0.5</priority>

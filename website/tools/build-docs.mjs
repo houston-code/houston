@@ -314,23 +314,99 @@ export function describe(html) {
 
 const canonical = (slug) => `${ORIGIN}/docs/${slug === "index" ? "" : slug}`;
 
-function sidebar(sections, version, current) {
-  const links = sections
-    .map((s) => {
-      const here = s.slug === current ? ' aria-current="page"' : "";
-      return `          <li><a href="/docs/${s.slug}"${here}>${inline(s.title)}</a></li>`;
+// The site groups the guide's sections by topic, in this order (by slug). A section the
+// guide adds that isn't listed here lands in "More" at the end, so a release never fails
+// on it; build-docs.test.mjs fails until the working-tree guide's sections are all placed.
+export const GROUPS = [
+  {
+    title: "Getting started",
+    slugs: ["getting-started-in-the-desktop-app", "what-houston-is", "clients", "models", "settings-and-keys"],
+  },
+  {
+    title: "Working with the agent",
+    slugs: [
+      "the-terminal-composer",
+      "slash-commands",
+      "typing-while-it-works",
+      "how-long-a-turn-runs",
+      "how-hard-the-model-thinks",
+      "being-told-when-it-needs-you",
+      "running-your-own-commands",
+      "remembering-an-instruction",
+      "side-chat",
+    ],
+  },
+  {
+    title: "Reviewing and undoing changes",
+    slugs: [
+      "seeing-what-the-tools-did",
+      "what-actually-ran",
+      "editing-files-while-it-works",
+      "undoing-a-turn-and-seeing-what-changed",
+      "rewinding-to-an-earlier-message",
+      "review-and-multi-step-tools",
+      "diagrams-and-visuals-in-replies",
+      "code-intelligence",
+    ],
+  },
+  {
+    title: "Permissions and safety",
+    slugs: ["approval-modes-and-permissions", "shell-sandbox-and-network", "project-rules"],
+  },
+  {
+    title: "Sessions and automation",
+    slugs: [
+      "context-worktrees-and-history",
+      "spawn-separate-sessions",
+      "proposed-sessions",
+      "watching-work-you-sent-off",
+      "scheduled-runs",
+    ],
+  },
+  {
+    title: "Extending Houston",
+    slugs: ["skills", "custom-subagents", "hooks", "plugins", "mcp-servers", "github-tools"],
+  },
+  {
+    title: "Reference",
+    slugs: ["what-a-session-cost", "checking-your-setup", "version-and-updates", "help-menu", "sharing-houston", "license-and-legal"],
+  },
+];
+
+// `sections` in GROUPS order: [{ title, id, sections }], skipping empty groups.
+export function groupSections(sections) {
+  const placed = new Set(GROUPS.flatMap((g) => g.slugs));
+  const groups = GROUPS.map((g) => ({
+    title: g.title,
+    sections: g.slugs.map((slug) => sections.find((s) => s.slug === slug)).filter(Boolean),
+  }));
+  groups.push({ title: "More", sections: sections.filter((s) => !placed.has(s.slug)) });
+  return groups.filter((g) => g.sections.length).map((g) => ({ ...g, id: slugify(g.title) }));
+}
+
+function sidebar(groups, version, current) {
+  const lists = groups
+    .map((g) => {
+      const links = g.sections
+        .map((s) => {
+          const here = s.slug === current ? ' aria-current="page"' : "";
+          return `            <li><a href="/docs/${s.slug}"${here}>${inline(s.title)}</a></li>`;
+        })
+        .join("\n");
+      return `        <h3 id="nav-${g.id}">${escapeHtml(g.title)}</h3>
+        <ul aria-labelledby="nav-${g.id}">
+${links}
+        </ul>`;
     })
     .join("\n");
   return `<nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/"${current === "index" ? ' aria-current="page"' : ""}>Houston docs</a></h2>
         <p class="docs-version">For ${escapeHtml(version)}</p>
-        <ul>
-${links}
-        </ul>
+${lists}
       </nav>`;
 }
 
-function shell({ title, description, slug, version, body, sections }) {
+function shell({ title, description, slug, version, body, groups }) {
   const url = canonical(slug);
   const ld = JSON.stringify(
     {
@@ -391,7 +467,7 @@ ${ld}
       <main id="main" class="docs-content">
 ${body}
       </main>
-      ${sidebar(sections, version, slug)}
+      ${sidebar(groups, version, slug)}
     </div>
   </div>
 
@@ -423,10 +499,13 @@ export function linkSectionRefs(html, sections, current) {
 export function buildDocs(md, version) {
   const sections = splitGuide(md);
   if (!sections.length) throw new Error("build-docs: the guide has no ## sections");
-  const pages = sections.map((s, n) => {
+  const groups = groupSections(sections);
+  // Reading order (and previous/next) follows the groups, not the guide's order.
+  const ordered = groups.flatMap((g) => g.sections);
+  const pages = ordered.map((s, n) => {
     const content = linkSectionRefs(blocks(s.lines, { headingShift: 1, ids: new Set() }), sections, s.slug);
-    const prev = sections[n - 1];
-    const next = sections[n + 1];
+    const prev = ordered[n - 1];
+    const next = ordered[n + 1];
     const pager = [
       prev ? `<a class="docs-prev" href="/docs/${prev.slug}"><span>Previous</span>${inline(prev.title)}</a>` : "",
       next ? `<a class="docs-next" href="/docs/${next.slug}"><span>Next</span>${inline(next.title)}</a>` : "",
@@ -447,12 +526,22 @@ ${content}
     description: `How to use Houston ${version}: models, approval modes and permissions, the shell sandbox, skills, subagents, hooks, MCP servers, and settings.`,
     body: `        <h1>Houston docs</h1>
         <p class="docs-lede">How to use Houston, the cross-platform coding agent that works with your own model. These pages describe <strong>Houston ${escapeHtml(version)}</strong>, the latest release.</p>
-        <ul class="docs-topics">
-${pages.map((p) => `          <li><a href="/docs/${p.slug}">${inline(p.title)}</a><p>${escapeHtml(p.description)}</p></li>`).join("\n")}
-        </ul>`,
+${groups
+  .map(
+    (g) => `        <section class="docs-group" aria-labelledby="${g.id}">
+          <h2 id="${g.id}">${escapeHtml(g.title)}</h2>
+          <ul class="docs-topics">
+${g.sections
+  .map((s) => pages.find((p) => p.slug === s.slug))
+  .map((p) => `            <li><a href="/docs/${p.slug}">${inline(p.title)}</a><p>${escapeHtml(p.description)}</p></li>`)
+  .join("\n")}
+          </ul>
+        </section>`
+  )
+  .join("\n")}`,
   };
 
-  return [index, ...pages].map((p) => ({ ...p, output: shell({ ...p, version, sections }) }));
+  return [index, ...pages].map((p) => ({ ...p, output: shell({ ...p, version, groups }) }));
 }
 
 // The sitemap with its /docs entries replaced by `pages`, all dated `lastmod`.
