@@ -20,8 +20,10 @@
 // is explicit and on the record rather than silent.
 //
 // Usage:  node scripts/merge-revert-guard.mjs <baseRef> <resultRef>
-//   baseRef    the merge target as it is NOW (e.g. the fetched origin/main)
+//   baseRef    the merge target (e.g. the fetched origin/main)
 //   resultRef  the built merge commit/tree that would land (e.g. HEAD after `git merge`)
+// When resultRef is a merge commit, the comparison uses its FIRST PARENT, the base the
+// merge was actually built on, rather than baseRef (see landingBase).
 // Override: set ALLOW_REVERT=1 (wired to an `intentional-revert` PR label in CI).
 // DEPENDENCY_UPDATE=1 (wired to Dependabot-authored PRs in CI) exempts the generated
 // dependency files from Rule 2; see GENERATED_DEPENDENCY_FILES.
@@ -40,31 +42,32 @@ const WINDOW = 40 // how many recent main commits count as "work that landed whi
 // from Rule 2. Rule 1 and every other file stay guarded, and on human PRs nothing changes.
 export const GENERATED_DEPENDENCY_FILES = new Set(['package-lock.json', 'THIRD-PARTY-NOTICES.md'])
 
-function git(args) {
-  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+function git(args, cwd) {
+  return execFileSync('git', args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd })
 }
 
 /** Like git(), but never leaks git's own stderr (used for existence probes that are
  *  EXPECTED to fail for a missing path — `cat-file -e` prints a fatal on a real worktree). */
-function gitQuiet(args) {
+function gitQuiet(args, cwd) {
   return execFileSync('git', args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
-    maxBuffer: 64 * 1024 * 1024
+    maxBuffer: 64 * 1024 * 1024,
+    cwd
   })
 }
 
 /** Files that `base` gained or changed within its last {@link WINDOW} commits. */
-function recentlyTouchedOnMain(base) {
-  const out = git(['log', `-n${WINDOW}`, '--name-only', '--pretty=format:', base])
+function recentlyTouchedOnMain(base, cwd) {
+  const out = git(['log', `-n${WINDOW}`, '--name-only', '--pretty=format:', base], cwd)
   return new Set(out.split('\n').map((l) => l.trim()).filter(Boolean))
 }
 
 /** True when a file exists in a tree-ish. Probes are expected to fail for a missing
  *  path, so stderr is suppressed to keep the CI log clean. */
-function existsAt(ref, file) {
+function existsAt(ref, file, cwd) {
   try {
-    gitQuiet(['cat-file', '-e', `${ref}:${file}`])
+    gitQuiet(['cat-file', '-e', `${ref}:${file}`], cwd)
     return true
   } catch {
     return false
@@ -72,9 +75,9 @@ function existsAt(ref, file) {
 }
 
 export function findReverts(base, result, deps = {}) {
-  const numstat = (deps.git ?? git)(['diff', '--numstat', `${base}`, `${result}`])
-  const recent = deps.recent ?? recentlyTouchedOnMain(base)
-  const exists = deps.exists ?? ((f) => existsAt(base, f))
+  const numstat = (deps.git ?? ((args) => git(args, deps.cwd)))(['diff', '--numstat', `${base}`, `${result}`])
+  const recent = deps.recent ?? recentlyTouchedOnMain(base, deps.cwd)
+  const exists = deps.exists ?? ((f) => existsAt(base, f, deps.cwd))
   const dependencyUpdate = deps.dependencyUpdate ?? false
   const deletions = []
   const contentReverts = []
@@ -101,8 +104,41 @@ export function findReverts(base, result, deps = {}) {
 }
 
 function existsInResult(result, file, deps) {
-  const exists = deps.existsInResult ?? ((r, f) => existsAt(r, f))
+  const exists = deps.existsInResult ?? ((r, f) => existsAt(r, f, deps.cwd))
   return exists(result, file)
+}
+
+/** The parent commits of `ref`, in order (empty for a root commit). */
+function parentsOf(ref, cwd) {
+  return git(['rev-list', '--parents', '-n1', ref], cwd).trim().split(/\s+/).slice(1)
+}
+
+/**
+ * The base a landing merge was actually built on: the merge commit's first parent, or
+ * `base` when the result isn't a merge.
+ *
+ * On a PR, CI checks out `refs/pull/N/merge`, which GitHub computes when the PR or its
+ * base changes, not when the job runs. The base fetched at job time can be newer, and
+ * every file it gained since then is absent from that merge, so a plain base-vs-result
+ * diff reports each one as a deletion. That fails PRs whose CI waited in a queue, and the
+ * upper PRs of a stack constantly, though none of them removes anything. The merge's own
+ * first parent has exactly the base it was built against. It still catches the #551
+ * shape: a stale tree committed on top of main merges to that stale tree, and its
+ * deletions show against the first parent just as they do against the tip.
+ */
+export function landingBase(base, parents) {
+  return parents.length >= 2 ? parents[0] : base
+}
+
+/** Run the guard on a landing merge: pick its real base, then look for reverts. */
+export function checkMerge(base, result, opts = {}) {
+  const parents = opts.parents ?? parentsOf(result, opts.cwd)
+  const compareTo = landingBase(base, parents)
+  const report = findReverts(compareTo, result, {
+    cwd: opts.cwd,
+    dependencyUpdate: opts.dependencyUpdate ?? false
+  })
+  return { compareTo, ...report }
 }
 
 function main() {
@@ -111,9 +147,12 @@ function main() {
     console.error('usage: merge-revert-guard.mjs <baseRef> <resultRef>')
     process.exit(2)
   }
-  const { deletions, contentReverts } = findReverts(base, result, {
+  const { compareTo, deletions, contentReverts } = checkMerge(base, result, {
     dependencyUpdate: process.env.DEPENDENCY_UPDATE === '1'
   })
+  if (compareTo !== base) {
+    console.log(`revert-guard: comparing against ${compareTo}, the base this merge was built on.`)
+  }
   if (deletions.length === 0 && contentReverts.length === 0) {
     console.log('revert-guard: clean — the merge does not roll back existing main content.')
     process.exit(0)

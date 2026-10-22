@@ -505,8 +505,11 @@ jobs:
     # landing tree. The `intentional-revert` override is read from the PR's labels, which
     # a merge_group event does not carry, so a legitimate revert would hit a guard it has
     # no way to acknowledge and wedge the queue. Running it on the PR loses nothing:
-    # `refs/pull/N/merge` is recomputed against current main, so the guard already sees
-    # the real before/after regardless of how stale the branch is.
+    # `refs/pull/N/merge` is the PR merged into its base, so the guard sees the real
+    # before/after regardless of how stale the branch is. GitHub builds that merge when
+    # the PR or its base changes, not when this job runs, so the script compares against
+    # the merge's own first parent rather than the freshly fetched base tip (files the
+    # base gained in between would otherwise read as deletions).
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:

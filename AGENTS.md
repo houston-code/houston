@@ -222,7 +222,10 @@ deletions.
 **Automated backstop.** The `revert-guard` CI job runs `scripts/merge-revert-guard.mjs` on
 every PR and fails if merging would delete a file that still exists on `main`, or roll back
 a large chunk of a file `main` touched recently. It runs against `refs/pull/N/merge`, the
-tree merging would actually produce. A deliberate removal is acknowledged with the
+tree merging would actually produce, and compares it with that merge's own first parent,
+the base GitHub built it on. Files the base gained after the merge was built (common while
+CI waits in a queue, and for the upper PRs of a stack) therefore don't read as deletions.
+A deliberate removal is acknowledged with the
 `intentional-revert` label. On Dependabot PRs the generated `package-lock.json` and
 `THIRD-PARTY-NOTICES.md` are exempt from the recent-content rule, since an update that
 prunes packages shrinks both legitimately. Keep the guard's logic and its unit tests
