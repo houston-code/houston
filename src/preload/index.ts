@@ -29,6 +29,7 @@ import type {
   ChatMessage,
   Conversation,
   ConversationMeta,
+  ConversationSettingsPatch,
   DeleteConversationResult,
   ElicitationResult,
   ImportConversationResult,
@@ -36,6 +37,7 @@ import type {
   SideChatTurn,
   SideChatView,
   PlanDecision,
+  ReasoningEffort,
   RepoInfo,
   ToolApprovalDecision
 } from '@shared/agent'
@@ -183,9 +185,15 @@ const api = {
     workspace: string
     providerId: string
     model: string
+    /** The new chat's own settings; unset ones fall back to the defaults. */
+    reasoningEffort?: ReasoningEffort
+    approvalPolicy?: ApprovalPolicy
     /** When set, create a branch + worktree and run the chat there. */
     worktree?: { branch: string; base?: string }
   }): Promise<Conversation> => ipcRenderer.invoke(IPC.conversationCreate, input),
+  /** Save a change to one chat's model, reasoning effort or approval policy. */
+  setConversationSettings: (id: string, patch: ConversationSettingsPatch): Promise<ConversationMeta | null> =>
+    ipcRenderer.invoke(IPC.conversationSetSettings, id, patch),
   forkConversation: (id: string): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationFork, id),
   compactConversation: (
@@ -240,6 +248,7 @@ const api = {
     providerId: string
     model: string
     approvalPolicy: AgentSendRequest['approvalPolicy']
+    reasoningEffort?: ReasoningEffort
   }): Promise<void> => ipcRenderer.invoke(IPC.agentRetry, req),
   cancelAgent: (runId: string): Promise<void> => ipcRenderer.invoke(IPC.agentCancel, runId),
   /** Queue a message typed while a run is active; returns the conversation's updated queue. */
@@ -287,6 +296,8 @@ const api = {
   /** Change the approval policy of an in-flight run (live mode switch). */
   setAgentPolicy: (runId: string, policy: ApprovalPolicy): Promise<void> =>
     ipcRenderer.invoke(IPC.agentSetPolicy, runId, policy),
+  setAgentEffort: (runId: string, effort: ReasoningEffort): Promise<void> =>
+    ipcRenderer.invoke(IPC.agentSetEffort, runId, effort),
   /** Steer the live run: inject `text` into the model's context before its next step. */
   steerAgent: (runId: string, text: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.agentSteer, runId, text),

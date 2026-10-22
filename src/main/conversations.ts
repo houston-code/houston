@@ -3,7 +3,8 @@ import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync } 
 import { join } from 'node:path'
 import { writeFileAtomicSync } from './atomic-write'
 import { externalizeMedia, hydrateMedia, pruneMedia } from './conversationMedia'
-import { CONVERSATION_SCHEMA_VERSION } from '@shared/agent'
+import { CONVERSATION_SCHEMA_VERSION, isReasoningEffort } from '@shared/agent'
+import { isApprovalPolicy, type ApprovalPolicy } from '@shared/types'
 import type {
   AgentEvent,
   ChatMessage,
@@ -12,11 +13,13 @@ import type {
   ConversationCompaction,
   ConversationError,
   ConversationMeta,
+  ConversationSettingsPatch,
   ConversationUsage,
   ConversationWorktree,
   PromptSnapshot,
   RewindBackup,
   ProposalState,
+  ReasoningEffort,
   SpawnedFrom,
   StoredSideChat
 } from '@shared/agent'
@@ -106,7 +109,19 @@ function isConversationShape(raw: unknown): raw is Conversation {
  * the version.
  */
 function migrate(conv: Conversation): Conversation {
-  return { ...conv, schemaVersion: stampedVersion(conv.schemaVersion) }
+  return dropUnknownChatSettings({ ...conv, schemaVersion: stampedVersion(conv.schemaVersion) })
+}
+
+/**
+ * Drop a stored reasoning effort or approval policy that isn't on its list (a
+ * hand-edited file, or one a newer Houston wrote), so the chat falls back to the
+ * defaults. Never coerced to some other value: an unknown policy fails open
+ * downstream, and the default is what an unset field means everywhere else.
+ */
+function dropUnknownChatSettings(conv: Conversation): Conversation {
+  if (conv.reasoningEffort !== undefined && !isReasoningEffort(conv.reasoningEffort)) delete conv.reasoningEffort
+  if (conv.approvalPolicy !== undefined && !isApprovalPolicy(conv.approvalPolicy)) delete conv.approvalPolicy
+  return conv
 }
 
 /**
@@ -175,6 +190,9 @@ export function createConversation(input: {
   workspace: string
   providerId: string
   model: string
+  /** The chat's own settings; unset ones fall back to the defaults. */
+  reasoningEffort?: ReasoningEffort
+  approvalPolicy?: ApprovalPolicy
   /** When set, the chat runs in this Houston-created git worktree. */
   worktree?: ConversationWorktree
   /** When set, the chat was spawned by another chat (see `spawn_session`). */
@@ -188,6 +206,8 @@ export function createConversation(input: {
     workspace: input.workspace,
     providerId: input.providerId,
     model: input.model,
+    ...(isReasoningEffort(input.reasoningEffort) ? { reasoningEffort: input.reasoningEffort } : {}),
+    ...(isApprovalPolicy(input.approvalPolicy) ? { approvalPolicy: input.approvalPolicy } : {}),
     createdAt: now,
     updatedAt: now,
     messages: [],
@@ -684,13 +704,39 @@ export function writeRewind(
 
 export function updateConversationMeta(
   id: string,
-  patch: Partial<Pick<ConversationMeta, 'providerId' | 'model' | 'title'>>
+  patch: Partial<Pick<ConversationMeta, 'providerId' | 'model' | 'title'>> & ConversationSettingsPatch
 ): void {
   const conv = read(id)
   if (!conv) return
   Object.assign(conv, patch)
+  dropUnknownChatSettings(conv)
   conv.updatedAt = Date.now()
   write(conv)
+}
+
+/**
+ * Save a change the user made to one chat's model, reasoning effort or approval
+ * policy, as they make it (not at the next send), so switching chats and back
+ * keeps it. Validated here, at the store, because the patch arrives over IPC:
+ * a field that isn't a known value (or a non-empty string, for the model) is
+ * ignored, never stored. Like {@link organizeConversation}, it leaves `updatedAt`
+ * alone so changing a dropdown doesn't reorder the sidebar.
+ */
+export function setConversationSettings(id: string, patch: ConversationSettingsPatch): ConversationMeta | null {
+  const conv = read(id)
+  if (!conv) return null
+  const p: unknown = patch
+  if (typeof p !== 'object' || p === null) return toMeta(conv)
+  const { providerId, model, reasoningEffort, approvalPolicy } = p as Record<string, unknown>
+  // Provider and model move together: a model id only means something under its provider.
+  if (typeof providerId === 'string' && providerId && typeof model === 'string' && model) {
+    conv.providerId = providerId
+    conv.model = model
+  }
+  if (isReasoningEffort(reasoningEffort)) conv.reasoningEffort = reasoningEffort
+  if (isApprovalPolicy(approvalPolicy)) conv.approvalPolicy = approvalPolicy
+  write(conv)
+  return toMeta(conv)
 }
 
 /**

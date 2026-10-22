@@ -79,9 +79,19 @@ OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in
 Settings, fetch its live model list, and pick a model. The picker shows each
 model's context window and capability badges (tool calling, vision, reasoning)
 and warns before you pick one that cannot call tools. Keys are stored encrypted
-by the OS keychain and never touch the renderer. The selection is shared across
-clients: picking a model in the desktop app or switching with `/model` in the
-terminal saves it as the default for future sessions.
+by the OS keychain and never touch the renderer.
+
+**Each chat keeps its own settings.** A chat's model, reasoning effort, and
+approval mode belong to that chat. Changing one in a chat changes that chat only:
+other chats, including ones running at the same time, keep theirs, and reopening a
+chat (or resuming it with `/resume`) brings back the settings it was using. New
+chats start from the defaults. In the desktop app the controls on the new-chat
+screen set the defaults, and **Use for new chats** in an open chat makes its
+settings the defaults. In the terminal, add `--default` (`/model <id> --default`,
+`/reasoning high --default`, `/approval ask --default`) to change the default as
+well as the current chat. If a chat's model is no longer set up, the chat moves to
+another model of the same provider (or the default model) and says so. Sessions a
+chat starts start with its settings.
 
 If a provider answers that it doesn't serve a model (the id is mistyped, the model
 was retired, or your key can't use it), the turn ends with a message saying so
@@ -584,16 +594,17 @@ every terminal supports them; the bell works everywhere.
 
 ## How hard the model thinks (/reasoning)
 
-`/reasoning` shows the current thinking effort; `/reasoning high` (or `off`, `low`,
-`medium`, `xhigh`) sets it. It applies to every model that supports reasoning, and
+`/reasoning` shows the current chat's thinking effort; `/reasoning high` (or `off`,
+`low`, `medium`, `xhigh`) sets it for this chat, and `/reasoning high --default` also
+makes it the default for new chats. It applies to every model that supports reasoning, and
 Houston says so plainly when the model you are on does not, since a setting that
 silently does nothing looks like a bug rather than a fact about the model.
 
-It starts at `high`, since coding and long multi-step work gain the most from
+The default is `high`, since coding and long multi-step work gain the most from
 deeper thinking. More thinking costs more tokens and takes longer per step, so
 turn it down (`/reasoning medium`, `low`, or `off`) for quick questions or to save
 money. The desktop app has the same setting in the reasoning menu next to the
-model picker.
+model picker; changing it while the agent is working applies from its next step.
 
 ## What a session cost (/cost)
 
@@ -729,7 +740,8 @@ working too, and applies to the run in progress: if a turn stops for an approval
 you would rather not keep answering, loosen the mode and the same turn carries on
 under it, rather than having to interrupt the work you were trying to unblock. The
 mode is shown next to the spinner while a turn runs, and on the status line above
-the composer the rest of the time. `/approval <mode>` sets one directly.
+the composer the rest of the time. `/approval <mode>` sets one directly. The mode
+belongs to the chat, like its model (see "Each chat keeps its own settings").
 
 **Permission rules** (Settings) are finer-grained than the mode: `allow`,
 `deny`, or `ask`, matched on the tool plus a glob over its target, e.g. allow

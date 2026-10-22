@@ -13,6 +13,7 @@ import type {
   Provider,
   QuestionOption,
   ReasoningBlock,
+  ReasoningEffort,
   StopReason,
   ToolApprovalDecision,
   ToolCall,
@@ -26,7 +27,8 @@ import {
   SYSTEM_NOTE_PREFIX,
   sanitizeApprovalNote,
   MAX_STEER_TEXT,
-  MAX_PENDING_STEERS
+  MAX_PENDING_STEERS,
+  isReasoningEffort
 } from '@shared/agent'
 import type { FileDiffPreview } from '@shared/diff'
 import {
@@ -401,6 +403,12 @@ interface RunState {
    */
   policy: ApprovalPolicy
   /**
+   * The live reasoning effort for a run whose chat keeps its own (the request's
+   * `reasoningEffort`), changed mid-run by {@link setRunEffort} like `policy`. Unset
+   * for runs without one, which read the saved default each model turn instead.
+   */
+  effort?: ReasoningEffort
+  /**
    * The events emitted since the message log was last persisted — the in-flight
    * turn's streamed output (assistant text, running tools, prompts) that isn't on
    * disk yet. A renderer re-opening the conversation rebuilds its transcript from
@@ -719,6 +727,17 @@ export function setRunPolicy(runId: string, policy: ApprovalPolicy): void {
   if (run) run.policy = policy
 }
 
+/**
+ * Update the reasoning effort of an in-flight run, for the chat it belongs to only:
+ * the next model turn requests the new level. Finished or unknown runs and values
+ * off the list are a no-op.
+ */
+export function setRunEffort(runId: string, effort: ReasoningEffort): void {
+  if (!isReasoningEffort(effort)) return
+  const run = runs.get(runId)
+  if (run) run.effort = effort
+}
+
 function waitForApproval(run: RunState, callId: string): Promise<ApprovalResolution> {
   return new Promise((resolve) => run.approvals.set(callId, resolve))
 }
@@ -835,6 +854,7 @@ export async function startRun(
     shellNetworkGranted: seededOverride.shellNetworkGranted || seededShellNetwork,
     shellNetworkDecided: seededOverride.shellNetworkDecided || seededShellNetwork,
     policy: req.approvalPolicy,
+    ...(isReasoningEffort(req.reasoningEffort) ? { effort: req.reasoningEffort } : {}),
     transcript: [],
     evidence: new EvidenceLedger(),
     ...(owner !== undefined ? { owner } : {})
@@ -2093,6 +2113,7 @@ export async function startRun(
                 providerId: req.providerId,
                 model: req.model,
                 approvalPolicy: run.policy,
+                ...(run.effort !== undefined ? { reasoningEffort: run.effort } : {}),
                 workspace,
                 ...(conversationId ? { parentConversationId: conversationId } : {}),
                 // A fork carries this chat's history up to (not including) the turn
@@ -2637,13 +2658,18 @@ export async function startRun(
       let sendMessages = buildWindow()
 
       // Re-read the thinking controls fresh each model turn rather than using the
-      // run-start `settings` snapshot, so changing the reasoning level mid-run —
-      // via the dropdown (which persists through saveSettings) or settings.json —
-      // takes effect on the next turn. This mirrors the live approval policy; the
-      // natural granularity is per-turn because reasoning is a per-request param.
-      // Everything else stays snapshotted so a run's behavior is otherwise stable.
-      // A per-run override (headless --effort) still wins over the live value.
-      const { reasoningEffort, reasoningSummary, verbosity } = applyRunOverrides(getSettings(), req.overrides)
+      // run-start `settings` snapshot, so changing the reasoning level mid-run takes
+      // effect on the next turn. This mirrors the live approval policy; the natural
+      // granularity is per-turn because reasoning is a per-request param. A chat that
+      // keeps its own effort sets `run.effort` (changed by setRunEffort), so another
+      // chat's change or a new default never reaches this run; without one, the saved
+      // default is read live. Everything else stays snapshotted so a run's behavior is
+      // otherwise stable. A per-run override (headless --effort) still wins.
+      const live = getSettings()
+      const { reasoningEffort, reasoningSummary, verbosity } = applyRunOverrides(
+        run.effort !== undefined ? { ...live, reasoningEffort: run.effort } : live,
+        req.overrides
+      )
 
       let assistantText = ''
       let toolCalls: ToolCall[] = []

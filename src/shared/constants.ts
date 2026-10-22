@@ -124,6 +124,7 @@ export const IPC = {
   conversationGet: 'conversation:get',
   conversationCreate: 'conversation:create',
   conversationFork: 'conversation:fork',
+  conversationSetSettings: 'conversation:setSettings',
   conversationCompact: 'conversation:compact',
   conversationDelete: 'conversation:delete',
   conversationExport: 'conversation:export',
@@ -146,6 +147,7 @@ export const IPC = {
   /** Renderer → main: the user's decision on a present_plan review (accept / suggest / reject). */
   agentResolvePlan: 'agent:resolvePlan',
   agentSetPolicy: 'agent:setPolicy',
+  agentSetEffort: 'agent:setEffort',
   /** Renderer → main: a course correction for the live run, injected before its next step. */
   agentSteer: 'agent:steer',
   /** Query the runId of the live run for a conversation (or null) to re-adopt it. */

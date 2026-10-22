@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ApprovalPolicy } from '@shared/types'
-import type { AgentEvent, ElicitationResult, PlanDecision, PlanPayload, ToolApprovalDecision } from '@shared/agent'
+import type {
+  AgentEvent,
+  ElicitationResult,
+  PlanDecision,
+  PlanPayload,
+  ReasoningEffort,
+  ToolApprovalDecision
+} from '@shared/agent'
 import type { ImageAttachment } from '@shared/images'
 import type { PromptInvocation } from '@shared/promptInvocation'
 import type { SessionUsage } from '@shared/usage'
@@ -25,6 +32,7 @@ interface SendParams {
   providerId: string
   model: string
   approvalPolicy: ApprovalPolicy
+  reasoningEffort?: ReasoningEffort
 }
 
 type RetryParams = Omit<SendParams, 'userText' | 'images' | 'invokedAs'>
@@ -61,6 +69,8 @@ export interface ChatController {
   resolvePlan: (callId: string, decision: PlanDecision) => void
   /** Change the approval policy of the in-flight run, if any (live mode switch). */
   setPolicy: (policy: ApprovalPolicy) => void
+  /** Push a reasoning-effort change into the live run (its next model turn). No-op when idle. */
+  setEffort: (effort: ReasoningEffort) => void
   /**
    * Steer the in-flight run: inject a course correction the model reads before its
    * next step, instead of queuing it for after the run. No-op when nothing is live.
@@ -235,7 +245,8 @@ export function useChat(conversationId: string | null = null): ChatController {
         ...(params.invokedAs ? { invokedAs: params.invokedAs } : {}),
         providerId: params.providerId,
         model: params.model,
-        approvalPolicy: params.approvalPolicy
+        approvalPolicy: params.approvalPolicy,
+        ...(params.reasoningEffort ? { reasoningEffort: params.reasoningEffort } : {})
       })
     } catch {
       // The IPC call itself failed (bridge/serialization) before any run started —
@@ -312,6 +323,10 @@ export function useChat(conversationId: string | null = null): ChatController {
 
   const setPolicy = useCallback((policy: ApprovalPolicy) => {
     if (runIdRef.current) void window.api.setAgentPolicy(runIdRef.current, policy)
+  }, [])
+
+  const setEffort = useCallback((effort: ReasoningEffort) => {
+    if (runIdRef.current) void window.api.setAgentEffort(runIdRef.current, effort)
   }, [])
 
   const steer = useCallback(async (text: string): Promise<boolean> => {
@@ -394,6 +409,7 @@ export function useChat(conversationId: string | null = null): ChatController {
     pendingPlan,
     resolvePlan,
     setPolicy,
+    setEffort,
     steer,
     seedCheckpoint,
     revertCheckpoint,

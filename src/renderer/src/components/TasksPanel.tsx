@@ -83,9 +83,12 @@ function TaskRow({
   onGoToChat,
   onOpenTerminal,
   note,
-  onNote
+  onNote,
+  currentId
 }: {
   task: BackgroundTask
+  /** The open chat: a task it started needs no "Go to chat". */
+  currentId: string | null
   now: number
   expanded: boolean
   /** The Tasks tab is showing; a hidden row doesn't poll. */
@@ -294,7 +297,7 @@ function TaskRow({
               Open terminal
             </button>
           )}
-          {task.conversationId && (
+          {task.conversationId && task.conversationId !== currentId && (
             <button type="button" className="btn btn--sm" onClick={() => onGoToChat(task)}>
               Go to chat
             </button>
@@ -322,9 +325,12 @@ export function TasksPanel({
   onGoToChat,
   onOpenTerminal,
   onClearFinished,
+  currentId = null,
   now = Date.now
 }: {
   tasks: BackgroundTask[]
+  /** The open chat, whose own tasks don't offer "Go to chat". */
+  currentId?: string | null
   /** The Tasks tab is visible. Expanded rows stop refreshing their output when it isn't. */
   active?: boolean
   onStop: (id: string) => Promise<KillShellOutcome>
@@ -363,6 +369,7 @@ export function TasksPanel({
         onOpenPreview={onOpenPreview}
         onGoToChat={onGoToChat}
         onOpenTerminal={onOpenTerminal}
+        currentId={currentId}
         note={notes[key] ?? ''}
         onNote={(n) => setNotes((prev) => ({ ...prev, [key]: n }))}
       />
