@@ -191,6 +191,15 @@ describe('listAzureOpenAIModels', () => {
   })
 })
 
+// The real SDK for the last describe block, loaded once at collection time. A cold
+// load of its module graph is most of that test's work, and under a full coverage run
+// it can stretch past the 5s per-test timeout; here no test timer is running.
+const { AzureOpenAI: RealAzureOpenAI } = (await vi.importActual('openai')) as {
+  AzureOpenAI: new (o: unknown) => {
+    chat: { completions: { create: (b: unknown) => Promise<unknown> } }
+  }
+}
+
 describe('the real SDK accepts what the adapter passes', () => {
   /**
    * The mocked tests above pin the options we send; these pin that those options mean
@@ -212,13 +221,8 @@ describe('the real SDK accepts what the adapter passes', () => {
     )
 
     const requests: { url: string; headers: Record<string, string> }[] = []
-    const actual = (await vi.importActual('openai')) as {
-      AzureOpenAI: new (o: unknown) => {
-        chat: { completions: { create: (b: unknown) => Promise<unknown> } }
-      }
-    }
     // The exact options the adapter built, handed to the real constructor.
-    const client = new actual.AzureOpenAI({
+    const client = new RealAzureOpenAI({
       ...ctorOpts,
       fetch: async (url: string, init: { headers?: HeadersInit }) => {
         const headers: Record<string, string> = {}
