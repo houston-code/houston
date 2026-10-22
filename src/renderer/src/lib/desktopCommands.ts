@@ -1,8 +1,8 @@
 import { isReasoningEffort, type ReasoningEffort } from '@shared/agent'
 import { parseApprovalPolicy, type ApprovalPolicy } from '@shared/types'
 
-/** The Settings sections a command can open on. */
-export type SettingsSection = 'models' | 'tools' | 'workspace' | 'appearance'
+/** The Settings pages a command can open on. */
+export type SettingsSection = 'models' | 'mcp' | 'hooks' | 'permissions' | 'appearance'
 
 /**
  * What the desktop app does for one of the built-in commands it shares with the
@@ -38,10 +38,11 @@ export function desktopCommandAction(name: string, args: string): DesktopCommand
     case 'login':
       return { kind: 'settings', section: 'models' }
     case 'mcp':
+      return { kind: 'settings', section: 'mcp' }
     case 'hooks':
-      return { kind: 'settings', section: 'tools' }
+      return { kind: 'settings', section: 'hooks' }
     case 'trust':
-      return { kind: 'settings', section: 'workspace' }
+      return { kind: 'settings', section: 'permissions' }
     case 'theme':
       return { kind: 'settings', section: 'appearance' }
     case 'model':

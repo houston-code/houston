@@ -161,3 +161,19 @@ export function KeyboardSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
     />
   )
 }
+
+/** Run the setup health check (the same as /doctor). */
+export function DiagnosticsCheckSection({ ctx }: { ctx: SettingsCtx }): JSX.Element | null {
+  const { onShowDoctor } = ctx
+  if (!onShowDoctor) return null
+  return (
+    <SettingsSection
+      title="Diagnostics"
+      desc="Check your setup: the selected model and its key, the sandbox, optional tools, and MCP servers."
+    >
+      <button type="button" className="btn btn--sm" onClick={onShowDoctor}>
+        Run diagnostics
+      </button>
+    </SettingsSection>
+  )
+}

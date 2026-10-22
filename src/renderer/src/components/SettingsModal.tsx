@@ -4,7 +4,7 @@ import { useFocusTrap } from '../lib/useFocusTrap'
 import { useApplyTheme } from '../hooks/useApplyTheme'
 import { applyTheme } from '../lib/theme'
 import type { AppSettings } from '@shared/types'
-import { PAGES, type TabId } from './settings/pages'
+import { PAGES, PAGE_GROUPS, pageById, type TabId } from './settings/pages'
 import { NAV_ICON } from './settings/navIcons'
 import { TOOL_NAMES } from './settings/permissionRules'
 import type { SettingsCtx } from './settings/context'
@@ -17,7 +17,8 @@ export function SettingsModal({
   initialTab = 'models',
   onClose,
   onSaved,
-  onShowScorecard
+  onShowScorecard,
+  onShowDoctor
 }: {
   initial: AppSettings
   /** The section to open on (e.g. Appearance for /theme). */
@@ -26,6 +27,8 @@ export function SettingsModal({
   onSaved: (s: AppSettings) => void
   /** Open the local-only per-model loop scorecard (from the Models tab). */
   onShowScorecard?: () => void
+  /** Open the setup health check (from About). */
+  onShowDoctor?: () => void
 }): JSX.Element {
   const [settings, setSettings] = useState<AppSettings>(initial)
   const [tab, setTab] = useState<TabId>(initialTab)
@@ -153,9 +156,10 @@ export function SettingsModal({
     saveKey,
     removeKey,
     persistNow,
-    onShowScorecard
+    onShowScorecard,
+    onShowDoctor
   }
-  const page = PAGES.find((p) => p.id === tab) ?? PAGES[0]
+  const page = pageById(tab)
 
   return (
     <div className="modal-backdrop" onClick={requestClose}>
@@ -177,20 +181,30 @@ export function SettingsModal({
 
         <div className="modal__main">
           <nav className="modal__nav" aria-label="Settings sections">
-            {PAGES.map((t) => (
-              <button
-                key={t.id}
-                className={t.id === tab ? 'is-active' : ''}
-                // The highlighted section is otherwise only a color and a rail.
-                aria-current={t.id === tab ? 'page' : undefined}
-                onClick={() => setTab(t.id)}
-              >
-                <span className="set-nav__icon" aria-hidden="true">
-                  {NAV_ICON[t.id]}
-                </span>
-                {t.label}
-              </button>
-            ))}
+            {PAGE_GROUPS.map((group) => {
+              const pages = PAGES.filter((p) => p.group === group)
+              // A group of one page named like the group needs no header of its own.
+              const headed = !(pages.length === 1 && pages[0].label === group)
+              return (
+                <div className="set-nav__group" key={group}>
+                  {headed && <div className="set-nav__heading">{group}</div>}
+                  {pages.map((t) => (
+                    <button
+                      key={t.id}
+                      className={t.id === tab ? 'is-active' : ''}
+                      // The highlighted section is otherwise only a color and a rail.
+                      aria-current={t.id === tab ? 'page' : undefined}
+                      onClick={() => setTab(t.id)}
+                    >
+                      <span className="set-nav__icon" aria-hidden="true">
+                        {NAV_ICON[t.id]}
+                      </span>
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              )
+            })}
           </nav>
 
           <div className="modal__body">

@@ -367,7 +367,7 @@ Open source under the [Apache License 2.0](LICENSE).
   Prettier for JS/TS/JSON/CSS/Markdown, `gofmt`, `rustfmt`, and `ruff`/`black` for
   Python. The formatters are **optional, not bundled**: install the ones you want on
   your `PATH` and Houston uses them when present (it silently skips a file when its
-  formatter is missing). Settings → *Tools & Permissions* → *Optional integrations*
+  formatter is missing). Settings → *Tools* → *Optional integrations*
   shows which it detects. Runs in the same sandbox as `run_shell` (no network); off by
   default.
 - **Code intelligence from language servers (optional).** When a language server is
@@ -377,7 +377,7 @@ Open source under the [Apache License 2.0](LICENSE).
   compared with what the file had before, so the agent fixes them in the same turn.
   Servers are **optional, not bundled**; a project's own `node_modules/.bin` copy is
   preferred. They start on demand, are reused across turns, stop when idle, and run in
-  the same sandbox as `run_shell` (no network). Settings → *Tools & Permissions* shows
+  the same sandbox as `run_shell` (no network). Settings → *Tools* shows
   which are detected and lets you turn them off. With a server for the project's
   language, the agent also gets `lsp_definition`, `lsp_references`, `lsp_hover`,
   `lsp_document_symbols`, `lsp_workspace_symbols`, and `lsp_rename` (a semantic rename
@@ -507,7 +507,7 @@ Open source under the [Apache License 2.0](LICENSE).
   the network on approval, unlike a raw `gh` in `run_shell`, which the sandbox keeps
   offline until the run is granted shell network. Houston tells the agent in its
   system prompt when `gh` is available, so it reaches for these instead of raw
-  shell `gh`. Settings → *Tools & Permissions* → *Optional integrations* shows whether
+  shell `gh`. Settings → *Tools* → *Optional integrations* shows whether
   `gh` is detected and signed in, with a one-line hint on how to enable it.
 - **PR sweeps.** For batch pull-request work the agent keeps a `pr_sweep` board
   (the same scratchpad idea as the task list, specialized per PR), rendered live in

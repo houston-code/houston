@@ -28,6 +28,8 @@ export interface SettingsCtx {
   persistNow: () => Promise<void>
   /** Open the local-only per-model loop scorecard. */
   onShowScorecard?: () => void
+  /** Open the setup health check (/doctor). */
+  onShowDoctor?: () => void
 }
 
 /** One settings section: a self-contained `SettingsSection` (or nothing). */

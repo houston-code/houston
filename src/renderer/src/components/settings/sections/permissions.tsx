@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import type { PermissionRule } from '@shared/types'
+import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, type ApprovalPolicy, type PermissionRule } from '@shared/types'
 import { lintPermissionRules, moveRule, type RuleIssue } from '@shared/permissionLint'
 import { SettingsSection } from '../fields'
 import { groupPermissionRules, ruleMatchesFilter } from '../permissionRules'
@@ -375,6 +375,44 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
         >
           + Add rule
         </button>
+      </div>
+    </SettingsSection>
+  )
+}
+
+/** What each approval mode lets the agent do without asking. */
+const APPROVAL_POLICY_HINT: Record<ApprovalPolicy, string> = {
+  plan: 'Read-only: the agent researches and proposes a plan; nothing is written or run.',
+  ask: 'Asks before every shell command and file write.',
+  'auto-edit': 'Reads and edits files in the workspace without asking; asks before shell commands.',
+  'full-auto': 'Runs everything without asking, still confined to the workspace sandbox.'
+}
+
+/** The approval mode new chats start in. */
+export function ApprovalModeSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
+  const { settings, setSettings } = ctx
+  const current = settings.approvalPolicy
+  return (
+    <SettingsSection
+      title="Approval mode"
+      desc="The mode new chats start in. Each chat keeps its own: change it from the composer, with Shift+Tab, or with /approval."
+    >
+      <div className="choice-list" role="radiogroup" aria-label="Default approval mode">
+        {APPROVAL_POLICIES.map((p) => (
+          <label key={p} className={`choice${current === p ? ' is-selected' : ''}`}>
+            <input
+              type="radio"
+              name="approval-policy"
+              value={p}
+              checked={current === p}
+              onChange={() => setSettings((s) => ({ ...s, approvalPolicy: p }))}
+            />
+            <span className="choice__text">
+              <span className="choice__label">{APPROVAL_POLICY_LABEL[p]}</span>
+              <span className="choice__hint">{APPROVAL_POLICY_HINT[p]}</span>
+            </span>
+          </label>
+        ))}
       </div>
     </SettingsSection>
   )

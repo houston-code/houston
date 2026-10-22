@@ -733,7 +733,7 @@ export interface AppSettings {
 }
 
 /** One format-on-save backend and whether its binary is present on this machine. */
-/** A user-configured language server (Settings > Tools & Permissions). */
+/** A user-configured language server (Settings > Tools). */
 export interface LspServerConfig {
   /** Name for the server; reusing a built-in id (typescript, python, go, rust, clangd) replaces it. */
   id: string
