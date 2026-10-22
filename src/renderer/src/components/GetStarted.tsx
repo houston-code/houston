@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { checklistView, type ChecklistFacts, type ChecklistStep } from '@shared/onboarding'
 
 /**
@@ -22,6 +23,11 @@ export interface GetStartedProps {
   taskExample?: string
   onConnectModel: () => void
   onChooseFolder: () => void
+  /**
+   * Focus step 1's button on mount. Set when the user backs out of the Connect panel,
+   * which replaced this card while open: without it focus falls to the page body.
+   */
+  focusModelStep?: boolean
 }
 
 export function GetStarted({
@@ -30,9 +36,16 @@ export function GetStarted({
   folderSummary,
   taskExample,
   onConnectModel,
-  onChooseFolder
+  onChooseFolder,
+  focusModelStep = false
 }: GetStartedProps): JSX.Element {
   const view = checklistView(facts)
+  const modelButton = useRef<HTMLButtonElement>(null)
+  // Mount-only: a later re-render (a fact ticking over) must not pull focus back here.
+  useEffect(() => {
+    if (focusModelStep) modelButton.current?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const action: Partial<Record<ChecklistStep, { label: string; run: () => void }>> = {
     model: { label: 'Connect', run: onConnectModel },
     folder: { label: 'Choose folder', run: onChooseFolder }
@@ -84,6 +97,7 @@ export function GetStarted({
               </span>
               {act && !done && (
                 <button
+                  ref={step.id === 'model' ? modelButton : undefined}
                   type="button"
                   className={`btn btn--sm${current ? ' btn--accent' : ''}`}
                   onClick={act.run}
@@ -92,7 +106,13 @@ export function GetStarted({
                 </button>
               )}
               {redo && (
-                <button type="button" className="btn btn--sm" aria-label={redo.label} onClick={redo.run}>
+                <button
+                  ref={step.id === 'model' ? modelButton : undefined}
+                  type="button"
+                  className="btn btn--sm"
+                  aria-label={redo.label}
+                  onClick={redo.run}
+                >
                   Change
                 </button>
               )}

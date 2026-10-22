@@ -50,11 +50,18 @@ describe('ConnectModel', () => {
     )
   })
 
+  it('starts focus on the selected provider, since it replaces the button that opened it', () => {
+    installApi()
+    renderPanel()
+    expect(screen.getByRole('radio', { name: 'Anthropic' })).toHaveFocus()
+  })
+
   it('asks for a key before trying to connect', async () => {
     const { api } = installApi()
     renderPanel()
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Paste an API key first.')
+    expect(keyInput()).toHaveFocus()
     expect(api.setKey).not.toHaveBeenCalled()
   })
 
@@ -76,6 +83,7 @@ describe('ConnectModel', () => {
     fireEvent.change(keyInput(), { target: { value: 'sk-bad' } })
     fireEvent.click(screen.getByRole('button', { name: 'Connect' }))
     expect(await screen.findByRole('alert')).toHaveTextContent("That key didn't work: 401 invalid x-api-key")
+    expect(keyInput()).toHaveFocus()
     // Nothing was written, so a key that already worked is untouched.
     expect(api.setKey).not.toHaveBeenCalled()
     expect(api.deleteKey).not.toHaveBeenCalled()

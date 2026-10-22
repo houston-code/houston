@@ -98,6 +98,7 @@ import {
   abortableSleep,
   describeProviderError,
   isModelNotFoundError,
+  isQuotaExhaustedError,
   isRetryableError,
   isToolsUnsupportedError,
   MAX_PROVIDER_RETRIES,
@@ -128,7 +129,8 @@ import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { peekShell } from './shells'
 import { gatherReadinessFacts, planReadiness, readinessNote } from './readiness'
 import { isSensitiveRead } from './sensitive-paths'
-import { runPostEditDiagnostics } from './diagnostics'
+import { lspManager } from './lsp/manager'
+import { afterWrite, captureBeforeWrite, type WriteSeamTarget } from './lsp/writeSeam'
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun } from './egress'
 import { formatFile } from './format'
@@ -968,6 +970,8 @@ export async function startRun(
 
     // This run's own overrides (headless flags) laid over the saved settings.
     const settings = applyRunOverrides(getSettings(), req.overrides)
+    // Language servers are shared across runs; each run applies the current settings.
+    lspManager.configure(settings)
     // Models flagged "not found" (`unavailableAt`), as the run started plus any it
     // flags itself; one that then answers has its flag cleared (see the stream loop).
     const modelKey = (providerId: string, model: string): string => `${providerId}\0${model}`
@@ -1043,7 +1047,9 @@ export async function startRun(
       planMode,
       // Nobody can answer a question on an unattended run; the prompt built from
       // this list then says so instead of naming ask_user.
-      askUser: req.unattended !== true
+      askUser: req.unattended !== true,
+      // The lsp_* tools, only when a server is installed for a language the project uses.
+      lsp: lspManager.availableFor([workspace]).length > 0
     })
     // Every built-in the run offers, deferred ones included: the prompt and the
     // skills are written against what the model can call, loaded yet or not.
@@ -1493,6 +1499,9 @@ export async function startRun(
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {})
         })
+        // Register the resolver before emitting: a host that answers inside its
+        // send callback (headless) would otherwise resolve a prompt nobody awaits.
+        const approval = waitForApproval(run, subCallId)
         emit({
           type: 'tool_approval',
           callId: subCallId,
@@ -1505,7 +1514,7 @@ export async function startRun(
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {})
         })
-        const { decision, note } = await waitForApproval(run, subCallId)
+        const { decision, note } = await approval
         run.pendingApprovals.delete(subCallId)
         const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell)
         if (!approved) {
@@ -1852,6 +1861,7 @@ export async function startRun(
     ): ToolContext => ({
       workspace,
       roots,
+      lsp: lspManager,
       allowNetwork: run.shellNetworkGranted && !egressUnavailable,
       egressProxy,
       signal: abort.signal,
@@ -2812,7 +2822,12 @@ export async function startRun(
             // to another model would fail the same way and just burn the chain. A
             // partial turn doesn't stop the hop: it is retracted first, exactly as
             // for a retry on the same model, so two models' output is never spliced.
-            if (isRetryableError(e) && hopToFallback((e as Error).message, discardPartial)) {
+            // An exhausted quota is final for this account but not for another
+            // provider's, so it hops too.
+            if (
+              (isRetryableError(e) || isQuotaExhaustedError(e)) &&
+              hopToFallback((e as Error).message, discardPartial)
+            ) {
               sendMessages = buildWindow()
               attempt = -1 // fresh transient-retry budget for the new model
               continue streaming
@@ -3121,6 +3136,21 @@ export async function startRun(
         // should trigger it, so a read-only shell command (ls/git log) never queues
         // a verify pass.
         if (r.call.name === 'run_shell') announceMissingRuntime(output)
+        // A file read now is usually edited next: let its language server load it in
+        // the background so post-edit diagnostics have a baseline (see noteRead).
+        if (
+          r.ok &&
+          r.call.name === 'read_file' &&
+          typeof r.call.arguments.path === 'string' &&
+          settings.diagnosticsOnSave !== false &&
+          run.policy !== 'plan'
+        ) {
+          try {
+            void lspManager.noteRead(resolvePath(r.call.arguments.path), roots)
+          } catch {
+            // A path outside the roots was refused by the read itself.
+          }
+        }
         const kind = lookupTool(r.call.name)?.kind
         if (!r.ok) iterErrors.push(r.output)
         if (r.ok && kind === 'write') filesModified = true
@@ -3267,10 +3297,45 @@ export async function startRun(
       // moment it finalizes, so an abort partway through this loop leaves the
       // already-completed real results in the log (only the not-yet-run calls get
       // the interrupted placeholder from the finally block).
-      for (const { call } of sequential) {
+      for (const { call: modelCall } of sequential) {
         if (abort.signal.aborted) {
           emit({ type: 'done', stopReason: 'aborted' })
           return
+        }
+
+        // A tool whose effect is only known once worked out (lsp_rename: the server's
+        // edits) is gated and run as the concrete call it amounts to (an apply_patch),
+        // so it gets that tool's permission rules, prompts, preview, and checkpoints.
+        // The model's own call is what the transcript records and the result answers.
+        // Skipped for a call that is invalid, denied by a rule, or blocked by plan mode,
+        // which the path below reports without asking the server anything.
+        let call = modelCall
+        let materializedNote = ''
+        const declared = lookupTool(modelCall.name)
+        if (
+          declared?.materialize &&
+          !validationFailure(modelCall) &&
+          matchRule(permissionRules, modelCall.name, permissionSubject(modelCall.name, modelCall.arguments), roots) !==
+            'deny' &&
+          !isBlockedByPlan(run.policy, declared)
+        ) {
+          try {
+            const m = await declared.materialize(
+              modelCall.arguments,
+              makeToolContext(modelCall.id, () => {}, () => {})
+            )
+            call = { ...modelCall, name: m.name, arguments: m.arguments }
+            materializedNote = m.note ?? ''
+          } catch (e) {
+            await flushResult({
+              call: modelCall,
+              output: `Error: ${(e as Error).message}`,
+              ok: false,
+              images: [],
+              documents: []
+            })
+            continue
+          }
         }
 
         const tool = lookupTool(call.name)
@@ -3490,6 +3555,9 @@ export async function startRun(
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })
+              // Registered before the emit so a synchronous answer (headless resolves
+              // inside its send callback) finds the resolver instead of being dropped.
+              const approval = waitForApproval(run, call.id)
               emit({
                 type: 'tool_approval',
                 callId: call.id,
@@ -3504,7 +3572,7 @@ export async function startRun(
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })
-              const { decision, note: denyGuidance } = await waitForApproval(run, call.id)
+              const { decision, note: denyGuidance } = await approval
               // Resolved (or cancelled) — it's no longer awaiting the user.
               run.pendingApprovals.delete(call.id)
               approvalNote = denyGuidance
@@ -3541,6 +3609,19 @@ export async function startRun(
                   await recordOriginal(runId, roots, t.path)
                 }
               }
+              // The files this write touches, resolved, for the language servers: their
+              // content now is the baseline post-edit diagnostics are compared against.
+              const seamTargets: WriteSeamTarget[] =
+                tool.kind === 'write'
+                  ? writeTargets(call.name, execArgs).flatMap((t) => {
+                      try {
+                        return [{ rel: t.path, abs: resolvePath(t.path), deleted: t.deleted }]
+                      } catch {
+                        return []
+                      }
+                    })
+                  : []
+              const beforeWrite = await captureBeforeWrite(lspManager, seamTargets, roots, settings.diagnosticsOnSave)
               emit({
                 type: 'tool_start',
                 callId: call.id,
@@ -3643,28 +3724,26 @@ export async function startRun(
                 }
                 run.evidence.recordFiles(workspace, targets.map((t) => t.path))
               }
-              // Diagnostics-on-save (opt-in): after a successful write, run a fast
-              // checker (eslint/ruff/gofmt) on the file and append any problems so
-              // the model can self-correct this turn. Runs on the final content
-              // (after any formatter) and never mutates the file; best-effort, so a
-              // missing binary or crashing checker is a silent no-op.
-              if (
-                ok &&
-                settings.diagnosticsOnSave &&
-                tool.kind === 'write' &&
-                typeof execArgs.path === 'string'
-              ) {
-                try {
-                  const diag = await runPostEditDiagnostics(execArgs.path, {
-                    workspace,
-                    roots,
-                    signal: abort.signal
-                  })
-                  if (diag.block) output += diag.block
-                } catch {
-                  // Diagnostics are best-effort feedback — never fail the edit.
-                }
+              // After a successful write: bring running language servers up to date,
+              // then report the problems the edit introduced, from the server covering
+              // the file (on by default when one is installed) or, when the user turned
+              // diagnosticsOnSave on, a fast checker (eslint/ruff/gofmt). Runs on the
+              // final content (after any formatter) and never mutates the file;
+              // best-effort, so a missing server or a crashing checker is a silent no-op.
+              if (ok && tool.kind === 'write') {
+                output += await afterWrite({
+                  manager: lspManager,
+                  targets: seamTargets,
+                  roots,
+                  workspace,
+                  before: beforeWrite,
+                  diagnosticsOnSave: settings.diagnosticsOnSave,
+                  signal: abort.signal
+                })
               }
+              // A shell command can change any file: re-sync the documents the language
+              // servers hold so their next answer is about the files as they are now.
+              if (tool.kind === 'shell') await lspManager.noteShell(roots)
               // Invalidate cached reads that this mutation could have staled. A write
               // drops the entries depending on the path(s) it touched; a shell (or any
               // other non-read) call clears the cache wholesale, since a command can
@@ -3684,8 +3763,8 @@ export async function startRun(
         }
 
         await flushResult({
-          call,
-          output,
+          call: modelCall,
+          output: ok && materializedNote ? `${materializedNote} ${output}` : output,
           ok,
           images: toolImages,
           documents: toolDocs

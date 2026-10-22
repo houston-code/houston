@@ -71,6 +71,7 @@ import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPane
 import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH } from './lib/previewPanel'
 import { clampPlanWidth, PLAN_DEFAULT_WIDTH } from './lib/planPanel'
 import { usePreviewServers } from './hooks/usePreviewServers'
+import { ownedByChat } from './lib/chatScope'
 import { useChat } from './hooks/useChat'
 import { useInputQueue } from './hooks/useInputQueue'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
@@ -110,6 +111,7 @@ import {
   type ChecklistFacts
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
+import { Icon } from './components/Icon'
 import type { WhatsNew } from '@shared/update'
 
 // These overlays aren't on the initial render path, so load them as separate
@@ -247,7 +249,12 @@ export default function App(): JSX.Element {
   const chat = useChat(currentId)
 
   // Dev servers the agent started (auto-detected loopback URLs) — drives the Preview dock.
-  const previewServers = usePreviewServers()
+  // Only the open chat's: another chat's servers stay out of its Preview and Tasks.
+  const allPreviewServers = usePreviewServers()
+  const previewServers = useMemo(
+    () => ownedByChat(allPreviewServers, currentId),
+    [allPreviewServers, currentId]
+  )
   const previewableCount = useMemo(
     () => previewServers.filter((s) => s.running && s.url).length,
     [previewServers]
@@ -260,6 +267,14 @@ export default function App(): JSX.Element {
   }, [])
   // The get-started checklist's inline "Connect a model" panel.
   const [connectOpen, setConnectOpen] = useState(false)
+  // Backing out of the Connect panel returns focus to step 1's button, which the
+  // panel replaced; see GetStarted's focusModelStep.
+  const [connectBackedOut, setConnectBackedOut] = useState(false)
+  // One-shot: GetStarted reads it in its mount effect, which runs before this one,
+  // so clear it after so a later remount of the checklist doesn't take focus.
+  useEffect(() => {
+    if (connectBackedOut) setConnectBackedOut(false)
+  }, [connectBackedOut])
   const onboarding = useOnboarding({
     settings,
     setSettings,
@@ -434,11 +449,15 @@ export default function App(): JSX.Element {
 
   // Background shells the agent spawned via run_shell (dev servers, watchers),
   // tracked by the main process.
-  const backgroundShells = useBackgroundShells()
+  const allBackgroundShells = useBackgroundShells()
+  const backgroundShells = useMemo(
+    () => ownedByChat(allBackgroundShells, currentId),
+    [allBackgroundShells, currentId]
+  )
 
   // The background-tasks list shown in the title bar: running/recently-finished
-  // integrated terminals + agent-backgrounded shells, so a backgrounded completion
-  // is noticeable from anywhere. Chat runs are intentionally excluded — each is
+  // integrated terminals + the open chat's agent-backgrounded shells (another chat's
+  // shells show when that chat is open). Chat runs are intentionally excluded — each is
   // already represented by its own Stop button and its sidebar dot (see
   // useBackgroundTasks).
   const { tasks: backgroundTasks, clearFinished: clearFinishedTasks } = useBackgroundTasks(
@@ -1939,7 +1958,10 @@ export default function App(): JSX.Element {
               <ConnectModel
                 settings={settings}
                 onConnected={(fresh, id, model) => void onModelConnected(fresh, id, model)}
-                onBack={() => setConnectOpen(false)}
+                onBack={() => {
+                  setConnectBackedOut(true)
+                  setConnectOpen(false)
+                }}
               />
             ) : showChecklist ? (
               <GetStarted
@@ -1953,6 +1975,7 @@ export default function App(): JSX.Element {
                 taskExample={firstTaskExample(workspaceKind)}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
+                focusModelStep={connectBackedOut}
               />
             ) : (
               <>
@@ -2002,7 +2025,7 @@ export default function App(): JSX.Element {
           <div className="checkpoint-bar">
             <span className="checkpoint-bar__label">The last turn failed.</span>
             <button className="btn btn--sm" onClick={onRetry}>
-              ⟳ Retry
+              <Icon name="refresh" /> Retry
             </button>
           </div>
         )}
@@ -2143,6 +2166,7 @@ export default function App(): JSX.Element {
             tasks={
               <TasksPanel
                 tasks={backgroundTasks}
+                currentId={currentId}
                 active={dockTab === 'tasks'}
                 onStop={(id) => window.api.stopBackgroundShell(id)}
                 onOpenPreview={(task) => {

@@ -248,8 +248,9 @@ export function FilesPanel({
             onClick={() => void reload()}
             disabled={loadingRoot || !workspace}
             title="Refresh"
+            aria-label="Refresh"
           >
-            ⟳
+            <Icon name="refresh" />
           </button>
           <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
             ✕

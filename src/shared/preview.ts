@@ -15,6 +15,8 @@ export interface PreviewServer {
   url?: string
   /** Every loopback URL detected in its output, `url` first (a script can start several servers). */
   urls?: string[]
+  /** Conversation whose agent run started it; the Preview dock shows only the open chat's. */
+  conversationId?: string
 }
 
 /** Integer rectangle in the window's content coordinate space (device-independent px). */

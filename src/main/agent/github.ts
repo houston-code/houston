@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
+import { hardenedGitArgs } from './gitRead'
 
 /**
  * First-class GitHub integration via the `gh` CLI. Houston never stores a GitHub
@@ -73,19 +74,51 @@ const MAX_GH_BUFFER = 8_000_000
 const GH_TIMEOUT_MS = 60_000
 
 /**
+ * Carry git `-c key=value` hardening in the environment (`GIT_CONFIG_COUNT`,
+ * `GIT_CONFIG_KEY_<n>`, `GIT_CONFIG_VALUE_<n>`), after any entries `base` already
+ * has, so every git that `gh` starts (checkout, fetch, push) inherits it. Pure.
+ */
+export function gitConfigEnv(args: string[], base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base }
+  const start = Number(base.GIT_CONFIG_COUNT)
+  let n = Number.isInteger(start) && start > 0 ? start : 0
+  for (let i = 0; i + 1 < args.length; i += 2) {
+    if (args[i] !== '-c') continue
+    const eq = args[i + 1].indexOf('=')
+    if (eq <= 0) continue
+    env[`GIT_CONFIG_KEY_${n}`] = args[i + 1].slice(0, eq)
+    env[`GIT_CONFIG_VALUE_${n}`] = args[i + 1].slice(eq + 1)
+    n++
+  }
+  env.GIT_CONFIG_COUNT = String(n)
+  return env
+}
+
+/**
  * Build a {@link GhExec} bound to a resolved `gh` path. Never rejects — a non-zero
  * exit, a timeout, or a spawn failure all come back as `ok:false` with stderr, so
  * the calling tool can surface a useful message instead of throwing.
+ *
+ * `gh` runs git in the workspace for some commands (`pr checkout`, `pr merge`'s local
+ * branch cleanup), outside the sandbox, so that git gets the same hardening as
+ * Houston's own (no repo-defined hooks, fsmonitor, or filter drivers); a repo whose
+ * drivers can't be switched off gets no `gh` at all.
  */
 export function runGh(ghPath: string): GhExec {
-  return (args, cwd, signal) =>
-    new Promise<GhResult>((resolve) => {
+  return async (args, cwd, signal) => {
+    let hardening: string[]
+    try {
+      hardening = await hardenedGitArgs(cwd)
+    } catch (e) {
+      return { ok: false, stdout: '', stderr: (e as Error).message, code: null }
+    }
+    return new Promise<GhResult>((resolve) => {
       execFile(
         ghPath,
         args,
         {
           cwd,
-          env: GH_ENV,
+          env: gitConfigEnv(hardening, GH_ENV),
           timeout: GH_TIMEOUT_MS,
           maxBuffer: MAX_GH_BUFFER,
           windowsHide: true,
@@ -100,6 +133,7 @@ export function runGh(ghPath: string): GhExec {
         }
       )
     })
+  }
 }
 
 /**

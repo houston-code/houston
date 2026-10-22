@@ -888,7 +888,7 @@ describe('runHeadless', () => {
       { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
     ])
     await runHeadless(baseOpts, d)
-    expect(err.join('')).toContain('· 150+25 tok · $0.0150')
+    expect(err.join('')).toContain('· 150+25 tok · $0.015')
   })
 
   it('surfaces a stalled limit in plain mode and returns a non-zero exit code', async () => {

@@ -85,14 +85,16 @@ export function sanitizeTitle(raw: string): string | null {
   // Despite "no markdown" in the prompt, models (small local ones especially) answer
   // with "## Fix auth", "**Fix auth**" or "Title: Fix auth". The sidebar and title bar
   // show the text literally, so strip the block markers, a leading label, and inline
-  // emphasis/code down to the words.
+  // emphasis/code/links down to the words.
   t = t.replace(/^(?:#{1,6}|>|[-*+]|\d+[.)])\s+/, '')
   t = t.replace(/(\*\*|__)(.+?)\1/g, '$2').replace(/(^|\s)[*_](\S(?:.*?\S)?)[*_](?=\s|$)/g, '$1$2')
   t = t.replace(/`([^`]+)`/g, '$1')
+  // A link keeps its text: "[README](./README.md)" → "README". An image drops entirely.
+  t = t.replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
   t = t.replace(/^(?:chat\s+)?title\s*[:\-–—]\s*/i, '').trim()
   // Drop wrapping quotes/backticks some models add, then any trailing sentence period.
   t = t.replace(/^["'`“”]+/, '').replace(/["'`“”]+$/, '').trim()
-  t = t.replace(/[.]+$/, '').trim()
+  t = t.replace(/[.]+$/, '').replace(/\s+/g, ' ').trim()
   if (!t) return null
   return t.length > MAX_TITLE_LEN ? `${t.slice(0, MAX_TITLE_LEN - 1)}…` : t
 }

@@ -64,6 +64,16 @@ describe('checkpoints', () => {
     expect(existsSync(join(ws, 'new.txt'))).toBe(false)
   })
 
+  it('keeps every file when several are snapshotted at once for a new run', async () => {
+    const names = ['p.txt', 'q.txt', 'r.txt']
+    for (const n of names) writeFileSync(join(ws, n), `${n} original`)
+    await Promise.all(names.map((n) => recordOriginal('run-parallel', [ws], n)))
+    expect(checkpointFileCount('run-parallel')).toBe(3)
+    for (const n of names) writeFileSync(join(ws, n), 'changed')
+    expect(await restoreCheckpoint('run-parallel')).toBe(3)
+    for (const n of names) expect(readFileSync(join(ws, n), 'utf8')).toBe(`${n} original`)
+  })
+
   it('snapshots each path only once (keeps the earliest content)', async () => {
     const f = join(ws, 'b.txt')
     writeFileSync(f, 'v1')

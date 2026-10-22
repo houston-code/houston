@@ -6,7 +6,7 @@
  * security-sensitive Electron app lean — same spirit as the in-house `diff.ts`.
  *
  * Supported: ATX headings, fenced code, blockquotes, ordered/unordered lists
- * (nested), GFM pipe tables, thematic breaks, and inline code / bold / italic /
+ * (nested, with GFM `- [ ]` / `- [x]` task items), GFM pipe tables, thematic breaks, and inline code / bold / italic /
  * strikethrough / links / autolinks. It is intentionally a pragmatic subset of
  * CommonMark, tuned for the markdown coding agents actually emit.
  */
@@ -25,6 +25,8 @@ export type Inline =
 export interface ListItem {
   /** Each item is a sequence of blocks, so items can hold paragraphs and nested lists. */
   blocks: Block[]
+  /** A GFM task item (`- [ ] todo`, `- [x] done`): whether it's ticked. Absent otherwise. */
+  checked?: boolean
 }
 
 export type Block =
@@ -52,6 +54,8 @@ const HR_RE = /^ {0,3}([-*_])(?:\s*\1){2,}\s*$/
 const UL_RE = /^(\s*)([-*+])\s+(.*)$/
 const OL_RE = /^(\s*)(\d{1,9})[.)]\s+(.*)$/
 const BLOCKQUOTE_RE = /^ {0,3}>\s?(.*)$/
+/** A task item's box at the start of its content: `[ ]`, `[x]` or `[X]`, then a space. */
+const TASK_RE = /^\[([ xX])\]\s+(?=\S)/
 
 /**
  * Hard cap on the document size handed to the parser, so a single pathological
@@ -222,6 +226,8 @@ function parseList(lines: string[], start: number): ListParse {
     const itemMatch = line.match(OL_RE) ?? line.match(UL_RE)
     if (itemMatch && itemMatch[1].length <= baseIndent + 1 && sameListType(line, ordered)) {
       const content: string[] = [itemMatch[itemMatch.length - 1]]
+      const task = TASK_RE.exec(content[0])
+      if (task) content[0] = content[0].slice(task[0].length)
       // The column the item's content starts at = whole line minus the content group.
       // (The prior `marker.length + 1` under-counted ordered lists by the delimiter char
       // — OL_RE captures only the digits, not the `.`/`)` — so nested/continuation lines
@@ -256,7 +262,7 @@ function parseList(lines: string[], start: number): ListParse {
         }
         break
       }
-      items.push({ blocks: parseBlocks(content) })
+      items.push(task ? { blocks: parseBlocks(content), checked: task[1] !== ' ' } : { blocks: parseBlocks(content) })
       continue
     }
     break

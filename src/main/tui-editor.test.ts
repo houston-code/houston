@@ -262,6 +262,20 @@ describe('renderEditor', () => {
     expect(v.cursorCol).toBe(6) // 2 (prompt) + 2 wide chars × 2 columns
   })
 
+  it('places the cursor after an emoji sequence by the columns it is drawn in', () => {
+    const { state } = run([type('\u{1F468}\u200D\u{1F469}\u200D\u{1F467}x')]) // 👨‍👩‍👧x
+    const v = renderEditor(state, { prompt: '> ', width: 40, paint })
+    expect(v.cursorCol).toBe(5) // 2 (prompt) + 2 (the family) + 1
+  })
+
+  it('wraps before an emoji sequence rather than through it', () => {
+    const family = '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}'
+    const { state } = run([type(`abcdefg${family}`)])
+    const v = renderEditor(state, { prompt: '> ', width: 10, paint })
+    expect(v.rows[0]).toBe('> abcdefg')
+    expect(v.rows[1]).toBe(`  ${family}`) // continuation rows are indented under the prompt
+  })
+
   it('renders the reverse-search prompt while searching', () => {
     const { state } = run([{ type: 'search' }, type('git')], initialEditorState(['git status']))
     const v = renderEditor(state, { prompt: '> ', width: 40, paint })

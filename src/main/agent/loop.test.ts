@@ -310,27 +310,30 @@ async function run(
     unattended?: boolean
     overrides?: RunSettingsOverrides
     allowShellNetwork?: boolean
+    /** Answer prompts synchronously inside `send`, as the headless CLI does. */
+    syncReplies?: boolean
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
   const runId = `run-${Math.round(Math.random() * 1e9)}`
   const events: AgentEvent[] = []
   let messages: ChatMessage[] = []
+  // Respond on a later tick by default, as the real renderer replies async;
+  // `syncReplies` answers inside send itself, as the headless CLI does.
+  const reply = (fn: () => void): void => {
+    if (opts.syncReplies) fn()
+    else setTimeout(fn, 0)
+  }
   const send = (e: AgentEvent): void => {
     events.push(e)
     if (e.type === 'tool_approval' && opts.onApproval) {
-      // Respond on a later tick — the loop registers the approval resolver on the
-      // line *after* it emits tool_approval, just as the real renderer replies async.
-      setTimeout(
-        () => opts.onApproval!(e.callId, (d, note) => resolveApproval(runId, e.callId, d, note)),
-        0
-      )
+      reply(() => opts.onApproval!(e.callId, (d, note) => resolveApproval(runId, e.callId, d, note)))
     }
     if (e.type === 'tool_question' && opts.onQuestion) {
-      setTimeout(() => opts.onQuestion!(e.callId, (a) => resolveQuestion(runId, e.callId, a)), 0)
+      reply(() => opts.onQuestion!(e.callId, (a) => resolveQuestion(runId, e.callId, a)))
     }
     if (e.type === 'plan_ready' && opts.onPlan) {
-      setTimeout(() => opts.onPlan!(e.callId, e.plan, (d) => resolvePlan(runId, e.callId, d)), 0)
+      reply(() => opts.onPlan!(e.callId, e.plan, (d) => resolvePlan(runId, e.callId, d)))
     }
   }
   await startRun(
@@ -1170,6 +1173,27 @@ describe('startRun', () => {
       registerFallback(backupReplies())
       const r = await run({ turns: [[{ type: 'error', message: 'invalid api key' }]] })
       expect(types(r)).not.toContain('model_fallback')
+      expect(types(r).at(-1)).toBe('error')
+    })
+
+    it('does not retry an exhausted quota, but still hops to the next model', async () => {
+      const quota = {
+        type: 'error' as const,
+        message: '429 You exceeded your current quota, please check your plan and billing details.',
+        status: 429
+      }
+      registerFallback(backupReplies())
+      const r = await run({ turns: [[quota]] })
+      expect(types(r)).not.toContain('retry')
+      expect(types(r)).toContain('model_fallback')
+      expect(r.messages.find((m) => m.role === 'assistant')?.content).toBe('from backup')
+    })
+
+    it('fails an exhausted quota at once when there is no next model', async () => {
+      const r = await run({
+        turns: [[{ type: 'error', message: '429 You exceeded your current quota, please check your plan.', status: 429 }]]
+      })
+      expect(types(r)).not.toContain('retry')
       expect(types(r).at(-1)).toBe('error')
     })
 
@@ -3062,7 +3086,12 @@ describe('lazily loaded built-in tools', () => {
     writeFileSync(join(ws, 'nb.ipynb'), notebook)
     const r = await run({
       policy: 'ask',
-      turns: [load('f1', 'notebook_edit'), call('n1', 'notebook_edit', editCell)],
+      // notebook_edit refuses a notebook it hasn't seen read, before any approval.
+      turns: [
+        load('f1', 'notebook_edit'),
+        call('r1', 'read_file', { path: 'nb.ipynb' }),
+        call('n1', 'notebook_edit', editCell)
+      ],
       onApproval: (_id, decide) => decide('deny')
     })
     expect(r.events.filter((e) => e.type === 'tool_approval').map((e) => (e as { name: string }).name)).toEqual([
@@ -4344,6 +4373,98 @@ describe('permission gates: batched sensitive reads and subagent calls', () => {
     expect(approvals[1].preview?.length).toBeGreaterThan(0)
     expect(readFileSync(join(ws, 'guarded.txt'), 'utf8')).toBe('before')
     expect(readFileSync(join(ws, 'free.txt'), 'utf8')).toBe('unguarded')
+  })
+
+  // The headless CLI answers every prompt synchronously inside its send callback,
+  // so each blocking site must register its resolver before emitting the prompt;
+  // otherwise the answer is dropped and the run hangs forever.
+  describe('prompts answered synchronously inside send (headless)', () => {
+    it('resolves a main-loop approval', async () => {
+      const r = await run({
+        policy: 'ask',
+        syncReplies: true,
+        turns: [callTurn({ id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'W' } }), finalText('done')],
+        onApproval: (_id, decide) => decide('allow')
+      })
+      expect(approvalsOf(r).map((a) => a.callId)).toEqual(['w1'])
+      expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('W')
+      expect(r.events.at(-1)?.type).toBe('done')
+    })
+
+    it("resolves a subagent's gated call", async () => {
+      writeFileSync(join(ws, '.env'), 'APP_MODE=dotenv-sync-marker')
+      const r = await run({
+        policy: 'full-auto',
+        syncReplies: true,
+        turns: [
+          callTurn({ id: 'd1', name: 'dispatch_agent', arguments: { description: 'look', prompt: 'read .env' } }),
+          callTurn({ id: 's1', name: 'read_file', arguments: { path: '.env' } }),
+          finalText('sub report'),
+          finalText('main done')
+        ],
+        onApproval: (_id, decide) => decide('allow')
+      })
+      expect(approvalsOf(r).map((a) => a.callId)).toEqual(['d1.read.1'])
+      expect(resultFor(r, 'd1.read.1')?.ok).toBe(true)
+      expect(r.events.at(-1)?.type).toBe('done')
+    })
+
+    it('resolves an ask_user question', async () => {
+      const r = await run({
+        syncReplies: true,
+        turns: [callTurn({ id: 'q1', name: 'ask_user', arguments: { question: 'Which?' } }), finalText('ok')],
+        onQuestion: (_id, answer) => answer('this one')
+      })
+      expect(resultFor(r, 'q1')?.output).toContain('this one')
+      expect(r.events.at(-1)?.type).toBe('done')
+    })
+
+    it('resolves a present_plan review', async () => {
+      const r = await run({
+        policy: 'plan',
+        syncReplies: true,
+        turns: [callTurn({ id: 'p1', name: 'present_plan', arguments: { title: 'T', plan: '1. step' } }), finalText('ok')],
+        onPlan: (_id, _plan, decide) => decide({ kind: 'reject' })
+      })
+      expect(resultFor(r, 'p1')).toBeDefined()
+      expect(r.events.at(-1)?.type).toBe('done')
+    })
+
+    it('finishes a real headless run whose write needs approval', async () => {
+      const { runHeadless } = await import('../headless')
+      h.provider = scripted([
+        callTurn({ id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'H' } }),
+        finalText('done')
+      ])
+      const err: string[] = []
+      const code = await runHeadless(
+        {
+          prompt: 'write it',
+          cwd: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          onApproval: 'allow',
+          allowShellNetwork: false,
+          json: false,
+          continueSession: false
+        },
+        {
+          getSettings: () =>
+            ({ ...h.settings, providers: [{ id: 'anthropic', models: [], requiresKey: false }] }) as never,
+          startRun,
+          resolveApproval,
+          resolveQuestion,
+          resolvePlan,
+          resolveElicitation: () => {},
+          out: () => {},
+          err: (s) => err.push(s)
+        }
+      )
+      expect(code).toBe(0)
+      expect(err.join('')).toContain('auto-approving write_file')
+      expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('H')
+    })
   })
 
   it("prompts for a subagent's .env read, and a denial keeps its contents out of the subagent", async () => {
@@ -7646,5 +7767,125 @@ describe('turn receipt', () => {
       onApproval: (id, decide) => decide(id === 'w1' ? 'allow' : 'deny')
     })
     expect(r.messages.at(-1)?.receipt?.filesChanged).toEqual(['kept.txt'])
+  })
+})
+
+describe('lsp_rename through the write gate', () => {
+  // A stand-in for the language server: renames the three `foo`s in a.ts and b.ts, plus any
+  // extra file a test names. The loop only sees it through lspManager.clientFor.
+  async function stubServer(extraUris: string[] = []): Promise<void> {
+    const { lspManager } = await import('./lsp/manager')
+    const { toUri } = await import('./lsp/uri')
+    const root = realpathSync(ws)
+    const edit = (uri: string, line: number, col: number) => ({
+      uri,
+      edit: { range: { start: { line, character: col }, end: { line, character: col + 3 } }, newText: 'bar' }
+    })
+    const all = [
+      edit(toUri(join(root, 'a.ts')), 0, 16),
+      edit(toUri(join(root, 'b.ts')), 0, 9),
+      edit(toUri(join(root, 'b.ts')), 1, 12),
+      ...extraUris.map((u) => edit(u, 0, 0))]
+    const changes: Record<string, unknown[]> = {}
+    for (const e of all) (changes[e.uri] ??= []).push(e.edit)
+    const client = {
+      server: { spec: { name: 'Stub' } },
+      serverCapabilities: { renameProvider: true },
+      sync: async () => 1,
+      request: async (method: string) => (method === 'textDocument/rename' ? { changes } : null)
+    }
+    vi.spyOn(lspManager, 'clientFor').mockResolvedValue(client as never)
+  }
+
+  const renameCall = {
+    type: 'tool_call' as const,
+    call: { id: 'r1', name: 'lsp_rename', arguments: { path: 'a.ts', line: 1, symbol: 'foo', new_name: 'bar' } }
+  }
+
+  beforeEach(() => {
+    writeFileSync(join(ws, 'a.ts'), 'export function foo() {}\n')
+    writeFileSync(join(ws, 'b.ts'), "import { foo } from './a'\nconsole.log(foo())\n")
+  })
+
+  it('asks for approval as the apply_patch it amounts to, and applies nothing when denied', async () => {
+    await stubServer()
+    const r = await run({
+      policy: 'ask',
+      onApproval: (_id, decide) => decide('deny'),
+      turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    const approval = r.events.find((e) => e.type === 'tool_approval')
+    expect(approval).toMatchObject({ name: 'apply_patch' })
+    const patch = String((approval as unknown as { args: { patch: string } }).args.patch)
+    expect(patch).toContain('*** Update File: a.ts')
+    expect(patch).toContain('*** Update File: b.ts')
+    expect(readFileSync(join(ws, 'b.ts'), 'utf8')).toContain('foo()')
+    // The transcript keeps the model's own call, answered under its own name.
+    const result = r.messages.find((m) => m.role === 'tool')
+    expect(result).toMatchObject({ toolCallId: 'r1', toolName: 'lsp_rename' })
+    expect(String(result?.content)).toMatch(/^Denied/)
+  })
+
+  it('applies every edit when allowed, with a checkpoint that reverts all of them', async () => {
+    await stubServer()
+    const r = await run({
+      policy: 'ask',
+      conversationId: 'conv-lsp-rename',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    expect(readFileSync(join(ws, 'a.ts'), 'utf8')).toBe('export function bar() {}\n')
+    expect(readFileSync(join(ws, 'b.ts'), 'utf8')).toBe("import { bar } from './a'\nconsole.log(bar())\n")
+    const result = r.messages.find((m) => m.role === 'tool')
+    expect(String(result?.content)).toMatch(/^Renamed "foo" to "bar": 3 edits in 2 files\. Applied patch/)
+    const cp = await getConversationCheckpoint('conv-lsp-rename')
+    expect(cp?.files).toBe(2)
+    await restoreCheckpoint(cp!.runId)
+    expect(readFileSync(join(ws, 'b.ts'), 'utf8')).toContain('foo()')
+  })
+
+  it('refuses a rename that reaches outside the workspace, before asking anyone', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'houston-lsp-outside-'))
+    try {
+      writeFileSync(join(outside, 'c.ts'), 'foo\n')
+      const { toUri } = await import('./lsp/uri')
+      await stubServer([toUri(join(realpathSync(outside), 'c.ts'))])
+      const r = await run({
+        policy: 'full-auto',
+        turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+      })
+      expect(types(r)).not.toContain('tool_approval')
+      expect(String(r.messages.find((m) => m.role === 'tool')?.content)).toMatch(/outside the project/)
+      expect(readFileSync(join(outside, 'c.ts'), 'utf8')).toBe('foo\n')
+      expect(readFileSync(join(ws, 'a.ts'), 'utf8')).toContain('foo')
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('honors apply_patch permission rules for the files the rename touches', async () => {
+    await stubServer()
+    h.settings.permissionRules = [{ action: 'deny', tool: 'apply_patch', match: 'b.ts' }]
+    try {
+      const r = await run({
+        policy: 'full-auto',
+        turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+      })
+      expect(String(r.messages.find((m) => m.role === 'tool')?.content)).toMatch(/denied/i)
+      expect(readFileSync(join(ws, 'a.ts'), 'utf8')).toContain('foo')
+    } finally {
+      h.settings.permissionRules = []
+    }
+  })
+
+  it('does not ask the server anything in plan mode', async () => {
+    const { lspManager } = await import('./lsp/manager')
+    const spy = vi.spyOn(lspManager, 'clientFor')
+    const r = await run({
+      policy: 'plan',
+      turns: [[renameCall, { type: 'done', stopReason: 'tool_use' }], [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    expect(spy).not.toHaveBeenCalled()
+    expect(String(r.messages.find((m) => m.role === 'tool')?.content)).toMatch(/Plan mode/)
   })
 })
