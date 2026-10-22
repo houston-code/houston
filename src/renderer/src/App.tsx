@@ -2319,7 +2319,7 @@ export default function App(): JSX.Element {
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         toggleShortcut={shortcutHint('toggle-sidebar', mac, shortcuts)}
-        runningIds={runningIds}
+        chatStatus={chatStatus}
         onSelect={selectConversation}
         onNew={onNewChat}
         onDelete={onDeleteConversation}
