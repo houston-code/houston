@@ -41,6 +41,33 @@ describe('parsePatch', () => {
     expect(ops[0]).toMatchObject({ type: 'update', path: 'old.ts', moveTo: 'new.ts' })
   })
 
+  it('accepts the "*** End of File" line that closes a chunk at the end of a file', () => {
+    const ops = parsePatch(
+      wrap(
+        '*** Update File: a.ts',
+        '@@',
+        ' const x = 1',
+        '-export default x',
+        '+export { x }',
+        '*** End of File',
+        '*** Update File: b.ts',
+        '@@ function f() {',
+        '-  return 1',
+        '+  return 2',
+        '*** End of File'
+      )
+    )
+    expect(ops).toEqual([
+      {
+        type: 'update',
+        path: 'a.ts',
+        moveTo: undefined,
+        hunks: [{ oldText: 'const x = 1\nexport default x', newText: 'const x = 1\nexport { x }' }]
+      },
+      { type: 'update', path: 'b.ts', moveTo: undefined, hunks: [{ oldText: '  return 1', newText: '  return 2' }] }
+    ])
+  })
+
   it('rejects an empty Move to destination (rather than silently dropping the rename)', () => {
     expect(() =>
       parsePatch(wrap('*** Update File: old.ts', '*** Move to:   ', ' a', '-b', '+B'))

@@ -38,7 +38,7 @@ import {
   setFolderTrust
 } from './store'
 import { loadProjectConfig } from './agent/projectConfig'
-import { getIntegrations } from './integrations'
+import { getIntegrations, languageServerIntegration } from './integrations'
 import {
   detectEditors,
   openProjectInEditor,
@@ -110,6 +110,7 @@ import {
   createConversation,
   forkConversation,
   deleteConversation,
+  otherConversationsInWorktree,
   importConversation,
   organizeConversation,
   reorderConversations,
@@ -759,7 +760,9 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.mcpStatus, () => getMcpStatuses())
 
   // Optional-integrations status (gh CLI, formatters) for the Settings hint.
-  ipcMain.handle(IPC.integrationsGet, () => getIntegrations())
+  ipcMain.handle(IPC.integrationsGet, () =>
+    getIntegrations({ languageServers: () => languageServerIntegration(getSettings()) })
+  )
 
   // "Open project in…" — user gesture, launches an external editor / file manager.
   ipcMain.handle(IPC.editorsList, () => detectEditors())
@@ -830,7 +833,10 @@ export function registerIpc(): void {
       const conv = getConversation(id)
       const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
       const title = conv?.title ?? 'this chat'
-      const kind: DeleteDialogKind = !conv?.worktree
+      // A worktree another chat still runs in (a fork shares its source's) is never
+      // offered for removal, even when it looks disposable.
+      const shared = conv?.worktree ? otherConversationsInWorktree(id, conv.worktree.path) > 0 : false
+      const kind: DeleteDialogKind = !conv?.worktree || shared
         ? 'plain'
         : (await isWorktreeDisposable(conv.worktree))
           ? 'disposableWorktree'
@@ -863,7 +869,10 @@ export function registerIpc(): void {
                 kind === 'disposableWorktree'
                   ? `Its worktree on branch “${conv!.worktree!.branch}” has no changes or ` +
                     `unmerged commits, so it will be removed too. This cannot be undone.`
-                  : 'This cannot be undone.'
+                  : shared
+                    ? `This cannot be undone. Its worktree on branch “${conv!.worktree!.branch}” ` +
+                      `stays, because another chat still uses it.`
+                    : 'This cannot be undone.'
             }
       )
 

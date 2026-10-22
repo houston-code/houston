@@ -65,6 +65,13 @@ const ADD = '*** Add File: '
 const UPDATE = '*** Update File: '
 const DELETE = '*** Delete File: '
 const MOVE = '*** Move to: '
+/**
+ * Closes an update chunk that reaches the end of the file. Part of the envelope's
+ * grammar, and GPT models emit it for a change at the bottom of a file. Locating a
+ * hunk is by its text here, so the marker adds nothing to apply and is skipped; it
+ * used to fail the whole patch as an unexpected line.
+ */
+const END_OF_FILE = '*** End of File'
 
 function isDirective(line: string): boolean {
   return line.startsWith('*** ')
@@ -168,8 +175,8 @@ function parseEnvelope(patch: string): PatchOp[] {
         i += 1
       }
       const hunkLines: string[] = []
-      while (i < lines.length - 1 && !isDirective(lines[i])) {
-        hunkLines.push(lines[i])
+      while (i < lines.length - 1 && (!isDirective(lines[i]) || lines[i].trimEnd() === END_OF_FILE)) {
+        if (lines[i].trimEnd() !== END_OF_FILE) hunkLines.push(lines[i])
         i += 1
       }
       ops.push({ type: 'update', path, moveTo, hunks: parseHunks(hunkLines, path) })

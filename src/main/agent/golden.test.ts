@@ -45,6 +45,8 @@ import { resetCaptureBackend, setCaptureBackend } from './viewlocalhost'
 import { resetMockupBackend, setMockupBackend } from './mockupRender'
 import { resetSpawnBackend, setSpawnBackend } from './spawn'
 import { resetSchedulerBackend, setSchedulerBackend } from './scheduler'
+import { lspManager } from './lsp/manager'
+import { BUILTIN_SERVERS } from './lsp/servers'
 import type { CaptureDeps } from './viewlocalhost'
 import type { SpawnBackend } from './spawn'
 import type { SchedulerBackend } from './scheduler'
@@ -764,6 +766,27 @@ describe('system prompt names only tools the run offers', () => {
       expect(unadvertisedMentions(norm(req.system), req.tools)).toEqual([])
     })
   }
+
+  it('with a language server for the project: the lsp_* tools and the line pointing at them', async () => {
+    wireBackends({ capture: true, spawn: true, scheduler: true })
+    const spy = vi.spyOn(lspManager, 'availableFor').mockReturnValue([BUILTIN_SERVERS[0]])
+    try {
+      const req = await firstRequest({})
+      const system = norm(req.system)
+      expect(unadvertisedMentions(system, req.tools)).toEqual([])
+      const pinned = {
+        promptLines: system.split('\n').filter((l) => l.includes('lsp_')),
+        tools: req.tools.filter((t) => t.name.startsWith('lsp_'))
+      }
+      await expect(JSON.stringify(pinned, null, 2) + '\n').toMatchFileSnapshot('goldens/toolset.lsp.json')
+    } finally {
+      spy.mockRestore()
+    }
+    // Without a server, neither the tools nor the line appear.
+    const plain = await firstRequest({})
+    expect(plain.tools.some((t) => t.name.startsWith('lsp_'))).toBe(false)
+    expect(norm(plain.system)).not.toContain('lsp_')
+  })
 
   it('flags a tool or parameter the prompt still names after it is dropped or renamed', async () => {
     wireBackends({ capture: true, spawn: true, scheduler: true })

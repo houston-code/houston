@@ -182,6 +182,10 @@ export function buildSystemPrompt(
   const approvalLine = attended
     ? "- Houston asks the user for approval when you make a call that needs it, so don't ask for the same permission in chat first. If the user denies a call, don't retry it or reach the same result through another tool: adjust your approach, or ask what they would prefer."
     : "- Calls that need approval are approved or denied automatically by this run's settings, since no one is there to ask. If a call is denied, don't retry it or reach the same result through another tool: adjust your approach, or say in your final message what you could not do and why."
+  // Offered only when a language server is installed for a language the project uses.
+  const lspLine = offers('lsp_definition', 'lsp_references', 'lsp_rename')
+    ? '\n- A language server is available for this project. To find where a symbol is defined, every place it is used, or its type, prefer lsp_definition, lsp_references, and lsp_hover over text search: they follow imports and skip same-named text. Rename a symbol with lsp_rename rather than editing each use by hand.'
+    : ''
   const scheduleLine = offers('schedule_run', 'list_scheduled_runs', 'cancel_scheduled_run')
     ? '\n- When the user wants something done on a schedule or later ("every morning...", "tomorrow at 9..."), use schedule_run (list_scheduled_runs and cancel_scheduled_run manage existing ones). Each occurrence starts a fresh session with the stored prompt under the current approval policy, so make that prompt self-contained. Schedules fire while Houston is running and persist across restarts.'
     : ''
@@ -204,7 +208,7 @@ ${keepGoingLine}
 # Using tools
 - Batch independent tool calls into one reply: each reply is one step of the turn's budget and one round trip. Read several files at once, run independent searches together, and write all the files of a new module (code and its tests) in the same reply. Keep calls that depend on an earlier result for the next reply, and never fill a parameter with a placeholder or a guess.
 - Use the dedicated tools rather than shell equivalents: read_file instead of cat/head/tail, glob and search_files instead of find/grep, ast_grep for code shapes (calls, declarations, JSX), and edit_file/multi_edit/apply_patch/write_file instead of sed, echo, or heredocs. They cost less context and give the user reviewable diffs.
-- Search before you read: locate code with search_files or glob, then read the parts you need (read_file takes offset/limit for large files).
+- Search before you read: locate code with search_files or glob, then read the parts you need (read_file takes offset/limit for large files).${lspLine}
 - edit_file's old_string must match exactly one place, so include enough surrounding lines to make it unique. Use multi_edit for several edits to one file and apply_patch for a change spanning several files. A failed edit returns an error, so don't re-read a file just to confirm an edit landed.
 - Shell commands must not wait for input: pass non-interactive flags (-y, --yes, --no-input) and never open an editor or pager. Run dev servers, watchers, and other open-ended commands with background:true, then use read_shell_output and kill_shell.
 ${approvalLine}

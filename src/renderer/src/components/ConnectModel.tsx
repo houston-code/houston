@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
@@ -98,6 +98,14 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
   // The platform, when a save failed because the OS secure store is unusable.
   const [storageBlocked, setStorageBlocked] = useState<string | null>(null)
 
+  const tilesRef = useRef<HTMLDivElement>(null)
+  const keyRef = useRef<HTMLInputElement>(null)
+  // The panel replaces the checklist whose button opened it, so focus would drop to
+  // the page body. Start it on the selected provider instead (mount only).
+  useEffect(() => {
+    tilesRef.current?.querySelector<HTMLElement>('[aria-checked="true"]')?.focus()
+  }, [])
+
   const provider = tiles.find((p) => p.id === providerId)
   const local = provider ? !provider.requiresKey : false
   const showReady = provider !== undefined && isReady(provider) && !replacing
@@ -165,6 +173,7 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
     const trimmed = key.trim()
     if (!trimmed) {
       setError('Paste an API key first.')
+      keyRef.current?.focus()
       return
     }
     setBusy(true)
@@ -177,6 +186,7 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
       } catch (e) {
         setUnverified(trimmed)
         setError(`That key didn't work: ${ipcErrorMessage(e)}`)
+        keyRef.current?.focus()
         return
       }
       await storeKey(trimmed)
@@ -234,6 +244,7 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
       </p>
 
       <div
+        ref={tilesRef}
         className="connect-model__tiles"
         role="radiogroup"
         aria-label="Provider"
@@ -307,6 +318,7 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
               API key
             </label>
             <input
+              ref={keyRef}
               id="connect-model-key"
               className="control control--input connect-model__key"
               type="password"

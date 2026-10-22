@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { version as PKG_VERSION } from '../../../package.json'
 import { McpClient, type SpawnFn } from './client'
+import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
 
 interface ToolDecl {
   name: string
@@ -319,4 +321,130 @@ describe('McpClient (fake stdio server)', () => {
     await expect(call).rejects.toThrow(/stopped reading input/)
     expect(client.isClosed).toBe(true)
   })
+})
+
+/**
+ * A fake stdio server that answers initialize with `initResult` and records the
+ * initialize params plus everything the client writes afterwards.
+ */
+interface Seen {
+  init?: Record<string, unknown>
+  written: Array<Record<string, unknown>>
+}
+
+function negotiatingSpawn(initResult: unknown, seen: Seen): SpawnFn {
+  const stdout = new EventEmitter()
+  const reply = (id: number, result: unknown): void =>
+    void queueMicrotask(() => stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`)))
+  const stdin = Object.assign(new EventEmitter(), {
+    write(line: string): boolean {
+      const msg = JSON.parse(line.trim()) as Record<string, unknown> & { id?: number; method?: string }
+      seen.written.push(msg)
+      if (msg.id === undefined || msg.method === undefined) return true
+      if (msg.method === 'initialize') {
+        seen.init = msg.params as Record<string, unknown>
+        reply(msg.id, initResult)
+      } else reply(msg.id, msg.method === 'tools/list' ? { tools: [] } : {})
+      return true
+    }
+  })
+  const child = Object.assign(new EventEmitter(), {
+    stdout,
+    stdin,
+    stderr: new EventEmitter(),
+    kill: () => {}
+  })
+  return (() => child) as unknown as SpawnFn
+}
+
+describe('McpClient protocol-version negotiation', () => {
+  const onElicit = async (): Promise<{ action: 'accept'; content: Record<string, unknown> }> => ({
+    action: 'accept',
+    content: { ok: true }
+  })
+  const elicit = (client: McpClient): void =>
+    client.handleLine(JSON.stringify({ jsonrpc: '2.0', id: 'el1', method: 'elicitation/create', params: {} }))
+  const replyTo = (seen: Seen, id: string): Record<string, unknown> | undefined =>
+    seen.written.find((m) => m.id === id && m.method === undefined)
+
+  it('requests the latest version and reports the real app version', async () => {
+    const seen: Seen = { written: [] }
+    const client = new McpClient(negotiatingSpawn({ protocolVersion: '2025-06-18', capabilities: {} }, seen))
+    await client.connect({ command: 'fake' })
+    expect(seen.init?.protocolVersion).toBe(LATEST_PROTOCOL_VERSION)
+    expect(seen.init?.clientInfo).toEqual({ name: 'Houston', version: PKG_VERSION })
+    client.close()
+  })
+
+  it('answers elicitation from a 2025-06-18 server', async () => {
+    const seen: Seen = { written: [] }
+    const client = new McpClient(negotiatingSpawn({ protocolVersion: '2025-06-18', capabilities: {} }, seen))
+    await client.connect({ command: 'fake', onElicit })
+    expect(seen.init?.capabilities).toEqual({ elicitation: {} })
+    elicit(client)
+    await new Promise((r) => setTimeout(r, 10))
+    expect(replyTo(seen, 'el1')?.result).toEqual({ action: 'accept', content: { ok: true } })
+    client.close()
+  })
+
+  it('stops answering elicitation when a server negotiates down to 2024-11-05', async () => {
+    const seen: Seen = { written: [] }
+    const client = new McpClient(negotiatingSpawn({ protocolVersion: '2024-11-05', capabilities: {} }, seen))
+    await client.connect({ command: 'fake', onElicit })
+    expect(client.tools).toEqual([])
+    elicit(client)
+    await new Promise((r) => setTimeout(r, 10))
+    expect((replyTo(seen, 'el1')?.error as { code: number }).code).toBe(-32601)
+    client.close()
+  })
+
+  it('fails the connection on an unsupported version, before initialized is sent', async () => {
+    const seen: Seen = { written: [] }
+    const client = new McpClient(negotiatingSpawn({ protocolVersion: '2023-01-01', capabilities: {} }, seen))
+    await expect(client.connect({ command: 'fake' })).rejects.toThrow(McpUnsupportedProtocolError)
+    expect(seen.written.some((m) => m.method === 'notifications/initialized')).toBe(false)
+  })
+})
+
+describe('McpClient (real stdio process)', () => {
+  // A server that logs a lot to stderr before answering, as the stdio transport allows.
+  // Its stderr pipe holds only ~64 KB, so if the client never reads it the server
+  // blocks on the write and never replies.
+  const chattyServer = String.raw`
+    process.stderr.write('x'.repeat(1024 * 1024) + '\nstarted\n', () => {
+      let buf = ''
+      process.stdin.on('data', (c) => {
+        buf += c
+        let nl
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const msg = JSON.parse(buf.slice(0, nl))
+          buf = buf.slice(nl + 1)
+          if (msg.id === undefined) continue
+          const result = msg.method === 'tools/list' ? { tools: [{ name: 'echo' }] } : { capabilities: {} }
+          process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\n')
+        }
+      })
+    })
+  `
+
+  it('keeps reading a server that writes more stderr than a pipe holds', async () => {
+    const client = new McpClient()
+    try {
+      await client.connect({ command: process.execPath, args: ['-e', chattyServer] })
+      expect(client.tools.map((t) => t.name)).toEqual(['echo'])
+    } finally {
+      client.close()
+    }
+  }, 15_000)
+
+  it("names the server's last stderr line when it exits", async () => {
+    const client = new McpClient()
+    await expect(
+      client.connect({
+        command: process.execPath,
+        args: ['-e', "process.stderr.write('booting\\nError: missing API_TOKEN\\n'); process.exit(1)"]
+      })
+    ).rejects.toThrow('MCP server process exited: Error: missing API_TOKEN')
+    client.close()
+  }, 15_000)
 })

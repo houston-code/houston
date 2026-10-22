@@ -19,3 +19,11 @@ import { join } from 'node:path'
  * module for its type-level surface), so the value is just a placeholder path.
  */
 process.env.ELECTRON_OVERRIDE_DIST_PATH ||= join(process.cwd(), 'node_modules', 'electron', 'dist')
+
+/**
+ * Language servers stay off in the main-process tests: diagnostics after an edit are on
+ * by default whenever a server is installed, so a developer machine with, say,
+ * typescript-language-server on PATH would otherwise start it from the loop and eval
+ * tests and change what their runs report. The LSP tests drive their own managers.
+ */
+process.env.HOUSTON_LSP ||= 'off'

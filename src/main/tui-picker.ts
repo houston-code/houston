@@ -25,6 +25,8 @@ export interface PickerSpec {
   options: PickerOption[]
   /** Allow selecting more than one (checkboxes); commit joins the chosen values. */
   multiSelect?: boolean
+  /** What Esc does here, for the footer ("esc deny" at an approval). Default "cancel". */
+  escLabel?: string
 }
 
 /** Semantic key events the picker understands (adapter maps real keys to these). */
@@ -148,9 +150,10 @@ export function renderPicker(s: PickerState, paint: Painter): string[] {
     const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
     lines.push(`${pointer} ${box}${label}${desc}`)
   })
+  const esc = `esc ${s.spec.escLabel ?? 'cancel'}`
   const hint = s.spec.multiSelect
-    ? '↑/↓ move · space toggle · enter confirm · type for a custom answer · esc cancel'
-    : '↑/↓ move · enter confirm · type for a custom answer · esc cancel'
+    ? `↑/↓ move · space toggle · enter confirm · type for a custom answer · ${esc}`
+    : `↑/↓ move · enter confirm · type for a custom answer · ${esc}`
   lines.push(paint(hint, 'dim'))
   return lines
 }

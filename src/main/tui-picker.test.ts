@@ -118,6 +118,10 @@ describe('renderPicker', () => {
     // Exactly title + 3 options + hint.
     expect(lines).toHaveLength(5)
   })
+  it('names what Esc does in the footer', () => {
+    expect(renderPicker(initialPickerState(spec), paint).at(-1)).toMatch(/esc cancel$/)
+    expect(renderPicker(initialPickerState({ ...spec, escLabel: 'deny' }), paint).at(-1)).toMatch(/esc deny$/)
+  })
   it('omits the heading line when the title is empty', () => {
     const lines = renderPicker(initialPickerState({ ...spec, title: '' }), paint)
     expect(lines[0]).toContain('› Allow')

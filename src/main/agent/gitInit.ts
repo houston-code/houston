@@ -1,13 +1,19 @@
 import { execFile } from 'node:child_process'
 import { realpathSync, statSync } from 'node:fs'
 import type { GitInitResult } from '@shared/git'
-import { GIT_ENV, GIT_HARDENING } from './gitRead'
+import { GIT_ENV, hardenedGitArgs } from './gitRead'
 
-function runGit(args: string[], cwd: string): Promise<{ ok: boolean; stderr: string }> {
+async function runGit(args: string[], cwd: string): Promise<{ ok: boolean; stderr: string }> {
+  let hardening: string[]
+  try {
+    hardening = await hardenedGitArgs(cwd)
+  } catch (e) {
+    return { ok: false, stderr: (e as Error).message }
+  }
   return new Promise((resolve) => {
     execFile(
       'git',
-      [...GIT_HARDENING, '--no-pager', ...args],
+      [...hardening, '--no-pager', ...args],
       { cwd, env: GIT_ENV, timeout: 10_000, maxBuffer: 1_000_000, windowsHide: true },
       (err, _stdout, stderr) => resolve({ ok: !err, stderr: (stderr || '').trim() })
     )

@@ -39,7 +39,7 @@ export interface UserItem {
   invokedAs?: PromptInvocation
   /**
    * A course correction steered into a running turn (rather than sent as its own
-   * turn). Labelled in the transcript so it's clear it changed the run in progress.
+   * turn). Rendered like any other user message; kept for the record.
    * Set live from the `steered` event and, on reload, from the saved message.
    */
   steered?: boolean
@@ -110,8 +110,11 @@ export interface NoticeItem {
   tone: 'error' | 'info' | 'handoff'
   /** A missing language runtime, rendered with a one-click install. */
   runtime?: { label: string; installCommand?: string; url: string }
-  /** A "retrying" notice; the next attempt updates it in place instead of stacking. */
-  retry?: boolean
+  /**
+   * A "retrying" notice and the attempt it reports; the next attempt updates it in
+   * place instead of stacking, and a final failure rewrites it in the past tense.
+   */
+  retry?: { attempt: number }
   /** On a `handoff` banner: the chat that spawned this one, which the banner links to. */
   openConversationId?: string
 }
@@ -523,8 +526,9 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       // Back-to-back attempts update one line ("retrying (3/6)") rather than stacking
       // a row per attempt down the transcript.
       const last = finalized[finalized.length - 1]
-      if (last?.kind === 'notice' && last.retry) return [...finalized.slice(0, -1), { ...last, text }]
-      return [...finalized, { kind: 'notice', id: nextId(), text, tone: 'info', retry: true }]
+      const retry = { attempt: e.attempt }
+      if (last?.kind === 'notice' && last.retry) return [...finalized.slice(0, -1), { ...last, text, retry }]
+      return [...finalized, { kind: 'notice', id: nextId(), text, tone: 'info', retry }]
     }
     // A model turn dropped mid-stream and is being redone. Retract what it showed so
     // the redo is the only copy of the reply; the retry or fallback notice that always
@@ -609,7 +613,21 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'error': {
       const finalized = finalizeStreaming(items)
-      return [...finalized, { kind: 'notice', id: nextId(), text: e.message, tone: 'error' }]
+      // The run gave up while a "retrying (6/6)" line was the last thing shown: say
+      // the retries are over, so it doesn't read as still in progress above the error.
+      const last = finalized[finalized.length - 1]
+      const settled =
+        last?.kind === 'notice' && last.retry
+          ? [
+              ...finalized.slice(0, -1),
+              {
+                ...last,
+                text: `⟳ Connection issue: tried ${last.retry.attempt} more time${last.retry.attempt === 1 ? '' : 's'}, then stopped.`,
+                retry: undefined
+              }
+            ]
+          : finalized
+      return [...settled, { kind: 'notice', id: nextId(), text: e.message, tone: 'error' }]
     }
     case 'usage':
     case 'turn_start':

@@ -3,8 +3,14 @@ import { describe, expect, it, vi } from 'vitest'
 import type { ChecklistFacts } from '@shared/onboarding'
 import { GetStarted } from './GetStarted'
 
-function setup(facts: Partial<ChecklistFacts> = {}, modelSummary?: string, folderSummary?: string) {
+function setup(
+  facts: Partial<ChecklistFacts> = {},
+  modelSummary?: string,
+  folderSummary?: string,
+  focusModelStep?: boolean
+) {
   const props = {
+    focusModelStep,
     facts: { modelReady: false, hasWorkspace: false, hasConversation: false, ...facts },
     modelSummary,
     folderSummary,
@@ -93,5 +99,20 @@ describe('GetStarted', () => {
     expect(screen.getByRole('button', { name: 'Connect' })).toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Change folder' }))
     expect(p.onChooseFolder).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns focus to step 1 after backing out of the Connect panel', () => {
+    setup({}, undefined, undefined, true)
+    expect(screen.getByRole('button', { name: 'Connect' })).toHaveFocus()
+  })
+
+  it('returns focus to step 1 Change once a model is connected', () => {
+    setup({ modelReady: true }, 'Anthropic · Claude', undefined, true)
+    expect(screen.getByRole('button', { name: 'Change model' })).toHaveFocus()
+  })
+
+  it('leaves focus alone on an ordinary mount', () => {
+    setup()
+    expect(document.body).toHaveFocus()
   })
 })

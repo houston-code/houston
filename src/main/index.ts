@@ -9,6 +9,7 @@ import { loadWindowState, saveWindowState, pickStartupBounds } from './window-st
 import { registerIpc } from './ipc'
 import { buildAppMenu } from './menu'
 import { killAllShells } from './agent/shells'
+import { lspManager } from './agent/lsp/manager'
 import { startShellLedger } from './agent/shellLedger'
 import { attachPreviewHost, destroyAllPreviewPanes } from './preview'
 import { killAllTerminals } from './terminal'
@@ -74,7 +75,10 @@ void startShellLedger(app.getPath('userData')).then((pgids) => {
 })
 // A last-chance stop for exits that skip will-quit (a direct process.exit); it runs
 // synchronously, which killAllShells is.
-process.once('exit', () => killAllShells())
+process.once('exit', () => {
+  killAllShells()
+  lspManager.killAll()
+})
 
 // Verify outbound TLS against the OS certificate store too, before any provider call.
 // Without it, a network that re-signs TLS with a root CA installed in the Windows store
@@ -293,6 +297,7 @@ app.on('will-quit', (e) => {
   destroyAllPreviewPanes()
   killAllShells()
   killAllTerminals()
+  lspManager.killAll()
   clearCheckpoints()
   disconnectAllMcp()
 })

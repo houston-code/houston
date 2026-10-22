@@ -17,6 +17,7 @@ import {
   renderPlan,
   toolArgHint,
   renderApprovalPrompt,
+  approvalOutcome,
   parseApprovalAnswer,
   renderQuestion,
   HELP_TEXT,
@@ -70,6 +71,7 @@ import {
   renderConversationList,
   subagentGlyph,
   shortCwd,
+  homeRelative,
   renderStatusLine,
   spinnerFrame,
   renderCapabilityList,
@@ -203,10 +205,16 @@ describe('makePainter', () => {
 })
 
 describe('tool rendering', () => {
-  it('summarizes a tool start with its salient arg', () => {
-    const line = renderToolStart('read_file', { path: 'src/x.ts' }, makePainter(false))
-    expect(line).toContain('read_file')
-    expect(line).toContain('src/x.ts')
+  it('names a tool start the way the desktop row does, with its whole target', () => {
+    const p = makePainter(false)
+    expect(renderToolStart('read_file', { path: 'src/deep/dir/x.ts' }, p)).toBe('· Read  src/deep/dir/x.ts')
+    expect(renderToolStart('run_shell', { command: 'npm  test\n--watch' }, p)).toBe('· Run  npm test ⏎ --watch')
+    expect(renderToolStart('git_status', {}, p)).toBe('· Git status')
+    expect(renderToolStart('mcp__github__search', {}, p)).toBe('· search  via github')
+  })
+
+  it('keeps the argument hint for a tool the shared labels do not know', () => {
+    expect(renderToolStart('custom_tool', { query: 'needle' }, makePainter(false))).toBe('· custom_tool  needle')
   })
 
   it('picks a hint from known arg keys and collapses whitespace', () => {
@@ -237,6 +245,21 @@ describe('approval prompt', () => {
     expect(p).toContain('run_shell')
     expect(p).toContain('[shell]')
     expect(p).toContain('rm -rf build')
+  })
+
+  it('keeps the typed-answer keys out of the picker prompt', () => {
+    expect(renderApprovalPrompt(ev(), makePainter(false))).toContain('[y] allow')
+    expect(renderApprovalPrompt(ev(), makePainter(false), { picker: true })).not.toContain('[y] allow')
+    expect(renderApprovalPrompt(ev({ shellNetwork: true }), makePainter(false), { picker: true })).not.toContain('[y]')
+  })
+
+  it('words each approval outcome', () => {
+    expect(approvalOutcome('allow')).toBe('Allowed')
+    expect(approvalOutcome('rule-allow')).toBe('Always allowed (rule saved)')
+    expect(approvalOutcome('rule-deny')).toBe('Always denied (rule saved)')
+    expect(approvalOutcome('deny', { note: 'use pnpm' })).toBe('Denied: use pnpm')
+    expect(approvalOutcome('deny', { shellNetwork: true })).toBe('Running offline')
+    expect(approvalOutcome('always', { shellNetwork: true })).toBe('Network allowed for this run')
   })
 
   it('warns when a shell command runs unsandboxed', () => {
@@ -743,7 +766,7 @@ describe('renderToolResult', () => {
   })
 
   it('still just marks a failure that produced no output', () => {
-    expect(renderToolResult('run_shell', false, '  \n ', paint)).toBe('  ✗ run_shell failed')
+    expect(renderToolResult('run_shell', false, '  \n ', paint)).toBe('  ✗ Run failed')
   })
 
   it('verbose opens up a successful result', () => {
@@ -804,10 +827,17 @@ describe('recovering tool output', () => {
 })
 
 describe('formatSessionCost', () => {
-  it('formats tokens with grouping and cost to 4 dp', () => {
+  it('formats tokens with grouping and cost the way the desktop does', () => {
     expect(formatSessionCost({ inputTokens: 1234, outputTokens: 567, cost: 0.0123 })).toBe(
-      '1,234+567 tok · $0.0123'
+      '1,234+567 tok · $0.012'
     )
+  })
+
+  it('scales precision with the amount, and shows a free model as $0.00', () => {
+    const at = (cost: number): string => formatSessionCost({ inputTokens: 1, outputTokens: 1, cost })
+    expect(at(0)).toBe('1+1 tok · $0.00')
+    expect(at(0.0042)).toBe('1+1 tok · $0.0042')
+    expect(at(12.3456)).toBe('1+1 tok · $12.35')
   })
 })
 
@@ -839,6 +869,15 @@ describe('status line & progress', () => {
     expect(shortCwd('/a/b', '/nope')).toBe('/a/b')
   })
 
+  it('homeRelative writes paths under home from ~ and leaves the rest whole', () => {
+    expect(homeRelative('/Users/x/code/deep/app', '/Users/x')).toBe('~/code/deep/app')
+    expect(homeRelative('/Users/x', '/Users/x')).toBe('~')
+    expect(homeRelative('C:\\Users\\x\\app', 'C:\\Users\\x')).toBe('~\\app')
+    // A sibling that only shares the prefix is not under home.
+    expect(homeRelative('/Users/xy/app', '/Users/x')).toBe('/Users/xy/app')
+    expect(homeRelative('/tmp/app', undefined)).toBe('/tmp/app')
+  })
+
   it('renders model, policy, cost, and a context bar', () => {
     const line = renderStatusLine(
       { providerId: 'anthropic', model: 'claude-opus-4-8', policy: 'ask', cwd: '/p', cost: { inputTokens: 0, outputTokens: 0, cost: 0.5 }, contextTokens: 500_000 },
@@ -847,7 +886,7 @@ describe('status line & progress', () => {
     )
     expect(line).toContain('anthropic/claude-opus-4-8')
     expect(line).toContain('ask')
-    expect(line).toContain('$0.5000')
+    expect(line).toContain('$0.500')
     expect(line).toContain('50%') // 500k of a 1M window
     expect(line).toMatch(/[▓░]/)
   })
@@ -1135,8 +1174,8 @@ describe('runTui', () => {
     const out = t.text()
     // One combined summary for the whole turn (30k+40k in, 100+200 out, $0.37),
     // carrying the running session total (same, as it's the only turn).
-    expect(out).toContain('· turn 70,000+300 tok · $0.3700')
-    expect(out).toContain('(session 70,000+300 tok · $0.3700)')
+    expect(out).toContain('· turn 70,000+300 tok · $0.370')
+    expect(out).toContain('(session 70,000+300 tok · $0.370)')
     // The old per-round lines (raw, unseparated counts) are gone.
     expect(out).not.toContain('30000+100')
     expect(out).not.toContain('40000+200')
@@ -1212,6 +1251,38 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(rec.approvals).toEqual([['run-1', 'c1', 'always']])
+  })
+
+  it('lists the choices once under the picker, and records the one taken', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['run ls', null])
+    t.io.select = async () => ({ kind: 'commit', value: 'always' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'always']])
+    expect(t.text()).not.toContain('[y] allow')
+    expect(t.text()).toContain('↳ Allowed for this run')
+  })
+
+  it('says Esc at the approval picker denied the call', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['run ls', null])
+    const specs: Array<{ escLabel?: string }> = []
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return { kind: 'cancel' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(specs[0].escLabel).toBe('deny')
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'deny']])
+    expect(t.text()).toContain('↳ Denied')
   })
 
   it('falls back to typing when the picker returns type', async () => {
@@ -1666,7 +1737,7 @@ describe('runTui', () => {
     // Two turns each report 100+50 / $0.01 → session total 200+100 / $0.02.
     // The breakdown replaced the single "session:" line; the totals are the point.
     expect(t.text()).toContain('200+100 tok')
-    expect(t.text()).toContain('$0.0200')
+    expect(t.text()).toContain('$0.020')
   })
 
   it('persists the session as a conversation on the first turn', async () => {
@@ -1937,6 +2008,35 @@ describe('runTui', () => {
     expect(out).toContain('✓ Correctness')
   })
 
+  it('prints one line for a run of retries and settles it when the run gives up', async () => {
+    const retry = (attempt: number): AgentEvent => ({ runId: 'x', type: 'retry', attempt, max: 6, message: '500 boom' })
+    const { d } = deps([retry(1), retry(2), retry(3), { runId: 'x', type: 'error', message: '500 boom' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out.match(/retrying \(/g)).toHaveLength(1)
+    expect(out).toContain('retrying (1/6)… 500 boom')
+    expect(out).toContain('tried 3 more times, then stopped')
+    expect(out.indexOf('then stopped')).toBeLessThan(out.indexOf('Error: 500 boom'))
+    expect(t.spinner).toContain('label:Retrying 3/6')
+  })
+
+  it('starts a new retry line after the request got through, and adds nothing to a plain error', async () => {
+    const retry: AgentEvent = { runId: 'x', type: 'retry', attempt: 1, max: 6, message: 'blip' }
+    const { d } = deps([retry, { runId: 'x', type: 'text', delta: 'ok\n\n' }, retry, { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text().match(/retrying \(/g)).toHaveLength(2)
+
+    const plain = deps([{ runId: 'x', type: 'error', message: 'bad request' }])
+    const t2 = fakeIo(['go', null])
+    plain.d.io = t2.io
+    await runTui(opts, plain.d)
+    expect(t2.text()).not.toContain('then stopped')
+  })
+
   // Parity with the GUI reducer (items.test.ts) and headless (headless.test.ts): a
   // turn the loop throws away mid-stream and redoes must leave one copy of the reply.
   // Line mode can't erase what it printed, so it drops what it hadn't and disowns
@@ -2090,7 +2190,7 @@ describe('runTui', () => {
     const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
-    expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:read_file', 'stop'])
+    expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:Read', 'stop'])
   })
 
   it('persists composer submissions to history, not approval answers', async () => {
@@ -2185,6 +2285,13 @@ describe('runTui', () => {
   it('lists every built-in terminal command in /help', () => {
     const missing = COMMANDS.filter((c) => !new RegExp(`/${c.name}\\b`).test(HELP_TEXT)).map((c) => c.name)
     expect(missing).toEqual([])
+  })
+
+  it('names the themes /theme actually has', () => {
+    const line = HELP_TEXT.split('\n').find((l) => l.includes('/theme'))!
+    for (const name of Object.keys(THEMES)) expect(line).toContain(name)
+    // `bright` is only a legacy alias for `dark`; /help used to list it as a theme.
+    expect(line).not.toContain('bright')
   })
 
   it('lists custom commands under /help', async () => {
@@ -4329,7 +4436,7 @@ describe('/cost breakdown', () => {
     expect(out).toContain('10,000+500 tok')
     expect(out).toContain('(9,000 cached)')
     expect(out).toContain('(200 cache write)')
-    expect(out).toContain('$0.1200')
+    expect(out).toContain('$0.120')
   })
 
   it('adds a total only when more than one model billed', () => {
@@ -4343,7 +4450,7 @@ describe('/cost breakdown', () => {
       paintNo
     )
     expect(two).toContain('total')
-    expect(two).toContain('$3.0000')
+    expect(two).toContain('$3.00')
   })
 
   it('says so before anything has been spent', () => {
@@ -4611,7 +4718,7 @@ describe('todo list rendering', () => {
     const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
-    expect(t.text()).toContain('read_file')
+    expect(t.text()).toContain('Read  a.ts')
     expect(t.text()).toContain('contents')
   })
 })

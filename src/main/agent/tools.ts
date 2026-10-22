@@ -112,6 +112,7 @@ import {
 } from './spawn'
 import { SCHEDULE_TOOL_NAMES, type ScheduledRunInfo } from './scheduler'
 import type { RenderMockup } from './mockupRender'
+import { LSP_TOOL_NAMES, makeLspTools, type LspToolAccess } from './lsp/tools'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -292,6 +293,19 @@ export interface ToolContext {
    * Absent on hosts that drive the tools directly, where nothing is enforced.
    */
   fileTracker?: FileReadTracker
+  /**
+   * The language servers covering this run's files (injected by the loop), behind the
+   * lsp_* tools. Absent where no servers can run; the tools then say so.
+   */
+  lsp?: LspToolAccess
+}
+
+/** The call a {@link ToolDef.materialize} hook turns a tool call into. */
+export interface MaterializedCall {
+  name: string
+  arguments: Record<string, unknown>
+  /** Prepended to the result when the call succeeds. */
+  note?: string
 }
 
 export interface ToolDef {
@@ -306,6 +320,12 @@ export interface ToolDef {
   blockedInPlan?: boolean
   /** Short human-readable description of a specific call, for the approval UI. */
   summarize: (args: Record<string, unknown>) => string
+  /**
+   * Work out, before any gate runs, the concrete call this one amounts to (lsp_rename:
+   * the apply_patch holding the server's edits). The loop then gates and runs that call
+   * in its place, so its effect passes exactly the checks the concrete tool does.
+   */
+  materialize?: (args: Record<string, unknown>, ctx: ToolContext) => Promise<MaterializedCall>
   execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string>
 }
 
@@ -602,8 +622,13 @@ export function numberedRead(text: string, offset?: number, limit?: number): str
   return `${header}${rows.join('\n')}${notice}`
 }
 
-/** The tools {@link staleWriteRefusal} guards: the ones that change an existing file in place. */
-const GUARDED_WRITES = new Set(['write_file', 'edit_file', 'multi_edit'])
+/**
+ * The tools {@link staleWriteRefusal} guards: the ones that change an existing file in
+ * place. notebook_edit is one of them: it addresses a cell by its number in the last
+ * read and rewrites the whole notebook, so after the user reorders cells or saves from
+ * Jupyter it would edit the wrong cell and overwrite their work.
+ */
+const GUARDED_WRITES = new Set(['write_file', 'edit_file', 'multi_edit', 'notebook_edit'])
 
 /** The refusal the model sees when a write would land on content it has not seen. */
 function staleWriteMessage(rel: string, reason: StaleWriteReason, name: string): string {
@@ -620,6 +645,22 @@ function staleWriteMessage(rel: string, reason: StaleWriteReason, name: string):
 function assertSeen(ctx: ToolContext, name: string, abs: string, rel: string, current: Buffer): void {
   const reason = ctx.fileTracker?.check(abs, current)
   if (reason) throw new Error(staleWriteMessage(rel, reason, name))
+}
+
+/**
+ * A file's text for an in-place edit, refusing bytes that are not UTF-8. Decoding is
+ * lossy: every byte that isn't valid UTF-8 (a Latin-1 or Windows-1252 accent, say)
+ * comes back as U+FFFD, and writing the edited text back would replace each of them
+ * with that character, damaging every line of the file and not just the one edited.
+ */
+export function editableText(buf: Buffer, rel: string): string {
+  const text = buf.toString('utf8')
+  if (!Buffer.from(text, 'utf8').equals(buf)) {
+    throw new Error(
+      `${rel} is not UTF-8 text (it may use a legacy encoding such as Latin-1 or Windows-1252), so editing it as text would corrupt its other non-ASCII characters. Make the change with run_shell instead (e.g. iconv to convert it, or sed on the bytes), or ask the user how to proceed.`
+    )
+  }
+  return text
 }
 
 /** The file's bytes, or null when it can't be read (most often: it does not exist). */
@@ -775,7 +816,7 @@ const editFile: ToolDef = {
     const replaceAll = args.replace_all === true
     const buf = await fs.readFile(abs)
     assertSeen(ctx, 'edit_file', abs, rel, buf)
-    const data = buf.toString('utf8')
+    const data = editableText(buf, rel)
     const sensitive = isSensitivePath(rel)
     const result = resolveEdit(data, oldStr, newStr, replaceAll, { showCandidate: !sensitive })
     assertNoRedactedValues(data, result.content)
@@ -878,7 +919,7 @@ const multiEdit: ToolDef = {
     }
     const buf = await fs.readFile(abs)
     assertSeen(ctx, 'multi_edit', abs, rel, buf)
-    const original = buf.toString('utf8')
+    const original = editableText(buf, rel)
     let data = original
     // Edits whose landing spot deserves a look, with their regions kept current as
     // later edits move lines around, so the snippets cite the file as written.
@@ -957,13 +998,14 @@ const notebookEdit: ToolDef = {
     if (!['replace', 'insert', 'delete'].includes(mode)) {
       throw new Error(`Unknown mode "${mode}": expected replace, insert, or delete.`)
     }
-    let raw: string
+    let bytes: Buffer
     try {
-      raw = await fs.readFile(abs, 'utf8')
+      bytes = await fs.readFile(abs)
     } catch {
       throw new Error(`${rel} does not exist. Create a notebook with write_file before editing its cells.`)
     }
-    const nb = parseNotebook(raw)
+    assertSeen(ctx, 'notebook_edit', abs, rel, bytes)
+    const nb = parseNotebook(bytes.toString('utf8'))
     const cell = num(args, 'cell')
     if (cell === undefined) throw new Error('notebook_edit requires a "cell" number.')
     const updated = editNotebook(nb, {
@@ -1138,12 +1180,13 @@ const applyPatch: ToolDef = {
         staged.push({ abs, rel: op.path, content: null, verb: 'delete' })
         deleted += 1
       } else {
-        let data: string
+        let bytes: Buffer
         try {
-          data = await fs.readFile(abs, 'utf8')
+          bytes = await fs.readFile(abs)
         } catch {
           throw new Error(`Update File: ${op.path} does not exist.`)
         }
+        let data = editableText(bytes, `Update File: ${op.path}`)
         const original = data
         op.hunks.forEach((hunk, h) => {
           try {
@@ -4683,6 +4726,9 @@ const recallHistory: ToolDef = {
   }
 }
 
+/** The lsp_* tools, given the file-tool containment check and apply_patch (for rename). */
+const lspTools = makeLspTools({ resolveInRoots, applyPatch })
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -4734,7 +4780,8 @@ export const TOOLS: ToolDef[] = [
   ghIssueComment,
   ghIssueSetState,
   ghRunList,
-  ghRunView
+  ghRunView,
+  ...lspTools
 ]
 
 export function toolSchemas(): ToolSchema[] {
@@ -4772,6 +4819,11 @@ export interface BuiltinToolsetOptions {
    * (headless), where the question could only get a canned reply. Absent counts as true.
    */
   askUser?: boolean
+  /**
+   * A language server is installed for a language this workspace uses; backs the lsp_*
+   * tools. Absent counts as false, so a run with no server pays nothing for them.
+   */
+  lsp?: boolean
 }
 
 /**
@@ -4791,6 +4843,7 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) return opts.scheduler
     if (name === PRESENT_PLAN_NAME) return opts.planMode
     if (name === ASK_USER_NAME) return opts.askUser !== false
+    if ((LSP_TOOL_NAMES as readonly string[]).includes(name)) return opts.lsp === true
     return true
   })
 }

@@ -22,6 +22,7 @@ import {
   setRunPolicy
 } from './agent/loop'
 import { killAllShells } from './agent/shells'
+import { lspManager } from './agent/lsp/manager'
 import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
@@ -655,6 +656,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
   } finally {
     killAllShells()
     disconnectAllMcp()
+    await lspManager.stopAll()
   }
   return code
 }
@@ -719,6 +721,7 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
   } finally {
     killAllShells()
     disconnectAllMcp()
+    await lspManager.stopAll()
   }
   return code
 }
