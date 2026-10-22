@@ -2,6 +2,7 @@ import { memo } from 'react'
 import { parseMarkdown, safeHref, type Block, type Inline } from '@shared/markdown'
 import { visualKind } from '../lib/visuals'
 import { CodeBlock } from './CodeBlock'
+import { Icon } from './Icon'
 import { VisualBlock } from './VisualBlock'
 
 /** Render an inline node tree. Keys are positional — the tree is static per render. */
@@ -70,9 +71,25 @@ function renderBlock(block: Block, key: number, visuals: boolean): JSX.Element {
         </blockquote>
       )
     case 'list': {
-      const items = block.items.map((it, i) => (
-        <li key={i}>{it.blocks.map((b, j) => renderBlock(b, j, visuals))}</li>
-      ))
+      const items = block.items.map((it, i) =>
+        it.checked === undefined ? (
+          <li key={i}>{it.blocks.map((b, j) => renderBlock(b, j, visuals))}</li>
+        ) : (
+          // A GFM task item: a read-only box in place of the bullet, like GitHub.
+          <li key={i} className="md-task">
+            {/* Drawn, not a disabled <input>: Chromium greys a disabled box out, so a
+                ticked one wouldn't read as done. */}
+            <span
+              className={`md-task__box${it.checked ? ' is-checked' : ''}`}
+              role="img"
+              aria-label={it.checked ? 'Done' : 'Not done'}
+            >
+              {it.checked && <Icon name="check" size={11} />}
+            </span>
+            <div className="md-task__body">{it.blocks.map((b, j) => renderBlock(b, j, visuals))}</div>
+          </li>
+        )
+      )
       return block.ordered ? (
         <ol key={key} className="md-list" start={block.start}>
           {items}

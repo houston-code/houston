@@ -4,6 +4,7 @@ import { isAbsolute, join } from 'node:path'
 import type { ConversationWorktree, RepoInfo, WorktreeRemoval } from '@shared/agent'
 import { isSafeGitRef } from '@shared/git'
 import { parseWorktreePorcelain } from './git'
+import { GIT_ENV, hardenedGitArgs } from './gitRead'
 
 /**
  * Create and tear down git worktrees that back a conversation, so a chat can work
@@ -14,7 +15,11 @@ import { parseWorktreePorcelain } from './git'
  *
  * All git here uses `execFile` (no shell), and every ref/branch is validated with
  * {@link isSafeGitRef} before it reaches the command line, so a crafted branch
- * name can't be read as an option or inject a second command.
+ * name can't be read as an option or inject a second command. It runs in the main
+ * process, outside the sandbox, in a repo whose `.git` a sandboxed command may have
+ * written, so it gets the same hardening as the read-only git (no hooks, fsmonitor,
+ * or repo-defined filter drivers): `worktree add` would otherwise run the repo's
+ * post-checkout hook and smudge filters on the host.
  */
 
 /** Where worktrees are nested inside the repo (relative to the main worktree root). */
@@ -27,12 +32,13 @@ const EXCLUDE_LINE = '/.houston/worktrees/'
 export type GitRun = (args: string[], cwd: string) => Promise<string>
 
 /** Default runner: rejects with an Error whose message carries git's stderr. */
-function runGit(args: string[], cwd: string): Promise<string> {
+async function runGit(args: string[], cwd: string): Promise<string> {
+  const hardening = await hardenedGitArgs(cwd)
   return new Promise((resolve, reject) => {
     execFile(
       'git',
-      args,
-      { cwd, timeout: 15_000, maxBuffer: 4_000_000, windowsHide: true },
+      [...hardening, '--no-pager', ...args],
+      { cwd, env: GIT_ENV, timeout: 15_000, maxBuffer: 4_000_000, windowsHide: true },
       (err, stdout, stderr) => {
         if (err) {
           const detail = (stderr || err.message || '').trim()

@@ -497,16 +497,38 @@ function startCallbackServer(expectedState: string): Promise<CallbackServer> {
   })
 }
 
+/**
+ * The command that hands `url` to the platform's URL handler, or null for anything
+ * but an http(s) URL. The URL comes from the authorization server's metadata, so it
+ * is untrusted text and must reach the handler as one argv entry that no shell reads.
+ * On Windows that rules out `cmd /c start`: cmd re-parses its command line, and a URL
+ * keeps `|`, `^`, `(` and `)` unescaped in its path and fragment, so a hostile
+ * endpoint like `https://host/x|calc` ran a second command. rundll32 passes the URL
+ * straight to the shell's protocol handler instead.
+ */
+export function urlOpenCommand(
+  url: string,
+  platform: NodeJS.Platform = process.platform
+): [string, string[]] | null {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return null
+  if (platform === 'darwin') return ['open', [url]]
+  if (platform === 'win32') return ['rundll32', ['url.dll,FileProtocolHandler', url]]
+  return ['xdg-open', [url]]
+}
+
 /** Default browser opener: the platform's URL handler, detached, best-effort. */
 function openWithSystemHandler(url: string): boolean {
+  const command = urlOpenCommand(url)
+  if (!command) return false
   try {
-    const [cmd, args] =
-      process.platform === 'darwin'
-        ? ['open', [url]]
-        : process.platform === 'win32'
-          ? ['cmd', ['/c', 'start', '', url.replace(/&/g, '^&')]]
-          : ['xdg-open', [url]]
-    const child = spawn(cmd, args, { stdio: 'ignore', detached: true })
+    const [cmd, args] = command
+    const child = spawn(cmd, args, { stdio: 'ignore', detached: true, windowsHide: true })
     child.on('error', () => {})
     child.unref()
     return true

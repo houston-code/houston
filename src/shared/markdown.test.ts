@@ -152,6 +152,29 @@ describe('parseMarkdown blocks', () => {
     expect(list.items).toHaveLength(3)
   })
 
+  it('parses GFM task items, dropping the box from the text', () => {
+    const list = parseMarkdown('- [ ] write it\n- [x] test it\n- [X] ship it\n- plain')[0] as Extract<
+      Block,
+      { type: 'list' }
+    >
+    expect(list.items.map((i) => i.checked)).toEqual([false, true, true, undefined])
+    expect(list.items[0].blocks).toEqual([{ type: 'paragraph', children: [{ type: 'text', value: 'write it' }] }])
+  })
+
+  it('reads task boxes in ordered and nested lists', () => {
+    const list = parseMarkdown('1. [x] first\n   - [ ] sub').at(0) as Extract<Block, { type: 'list' }>
+    expect(list.items[0].checked).toBe(true)
+    const nested = list.items[0].blocks[1] as Extract<Block, { type: 'list' }>
+    expect(nested.items[0].checked).toBe(false)
+  })
+
+  it('leaves bracket text that is not a task box alone', () => {
+    for (const src of ['- [link](https://x.dev)', '- [ ]', '- [x]no-space', '- [y] maybe']) {
+      const list = parseMarkdown(src)[0] as Extract<Block, { type: 'list' }>
+      expect(list.items[0].checked, src).toBeUndefined()
+    }
+  })
+
   it('parses an ordered list with a custom start', () => {
     const blocks = parseMarkdown('3. third\n4. fourth')
     const list = blocks[0] as Extract<Block, { type: 'list' }>

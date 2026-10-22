@@ -145,7 +145,7 @@ export async function previewWrite(
         return [
           bounded(
             path,
-            diffLines(renderNotebook(nb, { path }), renderNotebook(after, { path })),
+            hunkDiff(diffLines(renderNotebook(nb, { path }), renderNotebook(after, { path }))),
             {}
           )
         ]
@@ -172,7 +172,7 @@ export async function previewWrite(
             // A move is one change to the reader ("this file became that file"), not
             // a delete plus an unrelated add, so it is previewed as the destination
             // carrying the edit, annotated with where it came from.
-            previews.push(bounded(op.moveTo, diffLines(before, after), { renamedFrom: op.path }))
+            previews.push(bounded(op.moveTo, hunkDiff(diffLines(before, after)), { renamedFrom: op.path }))
           } else {
             previews.push(previewOf(op.path, before, after))
           }
