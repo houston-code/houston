@@ -1,4 +1,5 @@
 import { isBlockedSubresourceHost } from './agent/loopback'
+import type { Cdp } from './cdp'
 
 /**
  * Lock down an Electron session that loads UNTRUSTED pages — the local dev
@@ -26,6 +27,11 @@ import { isBlockedSubresourceHost } from './agent/loopback'
  *
  * The host filter matches on the URL's host literal (like webfetch), so a DNS
  * name resolving to a private IP is a known, deferred gap — see ROADMAP.md.
+ *
+ * The hidden capture window adds one per-page guard on top, {@link blockFileChoosers}:
+ * no one is watching that window, so any file picker its page opens is cancelled.
+ * The Preview dock doesn't take it. There the user clicks, and choosing a file to
+ * upload into their own app is theirs to do.
  */
 
 /**
@@ -59,4 +65,39 @@ export function hardenUntrustedSession(ses: LockableSession): void {
   ses.on('will-download', (event) => event.preventDefault())
   // Deny every device/notification permission an untrusted page might request.
   ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+}
+
+/**
+ * Cancel every native file picker a page opens: `<input type=file>` (clicked,
+ * reached through its `<label>`, or opened with `showPicker()`) and the
+ * `showOpenFilePicker` / `showSaveFilePicker` / `showDirectoryPicker` APIs.
+ *
+ * For the hidden `view_localhost` window. Its steps run with user activation, so
+ * a click on a label, or on a button whose handler calls `input.click()`, opens a
+ * picker even though the target isn't a file input. Electron shows that picker
+ * detached, on the user's screen (and un-hides the capture window behind it): a
+ * prompt Houston didn't ask for, whose chosen file the page could then send to
+ * any public host. Electron has no event to veto a file chooser, so this turns on
+ * DevTools' file-chooser interception through the window's protocol client (see
+ * cdp.ts), which cancels the picker in the browser process before any dialog
+ * exists; the page sees an aborted pick. Each intercepted picker is reported
+ * through `onBlocked`. The interception holds across the page's navigations.
+ *
+ * Resolves true once the interception is in force, false if the page refused it.
+ * Never hand the page user activation unless it resolved true.
+ */
+export async function blockFileChoosers(cdp: Pick<Cdp, 'send' | 'on'>, onBlocked: () => void): Promise<boolean> {
+  cdp.on((method) => {
+    if (method === 'Page.fileChooserOpened') onBlocked()
+  })
+  try {
+    // Interception only fires with the Page domain enabled; `cancel` dismisses the
+    // pick for the page (an input's `cancel` event, an AbortError) instead of
+    // leaving it pending forever.
+    await cdp.send('Page.enable')
+    await cdp.send('Page.setInterceptFileChooserDialog', { enabled: true, cancel: true })
+    return true
+  } catch {
+    return false
+  }
 }
