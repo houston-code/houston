@@ -17,10 +17,16 @@ export function useChatStatus(): ChatStatusMap {
     // Guard for test setups that stub only part of `window.api`.
     if (typeof window.api?.getChatStatus !== 'function') return
     let alive = true
+    // A broadcast that lands before the seed query resolves is newer than it: once
+    // one has arrived, the seed is stale and must not overwrite it.
+    let heard = false
     void window.api.getChatStatus().then((s) => {
-      if (alive) setStatus(s)
+      if (alive && !heard) setStatus(s)
     })
-    const off = window.api.onChatStatusChanged((s) => setStatus(s))
+    const off = window.api.onChatStatusChanged((s) => {
+      heard = true
+      setStatus(s)
+    })
     return () => {
       alive = false
       off()

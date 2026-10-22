@@ -53,6 +53,23 @@ describe('useChatStatus', () => {
     expect(unsubscribe).toHaveBeenCalled()
   })
 
+  it('keeps a broadcast that arrives before the seed query resolves', async () => {
+    let resolveSeed!: (s: ChatStatusMap) => void
+    let handler: ((s: ChatStatusMap) => void) | null = null
+    window.api = {
+      getChatStatus: vi.fn(() => new Promise<ChatStatusMap>((r) => (resolveSeed = r))),
+      onChatStatusChanged: vi.fn((cb: (s: ChatStatusMap) => void) => {
+        handler = cb
+        return () => {}
+      })
+    } as unknown as typeof window.api
+    const { result } = renderHook(() => useChatStatus())
+    act(() => handler!({ a: { running: true, pending: [{ kind: 'question' }] } }))
+    // The stale seed (taken before the prompt) resolves afterwards.
+    await act(async () => resolveSeed({ a: { running: true, pending: [] } }))
+    expect(result.current.a?.pending).toHaveLength(1)
+  })
+
   it('no-ops when the bridge is unavailable', () => {
     window.api = {} as unknown as typeof window.api
     const { result } = renderHook(() => useChatStatus())
