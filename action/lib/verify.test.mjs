@@ -77,7 +77,12 @@ describe('checkGpgStatus', () => {
   })
 })
 
-const hasGpgv = spawnSync('gpgv', ['--version']).status === 0 && spawnSync('gpg', ['--version']).status === 0
+// Linux and macOS only, like the action itself (install() refuses Windows runners): Git for
+// Windows ships an MSYS gpg that can't open the native paths this test hands it.
+const hasGpgv =
+  process.platform !== 'win32' &&
+  spawnSync('gpgv', ['--version']).status === 0 &&
+  spawnSync('gpg', ['--version']).status === 0
 
 describe.runIf(hasGpgv)('the pinned release signature', () => {
   function gpgv(sums) {

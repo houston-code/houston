@@ -52,7 +52,7 @@ describe('install', () => {
     const env = envFor({ HOUSTON_INPUT_CLI_VERSION: 'v0.8.0' })
     const { fetchImpl, urls } = server()
     const { exec, calls } = execWith()
-    const r = await install({ env, exec, fetchImpl, log: () => {} })
+    const r = await install({ env, exec, fetchImpl, log: () => {}, platform: 'linux' })
     expect(urls).toEqual([
       'https://github.com/houston-code/houston/releases/download/v0.8.0/houston-cli.cjs',
       'https://github.com/houston-code/houston/releases/download/v0.8.0/SHA256SUMS',
@@ -67,14 +67,14 @@ describe('install', () => {
   it('defaults to the pinned release', async () => {
     const { fetchImpl, urls } = server({ 'houston-cli.cjs': 'x', SHA256SUMS: `${sha('x')}  houston-cli.cjs\n` })
     // The fake CLI is not the pinned one, so the pinned-hash check is what stops it.
-    await expect(install({ env: envFor(), exec: execWith().exec, fetchImpl, log: () => {} })).rejects.toThrow(/hash this action pins/)
+    await expect(install({ env: envFor(), exec: execWith().exec, fetchImpl, log: () => {}, platform: 'linux' })).rejects.toThrow(/hash this action pins/)
     expect(urls[0]).toContain(`/v${pinnedRelease().version}/`)
   })
 
   it('never runs a CLI that fails verification', async () => {
     const { fetchImpl } = server({ 'houston-cli.cjs': `${CLI_BODY}// tampered\n` })
     const { exec, calls } = execWith()
-    await expect(install({ env: envFor({ HOUSTON_INPUT_CLI_VERSION: '0.8.0' }), exec, fetchImpl, log: () => {} })).rejects.toThrow(
+    await expect(install({ env: envFor({ HOUSTON_INPUT_CLI_VERSION: '0.8.0' }), exec, fetchImpl, log: () => {}, platform: 'linux' })).rejects.toThrow(
       /does not match SHA256SUMS/
     )
     expect(calls.some((c) => c[0] === 'node')).toBe(false)
@@ -83,25 +83,33 @@ describe('install', () => {
   it('never runs a CLI whose checksums are not signed by the release key', async () => {
     const { exec, calls } = execWith({ gpgv: { code: 1, stdout: '[GNUPG:] NO_PUBKEY X\n', stderr: '' } })
     await expect(
-      install({ env: envFor({ HOUSTON_INPUT_CLI_VERSION: '0.8.0' }), exec, fetchImpl: server().fetchImpl, log: () => {} })
+      install({ env: envFor({ HOUSTON_INPUT_CLI_VERSION: '0.8.0' }), exec, fetchImpl: server().fetchImpl, log: () => {}, platform: 'linux' })
     ).rejects.toThrow(/GPG signature check/)
     expect(calls.some((c) => c[0] === 'node')).toBe(false)
   })
 
   it('fails on a missing asset or a version that does not match', async () => {
     const env = envFor({ HOUSTON_INPUT_CLI_VERSION: '0.8.0' })
-    await expect(install({ env, exec: execWith().exec, fetchImpl: server({ 'SHA256SUMS.asc': null }).fetchImpl, log: () => {} })).rejects.toThrow(
+    await expect(install({ env, exec: execWith().exec, fetchImpl: server({ 'SHA256SUMS.asc': null }).fetchImpl, log: () => {}, platform: 'linux' })).rejects.toThrow(
       /HTTP 404/
     )
     await expect(
-      install({ env, exec: execWith({ version: '0.7.0' }).exec, fetchImpl: server().fetchImpl, log: () => {} })
+      install({ env, exec: execWith({ version: '0.7.0' }).exec, fetchImpl: server().fetchImpl, log: () => {}, platform: 'linux' })
     ).rejects.toThrow(/reports version "0.7.0"/)
+  })
+
+  it('refuses a Windows runner before downloading', async () => {
+    const { fetchImpl, urls } = server()
+    await expect(
+      install({ env: envFor(), exec: execWith().exec, fetchImpl, log: () => {}, platform: 'win32' })
+    ).rejects.toThrow(/Windows runners are not supported/)
+    expect(urls).toEqual([])
   })
 
   it('refuses a version that is not X.Y.Z before downloading', async () => {
     const { fetchImpl, urls } = server()
     await expect(
-      install({ env: envFor({ HOUSTON_INPUT_CLI_VERSION: '../../evil' }), exec: execWith().exec, fetchImpl, log: () => {} })
+      install({ env: envFor({ HOUSTON_INPUT_CLI_VERSION: '../../evil' }), exec: execWith().exec, fetchImpl, log: () => {}, platform: 'linux' })
     ).rejects.toThrow(/release version/)
     expect(urls).toEqual([])
   })

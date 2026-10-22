@@ -25,7 +25,16 @@ async function download(fetchImpl, url, dest) {
   writeFileSync(dest, body)
 }
 
-export async function install({ env, exec, fetchImpl = fetch, log = (s) => process.stdout.write(`${s}\n`) }) {
+export async function install({
+  env,
+  exec,
+  fetchImpl = fetch,
+  log = (s) => process.stdout.write(`${s}\n`),
+  platform = process.platform
+}) {
+  // No OS sandbox for shell commands, and gpg there is an MSYS build that misreads native
+  // paths, so the signature check can't be trusted to run as written.
+  if (platform === 'win32') throw new Error('Windows runners are not supported: use a Linux or macOS runner')
   const pinned = pinnedRelease()
   const version = parseVersion((env.HOUSTON_INPUT_CLI_VERSION ?? '').trim() || pinned.version)
   const base = env.RUNNER_TEMP && isAbsolute(env.RUNNER_TEMP) ? env.RUNNER_TEMP : join(homedir(), '.houston-action')
