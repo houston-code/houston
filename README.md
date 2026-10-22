@@ -295,6 +295,8 @@ Open source under the [Apache License 2.0](LICENSE).
   no desktop app, no Chromium, no display server, ~60 MB of RAM instead of a
   desktop app's footprint. Runs on headless Linux servers and small VPSes; API
   keys come from environment variables. See [Standalone CLI](#standalone-cli-no-desktop-app).
+- **GitHub Action.** Answer `@houston` mentions, review pull requests, and fix failed CI
+  runs in GitHub Actions, on your runners with your key. See [GitHub Action](#github-action).
 - **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only:
   the agent researches and proposes a plan, with writes and shell commands
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
@@ -902,6 +904,35 @@ built-in search otherwise, while `ast_grep` (structural search) needs an
 `ast-grep` binary on your `PATH` or via `HOUSTON_AST_GREP` (the desktop app
 bundles one, the single-file CLI does not), and reports it is unavailable when
 none is found.
+
+## GitHub Action
+
+Houston also runs in GitHub Actions, on your own runners with your own model API key and
+no hosted service: the [Houston action](action/README.md) downloads the standalone CLI,
+verifies it against the signed `SHA256SUMS` (see [Verifying downloads](#verifying-downloads)),
+and runs it in the job. It has three modes:
+
+- **respond:** answers an `@houston` mention on an issue or pull request, from someone
+  with write access, in a reply.
+- **review:** posts one review comment on each same-repository pull request, from
+  Houston's multi-agent `review_changes`.
+- **fix-ci:** when a workflow run fails, fixes the cause in a sandbox, pushes the fix to a
+  new `houston/` branch, and opens a pull request. It never pushes to the failed branch or
+  the default branch.
+
+```yaml
+- uses: houston-code/houston/action@<commit SHA> # v0.10.0
+  with:
+    mode: review
+    api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+Issue, comment, and pull request text and CI logs are treated as untrusted: they never
+reach a shell, and Houston reads them through its fenced GitHub tools. The model gets only
+read access to GitHub and no web access; the action itself does the posting and pushing.
+Example workflows with least-privilege `permissions:` are in
+[action/examples](action/examples/), and [action/README.md](action/README.md) lists every
+input and the security model.
 
 ## Develop
 

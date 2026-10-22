@@ -123,6 +123,11 @@ auto-merge** on in the repository settings.
    characters (the `release-notes` check on the PR says when it passes).
 3. Merge it with **Create a merge commit**.
 4. Release - publish: `0.10.0`.
+5. Point the GitHub Action at the new CLI in a PR to `main`: set `action/cli-release.json`
+   to the version and the `houston-cli.cjs` hash from the release's `SHA256SUMS`, and add
+   that `SHA256SUMS` and `SHA256SUMS.asc` under `action/test/fixtures/v<version>/` (its
+   unit tests check the pinned hash against the signed list). Until then the action keeps
+   running the CLI it pinned before.
 
 ### Fix something before it ships
 

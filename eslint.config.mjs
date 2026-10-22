@@ -33,6 +33,15 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // The GitHub Action's scripts run on bare Node from the action directory, with no
+    // install step, so they are plain ES modules using only Node's own globals.
+    files: ['action/**/*.mjs'],
+    languageOptions: {
+      sourceType: 'module',
+      globals: { process: 'readonly', Buffer: 'readonly', fetch: 'readonly', TextEncoder: 'readonly' }
+    }
+  },
+  {
     files: ['src/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks },
     rules: {

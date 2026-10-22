@@ -1,0 +1,171 @@
+name: Houston
+description: >-
+  Run the Houston coding agent on your own runner with your own model API key: answer
+  @houston mentions, review pull requests, or fix failed CI runs. No hosted service.
+author: The Houston Authors
+branding:
+  icon: terminal
+  color: purple
+
+inputs:
+  mode:
+    description: >-
+      respond (answer an @houston mention from a collaborator with write access), review
+      (one review comment on a pull request), or fix-ci (fix a failed workflow run on a new
+      branch and open a pull request). Defaults from the event: issue_comment, issues and
+      pull_request_review_comment respond, pull_request reviews, workflow_run fixes.
+    required: false
+    default: ''
+  prompt:
+    description: Extra instructions added to the task, such as house review rules.
+    required: false
+    default: ''
+  provider:
+    description: >-
+      Model provider id: anthropic, openai, gemini, a catalog host such as openrouter or
+      groq, or the id to give a base-url endpoint.
+    required: false
+    default: anthropic
+  model:
+    description: Model id. Defaults to the provider's default model.
+    required: false
+    default: ''
+  base-url:
+    description: An OpenAI-compatible endpoint to register as provider, for a self-hosted or gateway model.
+    required: false
+    default: ''
+  api-key:
+    description: >-
+      The provider's API key. Pass it from a secret (secrets.ANTHROPIC_API_KEY); the action
+      masks it and hands it to Houston only through the environment.
+    required: false
+    default: ''
+  approval:
+    description: >-
+      Approval policy: default (plan, read-only, for respond and review; auto-edit with
+      sandboxed, offline shell allowed for fix-ci), plan, auto-edit, or full-auto. Anything a policy
+      would ask about is refused, since no one is there to answer.
+    required: false
+    default: default
+  max-turns:
+    description: Hard cap on model steps for the run.
+    required: false
+    default: '40'
+  max-cost:
+    description: US dollar amount at which Houston is told to wrap up, like 2 or 0.5. Empty means no ceiling.
+    required: false
+    default: ''
+  effort:
+    description: Reasoning effort, one of off, low, medium, high, xhigh. Empty keeps Houston's default.
+    required: false
+    default: ''
+  verify:
+    description: A check Houston must pass after editing, like "npm test". Used by fix-ci.
+    required: false
+    default: ''
+  allowed-tools:
+    description: >-
+      Comma or newline separated tool names. When set, only these tools (plus the ones the
+      mode needs) run at all. Web fetch, web search, and every GitHub write tool stay
+      refused either way.
+    required: false
+    default: ''
+  trigger:
+    description: The mention that starts a respond run.
+    required: false
+    default: '@houston'
+  branch-prefix:
+    description: Prefix for fix-ci branches. The action only ever pushes a new branch under it.
+    required: false
+    default: houston/
+  working-directory:
+    description: The git checkout Houston works in. Defaults to the workspace.
+    required: false
+    default: ''
+  post:
+    description: Set to false to write the reply, review, or fix to the job summary instead of posting it.
+    required: false
+    default: 'true'
+  install-sandbox:
+    description: >-
+      On a GitHub-hosted Linux runner, install bubblewrap when a run can use the shell, so
+      shell commands are sandboxed. Self-hosted runners are only checked, never changed.
+    required: false
+    default: 'true'
+  cli-version:
+    description: Houston CLI release to run. Defaults to the release this action version pins.
+    required: false
+    default: ''
+  github-token:
+    description: >-
+      Token for reading the thread and CI logs and for posting. Pull requests the default
+      token opens do not trigger workflows; pass a GitHub App token to get CI on fix PRs.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  status:
+    description: success, limit, stalled, approval_denied, error, or skipped.
+    value: ${{ steps.run.outputs.status }}
+  skipped:
+    description: true when the event did not start a run (no mention, a fork, a passing run).
+    value: ${{ steps.run.outputs.skipped }}
+  url:
+    description: The posted comment, review, or pull request.
+    value: ${{ steps.run.outputs.url }}
+  branch:
+    description: The fix-ci branch that was pushed.
+    value: ${{ steps.run.outputs.branch }}
+  reply-file:
+    description: Path of the reply, review, or pull request body Houston wrote.
+    value: ${{ steps.run.outputs.reply-file }}
+  cost-usd:
+    description: Estimated model cost of the run.
+    value: ${{ steps.run.outputs.cost-usd }}
+  turns:
+    description: Model steps the run took.
+    value: ${{ steps.run.outputs.turns }}
+  cli-version:
+    description: The Houston CLI version that ran.
+    value: ${{ steps.install.outputs.cli-version }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: '22'
+
+    - name: Install the Houston CLI
+      id: install
+      shell: bash
+      env:
+        HOUSTON_INPUT_CLI_VERSION: ${{ inputs.cli-version }}
+      run: node "$GITHUB_ACTION_PATH/scripts/install.mjs"
+
+    # Inputs reach the script only through the environment, never spliced into the script
+    # text, so no input value (or event text) is ever read by the shell.
+    - name: Run Houston
+      id: run
+      shell: bash
+      env:
+        HOUSTON_CLI_PATH: ${{ steps.install.outputs.cli-path }}
+        HOUSTON_ACTION_API_KEY: ${{ inputs.api-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        HOUSTON_INPUT_MODE: ${{ inputs.mode }}
+        HOUSTON_INPUT_PROMPT: ${{ inputs.prompt }}
+        HOUSTON_INPUT_PROVIDER: ${{ inputs.provider }}
+        HOUSTON_INPUT_MODEL: ${{ inputs.model }}
+        HOUSTON_INPUT_BASE_URL: ${{ inputs.base-url }}
+        HOUSTON_INPUT_APPROVAL: ${{ inputs.approval }}
+        HOUSTON_INPUT_MAX_TURNS: ${{ inputs.max-turns }}
+        HOUSTON_INPUT_MAX_COST: ${{ inputs.max-cost }}
+        HOUSTON_INPUT_EFFORT: ${{ inputs.effort }}
+        HOUSTON_INPUT_VERIFY: ${{ inputs.verify }}
+        HOUSTON_INPUT_ALLOWED_TOOLS: ${{ inputs.allowed-tools }}
+        HOUSTON_INPUT_TRIGGER: ${{ inputs.trigger }}
+        HOUSTON_INPUT_BRANCH_PREFIX: ${{ inputs.branch-prefix }}
+        HOUSTON_INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
+        HOUSTON_INPUT_POST: ${{ inputs.post }}
+        HOUSTON_INPUT_INSTALL_SANDBOX: ${{ inputs.install-sandbox }}
+      run: node "$GITHUB_ACTION_PATH/scripts/run.mjs"
