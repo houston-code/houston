@@ -505,8 +505,8 @@ jobs:
     # landing tree. The `intentional-revert` override is read from the PR's labels, which
     # a merge_group event does not carry, so a legitimate revert would hit a guard it has
     # no way to acknowledge and wedge the queue. Running it on the PR loses nothing:
-    # `refs/pull/N/merge` is recomputed against current main, so the guard already sees
-    # the real before/after regardless of how stale the branch is.
+    # `refs/pull/N/merge` is this PR merged into its base, so the guard sees the real
+    # before/after regardless of how stale the branch is.
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
@@ -517,7 +517,13 @@ jobs:
           # with work that landed while this branch was open, so it needs real history,
           # not the default depth-1 checkout.
           fetch-depth: 0
-      # Against the PR's own base: main, or a release line for a backport or release PR.
+      # Against the tree the merge was built on: the merge commit's first parent. That is
+      # the PR's own base (main, or a release line for a backport or release PR) as GitHub
+      # saw it when it built refs/pull/N/merge, or, for a PR in a stack, the PRs below it
+      # merged onto main. Re-fetching the base branch instead races both: anything that
+      # lands on main between building the merge ref and this step looks like content the
+      # PR removes, and a stacked PR's merge ref sits on a snapshot of main that only moves
+      # when the stack is pushed.
       - name: Check this merge does not revert work already on its base branch
         env:
           ALLOW_REVERT: ${{ contains(github.event.pull_request.labels.*.name, 'intentional-revert') && '1' || '' }}
@@ -525,11 +531,7 @@ jobs:
           # THIRD-PARTY-NOTICES.md, which reads as a revert; this exempts only those two
           # files from the recent-content rule (see GENERATED_DEPENDENCY_FILES).
           DEPENDENCY_UPDATE: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && '1' || '' }}
-          BASE: ${{ github.base_ref }}
-        run: |
-          set -euo pipefail
-          git fetch --no-tags --depth=100 origin "+refs/heads/$BASE:refs/remotes/origin/$BASE"
-          node scripts/merge-revert-guard.mjs "origin/$BASE" HEAD
+        run: node scripts/merge-revert-guard.mjs HEAD^1 HEAD
 
   # Release PRs (release-pr/vX.Y.Z, opened by release-prepare.yml): the notes' one-sentence
   # summary must pass, and the PR may change nothing but the version and CHANGELOG. Release

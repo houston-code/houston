@@ -20,7 +20,7 @@
 // is explicit and on the record rather than silent.
 //
 // Usage:  node scripts/merge-revert-guard.mjs <baseRef> <resultRef>
-//   baseRef    the merge target as it is NOW (e.g. the fetched origin/main)
+//   baseRef    the tree the merge was built on (in CI, HEAD^1 of refs/pull/N/merge)
 //   resultRef  the built merge commit/tree that would land (e.g. HEAD after `git merge`)
 // Override: set ALLOW_REVERT=1 (wired to an `intentional-revert` PR label in CI).
 // DEPENDENCY_UPDATE=1 (wired to Dependabot-authored PRs in CI) exempts the generated
