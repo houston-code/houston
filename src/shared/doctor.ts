@@ -42,6 +42,54 @@ export interface DoctorFacts {
   terminal?: { tty: boolean; color: boolean; columns: number; term: string }
   /** Newer release, when the update check found one. */
   update: { latest: string; url: string } | null
+  /**
+   * Language servers Houston can drive: whether each is installed and whether the
+   * workspace looks like it uses that language. Absent on hosts that don't probe them.
+   */
+  languageServers?: {
+    id: string
+    name: string
+    path: string | null
+    source?: string
+    usedByProject: boolean
+    installHint: string
+  }[]
+  /** Why installed servers won't start here, if they won't (see IntegrationsInfo). */
+  languageServersBlocked?: 'disabled' | 'unsandboxed' | 'needs-git-bash'
+}
+
+/** The "Language servers" group: installed servers, missing ones this project needs, and a blocked host. */
+function languageServerChecks(f: DoctorFacts): DoctorCheck[] {
+  const servers = f.languageServers ?? []
+  const checks: DoctorCheck[] = []
+  if (f.languageServersBlocked) {
+    const why = {
+      disabled: { detail: 'turned off (in settings, or by HOUSTON_LSP=off)', fix: 'turn language servers on in Settings > Tools & Permissions' },
+      unsandboxed: {
+        detail: 'off: no OS sandbox on this host to confine them',
+        fix: 'turn them on explicitly in Settings > Tools & Permissions if you accept running them unconfined'
+      },
+      'needs-git-bash': { detail: 'off: they need Git for Windows (Git Bash)', fix: 'install Git for Windows, then restart Houston' }
+    }[f.languageServersBlocked]
+    checks.push({ label: 'language servers', status: 'warn', ...why })
+  }
+  const missing: string[] = []
+  for (const s of servers) {
+    if (s.path) {
+      checks.push({ label: s.id, status: 'ok', detail: s.source === 'workspace' ? `${s.path} (project)` : s.path })
+    } else if (s.usedByProject) {
+      checks.push({
+        label: s.id,
+        status: 'warn',
+        detail: `not installed; this project uses ${s.name}`,
+        fix: s.installHint
+      })
+    } else {
+      missing.push(s.id)
+    }
+  }
+  if (missing.length) checks.push({ label: 'not installed', status: 'ok', detail: `${missing.join(', ')} (optional)` })
+  return checks
 }
 
 /** Turn probed facts into the graded report. Pure. */
@@ -126,6 +174,10 @@ export function buildDoctorReport(f: DoctorFacts): DoctorReport {
         ...(b.path ? {} : { fix: `install it to use ${b.purpose}` })
       }))
     },
+    // Only on hosts that probe language servers, so a report without them is unchanged.
+    ...(f.languageServers || f.languageServersBlocked
+      ? [{ title: 'Language servers', checks: languageServerChecks(f) }]
+      : []),
     {
       title: 'MCP',
       checks: f.mcp.map((m) => ({

@@ -708,16 +708,62 @@ describe('SettingsModal', () => {
     expect(onSaved).not.toHaveBeenCalled()
   })
 
-  it('toggles the diagnostics-on-save option under the Tools tab', () => {
-    installApi()
-    const { onSaved } = renderModal({ diagnosticsOnSave: false })
+  it('picks the diagnostics-on-save mode under the Tools tab, unset reading as the language-server default', async () => {
+    const api = installApi()
+    renderModal({ diagnosticsOnSave: false })
     fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
 
-    const checkbox = screen.getByRole('checkbox', { name: /run a fast checker/i })
-    expect(checkbox).not.toBeChecked()
-    fireEvent.click(checkbox)
-    expect(checkbox).toBeChecked()
-    expect(onSaved).not.toHaveBeenCalled()
+    const select = screen.getByRole('combobox', { name: /after the agent writes a file/i })
+    expect(select).toHaveValue('off')
+    fireEvent.change(select, { target: { value: 'auto' } })
+    expect(select).toHaveValue('auto')
+    fireEvent.click(within(document.querySelector('.modal__foot') as HTMLElement).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
+    // The default is stored as unset, so a later default change still reaches this user.
+    expect(saved.diagnosticsOnSave).toBeUndefined()
+  })
+
+  it('edits extra language servers as JSON and refuses an invalid list', async () => {
+    const api = installApi()
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    const box = screen.getByRole('textbox', { name: /extra language servers/i })
+    fireEvent.focus(box)
+    fireEvent.change(box, { target: { value: '[{"id": "lua"}]' } })
+    fireEvent.blur(box)
+    expect(screen.getByRole('alert')).toHaveTextContent(/"id", "command", and "extensions"/)
+    fireEvent.focus(box)
+    fireEvent.change(box, {
+      target: { value: '[{"id": "lua", "command": "lua-language-server", "extensions": ["lua"]}]' }
+    })
+    fireEvent.blur(box)
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+    fireEvent.change(screen.getByRole('combobox', { name: /run language servers/i }), { target: { value: 'off' } })
+    fireEvent.click(within(document.querySelector('.modal__foot') as HTMLElement).getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    const saved = api.saveSettings.mock.calls.at(-1)![0] as AppSettings
+    expect(saved.lspServers).toEqual([{ id: 'lua', command: 'lua-language-server', extensions: ['lua'] }])
+    expect(saved.lspEnabled).toBe(false)
+  })
+
+  it('shows which language servers are installed', async () => {
+    installApi({
+      getIntegrations: vi.fn(() =>
+        Promise.resolve({
+          gh: { installed: true, authenticated: true },
+          formatters: [],
+          languageServers: [
+            { id: 'typescript', name: 'TypeScript', languages: ['ts'], path: '/usr/bin/tls', installHint: '', user: false },
+            { id: 'go', name: 'Go', languages: ['go'], path: null, installHint: '', user: false }
+          ]
+        })
+      )
+    })
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    expect(await screen.findByText('Language servers (code intelligence)')).toBeInTheDocument()
+    expect(screen.getByText('1 of 2 found')).toBeInTheDocument()
   })
 
   it('removes a permission rule when its ✕ control is clicked', () => {

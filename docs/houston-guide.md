@@ -380,6 +380,41 @@ exactly (its snippet had drifted from the file, or carried copied line numbers),
 result shows the edited lines so it can check them. An edit whose snippet matches
 nothing points the agent at the closest part of the file instead of only failing.
 
+## Code intelligence (language servers)
+
+When a language server for the project's language is installed, Houston uses it to
+check the agent's edits the way an editor would. After the agent writes a file the
+server covers, the tool result lists the errors the edit introduced (and up to five
+new warnings), so the agent can fix them in the same turn. Problems the file already
+had before the edit are left out, and a clean edit adds nothing. This is on by
+default whenever a server is installed; the agent reading a file starts its server in
+the background, so the check after the edit is usually quick.
+
+Supported servers (none are bundled; install the ones you want):
+
+- TypeScript and JavaScript: `typescript-language-server` or `vtsls`. A copy in the
+  project's own `node_modules/.bin` is preferred over one on `PATH`.
+- Python: `pyright-langserver` (from `pyright`) or `basedpyright-langserver`.
+- Go: `gopls`. Rust: `rust-analyzer`. C and C++: `clangd`.
+
+Other servers can be added in Settings > **Tools & Permissions** > **Language
+servers** as a JSON list of `{ "id", "command", "extensions" }` entries (plus
+optional `args`, `languageId`, `rootMarkers`); reusing a built-in id (`typescript`,
+`python`, `go`, `rust`, `clangd`) replaces it. Settings > Tools & Permissions >
+**Optional integrations** and `/doctor` show which servers are installed.
+
+Servers start on demand, one per language and project, are reused across turns, and
+stop after ten idle minutes or when Houston quits. They run in the same sandbox as
+shell commands, with no network. A server can run code from the project (a TypeScript
+plugin named in `tsconfig.json`, a Rust build script), so on a host where the sandbox
+can't confine it, servers stay off unless you set **Run language servers** to
+**Always**; **Never** turns them off. Setting `HOUSTON_LSP=off` in the environment also
+turns them off for that process.
+
+**Diagnostics on save** (same tab) picks what runs after an edit: the language server
+when one covers the file (the default); the language server, or else a fast checker
+(`eslint`, `ruff`/`pyflakes`, `gofmt`) for other files; or no check at all.
+
 ## Typing while it works (steering)
 
 You do not have to wait for a turn to finish before saying the next thing. Type
@@ -529,7 +564,8 @@ itself separately.
 `/doctor` reports what Houston can see: the version (and whether a newer one is
 out), Node and platform, the active model and every provider's key status,
 whether the shell sandbox is actually enforced on this host, which external tools
-(`git`, `gh`, `rg`) are on PATH, and each MCP server's connection state. In the
+(`git`, `gh`, `rg`) are on PATH, which language servers are installed (and whether
+servers are off on this host), and each MCP server's connection state. In the
 terminal it also reports the terminal's size and color support. Each row is marked
 healthy, worth knowing, or broken, and anything not healthy comes with what to do
 about it. It runs in both the desktop app and the terminal.
@@ -1264,7 +1300,8 @@ Settings covers providers and keys, web search, approval mode and permission
 rules, hooks, MCP servers, additional folders, context threshold, appearance
 (theme, notifications), updates (installed version and a manual "Check for updates";
 also **Check for Updates…** in the app menu on macOS or the Help menu on Windows and
-Linux), and optional integrations (`gh`, formatters). API keys
+Linux), language servers, and optional integrations (`gh`, formatters, language
+servers). API keys
 are encrypted with the OS keychain and stay in the main process.
 
 If a key won't save because the OS keychain is unavailable, Settings (and the Get started
