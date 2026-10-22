@@ -41,4 +41,5 @@
 - Standalone terminal CLI for macOS, Windows and Linux (x64 or Arm) with Node 22+:
   - Homebrew: `brew install houston-code/tap/houston`
   - npm: `npm install -g @houston-code/cli`
+  - bun: `bun add -g @houston-code/cli`
   - Install script: `curl -fsSL https://houstoncode.ai/install.sh | sh`

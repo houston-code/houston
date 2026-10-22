@@ -98,10 +98,20 @@ describe("CLI install copy buttons", () => {
     return window.document;
   }
 
+  it("lists every install channel, in order", () => {
+    const doc = new JSDOM(html).window.document;
+    expect([...doc.querySelectorAll(".cli-cmds code")].map((c) => c.textContent)).toEqual([
+      "brew install houston-code/tap/houston",
+      "npm install -g @houston-code/cli",
+      "bun add -g @houston-code/cli",
+      "curl -fsSL https://houstoncode.ai/install.sh | sh",
+    ]);
+  });
+
   it("ships one hidden button per command", () => {
     const doc = new JSDOM(html).window.document;
     const rows = [...doc.querySelectorAll(".cli-cmds dd")];
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     for (const dd of rows) {
       const btn = dd.querySelector(".copy-btn");
       expect(btn.hidden).toBe(true);
@@ -120,10 +130,10 @@ describe("CLI install copy buttons", () => {
     const doc = await page({ writeText: (t) => (written.push(t), Promise.resolve()) });
     const buttons = [...doc.querySelectorAll(".copy-btn")];
     expect(buttons.every((b) => !b.hidden)).toBe(true);
-    buttons[2].click();
+    buttons[3].click();
     await new Promise((r) => setTimeout(r, 0));
     expect(written).toEqual(["curl -fsSL https://houstoncode.ai/install.sh | sh"]);
-    expect(buttons[2].textContent).toBe("Copied");
+    expect(buttons[3].textContent).toBe("Copied");
     expect(doc.getElementById("copy-status").textContent).toBe("Command copied.");
   });
 
