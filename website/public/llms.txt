@@ -29,6 +29,7 @@
 - Home: https://houstoncode.ai/
 - Download (all platforms): https://github.com/houston-code/houston/releases/latest
 - Source and issues: https://github.com/houston-code/houston
+- Docs (for the latest release): https://houstoncode.ai/docs/
 - Privacy: https://houstoncode.ai/privacy
 - Contact: https://houstoncode.ai/contact
 - License (Apache-2.0): https://github.com/houston-code/houston/blob/main/LICENSE

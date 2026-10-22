@@ -94,6 +94,10 @@ on to build and sign everything without publishing (it still asks for approval).
    The release PR merged into the line, not `main`, so without this `main` would keep the old
    version and miss these notes, and the next line would be cut without them. If auto-merge
    can't be turned on, the run still passes and its summary says to queue the PR yourself.
+   For a release marked **latest**, the same PR rebuilds the site's docs
+   (houstoncode.ai/docs) from the release commit's `docs/houston-guide.md` with
+   `website/tools/build-docs.mjs`, so the site describes what people can install. They go
+   live when Cloudflare Pages deploys the merged `main`.
 9. **distribute**: for a release marked **latest** only, sends the standalone CLI to npm
    (`@houston-code/cli`), the Homebrew tap and the AUR. Each channel stays off until its
    repository variable is `true`; [packaging/README.md](../packaging/README.md) has the

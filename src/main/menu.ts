@@ -262,8 +262,9 @@ function macAppMenu(): MenuItemConstructorOptions {
   }
 }
 
-/** The product guide (docs/houston-guide.md) as published on the repo's main branch. */
-export const GUIDE_URL = 'https://github.com/houston-code/houston/blob/main/docs/houston-guide.md'
+/** The product guide (docs/houston-guide.md) as published on the website, built from the
+ * latest release (website/tools/build-docs.mjs). */
+export const GUIDE_URL = 'https://houstoncode.ai/docs/'
 export const ISSUES_URL = 'https://github.com/houston-code/houston/issues/new'
 
 /** Help menu: the tour (same as the command palette's "Take the tour"), then the

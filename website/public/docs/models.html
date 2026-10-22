@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Models | Houston docs</title>
+  <meta name="description" content="Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in Settings,..." />
+  <meta name="houston-docs-version" content="v0.9.0" />
+  <link rel="canonical" href="https://houstoncode.ai/docs/models" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Houston" />
+  <meta property="og:title" content="Models | Houston docs" />
+  <meta property="og:description" content="Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in Settings,..." />
+  <meta property="og:url" content="https://houstoncode.ai/docs/models" />
+  <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Models | Houston docs" />
+  <meta name="twitter:description" content="Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in Settings,..." />
+  <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
+
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+  <script src="/assets/theme.js"></script>
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Models",
+  "description": "Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in Settings,...",
+  "url": "https://houstoncode.ai/docs/models",
+  "inLanguage": "en",
+  "version": "v0.9.0",
+  "isPartOf": {
+    "@type": "WebSite",
+    "name": "Houston",
+    "url": "https://houstoncode.ai/"
+  },
+  "about": {
+    "@type": "SoftwareApplication",
+    "@id": "https://houstoncode.ai/#app",
+    "name": "Houston"
+  }
+}
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="/" aria-label="Houston home">
+        <img src="/assets/icon-60.png" alt="" width="30" height="30" />
+        <span>Houston</span>
+        <span class="beta-badge">Beta</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <a class="nav-link" href="/#why">Security</a>
+        <a class="nav-link" href="/#features">Features</a>
+        <a class="nav-link" href="/docs/" aria-current="page">Docs</a>
+        <a class="nav-link" href="/#faq">FAQ</a>
+        <a class="nav-link" href="https://github.com/houston-code/houston" rel="noopener">GitHub</a>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Dark theme" aria-pressed="false" hidden>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <a class="btn btn-primary btn-sm" href="/#download">Download</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="docs">
+    <div class="wrap docs-layout">
+      <main id="main" class="docs-content">
+        <a class="docs-crumb" href="/docs/">Houston docs</a>
+        <h1>Models</h1>
+        <div class="prose">
+<p>Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in Settings, fetch its live model list, and pick a model. The picker shows each model's context window and capability badges (tool calling, vision, reasoning) and warns before you pick one that cannot call tools. Keys are stored encrypted by the OS keychain and never touch the renderer. The selection is shared across clients: picking a model in the desktop app or switching with <code>/model</code> in the terminal saves it as the default for future sessions.</p>
+<p>If a provider answers that it doesn't serve a model (the id is mistyped, the model was retired, or your key can't use it), the turn ends with a message saying so instead of the raw error, and the model is marked &quot;Not found&quot; in the picker (&quot;(not found)&quot; in <code>/model</code>) until it answers a request again. Pick another model and retry.</p>
+<h2 id="claude-through-your-cloud-account">Claude through your cloud account</h2>
+<p>If your Claude access runs through a cloud account rather than an Anthropic API key, add &quot;Amazon Bedrock (AWS credentials)&quot;, &quot;Google Vertex AI&quot;, or &quot;Microsoft Foundry&quot; from the provider picker in Settings. All three behave like the Anthropic provider once added: the same streaming, extended thinking, and prompt caching.</p>
+<p>Bedrock and Vertex do not ask you for an API key, because neither uses one. They sign requests with the credentials already on your machine:</p>
+<ul>
+<li><strong>Bedrock</strong> uses the standard AWS credential chain, so an <code>~/.aws/credentials</code> profile, an SSO login, or an instance role all work as-is. Set the region in Settings (or export <code>AWS_REGION</code>). If you have an Amazon Bedrock API key instead, you can enter it as an optional key, and it takes precedence over your AWS credentials. There is also a separate &quot;Amazon Bedrock (API key)&quot; provider for that case alone.</li>
+<li><strong>Vertex</strong> uses Google Application Default Credentials: run <code>gcloud auth application-default login</code> if you have not already. Set the region in Settings (or export <code>CLOUD_ML_REGION</code>). The project is usually inferred from your credentials, so leave it blank unless you need a specific one.</li>
+<li><strong>Foundry</strong> is the exception: it does take an API key, the one from your Foundry resource. Enter it in Settings along with the resource name, the <code>my-resource</code> part of <code>https://my-resource.services.ai.azure.com</code> (or export <code>ANTHROPIC_FOUNDRY_RESOURCE</code>).</li>
+</ul>
+<p>Each host addresses models its own way: Bedrock prefixes the vendor (<code>anthropic.claude-opus-4-8</code>), while Vertex and Foundry take the plain id, and Vertex also accepts a dated snapshot (<code>claude-opus-4-5@20251101</code>). The model picker shows them under one name either way. None of the three publishes a model list, so Houston ships a curated one and &quot;Fetch&quot; restores it rather than calling out to the network. If your account has access to a model that is not listed, add its id to the list by hand.</p>
+<h2 id="gpt-models-on-azure-openai">GPT models on Azure OpenAI</h2>
+<p>Add &quot;Azure OpenAI&quot; from the provider picker to use GPT models on your own Azure resource. It needs three things from Settings:</p>
+<ul>
+<li><strong>API key</strong>, from your Azure OpenAI resource.</li>
+<li><strong>Endpoint</strong>, the resource URL, e.g. <code>https://my-resource.openai.azure.com</code> (or export <code>AZURE_OPENAI_ENDPOINT</code>).</li>
+<li><strong>API version</strong>, the <code>api-version</code> Azure serves your deployments at. Houston pre-fills a widely supported one; a newer model may need a newer version, which you can change here without waiting on a Houston update.</li>
+</ul>
+<p>Azure serves models as <strong>deployments you name yourself</strong>, so there is no model list to fetch and none to ship. Each model id in the provider's list is a deployment name: add the names you created in the Azure portal, and Houston sends each request to that deployment. One provider covers as many deployments as you have, so a resource with separate GPT deployments needs only one entry here.</p>
+<h2 id="dropped-connections">Dropped connections</h2>
+<p>When the provider is overloaded, rate-limiting, or drops the connection, Houston retries the turn with a growing pause between attempts, telling you it is retrying. That holds even when part of the reply had already appeared: the partial reply is discarded and the turn starts over, so you only ever keep one copy of the answer. The desktop app removes the partial text, the terminal marks it as discarded (it can't erase what it printed), and headless mode never writes it to stdout. Any tool calls in a discarded reply never run. A failure that isn't transient (a bad key, a malformed request) ends the turn instead.</p>
+<h2 id="fallback-models">Fallback models</h2>
+<p>You can name next-choice models that Houston tries when your selected model cannot serve a turn: the provider is overloaded or rate-limiting after Houston has already retried, or the conversation no longer fits the model's context window even after compacting. Set them as an ordered list in settings.json:</p>
+<pre><code class="language-json">&quot;fallbackModels&quot;: [
+  { &quot;providerId&quot;: &quot;openai&quot;, &quot;model&quot;: &quot;gpt-5&quot; },
+  { &quot;providerId&quot;: &quot;ollama&quot;, &quot;model&quot;: &quot;qwen2.5-coder&quot; }
+]</code></pre>
+<p>Entries are tried in order and may name any provider you have configured. One that no longer resolves (you removed the provider, or its key is missing) is skipped rather than failing the run. Any part of the reply that had already appeared is discarded before Houston switches, so a fallback never splices two models' output together, and it tells you in the transcript when a reply came from a fallback. A request that failed for its own reasons (a bad key, a malformed request) is not retried on another model, since it would fail there too. A model the provider doesn't serve does move on to the next one. Leave the list unset to have a failing model simply end the turn.</p>
+        </div>
+        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/clients"><span>Previous</span>Clients (where Houston runs)</a><a class="docs-next" href="/docs/slash-commands"><span>Next</span>Slash commands</a></nav>
+      </main>
+      <nav class="docs-nav" aria-labelledby="docs-nav-title">
+        <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
+        <p class="docs-version">For v0.9.0</p>
+        <ul>
+          <li><a href="/docs/what-houston-is">What Houston is</a></li>
+          <li><a href="/docs/clients">Clients (where Houston runs)</a></li>
+          <li><a href="/docs/models" aria-current="page">Models</a></li>
+          <li><a href="/docs/slash-commands">Slash commands</a></li>
+          <li><a href="/docs/the-terminal-composer">The terminal composer</a></li>
+          <li><a href="/docs/seeing-what-the-tools-did">Seeing what the tools did</a></li>
+          <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
+          <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+          <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
+          <li><a href="/docs/typing-while-it-works">Typing while it works (steering)</a></li>
+          <li><a href="/docs/how-long-a-turn-runs">How long a turn runs</a></li>
+          <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+          <li><a href="/docs/being-told-when-it-needs-you">Being told when it needs you</a></li>
+          <li><a href="/docs/how-hard-the-model-thinks">How hard the model thinks (/reasoning)</a></li>
+          <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
+          <li><a href="/docs/version-and-updates">Version and updates</a></li>
+          <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
+          <li><a href="/docs/running-your-own-commands">Running your own commands (!)</a></li>
+          <li><a href="/docs/approval-modes-and-permissions">Approval modes and permissions</a></li>
+          <li><a href="/docs/skills">Skills</a></li>
+          <li><a href="/docs/custom-subagents">Custom subagents</a></li>
+          <li><a href="/docs/spawn-separate-sessions">Spawn separate sessions</a></li>
+          <li><a href="/docs/proposed-sessions">Proposed sessions</a></li>
+          <li><a href="/docs/side-chat">Side chat (/btw)</a></li>
+          <li><a href="/docs/watching-work-you-sent-off">Watching work you sent off (/spawned)</a></li>
+          <li><a href="/docs/scheduled-runs">Scheduled runs</a></li>
+          <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
+          <li><a href="/docs/hooks">Hooks</a></li>
+          <li><a href="/docs/plugins">Plugins</a></li>
+          <li><a href="/docs/mcp-servers">MCP servers</a></li>
+          <li><a href="/docs/shell-sandbox-and-network">Shell sandbox and network</a></li>
+          <li><a href="/docs/github-tools">GitHub tools</a></li>
+          <li><a href="/docs/remembering-an-instruction">Remembering an instruction (#)</a></li>
+          <li><a href="/docs/project-rules">Project rules</a></li>
+          <li><a href="/docs/context-worktrees-and-history">Context, worktrees, and history</a></li>
+          <li><a href="/docs/help-menu">Help menu</a></li>
+          <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
+          <li><a href="/docs/settings-and-keys">Settings and keys</a></li>
+          <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
+          <li><a href="/docs/license-and-legal">License and legal</a></li>
+        </ul>
+      </nav>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="/" aria-label="Houston home">
+            <img src="/assets/icon-60.png" alt="" width="30" height="30" />
+            <span>Houston</span>
+          </a>
+          <p>A cross-platform coding agent. Bring your own model.</p>
+        </div>
+        <nav class="footer-col" aria-labelledby="footer-product">
+          <h2 id="footer-product">Product</h2>
+          <ul>
+            <li><a href="/#features">Features</a></li>
+            <li><a href="/#download">Download</a></li>
+            <li><a href="/docs/">Docs</a></li>
+            <li><a href="/#faq">FAQ</a></li>
+            <li><a href="https://github.com/houston-code/houston/releases" rel="noopener">Releases</a></li>
+          </ul>
+        </nav>
+        <nav class="footer-col" aria-labelledby="footer-project">
+          <h2 id="footer-project">Project</h2>
+          <ul>
+            <li><a href="https://github.com/houston-code/houston" rel="noopener">GitHub</a></li>
+            <li><a href="https://github.com/houston-code/houston/issues" rel="noopener">Report an issue</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/CONTRIBUTING.md" rel="noopener">Contributing</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/SECURITY.md" rel="noopener">Security policy</a></li>
+            <li><a href="/contact">Contact</a></li>
+          </ul>
+        </nav>
+        <nav class="footer-col" aria-labelledby="footer-legal">
+          <h2 id="footer-legal">Legal</h2>
+          <ul>
+            <li><a href="/privacy">Privacy</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/LICENSE" rel="noopener">License (Apache-2.0)</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/TRADEMARK.md" rel="noopener">Trademark policy</a></li>
+          </ul>
+        </nav>
+      </div>
+      <div class="footer-bottom">
+        <span>© <span id="year">2026</span> The Houston Authors</span>
+      </div>
+    </div>
+  </footer>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

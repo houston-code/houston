@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Approval modes and permissions | Houston docs</title>
+  <meta name="description" content="Approval is layered. From most to least restrictive:" />
+  <meta name="houston-docs-version" content="v0.9.0" />
+  <link rel="canonical" href="https://houstoncode.ai/docs/approval-modes-and-permissions" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Houston" />
+  <meta property="og:title" content="Approval modes and permissions | Houston docs" />
+  <meta property="og:description" content="Approval is layered. From most to least restrictive:" />
+  <meta property="og:url" content="https://houstoncode.ai/docs/approval-modes-and-permissions" />
+  <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Approval modes and permissions | Houston docs" />
+  <meta name="twitter:description" content="Approval is layered. From most to least restrictive:" />
+  <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
+
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+  <script src="/assets/theme.js"></script>
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Approval modes and permissions",
+  "description": "Approval is layered. From most to least restrictive:",
+  "url": "https://houstoncode.ai/docs/approval-modes-and-permissions",
+  "inLanguage": "en",
+  "version": "v0.9.0",
+  "isPartOf": {
+    "@type": "WebSite",
+    "name": "Houston",
+    "url": "https://houstoncode.ai/"
+  },
+  "about": {
+    "@type": "SoftwareApplication",
+    "@id": "https://houstoncode.ai/#app",
+    "name": "Houston"
+  }
+}
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="/" aria-label="Houston home">
+        <img src="/assets/icon-60.png" alt="" width="30" height="30" />
+        <span>Houston</span>
+        <span class="beta-badge">Beta</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <a class="nav-link" href="/#why">Security</a>
+        <a class="nav-link" href="/#features">Features</a>
+        <a class="nav-link" href="/docs/" aria-current="page">Docs</a>
+        <a class="nav-link" href="/#faq">FAQ</a>
+        <a class="nav-link" href="https://github.com/houston-code/houston" rel="noopener">GitHub</a>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Dark theme" aria-pressed="false" hidden>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <a class="btn btn-primary btn-sm" href="/#download">Download</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="docs">
+    <div class="wrap docs-layout">
+      <main id="main" class="docs-content">
+        <a class="docs-crumb" href="/docs/">Houston docs</a>
+        <h1>Approval modes and permissions</h1>
+        <div class="prose">
+<p>Approval is layered. From most to least restrictive:</p>
+<ul>
+<li><strong>Plan mode:</strong> read-only. The agent researches and proposes a plan; writes and shell commands are blocked. It presents the plan for the user to accept, request changes, or reject. The plan lists the checks it will run, and under them Houston shows whether those checks can run on this machine: whether the runtimes are installed, whether the dependencies are, and whether shell commands can reach the network to install them (for example, &quot;choose Allow for run on the install command&quot;). Houston works this out from the machine without running anything, and tells the agent about any problem when you accept, so it can say a check couldn't run instead of claiming it.</li>
+<li><strong>Ask every time:</strong> every edit and command needs a click.</li>
+<li><strong>Auto-approve edits:</strong> file edits go through automatically; shell commands still ask.</li>
+<li><strong>Full auto:</strong> edits and (sandboxed) commands run without asking. A few controls still hold even here, because the sandbox can read your whole filesystem: network egress is granted <strong>per destination</strong> (approving a fetch to one host does not open egress to another), the first shell command pauses once for a <strong>shell-network consent</strong> so blanket outbound access is never automatic (declining runs commands offline), a shell command that <strong>names a path outside the project</strong>, quoted or not, asks first (<code>/dev/null</code> and the temp directory the sandbox can already write to don't count), and <strong>reading a credential file</strong> (a <code>.env</code>, a private key, <code>.aws/credentials</code> and the like) prompts even here, since reads otherwise never do. &quot;Allow for run&quot; on that prompt stops it asking about credential reads for the rest of the conversation, and an <code>allow</code> permission rule opts a path in permanently. <strong>Changing a credential file</strong> prompts too: a file edit that writes one, or a shell command that redirects into, copies over, edits in place, or removes one (<code>&gt; .env</code>, <code>cp .env.example .env</code>, <code>sed -i … .env</code>, <code>rm .env</code>). Templates such as <code>.env.example</code> don't count.</li>
+</ul>
+<p><strong>Throwing away work</strong> asks in every mode, full auto included. The sandbox keeps commands inside the project, but the project is what these destroy, and undo doesn't cover shell commands: <code>git reset --hard</code>, a forced <code>git clean</code>, <code>git checkout -- .</code> or <code>git restore</code> of your changes, <code>rm -r</code> of anything but build output and dependencies (<code>node_modules</code>, <code>dist</code>, <code>build</code>, <code>target</code>, <code>__pycache__</code> and the like are fine), <code>find … -delete</code>, deleting a branch or a stash, rewriting history, and a forced or deleting <code>git push</code>. Quoting a word, splitting it across lines, or running it through <code>bash -c</code> doesn't hide one. &quot;Allow for run&quot; doesn't stop these asking; an <code>allow</code> permission rule for that exact command does (the &quot;Always allow&quot; choice on the prompt saves one).</p>
+<p><strong>Which mode a new install starts in.</strong> Where the sandbox confines shell commands (macOS, and Linux with bubblewrap), a new install starts in <strong>Full auto</strong>; where it can't (Windows, or Linux without bubblewrap), every command would run unconfined, so it starts in <strong>Ask every time</strong>. An existing install keeps the mode it last used. The desktop app and the terminal start in the same saved mode; <code>--approval</code> or <code>--full-auto</code> overrides it for one terminal session, and a headless run starts in plan unless told otherwise.</p>
+<p><strong>Reading the diff.</strong> A file edit shows a real diff before you approve it: the changed part with a few lines of context (long untouched stretches are folded away with a note saying how many), line numbers in the gutter, the changed words picked out inside a modified line, and the code syntax-coloured.</p>
+<p>On any single tool call the user can approve once, deny, <strong>allow for the run</strong> (auto-approve that kind of tool for the rest of the conversation, or, for a network call, just that one destination), or <strong>always allow / always deny</strong> (saves a permission rule so the choice persists). File edits show an inline red/green diff before approval.</p>
+<p><strong>Denying with a reason.</strong> A refusal can carry guidance, and the agent is told what it says, so &quot;no, and here is what to do instead&quot; lands in the same step instead of needing a follow-up message. In the desktop app, type it in the box under the approval buttons (Enter denies with that reason). In the terminal, pick &quot;Deny with a reason…&quot;, or just type the reason at the approval prompt: anything that is not one of the shortcut keys is read as a denial plus that explanation. The terminal's approval keys are <code>y</code> allow, <code>n</code> deny, <code>a</code> allow for the run, <code>!</code> always allow, <code>x</code> always deny.</p>
+<p>Stopping a run while an approval is waiting is recorded as an interruption, not as a refusal, so the agent is not told the user rejected something they simply never answered.</p>
+<p><strong>Switching mode.</strong> In the terminal, <code>Shift-Tab</code> steps through the modes, from most restrictive to least and back around to plan. It works while the agent is working too, and applies to the run in progress: if a turn stops for an approval you would rather not keep answering, loosen the mode and the same turn carries on under it, rather than having to interrupt the work you were trying to unblock. The mode is shown next to the spinner while a turn runs, and on the status line above the composer the rest of the time. <code>/approval &lt;mode&gt;</code> sets one directly.</p>
+<p><strong>Permission rules</strong> (Settings) are finer-grained than the mode: <code>allow</code>, <code>deny</code>, or <code>ask</code>, matched on the tool plus a glob over its target, e.g. allow <code>run_shell</code> matching <code>git *</code>, deny anything matching <code>*rm -rf*</code>, always ask before <code>write_file</code> under <code>src/secret/**</code>. Rules are checked before the mode and the first match wins. Matching normalizes the target so a rule cannot be dodged by respelling it: a file rule is resolved and anchored to the workspace (so <code>src/*</code> covers the same file written as an absolute path, and a relative climb like <code>src/../../etc/passwd</code> does not slip past it), a URL rule is case-insensitive on scheme and host, and a shell rule sees through quoting, backslash escapes, and bash's <code>$'...'</code> escapes (so <code>deny *rm -rf*</code> still fires on <code>&quot;rm&quot; -rf</code>, <code>r\m -rf</code>, or <code>$'\x72m' -rf</code>). A line that ends in a backslash continues onto the next, as in bash, so a deny also fires on <code>rm</code> split across two lines, and an allow must cover the joined command. An allow rule sees through quoting only where it changes nothing (<code>&quot;git&quot; status</code> is <code>git status</code>): a quoted or escaped <code>*</code>, <code>~</code>, <code>$</code>, space, or <code>&gt;</code> is not the bare one, since the shell treats them differently. Allowing <code>rm '*'</code> (one file named <code>*</code>) never allows <code>rm *</code>, and allowing <code>rm -rf '~'</code> (or <code>rm -rf $'\x7e'</code>) never allows <code>rm -rf ~</code>. An empty quoted argument counts as one: allowing <code>'' rm -rf /</code> (which runs nothing) never allows <code>rm -rf /</code>. Quoted or escaped whitespace is part of an argument, as in bash, so an allow keeps it as written: allowing <code>rm 'my  file'</code> (two spaces) never allows <code>rm 'my file'</code>, and allowing <code>find . -delete \ </code> (find gets a lone space and stops) never allows <code>find . -delete</code>. Spacing outside quotes doesn't matter. A rule an earlier version of Houston saved with that whitespace collapsed allows what its text says; one that ends in a lone backslash matches nothing, and <strong>Clean up rules</strong> removes it. An <code>apply_patch</code> call is checked against every file it adds, changes, deletes, or moves to: one denied file denies the whole patch, one <code>ask</code> file asks, and an <code>allow</code> covers it only when every file is allowed. &quot;Always allow&quot; or &quot;Always deny&quot; on a patch saves one rule per file.</p>
+<p>A rule marked <strong>Exact</strong> matches only its one target: <code>*</code> is an ordinary character and a folder does not cover the files inside it. <strong>Always allow</strong> on a file, URL, or search saves an exact rule, so approving a write to a file named <code>*</code>, or to a folder path, allows that path and nothing else. On a shell command it saves a command prefix instead, such as <code>npm install</code>. A command it can't shorten to a prefix is saved whole, and exact when it holds <code>*</code>, so approving <code>rm *</code> never allows <code>rm -rf ~</code>. A <code>cd</code> into the project needs no rule (an allowed <code>npm install</code> also covers <code>cd src &amp;&amp; npm install</code>), so it is left out. Any other change of directory, such as <code>cd -</code>, <code>popd</code>, <code>cd $DIR</code>, or a <code>cd</code> out of the project, still asks, and is saved whole and exact. A shell rule like <code>rm *</code> saved by an earlier version is still a pattern: tick <strong>Exact</strong> on it to narrow it. <strong>Always deny</strong> saves a regular pattern, which can only be broader than the call it blocked.</p>
+<p><strong>Project guardrails.</strong> A repo can ship a <code>.houston/settings.json</code> with its own <code>deny</code> / <code>ask</code> rules, checked before the user's global rules. Those guardrails always apply and can only <em>tighten</em>, so cloning an untrusted repo can never auto-approve actions.</p>
+<p><strong>Trusted folders.</strong> The same project file may also define <code>allow</code> rules, <code>hooks</code>, and <code>mcpServers</code>. Those ELEVATE (they auto-approve matching actions or run processes as you), so Houston ignores them until you explicitly trust the folder: the desktop app shows a banner above the composer, and the interactive terminal asks at session start (Trust / Not now / Never). Your decision is bound to a fingerprint of that elevating config; if it later changes (say a pull adds a hook), the folder drops back to untrusted and Houston asks again. Headless runs never prompt and simply note when an untrusted folder's extra config is being ignored. Trusted project <code>allow</code> rules sit BELOW your own rules (they fill gaps, never override you), project hooks run after yours, and project MCP servers appear namespaced as <code>mcp__proj-&lt;id&gt;__&lt;tool&gt;</code>.</p>
+<p>Decisions are reviewable: Settings, <em>Workspace</em>, <em>Trusted folders</em> lists every folder you answered for (trusted or never) with a Forget button, and <code>/trust</code> in the terminal shows the current folder's state (<code>/trust forget</code> clears the decision and asks again on the spot). Forgetting is how you reverse a &quot;Never&quot; or retire a stale &quot;Trust&quot;.</p>
+<p><strong>Managed policy.</strong> On a managed device an administrator can ship a machine-wide <code>managed-settings.json</code> with <code>deny</code> / <code>ask</code> rules that outrank both project guardrails and every user's own rules. It too can only tighten, and lives in a root-owned location the user cannot edit.</p>
+        </div>
+        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/running-your-own-commands"><span>Previous</span>Running your own commands (!)</a><a class="docs-next" href="/docs/skills"><span>Next</span>Skills</a></nav>
+      </main>
+      <nav class="docs-nav" aria-labelledby="docs-nav-title">
+        <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
+        <p class="docs-version">For v0.9.0</p>
+        <ul>
+          <li><a href="/docs/what-houston-is">What Houston is</a></li>
+          <li><a href="/docs/clients">Clients (where Houston runs)</a></li>
+          <li><a href="/docs/models">Models</a></li>
+          <li><a href="/docs/slash-commands">Slash commands</a></li>
+          <li><a href="/docs/the-terminal-composer">The terminal composer</a></li>
+          <li><a href="/docs/seeing-what-the-tools-did">Seeing what the tools did</a></li>
+          <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
+          <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+          <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
+          <li><a href="/docs/typing-while-it-works">Typing while it works (steering)</a></li>
+          <li><a href="/docs/how-long-a-turn-runs">How long a turn runs</a></li>
+          <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+          <li><a href="/docs/being-told-when-it-needs-you">Being told when it needs you</a></li>
+          <li><a href="/docs/how-hard-the-model-thinks">How hard the model thinks (/reasoning)</a></li>
+          <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
+          <li><a href="/docs/version-and-updates">Version and updates</a></li>
+          <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
+          <li><a href="/docs/running-your-own-commands">Running your own commands (!)</a></li>
+          <li><a href="/docs/approval-modes-and-permissions" aria-current="page">Approval modes and permissions</a></li>
+          <li><a href="/docs/skills">Skills</a></li>
+          <li><a href="/docs/custom-subagents">Custom subagents</a></li>
+          <li><a href="/docs/spawn-separate-sessions">Spawn separate sessions</a></li>
+          <li><a href="/docs/proposed-sessions">Proposed sessions</a></li>
+          <li><a href="/docs/side-chat">Side chat (/btw)</a></li>
+          <li><a href="/docs/watching-work-you-sent-off">Watching work you sent off (/spawned)</a></li>
+          <li><a href="/docs/scheduled-runs">Scheduled runs</a></li>
+          <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
+          <li><a href="/docs/hooks">Hooks</a></li>
+          <li><a href="/docs/plugins">Plugins</a></li>
+          <li><a href="/docs/mcp-servers">MCP servers</a></li>
+          <li><a href="/docs/shell-sandbox-and-network">Shell sandbox and network</a></li>
+          <li><a href="/docs/github-tools">GitHub tools</a></li>
+          <li><a href="/docs/remembering-an-instruction">Remembering an instruction (#)</a></li>
+          <li><a href="/docs/project-rules">Project rules</a></li>
+          <li><a href="/docs/context-worktrees-and-history">Context, worktrees, and history</a></li>
+          <li><a href="/docs/help-menu">Help menu</a></li>
+          <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
+          <li><a href="/docs/settings-and-keys">Settings and keys</a></li>
+          <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
+          <li><a href="/docs/license-and-legal">License and legal</a></li>
+        </ul>
+      </nav>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="/" aria-label="Houston home">
+            <img src="/assets/icon-60.png" alt="" width="30" height="30" />
+            <span>Houston</span>
+          </a>
+          <p>A cross-platform coding agent. Bring your own model.</p>
+        </div>
+        <nav class="footer-col" aria-labelledby="footer-product">
+          <h2 id="footer-product">Product</h2>
+          <ul>
+            <li><a href="/#features">Features</a></li>
+            <li><a href="/#download">Download</a></li>
+            <li><a href="/docs/">Docs</a></li>
+            <li><a href="/#faq">FAQ</a></li>
+            <li><a href="https://github.com/houston-code/houston/releases" rel="noopener">Releases</a></li>
+          </ul>
+        </nav>
+        <nav class="footer-col" aria-labelledby="footer-project">
+          <h2 id="footer-project">Project</h2>
+          <ul>
+            <li><a href="https://github.com/houston-code/houston" rel="noopener">GitHub</a></li>
+            <li><a href="https://github.com/houston-code/houston/issues" rel="noopener">Report an issue</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/CONTRIBUTING.md" rel="noopener">Contributing</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/SECURITY.md" rel="noopener">Security policy</a></li>
+            <li><a href="/contact">Contact</a></li>
+          </ul>
+        </nav>
+        <nav class="footer-col" aria-labelledby="footer-legal">
+          <h2 id="footer-legal">Legal</h2>
+          <ul>
+            <li><a href="/privacy">Privacy</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/LICENSE" rel="noopener">License (Apache-2.0)</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/TRADEMARK.md" rel="noopener">Trademark policy</a></li>
+          </ul>
+        </nav>
+      </div>
+      <div class="footer-bottom">
+        <span>© <span id="year">2026</span> The Houston Authors</span>
+      </div>
+    </div>
+  </footer>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

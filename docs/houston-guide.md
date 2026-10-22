@@ -1557,8 +1557,8 @@ conventions, not as authority to change tool or permission behavior.
 ## Help menu
 
 The desktop app's **Help** menu (last in the menu bar on every platform) has
-**Houston Guide**, which opens this guide, and **Report an Issue**, which opens a
-new GitHub issue. On macOS the Help menu also has the system search field: type
+**Houston Guide**, which opens this guide on houstoncode.ai/docs (written for the
+latest release), and **Report an Issue**, which opens a new GitHub issue. On macOS the Help menu also has the system search field: type
 part of a command's name (for example "settings") to find it in the menus. On
 Windows and Linux the Help menu also holds **Share Houston…** and **Check for
 Updates…**, which sit in the app menu on macOS.
