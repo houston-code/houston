@@ -80,6 +80,32 @@ describe('McpSseClient', () => {
     expect(await client.callTool('search', { q: 'hi' })).toBe('hi there')
   })
 
+  it('leaves no handshake timer running once connected', async () => {
+    // An armed 20 s timer kept a finished one-shot CLI run alive until it fired.
+    const armed = new Set<unknown>()
+    const realSet = globalThis.setTimeout
+    const realClear = globalThis.clearTimeout
+    const set = vi.spyOn(globalThis, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      const handle = realSet(fn, ms)
+      if (ms === 20_000) armed.add(handle)
+      return handle
+    }) as typeof setTimeout)
+    const clear = vi.spyOn(globalThis, 'clearTimeout').mockImplementation(((handle?: NodeJS.Timeout) => {
+      armed.delete(handle)
+      realClear(handle)
+    }) as typeof clearTimeout)
+    try {
+      const srv = fakeSseServer()
+      const client = new McpSseClient(srv.connect, srv.fetch)
+      await client.connect({ url: 'https://x/sse' })
+      expect(armed.size).toBe(0)
+      client.close()
+    } finally {
+      set.mockRestore()
+      clear.mockRestore()
+    }
+  })
+
   it('resolves a relative endpoint against the SSE url and POSTs there', async () => {
     const srv = fakeSseServer({ endpoint: '/messages?session=abc' })
     const client = new McpSseClient(srv.connect, srv.fetch)

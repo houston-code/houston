@@ -4,6 +4,7 @@ import {
   backoffDelayMs,
   describeProviderError,
   isModelNotFoundError,
+  isQuotaExhaustedError,
   isRetryableError,
   isToolsUnsupportedError,
   MAX_PROVIDER_RETRIES,
@@ -84,6 +85,21 @@ describe('isRetryableError', () => {
     expect(isRetryableError({ status: 409 })).toBe(true)
     expect(isRetryableError({ status: 500 })).toBe(true)
     expect(isRetryableError({ status: 503 })).toBe(true)
+  })
+
+  it('does not retry an exhausted quota, though it arrives as a 429', () => {
+    const sdk = Object.assign(new Error('429 You exceeded your current quota, please check your plan and billing details.'), {
+      status: 429,
+      code: 'insufficient_quota'
+    })
+    expect(isQuotaExhaustedError(sdk)).toBe(true)
+    expect(isRetryableError(sdk)).toBe(false)
+    // In-band, from a stream: only the message survives.
+    expect(isRetryableError({ status: 429, message: 'You exceeded your current quota' })).toBe(false)
+    expect(isRetryableError({ status: 429, error: { code: 'insufficient_quota' } })).toBe(false)
+    // An ordinary rate limit is still retried.
+    expect(isQuotaExhaustedError({ status: 429, message: 'Rate limit reached for requests' })).toBe(false)
+    expect(isRetryableError({ status: 429, message: 'Rate limit reached for requests' })).toBe(true)
   })
 
   it('does not retry ordinary 4xx', () => {

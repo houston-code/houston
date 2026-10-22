@@ -28,6 +28,14 @@ const distScript = readFileSync(
   'utf8'
 )
 
+/** The leg policy `plan` runs; the runner labels for every package leg live here. */
+const planScript = readFileSync(
+  resolve(dirname(fileURLToPath(import.meta.url)), '../../scripts/ci-plan.mjs'),
+  'utf8'
+)
+
+const SHIPPED_RUNNERS = ['ubuntu-22.04', 'macos-15', 'macos-15-intel', 'windows-2025']
+
 /** The `revert-guard:` job, from its key to the end of the file. */
 const revertGuardJob = workflow.slice(workflow.indexOf('\n  revert-guard:'))
 
@@ -102,7 +110,7 @@ function job(name: string): string {
   return next === -1 ? workflow.slice(start) : workflow.slice(start, start + 1 + next)
 }
 
-describe('CI runs everything on every PR', () => {
+describe('CI never scopes away a required check', () => {
   it('has no path scoping that could skip a required check', () => {
     // A job skipped by a condition reports its required check as a PASS, so any scoping
     // is a way for an untested change to merge. A workflow-level `paths:` filter is
@@ -112,17 +120,38 @@ describe('CI runs everything on every PR', () => {
     expect(workflow).not.toMatch(/^ {2}paths(-ignore)?:/m)
   })
 
+  it('lets `plan` choose package legs only, never whether a required check runs', () => {
+    // `plan` may skip `package` (prose-only changes) and trims its legs; `test`,
+    // `linux-sandbox` and `revert-guard` must not depend on it at all.
+    for (const name of ['test', 'linux-sandbox', 'revert-guard']) {
+      expect(job(name), name).not.toMatch(/^ {4}needs:/m)
+    }
+    expect(job('package')).toContain('needs: plan')
+    expect(job('package')).toContain("needs.plan.outputs.package == 'true'")
+    expect(job('package')).toContain('matrix: ${{ fromJSON(needs.plan.outputs.package-matrix) }}')
+    expect(job('plan')).toContain('run: node scripts/ci-plan.mjs >> "$GITHUB_OUTPUT"')
+  })
+
+  it('diffs what lands: the PR merge, the queue candidate against its base, the push against main before it', () => {
+    const plan = job('plan')
+    expect(plan).toContain('pull_request) base=HEAD^1 ;;')
+    expect(plan).toContain('QUEUE_BASE: ${{ github.event.merge_group.base_sha }}')
+    expect(plan).toContain('PUSH_BEFORE: ${{ github.event.before }}')
+    // A failed diff leaves the file list out, and ci-plan.mjs then assumes everything changed.
+    expect(plan).toContain('git diff --name-only "$base" HEAD > "$files" || exit 0')
+  })
+
   it('never scopes away the revert guard', () => {
     expect(revertGuardJob).not.toContain('needs:')
   })
 
   it('packages and tests on every platform it ships on', () => {
     const pkg = job('package')
-    for (const os of ['ubuntu-22.04', 'macos-15', 'macos-15-intel', 'windows-2025']) {
-      expect(pkg).toContain(`os: ${os}\n`)
-    }
-    // The full unit suite on every non-Linux leg (both macOS legs against the real Seatbelt
-    // backend, Windows against its own; Linux runs it in `test`), and the e2e on macOS.
+    // The legs are defined in ci-plan.mjs; the nightly run takes all of them.
+    for (const os of SHIPPED_RUNNERS) expect(planScript).toContain(`os: '${os}'`)
+    expect(workflow).toMatch(/^ {2}schedule:\n {4}- cron: /m)
+    // The full unit suite on every non-Linux leg (macOS against the real Seatbelt backend,
+    // Windows against its own; Linux runs it in `test`), and the e2e on macOS.
     expect(pkg).toMatch(/if: runner\.os != 'Linux'\n {8}run: \|\n(?: {10}.*\n)*? {10}npm test /)
     expect(pkg).not.toContain('npx vitest run src/main/sandbox')
     expect(pkg).toMatch(/if: runner\.os == 'macOS'\n {8}run: npm run test:e2e/)
@@ -138,8 +167,8 @@ describe('CI runs everything on every PR', () => {
 })
 
 describe('CI gates merge on the whole matrix', () => {
-  it('makes the required `build` check depend on every platform leg, the SBOM gate, and workflow-lint', () => {
-    expect(job('build')).toContain('needs: [package, sbom-conformance, workflow-lint]')
+  it('makes the required `build` check depend on the plan, every platform leg, the SBOM gate, and workflow-lint', () => {
+    expect(job('build')).toContain('needs: [plan, package, sbom-conformance, workflow-lint]')
   })
 
   it('fails `build` when a dependency fails, instead of skipping it to a pass', () => {
@@ -148,8 +177,16 @@ describe('CI gates merge on the whole matrix', () => {
     // every result itself, and anything but success (failure, skipped, cancelled) fails it.
     const build = job('build')
     expect(build).toMatch(/if: \$\{\{ !cancelled\(\) && /)
-    expect(build).toContain("join(needs.*.result, ' ')")
+    expect(build).toContain('for r in "$PLAN" "$SBOM" "$LINT"; do')
     expect(build).toContain('[ "$r" = success ] ||')
+    expect(build).toContain('[ "$PACKAGE" = success ] ||')
+  })
+
+  it('accepts a skipped `package` only when a successful plan planned no legs', () => {
+    const build = job('build')
+    expect(build).toContain('PLAN: ${{ needs.plan.result }}')
+    expect(build).toContain('PACKAGE_PLANNED: ${{ needs.plan.outputs.package }}')
+    expect(build).toMatch(/if \[ "\$PACKAGE_PLANNED" = false \]; then\n {12}\[ "\$PACKAGE" = skipped \] \|\|/)
   })
 
   it('skips `build` in a cancelled run, so a superseded run cannot leave a red required check', () => {
@@ -215,11 +252,13 @@ describe('CI lints its own workflows', () => {
 })
 
 describe('CI alerts on a red main', () => {
-  it('files an issue when the post-merge run fails, since its actor is a bot', () => {
+  it('files an issue when the post-merge or nightly run fails, since neither has a reliable actor', () => {
     const alert = job('alert')
-    expect(alert).toContain("github.event_name == 'push'")
+    expect(alert).toContain("(github.event_name == 'push' || github.event_name == 'schedule')")
     expect(alert).toContain('uses: ./.github/workflows/alert-on-failure.yml')
-    expect(alert).toContain('needs: [test, linux-sandbox]')
+    // `build` carries the package legs nightly (it is skipped on push).
+    expect(alert).toContain('needs: [test, linux-sandbox, build]')
+    expect(alert).toContain("workflow: ${{ github.event_name == 'schedule' && 'CI nightly' || 'CI on main' }}")
     expect(alert).toContain("failed: ${{ contains(needs.*.result, 'failure') }}")
   })
 
@@ -299,11 +338,13 @@ describe('CI is the release gate', () => {
 })
 
 describe('CI keeps PR caches warm', () => {
-  it('refreshes every package leg\'s caches from main, where every PR can read them', () => {
+  it('refreshes the PR and queue legs\' caches from main, where every PR can read them', () => {
     // PR- and queue-scoped caches are invisible to other PRs, and `package` skips push.
     const warm = job('warm-caches')
-    expect(warm).toContain("if: github.event_name == 'push'")
-    for (const os of ['ubuntu-22.04', 'macos-15', 'macos-15-intel', 'windows-2025']) expect(warm).toContain(`os: ${os}\n`)
+    expect(warm).toContain("if: github.event_name == 'push' && needs.plan.outputs.warm-caches == 'true'")
+    for (const os of ['ubuntu-22.04', 'macos-15', 'windows-2025']) expect(warm).toContain(`os: ${os}\n`)
+    // Intel runs only nightly, whose package legs save main-scoped caches themselves.
+    expect(warm).not.toContain('macos-15-intel')
     expect(warm).toMatch(/install: full\n {10}electron-cache: full/)
   })
 
@@ -312,8 +353,10 @@ describe('CI keeps PR caches warm', () => {
   })
 
   it('uses the same runners as the package legs, so the cache keys match', () => {
-    const pkg = job('package')
-    for (const os of ['ubuntu-22.04', 'macos-15', 'macos-15-intel', 'windows-2025']) expect(pkg).toContain(`os: ${os}\n`)
+    for (const os of ['ubuntu-22.04', 'macos-15', 'windows-2025']) {
+      expect(job('warm-caches')).toContain(`os: ${os}\n`)
+      expect(planScript).toContain(`os: '${os}'`)
+    }
   })
 
   it('never gates a merge: it runs only after the merge, and `build` does not need it', () => {

@@ -328,6 +328,15 @@ function toMeta(conv: Conversation): ConversationMeta {
   return { ...rest, errored: !!lastError }
 }
 
+/**
+ * How many conversations other than `exceptId` run in the worktree at `path`. A fork
+ * carries its source's worktree, so two chats can share one, and tearing it down with
+ * one of them would pull the checkout out from under the other.
+ */
+export function otherConversationsInWorktree(exceptId: string, path: string): number {
+  return listConversations().filter((c) => c.id !== exceptId && c.worktree?.path === path).length
+}
+
 export function deleteConversation(id: string): void {
   if (!isConversationId(id)) return
   const path = filePath(id)

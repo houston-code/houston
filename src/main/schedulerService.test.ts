@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createSchedulerService } from './schedulerService'
+import { POLL_MS, createSchedulerService } from './schedulerService'
 import type { ScheduledRunInfo, ScheduledRunInput } from './agent/scheduler'
 
 let dir: string
@@ -163,5 +163,56 @@ describe('createSchedulerService', () => {
     expect(service.list()).toHaveLength(0)
     expect(warns.some((w) => w.includes('unreadable'))).toBe(true)
     expect(existsSync(`${file}.corrupt`)).toBe(true)
+  })
+
+  // The desktop app and a terminal session share one store file. Two services on the
+  // same file stand in for the two processes.
+  describe('shared by several processes', () => {
+    it("keeps a schedule another process created when this one changes the store", () => {
+      const { service: app } = makeService()
+      const { service: tui } = makeService()
+      const mine = app.create(input({ name: 'mine' }))
+      const theirs = tui.create(input({ name: 'theirs' }))
+      // Before: the app's stale copy wrote over the terminal's schedule here.
+      expect(app.cancel(mine.id)).toBe(true)
+      expect(tui.list().map((s) => s.id)).toEqual([theirs.id])
+      expect(app.list().map((s) => s.id)).toEqual([theirs.id])
+      expect(existsSync(`${file}.lock`)).toBe(false)
+    })
+
+    it('fires a schedule created in another process', async () => {
+      const { service: app, fired } = makeService()
+      app.start()
+      const { service: cli } = makeService() // manage-only: never started
+      cli.create(input({ spec: 'every 30m' }))
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + POLL_MS)
+      expect(fired).toHaveLength(1)
+      expect(cli.list()[0].lastResult).toBe('ok')
+      app.stop()
+    })
+
+    it('fires each occurrence once when two running hosts share the store', async () => {
+      const a = makeService()
+      a.service.create(input({ spec: 'every 30m' }))
+      // The second host starts with the schedule already on disk, as after a restart.
+      const b = makeService()
+      a.service.start()
+      b.service.start()
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + POLL_MS)
+      expect(a.fired.length + b.fired.length).toBe(1)
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000)
+      expect(a.fired.length + b.fired.length).toBe(2)
+      a.service.stop()
+      b.service.stop()
+    })
+
+    it('breaks a lock left by a process that died holding it', () => {
+      writeFileSync(`${file}.lock`, '2147483646') // no such process
+      const { service } = makeService()
+      service.create(input())
+      expect(service.list()).toHaveLength(1)
+      expect(existsSync(`${file}.lock`)).toBe(false)
+      expect(warns).toEqual([])
+    })
   })
 })

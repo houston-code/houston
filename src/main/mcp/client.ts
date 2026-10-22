@@ -151,6 +151,12 @@ export function parseMcpResourceList(result: unknown): McpResourceInfo[] {
 
 const INIT_TIMEOUT_MS = 15_000
 const CALL_TIMEOUT_MS = 120_000
+/** stderr kept from a stdio server, so its exit can name the reason. */
+const STDERR_TAIL_CHARS = 4_000
+/** How long an exit waits for the rest of stderr before reporting without it. */
+const STDERR_SETTLE_MS = 200
+/** Longest stderr line quoted when a server exits. */
+const MAX_EXIT_DETAIL_CHARS = 300
 
 export type SpawnFn = (
   command: string,
@@ -164,6 +170,9 @@ export class McpClient {
   private readonly pending = new PendingRequests()
   private buffer = ''
   private readonly decoder = new StringDecoder('utf8')
+  /** The end of what the server wrote to stderr, to say why it exited. */
+  private stderrTail = ''
+  private readonly stderrDecoder = new StringDecoder('utf8')
   private closed = false
   /** Capabilities the server declared at initialize (gates list re-fetches). */
   private capable: Record<McpListKind, boolean> = { tools: true, resources: false, prompts: false }
@@ -207,11 +216,32 @@ export class McpClient {
     })
     this.child = child
     child.stdout.on('data', (c: Buffer) => this.onData(c))
+    // Read stderr even though nothing needs it while the server runs: an unread pipe
+    // fills (64 KB or so), and a server that logs to stderr, as the spec lets it, then
+    // blocks on its next write and stops answering, so every call times out. Only the
+    // tail is kept, to explain an exit.
+    child.stderr?.on('data', (c: Buffer) => {
+      this.stderrTail = (this.stderrTail + this.stderrDecoder.write(c)).slice(-STDERR_TAIL_CHARS)
+    })
     // A write to a server that has gone away fails with EPIPE, which Node reports as an
     // 'error' event on stdin. Unheard, it surfaces as an uncaught exception (the
     // standalone CLI exits on those), so treat it like the process exiting.
     child.stdin.on('error', (e: Error) => this.failAll(`MCP server stopped reading input: ${e.message}`))
-    child.on('exit', () => this.failAll('MCP server process exited'))
+    // 'exit' can arrive before the last of stderr has been read, so give the stream a
+    // moment to end before quoting it (bounded: a grandchild may hold the pipe open).
+    let stderrEnded = false
+    child.stderr?.once('end', () => (stderrEnded = true))
+    child.on('exit', () => {
+      // Closed at once, so a new request fails fast; in-flight ones settle with the reason.
+      this.closed = true
+      const fail = (): void => this.failAll(`MCP server process exited${this.lastStderrLine()}`)
+      if (stderrEnded || !child.stderr) return fail()
+      const timer = setTimeout(fail, STDERR_SETTLE_MS)
+      child.stderr.once('end', () => {
+        clearTimeout(timer)
+        fail()
+      })
+    })
     child.on('error', (e: Error) => this.failAll(`MCP server failed to start: ${e.message}`))
 
     const init = await this.request(
@@ -368,6 +398,20 @@ export class McpClient {
       this.pending.reject(id, e as Error)
     }
     return result
+  }
+
+  /** `: <the server's last stderr line>` for an exit message, or '' when it wrote none. */
+  private lastStderrLine(): string {
+    const last = this.stderrTail
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .pop()
+    // The server's own text lands in the UI, the log, and the terminal: no control characters.
+    // eslint-disable-next-line no-control-regex
+    const line = (last ?? '').replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim()
+    if (!line) return ''
+    return `: ${line.length > MAX_EXIT_DETAIL_CHARS ? `${line.slice(0, MAX_EXIT_DETAIL_CHARS - 1)}…` : line}`
   }
 
   private failAll(message: string): void {

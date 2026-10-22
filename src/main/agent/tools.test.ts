@@ -1051,6 +1051,14 @@ describe('apply_patch', () => {
     ).rejects.toThrow(/already exists.*Update File/s)
   })
 
+  it('applies a change at the end of a file closed by "*** End of File"', async () => {
+    await run('write_file', { path: 'tail.ts', content: 'const x = 1\nexport default x\n' })
+    await run('apply_patch', {
+      patch: patch('*** Update File: tail.ts', '@@', ' const x = 1', '-export default x', '+export { x }', '*** End of File')
+    })
+    expect(fileText('tail.ts')).toBe('const x = 1\nexport { x }\n')
+  })
+
   it('applies a hunk whose context drifted by whitespace (resilient match)', async () => {
     await run('write_file', { path: 'd.ts', content: 'function f() {\n      return 1\n}\n' })
     await run('apply_patch', {
@@ -1291,6 +1299,35 @@ describe('stale-write guard', () => {
     await run('edit_file', { path: 'q.txt', old_string: 'new', new_string: 'newer' })
     expect(fileText('p.txt')).toBe('one\n2\n')
     expect(fileText('q.txt')).toBe('newer\n')
+  })
+
+  it('refuses notebook_edit on an unread notebook or one changed in Jupyter since the read', async () => {
+    const nb = (...sources: string[]): string =>
+      JSON.stringify({
+        cells: sources.map((src) => ({ cell_type: 'code', metadata: {}, source: [src], outputs: [], execution_count: null })),
+        metadata: {},
+        nbformat: 4,
+        nbformat_minor: 5
+      })
+    put('n.ipynb', nb('a = 1', 'b = 2'))
+    await expect(run('notebook_edit', { path: 'n.ipynb', cell: 2, source: 'b = 3' })).rejects.toThrow(
+      /You have not read n\.ipynb yet/
+    )
+    await run('read_file', { path: 'n.ipynb' })
+    // The user inserts a cell above in Jupyter: cell 2 is now a different cell.
+    put('n.ipynb', nb('a = 1', 'inserted = 0', 'b = 2'))
+    await expect(run('notebook_edit', { path: 'n.ipynb', cell: 2, source: 'b = 3' })).rejects.toThrow(
+      /n\.ipynb has changed on disk/
+    )
+    expect(fileText('n.ipynb')).toBe(nb('a = 1', 'inserted = 0', 'b = 2'))
+    expect(await staleWriteRefusal('notebook_edit', { path: 'n.ipynb', cell: 3 }, [workspace], tracker)).toMatch(
+      /changed on disk/
+    )
+    // After a fresh read the edit goes through, and its own write counts as seen.
+    await run('read_file', { path: 'n.ipynb' })
+    await run('notebook_edit', { path: 'n.ipynb', cell: 3, source: 'b = 3' })
+    await run('notebook_edit', { path: 'n.ipynb', cell: 1, mode: 'delete' })
+    expect(fileText('n.ipynb')).toContain('b = 3')
   })
 
   it('forgets a file apply_patch deleted, so a later file at that path must be read', async () => {
