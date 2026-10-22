@@ -7,7 +7,7 @@
 
 # Privacy
 
-**Last updated: October 22, 2026**
+**Last updated: October 23, 2026**
 
 Houston is a locally-installed coding agent. You bring your own model and
 credentials, so almost every privacy question comes down to one thing: which
@@ -66,7 +66,8 @@ only to the destination you configured:
   issue) to GitHub through your own `gh`, under your GitHub account.
 - **Application updates.** Packaged builds contact the update service to check for
   and download new versions, and the terminal client checks once a day whether a
-  newer release exists (set `HOUSTON_NO_UPDATE_CHECK=1` to turn that off). That involves standard network metadata such as your
+  newer release exists, for interactive sessions and one-shot (`-p`) runs alike (set
+  `HOUSTON_NO_UPDATE_CHECK=1` to turn that off). That involves standard network metadata such as your
   IP address and app version, handled by that service. It does not send your
   conversations or project data. Like any download host, the service keeps
   aggregate counts of how often each released file is fetched; those totals are

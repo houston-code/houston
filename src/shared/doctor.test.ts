@@ -68,3 +68,22 @@ describe('buildDoctorReport — language servers', () => {
     expect(g.checks[0]).toMatchObject({ label: 'language servers', status: 'warn', detail: expect.stringContaining('no OS sandbox') })
   })
 })
+
+describe('buildDoctorReport — update row', () => {
+  const versionRow = (f: DoctorFacts) =>
+    buildDoctorReport(f).groups.find((g) => g.title === 'Houston')!.checks.find((c) => c.label === 'version')!
+
+  it('points at the download link when the host knows no upgrade command', () => {
+    const row = versionRow(facts({ update: { latest: '0.3.0', url: 'https://houstoncode.ai/#download' } }))
+    expect(row.status).toBe('warn')
+    expect(row.fix).toBe('download it at https://houstoncode.ai/#download')
+  })
+
+  it('gives the upgrade command for how this copy was installed', () => {
+    const row = versionRow(
+      facts({ update: { latest: '0.3.0', url: 'https://houstoncode.ai/#download', hint: 'brew upgrade houston' } })
+    )
+    expect(row.detail).toBe('0.2.200 (0.3.0 available)')
+    expect(row.fix).toBe('brew upgrade houston')
+  })
+})

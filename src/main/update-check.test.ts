@@ -2,7 +2,14 @@ import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { checkForUpdate, shortenHeadline, updateCheckEnabled, CHECK_INTERVAL_MS } from './update-check'
+import {
+  checkForUpdate,
+  formatHeadlessUpdateNotice,
+  headlessUpdateNoticeAllowed,
+  shortenHeadline,
+  updateCheckEnabled,
+  CHECK_INTERVAL_MS
+} from './update-check'
 import { DOWNLOAD_URL } from '@shared/update'
 
 const CURRENT = '0.2.141'
@@ -228,5 +235,35 @@ describe('shortenHeadline', () => {
 
   it('leaves a short plain line alone', () => {
     expect(shortenHeadline('Faster startup')).toBe('Faster startup')
+  })
+})
+
+describe('headlessUpdateNoticeAllowed', () => {
+  it('allows a person at a terminal', () => {
+    expect(headlessUpdateNoticeAllowed(false, true, {})).toBe(true)
+  })
+
+  it('never writes into --json output', () => {
+    expect(headlessUpdateNoticeAllowed(true, true, {})).toBe(false)
+  })
+
+  it('stays quiet when stderr is a pipe or a log file', () => {
+    expect(headlessUpdateNoticeAllowed(false, false, {})).toBe(false)
+  })
+
+  it('stays quiet in CI', () => {
+    expect(headlessUpdateNoticeAllowed(false, true, { CI: 'true' })).toBe(false)
+  })
+})
+
+describe('formatHeadlessUpdateNotice', () => {
+  it('is one stderr line naming both versions and the upgrade command', () => {
+    expect(
+      formatHeadlessUpdateNotice(
+        { latest: '0.10.0', url: DOWNLOAD_URL },
+        '0.9.0',
+        'update with: npm i -g @houston-code/cli@latest'
+      )
+    ).toBe('houston: update available: 0.10.0 (you have 0.9.0). Update with: npm i -g @houston-code/cli@latest\n')
   })
 })

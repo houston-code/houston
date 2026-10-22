@@ -195,3 +195,18 @@ export async function checkForUpdate(
     ...(release.headline ? { headline: release.headline } : {})
   }
 }
+
+/**
+ * Whether a one-shot (`-p`) run may print an update notice. Only to a person at a
+ * terminal: never into `--json` output a harness parses, never when stderr is a pipe or
+ * a log, and never in CI, where nobody upgrades anything by reading a run's stderr.
+ */
+export function headlessUpdateNoticeAllowed(json: boolean, stderrIsTTY: boolean, env: NodeJS.ProcessEnv): boolean {
+  return !json && stderrIsTTY && !env.CI
+}
+
+/** The one stderr line a one-shot run prints after its answer when an update exists. */
+export function formatHeadlessUpdateNotice(update: UpdateAvailable, currentVersion: string, hintLine: string): string {
+  const hint = hintLine.charAt(0).toUpperCase() + hintLine.slice(1)
+  return `houston: update available: ${update.latest} (you have ${currentVersion}). ${hint}\n`
+}

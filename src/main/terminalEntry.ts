@@ -62,7 +62,13 @@ import { gatherDoctorFacts } from './doctor'
 import { saveMemory } from './memory'
 import { legacyRulesNoticeApplies } from './globalRules'
 import { takeLegacyRulesTerminalNotice } from './legacyRulesNotice'
-import { checkForUpdate } from './update-check'
+import {
+  checkForUpdate,
+  formatHeadlessUpdateNotice,
+  headlessUpdateNoticeAllowed,
+  type UpdateAvailable
+} from './update-check'
+import { currentInstallMethod, upgradeHint } from './install-method'
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
 import { runHeadless, type HeadlessOptions } from './headless'
 import { serveAcp } from './acp'
@@ -374,7 +380,7 @@ function probeDoctor(
   cwd: string,
   version: string,
   color: boolean,
-  update: { latest: string; url: string } | null
+  update: { latest: string; url: string; hint?: string } | null
 ): DoctorFacts {
   return {
     ...gatherDoctorFacts(cwd, { version, update }),
@@ -432,7 +438,8 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
   const version = host.version ?? 'dev'
   // Remembered from the background update check so /doctor can report it without
   // a second network round trip.
-  let latestUpdate: { latest: string; url: string } | null = null
+  let latestUpdate: { latest: string; url: string; hint: string } | null = null
+  const hint = upgradeHint(currentInstallMethod())
 
   const paint = makePainter(tui.color)
   // Built-ins plus this workspace's own .houston/commands. The Tab completer only
@@ -544,8 +551,8 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       takeLegacyRulesNotice: () => takeLegacyRulesTerminalNotice(() => legacyRulesNoticeApplies()),
       checkUpdate: async () => {
         const found = await checkForUpdate(version)
-        latestUpdate = found ? { latest: found.latest, url: found.url } : null
-        return found
+        latestUpdate = found ? { latest: found.latest, url: found.url, hint: hint.fix } : null
+        return found ? { ...found, hint: hint.line } : null
       },
       // Real terminal width (re-read each turn) so status-line truncation and
       // markdown wrapping track the actual terminal, not a hardcoded 80 columns.
@@ -691,6 +698,22 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
     notify: (m) => process.stderr.write(`· ${m}\n`),
     startScheduler: false
   })
+  // The update check runs alongside the task and is never waited for: its answer is
+  // printed after the run only if it is already in (it is cached for a day, so it
+  // usually is), and process exit does not wait on a fetch still in flight.
+  const pendingUpdate: { found: UpdateAvailable | null } = { found: null }
+  if (
+    opts.version &&
+    headlessUpdateNoticeAllowed(headless.json, Boolean(process.stderr.isTTY), process.env)
+  ) {
+    void checkForUpdate(opts.version)
+      .then((found) => {
+        pendingUpdate.found = found
+      })
+      .catch(() => {
+        /* a failed update check is a non-event */
+      })
+  }
   let code = 1
   try {
     code = await runHeadless(headless, {
@@ -742,6 +765,11 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
         `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`
       )
       await sessions.waitForBackgroundSessions()
+    }
+    if (pendingUpdate.found && opts.version) {
+      process.stderr.write(
+        formatHeadlessUpdateNotice(pendingUpdate.found, opts.version, upgradeHint(currentInstallMethod()).line)
+      )
     }
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)

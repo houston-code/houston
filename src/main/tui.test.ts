@@ -3743,6 +3743,23 @@ describe('version, update check, and /doctor', () => {
     expect(out.match(/update available/g)).toHaveLength(1)
   })
 
+  it('shows the host\'s upgrade command instead of the link when it has one', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    d.version = '0.9.0'
+    d.checkUpdate = async () => ({
+      latest: '0.10.0',
+      url: 'https://x/releases',
+      hint: 'update with: brew upgrade houston'
+    })
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('update available: 0.10.0 (you have 0.9.0)')
+    expect(out).toContain('update with: brew upgrade houston')
+    expect(out).not.toContain('https://x/releases')
+  })
+
   it('says nothing when there is no update, and never blocks on the check', async () => {
     const { d } = deps(done)
     const t = fakeIo([null])

@@ -40,8 +40,11 @@ export interface DoctorFacts {
    * Absent for the desktop app, whose report simply omits the Terminal group.
    */
   terminal?: { tty: boolean; color: boolean; columns: number; term: string }
-  /** Newer release, when the update check found one. */
-  update: { latest: string; url: string } | null
+  /**
+   * Newer release, when the update check found one. `hint` is the upgrade command for
+   * how this copy was installed (terminal clients); without it the fix is the download link.
+   */
+  update: { latest: string; url: string; hint?: string } | null
   /**
    * Language servers Houston can drive: whether each is installed and whether the
    * workspace looks like it uses that language. Absent on hosts that don't probe them.
@@ -134,7 +137,7 @@ export function buildDoctorReport(f: DoctorFacts): DoctorReport {
           label: 'version',
           status: f.update ? 'warn' : 'ok',
           detail: f.update ? `${f.version} (${f.update.latest} available)` : f.version,
-          ...(f.update ? { fix: `download it at ${f.update.url}` } : {})
+          ...(f.update ? { fix: f.update.hint ?? `download it at ${f.update.url}` } : {})
         },
         { label: 'node', status: 'ok', detail: f.nodeVersion },
         { label: 'platform', status: 'ok', detail: f.platform },
