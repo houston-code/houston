@@ -338,10 +338,15 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getByRole('button', { name: '+ Add rule' }))
     expect(document.querySelectorAll('.rule')).toHaveLength(1)
 
-    // The new rule lands in a run_shell group (per-tool grouping) and defaults to the
-    // safe 'ask' action; the tool is shown by the group header, not a per-row field.
-    expect(document.querySelector('.rule-group__tool')?.textContent).toBe('run_shell')
+    // The new rule is a run_shell rule, last in the list, and defaults to the safe
+    // 'ask' action.
+    expect(screen.getByRole('combobox', { name: 'Rule 1 tool' })).toHaveValue('run_shell')
     expect(screen.getByDisplayValue('Ask')).toBeInTheDocument()
+
+    // By tool, it lands in a run_shell group whose header names the tool.
+    fireEvent.click(screen.getByRole('button', { name: 'By tool' }))
+    expect(document.querySelector('.rule-group__tool')?.textContent).toBe('run_shell')
+    expect(screen.queryByRole('combobox', { name: 'Rule 1 tool' })).toBeNull()
   })
 
   it('groups rules by tool and filters them', () => {
@@ -354,6 +359,7 @@ describe('SettingsModal', () => {
       ]
     })
     fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'By tool' }))
 
     // Two tool groups (run_shell with 2, web_fetch with 1); three rows total.
     const groups = [...document.querySelectorAll('.rule-group__tool')].map((n) => n.textContent)
@@ -364,6 +370,85 @@ describe('SettingsModal', () => {
     fireEvent.change(screen.getByPlaceholderText('Filter rules…'), { target: { value: 'git' } })
     expect(document.querySelectorAll('.rule')).toHaveLength(1)
     expect(screen.getByDisplayValue('git status')).toBeInTheDocument()
+  })
+
+  describe('rule order', () => {
+    const ordered = [
+      { action: 'allow' as const, tool: 'run_shell', match: '*' },
+      { action: 'deny' as const, tool: 'run_shell', match: 'rm *' },
+      { action: 'ask' as const, tool: 'web_fetch', match: 'https://a.example/*' }
+    ]
+    const patterns = (): string[] =>
+      [...document.querySelectorAll<HTMLInputElement>('.rule__match')].map((i) => i.value)
+
+    it('lists rules numbered in the order they are checked', () => {
+      installApi()
+      renderModal({ permissionRules: ordered })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      expect([...document.querySelectorAll('.rule__num')].map((n) => n.textContent)).toEqual(['1', '2', '3'])
+      expect(patterns()).toEqual(['*', 'rm *', 'https://a.example/*'])
+    })
+
+    it('warns when an earlier rule means a later one never applies', () => {
+      installApi()
+      renderModal({ permissionRules: ordered })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      expect(screen.getByText('Never applies: rule 1 (allow run_shell *) matches first.')).toBeInTheDocument()
+      expect(screen.getByText('Approves every run_shell call without asking.')).toBeInTheDocument()
+      expect(screen.getByText('2 rules need attention.')).toBeInTheDocument()
+    })
+
+    it('moves a rule up and down, and the warning follows the new order', async () => {
+      const api = installApi()
+      const { container } = renderModal({ permissionRules: ordered })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      expect(screen.getByRole('button', { name: 'Move rule 1 up' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Move rule 3 down' })).toBeDisabled()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Move rule 2 up' }))
+      expect(patterns()).toEqual(['rm *', '*', 'https://a.example/*'])
+      expect(screen.queryByText(/Never applies/)).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: 'Move rule 1 down' }))
+      expect(patterns()).toEqual(['*', 'rm *', 'https://a.example/*'])
+      fireEvent.click(screen.getByRole('button', { name: 'Move rule 2 up' }))
+
+      fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      const saved = api.saveSettings.mock.calls.at(-1)?.[0] as AppSettings
+      expect(saved.permissionRules?.map((r) => r.match)).toEqual(['rm *', '*', 'https://a.example/*'])
+    })
+
+    it('reorders by dragging a rule onto another', () => {
+      installApi()
+      renderModal({ permissionRules: ordered })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      const handles = document.querySelectorAll('.rule__handle')
+      const rows = document.querySelectorAll('.rule-row')
+      fireEvent.dragStart(handles[2], { dataTransfer: { setData: vi.fn(), setDragImage: vi.fn() } })
+      fireEvent.dragOver(rows[0])
+      fireEvent.drop(rows[0])
+      expect(patterns()).toEqual(['https://a.example/*', '*', 'rm *'])
+    })
+
+    it('turns reordering off while a filter hides rules, keeping the real numbers', () => {
+      installApi()
+      renderModal({ permissionRules: ordered })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      fireEvent.change(screen.getByPlaceholderText('Filter rules…'), { target: { value: 'rm' } })
+      expect([...document.querySelectorAll('.rule__num')].map((n) => n.textContent)).toEqual(['2'])
+      expect(screen.getByRole('button', { name: 'Move rule 2 up' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: 'Move rule 2 down' })).toBeDisabled()
+    })
+
+    it('edits a rule\'s tool in the ordered view', () => {
+      installApi()
+      renderModal({ permissionRules: ordered })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      fireEvent.change(screen.getByRole('combobox', { name: 'Rule 2 tool' }), { target: { value: 'write_file' } })
+      // No longer the same tool as rule 1, so nothing shadows it.
+      expect(screen.queryByText(/Never applies/)).toBeNull()
+    })
   })
 
   it('shows a rule\'s Exact flag and saves it when toggled, keeping it through edits', async () => {
@@ -797,7 +882,7 @@ describe('SettingsModal', () => {
     expect(document.querySelectorAll('.rule')).toHaveLength(1)
     const ruleRow = document.querySelector('.rule') as HTMLElement
     // The ✕ inside the rule row removes it.
-    fireEvent.click(within(ruleRow).getByRole('button', { name: '✕' }))
+    fireEvent.click(within(ruleRow).getByRole('button', { name: 'Remove rule 1' }))
 
     expect(document.querySelectorAll('.rule')).toHaveLength(0)
   })

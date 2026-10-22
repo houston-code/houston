@@ -867,7 +867,12 @@ belongs to the chat, like its model (see "Each chat keeps its own settings").
 `deny`, or `ask`, matched on the tool plus a glob over its target, e.g. allow
 `run_shell` matching `git *`, deny anything matching `*rm -rf*`, always ask
 before `write_file` under `src/secret/**`. Rules are checked before the mode and
-the first match wins. Matching normalizes the target so a rule cannot be dodged
+the first match wins, so their order matters: Settings lists them numbered in the
+order they are checked, and you can drag a rule or use its arrows to move it. A rule
+that can never apply because an earlier one already matches everything it would (a
+`*` pattern for the same tool, or the same pattern) is flagged, as is an empty
+pattern (it matches nothing) and an allow of `*`. **By tool** groups the list per
+tool instead. Matching normalizes the target so a rule cannot be dodged
 by respelling it: a file rule is resolved and anchored to the workspace (so
 `src/*` covers the same file written as an absolute path, and a relative climb
 like `src/../../etc/passwd` does not slip past it), a URL rule is
