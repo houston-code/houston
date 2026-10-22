@@ -30,8 +30,10 @@ describe('npmManifest', () => {
     expect(manifest.scripts).toBeUndefined()
   })
 
-  it('publishes publicly with provenance', () => {
-    expect(manifest.publishConfig).toEqual({ access: 'public', provenance: true })
+  // Provenance is requested by the release workflow's --provenance flag instead: in
+  // publishConfig it would make a publish from outside CI fail.
+  it('publishes publicly, leaving provenance to the publishing command', () => {
+    expect(manifest.publishConfig).toEqual({ access: 'public' })
   })
 
   it('refuses a non-release version', () => {

@@ -44,7 +44,9 @@ export function npmManifest(rootPkg) {
     bin: { houston: CLI_FILE },
     files: [CLI_FILE, 'NOTICE'],
     engines: { node: rootPkg.engines.node },
-    publishConfig: { access: 'public', provenance: true },
+    // No `provenance: true` here: npm can only generate provenance in CI, so it would break
+    // the one-time hand publish. The release workflow passes --provenance itself.
+    publishConfig: { access: 'public' },
   }
 }
 
