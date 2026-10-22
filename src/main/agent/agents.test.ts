@@ -38,6 +38,18 @@ describe('loadAgents', () => {
     })
   })
 
+  it('reads max_turns as a hard step limit, ignoring values it cannot use', async () => {
+    writeAgent('capped', '---\nmax_turns: 12\n---\nCapped agent.')
+    writeAgent('silly', '---\nmax_turns: 0\n---\nZero.')
+    writeAgent('huge', '---\nmax_turns: 100000\n---\nToo many.')
+    writeAgent('words', '---\nmax_turns: twelve\n---\nWords.')
+    const byName = Object.fromEntries((await loadAgents(ws)).map((a) => [a.name, a]))
+    expect(byName.capped.maxTurns).toBe(12)
+    expect(byName.silly.maxTurns).toBeUndefined()
+    expect(byName.huge.maxTurns).toBeUndefined()
+    expect(byName.words.maxTurns).toBeUndefined()
+  })
+
   it('falls back to the first body line for the description', async () => {
     writeAgent('explorer', 'Maps the codebase structure.\nMore detail.')
     const [a] = await loadAgents(ws)

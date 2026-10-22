@@ -120,9 +120,11 @@ describe('prompt visibility guard', () => {
     // A ship action's prompt is read only by shipTurn; the renderer's other
     // `.prompt` is a tool argument shown to the user: propose_session's brief on its
     // card (sent only via proposalHereTurn). spawn_session's prompt labels its tool
-    // row in shared/toolLabel.ts, which both clients use.
+    // row in shared/toolLabel.ts, which both clients use. SubagentPanel shows the task
+    // a subagent was given (its setup tab and transcript), display only, never sent.
     expect(occurrences(['renderer/src'], /\.prompt\b/)).toEqual({
-      'renderer/src/components/ProposalCard.tsx': 1
+      'renderer/src/components/ProposalCard.tsx': 1,
+      'renderer/src/components/SubagentPanel.tsx': 2
     })
     expect(occurrences(['shared'], /\ba\.prompt\b/)).toEqual({ 'shared/toolLabel.ts': 1 })
     expect(occurrences(['shared'], /\baction\.prompt\b/)).toEqual({ 'shared/promptInvocation.ts': 1 })

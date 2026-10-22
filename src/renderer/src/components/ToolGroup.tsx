@@ -1,4 +1,4 @@
-import { useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { imageDataUrl } from '@shared/images'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -8,9 +8,11 @@ import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shar
 import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
 import { droppedSummary, findingTally, isDropped, sortFindings } from '@shared/reviewFindings'
 import { stoppedPromptText } from '@shared/promptOutcome'
+import { isSubagentTool } from '@shared/subagents'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
+import { SubagentBody, SubagentChips, SubagentTranscript } from './SubagentPanel'
 import { ImageGallery } from './ImageGallery'
 import {
   galleryViewerImages,
@@ -263,12 +265,27 @@ function ToolRow({
   // said" was an interruption, which is the model's wording, not the user's.
   const output = stoppedPromptText(item.output) ?? item.output
 
-  // Open the diff/output by default while a change is awaiting approval.
-  const [open, setOpen] = useState(awaiting)
+  // A dispatched subagent's row: its steps stream in while it runs, and it collapses to
+  // its summary chips once it finishes.
+  const isAgent = isSubagentTool(item.name)
+  const records = item.records
+  // Open the diff/output by default while a change is awaiting approval, and a
+  // subagent's steps while it runs.
+  const [open, setOpen] = useState(awaiting || (isAgent && running))
+  const wasRunning = useRef(running)
+  useEffect(() => {
+    if (!isAgent) return
+    if (running && !wasRunning.current) setOpen(true)
+    if (!running && wasRunning.current) setOpen(false)
+    wasRunning.current = running
+  }, [isAgent, running])
+  // A review's agents, opened from the row in the transcript drawer.
+  const [agentsOpen, setAgentsOpen] = useState(false)
   // Guidance to send with a denial ("no, use staging instead").
   const [note, setNote] = useState('')
   // Todo/sweep rows render their list inline, so they have nothing extra to expand.
-  const expandable = !isTodo && !isSweep && Boolean(allLines.length > 0 || output)
+  const expandable =
+    !isTodo && !isSweep && Boolean(allLines.length > 0 || output || (isAgent && records?.length))
   const toggle = (): void => {
     if (expandable) setOpen((v) => !v)
   }
@@ -300,6 +317,7 @@ function ToolRow({
             {target}
           </span>
         )}
+        {isAgent && records && records.length > 0 && <SubagentChips records={records} />}
         <span className="tool-row__spacer" />
         {tally && (
           <span className={`tool-row__tally${tally.alarm ? ' tool-row__tally--alarm' : ''}`}>{tally.text}</span>
@@ -313,9 +331,13 @@ function ToolRow({
         {expandable && <span className="tool-row__chevron">{open ? '▾' : '▸'}</span>}
       </div>
 
-      {item.status === 'running' && item.progress && (
+      {item.status === 'running' && item.progress && !(isAgent && records?.length) && (
         <div className="tool-row__progress">{item.progress}</div>
       )}
+
+      {isAgent && open && (records?.length || output) ? (
+        <SubagentBody records={records} output={output} running={running} />
+      ) : null}
 
       {item.subagents && item.subagents.length > 0 && (
         <ul className="tool-row__subagents">
@@ -332,6 +354,17 @@ function ToolRow({
 
       {item.findings && item.findings.length > 0 && (
         <ReviewFindings findings={item.findings} running={running} />
+      )}
+
+      {!isAgent && records && records.length > 0 && (
+        <div className="sa-foot sa-foot--row">
+          <button type="button" className="sa-link" onClick={() => setAgentsOpen(true)}>
+            See what its {records.length} agent{records.length === 1 ? '' : 's'} did
+          </button>
+        </div>
+      )}
+      {agentsOpen && records && records.length > 0 && (
+        <SubagentTranscript records={records} selectedId={records[0].id} onClose={() => setAgentsOpen(false)} />
       )}
 
       {isTodo && (
@@ -385,7 +418,7 @@ function ToolRow({
           ))}
         </div>
       )}
-      {open && output && !isTodo && !isSweep && <pre className="tool-row__output">{output}</pre>}
+      {open && output && !isTodo && !isSweep && !isAgent && <pre className="tool-row__output">{output}</pre>}
 
       {isGallery && (
         <ImageGallery

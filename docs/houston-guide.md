@@ -403,7 +403,9 @@ tests pass and the receipt says no tests ran, believe the receipt.
   how its steps went. It counts as passed only when a check of the page
   (`expect_text` or `wait_for`) passed after the last click or keypress: clicking
   through a flow shows it didn't break, not that it did the right thing.
-- **Also listed.** Commands a writable subagent ran (marked with who ran them), your
+- **Also listed.** Commands a writable subagent ran, each by name with its exit code
+  and which subagent ran it (even an `ls` it ran is listed, since you didn't watch it
+  happen), files a subagent changed (marked with who changed them), your
   verify command when Houston runs it at the end of a turn, and how a command started
   in the background ended (or that it is still running, for a dev server). A check
   that ran before the turn's last file change says so, since it may not cover the
@@ -707,7 +709,8 @@ model picker; changing it while the agent is working applies from its next step.
 input tokens were served from the prompt cache, and the dollar cost, with a total
 when more than one model billed. Subagents and reviews often run on a different
 (cheaper) model, and they are listed separately rather than folded into the main
-one.
+one. In the desktop app, the cost breakdown also lists what each subagent spent
+(already counted in its model's row).
 
 The cached count is worth watching on a long session: those tokens are real
 context, but they bill far below the base input rate, so a big number there is
@@ -958,9 +961,10 @@ Drop a Markdown file in `.houston/agents/<name>.md` to define a specialized
 subagent: front-matter `description` plus a system-prompt body. The main agent
 dispatches it by name with `dispatch_agent`, and it works in its own fresh
 context and reports back, keeping the main thread clean. An optional front-matter
-`tools:` list narrows which tools it may use, and an optional `model:` pins the
+`tools:` list narrows which tools it may use, an optional `model:` pins the
 agent to a (usually cheaper) sibling model from the current provider (unknown
-ids fall back to the chat's model). By default a subagent is read-only (it cannot
+ids fall back to the chat's model), and an optional `max_turns:` (a whole number
+up to 500) sets a hard limit on its steps that never extends. By default a subagent is read-only (it cannot
 edit files or run commands); a subagent marked `write: true` gets a writable tier
 and is dispatched with `dispatch_writable_agent`, which is approval-gated because
 it grants write access: one approval covers the whole delegated task's local
@@ -977,10 +981,35 @@ commands never get network access. On a host without an OS-enforced sandbox
 so it asks for its own approval first too. Tokens a subagent spends roll into the
 conversation's usage meter, priced at the model the subagent actually ran on.
 
-While a subagent works, its dispatch row shows live progress (turn counter plus
-what it is doing), in every client. Each report ends with an id like `ag1`: the
-main agent can pass it back as `resume` to send a follow-up into that subagent's
-context instead of re-dispatching from scratch (ids last for the app session). A
+**Seeing what a subagent did.** While a subagent works, its row in the desktop app
+lists each step as it happens (what it read, searched, edited or ran, with the
+outcome: lines read, matches found, a command's exit code, an edit's line counts)
+and shows its model, step count, time and tokens. A nested agent gets its own
+indented block. When it finishes, the row collapses to a summary (model, steps,
+time, cost, and its id, like `ag1`). Expand it for three tabs: **Report** (the
+agent's report, rendered), **Steps** (each step expands to its result, or an
+edit's real diff), and **Prompt & setup** (the exact task the main agent wrote,
+which agent and model ran it and who chose the model, its tools, its step
+budget, its usage, and its system prompt). **Open transcript** shows the whole
+run in order in a side panel, with a Copy as Markdown button. A review's row
+links to the same view for each of its reviewers. This record is saved with the
+chat, so it's there after a restart; Settings > Loop control sets how much of it
+a chat keeps (4 MB by default, after which the oldest subagents keep their task,
+steps and report but drop step results and diffs). The terminal prints a line per
+step under the dispatch (a review's reviewers only with `/verbose`) and the
+report, and `--json` emits `subagent_start`, `subagent_step` and `subagent_end`.
+
+**Steps.** A subagent works under the same step budget as the main agent: the
+"Steps per turn" setting, extended in the same chunks while it is still finding
+things out or making edits, up to the same hard limit, with the same loop
+detection. Near the end it is told to wrap up, and its last step can't run tools,
+so it always ends on a report of what it has. A custom agent's `max_turns`
+replaces that with a fixed limit. A review's agents keep the base budget without
+extending, since a review runs many at once.
+
+The main agent can pass a subagent's id back as `resume` to send a follow-up
+into that subagent's context instead of re-dispatching from scratch (ids last for
+the app session; the saved record doesn't make an agent resumable after a restart). A
 dispatch can also pass `model` to run one-off legwork on a cheaper sibling model.
 Subagents can fan out one level themselves: a dispatched agent may dispatch its
 own nested read-only researchers (never writable, and no deeper).

@@ -128,6 +128,8 @@ export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
  */
 export interface DispatchAgentOptions {
   prompt: string
+  /** The dispatch's short label, shown on the subagent's record. */
+  description?: string
   /** Named custom agent (.houston/agents) to run as. */
   agent?: string
   /** Model override for this dispatch — one of the current provider's model ids. */
@@ -2681,6 +2683,7 @@ const dispatchAgent: ToolDef = {
     if (!ctx.dispatchSubAgent) throw new Error('Subagents are not available in this context.')
     return ctx.dispatchSubAgent({
       prompt,
+      description: str(args, 'description') || undefined,
       agent: str(args, 'agent') || undefined,
       model: str(args, 'model') || undefined,
       resume: str(args, 'resume') || undefined
@@ -2737,6 +2740,7 @@ const dispatchWritableAgent: ToolDef = {
     }
     return ctx.dispatchWritableSubAgent({
       prompt,
+      description: str(args, 'description') || undefined,
       agent: str(args, 'agent') || undefined,
       model: str(args, 'model') || undefined,
       resume: str(args, 'resume') || undefined

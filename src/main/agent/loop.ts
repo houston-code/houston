@@ -157,6 +157,15 @@ import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sand
 import { egressEndpointsForRun } from './egress'
 import { formatFile } from './format'
 import { MAX_SUBAGENT_DEPTH, runSubAgent } from './subagent'
+import { SubagentRecorder, type SubagentHandle } from './subagentRecorder'
+import {
+  limitSubagentHistory,
+  resumeNote,
+  subagentHistoryBytes,
+  type SubagentBudget,
+  type SubagentModelSource,
+  type SubagentStatus
+} from '@shared/subagents'
 import {
   MAX_SUBAGENT_SESSIONS,
   getSubAgent,
@@ -1538,6 +1547,16 @@ export async function startRun(
         by
       )
 
+    // The record of every subagent this run starts (dispatched, nested, reviewers), streamed
+    // to the clients and saved on the dispatching call's tool result (see flushResult).
+    const subagentRecorder = new SubagentRecorder(emit, redact, (model, u) => {
+      const caps = providerConfig.models.find((m) => m.id === model)?.caps
+      const cost = turnCostUsd(model, u.input, u.output, { readTokens: u.cacheRead, writeTokens: u.cacheWrite }, caps)
+      return cost > 0 ? cost : undefined
+    })
+    // What subagents and reviews spent this run, so the cost-ceiling reminder counts it.
+    let delegatedCostUsd = 0
+
     // Surface a hook's `systemMessage` directive as a user-facing transcript notice.
     // Emit-only by design: it never lands in `messages`, so the model never sees it
     // (the documented contract of the directive).
@@ -1702,24 +1721,25 @@ export async function startRun(
     const resolveDispatchModel = (
       requested: string | undefined,
       agent: CustomAgent | undefined
-    ): { model: string; error?: string } => {
+    ): { model: string; source: SubagentModelSource; error?: string } => {
       const available = providerConfig.models.map((m) => m.id)
       if (requested) {
         // The run's own model is always acceptable, even when the provider config
         // lists no models (some custom endpoints don't enumerate them).
-        if (requested === req.model) return { model: requested }
+        if (requested === req.model) return { model: requested, source: 'argument' }
         if (!available.includes(requested)) {
           return {
             model: req.model,
+            source: 'run',
             error: available.length
               ? `Unknown model "${requested}" for provider ${req.providerId}. Configured models: ${available.join(', ')}. Omit model to use ${req.model}.`
               : `Model overrides aren't available: provider ${req.providerId} lists no models. Omit model to use ${req.model}.`
           }
         }
-        return { model: requested }
+        return { model: requested, source: 'argument' }
       }
-      if (agent?.model && available.includes(agent.model)) return { model: agent.model }
-      return { model: req.model }
+      if (agent?.model && available.includes(agent.model)) return { model: agent.model, source: 'agent-file' }
+      return { model: req.model, source: 'run' }
     }
 
     // ---- Subagent consent seams ---------------------------------------------
@@ -1941,6 +1961,8 @@ export async function startRun(
       writable: boolean
       /** Depth of the agent being dispatched: 1 from the main agent, 2 nested. */
       depth: number
+      /** For a nested agent: its parent's record, and the parent's step that dispatched it. */
+      parent?: { recordId: string; step?: number }
     }): Promise<string> => {
       const { callId, opts, writable, depth } = input
       const agent = opts.agent ? agentsByName.get(opts.agent) : undefined
@@ -1970,6 +1992,15 @@ export async function startRun(
       const modelCaps = providerConfig.models.find((m) => m.id === model)?.caps
       const systemOverride = resumed ? resumed.systemOverride : agent?.systemPrompt
       const allowedTools = resumed ? resumed.tools : agent?.tools
+      const agentName = resumed ? resumed.agentName : opts.agent
+      // A custom agent's `max_turns` is a hard limit; everyone else shares the main
+      // loop's adaptive budget.
+      const hardCap = agentName ? agentsByName.get(agentName)?.maxTurns : undefined
+      const label =
+        opts.description?.trim() ||
+        (agentName ? `${agentName} agent` : writable ? 'Writable subagent' : 'Research subagent')
+      // Who the receipt credits for this agent's commands and edits.
+      const credit = `${writable ? 'Writable subagent' : 'Subagent'} "${label}"`
 
       // Consent seams for this subagent's gated calls: UNCONFINED shell (writable tier
       // on a host with no OS sandbox), NETWORK egress (any tier), and the permission
@@ -2035,10 +2066,10 @@ export async function startRun(
       let subOutput = 0
       let subCacheRead = 0
       let subCacheWrite = 0
-      // Nested agents' progress shares the parent dispatch's row; the arrow keeps
-      // the two narrations distinguishable.
-      const progressPrefix = depth > 1 ? '↳ ' : ''
       let storedId: string | undefined
+      // This agent's record, started once runSubAgent has assembled its system prompt.
+      let handle: SubagentHandle | undefined
+      let ending: { status: SubagentStatus; budget: SubagentBudget } | undefined
       const result = await runSubAgent({
         // Pinned to the run's configured provider, not the fallback route: a
         // dispatch's `model` override is validated against `req.providerId`'s
@@ -2066,8 +2097,8 @@ export async function startRun(
               gateUnconfinedShell,
               // Delegated commands and edits belong on this turn's receipt, credited
               // to the agent that ran them.
-              recordEvidence: (e: EvidenceDraft) => recordEvidence(e, opts.agent ?? 'a subagent'),
-              recordFiles: (paths: string[]) => run.evidence.recordFiles(workspace, paths)
+              recordEvidence: (e: EvidenceDraft) => recordEvidence(e, credit),
+              recordFiles: (paths: string[]) => run.evidence.recordFiles(workspace, paths, credit)
             }
           : {}),
         // Permission rules + the sensitive-read prompt on every local call, either tier.
@@ -2087,10 +2118,38 @@ export async function startRun(
         // which never passes flushResult — scrub them with the run-scoped redactor.
         redact,
         priorMessages: resumed?.messages,
-        // Progress lines carry tool-arg summaries from the subagent's own calls,
-        // so they get the same secret scrub as tool results (see the flush below).
-        onProgress: (message) =>
-          emit({ type: 'tool_progress', callId, message: redact(`${progressPrefix}${message}`) }),
+        // Progress reaches the clients as the agent's record (onStep below), which
+        // carries each step's outcome, rather than as one overwriting progress line.
+        // The same budget, loop detection and context limit the main agent works under.
+        budget: {
+          maxIterations: settings.maxIterations,
+          autoExtend: autoExtendTurnsEnabled(settings),
+          ceiling: settings.maxIterationsCeiling,
+          ...(hardCap ? { hardCap } : {})
+        },
+        stall:
+          settings.stallDetection === false
+            ? false
+            : { repeatCallLimit: settings.stallRepeatCallLimit, repeatErrorLimit: settings.stallRepeatErrorLimit },
+        contextWindow: resolveContextWindow(model, modelCaps) ?? undefined,
+        onStart: ({ system, tools: toolNames }) => {
+          handle = subagentRecorder.start(callId, {
+            kind: writable ? 'writable' : 'research',
+            label,
+            ...(agentName ? { agentName } : {}),
+            model,
+            modelSource: resumed ? 'run' : modelRes.source,
+            prompt: opts.prompt,
+            systemPrompt: system,
+            tools: toolNames,
+            ...(input.parent ? { parentId: input.parent.recordId, parentStep: input.parent.step } : {}),
+            ...(resumed ? { resumed: true } : {})
+          })
+        },
+        onStep: (step) => handle?.step(step),
+        onEnd: (end) => {
+          ending = end
+        },
         // Store/refresh the transcript for resumability — top-level dispatches
         // only. A nested agent's report goes to its parent subagent, not to the
         // main model, so an id for it would name something the model never saw.
@@ -2117,12 +2176,19 @@ export async function startRun(
         // floor. Nested dispatch never widens write authority.
         ...(depth < MAX_SUBAGENT_DEPTH
           ? {
-              dispatchNested: (nestedPrompt: string, nestedAgent?: string, nestedModel?: string) =>
+              dispatchNested: (
+                nestedPrompt: string,
+                nestedAgent?: string,
+                nestedModel?: string,
+                stepIndex?: number,
+                nestedDescription?: string
+              ) =>
                 runDispatch({
                   callId,
-                  opts: { prompt: nestedPrompt, agent: nestedAgent, model: nestedModel },
+                  opts: { prompt: nestedPrompt, agent: nestedAgent, model: nestedModel, description: nestedDescription },
                   writable: false,
-                  depth: depth + 1
+                  depth: depth + 1,
+                  ...(handle ? { parent: { recordId: handle.id, step: stepIndex } } : {})
                 })
             }
           : {}),
@@ -2131,6 +2197,7 @@ export async function startRun(
           subOutput += u.outputTokens ?? 0
           subCacheRead += u.cacheReadTokens ?? 0
           subCacheWrite += u.cacheWriteTokens ?? 0
+          handle?.usage(u)
         }
       }).finally(() => {
         // A subagent bills against its own (possibly cheaper) model; total its
@@ -2138,17 +2205,19 @@ export async function startRun(
         // inputTokens: 0 keeps the context-size meter on the main turn (this is
         // an ephemeral subagent context), while output + cost accumulate.
         if (subInput || subOutput) {
+          const cost = turnCostUsd(
+            model,
+            subInput,
+            subOutput,
+            { readTokens: subCacheRead, writeTokens: subCacheWrite },
+            modelCaps
+          )
+          delegatedCostUsd += cost
           emit({
             type: 'usage',
             inputTokens: 0,
             outputTokens: subOutput,
-            cost: turnCostUsd(
-              model,
-              subInput,
-              subOutput,
-              { readTokens: subCacheRead, writeTokens: subCacheWrite },
-              modelCaps
-            ),
+            cost,
             // A subagent can run on its own (often cheaper) model; attribute it there.
             model,
             ...(subCacheRead ? { cacheReadTokens: subCacheRead } : {}),
@@ -2157,11 +2226,18 @@ export async function startRun(
         }
       })
 
+      handle?.end({
+        status: ending?.status ?? (abort.signal.aborted ? 'aborted' : 'error'),
+        report: result,
+        ...(ending ? { budget: ending.budget } : {}),
+        ...(storedId ? { resumeId: storedId } : {})
+      })
+
       // Tell the model how to follow up. Only when a transcript was stored — an
       // aborted/errored run isn't resumable, and nested dispatches never are.
       if (storedId) {
         const tool = writable ? 'dispatch_writable_agent' : 'dispatch_agent'
-        return `${result}\n\n[subagent ${storedId}: pass resume: "${storedId}" to ${tool} to continue this agent with its context intact]`
+        return `${result}\n\n${resumeNote(storedId, tool)}`
       }
       return result
     }
@@ -2377,6 +2453,35 @@ export async function startRun(
           onSubAgent: (ev) =>
             emit({ type: 'subagent', parentCallId: callId, id: ev.id, label: ev.label, status: ev.status }),
           onFinding: (finding) => emit({ type: 'review_finding', parentCallId: callId, finding }),
+          // Each reviewer, skeptic and the verifier gets its own record under the review.
+          observeAgent: (meta, o) => {
+            let handle: SubagentHandle | undefined
+            let ending: { status: SubagentStatus; budget: SubagentBudget } | undefined
+            return {
+              onStart: ({ system, tools: toolNames }) => {
+                handle = subagentRecorder.start(callId, {
+                  kind: 'reviewer',
+                  label: meta.label,
+                  model: o.model,
+                  modelSource: reviewModel === req.model ? 'run' : 'argument',
+                  prompt: o.prompt,
+                  systemPrompt: system,
+                  tools: toolNames
+                })
+              },
+              onStep: (step) => handle?.step(step),
+              onEnd: (end) => {
+                ending = end
+              },
+              onUsage: (u) => handle?.usage(u),
+              done: (report) =>
+                handle?.end({
+                  status: ending?.status ?? (abort.signal.aborted ? 'aborted' : 'error'),
+                  report,
+                  ...(ending ? { budget: ending.budget } : {})
+                })
+            }
+          },
           onUsage: (u) => {
             reviewInput += u.inputTokens ?? 0
             reviewOutput += u.outputTokens ?? 0
@@ -2386,17 +2491,19 @@ export async function startRun(
           signal: abort.signal
         }).finally(() => {
           if (reviewInput || reviewOutput) {
+            const cost = turnCostUsd(
+              reviewModel,
+              reviewInput,
+              reviewOutput,
+              { readTokens: reviewCacheRead, writeTokens: reviewCacheWrite },
+              reviewCaps
+            )
+            delegatedCostUsd += cost
             emit({
               type: 'usage',
               inputTokens: 0,
               outputTokens: reviewOutput,
-              cost: turnCostUsd(
-                reviewModel,
-                reviewInput,
-                reviewOutput,
-                { readTokens: reviewCacheRead, writeTokens: reviewCacheWrite },
-                reviewCaps
-              ),
+              cost,
               // Its own model: a review can run on a different (often cheaper) one,
               // and lumping it into the main model's total hides that entirely.
               model: reviewModel,
@@ -2941,7 +3048,10 @@ export async function startRun(
       // into future compaction like any other turn (per the loop's persistence
       // discipline). One-time, guarded by `landed`.
       {
-        const decision = shouldLand({ iteration: iter, costUsd: cumulativeCostUsd, alreadyLanded: landed }, budget)
+        const decision = shouldLand(
+          { iteration: iter, costUsd: cumulativeCostUsd + delegatedCostUsd, alreadyLanded: landed },
+          budget
+        )
         if (decision.land) {
           landed = true
           messages.push(systemNoteMessage(landingReminder(decision.iterationsLeft, decision.trigger)))
@@ -3500,14 +3610,23 @@ export async function startRun(
           output,
           ok: r.ok
         })
+        // What the call's subagents did, saved with the result (display-only).
+        const subagents = subagentRecorder.take(r.call.id)
         messages.push({
           role: 'tool',
           content: output,
           toolCallId: r.call.id,
           toolName: r.call.name,
           ...(r.images.length ? { images: r.images } : {}),
-          ...(r.documents.length ? { documents: r.documents } : {})
+          ...(r.documents.length ? { documents: r.documents } : {}),
+          ...(subagents ? { subagents } : {})
         })
+        if (subagents) {
+          // Keep the chat within its subagent history limit: the oldest records drop
+          // their step outputs and diffs first.
+          const limited = limitSubagentHistory(messages, subagentHistoryBytes(settings.subagentHistoryMb))
+          if (limited !== messages) for (let i = 0; i < limited.length; i++) messages[i] = limited[i]
+        }
         // Feed the stall/verify accumulators as each call finalizes — inline flush
         // runs in ORIGINAL call order (parallel group in order, then each
         // sequential call), so this is the same call-order collection the detector

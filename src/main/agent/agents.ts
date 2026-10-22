@@ -45,6 +45,23 @@ export interface CustomAgent {
    * the dispatch falls back to the parent's model rather than failing.
    */
   model?: string
+  /**
+   * Front-matter `max_turns:` — a hard limit on the agent's steps (model turns). Unlike
+   * the default budget it never extends, however productive the run; on its last step
+   * the agent is told its tools won't run, so it ends on a report. Absent: the agent
+   * gets the same adaptive budget as the main agent.
+   */
+  maxTurns?: number
+}
+
+/** The largest `max_turns` an agent file may declare. */
+export const MAX_AGENT_TURNS = 500
+
+/** Parse `max_turns:` as a whole number from 1 to MAX_AGENT_TURNS; anything else is ignored. */
+export function parseMaxTurns(value: string | undefined): number | undefined {
+  if (value === undefined || !/^\s*\d+\s*$/.test(value)) return undefined
+  const n = Number(value.trim())
+  return n >= 1 && n <= MAX_AGENT_TURNS ? n : undefined
 }
 
 function firstLine(s: string): string {
@@ -98,13 +115,15 @@ export async function loadAgents(workspace: string): Promise<CustomAgent[]> {
     const tools = parseTools(data.tools)
     const write = parseBool(data.write)
     const model = data.model?.trim()
+    const maxTurns = parseMaxTurns(data.max_turns ?? data.maxTurns)
     agents.push({
       name,
       description: data.description || firstLine(systemPrompt) || name,
       systemPrompt,
       ...(tools ? { tools } : {}),
       ...(write ? { write: true } : {}),
-      ...(model ? { model } : {})
+      ...(model ? { model } : {}),
+      ...(maxTurns ? { maxTurns } : {})
     })
   }
   agents.sort((a, b) => a.name.localeCompare(b.name))

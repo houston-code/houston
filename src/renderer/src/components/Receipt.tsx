@@ -2,6 +2,8 @@ import {
   checkDetail,
   checkGlyph,
   checkKindLabel,
+  delegatedDetail,
+  delegatedGlyph,
   planCheckText,
   receiptHasFailure,
   receiptSummary,
@@ -28,11 +30,27 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
         <span className="receipt__text">{receiptSummary(receipt)}</span>
       </summary>
       <div className="receipt__body">
-        {receipt.checks.length > 0 && (
+        {(receipt.checks.length > 0 || (receipt.delegated?.length ?? 0) > 0) && (
           <ul className="receipt__checks">
             {receipt.checks.map((c, i) => (
               <CheckRow key={i} check={c} />
             ))}
+            {receipt.delegated?.map((d, i) => {
+              const state = d.exitCode === null ? 'unknown' : d.exitCode === 0 ? 'ok' : 'failed'
+              return (
+                <li key={`d${i}`} className={`receipt__check receipt__check--${state}`}>
+                  <span className="receipt__glyph" aria-hidden="true">
+                    {delegatedGlyph(d)}
+                  </span>
+                  <span className="sr-only">{OUTCOME[state]}: </span>
+                  <span className="receipt__kind">Command</span>
+                  <code className="receipt__cmd" title={d.label}>
+                    {describeShell(d.label).label}
+                  </code>
+                  <span className="receipt__detail">{delegatedDetail(d)}</span>
+                </li>
+              )
+            })}
           </ul>
         )}
         {receipt.plan && !receipt.plan.complete && <PlanSection plan={receipt.plan} />}
@@ -51,6 +69,11 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
             Plus {receipt.checksOmitted} earlier check{receipt.checksOmitted === 1 ? '' : 's'}.
           </p>
         )}
+        {(receipt.delegatedOmitted ?? 0) > 0 && (
+          <p className="receipt__note">
+            Plus {receipt.delegatedOmitted} earlier subagent command{receipt.delegatedOmitted === 1 ? '' : 's'}.
+          </p>
+        )}
         {receipt.otherCommands > 0 && (
           <p className="receipt__note">
             Plus {receipt.otherCommands} other command{receipt.otherCommands === 1 ? '' : 's'}.
@@ -63,6 +86,7 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
               {receipt.filesChanged.map((f) => (
                 <li key={f}>
                   <code>{f}</code>
+                  {receipt.filesBy?.[f] && <span className="receipt__detail"> by {receipt.filesBy[f]}</span>}
                 </li>
               ))}
             </ul>

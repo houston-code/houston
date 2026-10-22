@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { EARLIER_MODELS_LABEL, formatTokens, formatUsd, unattributedUsage, type SessionUsage } from '@shared/usage'
+import type { SubagentSpend } from '@shared/subagents'
+
+/** Subagent rows shown in the breakdown before the rest are summed into one. */
+const MAX_AGENT_ROWS = 8
 
 /**
  * The context/usage chip in the control bar, and — when there's more than one
@@ -15,9 +19,12 @@ export function CostBreakdown({
   usage,
   contextWindow,
   meterPct,
-  meterClass
+  meterClass,
+  agents = []
 }: {
   usage: SessionUsage
+  /** What each subagent in the chat spent (already counted in the model rows). */
+  agents?: SubagentSpend[]
   contextWindow: number | null
   /** Context-fill percent for the inline meter, or null when the window is unknown. */
   meterPct: number | null
@@ -33,7 +40,9 @@ export function CostBreakdown({
   // Houston kept them), so the rows add up to the total printed under them.
   const earlier = unattributedUsage(usage)
   const rows = [...(usage.perModel ?? []), ...(earlier ? [earlier] : [])]
-  const hasDetail = rows.length > 1 || (usage.cacheRead ?? 0) > 0
+  const hasDetail = rows.length > 1 || (usage.cacheRead ?? 0) > 0 || agents.length > 0
+  const agentRows = agents.slice(0, MAX_AGENT_ROWS)
+  const agentRest = agents.slice(MAX_AGENT_ROWS)
 
   // Close on an outside click or Esc, the way every other transient panel does.
   useEffect(() => {
@@ -133,6 +142,39 @@ export function CostBreakdown({
             <span>{(usage.cacheRead ?? 0) > 0 ? formatTokens(usage.cacheRead!) : '–'}</span>
             <span>{usage.cost > 0 ? formatUsd(usage.cost) : '–'}</span>
           </div>
+          {agentRows.length > 0 && (
+            <>
+              <div className="usage-panel__head usage-panel__head--sub">
+                <span>Subagents (included above)</span>
+                <span>In</span>
+                <span>Out</span>
+                <span />
+                <span>Cost</span>
+              </div>
+              {agentRows.map((a) => (
+                <div key={a.id} className="usage-panel__row">
+                  <span className="usage-panel__model" title={`${a.label} (${a.model})`}>
+                    {a.label}
+                  </span>
+                  <span>{formatTokens(a.input)}</span>
+                  <span>{formatTokens(a.output)}</span>
+                  <span />
+                  <span>{a.costUsd > 0 ? formatUsd(a.costUsd) : '–'}</span>
+                </div>
+              ))}
+              {agentRest.length > 0 && (
+                <div className="usage-panel__row">
+                  <span className="usage-panel__model">
+                    {agentRest.length} more subagent{agentRest.length === 1 ? '' : 's'}
+                  </span>
+                  <span>{formatTokens(agentRest.reduce((n, a) => n + a.input, 0))}</span>
+                  <span>{formatTokens(agentRest.reduce((n, a) => n + a.output, 0))}</span>
+                  <span />
+                  <span>{formatUsd(agentRest.reduce((n, a) => n + a.costUsd, 0))}</span>
+                </div>
+              )}
+            </>
+          )}
           <p className="usage-panel__note">
             Cached input bills far below the base rate, so a long conversation costs
             less than its token count suggests. Costs are approximate.

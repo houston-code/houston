@@ -8,6 +8,7 @@ import type { RuntimeId } from './runtimes'
 import type { PromptInvocation } from './promptInvocation'
 import type { TurnReceipt } from './evidence'
 import type { PlanReadiness } from './planReadiness'
+import type { SubagentRecord, SubagentStep } from './subagents'
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
@@ -124,6 +125,12 @@ export interface ChatMessage {
    * and it is display-only; providers never see it.
    */
   receipt?: TurnReceipt
+  /**
+   * Present on the tool-result turn of a call that ran subagents (dispatch_agent,
+   * dispatch_writable_agent, review_changes): what each one did, for the clients to
+   * show (see SubagentRecord). Display-only; providers never see it.
+   */
+  subagents?: SubagentRecord[]
   /**
    * Present on a `user` turn that was steered into a running turn (read before the
    * agent's next step) rather than sent as its own turn. Kept on the saved message
@@ -1076,6 +1083,33 @@ export type AgentEvent =
       /** Human label for the row (e.g. "Correctness", "Verifying findings"). */
       label: string
       status: 'running' | 'done' | 'error'
+    }
+  | {
+      // A subagent began (a dispatched agent, a nested one, or a reviewer). The
+      // record arrives without steps; `subagent_step` fills them in and
+      // `subagent_end` settles it. Keyed by `parentCallId` + `record.id`.
+      runId: string
+      type: 'subagent_start'
+      parentCallId: string
+      record: SubagentRecord
+    }
+  | {
+      // A step was added to a running subagent, or a running step finished (same
+      // `step.index`, so it updates in place).
+      runId: string
+      type: 'subagent_step'
+      parentCallId: string
+      recordId: string
+      step: SubagentStep
+    }
+  | {
+      // A subagent finished: its status, usage, budget, and report.
+      runId: string
+      type: 'subagent_end'
+      parentCallId: string
+      recordId: string
+      update: Pick<SubagentRecord, 'status' | 'endedAt'> &
+        Partial<Pick<SubagentRecord, 'usage' | 'budget' | 'report' | 'resumeId' | 'stepsOmitted'>>
     }
   | {
       // One review finding, surfaced under its review_changes row the moment a

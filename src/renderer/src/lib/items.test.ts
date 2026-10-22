@@ -1076,3 +1076,56 @@ describe('rewindTargets images', () => {
     expect(t.images).toEqual([img])
   })
 })
+
+describe('reduceEvent — subagent records', () => {
+  const record = {
+    id: 'sa1',
+    kind: 'research' as const,
+    label: 'Trace',
+    model: 'm',
+    modelSource: 'run' as const,
+    prompt: 'p',
+    tools: ['read_file'],
+    status: 'running' as const,
+    startedAt: 1,
+    steps: []
+  }
+  const running = (): DisplayItem[] => [
+    { kind: 'tool', id: 'c1', name: 'dispatch_agent', status: 'running', args: { description: 'Trace' } }
+  ]
+  const ev = (e: Record<string, unknown>): AgentEvent => ({ runId: 'r', ...e }) as AgentEvent
+
+  it('builds a record from start, steps and end, and is idempotent under replay', () => {
+    let items = running()
+    const start = ev({ type: 'subagent_start', parentCallId: 'c1', record })
+    const step = ev({
+      type: 'subagent_step',
+      parentCallId: 'c1',
+      recordId: 'sa1',
+      step: { index: 0, turn: 1, kind: 'tool', tool: 'read_file', summary: 'Read a', ok: true }
+    })
+    for (const e of [start, step, start, step]) items = reduceEvent(items, e)
+    items = reduceEvent(items, ev({ type: 'subagent_end', parentCallId: 'c1', recordId: 'sa1', update: { status: 'done', endedAt: 9, resumeId: 'ag1' } }))
+    const tool = items[0] as ToolItem
+    expect(tool.records).toHaveLength(1)
+    expect(tool.records![0]).toMatchObject({ status: 'done', resumeId: 'ag1', endedAt: 9 })
+    expect(tool.records![0].steps).toHaveLength(1)
+  })
+
+  it('marks an agent that never reported its end as stopped once the call finishes', () => {
+    let items = reduceEvent(running(), ev({ type: 'subagent_start', parentCallId: 'c1', record }))
+    items = reduceEvent(items, ev({ type: 'tool_result', callId: 'c1', name: 'dispatch_agent', ok: true, output: '[subagent aborted]' }))
+    expect((items[0] as ToolItem).records![0].status).toBe('aborted')
+  })
+
+  it('rebuilds the records saved on a tool result when a chat is reloaded', () => {
+    const saved = { ...record, status: 'done' as const, endedAt: 5 }
+    const items = itemsFromMessages([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'dispatch_agent', arguments: { description: 'Trace', prompt: 'p' } }] },
+      { role: 'tool', content: 'report', toolCallId: 'c1', toolName: 'dispatch_agent', subagents: [saved] }
+    ])
+    const tool = items.find((i) => i.kind === 'tool') as ToolItem
+    expect(tool.records).toEqual([saved])
+  })
+})

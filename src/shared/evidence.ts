@@ -97,6 +97,14 @@ export interface ReceiptCheck {
   runs: number
 }
 
+/** A command a subagent ran that isn't a check (see TurnReceipt.delegated). */
+export interface DelegatedCommand {
+  label: string
+  /** Null when it was killed or still running. */
+  exitCode: number | null
+  by: string
+}
+
 /** What Houston recorded about a turn. Saved on the turn's last assistant message. */
 export interface TurnReceipt {
   v: 1
@@ -106,6 +114,16 @@ export interface TurnReceipt {
   checksOmitted?: number
   /** Commands of no particular kind (ls, git status, cat): counted, not listed. */
   otherCommands: number
+  /**
+   * Commands of no particular kind that a subagent ran, listed with who ran them (the
+   * user didn't watch them happen, so they're named rather than counted). Most recent
+   * last; capped at {@link RECEIPT_MAX_DELEGATED}.
+   */
+  delegated?: DelegatedCommand[]
+  /** Delegated commands dropped by the cap (the oldest). */
+  delegatedOmitted?: number
+  /** For files a subagent changed: who changed them, keyed by the path in `filesChanged`. */
+  filesBy?: Record<string, string>
   /** Paths the turn's file tools changed, in first-change order; capped at {@link RECEIPT_MAX_FILES}. */
   filesChanged: string[]
   /** Every path changed, including any beyond the cap. */
@@ -150,6 +168,7 @@ export const RECEIPT_TITLE = 'What ran'
 
 export const RECEIPT_MAX_CHECKS = 24
 export const RECEIPT_MAX_FILES = 200
+export const RECEIPT_MAX_DELEGATED = 12
 export const RECEIPT_LABEL_MAX = 160
 
 const KIND_LABEL: Record<CheckKind, string> = {
@@ -293,6 +312,8 @@ export function receiptSummary(r: TurnReceipt): string {
   if (r.plan) parts.push(planPhrase(r.plan))
   const gaps = r.todoGaps?.length ?? 0
   if (gaps) parts.push(`${gaps} todo${gaps === 1 ? '' : 's'} marked done with nothing recorded`)
+  const delegated = (r.delegated?.length ?? 0) + (r.delegatedOmitted ?? 0)
+  if (delegated) parts.push(`${delegated} subagent command${delegated === 1 ? '' : 's'} ran`)
   if (!parts.length && r.otherCommands > 0) {
     parts.push(`${r.otherCommands} command${r.otherCommands === 1 ? '' : 's'} ran`)
   }
@@ -342,9 +363,17 @@ export function formatReceiptLines(r: TurnReceipt): string[] {
   if (r.checksOmitted) {
     lines.push(`  plus ${r.checksOmitted} earlier check${r.checksOmitted === 1 ? '' : 's'}`)
   }
+  for (const d of r.delegated ?? []) {
+    lines.push(`  ${delegatedGlyph(d)} Command: ${d.label} (${delegatedDetail(d)})`)
+  }
+  if (r.delegatedOmitted) {
+    lines.push(`  plus ${r.delegatedOmitted} earlier subagent command${r.delegatedOmitted === 1 ? '' : 's'}`)
+  }
   if (r.otherCommands > 0) {
     lines.push(`  plus ${r.otherCommands} other command${r.otherCommands === 1 ? '' : 's'}`)
   }
+  const byFiles = Object.entries(r.filesBy ?? {})
+  for (const [file, by] of byFiles) lines.push(`  changed ${file} (by ${by})`)
   for (const g of r.todoGaps ?? []) lines.push(`  ! marked done with nothing recorded: ${g}`)
   if (r.plan && !r.plan.complete) {
     lines.push(`  plan "${r.plan.title}":`)
@@ -357,4 +386,14 @@ export function formatReceiptLines(r: TurnReceipt): string[] {
     }
   }
   return lines
+}
+
+/** ✓ for a delegated command that exited 0, ✗ for one that didn't, ? when unknown. */
+export function delegatedGlyph(d: DelegatedCommand): string {
+  return d.exitCode === null ? '?' : d.exitCode === 0 ? '✓' : '✗'
+}
+
+/** "exit 0 · by Writable subagent "Fix the bug"". */
+export function delegatedDetail(d: DelegatedCommand): string {
+  return `${d.exitCode === null ? 'exit unknown' : `exit ${d.exitCode}`} · by ${d.by}`
 }

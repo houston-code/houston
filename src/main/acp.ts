@@ -33,6 +33,7 @@ import { formatReceiptLines } from '@shared/evidence'
 import { formatReadinessLines } from '@shared/planReadiness'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { assertNever } from '@shared/assert'
+import { SubagentTermLines } from '@shared/subagents'
 import { resolveHeadlessModel } from './headless'
 
 /**
@@ -871,6 +872,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       })
     }
 
+    // A subagent's start, finished steps and end, as indented progress lines.
+    const subagentLines = new SubagentTermLines()
+
     const progress = (callId: string, line: string): void => {
       const c = calls.get(callId)
       if (!c || !announced.has(callId)) return
@@ -1092,6 +1096,13 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         case 'subagent':
           progress(e.parentCallId, `${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${e.label}`)
           break
+        case 'subagent_start':
+        case 'subagent_step':
+        case 'subagent_end': {
+          const line = subagentLines.line(e)
+          if (line) progress(e.parentCallId, `${'  '.repeat(line.depth - 1)}${line.text}`)
+          break
+        }
         case 'review_finding':
           progress(
             e.parentCallId,

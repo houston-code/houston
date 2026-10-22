@@ -7174,13 +7174,14 @@ describe('subagent dispatch: progress, models, resume, nesting', () => {
     { type: 'done', stopReason: 'end_turn' }
   ]
 
-  it('streams tool_progress for a dispatch and appends a resumable id to the report', async () => {
+  it('streams a dispatch as a record under its call and saves it with the result', async () => {
     writeFileSync(join(ws, 'note.txt'), 'the answer')
     const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
     const provider = scriptedRecording(
       [
         dispatchCall({ description: 'find', prompt: 'what does note.txt say?' }),
         [
+          { type: 'text', text: 'Reading it.' },
           { type: 'tool_call', call: { id: 's1', name: 'read_file', arguments: { path: 'note.txt' } } },
           { type: 'done', stopReason: 'tool_use' }
         ],
@@ -7190,15 +7191,87 @@ describe('subagent dispatch: progress, models, resume, nesting', () => {
       requests
     )
     const r = await run({ provider })
-    const progress = r.events.filter((e) => e.type === 'tool_progress')
-    expect(progress.length).toBeGreaterThan(0)
-    expect(progress[0].message).toContain('turn 1/16')
-    expect(progress[0].message).toContain('note.txt')
-    // The progress rows attach to the dispatch call so the UI nests them under it.
-    const start = r.events.find((e) => e.type === 'tool_start')
-    expect(start && progress[0].callId === start.callId).toBe(true)
+    const start = r.events.find((e) => e.type === 'tool_start')!
+    const callId = start.type === 'tool_start' ? start.callId : ''
+    // The record replaces the old overwriting progress line.
+    expect(r.events.some((e) => e.type === 'tool_progress')).toBe(false)
+    const began = r.events.find((e) => e.type === 'subagent_start')
+    expect(began?.type === 'subagent_start' && began.parentCallId).toBe(callId)
+    expect(began?.type === 'subagent_start' && began.record).toMatchObject({
+      kind: 'research',
+      label: 'find',
+      model: 'claude-test',
+      modelSource: 'run',
+      prompt: 'what does note.txt say?',
+      status: 'running'
+    })
+    expect(began?.type === 'subagent_start' && began.record.systemPrompt).toContain('research subagent')
+    expect(began?.type === 'subagent_start' && began.record.tools).toContain('read_file')
+    const steps = r.events.flatMap((e) => (e.type === 'subagent_step' ? [e.step] : []))
+    expect(steps.some((s) => s.kind === 'text' && s.summary === 'Reading it.')).toBe(true)
+    expect(steps.some((s) => s.tool === 'read_file' && s.ok === true && /note\.txt/.test(s.summary))).toBe(true)
+    const end = r.events.find((e) => e.type === 'subagent_end')
+    expect(end?.type === 'subagent_end' && end.update).toMatchObject({
+      status: 'done',
+      report: 'it says: the answer',
+      resumeId: 'ag1',
+      budget: { used: 2, limit: 40, ceiling: 200 }
+    })
+
+    // The model still gets the resume note; the saved record keeps the clean report.
     const result = r.events.find((e) => e.type === 'tool_result')
     expect(result?.type === 'tool_result' && result.output).toContain('[subagent ag1')
+    const saved = r.messages.find((m) => m.role === 'tool' && m.toolCallId === callId)!
+    expect(saved.subagents).toHaveLength(1)
+    expect(saved.subagents![0]).toMatchObject({ status: 'done', resumeId: 'ag1', report: 'it says: the answer' })
+    expect(saved.subagents![0].steps.length).toBeGreaterThan(0)
+  })
+
+  it('records a nested agent under its parent, linked to the step that dispatched it', async () => {
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'outer', prompt: 'look around' }),
+        [
+          { type: 'tool_call', call: { id: 'n1', name: 'dispatch_agent', arguments: { description: 'inner', prompt: 'look deeper' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        finalText('inner says hi'),
+        finalText('outer report'),
+        finalText('done')
+      ],
+      []
+    )
+    const r = await run({ provider })
+    const saved = r.messages.find((m) => m.role === 'tool' && m.subagents)!.subagents!
+    expect(saved).toHaveLength(2)
+    const outer = saved.find((x) => !x.parentId)!
+    const inner = saved.find((x) => x.parentId === outer.id)!
+    expect(inner).toMatchObject({ label: 'inner', prompt: 'look deeper', report: 'inner says hi', status: 'done' })
+    expect(inner.resumeId).toBeUndefined()
+    expect(outer.steps.find((s) => s.tool === 'dispatch_agent')?.childId).toBe(inner.id)
+  })
+
+  it('trims the oldest saved records past the subagent history limit', async () => {
+    h.settings.subagentHistoryMb = 0
+    try {
+      writeFileSync(join(ws, 'note.txt'), 'x'.repeat(500))
+      const provider = scriptedRecording(
+        [
+          dispatchCall({ description: 'one', prompt: 'read note.txt' }),
+          [{ type: 'tool_call', call: { id: 's1', name: 'read_file', arguments: { path: 'note.txt' } } }, { type: 'done', stopReason: 'tool_use' }],
+          finalText('read it'),
+          finalText('done')
+        ],
+        []
+      )
+      const r = await run({ provider })
+      const rec = r.messages.find((m) => m.subagents)!.subagents![0]
+      expect(rec.trimmed).toBe(true)
+      expect(rec.steps.every((s) => s.output === undefined)).toBe(true)
+      expect(rec.report).toBe('read it')
+    } finally {
+      delete h.settings.subagentHistoryMb
+    }
   })
 
   it('runs a dispatch on an explicit sibling model and validates unknown ids', async () => {

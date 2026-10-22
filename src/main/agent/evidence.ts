@@ -2,8 +2,10 @@ import { isAbsolute, relative, resolve } from 'node:path'
 import {
   RECEIPT_LABEL_MAX,
   RECEIPT_MAX_CHECKS,
+  RECEIPT_MAX_DELEGATED,
   RECEIPT_MAX_FILES,
   type BlockedReason,
+  type DelegatedCommand,
   type CheckKind,
   type ReceiptCheck,
   type StepCounts,
@@ -628,7 +630,11 @@ export class EvidenceLedger {
   /** Checks keyed by kind + label; re-inserted on each run so the order is most recent last. */
   private readonly checks = new Map<string, { record: CheckRecord; runs: number }>()
   private otherCommands = 0
+  private readonly delegated: DelegatedCommand[] = []
+  private delegatedOmitted = 0
   private readonly files = new Set<string>()
+  /** Who changed a file, when it was a subagent. */
+  private readonly filesBy = new Map<string, string>()
   private lastWriteSeq = -1
 
   /** Record what a tool reported. Commands must already be redacted. `by` names a subagent. */
@@ -641,7 +647,17 @@ export class EvidenceLedger {
   recordShell(e: ShellEvidence, by?: string): void {
     const cls = classifyCommand(e.command, e.background)
     if (!cls.kind) {
-      this.otherCommands++
+      // A subagent's commands happen out of the user's sight, so they're listed by
+      // name with who ran them; the agent's own are only counted.
+      if (by && !e.background) {
+        this.delegated.push({ label: displayLabel(e.command), exitCode: e.exitCode, by: displayLabel(by, 60) })
+        if (this.delegated.length > RECEIPT_MAX_DELEGATED) {
+          this.delegated.shift()
+          this.delegatedOmitted++
+        }
+      } else {
+        this.otherCommands++
+      }
       return
     }
     const label = displayLabel(e.command)
@@ -701,13 +717,17 @@ export class EvidenceLedger {
    * the workspace, so `./src/a.ts` and an absolute path to it count as one file; a
    * path in another root keeps its full form.
    */
-  recordFiles(workspace: string, paths: string[]): void {
+  recordFiles(workspace: string, paths: string[], by?: string): void {
     let any = false
     for (const p of paths) {
       if (!p) continue
       const rel = relative(workspace, resolve(workspace, p))
       const shown = rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : p
-      this.files.add(shown.replace(CONTROL_CHARS, ''))
+      const key = shown.replace(CONTROL_CHARS, '')
+      this.files.add(key)
+      // The last writer wins; the agent's own later change clears the credit.
+      if (by) this.filesBy.set(key, displayLabel(by, 60))
+      else this.filesBy.delete(key)
       any = true
     }
     if (any) this.lastWriteSeq = this.seq++
@@ -745,7 +765,9 @@ export class EvidenceLedger {
     extra: { todoGaps?: string[] } = {}
   ): TurnReceipt | null {
     const todoGaps = (extra.todoGaps ?? []).slice(0, 10).map((g) => displayLabel(g, 120))
-    if (this.checks.size === 0 && this.files.size === 0 && todoGaps.length === 0) return null
+    if (this.checks.size === 0 && this.files.size === 0 && todoGaps.length === 0 && this.delegated.length === 0) {
+      return null
+    }
     const all = [...this.checks.values()].map(({ record, runs }): ReceiptCheck => {
       const { seq, pending: _pending, ...check } = this.settle(record, peek)
       return {
@@ -761,8 +783,17 @@ export class EvidenceLedger {
       checks,
       ...(all.length > checks.length ? { checksOmitted: all.length - checks.length } : {}),
       otherCommands: this.otherCommands,
+      ...(this.delegated.length ? { delegated: this.delegated.slice() } : {}),
+      ...(this.delegatedOmitted ? { delegatedOmitted: this.delegatedOmitted } : {}),
       filesChanged: files.slice(0, RECEIPT_MAX_FILES),
       filesChangedCount: files.length,
+      ...(this.filesBy.size
+        ? {
+            filesBy: Object.fromEntries(
+              [...this.filesBy].filter(([f]) => files.indexOf(f) < RECEIPT_MAX_FILES)
+            )
+          }
+        : {}),
       ...(todoGaps.length ? { todoGaps } : {})
     }
   }

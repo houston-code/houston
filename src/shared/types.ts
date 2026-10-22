@@ -604,6 +604,12 @@ export interface AppSettings {
    */
   maxIterationsCeiling?: number
   /**
+   * How much subagent activity (steps, result previews, diffs) a chat keeps, in MB.
+   * Past it, the oldest subagents keep their task, step list and report but drop step
+   * outputs and diffs. Unset: DEFAULT_SUBAGENT_HISTORY_MB. 0 keeps summaries only.
+   */
+  subagentHistoryMb?: number
+  /**
    * Cumulative USD cost ceiling for a single run. Once the run's accumulated
    * per-turn cost crosses this, it gets the same one-time "land" nudge as the
    * iteration margin. 0/unset disables the cost-based trigger.

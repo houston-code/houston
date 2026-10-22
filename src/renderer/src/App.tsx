@@ -8,6 +8,7 @@ import {
   useState,
   type CSSProperties
 } from 'react'
+import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
 import type {
@@ -293,6 +294,11 @@ export default function App(): JSX.Element {
     return roots
   }, [])
   const chat = useChat(currentId)
+  // What each subagent in this chat spent, for the cost breakdown.
+  const subagentSpendRows = useMemo(
+    () => subagentSpend(chat.items.flatMap((it) => (it.kind === 'tool' && it.records ? it.records : []))),
+    [chat.items]
+  )
 
   // Dev servers the agent started (auto-detected loopback URLs) — drives the Preview dock.
   // Only the open chat's: another chat's servers stay out of its Preview and Tasks.
@@ -2541,6 +2547,7 @@ export default function App(): JSX.Element {
             selected={settings.selected}
             workspace={workspace}
             usage={chat.usage}
+            subagentSpend={subagentSpendRows}
             newChat={currentId === null}
             repoInfo={repoInfo}
             worktreeMode={worktreeMode}
