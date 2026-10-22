@@ -169,8 +169,9 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   itself: a symbol/dependency repo-map, a cached tree-sitter parse tree, or an
   embeddings/vector store for semantic retrieval (a semantic-search **MCP server**
   is the natural way to add that without baking an indexer into the core).
-  LSP-backed go-to-definition / find-references is the other large lever, tracked
-  under IDE integration below.
+  Type-aware navigation is shipped separately through language servers (the `lsp_*`
+  tools and post-edit diagnostics, when a server is installed), which answer from the
+  live tree rather than a stored index.
 
 - **Landlock fallback for the Linux sandbox.** On Linux, `run_shell` is confined by
   bubblewrap; when bubblewrap is unusable (not installed, or unprivileged user

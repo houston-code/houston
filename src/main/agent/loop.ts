@@ -1039,7 +1039,9 @@ export async function startRun(
       planMode,
       // Nobody can answer a question on an unattended run; the prompt built from
       // this list then says so instead of naming ask_user.
-      askUser: req.unattended !== true
+      askUser: req.unattended !== true,
+      // The lsp_* tools, only when a server is installed for a language the project uses.
+      lsp: lspManager.availableFor([workspace]).length > 0
     }).map((t) => t.schema)
     // Merge Houston's built-in skills (e.g. houston-guide) with the workspace's
     // own for the agent runtime; `/skills` still lists only the workspace's. A
@@ -1843,6 +1845,7 @@ export async function startRun(
     ): ToolContext => ({
       workspace,
       roots,
+      lsp: lspManager,
       allowNetwork: run.shellNetworkGranted && !egressUnavailable,
       egressProxy,
       signal: abort.signal,
@@ -3278,10 +3281,45 @@ export async function startRun(
       // moment it finalizes, so an abort partway through this loop leaves the
       // already-completed real results in the log (only the not-yet-run calls get
       // the interrupted placeholder from the finally block).
-      for (const { call } of sequential) {
+      for (const { call: modelCall } of sequential) {
         if (abort.signal.aborted) {
           emit({ type: 'done', stopReason: 'aborted' })
           return
+        }
+
+        // A tool whose effect is only known once worked out (lsp_rename: the server's
+        // edits) is gated and run as the concrete call it amounts to (an apply_patch),
+        // so it gets that tool's permission rules, prompts, preview, and checkpoints.
+        // The model's own call is what the transcript records and the result answers.
+        // Skipped for a call that is invalid, denied by a rule, or blocked by plan mode,
+        // which the path below reports without asking the server anything.
+        let call = modelCall
+        let materializedNote = ''
+        const declared = lookupTool(modelCall.name)
+        if (
+          declared?.materialize &&
+          !validationFailure(modelCall) &&
+          matchRule(permissionRules, modelCall.name, permissionSubject(modelCall.name, modelCall.arguments), roots) !==
+            'deny' &&
+          !isBlockedByPlan(run.policy, declared)
+        ) {
+          try {
+            const m = await declared.materialize(
+              modelCall.arguments,
+              makeToolContext(modelCall.id, () => {}, () => {})
+            )
+            call = { ...modelCall, name: m.name, arguments: m.arguments }
+            materializedNote = m.note ?? ''
+          } catch (e) {
+            await flushResult({
+              call: modelCall,
+              output: `Error: ${(e as Error).message}`,
+              ok: false,
+              images: [],
+              documents: []
+            })
+            continue
+          }
         }
 
         const tool = lookupTool(call.name)
@@ -3709,8 +3747,8 @@ export async function startRun(
         }
 
         await flushResult({
-          call,
-          output,
+          call: modelCall,
+          output: ok && materializedNote ? `${materializedNote} ${output}` : output,
           ok,
           images: toolImages,
           documents: toolDocs

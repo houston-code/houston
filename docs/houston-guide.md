@@ -390,6 +390,26 @@ had before the edit are left out, and a clean edit adds nothing. This is on by
 default whenever a server is installed; the agent reading a file starts its server in
 the background, so the check after the edit is usually quick.
 
+The same servers give the agent type-aware navigation tools, offered only when a
+server is installed for a language the project uses (so a project without one pays
+nothing for them):
+
+- `lsp_definition`: where a symbol is defined (following imports through to the
+  declaration).
+- `lsp_references`: every real use of a symbol across the project.
+- `lsp_hover`: a symbol's type, signature, and documentation.
+- `lsp_document_symbols` and `lsp_workspace_symbols`: a file's outline, or symbols by
+  name across the project.
+- `lsp_rename`: rename a symbol everywhere it is used. The server's edits are applied
+  as one `apply_patch`, so the rename asks for approval the way any patch does (with a
+  diff of every file), follows your `apply_patch` permission rules file by file, and is
+  undone by **Revert** like any other change. A rename that would touch a file outside
+  the project, or create, move, or delete files, is refused.
+
+These are read-only (except `lsp_rename`), need no approval, and run in parallel with
+other reads. Results never include files outside the project, and lines from
+credential files are not quoted.
+
 Supported servers (none are bundled; install the ones you want):
 
 - TypeScript and JavaScript: `typescript-language-server` or `vtsls`. A copy in the

@@ -370,7 +370,10 @@ Open source under the [Apache License 2.0](LICENSE).
   Servers are **optional, not bundled**; a project's own `node_modules/.bin` copy is
   preferred. They start on demand, are reused across turns, stop when idle, and run in
   the same sandbox as `run_shell` (no network). Settings → *Tools & Permissions* shows
-  which are detected and lets you turn them off.
+  which are detected and lets you turn them off. With a server for the project's
+  language, the agent also gets `lsp_definition`, `lsp_references`, `lsp_hover`,
+  `lsp_document_symbols`, `lsp_workspace_symbols`, and `lsp_rename` (a semantic rename
+  applied as one approved, revertible patch).
 - **Undo / redo a turn's file changes.** Houston snapshots each file before and
   after the agent writes it, so when a turn edits files a **Revert** button appears:
   one click restores everything that turn changed (and deletes files it created).

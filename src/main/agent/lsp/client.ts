@@ -13,9 +13,11 @@
  */
 import type { ChildProcess } from 'node:child_process'
 import { promises as fs } from 'node:fs'
-import { pathToFileURL, fileURLToPath } from 'node:url'
 import { JsonRpcConnection } from './jsonrpc'
 import { extKey, type ResolvedServer } from './servers'
+import { fromUri, toUri } from './uri'
+
+export { fromUri, toUri }
 
 export interface Position {
   line: number
@@ -51,20 +53,6 @@ export interface LspClientOptions {
   requestTimeoutMs?: number
   /** Most documents kept open at once; the least recently used is closed past this. */
   maxOpenDocuments?: number
-}
-
-export function toUri(abs: string): string {
-  return pathToFileURL(abs).href
-}
-
-/** The local path a `file:` URI names, or null for any other scheme. */
-export function fromUri(uri: string): string | null {
-  if (!uri.startsWith('file:')) return null
-  try {
-    return fileURLToPath(uri)
-  } catch {
-    return null
-  }
 }
 
 interface OpenDoc {
@@ -499,7 +487,7 @@ const CLIENT_CAPABILITIES = {
   textDocument: {
     synchronization: { dynamicRegistration: false, didSave: false, willSave: false },
     publishDiagnostics: { relatedInformation: false, versionSupport: true },
-    definition: { dynamicRegistration: false, linkSupport: false },
+    definition: { dynamicRegistration: false, linkSupport: true },
     references: { dynamicRegistration: false },
     hover: { dynamicRegistration: false, contentFormat: ['plaintext', 'markdown'] },
     documentSymbol: { dynamicRegistration: false, hierarchicalDocumentSymbolSupport: true },

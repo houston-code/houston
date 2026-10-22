@@ -112,6 +112,7 @@ import {
 } from './spawn'
 import { SCHEDULE_TOOL_NAMES, type ScheduledRunInfo } from './scheduler'
 import type { RenderMockup } from './mockupRender'
+import { LSP_TOOL_NAMES, makeLspTools, type LspToolAccess } from './lsp/tools'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -292,6 +293,19 @@ export interface ToolContext {
    * Absent on hosts that drive the tools directly, where nothing is enforced.
    */
   fileTracker?: FileReadTracker
+  /**
+   * The language servers covering this run's files (injected by the loop), behind the
+   * lsp_* tools. Absent where no servers can run; the tools then say so.
+   */
+  lsp?: LspToolAccess
+}
+
+/** The call a {@link ToolDef.materialize} hook turns a tool call into. */
+export interface MaterializedCall {
+  name: string
+  arguments: Record<string, unknown>
+  /** Prepended to the result when the call succeeds. */
+  note?: string
 }
 
 export interface ToolDef {
@@ -306,6 +320,12 @@ export interface ToolDef {
   blockedInPlan?: boolean
   /** Short human-readable description of a specific call, for the approval UI. */
   summarize: (args: Record<string, unknown>) => string
+  /**
+   * Work out, before any gate runs, the concrete call this one amounts to (lsp_rename:
+   * the apply_patch holding the server's edits). The loop then gates and runs that call
+   * in its place, so its effect passes exactly the checks the concrete tool does.
+   */
+  materialize?: (args: Record<string, unknown>, ctx: ToolContext) => Promise<MaterializedCall>
   execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string>
 }
 
@@ -4706,6 +4726,9 @@ const recallHistory: ToolDef = {
   }
 }
 
+/** The lsp_* tools, given the file-tool containment check and apply_patch (for rename). */
+const lspTools = makeLspTools({ resolveInRoots, applyPatch })
+
 export const TOOLS: ToolDef[] = [
   readFile,
   writeFile,
@@ -4757,7 +4780,8 @@ export const TOOLS: ToolDef[] = [
   ghIssueComment,
   ghIssueSetState,
   ghRunList,
-  ghRunView
+  ghRunView,
+  ...lspTools
 ]
 
 export function toolSchemas(): ToolSchema[] {
@@ -4795,6 +4819,11 @@ export interface BuiltinToolsetOptions {
    * (headless), where the question could only get a canned reply. Absent counts as true.
    */
   askUser?: boolean
+  /**
+   * A language server is installed for a language this workspace uses; backs the lsp_*
+   * tools. Absent counts as false, so a run with no server pays nothing for them.
+   */
+  lsp?: boolean
 }
 
 /**
@@ -4814,6 +4843,7 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) return opts.scheduler
     if (name === PRESENT_PLAN_NAME) return opts.planMode
     if (name === ASK_USER_NAME) return opts.askUser !== false
+    if ((LSP_TOOL_NAMES as readonly string[]).includes(name)) return opts.lsp === true
     return true
   })
 }
