@@ -193,27 +193,55 @@ describe('SettingsModal', () => {
         .getAllByRole('button')
         .filter((b) => b.getAttribute('aria-current') === 'page')
         .map((b) => b.textContent?.trim() ?? '')
-    expect(current()).toEqual(['Models & Inference'])
+    expect(current()).toEqual(['Providers & Models'])
     fireEvent.click(within(nav).getByRole('button', { name: 'Keyboard' }))
     expect(current()).toEqual(['Keyboard'])
   })
 
-  it('renders Legal as the last tab in the nav, revealing its links when selected', () => {
+  it('groups the nav under headings, with Permissions right after Keyboard and About last', () => {
     installApi()
     renderModal()
-
-    // Legal is a standalone tab, ordered last after Appearance.
-    const labels = screen
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' })
+    const labels = within(nav)
       .getAllByRole('button')
       .map((b) => b.textContent?.trim())
-      .filter((t) => t && ['Legal', 'Models & Inference', 'Tools & Permissions', 'Workspace', 'Keyboard', 'Appearance'].includes(t))
-    expect(labels.at(-1)).toBe('Legal')
+    expect(labels).toEqual([
+      'Providers & Models',
+      'Agent Behavior',
+      'Tools',
+      'MCP Servers',
+      'Hooks',
+      'Workspace',
+      'General',
+      'Appearance',
+      'Keyboard',
+      'Permissions',
+      'About'
+    ])
+    // Group headings, except where a one-page group is named like its page.
+    expect([...nav.querySelectorAll('.set-nav__heading')].map((h) => h.textContent)).toEqual([
+      'AI',
+      'App',
+      'Security'
+    ])
+  })
 
-    // Its content isn't rendered until selected; then the legal links appear.
+  it('shows the legal links on About', () => {
+    installApi()
+    renderModal()
     expect(screen.queryByRole('link', { name: 'Privacy' })).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Legal' }))
+    fireEvent.click(screen.getByRole('button', { name: 'About' }))
     expect(screen.getByRole('link', { name: 'Privacy' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'License (Apache-2.0)' })).toBeInTheDocument()
+  })
+
+  it('opens diagnostics from About when a handler is given', () => {
+    installApi()
+    const onShowDoctor = vi.fn()
+    renderModal({}, { onShowDoctor })
+    fireEvent.click(screen.getByRole('button', { name: 'About' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Run diagnostics' }))
+    expect(onShowDoctor).toHaveBeenCalledTimes(1)
   })
 
   it('offers a Loop scorecard button on the Models tab that calls onShowScorecard', () => {
@@ -244,17 +272,37 @@ describe('SettingsModal', () => {
     expect(screen.queryByText('My Local')).not.toBeInTheDocument()
   })
 
-  it('switches to the Tools & Permissions tab and reveals its controls', () => {
+  it('puts permissions on their own page, apart from tools and MCP', () => {
     installApi()
     renderModal()
 
-    // Tools content isn't present until the tab is selected.
-    expect(screen.queryByText('Permissions')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
-
-    expect(screen.getByRole('heading', { name: 'Permissions' })).toBeInTheDocument()
-    expect(screen.getByRole('heading', { name: 'MCP servers' })).toBeInTheDocument()
+    // Nothing from Permissions is present until the page is selected.
+    expect(screen.queryByRole('heading', { name: 'Permissions' })).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+    for (const h of ['Approval mode', 'Web reads in full auto', 'Permissions', 'Trusted folders', 'Sandbox egress']) {
+      expect(screen.getByRole('heading', { name: h })).toBeInTheDocument()
+    }
     expect(screen.getByRole('button', { name: '+ Add rule' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'MCP servers' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    expect(screen.getByRole('heading', { name: 'Web search' })).toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'Permissions' })).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
+    expect(screen.getByRole('heading', { name: 'MCP servers' })).toBeInTheDocument()
+  })
+
+  it('sets the approval mode new chats start in', async () => {
+    const api = installApi()
+    renderModal({ approvalPolicy: 'ask' })
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+    const group = screen.getByRole('radiogroup', { name: 'Default approval mode' })
+    expect(within(group).getByRole('radio', { name: /Ask every time/ })).toBeChecked()
+    fireEvent.click(within(group).getByRole('radio', { name: /Auto-approve edits/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).approvalPolicy).toBe('auto-edit')
   })
 
   it('shows the optional-integrations status and how to enable gh when missing', async () => {
@@ -270,7 +318,7 @@ describe('SettingsModal', () => {
       )
     })
     renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
 
     expect(screen.getByRole('heading', { name: 'Optional integrations' })).toBeInTheDocument()
     // gh is absent → warn status + an enable hint linking to the install page.
@@ -291,7 +339,7 @@ describe('SettingsModal', () => {
       )
     })
     renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
 
     await waitFor(() => expect(screen.getByText('Needs Git for Windows')).toBeInTheDocument())
     expect(screen.getByRole('link', { name: 'gitforwindows.org' })).toHaveAttribute(
@@ -309,7 +357,7 @@ describe('SettingsModal', () => {
       )
     })
     renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
 
     await waitFor(() => expect(screen.getByText('Installed & signed in')).toBeInTheDocument())
     // No enable hint when it's already usable.
@@ -319,7 +367,7 @@ describe('SettingsModal', () => {
   it('sets whether web reads ask in full auto, asking once per site by default', async () => {
     const api = installApi()
     const { container } = renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
     const select = screen.getByLabelText('Web reads') as HTMLSelectElement
     expect(select.value).toBe('ask')
     fireEvent.change(select, { target: { value: 'allow' } })
@@ -331,7 +379,7 @@ describe('SettingsModal', () => {
   it('adds a permission rule when "+ Add rule" is clicked', () => {
     installApi()
     renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
 
     // The rule-row count proves the click mutated state: 0 rows before, exactly 1 after.
     expect(document.querySelectorAll('.rule')).toHaveLength(0)
@@ -358,7 +406,7 @@ describe('SettingsModal', () => {
         { action: 'deny', tool: 'web_fetch', match: 'https://evil.example.com' }
       ]
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
     fireEvent.click(screen.getByRole('button', { name: 'By tool' }))
 
     // Two tool groups (run_shell with 2, web_fetch with 1); three rows total.
@@ -384,7 +432,7 @@ describe('SettingsModal', () => {
     it('lists rules numbered in the order they are checked', () => {
       installApi()
       renderModal({ permissionRules: ordered })
-      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
       expect([...document.querySelectorAll('.rule__num')].map((n) => n.textContent)).toEqual(['1', '2', '3'])
       expect(patterns()).toEqual(['*', 'rm *', 'https://a.example/*'])
     })
@@ -392,7 +440,7 @@ describe('SettingsModal', () => {
     it('warns when an earlier rule means a later one never applies', () => {
       installApi()
       renderModal({ permissionRules: ordered })
-      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
       expect(screen.getByText('Never applies: rule 1 (allow run_shell *) matches first.')).toBeInTheDocument()
       expect(screen.getByText('Approves every run_shell call without asking.')).toBeInTheDocument()
       expect(screen.getByText('2 rules need attention.')).toBeInTheDocument()
@@ -401,7 +449,7 @@ describe('SettingsModal', () => {
     it('moves a rule up and down, and the warning follows the new order', async () => {
       const api = installApi()
       const { container } = renderModal({ permissionRules: ordered })
-      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
       expect(screen.getByRole('button', { name: 'Move rule 1 up' })).toBeDisabled()
       expect(screen.getByRole('button', { name: 'Move rule 3 down' })).toBeDisabled()
 
@@ -422,7 +470,7 @@ describe('SettingsModal', () => {
     it('reorders by dragging a rule onto another', () => {
       installApi()
       renderModal({ permissionRules: ordered })
-      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
       const handles = document.querySelectorAll('.rule__handle')
       const rows = document.querySelectorAll('.rule-row')
       fireEvent.dragStart(handles[2], { dataTransfer: { setData: vi.fn(), setDragImage: vi.fn() } })
@@ -434,7 +482,7 @@ describe('SettingsModal', () => {
     it('turns reordering off while a filter hides rules, keeping the real numbers', () => {
       installApi()
       renderModal({ permissionRules: ordered })
-      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
       fireEvent.change(screen.getByPlaceholderText('Filter rules…'), { target: { value: 'rm' } })
       expect([...document.querySelectorAll('.rule__num')].map((n) => n.textContent)).toEqual(['2'])
       expect(screen.getByRole('button', { name: 'Move rule 2 up' })).toBeDisabled()
@@ -444,7 +492,7 @@ describe('SettingsModal', () => {
     it('edits a rule\'s tool in the ordered view', () => {
       installApi()
       renderModal({ permissionRules: ordered })
-      fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
       fireEvent.change(screen.getByRole('combobox', { name: 'Rule 2 tool' }), { target: { value: 'write_file' } })
       // No longer the same tool as rule 1, so nothing shadows it.
       expect(screen.queryByText(/Never applies/)).toBeNull()
@@ -459,7 +507,7 @@ describe('SettingsModal', () => {
         { action: 'allow', tool: 'write_file', match: 'docs' }
       ]
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
     const boxes = screen.getAllByRole('checkbox', { name: 'Exact' }) as HTMLInputElement[]
     expect(boxes.map((b) => b.checked)).toEqual([true, false])
 
@@ -485,7 +533,7 @@ describe('SettingsModal', () => {
         { action: 'allow', tool: 'run_shell', match: 'cd /repo && npm install bar' }
       ]
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
     expect(document.querySelectorAll('.rule')).toHaveLength(2)
 
     fireEvent.click(screen.getByRole('button', { name: 'Clean up rules' }))
@@ -500,7 +548,7 @@ describe('SettingsModal', () => {
     const rules = [{ action: 'allow' as const, tool: 'run_shell', match: 'npm install' }]
     installApi({ cleanupPermissionRules: vi.fn(() => Promise.resolve(rules)) })
     renderModal({ permissionRules: rules })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
     fireEvent.click(screen.getByRole('button', { name: 'Clean up rules' }))
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Rules are already tidy.'))
   })
@@ -687,7 +735,7 @@ describe('SettingsModal', () => {
 
   it('saves all settings and closes when the footer Save is clicked', async () => {
     const api = installApi()
-    const { onClose, onSaved, container } = renderModal()
+    const { onClose, onSaved, container } = renderModal({}, { initialTab: 'agent' })
 
     // Edit a free-text field so we can assert it's carried into the save payload.
     fireEvent.change(screen.getByPlaceholderText(/Extra instructions appended/), {
@@ -718,7 +766,7 @@ describe('SettingsModal', () => {
   it('warns before discarding unsaved edits, and discards only on confirm', () => {
     installApi()
     const { onClose } = renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
     fireEvent.click(screen.getByRole('button', { name: '+ Add rule' })) // now dirty
 
     // Cancel while dirty asks to confirm instead of closing.
@@ -773,8 +821,7 @@ describe('SettingsModal', () => {
 
   it('caps the subagent history kept per chat, clamped to 0 to 1024 MB', async () => {
     const api = installApi()
-    const { container } = renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Models & Inference' }))
+    const { container } = renderModal({}, { initialTab: 'agent' })
     const box = screen.getByLabelText(/Subagent history kept per chat/) as HTMLInputElement
     fireEvent.change(box, { target: { value: '5000' } })
     fireEvent.click(within(container.querySelector('.modal__foot')!).getByText('Save'))
@@ -784,16 +831,16 @@ describe('SettingsModal', () => {
 
   it('shows keep-going off for a previously chosen step cap, and on by default', () => {
     installApi()
-    renderModal({ maxIterations: 25 })
+    renderModal({ maxIterations: 25 }, { initialTab: 'agent' })
     expect(screen.getByRole('checkbox', { name: /keep going while the turn is making progress/i })).not.toBeChecked()
     cleanup()
-    renderModal()
+    renderModal({}, { initialTab: 'agent' })
     expect(screen.getByRole('checkbox', { name: /keep going while the turn is making progress/i })).toBeChecked()
   })
 
   it('editing the step cap never silently turns keep-going off', () => {
     installApi()
-    renderModal()
+    renderModal({}, { initialTab: 'agent' })
     const box = screen.getByRole('checkbox', { name: /keep going while the turn is making progress/i })
     expect(box).toBeChecked()
     fireEvent.change(screen.getByDisplayValue('40'), { target: { value: '60' } })
@@ -803,7 +850,7 @@ describe('SettingsModal', () => {
   it('toggles a checkbox option (format on save) under the Tools tab', () => {
     installApi()
     const { onSaved } = renderModal({ formatOnSave: false })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
 
     const checkbox = screen.getByRole('checkbox', { name: /run the matching formatter/i })
     expect(checkbox).not.toBeChecked()
@@ -816,7 +863,7 @@ describe('SettingsModal', () => {
   it('picks the diagnostics-on-save mode under the Tools tab, unset reading as the language-server default', async () => {
     const api = installApi()
     renderModal({ diagnosticsOnSave: false })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
 
     const select = screen.getByRole('combobox', { name: /after the agent writes a file/i })
     expect(select).toHaveValue('off')
@@ -832,7 +879,7 @@ describe('SettingsModal', () => {
   it('edits extra language servers as JSON and refuses an invalid list', async () => {
     const api = installApi()
     renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
     const box = screen.getByRole('textbox', { name: /extra language servers/i })
     fireEvent.focus(box)
     fireEvent.change(box, { target: { value: '[{"id": "lua"}]' } })
@@ -866,7 +913,7 @@ describe('SettingsModal', () => {
       )
     })
     renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
     expect(await screen.findByText('Language servers (code intelligence)')).toBeInTheDocument()
     expect(screen.getByText('1 of 2 found')).toBeInTheDocument()
   })
@@ -876,7 +923,7 @@ describe('SettingsModal', () => {
     renderModal({
       permissionRules: [{ action: 'deny', tool: 'run_shell', match: 'rm *' }]
     })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
 
     // Exactly one rule row to start.
     expect(document.querySelectorAll('.rule')).toHaveLength(1)
@@ -926,7 +973,7 @@ describe('SettingsModal', () => {
   it('adds an MCP server row when "+ Add MCP server" is clicked', () => {
     installApi()
     renderModal()
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
 
     // No servers configured to start.
     expect(document.querySelectorAll('.mcp-server')).toHaveLength(0)
@@ -951,7 +998,7 @@ describe('SettingsModal', () => {
     const mcpOAuthLogin = vi.fn(() => Promise.resolve({ ok: true, settings: signedIn }))
     const api = installApi({ mcpOAuthLogin })
     renderModal({ mcpServers: [remote] })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Sign in (OAuth)' }))
 
@@ -977,7 +1024,7 @@ describe('SettingsModal', () => {
     const mcpOAuthLogout = vi.fn(() => Promise.resolve(signedOut))
     installApi({ mcpOAuthLogout })
     renderModal({ mcpServers: [remote] })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
     await waitFor(() => expect(mcpOAuthLogout).toHaveBeenCalledWith('linear'))
@@ -1001,7 +1048,7 @@ describe('SettingsModal', () => {
       )
     })
     renderModal({ mcpServers: [remote] })
-    fireEvent.click(screen.getByRole('button', { name: 'Tools & Permissions' }))
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
     await waitFor(() => expect(screen.getByText('Needs sign-in')).toBeInTheDocument())
   })
 
@@ -1023,7 +1070,7 @@ describe('SettingsModal', () => {
     it('defaults to allowlist mode with editable allow/deny domain lists', () => {
       installApi()
       renderModal()
-      fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
 
       expect(screen.getByRole('heading', { name: 'Sandbox egress' })).toBeInTheDocument()
       const mode = screen.getByLabelText(/^Mode/) as HTMLSelectElement
@@ -1035,7 +1082,7 @@ describe('SettingsModal', () => {
     it('edits the allow list (one domain per line, normalized on blur) and saves it', async () => {
       const api = installApi()
       renderModal({ sandboxEgress: { allow: ['corp.example'] } })
-      fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
 
       const allow = screen.getByLabelText(/Additional allowed domains/) as HTMLTextAreaElement
       expect(allow.value).toBe('corp.example')
@@ -1053,7 +1100,7 @@ describe('SettingsModal', () => {
     it("switching to 'All domains' hides the lists and persists the explicit escape hatch", async () => {
       const api = installApi()
       renderModal()
-      fireEvent.click(screen.getByRole('button', { name: 'Workspace' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
 
       fireEvent.change(screen.getByLabelText(/^Mode/), { target: { value: 'all' } })
       expect(screen.queryByLabelText(/Additional allowed domains/)).not.toBeInTheDocument()
@@ -1119,7 +1166,7 @@ describe('SettingsModal', () => {
     it('has its own tab with the manual check, which reports the result', async () => {
       const api = installApi()
       renderModal()
-      fireEvent.click(screen.getByRole('button', { name: 'Updates' }))
+      fireEvent.click(screen.getByRole('button', { name: 'About' }))
       // The page fetches and shows the installed version.
       expect(await screen.findByText('Houston 1.2.3')).toBeInTheDocument()
       fireEvent.click(screen.getByRole('button', { name: 'Check for updates' }))

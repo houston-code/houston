@@ -5,8 +5,9 @@ import { desktopCommandAction } from './desktopCommands'
 describe('desktopCommandAction', () => {
   it('opens the matching Settings section', () => {
     expect(desktopCommandAction('theme', '')).toEqual({ kind: 'settings', section: 'appearance' })
-    expect(desktopCommandAction('mcp', 'add')).toEqual({ kind: 'settings', section: 'tools' })
-    expect(desktopCommandAction('trust', '')).toEqual({ kind: 'settings', section: 'workspace' })
+    expect(desktopCommandAction('mcp', 'add')).toEqual({ kind: 'settings', section: 'mcp' })
+    expect(desktopCommandAction('hooks', '')).toEqual({ kind: 'settings', section: 'hooks' })
+    expect(desktopCommandAction('trust', '')).toEqual({ kind: 'settings', section: 'permissions' })
     expect(desktopCommandAction('login', '')).toEqual({ kind: 'settings', section: 'models' })
   })
 

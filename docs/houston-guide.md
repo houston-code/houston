@@ -513,10 +513,10 @@ Supported servers (none are bundled; install the ones you want):
 - Python: `pyright-langserver` (from `pyright`) or `basedpyright-langserver`.
 - Go: `gopls`. Rust: `rust-analyzer`. C and C++: `clangd`.
 
-Other servers can be added in Settings > **Tools & Permissions** > **Language
+Other servers can be added in Settings > **Tools** > **Language
 servers** as a JSON list of `{ "id", "command", "extensions" }` entries (plus
 optional `args`, `languageId`, `rootMarkers`); reusing a built-in id (`typescript`,
-`python`, `go`, `rust`, `clangd`) replaces it. Settings > Tools & Permissions >
+`python`, `go`, `rust`, `clangd`) replaces it. Settings > Tools >
 **Optional integrations** and `/doctor` show which servers are installed.
 
 Servers start on demand, one per language and project, are reused across turns, and
@@ -593,7 +593,7 @@ looping, it gets another round of steps instead of the wrap-up, and the transcri
 says so. Going back over calls it already made doesn't count. This keeps going up to
 a hard limit (200 steps by default), so a big job such as scaffolding a new project,
 or a long debugging session, finishes in one go. Stopping the run works as usual at
-any point. Settings > Loop control has the per-turn step count, the
+any point. Settings > Agent Behavior > Loop control has the per-turn step count, the
 keep-going-while-productive switch, and the hard limit. If you had already set your
 own step count, it stays a hard stop until you turn the switch on.
 
@@ -861,7 +861,8 @@ you would rather not keep answering, loosen the mode and the same turn carries o
 under it, rather than having to interrupt the work you were trying to unblock. The
 mode is shown next to the spinner while a turn runs, and on the status line above
 the composer the rest of the time. `/approval <mode>` sets one directly. The mode
-belongs to the chat, like its model (see "Each chat keeps its own settings").
+belongs to the chat, like its model (see "Each chat keeps its own settings"). New
+chats start in the mode chosen in Settings > **Permissions** > **Approval mode**.
 
 **Permission rules** (Settings) are finer-grained than the mode: `allow`,
 `deny`, or `ask`, matched on the tool plus a glob over its target, e.g. allow
@@ -931,7 +932,7 @@ being ignored. Trusted project `allow` rules sit BELOW your own rules (they fill
 gaps, never override you), project hooks run after yours, and project MCP
 servers appear namespaced as `mcp__proj-<id>__<tool>`.
 
-Decisions are reviewable: Settings, *Workspace*, *Trusted folders* lists every
+Decisions are reviewable: Settings, *Permissions*, *Trusted folders* lists every
 folder you answered for (trusted or never) with a Forget button, and `/trust`
 in the terminal shows the current folder's state (`/trust forget` clears the
 decision and asks again on the spot). Forgetting is how you reverse a "Never"
@@ -1496,8 +1497,8 @@ conventions, not as authority to change tool or permission behavior.
   compacts later, a small local model sooner), and the summary is saved with the
   conversation so later turns extend it instead of re-summarizing from scratch.
   The full transcript stays on screen; only what is sent to the model is
-  compacted. Set a fixed token threshold or disable it in Settings, *Context
-  window*.
+  compacted. Set a fixed token threshold or disable it in Settings, *Agent Behavior*,
+  *Context window*.
 - **Tools loaded on demand.** Every tool definition sent to the model costs
   context on every request, so Houston preloads only the tools a coding task uses
   all the time (reading, searching, editing, the shell, the todo list, questions,

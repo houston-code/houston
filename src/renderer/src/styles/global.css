@@ -5489,7 +5489,7 @@ body:has(.coachmark) .get-started {
 }
 .modal__nav {
   flex-shrink: 0;
-  width: 176px;
+  width: 196px;
   border-right: 1px solid var(--border);
   padding: 12px 8px;
   display: flex;
@@ -5962,7 +5962,7 @@ body:has(.coachmark) .get-started {
 .field__hint--warn {
   color: var(--warn);
 }
-/* Optional-integrations status rows (Settings → Tools & Permissions). */
+/* Optional-integrations status rows (Settings → Tools). */
 .integration {
   display: flex;
   align-items: baseline;
@@ -6351,6 +6351,70 @@ body:has(.coachmark) .get-started {
    isn't a perceptible focus change — give it a full-strength outer ring. */
 .modal__nav button.is-active:focus-visible {
   box-shadow: inset 2px 0 0 var(--accent), 0 0 0 2px var(--accent);
+}
+
+/* ---- Nav groups: a small uppercase heading over each group's pages ---- */
+.set-nav__group {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.set-nav__group + .set-nav__group {
+  margin-top: var(--space-3);
+}
+.set-nav__heading {
+  padding: 0 10px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* ---- Radio choices with a one-line hint (approval mode) ---- */
+.choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.choice {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+.choice:hover {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+}
+.choice.is-selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+.choice input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+}
+.choice input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.choice__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.choice__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.choice__hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
 }
 
 /* ---- Reusable flat section wrapper (NOT .section — that's the sidebar) ---- */

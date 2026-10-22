@@ -2678,6 +2678,10 @@ export default function App(): JSX.Element {
               setSettingsOpen(false)
               setScorecardOpen(true)
             }}
+            onShowDoctor={() => {
+              setSettingsOpen(false)
+              setDoctorOpen(true)
+            }}
           />
         )}
 

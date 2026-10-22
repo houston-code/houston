@@ -64,10 +64,10 @@ function languageServerChecks(f: DoctorFacts): DoctorCheck[] {
   const checks: DoctorCheck[] = []
   if (f.languageServersBlocked) {
     const why = {
-      disabled: { detail: 'turned off (in settings, or by HOUSTON_LSP=off)', fix: 'turn language servers on in Settings > Tools & Permissions' },
+      disabled: { detail: 'turned off (in settings, or by HOUSTON_LSP=off)', fix: 'turn language servers on in Settings > Tools' },
       unsandboxed: {
         detail: 'off: no OS sandbox on this host to confine them',
-        fix: 'turn them on explicitly in Settings > Tools & Permissions if you accept running them unconfined'
+        fix: 'turn them on explicitly in Settings > Tools if you accept running them unconfined'
       },
       'needs-git-bash': { detail: 'off: they need Git for Windows (Git Bash)', fix: 'install Git for Windows, then restart Houston' }
     }[f.languageServersBlocked]
