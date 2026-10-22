@@ -757,7 +757,7 @@ Approval is layered. From most to least restrictive:
 - **Full auto:** edits and (sandboxed) commands run without asking. A few controls
   still hold even here, because the sandbox can read your whole filesystem: network
   egress is granted **per destination** (approving a fetch to one host does not open
-  egress to another), shell commands run offline until you allow network: the
+  egress to another; see "Network calls in full auto" below), shell commands run offline until you allow network: the
   first time one fails for lack of network, Houston asks once whether shell
   commands in this chat may reach the network (the **shell-network consent**), so
   blanket outbound access is never automatic (declining keeps them offline; when
@@ -771,6 +771,22 @@ Approval is layered. From most to least restrictive:
   file** prompts too: a file edit that writes one, or a shell command that redirects
   into, copies over, edits in place, or removes one (`> .env`, `cp .env.example .env`,
   `sed -i … .env`, `rm .env`). Templates such as `.env.example` don't count.
+
+**Network calls in full auto.** The GitHub reads (`gh_pr_list`, `gh_pr_view`,
+`gh_pr_checks`, `gh_issue_list`, `gh_issue_view`, `gh_run_list`, `gh_run_view`)
+run without asking. Everything else asks once per destination, and "Allow for
+run" covers only that destination (the prompt says which):
+
+- `web_fetch` asks once per site and `web_search` once per chat. Settings →
+  Permissions → **Web reads in full auto** can set these to run without asking;
+  either way, a URL or query carrying a credential is refused.
+- `view_localhost` asks once per host, since a page can load from the internet,
+  and a call that clicks or types (`steps`) asks once more per host.
+- GitHub calls that post or update something (open a PR or issue, comment,
+  review, reopen, mark ready or draft) share one grant per repository, so
+  allowing a comment on one repository never allows anything on another.
+- Merging a PR, closing a PR or issue, checking out a PR, and creating a
+  repository each ask on their own: allowing a comment never allows a merge.
 
 **Throwing away work** asks in every mode, full auto included. The sandbox keeps
 commands inside the project, but the project is what these destroy, and undo doesn't
@@ -798,7 +814,7 @@ out inside a modified line, and the code syntax-coloured.
 
 On any single tool call the user can approve once, deny, **allow for the run**
 (auto-approve that kind of tool for the rest of the conversation, or, for a
-network call, just that one destination), or **always allow / always deny**
+network call, just that one destination, which the prompt names), or **always allow / always deny**
 (saves a permission rule so the choice persists). File edits show an inline
 red/green diff before approval.
 
@@ -856,8 +872,10 @@ on a patch saves one rule per file.
 
 A rule marked **Exact** matches only its one target: `*` is an ordinary
 character and a folder does not cover the files inside it. **Always allow** on a
-file, URL, or search saves an exact rule, so approving a write to a file named
-`*`, or to a folder path, allows that path and nothing else. On a shell command
+file saves an exact rule, so approving a write to a file named
+`*`, or to a folder path, allows that path and nothing else. On a `web_fetch` it
+saves the site (`https://example.com`, covering every page there), and on a
+`web_search` it allows every search. On a shell command
 it saves a command prefix instead, such as `npm install`. A command it can't
 shorten to a prefix is saved whole, and exact when it holds `*`, so approving
 `rm *` never allows `rm -rf ~`. A `cd` into the project needs no rule (an allowed
@@ -1293,7 +1311,8 @@ replace the real secret with the placeholder.
 **Credential masking on egress.** Houston's own network tools refuse to *send* a
 credential: before a `web_fetch` or `web_search` leaves the machine, its URL or
 query is scanned for a well-known token format or one of this install's stored
-secret values, and the call is refused if one is present. This is the outbound
+secret values, and the call is refused if one is present. The GitHub tools scan
+everything they send the same way (titles, bodies, comments, reviews). This is the outbound
 counterpart to the tool-result redactor (which scrubs secrets on the way back
 in), so a prompt-injected agent cannot exfiltrate a key by pasting it into a
 request. Note this covers Houston-mediated egress; a raw `curl` inside

@@ -370,13 +370,17 @@ export function renderApprovalPrompt(
   const offline = ev.shellOffline
     ? `\n${paint('  Runs without network. Choose "Allow for run" to also allow network for this run.', 'dim')}`
     : ''
+  // A network grant reaches one destination; say which before the user picks it.
+  const scope = ev.networkScope
+    ? `\n${paint(`  "Allow for run" covers ${ev.networkScope} for the rest of this chat.`, 'dim')}`
+    : ''
   const head = paint(`Approve ${ev.name}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
   const keys = opts.picker
     ? ''
     : `\n${paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim')}` +
       paint('\n  …or type why not, and that goes back to the agent', 'dim')
-  return `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}${keys}`
+  return `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}${scope}${keys}`
 }
 
 /**

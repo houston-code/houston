@@ -538,6 +538,12 @@ export interface AppSettings {
   /** Selected web-search provider id (see SEARCH_PROVIDERS). Defaults to Tavily. */
   searchProvider?: string
   /**
+   * How full auto treats web reads (`web_fetch` and `web_search`). `ask` (default):
+   * once per site, and once for search, per chat. `allow`: without asking. A URL or
+   * query carrying a credential is refused either way. Other policies always ask.
+   */
+  webReads?: 'ask' | 'allow'
+  /**
    * Per-provider "an API key is stored" flags, keyed by search-provider id. Derived
    * from the secrets store on every read, never persisted.
    */

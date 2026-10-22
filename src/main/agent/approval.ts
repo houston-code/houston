@@ -27,7 +27,9 @@ export function isBlockedByPlan(
  * - `override` ("Allow for run") auto-approves everything for the rest of the run.
  * - Network egress and MCP always prompt on first use — even in full-auto — because
  *   they leave the machine / run outside the sandbox. The user can still pick "Allow
- *   for run" on that prompt to stop further prompts.
+ *   for run" on that prompt to stop further prompts. (The loop-level
+ *   {@link decideApproval} lets full auto skip the prompt for a network call that only
+ *   reads; see its `networkRead` input.)
  * - Shell auto-approval in full-auto is premised on the sandbox confining the command
  *   to the project. When `sandboxed` is false the sandbox is NOT in effect, so an
  *   arbitrary command would run with the user's full privileges — prompt then, even
@@ -94,6 +96,12 @@ export interface ApprovalInputs {
    * push). Defaults to false.
    */
   shellDiscardsWork?: boolean
+  /**
+   * Whether this network call only reads (see fullAutoNetworkRead: a GitHub read, or
+   * a web read when the user allowed those), so
+   * full auto runs it without the per-destination prompt. Defaults to false.
+   */
+  networkRead?: boolean
 }
 
 /**
@@ -137,6 +145,11 @@ export interface ApprovalInputs {
  * `git reset --hard` or `rm -r src` destroys, and shell side effects aren't checkpointed.
  * Only an explicit `allow` rule skips it: "Allow for run" and full-auto don't, and on a
  * host without a sandbox neither does the unconfined-shell consent.
+ *
+ * A network call that only reads (`networkRead`) runs without asking in full auto: the
+ * per-destination prompt exists to stop data leaving or something being published, and
+ * a GitHub list or view does neither. A permission
+ * `ask` or `deny` rule still applies first, and every other policy still asks.
  */
 export function decideApproval(inputs: ApprovalInputs): {
   mustApprove: boolean
@@ -168,6 +181,9 @@ export function decideApproval(inputs: ApprovalInputs): {
   }
   if ((kind === 'write' || kind === 'shell') && inputs.sensitiveWrite && !override) {
     return { mustApprove: true, unsandboxedShell: false }
+  }
+  if (kind === 'network' && inputs.networkRead && policy === 'full-auto') {
+    return { mustApprove: false, unsandboxedShell: false }
   }
   return {
     mustApprove: needsApproval(policy, kind, override, shellSandboxed),

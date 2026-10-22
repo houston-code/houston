@@ -1636,6 +1636,33 @@ export function SettingsModal({
             {tab === 'tools' && (
               <>
                 <SettingsSection
+                  title="Web reads in full auto"
+                  desc={
+                    <>
+                      Whether <code>web_fetch</code> and <code>web_search</code> ask before
+                      running in full auto. A URL or search carrying a credential is refused
+                      either way, and other modes always ask.
+                    </>
+                  }
+                >
+                  <label className="field">
+                    <span>Web reads</span>
+                    <select
+                      value={settings.webReads ?? 'ask'}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          webReads: e.target.value === 'allow' ? 'allow' : 'ask'
+                        }))
+                      }
+                    >
+                      <option value="ask">Ask once per site</option>
+                      <option value="allow">Allow without asking</option>
+                    </select>
+                  </label>
+                </SettingsSection>
+
+                <SettingsSection
                   title="Permissions"
                   desc={
                     <>
@@ -1643,9 +1670,10 @@ export function SettingsModal({
                       <strong>Allow</strong> auto-approves, <strong>Deny</strong> refuses,{' '}
                       <strong>Ask</strong> always prompts. The pattern is a glob over the call&apos;s
                       command, path, URL, or query; an <strong>Exact</strong> rule matches only
-                      that one target. <strong>Always allow</strong> on a file, URL, or search
-                      saves an exact rule, as it does for a shell command holding <code>*</code>{' '}
-                      that it can&apos;t shorten to a prefix. These are your global rules; a
+                      that one target. <strong>Always allow</strong> on a file saves an exact
+                      rule, as it does for a shell command holding <code>*</code> that it
+                      can&apos;t shorten to a prefix; on a web fetch it saves the site, and on a
+                      web search it allows every search. These are your global rules; a
                       project&apos;s{' '}
                       <code>.houston/settings.json</code> may add stricter deny/ask rules that apply
                       first and aren&apos;t shown here.

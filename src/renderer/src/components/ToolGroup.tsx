@@ -460,6 +460,11 @@ function ToolRow({
               Runs without network. Choose "Allow for run" to also allow network for this run.
             </p>
           )}
+          {item.networkScope && (
+            <p className="tool-row__approval-note">
+              "Allow for run" covers {item.networkScope} for the rest of this chat.
+            </p>
+          )}
           <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'allow')}>
             Allow
           </button>
@@ -468,7 +473,13 @@ function ToolRow({
           </button>
           <button
             className="btn btn--sm"
-            title="Save a permission rule so this is allowed in future runs too"
+            title={
+              item.name === 'web_fetch'
+                ? 'Save a permission rule so fetches from this site are allowed in future runs too'
+                : item.name === 'web_search'
+                  ? 'Save a permission rule so web searches are allowed in future runs too'
+                  : 'Save a permission rule so this is allowed in future runs too'
+            }
             onClick={() => onApprove(item.id, 'rule-allow')}
           >
             Always allow

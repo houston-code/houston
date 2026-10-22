@@ -56,6 +56,7 @@ import { backendSupportsSession } from '../sandbox'
 import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
 import { MAX_PAGE_TEXT_CHARS, type CaptureInput, type LocalhostCapture } from './viewlocalhost'
 import { prNoticeFromToolResult } from '@shared/prNotice'
+import { GH_READ_TOOLS } from './permissions'
 
 let workspace: string
 let ctx: ToolContext
@@ -138,6 +139,16 @@ describe('tool registry', () => {
       'web_search',
       'write_file'
     ])
+  })
+
+  it('treats exactly the gh_* tools plan mode allows as the GitHub reads full auto runs unasked', () => {
+    const gh = toolSchemas()
+      .map((t) => t.name)
+      .filter((n) => n.startsWith('gh_'))
+    for (const name of gh) {
+      expect({ name, read: GH_READ_TOOLS.has(name) }).toEqual({ name, read: getTool(name)!.blockedInPlan !== true })
+    }
+    for (const name of GH_READ_TOOLS) expect(gh).toContain(name)
   })
 
   it('review_changes errors without a review dispatcher in context', async () => {
@@ -2254,6 +2265,49 @@ function splitFences(out: string): { nonce: string; inside: string[]; outside: s
   })
   return { nonce, inside, outside }
 }
+
+describe('GitHub tools refuse to send a credential', () => {
+  const ok = (stdout: string): GhResult => ({ ok: true, stdout, stderr: '', code: 0 })
+  const TOKEN = `ghp_${'a'.repeat(36)}`
+
+  it.each([
+    ['gh_pr_create', { title: 'Fix', body: `token ${TOKEN}` }],
+    ['gh_pr_comment', { number: 1, body: TOKEN }],
+    ['gh_issue_create', { title: `leak ${TOKEN}` }],
+    ['gh_issue_comment', { number: 1, body: TOKEN }],
+    ['gh_pr_review', { number: 1, event: 'comment', body: TOKEN }],
+    ['gh_issue_set_state', { number: 1, action: 'close', comment: TOKEN }],
+    ['gh_repo_create', { name: 'x', description: TOKEN }]
+  ])('%s never runs gh with a token in its arguments', async (name, args) => {
+    const ghExec = vi.fn(async () => ok('https://github.com/o/r/pull/1'))
+    const ctx: ToolContext = { workspace, allowNetwork: true, ghExec }
+    await expect(getTool(name)!.execute(args, ctx)).rejects.toThrow(/Refusing to send this GitHub request.*github-token/)
+    expect(ghExec).not.toHaveBeenCalled()
+  })
+
+  it('refuses one of this install\'s stored secret values too, naming only its type', async () => {
+    const ghExec = vi.fn(async () => ok(''))
+    const ctx: ToolContext = {
+      workspace,
+      allowNetwork: true,
+      ghExec,
+      collectSecrets: () => ['hunter2-very-secret-value']
+    }
+    const err = await getTool('gh_pr_comment')!
+      .execute({ number: 1, body: 'pw is hunter2-very-secret-value' }, ctx)
+      .catch((e: Error) => e.message)
+    expect(err).toMatch(/Refusing to send this GitHub request/)
+    expect(err).not.toContain('hunter2')
+    expect(ghExec).not.toHaveBeenCalled()
+  })
+
+  it('still runs a call with nothing secret in it', async () => {
+    const ghExec = vi.fn(async () => ok('https://github.com/o/r/pull/1#issuecomment-1'))
+    const ctx: ToolContext = { workspace, allowNetwork: true, ghExec }
+    await getTool('gh_pr_comment')!.execute({ number: 1, body: 'LGTM' }, ctx)
+    expect(ghExec).toHaveBeenCalledTimes(1)
+  })
+})
 
 describe('untrusted-content fencing beyond web_fetch', () => {
   const ok = (stdout: string): GhResult => ({ ok: true, stdout, stderr: '', code: 0 })

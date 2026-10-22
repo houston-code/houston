@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
 import {
   alreadyAllowedAsRule,
   cleanupPermissionRules,
+  describeNetworkDestination,
+  fullAutoNetworkRead,
+  GH_READ_TOOLS,
   matchRule,
   networkDestination,
   parseTightenOnlyRules,
@@ -118,9 +121,57 @@ describe('networkDestination', () => {
     expect(networkDestination('web_fetch', { url: 'https://example.com', steps })).toBe('example.com')
   })
 
-  it('collapses every gh_* call onto github.com (one grant covers them all)', () => {
-    expect(networkDestination('gh_pr_create', { title: 'x' })).toBe('github.com')
-    expect(networkDestination('gh_run_view', { run_id: 1 })).toBe('github.com')
+  describe('gh_* calls', () => {
+    const repo = 'github.com:acme/app'
+
+    it('keys a read on the repository, apart from any write', () => {
+      expect(networkDestination('gh_pr_list', {}, repo)).toBe('github.com:acme/app:read')
+      expect(networkDestination('gh_run_view', { run_id: 1 }, repo)).toBe('github.com:acme/app:read')
+    })
+
+    it('shares one write grant per repository across the publishing calls', () => {
+      const writes: [string, Record<string, unknown>][] = [
+        ['gh_pr_create', { title: 'x' }],
+        ['gh_pr_comment', { body: 'x' }],
+        ['gh_issue_create', { title: 'x' }],
+        ['gh_issue_comment', { number: 1, body: 'x' }],
+        ['gh_pr_review', { event: 'approve' }],
+        ['gh_pr_set_state', { number: 1, action: 'reopen' }],
+        ['gh_pr_set_state', { action: 'ready' }],
+        ['gh_pr_set_state', { action: 'draft' }],
+        ['gh_issue_set_state', { number: 1, action: 'reopen' }]
+      ]
+      for (const [tool, args] of writes) {
+        expect(networkDestination(tool, args, repo)).toBe('github.com:acme/app:write')
+      }
+      // Another repository is another grant.
+      expect(networkDestination('gh_pr_comment', { body: 'x' }, 'github.com:other/repo')).toBe(
+        'github.com:other/repo:write'
+      )
+    })
+
+    it('gives a merge, a close, and a checkout a grant of their own, so a write grant never covers them', () => {
+      expect(networkDestination('gh_pr_merge', {}, repo)).toBe('github.com:acme/app:gh_pr_merge')
+      expect(networkDestination('gh_pr_checkout', { number: 2 }, repo)).toBe('github.com:acme/app:gh_pr_checkout')
+      expect(networkDestination('gh_pr_set_state', { number: 1, action: 'close' }, repo)).toBe(
+        'github.com:acme/app:gh_pr_set_state'
+      )
+      expect(networkDestination('gh_issue_set_state', { number: 1, action: 'close' }, repo)).toBe(
+        'github.com:acme/app:gh_issue_set_state'
+      )
+    })
+
+    it('keys gh_repo_create on the repository it creates', () => {
+      expect(networkDestination('gh_repo_create', { name: 'Acme/New' }, repo)).toBe('github:gh_repo_create:acme/new')
+      expect(networkDestination('gh_repo_create', { name: 'other' }, repo)).toBe('github:gh_repo_create:other')
+      expect(networkDestination('gh_repo_create', {}, repo)).toBe('github:gh_repo_create:?')
+    })
+
+    it('uses an unknown-repo key apart from every real one when the repository is unknown', () => {
+      expect(networkDestination('gh_pr_comment', { body: 'x' })).toBe('github:unknown-repo:write')
+      expect(networkDestination('gh_pr_comment', { body: 'x' }, null)).toBe('github:unknown-repo:write')
+      expect(networkDestination('gh_pr_list', {}, null)).toBe('github:unknown-repo:read')
+    })
   })
 
   it('gives web_search a single stable key (the query has no host)', () => {
@@ -131,6 +182,46 @@ describe('networkDestination', () => {
     expect(networkDestination('web_fetch', { url: 'not a url' })).toBe('web_fetch')
     expect(networkDestination('web_fetch', {})).toBe('web_fetch')
     expect(networkDestination('some_future_net_tool', {})).toBe('some_future_net_tool')
+  })
+})
+
+describe('fullAutoNetworkRead', () => {
+  it('runs every GitHub read without asking, and nothing that publishes', () => {
+    for (const tool of GH_READ_TOOLS) expect(fullAutoNetworkRead(tool, {})).toBe(true)
+    for (const tool of ['gh_pr_create', 'gh_pr_comment', 'gh_pr_merge', 'gh_repo_create', 'gh_issue_set_state']) {
+      expect(fullAutoNetworkRead(tool, {})).toBe(false)
+    }
+  })
+
+  it('always asks for view_localhost: a page script can reach public hosts', () => {
+    expect(fullAutoNetworkRead('view_localhost', { url: 'http://localhost:3000' })).toBe(false)
+    expect(fullAutoNetworkRead('view_localhost', { url: 'http://localhost:3000' }, 'allow')).toBe(false)
+    expect(
+      fullAutoNetworkRead('view_localhost', { url: 'http://localhost:3000', steps: [{ action: 'click', selector: 'a' }] })
+    ).toBe(false)
+  })
+
+  it('asks for web reads unless the user allowed them', () => {
+    expect(fullAutoNetworkRead('web_fetch', { url: 'https://x.example' })).toBe(false)
+    expect(fullAutoNetworkRead('web_search', { query: 'q' }, 'ask')).toBe(false)
+    expect(fullAutoNetworkRead('web_fetch', { url: 'https://x.example' }, 'allow')).toBe(true)
+    expect(fullAutoNetworkRead('web_search', { query: 'q' }, 'allow')).toBe(true)
+    expect(fullAutoNetworkRead('some_future_net_tool', {}, 'allow')).toBe(false)
+  })
+})
+
+describe('describeNetworkDestination', () => {
+  it('names what an "Allow for run" grant covers', () => {
+    expect(describeNetworkDestination('github.com:acme/app:read')).toBe('GitHub reads on acme/app')
+    expect(describeNetworkDestination('github.com:acme/app:write')).toMatch(/^GitHub posts and updates on acme\/app/)
+    expect(describeNetworkDestination('github.com:acme/app,acme/fork:write')).toMatch(/on acme\/app, acme\/fork/)
+    expect(describeNetworkDestination('github.com:acme/app:gh_pr_merge')).toBe('gh_pr_merge on acme/app')
+    expect(describeNetworkDestination('github:unknown-repo:write')).toMatch(/on this repository/)
+    expect(describeNetworkDestination('github:gh_repo_create:acme/new')).toBe('creating the repository acme/new')
+    expect(describeNetworkDestination('web_search')).toBe('web searches')
+    expect(describeNetworkDestination('localhost (interactive)')).toBe('clicking and typing on localhost')
+    expect(describeNetworkDestination('docs.example.com')).toBe('docs.example.com')
+    expect(describeNetworkDestination('[::1]')).toBe('[::1]')
   })
 })
 
@@ -1392,7 +1483,7 @@ describe('persistedRules', () => {
       exactAllow('write_file', 'notes.txt')
     ])
     expect(persistedRules('allow', 'web_fetch', { url: 'https://x.com/a' })).toEqual([
-      exactAllow('web_fetch', 'https://x.com/a')
+      allow('web_fetch', 'https://x.com')
     ])
     expect(persistedRules('allow', 'dispatch_writable_agent', { prompt: 'go' })).toEqual([
       allow('dispatch_writable_agent', '*')
@@ -1467,14 +1558,49 @@ describe('a saved "Always allow" covers only the approved target', () => {
     expect(matchRule(rules, 'apply_patch', permissionSubject('apply_patch', { patch: patchOf(addOp('*'), addOp('/etc/x')) }), ROOTS)).toBeNull()
   })
 
-  it('web_fetch and web_search: a `*` in the URL or query is literal', () => {
-    const fetch = saved('web_fetch', { url: 'https://Evil.example/*' })
-    expect(matchRule(fetch, 'web_fetch', 'https://evil.example/*', ROOTS)).toBe('allow')
-    expect(matchRule(fetch, 'web_fetch', 'https://evil.example/exfil?d=1', ROOTS)).toBeNull()
-    expect(matchRule(saved('web_fetch', { url: 'https://x.example/a' }), 'web_fetch', 'https://x.example/a/b', ROOTS)).toBeNull()
-    const search = saved('web_search', { query: '*' })
-    expect(matchRule(search, 'web_search', '*', ROOTS)).toBe('allow')
-    expect(matchRule(search, 'web_search', 'anything else', ROOTS)).toBeNull()
+  it('web_fetch: saves the site, so it matches the next page there and no other site', () => {
+    const fetch = saved('web_fetch', { url: 'https://Docs.Example.com/guide/intro?x=1#top' })
+    expect(fetch).toEqual([allow('web_fetch', 'https://docs.example.com')])
+    for (const url of [
+      'https://docs.example.com/guide/other',
+      'https://DOCS.example.com/api',
+      'https://docs.example.com'
+    ]) {
+      expect(matchRule(fetch, 'web_fetch', url, ROOTS)).toBe('allow')
+    }
+    for (const url of [
+      'https://docs.example.com.evil.net/x',
+      'https://docs.example.com@evil.net/x',
+      'https://docs.example.com:8443/x',
+      'http://docs.example.com/x',
+      'https://evil.net/https://docs.example.com/x',
+      'https://other.example.com/'
+    ]) {
+      expect(matchRule(fetch, 'web_fetch', url, ROOTS)).toBeNull()
+    }
+    // A non-default port stays part of the site; credentials in the URL are dropped.
+    expect(saved('web_fetch', { url: 'https://u:p@x.example:8443/a' })).toEqual([allow('web_fetch', 'https://x.example:8443')])
+  })
+
+  it('web_fetch: a `*` in the URL never becomes a wildcard site, and a non-http URL saves nothing', () => {
+    const star = saved('web_fetch', { url: 'https://Evil.example/*' })
+    expect(star).toEqual([allow('web_fetch', 'https://evil.example')])
+    expect(matchRule(star, 'web_fetch', 'https://other.example/x', ROOTS)).toBeNull()
+    expect(saved('web_fetch', { url: 'https://*.example/x' })).toEqual([])
+    expect(saved('web_fetch', { url: 'file:///etc/passwd' })).toEqual([])
+    expect(saved('web_fetch', { url: 'not a url' })).toEqual([])
+  })
+
+  it('web_search: allows every search (they all go to the one configured provider)', () => {
+    const search = saved('web_search', { query: 'rust async' })
+    expect(search).toEqual([allow('web_search', '*')])
+    expect(matchRule(search, 'web_search', 'anything else', ROOTS)).toBe('allow')
+    expect(matchRule(search, 'web_fetch', 'https://x.example', ROOTS)).toBeNull()
+  })
+
+  it('web_fetch and web_search: a deny stays the exact URL or query', () => {
+    expect(persistedRules('deny', 'web_fetch', { url: 'https://x.example/a' })).toEqual([deny('web_fetch', 'https://x.example/a')])
+    expect(persistedRules('deny', 'web_search', { query: 'q' })).toEqual([deny('web_search', 'q')])
   })
 
   it('run_shell: a `*` in an approved command is literal, so `rm *` does not allow `rm -rf ~`', () => {
