@@ -14,7 +14,8 @@ import type {
   MenuState,
   ModelOption,
   PermissionPolicyView,
-  PermissionRule
+  PermissionRule,
+  PermissionTestResult
 } from '@shared/types'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
@@ -142,6 +143,15 @@ const api = {
   /** The admin policy and this project's permission config, shown read-only in Settings. */
   getPermissionPolicy: (workspace: string | null): Promise<PermissionPolicyView> =>
     ipcRenderer.invoke(IPC.permissionsPolicy, workspace),
+  /** Test a call against the admin, project, and given (unsaved) user rules. */
+  testPermission: (input: {
+    workspace: string | null
+    userRules: PermissionRule[]
+    tool: string
+    subject: string
+  }): Promise<PermissionTestResult> => ipcRenderer.invoke(IPC.permissionsTest, input),
+  /** When each permission rule last decided a call, keyed by permissionRuleKey. */
+  getRuleUsage: (): Promise<Record<string, number>> => ipcRenderer.invoke(IPC.permissionsUsage),
   setKey: (providerId: string, key: string): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.settingsSetKey, providerId, key),
   deleteKey: (providerId: string): Promise<AppSettings> =>

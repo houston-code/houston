@@ -102,6 +102,10 @@ export const IPC = {
   permissionsCleanup: 'permissions:cleanup',
   /** The managed policy + open project's permission config, read-only for Settings. */
   permissionsPolicy: 'permissions:policy',
+  /** Test one call against every permission tier (Settings' rule tester). */
+  permissionsTest: 'permissions:test',
+  /** When each permission rule last decided a call. */
+  permissionsUsage: 'permissions:usage',
   settingsSetKey: 'settings:setKey',
   settingsDeleteKey: 'settings:deleteKey',
   settingsListModels: 'settings:listModels',

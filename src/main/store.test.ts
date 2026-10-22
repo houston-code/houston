@@ -502,12 +502,17 @@ describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
   const seed = (permissionRules: PermissionRule[]): void =>
     writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o'])], permissionRules })
 
-  it('prepends a new rule and persists it', async () => {
+  // A rule from an approval prompt is stamped with when and how it was added.
+  const stamped = (rule: PermissionRule): PermissionRule => ({ ...rule, addedAt: expect.any(Number), source: 'prompt' })
+
+  it('prepends a new rule, stamped as from a prompt, and persists it', async () => {
     seed([])
     const { addPermissionRule, getSettings } = await loadStore()
     const rule: PermissionRule = { action: 'allow', tool: 'web_fetch', match: 'https://x.com/*' }
+    const before = Date.now()
     addPermissionRule(rule)
-    expect(getSettings().permissionRules).toEqual([rule])
+    expect(getSettings().permissionRules).toEqual([stamped(rule)])
+    expect(getSettings().permissionRules?.[0].addedAt).toBeGreaterThanOrEqual(before)
   })
 
   it('prepends ahead of existing rules so the newest wins', async () => {
@@ -516,7 +521,7 @@ describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
     const { addPermissionRule, getSettings } = await loadStore()
     const rule: PermissionRule = { action: 'deny', tool: 'run_shell', match: 'rm -rf build' }
     addPermissionRule(rule)
-    expect(getSettings().permissionRules).toEqual([rule, existing])
+    expect(getSettings().permissionRules).toEqual([stamped(rule), existing])
   })
 
   it('dedupes an identical rule (repeated clicks do not pile up)', async () => {
@@ -534,11 +539,11 @@ describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
     const exact: PermissionRule = { action: 'allow', tool: 'write_file', match: 'src', exact: true }
     addPermissionRule(exact)
     addPermissionRule({ ...exact })
-    expect(getSettings().permissionRules).toEqual([exact, glob])
+    expect(getSettings().permissionRules).toEqual([stamped(exact), glob])
     // A fresh load reads `exact` back from disk.
     vi.resetModules()
     const reloaded = await loadStore()
-    expect(reloaded.getSettings().permissionRules).toEqual([exact, glob])
+    expect(reloaded.getSettings().permissionRules).toEqual([stamped(exact), glob])
   })
 })
 

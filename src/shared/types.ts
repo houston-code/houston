@@ -474,6 +474,31 @@ export interface PermissionRule {
    * older saved rules, which keep their glob meaning.
    */
   exact?: boolean
+  /**
+   * When the rule was created (epoch ms) and how: from an approval prompt's "Always
+   * allow / deny", or by hand in Settings. Bookkeeping only, never read by the
+   * matcher; absent on rules saved before it was recorded.
+   */
+  addedAt?: number
+  source?: 'prompt' | 'settings'
+}
+
+/**
+ * A permission rule's identity for bookkeeping that lives outside the rule itself
+ * (when it last decided a call): the fields the matcher reads, NUL-separated.
+ */
+export function permissionRuleKey(r: Pick<PermissionRule, 'action' | 'tool' | 'match' | 'exact'>): string {
+  return `${r.action}\u0000${r.tool || '*'}\u0000${r.match ?? ''}\u0000${r.exact ? 'exact' : ''}`
+}
+
+/** The result of testing a call against every permission tier (Settings' rule tester). */
+export interface PermissionTestResult {
+  /** What the rules decide, or null when none match (the approval mode decides). */
+  decision: PermissionRule['action'] | null
+  /** Which tier decided, or null when none matched. */
+  tier: 'managed' | 'project' | 'user' | 'project-allow' | null
+  /** Indices of the user's rules that each match this call on their own. */
+  userMatches: number[]
 }
 
 export interface SelectedModel {

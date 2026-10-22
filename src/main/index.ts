@@ -33,6 +33,7 @@ import { parseTuiArgs } from './tui'
 import { runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from './terminalEntry'
 import { activeBackendId, isSandboxed } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
+import { flushRuleUsage } from './ruleUsage'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
 // don't force-exit: in a GUI app a stray async error shouldn't kill the window.
@@ -285,6 +286,7 @@ app.on('before-quit', (e) =>
  * themselves. A write that failed turns a clean exit into a failure.
  */
 async function flushBeforeExit(code: number): Promise<number> {
+  flushRuleUsage()
   try {
     await flushSecrets()
     return code
@@ -305,6 +307,7 @@ app.on('will-quit', (e) => {
       .finally(() => app.quit())
     return
   }
+  flushRuleUsage()
   destroyAllPreviewPanes()
   killAllShells()
   killAllTerminals()
