@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import {
   GLOBAL_RULES_HEADING,
   LEGACY_RULES_IMPORT,
@@ -100,12 +100,17 @@ describe('legacyRulesNoticeApplies', () => {
     expect(legacyRulesNoticeApplies(home)).toBe(true)
   })
 
-  it('is false once the global file imports it (~/ or absolute spelling)', () => {
-    writeLegacy()
+  it('is false once the global file imports it (~/ or absolute spelling)', async () => {
+    writeLegacy('LEGACY-RULE')
     writeGlobal(`Stuff\n${LEGACY_RULES_IMPORT}\n`)
     expect(legacyRulesNoticeApplies(home)).toBe(false)
-    writeGlobal(`See @${legacyRulesFile(home)}.`)
+    // An import names its path with forward slashes on every platform (C:/Users/...
+    // on Windows); that is the absolute spelling the loader expands.
+    const absolute = legacyRulesFile(home).split(sep).join('/')
+    writeGlobal(`See @${absolute}.`)
     expect(legacyRulesNoticeApplies(home)).toBe(false)
+    // The notice and the loader agree: that line really loads the legacy rules.
+    expect((await loadProjectRules(workspace, { home })).text).toContain('LEGACY-RULE')
   })
 
   it('does not count a mention inside a fenced code block as an import', () => {
