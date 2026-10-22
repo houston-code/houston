@@ -7,6 +7,7 @@ import { getTool, builtinToolset, type ToolContext } from '../tools'
 import { LspManager } from './manager'
 import { applyTextEdits, hoverText, locateSymbol, renameHunks, workspaceEditFiles, LSP_TOOL_NAMES } from './tools'
 import { parsePatch } from '../apply-patch'
+import { toUri } from './uri'
 import { resolveEdit } from '../edit-match'
 import type { LspServerConfig } from '@shared/types'
 
@@ -202,9 +203,11 @@ describe('rename edits', () => {
   })
 
   it('reads documentChanges and refuses file operations', () => {
-    const uri = 'file:///w/a.ts'
-    expect(workspaceEditFiles({ documentChanges: [{ textDocument: { uri, version: 1 }, edits: [edit(0, 0, 1, 'x')] }] }).get('/w/a.ts')).toHaveLength(1)
-    expect(() => workspaceEditFiles({ documentChanges: [{ kind: 'rename', oldUri: uri, newUri: 'file:///w/b.ts' }] })).toThrow(/rename a file/)
+    // Built from a platform path: a drive-less file:///w/... URI names no local file on Windows.
+    const abs = join(root, 'a.ts')
+    const uri = toUri(abs)
+    expect(workspaceEditFiles({ documentChanges: [{ textDocument: { uri, version: 1 }, edits: [edit(0, 0, 1, 'x')] }] }).get(abs)).toHaveLength(1)
+    expect(() => workspaceEditFiles({ documentChanges: [{ kind: 'rename', oldUri: uri, newUri: toUri(join(root, 'b.ts')) }] })).toThrow(/rename a file/)
     expect(() => workspaceEditFiles({ changes: { 'untitled:1': [edit(0, 0, 1, 'x')] } })).toThrow(/can't edit/)
   })
 
