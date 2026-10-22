@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { aurSrcinfo, isReleaseVersion, renderAll, renderTemplate, validate } from './render-packaging.mjs'
 
 const params = { version: '1.2.3', sha256: 'a'.repeat(64) }
@@ -65,10 +68,15 @@ describe('renderAll', () => {
   // the same fields the way it would: the two files must agree, field for field.
   it.skipIf(process.platform === 'win32')('writes a PKGBUILD that bash reads back as the .SRCINFO', () => {
     const fields = ['pkgdesc', 'pkgver', 'pkgrel', 'url', 'arch', 'license', 'depends', 'provides', 'conflicts', 'source', 'sha256sums']
-    const script = `source /dev/stdin; ${fields
+    // A real file, not /dev/stdin: the Linux CI sandbox has no /dev/stdin.
+    const dir = mkdtempSync(join(tmpdir(), 'houston-pkgbuild-'))
+    const pkgbuild = join(dir, 'PKGBUILD')
+    writeFileSync(pkgbuild, out['aur/PKGBUILD'])
+    const script = `source "$1"; ${fields
       .map((f) => `for v in "\${${f}[@]}"; do printf '\\t%s = %s\\n' ${f} "$v"; done`)
       .join('; ')}`
-    const r = spawnSync('bash', ['-c', script], { input: out['aur/PKGBUILD'], encoding: 'utf8' })
+    const r = spawnSync('bash', ['-c', script, 'bash', pkgbuild], { encoding: 'utf8' })
+    rmSync(dir, { recursive: true, force: true })
     expect(r.stderr).toBe('')
     expect(`pkgbase = houston-bin\n${r.stdout}\npkgname = houston-bin\n`).toBe(out['aur/.SRCINFO'])
   })
