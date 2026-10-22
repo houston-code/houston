@@ -763,13 +763,15 @@ is `allow`; an unrecognized value is treated as `deny`.
 
 **Shell network.** Shell commands run in a sandbox with network off until the run
 is granted it, because the sandbox can read your whole filesystem.
-Interactively that grant is "Allow for run" on a shell command (or, under full
-auto, a one-time consent). `--on-approval allow` approves each command the way
+Interactively that grant is "Allow for run" on a shell command, or, under full
+auto, **Allow network for this chat** on the card Houston shows once a command
+fails for lack of network (commands that need no network never ask; Houston doesn't
+re-run the failed command itself). `--on-approval allow` approves each command the way
 plain "Allow" does, so under `ask` or `auto-edit` those commands still run
 offline. Pass `--allow-shell-network` to grant shell network for the run under
 any policy; granted traffic still goes through the egress allowlist. Under
-`full-auto`, `--on-approval allow` (its default) also answers the one-time
-consent with yes.
+`full-auto`, `--on-approval allow` (its default) also answers that card with yes
+when a command fails without network.
 
 ## Interactive terminal
 
@@ -1116,6 +1118,7 @@ src/
 │   │                   rules.ts: load project AGENTS.md / CLAUDE.md;
 │   │                   permissions.ts / approval.ts: rules and the approval gate;
 │   │                   untrusted.ts: the fence for outsider-written text;
+│   │                   lsp/: the language-server client and `lsp_*` tools;
 │   │                   evals/: task-level evals)
 │   ├── mcp/           MCP transports (stdio / streamable HTTP / SSE) + the
 │   │                  OAuth sign-in client for hosted servers (discovery,
@@ -1145,8 +1148,9 @@ the agent loop and UI never depend on a specific provider.
 - **Tool execution is sandboxed where the OS allows it.** `run_shell` runs under
   Seatbelt (`sandbox-exec`) on macOS and bubblewrap on Linux: filesystem reads
   allowed, writes restricted to the project + temp dirs, network denied until you
-  grant it (a one-time consent in *full auto*, "Allow for run" on a shell approval,
-  or `--allow-shell-network` on a headless run). Granted network is confined to a
+  grant it (in *full auto*, a once-per-chat card after a command first fails for lack
+  of network; "Allow for run" on a shell approval; or `--allow-shell-network` on a
+  headless run). Granted network is confined to a
   per-domain egress allowlist: direct sockets stay blocked and traffic flows through
   a local proxy that permits package registries, VCS hosts, and domains you add in
   Settings. Windows has no equivalent, so shell commands there run unconfined and
