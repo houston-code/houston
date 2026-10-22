@@ -1,0 +1,6 @@
+[
+  "read_file",
+  "glob",
+  "search_files",
+  "run_shell"
+]

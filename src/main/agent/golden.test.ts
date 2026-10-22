@@ -30,6 +30,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   AgentEvent,
+  AgentRunRequest,
   ChatMessage,
   ChatRequest,
   PlanDecision,
@@ -250,6 +251,8 @@ async function runScenario(opts: {
   unattended?: boolean
   /** Per-run setting overrides (the headless flags). */
   overrides?: RunSettingsOverrides
+  /** The headless automation fields (tool scope, appended prompt, output schema, announceTools). */
+  automation?: Pick<AgentRunRequest, 'toolScope' | 'appendSystemPrompt' | 'outputSchema' | 'announceTools'>
 }): Promise<ScenarioResult> {
   const requests: CapturedRequest[] = []
   h.provider = capturingProvider(opts.turns, requests)
@@ -278,6 +281,7 @@ async function runScenario(opts: {
       messages: [{ role: 'user', content: opts.userText ?? 'hello' }],
       ...(opts.unattended ? { unattended: true } : {}),
       ...(opts.overrides ? { overrides: opts.overrides } : {}),
+      ...(opts.automation ?? {}),
       ...(desktopClient ? { imageGallery: true } : {})
     },
     send
@@ -553,6 +557,41 @@ describe('agent behavior goldens', () => {
     })
     await expect(norm(r.requests[0].system)).toMatchFileSnapshot('goldens/system-prompt.headless.txt')
     await expect(transcript('headless', r)).toMatchFileSnapshot('goldens/transcript.headless.txt')
+  })
+
+  it('headless automation (scoped tools, appended prompt, output schema): pins the run sections and toolset', async () => {
+    // The flags a CI integration drives: --allowed-tools/--disallowed-tools narrow the
+    // toolset, --append-system-prompt and --output-schema add delimited prompt sections,
+    // and --json asks for the run_info event that feeds its init line.
+    configureCliBackends()
+    const r = await runScenario({
+      unattended: true,
+      automation: {
+        toolScope: {
+          allowed: [
+            { tool: 'read_file', match: '*' },
+            { tool: 'glob', match: '*' },
+            { tool: 'search_files', match: '*' },
+            { tool: 'run_shell', match: 'git *' }
+          ],
+          disallowed: [{ tool: 'run_shell', match: 'git push *' }]
+        },
+        appendSystemPrompt: 'Review only the files changed on this branch.',
+        outputSchema: {
+          type: 'object',
+          required: ['verdict'],
+          properties: { verdict: { enum: ['pass', 'fail'] }, notes: { type: 'string' } }
+        },
+        announceTools: true
+      },
+      turns: [[{ type: 'text', text: '{"verdict":"pass"}' }, doneTurn()]],
+      userText: 'Review the branch'
+    })
+    await expect(norm(r.requests[0].system)).toMatchFileSnapshot('goldens/system-prompt.headless-automation.txt')
+    await expect(JSON.stringify(r.requests[0].tools.map((t) => t.name), null, 2) + '\n').toMatchFileSnapshot(
+      'goldens/toolset.headless-automation.names.json'
+    )
+    await expect(transcript('headless-automation', r)).toMatchFileSnapshot('goldens/transcript.headless-automation.txt')
   })
 
   it('per-model request shape: reasoning/caching knobs and prompt addenda per family', async () => {

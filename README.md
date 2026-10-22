@@ -284,8 +284,10 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Headless mode.** Run one prompt without the GUI and stream the result to
   stdout: `Houston -p "<prompt>"` (read-only by default; add `--full-auto` to let
   it edit/run, `--json` for machine-readable events and a final summary line).
-  Per-run effort, turn and cost budgets, a verification command, and distinct exit
-  codes make it drivable from scripts, CI, and benchmark harnesses.
+  Per-run effort, turn and cost budgets, a verification command, tool scoping, a
+  JSON Schema for the final answer, multi-turn input over stdin, a versioned event
+  schema, and distinct exit codes make it drivable from scripts, CI, and benchmark
+  harnesses.
   See [Headless / scripting](#headless--scripting).
 - **Interactive terminal.** A stay-resident REPL in your terminal: `Houston -i`.
   Conversation streams live, tool approvals and questions are answered inline, and
@@ -604,6 +606,14 @@ Houston -p "List the TODOs" --json
 # harness / CI: prompt on stdin, per-run budgets, and a check the agent must pass
 cat task.md | Houston -p - --full-auto --json --effort high --max-turns 60 --max-cost 5 --verify "npm test"
 
+# CI review: read-only tools plus git, an extra instruction, and a typed answer
+Houston -p "Review this branch" --json --allowed-tools 'read_file,glob,search_files,run_shell(git *)' \
+  --append-system-prompt @.github/review-rules.md --output-schema review.schema.json
+
+# drive several turns from another program, one JSON line per prompt
+printf '%s\n' '{"type":"user","content":"Find the flaky test"}' '{"type":"user","content":"Now fix it"}' \
+  | Houston --input-format stream-json --json --full-auto
+
 # continue the last session in this folder, then take over interactively
 Houston -p "Now add tests for it" --continue
 Houston -i   # /resume picks up the same conversation
@@ -621,9 +631,42 @@ limit) to stderr, and the exit code says how the run ended (below). It
 reuses your saved settings and stored API keys. Each run is saved as a
 conversation (shared with the app and the interactive `-i` session), so you can
 script a prompt and then take over where it left off. The run prints its session
-id (`· session <id>` on stderr, or a `{"type":"session","conversationId":…}` line
-first in `--json`) so a script can capture it and `--resume <id>` that exact
+id (`· session <id>` on stderr, or in `--json` on the init line and a
+`{"type":"session","conversationId":…}` line right after it) so a script can capture it and `--resume <id>` that exact
 session later.
+
+**Automation flags.** For CI and other programs driving Houston:
+
+- `--allowed-tools <list>` / `--disallowed-tools <list>`: restrict the tools this run
+  can use. A list is comma-separated; each entry is a tool name (`read_file`), a name
+  ending in `*` (`mcp__github__*`), or a name with a permission-rule pattern
+  (`run_shell(git *)`, `write_file(src/**)`), matched like a permission rule. The
+  model is offered only the tools in scope, and a call outside the scope is refused
+  under every policy, `full-auto` included. When both lists cover a call, it is
+  refused. The scope only narrows: a call inside it still needs whatever approval
+  the policy and your rules require. An unknown built-in tool name exits 2, so a
+  typo can't leave a tool unrestricted.
+- `--append-system-prompt <text|@file>`: add instructions to the system prompt for
+  this run, in their own clearly marked section. Repeat it to add more.
+- `--output-schema <file|json>`: a JSON Schema the final answer must match. The
+  agent is told to end with only that JSON; Houston checks it, and if it doesn't
+  match, gives the agent one more round to correct it. With `--json`, the parsed
+  value is the result line's `structured_output`; if it still doesn't match, the
+  run exits 4 and the result line lists `schemaErrors`. Schemas use draft 2020-12
+  keywords; one that uses a keyword Houston can't check (such as
+  `unevaluatedProperties` or a remote `$ref`) exits 2 instead of being half-applied.
+- `--mcp-config <file>`: add MCP servers for this run only. The file has the same
+  shape as the `mcpServers` list in `.houston/settings.json`, holds at most 10
+  servers, and their tools are named `mcp__run-<id>__<tool>`. The servers are
+  never saved to your settings.
+- `--input-format stream-json`: read prompts from stdin, one
+  `{"type":"user","content":"..."}` line per turn. Each line starts a turn once
+  the previous one has finished, and end of input ends the session. It needs
+  `--json`, and replaces `-p`. Each turn ends with its own result line; the exit
+  code is that of the first turn that didn't succeed (0 if all did), and a line
+  that isn't valid input ends the session with exit 2.
+
+Relative paths in these flags are read from the directory you run Houston in.
 
 **Prompt from stdin.** `-p -` reads the prompt from stdin, and so does a `-p` with
 no value when input is piped in (`cat task.md | Houston -p --json`), which keeps a
@@ -646,21 +689,39 @@ are never written back:
 A value a flag can't take (`--max-turns 0`, `--effort max`, an empty `--verify`)
 exits 2 before anything runs, rather than running without the budget you meant.
 
-**`--json` result line.** After one JSON line per agent event, the last line is a
-summary a harness can read without folding the stream itself:
+**`--json` output.** The first line describes the run, so a harness can check its
+setup and the contract version before reading anything else:
 
 ```json
-{"type":"result","status":"success","stopReason":"end_turn","turns":7,"costUsd":0.0412,"inputTokens":51234,"outputTokens":2210,"durationMs":48120,"finalText":"Fixed the off-by-one in utils/date.ts and the suite passes."}
+{"type":"system","subtype":"init","schemaVersion":1,"houstonVersion":"0.9.0","cwd":"/home/ci/repo","providerId":"anthropic","model":"claude-sonnet-5","approvalPolicy":"plan","onApproval":"deny","inputFormat":"text","conversationId":"…","tools":["read_file","glob","search_files","run_shell"],"allowedTools":["read_file","glob","search_files","run_shell(git *)"],"outputSchema":true}
 ```
 
-`status` is `success`, `limit`, `stalled`, `approval_denied`, or `error`.
+A `{"type":"session","conversationId":…}` line follows when the run is saved,
+then one JSON line per agent event, then a summary a harness can read without
+folding the stream itself:
+
+```json
+{"type":"result","schemaVersion":1,"status":"success","stopReason":"end_turn","turns":7,"costUsd":0.0412,"inputTokens":51234,"outputTokens":2210,"durationMs":48120,"finalText":"Fixed the off-by-one in utils/date.ts and the suite passes."}
+```
+
+Every line is described by the JSON Schema in
+[docs/schemas/headless-events.schema.json](docs/schemas/headless-events.schema.json).
+`schemaVersion` changes only when a field is removed, renamed, or changes meaning;
+new optional fields and new event types can appear in the same version, so ignore
+what you don't recognize.
+
+`status` is `success`, `limit`, `stalled`, `approval_denied`, `error`,
+`schema_invalid` (the answer never matched `--output-schema`), or `input_error` (a
+bad `--input-format stream-json` line).
 `limitReason` (`max-steps`, `max-output`, or `stalled`) is present when the loop
 stopped short. `turns` counts the agent's model steps (the unit `--max-turns`
 caps); `costUsd` and the token totals include subagent and review rounds.
 `finalText` is the agent's closing answer: the text it wrote after its last tool
 call. `receipt`, present when the run ran checks or changed files, is Houston's own
 record of what actually ran (see [Turn receipts](#features)). A run that fails before it starts (no model configured) still ends with a
-result line; a usage error (exit 2) prints only to stderr.
+result line, with `error` saying why; a usage error (exit 2) prints only to stderr.
+With `--output-schema`, the result line also carries `structured_output` (the
+matching value) or `schemaErrors` (why it didn't match).
 
 **Exit codes.**
 
@@ -668,8 +729,9 @@ result line; a usage error (exit 2) prints only to stderr.
 | --- | --- | --- |
 | 0 | The agent finished on its own. | `success` |
 | 1 | The run failed: an error or an aborted run, a stalled agent, or a call refused under `--on-approval fail`. | `error`, `stalled`, `approval_denied` |
-| 2 | Usage error: a bad flag value, or an empty prompt on stdin. Nothing ran. | (no result line) |
+| 2 | Usage error: a bad flag value, an unreadable flag file, or an empty prompt on stdin (nothing ran); or a bad `--input-format stream-json` line. | (no result line), `input_error` |
 | 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit) or the model's output limit. | `limit` |
+| 4 | The final answer still didn't match `--output-schema` after one corrective round. | `schema_invalid` |
 
 When several apply, a failure wins over a budget stop. The outcome of a
 `--verify` check doesn't change the code; in `--json` mode each check is a

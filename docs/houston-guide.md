@@ -51,17 +51,41 @@ ships as a desktop app and as terminal clients.
     `--verify <command>` runs that command when the agent stops after editing
     files and sends a failure back for a bounded fix-up pass (it needs a policy
     that can edit, such as `--full-auto`). A bad value exits 2 before anything runs.
-  - **`--json` result line.** After one JSON line per agent event, the last line
-    is a summary: `{"type":"result", "status", "stopReason", "limitReason"?,
-    "turns", "costUsd", "inputTokens", "outputTokens", "durationMs", "finalText",
-    "receipt"?}`. `status` is `success`, `limit`, `stalled`, `approval_denied`, or
-    `error`; `finalText` is the agent's closing answer (the text after its last tool
-    call); `receipt` is Houston's record of what the run actually ran (see "What
-    actually ran"), present when it ran checks or changed files.
+  - **Automation flags.** `--allowed-tools <list>` and `--disallowed-tools <list>`
+    restrict the run's tools: comma-separated tool names (`read_file`), names
+    ending in `*` (`mcp__github__*`), or names with a permission-rule pattern
+    (`run_shell(git *)`). Tools out of scope aren't offered, and a call out of scope
+    is refused under every policy, `full-auto` included; disallowed wins over
+    allowed. The scope only narrows: an allowed call still needs whatever approval
+    the policy and rules require. `--append-system-prompt <text|@file>` adds
+    instructions for the run in their own marked section of the system prompt.
+    `--output-schema <file|json>` makes the final answer a JSON value matching that
+    JSON Schema: Houston checks it and gives the agent one round to correct a miss.
+    `--mcp-config <file>` adds MCP servers for this run only (the `mcpServers` shape
+    of `.houston/settings.json`, at most 10; their tools are named
+    `mcp__run-<id>__<tool>`). `--input-format stream-json` (with `--json`) reads one
+    `{"type":"user","content":"..."}` line per turn from stdin, each turn starting
+    after the previous one finishes, until end of input.
+  - **`--json` output.** The first line is `{"type":"system","subtype":"init",
+    "schemaVersion", "houstonVersion", "cwd", "providerId", "model",
+    "approvalPolicy", "onApproval", "inputFormat", "tools"?, ...}`; then a
+    `session` line when the run is saved; then one JSON line per agent event; then
+    a summary (one per turn with stream-json input): `{"type":"result",
+    "schemaVersion", "status", "stopReason", "limitReason"?, "turns", "costUsd",
+    "inputTokens", "outputTokens", "durationMs", "finalText", "receipt"?,
+    "structured_output"?, "schemaErrors"?, "error"?}`. `status` is `success`,
+    `limit`, `stalled`, `approval_denied`, `error`, `schema_invalid`, or
+    `input_error`; `finalText` is the agent's closing answer (the text after its
+    last tool call); `receipt` is Houston's record of what the run actually ran
+    (see "What actually ran"), present when it ran checks or changed files;
+    `structured_output` is the answer parsed against `--output-schema`. Every line
+    is described by `docs/schemas/headless-events.schema.json` in the repository.
   - **Exit codes.** 0: the agent finished on its own. 1: an error or aborted run,
     a stalled agent, or a call refused under `--on-approval fail`. 2: a usage
-    error (a bad flag value, or an empty prompt on stdin); nothing ran. 3: the run
-    hit a budget before finishing (its step cap or the model's output limit).
+    error (a bad flag value, an unreadable flag file, or an empty prompt on stdin;
+    nothing ran), or a bad stream-json input line. 3: the run hit a budget before
+    finishing (its step cap or the model's output limit). 4: the final answer
+    still didn't match `--output-schema` after the corrective round.
 - **Standalone CLI.** The same `-p` and `-i` clients as a single self-contained
   Node script, with no desktop app and no browser engine. Runs on headless Linux
   servers; API keys come from environment variables.

@@ -246,7 +246,7 @@ export interface Provider {
 
 // ---- Agent run protocol (main <-> renderer) ----
 
-import type { ApprovalPolicy } from './types'
+import type { ApprovalPolicy, McpServerConfig } from './types'
 import type { ImageAttachment } from './images'
 
 /**
@@ -665,6 +665,37 @@ export interface AgentRunRequest {
    * render_mockup, whose images are never files, needs imageGallery.
    */
   imageLinks?: boolean
+  /**
+   * The headless `--allowed-tools` / `--disallowed-tools` scope. It only narrows:
+   * a call outside it is refused, and a call inside it still goes through the
+   * permission rules and approval policy (see toolScope.ts).
+   */
+  toolScope?: ToolScope
+  /** The headless `--append-system-prompt` text, added to the system prompt in its own section. */
+  appendSystemPrompt?: string
+  /**
+   * The headless `--output-schema`: a JSON Schema the run's final answer must
+   * match. The system prompt asks for a final message that is only that JSON;
+   * the client validates it (the loop doesn't).
+   */
+  outputSchema?: Record<string, unknown>
+  /** MCP servers for this run only (the headless `--mcp-config`), on top of the configured ones. */
+  extraMcpServers?: McpServerConfig[]
+  /** Emit a `run_info` event once the run's toolset is assembled (headless `--json`). */
+  announceTools?: boolean
+}
+
+/** One `--allowed-tools` / `--disallowed-tools` entry: a tool name (or `*` glob) and a rule pattern. */
+export interface ToolScopeEntry {
+  tool: string
+  /** A permission-rule pattern over the call's subject; `*` covers every call of the tool. */
+  match: string
+}
+
+/** A run's tool scope. `allowed` absent means every tool; `disallowed` always wins. */
+export interface ToolScope {
+  allowed?: ToolScopeEntry[]
+  disallowed?: ToolScopeEntry[]
 }
 
 /**
@@ -1195,6 +1226,12 @@ export type AgentEvent =
        */
       perModel?: ModelUsage[]
     }
+  /**
+   * The tools this run offers the model, once they are assembled (built-ins and
+   * connected MCP tools, after the run's tool scope). Sent only when the request
+   * sets `announceTools`, which the headless `--json` client does for its init line.
+   */
+  | { runId: string; type: 'run_info'; tools: string[] }
   | { runId: string; type: 'done'; stopReason: StopReason }
   | {
       runId: string
