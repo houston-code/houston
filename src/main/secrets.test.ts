@@ -59,6 +59,7 @@ import {
   initSecrets,
   isWeakEncryptionBackend,
   mcpOAuthKeyId,
+  refreshSecretsFromDisk,
   setCredential,
   setKey,
   secureStorageStatus,
@@ -501,5 +502,86 @@ describe('async persistence', () => {
     expect(() => fresh.setKey('anthropic', 'sk-x')).toThrow(/restart Houston/i)
     await fresh.initSecrets()
     expect(fresh.getKey('anthropic')).toBe('sk-test')
+  })
+})
+
+// The desktop app and a terminal session each hold a vault over the same file. These
+// stand in for the other process by writing the file directly, as it would.
+describe('changes made by another Houston process', () => {
+  const cipher = (plaintext: string): string => Buffer.from(`v1:${plaintext}`, 'utf8').toString('base64')
+  const otherProcessWrites = (mutate: (f: { keys: Record<string, string>; headers?: Record<string, string> }) => void): void => {
+    const path = join(state.userData, 'secrets.json')
+    const file = existsSync(path) ? rawFile() : { keys: {} }
+    mutate(file)
+    writeFileSync(path, JSON.stringify(file))
+  }
+
+  it('picks up a key saved, rotated, or deleted in the other process', async () => {
+    setKey('openai', 'sk-mine-1234')
+    await flushSecrets()
+    otherProcessWrites((f) => {
+      f.keys.anthropic = cipher(JSON.stringify({ type: 'api-key', key: 'sk-theirs-5678' }))
+    })
+    await refreshSecretsFromDisk()
+    expect(getKey('anthropic')).toBe('sk-theirs-5678')
+    expect(getKey('openai')).toBe('sk-mine-1234')
+    expect(collectSecretValues()).toContain('sk-theirs-5678')
+
+    otherProcessWrites((f) => {
+      f.keys.anthropic = cipher(JSON.stringify({ type: 'api-key', key: 'sk-rotated-9999' }))
+      delete f.keys.openai
+    })
+    await refreshSecretsFromDisk()
+    expect(getKey('anthropic')).toBe('sk-rotated-9999')
+    expect(getKey('openai')).toBeNull()
+    expect(collectSecretValues()).not.toContain('sk-theirs-5678')
+  })
+
+  it('sees an MCP refresh token the other process rotated, and headers it saved', async () => {
+    const tokens = { access: 'access-one-xxxxx', refresh: 'refresh-one-xxxx', clientId: 'c', tokenEndpoint: 'https://as/token' }
+    setMcpOAuthTokens('srv', tokens)
+    await flushSecrets()
+    otherProcessWrites((f) => {
+      f.keys[mcpOAuthKeyId('srv')] = cipher(
+        JSON.stringify({ type: 'oauth', ...tokens, access: 'access-two-xxxxx', refresh: 'refresh-two-xxxx' })
+      )
+      f.headers = { ...(f.headers ?? {}), 'mcp:srv': cipher(JSON.stringify({ 'x-api-key': 'k' })) }
+    })
+    await refreshSecretsFromDisk()
+    expect(getMcpOAuthTokens('srv')).toMatchObject({ access: 'access-two-xxxxx', refresh: 'refresh-two-xxxx' })
+    expect(getSecretHeaders('mcp:srv')).toEqual({ 'x-api-key': 'k' })
+  })
+
+  it("never lets the other process's older copy replace a write still on its way to disk", async () => {
+    otherProcessWrites((f) => {
+      f.keys.anthropic = cipher(JSON.stringify({ type: 'api-key', key: 'sk-old-on-disk' }))
+    })
+    setKey('anthropic', 'sk-new-in-memory') // queued, not yet written
+    await refreshSecretsFromDisk()
+    expect(getKey('anthropic')).toBe('sk-new-in-memory')
+    await flushSecrets()
+    await refreshSecretsFromDisk()
+    expect(getKey('anthropic')).toBe('sk-new-in-memory')
+  })
+
+  it('checks the file from the getters, at most once a second', async () => {
+    const base = Date.now() + 10_000_000 // past any check an earlier test made
+    const now = vi.spyOn(Date, 'now').mockReturnValue(base)
+    try {
+      getKey('anthropic') // checks, finds nothing new
+      otherProcessWrites((f) => {
+        f.keys.anthropic = cipher(JSON.stringify({ type: 'api-key', key: 'sk-from-the-app' }))
+      })
+      now.mockReturnValue(base + 500)
+      getKey('anthropic') // within the second: not even a stat
+      await new Promise((r) => setTimeout(r, 10))
+      expect(getKey('anthropic')).toBeNull()
+      now.mockReturnValue(base + 1_500)
+      expect(getKey('anthropic')).toBeNull() // notices the change, re-syncs in the background
+      await new Promise((r) => setTimeout(r, 10))
+      expect(getKey('anthropic')).toBe('sk-from-the-app')
+    } finally {
+      now.mockRestore()
+    }
   })
 })

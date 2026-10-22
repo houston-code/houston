@@ -26,6 +26,11 @@ on:
   # N sequential rebase-and-full-CI cycles. The queue keeps the same guarantee (the tree
   # that is tested is the tree that lands) while doing the sequencing itself.
   merge_group:
+  # Nightly on main: the full package matrix, including the macOS Intel leg that PRs and
+  # queue candidates no longer run (scripts/ci-plan.mjs says why), and a refresh of the
+  # main-scoped package caches, which those legs save on a miss.
+  schedule:
+    - cron: '17 7 * * *'
   # Release - prepare calls this workflow as its verification gate, so a release is cut only
   # from a tree that passes exactly what a PR must pass. It passes the exact commit the
   # release is cut from (`ref`: for a patch, a release line's commit, not main's), and
@@ -173,22 +178,77 @@ jobs:
       # active, so even a subtle probe/selection mismatch fails the job.
       - run: HOUSTON_REQUIRE_SANDBOX=1 npx vitest run src/main/sandbox/conformance.test.ts
 
-  # Package the app on every platform it ships on, each on its own runner (cross-compilation
+  # Which `package` legs this run needs, and whether a push must refresh the package caches.
+  # The policy and its reasons live in scripts/ci-plan.mjs (unit-tested); this job only
+  # feeds it the event, the PR's labels, and the files the run changes. It cannot skip a
+  # required check: `test`, `linux-sandbox` and `revert-guard` never read it, and `build`
+  # fails unless this job succeeded and `package` did exactly what it planned.
+  plan:
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    outputs:
+      package: ${{ steps.plan.outputs.package }}
+      package-matrix: ${{ steps.plan.outputs.package-matrix }}
+      warm-caches: ${{ steps.plan.outputs.warm-caches }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+          # A PR's HEAD is refs/pull/N/merge, so HEAD^1 is its base and the diff is the PR.
+          fetch-depth: 2
+      # Against what lands: a PR's merge into its base, a queue candidate against the main it
+      # was built on (so the PRs ahead of it count too), a push against main before it. Any
+      # failure leaves the list out, and the plan then assumes everything changed.
+      - name: List the files this run changes
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          case "$EVENT" in
+            pull_request) base=HEAD^1 ;;
+            merge_group) base="$QUEUE_BASE" ;;
+            push) base="$PUSH_BEFORE" ;;
+            *) exit 0 ;;
+          esac
+          if [ "$EVENT" != pull_request ]; then
+            git fetch --no-tags --depth=1 origin "$base" || exit 0
+          fi
+          files="$RUNNER_TEMP/changed-files.txt"
+          git diff --name-only "$base" HEAD > "$files" || exit 0
+          echo "changed files: $(wc -l < "$files")"
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+      - name: Plan
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          FILES_FROM: ${{ steps.diff.outputs.files }}
+        run: node scripts/ci-plan.mjs >> "$GITHUB_OUTPUT"
+
+  # Package the app on the platforms it ships on, each on its own runner (cross-compilation
   # is impossible: native node-pty + per-(os,arch) rg/ast-grep binaries), and run the
   # platform-specific suites there:
-  #   - Every non-Linux leg runs the full unit suite (Linux runs it in `test`): both macOS
-  #     legs against the real Seatbelt sandbox backend, Windows against its own backend
-  #     (Git Bash) and its path and permission semantics.
-  #   - Both macOS legs run the packaged-app e2e (Playwright driving the built .app), the
-  #     only check that the asar archive, the afterPack vendored binaries, and the
-  #     main/preload/renderer bridge work together in the real artifact.
-  # Same matrix as release-prepare.yml / release-publish.yml, minus signing and publishing.
+  #   - Every non-Linux leg runs the full unit suite (Linux runs it in `test`): macOS against
+  #     the real Seatbelt sandbox backend, Windows against its own backend (Git Bash) and its
+  #     path and permission semantics.
+  #   - macOS runs the packaged-app e2e (Playwright driving the built .app), the only check
+  #     that the asar archive, the afterPack vendored binaries, and the main/preload/renderer
+  #     bridge work together in the real artifact.
+  # Which legs run is `plan`'s call: Linux on a PR (all four with the `full-ci` label),
+  # Linux + macOS arm64 + Windows on a queue candidate, all four nightly, none for a
+  # prose-only change. The legs themselves (runner labels, dist scripts) are LEGS in
+  # scripts/ci-plan.mjs, the same matrix as release-prepare.yml / release-publish.yml.
   package:
     name: package (${{ matrix.target }})
+    needs: plan
     timeout-minutes: 45
     # Not on push:[main]. The merge-queue candidate already ran this on the exact tree
     # that landed, so a second macOS/Windows pass after the merge would only repeat it.
-    if: github.event_name != 'push' && !inputs.release
+    if: github.event_name != 'push' && !inputs.release && needs.plan.outputs.package == 'true'
     # Windows defaults `run:` steps to PowerShell; force bash for the whole matrix so a
     # bash step can't silently behave differently on the Windows leg.
     defaults:
@@ -202,28 +262,7 @@ jobs:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          # Pinned to ubuntu-22.04 (NOT ubuntu-latest): the native node-pty addon is compiled
-          # here, so the runner's glibc sets the shipped app's minimum glibc. 22.04 = glibc
-          # 2.35, our documented Linux floor (README). Keep in lockstep with the Linux legs in
-          # release-prepare.yml / release-publish.yml so CI == shipped.
-          - target: linux-x64
-            os: ubuntu-22.04
-            dist: dist:linux
-          - target: mac-arm64
-            os: macos-15
-            dist: dist:mac
-          # macos-15-intel is GitHub's Intel (x64) runner, the only place the x64 mac app
-          # builds natively. GitHub sunsets x64 macOS runners after macos-15 (~Fall 2027), at
-          # which point Intel needs a universal-on-arm64 build or gets dropped. Keep this label
-          # in lockstep with the release workflows' Intel legs.
-          - target: mac-x64
-            os: macos-15-intel
-            dist: dist:mac:x64
-          - target: win-x64
-            os: windows-2025
-            dist: dist:win
+      matrix: ${{ fromJSON(needs.plan.outputs.package-matrix) }}
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -289,19 +328,24 @@ jobs:
             release/latest*.yml
           if-no-files-found: error
 
-
   # Refresh the package legs' dependency caches from main. A cache saved by a PR or a
   # merge-queue run is scoped to that ref and no other PR can restore it, and `package`
-  # (the only job on these runners) doesn't run on push. So without this, every new PR
-  # started these legs cold: a full npm download, the Electron runtime and headers, and
-  # electron-builder's tools, about 3 minutes of npm ci alone on Windows. A main-scoped
-  # entry is readable by every PR. It packages too, because electron-builder fetches its
-  # tools (NSIS, dmg-builder) only while packaging, and a cache is saved only on a miss.
+  # doesn't run on push. So without this, every new PR started these legs cold: a full npm
+  # download, the Electron runtime and headers, and electron-builder's tools, about 3
+  # minutes of npm ci alone on Windows. A main-scoped entry is readable by every PR. It
+  # packages too, because electron-builder fetches its tools (NSIS, dmg-builder) only while
+  # packaging, and a cache is saved only on a miss.
   # Linux is included: `test` runs on push too, but it only installs, so it caches the
   # npm downloads and Electron headers, not what packaging needs.
+  #
+  # Only on a push that changes what the caches hold (`plan`: the lockfile they are keyed
+  # on, .nvmrc, the setup action, electron-builder.yml). Any other merge hits the existing
+  # entries, saves nothing, and would only hold a macOS runner the queue needs. The nightly
+  # run's package legs save on a miss too, which covers the Intel leg left out here.
   warm-caches:
     name: warm-caches (${{ matrix.target }})
-    if: github.event_name == 'push'
+    needs: plan
+    if: github.event_name == 'push' && needs.plan.outputs.warm-caches == 'true'
     timeout-minutes: 30
     defaults:
       run:
@@ -318,9 +362,6 @@ jobs:
           - target: mac-arm64
             os: macos-15
             dist: dist:mac
-          - target: mac-x64
-            os: macos-15-intel
-            dist: dist:mac:x64
           - target: win-x64
             os: windows-2025
             dist: dist:win
@@ -390,37 +431,51 @@ jobs:
   # a skipped required check reports a PASS, so without it a red macOS leg would let the PR
   # merge. Here the job runs whenever the run itself was not cancelled, and fails unless
   # every dependency actually succeeded (a skipped or cancelled dependency fails it too).
+  # The one allowed skip is `package` when `plan` succeeded and planned no legs (a
+  # prose-only change); a `package` skipped for any other reason, or a failed `plan`, fails.
   # It is not `always()`: when the concurrency group cancels a superseded run (Dependabot
   # opens and labels a PR in the same second), `always()` ran this job anyway and posted a
   # red `build` that kept the PR blocked after the newer run went green.
   build:
-    needs: [package, sbom-conformance, workflow-lint]
+    needs: [plan, package, sbom-conformance, workflow-lint]
     if: ${{ !cancelled() && github.event_name != 'push' && !inputs.release }}
     timeout-minutes: 5
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every platform leg, the SBOM gate, and workflow-lint to pass
+      - name: Require the planned platform legs, the SBOM gate, and workflow-lint to pass
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
+          PLAN: ${{ needs.plan.result }}
+          PACKAGE_PLANNED: ${{ needs.plan.outputs.package }}
+          PACKAGE: ${{ needs.package.result }}
+          SBOM: ${{ needs.sbom-conformance.result }}
+          LINT: ${{ needs.workflow-lint.result }}
         run: |
-          echo "dependency results: $RESULTS"
-          for r in $RESULTS; do
-            [ "$r" = success ] || { echo "::error::a package leg, the SBOM gate, or workflow-lint did not succeed ($r)"; exit 1; }
+          echo "plan=$PLAN (package planned: $PACKAGE_PLANNED) package=$PACKAGE sbom-conformance=$SBOM workflow-lint=$LINT"
+          for r in "$PLAN" "$SBOM" "$LINT"; do
+            [ "$r" = success ] || { echo "::error::plan, the SBOM gate, or workflow-lint did not succeed ($r)"; exit 1; }
           done
+          if [ "$PACKAGE_PLANNED" = false ]; then
+            [ "$PACKAGE" = skipped ] || { echo "::error::no package legs were planned, but package reported $PACKAGE"; exit 1; }
+            echo "No package legs planned: the change touches only prose that never ships."
+          else
+            [ "$PACKAGE" = success ] || { echo "::error::a package leg did not succeed ($PACKAGE)"; exit 1; }
+          fi
 
-  # Post-merge alert. Queue merges are pushed by github-merge-queue[bot], so GitHub's own
-  # failure notification for this run reaches no one, and a broken main would stay silent.
-  # Files (or closes) one issue through the same reusable alert the scheduled workflows use.
+  # Post-merge and nightly alert. Queue merges are pushed by github-merge-queue[bot] and a
+  # scheduled run's actor is whoever last touched this file, so GitHub's own failure
+  # notification reaches no one reliably and a broken main would stay silent. Files (or
+  # closes) one issue per kind of run through the same reusable alert the scheduled
+  # workflows use. `build` is skipped on push and carries the package legs nightly.
   alert:
-    needs: [test, linux-sandbox]
+    needs: [test, linux-sandbox, build]
     if: >-
-      always() && github.event_name == 'push'
+      always() && (github.event_name == 'push' || github.event_name == 'schedule')
       && !cancelled() && !contains(needs.*.result, 'cancelled')
     uses: ./.github/workflows/alert-on-failure.yml
     permissions:
       issues: write
     with:
-      workflow: CI on main
+      workflow: ${{ github.event_name == 'schedule' && 'CI nightly' || 'CI on main' }}
       failed: ${{ contains(needs.*.result, 'failure') }}
 
   # Silent-clobber guard. A PR branched off an out-of-date main can, when merged,

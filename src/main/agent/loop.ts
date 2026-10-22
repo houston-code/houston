@@ -91,6 +91,7 @@ import {
   abortableSleep,
   describeProviderError,
   isModelNotFoundError,
+  isQuotaExhaustedError,
   isRetryableError,
   isToolsUnsupportedError,
   MAX_PROVIDER_RETRIES,
@@ -1509,6 +1510,9 @@ export async function startRun(
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {})
         })
+        // Register the resolver before emitting: a host that answers inside its
+        // send callback (headless) would otherwise resolve a prompt nobody awaits.
+        const approval = waitForApproval(run, subCallId)
         emit({
           type: 'tool_approval',
           callId: subCallId,
@@ -1521,7 +1525,7 @@ export async function startRun(
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
           ...(sensitiveWrite ? { sensitiveWrite: true } : {})
         })
-        const { decision, note } = await waitForApproval(run, subCallId)
+        const { decision, note } = await approval
         run.pendingApprovals.delete(subCallId)
         const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell)
         if (!approved) {
@@ -2828,7 +2832,12 @@ export async function startRun(
             // to another model would fail the same way and just burn the chain. A
             // partial turn doesn't stop the hop: it is retracted first, exactly as
             // for a retry on the same model, so two models' output is never spliced.
-            if (isRetryableError(e) && hopToFallback((e as Error).message, discardPartial)) {
+            // An exhausted quota is final for this account but not for another
+            // provider's, so it hops too.
+            if (
+              (isRetryableError(e) || isQuotaExhaustedError(e)) &&
+              hopToFallback((e as Error).message, discardPartial)
+            ) {
               sendMessages = buildWindow()
               attempt = -1 // fresh transient-retry budget for the new model
               continue streaming
@@ -3506,6 +3515,9 @@ export async function startRun(
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })
+              // Registered before the emit so a synchronous answer (headless resolves
+              // inside its send callback) finds the resolver instead of being dropped.
+              const approval = waitForApproval(run, call.id)
               emit({
                 type: 'tool_approval',
                 callId: call.id,
@@ -3520,7 +3532,7 @@ export async function startRun(
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
                 ...(sensitiveWrite ? { sensitiveWrite: true } : {})
               })
-              const { decision, note: denyGuidance } = await waitForApproval(run, call.id)
+              const { decision, note: denyGuidance } = await approval
               // Resolved (or cancelled) — it's no longer awaiting the user.
               run.pendingApprovals.delete(call.id)
               approvalNote = denyGuidance

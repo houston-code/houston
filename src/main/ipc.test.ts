@@ -106,7 +106,13 @@ import {
   turnFingerprint
 } from './agent/checkpoints'
 import { setUserDataDir } from './userData'
-import { createConversation, getConversation, setMessages } from './conversations'
+import {
+  createConversation,
+  deleteConversation,
+  forkConversation,
+  getConversation,
+  setMessages
+} from './conversations'
 import { configureHasKey, updateSettings } from './store'
 
 // registerIpc wires the scheduler, whose store lives under the profile directory.
@@ -195,6 +201,8 @@ describe('conversationDelete dialog', () => {
     expect((await del(conv.id)).deleted).toBe(false)
     expect(h.removeWorktree).not.toHaveBeenCalled()
     expect(getConversation(conv.id)).not.toBeNull()
+    // Leave no chat behind on this worktree: a later test would see it as shared.
+    deleteConversation(conv.id)
   })
 
   it('still offers keep/remove for a worktree with work in it', async () => {
@@ -207,6 +215,27 @@ describe('conversationDelete dialog', () => {
     expect(opts.detail).not.toMatch(/—/)
     expect(h.removeWorktree).not.toHaveBeenCalled()
     expect(res.deleted).toBe(true)
+  })
+
+  it('never removes a worktree a fork still uses, even a clean one', async () => {
+    const shared = { ...wt, path: '/repo/.houston/worktrees/shared', branch: 'shared' }
+    const source = createConversation({ workspace: shared.path, providerId: 'p', model: 'm', worktree: shared })
+    const fork = forkConversation(source.id)!
+    h.isWorktreeDisposable.mockResolvedValue(true)
+    h.showMessageBox.mockResolvedValue({ response: 1 })
+    const res = await del(fork.id)
+    const opts = h.showMessageBox.mock.calls[0][1] as { buttons: string[]; detail: string }
+    expect(opts.buttons).toEqual(['Cancel', 'Delete'])
+    expect(opts.detail).toMatch(/stays, because another chat still uses it/)
+    expect(opts.detail).not.toMatch(/—/)
+    expect(h.removeWorktree).not.toHaveBeenCalled()
+    expect(res).toEqual({ deleted: true, worktree: null })
+    expect(getConversation(source.id)?.worktree).toEqual(shared)
+
+    // With the fork gone, the source is the worktree's last chat again.
+    h.showMessageBox.mockClear()
+    await del(source.id)
+    expect(h.removeWorktree).toHaveBeenCalledWith(shared)
   })
 
   it('does not probe git for a chat without a worktree', async () => {

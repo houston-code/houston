@@ -858,12 +858,14 @@ Every PR runs a dependency license gate (`npm run license-gate`, which fails the
 any package in the installed tree carries AGPL or another copyleft/source-available
 license, which is incompatible with redistributing Houston under Apache-2.0, and holds
 everything that ships to a permissive allowlist), the unit gate (lint + typecheck +
-vitest), the real bubblewrap sandbox exercise, and the full packaging matrix: Linux x64,
-macOS arm64, macOS x64 (Intel), and Windows x64, each packaging on its own runner. The
-macOS legs also smoke-test the packaged app with Playwright. Each leg uploads its build as
-an inspection-only artifact (`houston-linux-x64` / `houston-mac-arm64` / `houston-mac-x64`
-/ `houston-win-x64`, 3-day retention), so you can grab a PR's build from the **Actions**
-tab without building locally. A release is checked the same way before its release PR opens
+vitest), the real bubblewrap sandbox exercise, and Linux x64 packaging. The merge queue
+adds macOS arm64 and Windows x64 before anything lands, and a nightly run (or the `full-ci`
+label on a PR) adds macOS x64 (Intel), each packaging on its own runner
+([CONTRIBUTING.md](CONTRIBUTING.md#what-runs) has the details). The macOS legs also
+smoke-test the packaged app with Playwright. Each leg uploads its build as an
+inspection-only artifact (`houston-linux-x64` / `houston-mac-arm64` / `houston-mac-x64`
+/ `houston-win-x64`, 3-day retention), so you can grab a build from the **Actions** tab
+without building locally. A release is checked the same way before its release PR opens
 (`release-prepare.yml`) and then built, signed and published (`release-publish.yml`);
 [docs/RELEASING.md](docs/RELEASING.md) describes the process.
 

@@ -231,31 +231,50 @@ again on the queue's candidate before it lands:
 | --- | --- |
 | `test` | `license-gate`, notices freshness, lint, typecheck, the full vitest suite, and the standalone-CLI smoke |
 | `linux-sandbox` | the real bubblewrap backend, which the `test` job can only skip |
-| `build` | packaging on Linux, macOS (arm64 and x64), and Windows, the macOS and Windows unit suites, the packaged-app e2e, SBOM conformance, and workflow lint |
+| `build` | the planned `package` legs (packaging, the macOS and Windows unit suites, the packaged-app e2e), SBOM conformance, and workflow lint |
 | `revert-guard` | that merging would not delete or roll back work already on `main` |
 
 ### What runs
 
-Every PR and every merge-queue candidate runs the full set; nothing is skipped by path.
-`build` is a single required check that passes only when every leg of the `package`
-matrix (Linux x64, macOS arm64, macOS x64, Windows x64), the SBOM conformance gate, and
-`workflow-lint` succeeded. `workflow-lint` runs actionlint and zizmor over
-`.github/workflows`; zizmor's suppressions live in `.github/zizmor.yml`. Each `package`
-leg builds the app on its own runner and runs the full unit suite there: both macOS legs
-against the real Seatbelt sandbox, the Windows leg against its own backend (Git Bash) and
-its path semantics. Both macOS legs also run the packaged-app Playwright e2e.
+`test`, `linux-sandbox` and `revert-guard` run on every PR, and every check runs again on
+every merge-queue candidate. What varies is the `package` matrix, because macOS runners
+are the scarce resource and a burst of PRs used to leave queue candidates waiting behind
+PR runs for most of an hour. A `plan` job decides the legs (the policy is
+`scripts/ci-plan.mjs`):
+
+| Run | `package` legs |
+| --- | --- |
+| Pull request | Linux x64 |
+| Pull request labelled `full-ci` | Linux x64, macOS arm64, macOS x64, Windows x64 |
+| Merge-queue candidate | Linux x64, macOS arm64, Windows x64 |
+| Nightly on `main` | Linux x64, macOS arm64, macOS x64, Windows x64 |
+| Prose-only change (contributor docs, `docs/*.md` except the in-app guide, `website/`) | none |
+
+So nothing reaches `main` without the macOS and Windows legs, but a PR finds out about a
+macOS- or Windows-only failure in the queue rather than on the PR. If your change is
+platform-sensitive (the sandbox backends, paths, packaging, native modules), add the
+`full-ci` label to run every leg on the PR itself. Adding a label re-runs CI.
+
+`build` is a single required check that passes only when `plan` succeeded, every planned
+`package` leg succeeded (a skipped `package` counts only when `plan` planned none), and
+the SBOM conformance gate and `workflow-lint` succeeded. `workflow-lint` runs actionlint
+and zizmor over `.github/workflows`; zizmor's suppressions live in `.github/zizmor.yml`.
+Each `package` leg builds the app on its own runner and runs the full unit suite there:
+macOS against the real Seatbelt sandbox, Windows against its own backend (Git Bash) and
+its path semantics. The macOS legs also run the packaged-app Playwright e2e.
 
 Tests run on Windows too, so build expected paths with `join`/`resolve` (or `normalize` a
 POSIX literal) rather than hard-coding `/`, and pin `platform` on anything that takes one. Each leg
 uploads its build as a short-lived Actions artifact, so you can install a PR's app without
 building it.
 
-After a PR lands, CI runs again on `main`. That run also refreshes the package legs'
-dependency caches (`warm-caches`, one job per package leg): caches saved by PR runs are visible only to that PR, so
-this is what lets a new PR's `package` legs start warm. The run is pushed by the merge queue's bot, so
-GitHub notifies nobody when it fails; instead it opens (and later closes) a
-`scheduled-failure` issue assigned to the repository owner, the same way the scheduled
-workflows report.
+After a PR lands, CI runs again on `main`. When the merge changes what the dependency
+caches hold (`package-lock.json`, `.nvmrc`, `electron-builder.yml`, or the setup action),
+that run also refreshes them (`warm-caches`): caches saved by PR runs are visible only to
+that PR, so this is what lets a new PR's `package` legs start warm. The nightly run's
+`package` legs refresh them too. Neither run has an actor GitHub reliably notifies, so a
+failure opens (and later closes) a `scheduled-failure` issue assigned to the repository
+owner, the same way the scheduled workflows report.
 
 ### The merge queue
 
