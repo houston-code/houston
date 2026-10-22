@@ -3,3 +3,7 @@
 /download   https://github.com/houston-code/houston/releases/latest   302
 /releases   https://github.com/houston-code/houston/releases/latest   302
 /github     https://github.com/houston-code/houston   302
+
+# RFC 9116 puts the security contact at /.well-known/security.txt. Scanners also probe
+# the deprecated root path, so serve it there too rather than 404ing a good-faith check.
+/security.txt   /.well-known/security.txt   301
