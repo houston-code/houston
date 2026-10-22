@@ -39,10 +39,13 @@ export function renderMarkdownAnsi(src: string, opts: MarkdownOpts): string {
 }
 
 function renderBlocks(blocks: Block[], opts: MarkdownOpts, depth: number): string {
+  // Top-level blocks get a blank line between them, as on the desktop: without it a
+  // blockquote under a code block read as more code (both draw a │ gutter) and a
+  // heading ran into the list below it. Inside a list item they stay tight.
   return blocks
     .map((b) => renderBlock(b, opts, depth))
     .filter((s) => s.length > 0)
-    .join('\n')
+    .join(depth === 0 ? '\n\n' : '\n')
 }
 
 function renderBlock(b: Block, opts: MarkdownOpts, depth: number): string {
@@ -217,7 +220,16 @@ export function splitFinalizedBlocks(buf: string): { complete: string; rest: str
  */
 export class MarkdownStream {
   private buf = ''
+  // Whether a block has been printed. Chunks are cut at the reply's blank lines, so
+  // each later chunk starts with the blank line that separated it in the source.
+  private printed = false
   constructor(private readonly opts: MarkdownOpts) {}
+
+  private emit(src: string): string {
+    const out = `${this.printed ? '\n' : ''}${renderMarkdownAnsi(src, this.opts)}\n`
+    this.printed = true
+    return out
+  }
 
   push(delta: string): string {
     this.buf += delta
@@ -227,11 +239,11 @@ export class MarkdownStream {
       return ''
     }
     this.buf = rest
-    return `${renderMarkdownAnsi(complete, this.opts)}\n`
+    return this.emit(complete)
   }
 
   flush(): string {
-    const out = this.buf.trim() ? `${renderMarkdownAnsi(this.buf, this.opts)}\n` : ''
+    const out = this.buf.trim() ? this.emit(this.buf) : ''
     this.buf = ''
     return out
   }
