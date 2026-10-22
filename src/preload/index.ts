@@ -152,6 +152,10 @@ const api = {
   }): Promise<PermissionTestResult> => ipcRenderer.invoke(IPC.permissionsTest, input),
   /** When each permission rule last decided a call, keyed by permissionRuleKey. */
   getRuleUsage: (): Promise<Record<string, number>> => ipcRenderer.invoke(IPC.permissionsUsage),
+  /** Save a preferences export where the user chooses; resolves to the path, or null if cancelled. */
+  exportSettingsFile: (content: string): Promise<string | null> => ipcRenderer.invoke(IPC.settingsExportFile, content),
+  /** Read a preferences export the user picks; resolves to its text, or null if cancelled. */
+  importSettingsFile: (): Promise<string | null> => ipcRenderer.invoke(IPC.settingsImportFile),
   setKey: (providerId: string, key: string): Promise<AppSettings> =>
     ipcRenderer.invoke(IPC.settingsSetKey, providerId, key),
   deleteKey: (providerId: string): Promise<AppSettings> =>

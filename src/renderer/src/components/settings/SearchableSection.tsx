@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { SettingsCtx } from './context'
 import type { SectionEntry } from './pages'
+import { SectionFrame } from './SectionFrame'
 import { matchesTerms, normalizeForSearch, searchHaystack } from './search'
 
 /**
@@ -47,10 +48,9 @@ export function SearchableSection({
     onResult(entry.id, matched)
   }, [entry.id, matched, onResult])
 
-  const { Component } = entry
   return (
     <div ref={ref} className="set-result" data-section={entry.id} hidden={!matched}>
-      <Component ctx={ctx} />
+      <SectionFrame entry={entry} ctx={ctx} />
     </div>
   )
 }

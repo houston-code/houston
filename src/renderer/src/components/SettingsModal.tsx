@@ -7,6 +7,7 @@ import { PAGES, PAGE_GROUPS, pageById, type TabId } from './settings/pages'
 import { NAV_ICON } from './settings/navIcons'
 import { TOOL_NAMES } from './settings/permissionRules'
 import { SearchableSection } from './settings/SearchableSection'
+import { SectionFrame } from './settings/SectionFrame'
 import { highlightTerms, queryTerms } from './settings/search'
 import { isMacPlatform } from '../lib/shortcuts'
 import type { SettingsCtx } from './settings/context'
@@ -337,7 +338,7 @@ export function SettingsModal({
                 )}
               </>
             ) : (
-              page.sections.map(({ id, Component }) => <Component key={`${page.id}-${id}`} ctx={ctx} />)
+              page.sections.map((entry) => <SectionFrame key={`${page.id}-${entry.id}`} entry={entry} ctx={ctx} />)
             )}
           </div>
         </div>

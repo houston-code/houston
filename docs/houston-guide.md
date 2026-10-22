@@ -1579,7 +1579,13 @@ are encrypted with the OS keychain and stay in the main process.
 
 Changes save as you make them, with no Save button: a switch, a choice, or a reorder
 at once, and a text field when you leave it (so a half-typed pattern is never saved).
-The title bar shows when a change is saved and offers **Undo** for the last one.
+The title bar shows when a change is saved and offers **Undo** for the last one. A section
+whose preferences differ from the defaults is marked **Modified**, with a **Reset**
+beside it. General > **Your preferences** exports them to a file, imports one (after
+saying what it replaces, and calling out any rules that allow calls or hooks that run
+commands), or resets them all. Exports leave out providers, API keys, MCP servers, and
+folders; a reset keeps those, your permission rules and hooks, and the approval mode
+(whose fresh-install default depends on whether this machine's sandbox works).
 
 The search box above the pages (focused when Settings opens; Cmd+F or Ctrl+F, or `/`,
 jumps back to it) finds a setting from any page: by its name or description, a
