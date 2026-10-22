@@ -206,10 +206,16 @@ describe('makePainter', () => {
 })
 
 describe('tool rendering', () => {
-  it('summarizes a tool start with its salient arg', () => {
-    const line = renderToolStart('read_file', { path: 'src/x.ts' }, makePainter(false))
-    expect(line).toContain('read_file')
-    expect(line).toContain('src/x.ts')
+  it('names a tool start the way the desktop row does, with its whole target', () => {
+    const p = makePainter(false)
+    expect(renderToolStart('read_file', { path: 'src/deep/dir/x.ts' }, p)).toBe('· Read  src/deep/dir/x.ts')
+    expect(renderToolStart('run_shell', { command: 'npm  test\n--watch' }, p)).toBe('· Run  npm test ⏎ --watch')
+    expect(renderToolStart('git_status', {}, p)).toBe('· Git status')
+    expect(renderToolStart('mcp__github__search', {}, p)).toBe('· search  via github')
+  })
+
+  it('keeps the argument hint for a tool the shared labels do not know', () => {
+    expect(renderToolStart('custom_tool', { query: 'needle' }, makePainter(false))).toBe('· custom_tool  needle')
   })
 
   it('picks a hint from known arg keys and collapses whitespace', () => {
@@ -746,7 +752,7 @@ describe('renderToolResult', () => {
   })
 
   it('still just marks a failure that produced no output', () => {
-    expect(renderToolResult('run_shell', false, '  \n ', paint)).toBe('  ✗ run_shell failed')
+    expect(renderToolResult('run_shell', false, '  \n ', paint)).toBe('  ✗ Run failed')
   })
 
   it('verbose opens up a successful result', () => {
@@ -2093,7 +2099,7 @@ describe('runTui', () => {
     const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
-    expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:read_file', 'stop'])
+    expect(t.spinner).toEqual(['start:Working', 'label:Thinking', 'label:Read', 'stop'])
   })
 
   it('persists composer submissions to history, not approval answers', async () => {
@@ -4773,7 +4779,7 @@ describe('todo list rendering', () => {
     const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
-    expect(t.text()).toContain('read_file')
+    expect(t.text()).toContain('Read  a.ts')
     expect(t.text()).toContain('contents')
   })
 })

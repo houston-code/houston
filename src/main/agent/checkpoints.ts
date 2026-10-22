@@ -764,6 +764,51 @@ function evictForNewCheckpoint(): void {
   }
 }
 
+/** Checkpoints being loaded or created, so concurrent callers share one. */
+const opening = new Map<string, Promise<Checkpoint>>()
+
+/**
+ * The run's checkpoint: the one in memory, else the one on disk, else a new one.
+ * Re-hydrates from disk on an in-memory miss (as every other mutator does): if this
+ * run was evicted after snapshotting earlier files, a fresh empty Map would be
+ * persisted over its on-disk snapshot and a revert would silently drop those files.
+ *
+ * The lookup awaits the disk, so two snapshots starting together for a run with no
+ * checkpoint yet would both miss, both create one, and the second would replace the
+ * first, losing the first file's pre-turn content so a revert left it changed. Today's
+ * callers record one file at a time, but nothing in this API says they must, so
+ * concurrent callers share the same load. `isNew` is true only for the creator.
+ */
+async function openCheckpoint(runId: string, roots: string[]): Promise<{ cp: Checkpoint; isNew: boolean }> {
+  const existing = checkpoints.get(runId)
+  if (existing) return { cp: existing, isNew: false }
+  const inFlight = opening.get(runId)
+  if (inFlight) return { cp: await inFlight, isNew: false }
+  let isNew = false
+  const load = (async (): Promise<Checkpoint> => {
+    const loaded = await loadRunIntoMemory(runId)
+    if (loaded) return loaded
+    isNew = true
+    evictForNewCheckpoint()
+    const created: Checkpoint = { roots, files: new Map(), reverted: false }
+    checkpoints.set(runId, created)
+    // Flag the chain entry, so a rewind can tell "changed nothing" from "pruned".
+    const conv = runConversation.get(runId)
+    const entry = conv ? chains.get(conv)?.find((e) => e.runId === runId) : undefined
+    if (entry && !entry.files) {
+      entry.files = true
+      void scheduleWriteIndex()
+    }
+    return created
+  })()
+  opening.set(runId, load)
+  try {
+    return { cp: await load, isNew }
+  } finally {
+    opening.delete(runId)
+  }
+}
+
 /**
  * Record a file's current content before the turn modifies it. No-op if already
  * recorded for this run, if the path escapes the allowed roots, or if too large.
@@ -772,23 +817,7 @@ export async function recordOriginal(runId: string, roots: string[], relPath: st
   const abs = resolveOrNull(roots, relPath)
   if (!abs) return
 
-  // Re-hydrate from disk on an in-memory miss (as every other mutator does): if this
-  // run was evicted after snapshotting earlier files, a fresh empty Map would be
-  // persisted over its on-disk snapshot and a revert would silently drop those files.
-  let cp = checkpoints.get(runId) ?? (await loadRunIntoMemory(runId))
-  const isNewCheckpoint = !cp
-  if (!cp) {
-    evictForNewCheckpoint()
-    cp = { roots, files: new Map(), reverted: false }
-    checkpoints.set(runId, cp)
-    // Flag the chain entry, so a rewind can tell "changed nothing" from "pruned".
-    const conv = runConversation.get(runId)
-    const entry = conv ? chains.get(conv)?.find((e) => e.runId === runId) : undefined
-    if (entry && !entry.files) {
-      entry.files = true
-      void scheduleWriteIndex()
-    }
-  }
+  const { cp, isNew: isNewCheckpoint } = await openCheckpoint(runId, roots)
   if (cp.files.has(abs)) return
 
   const { content, binary, capped } = await readCapped(abs)

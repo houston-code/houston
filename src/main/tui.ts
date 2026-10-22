@@ -77,6 +77,7 @@ import { pathToFileURL } from 'node:url'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
 import { SHARE_MESSAGE } from '@shared/share'
 import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
+import { describeToolCall } from '@shared/toolLabel'
 import { renderPreviewView } from './tui-diff'
 import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
@@ -311,11 +312,16 @@ export function renderTodoList(todos: Todo[], paint: Painter): string {
   return lines.join('\n')
 }
 
-/** One-line summary of a tool starting, e.g. "· read_file  src/x.ts". */
+/**
+ * One-line summary of a tool starting, named the way the desktop's tool row names
+ * it: "· Read  src/x.ts", "· Run  npm test", not the wire name ("read_file").
+ */
 export function renderToolStart(name: string, args: Record<string, unknown>, paint: Painter): string {
-  const hint = toolArgHint(args)
+  const { verb, target } = describeToolCall(name, args)
+  // A tool the shared labels don't know keeps the old best-effort argument hint.
+  const hint = truncate((target || (verb === name ? toolArgHint(args) : '')).replace(/\s+/g, ' ').trim(), 80)
   const suffix = hint ? `  ${paint(hint, 'dim')}` : ''
-  return `${paint('·', 'dim')} ${paint(name, 'cyan')}${suffix}`
+  return `${paint('·', 'dim')} ${paint(verb, 'cyan')}${suffix}`
 }
 
 /** Best-effort one-liner describing a tool call's most salient argument. */
@@ -528,14 +534,16 @@ export function renderToolResult(
   if (ok && name === PRESENT_PLAN_TOOL) return paint(`  ↳ ${PLAN_OUTCOME_LABEL[planOutcome(output)]}`, 'dim')
   const lines = output.split('\n')
   if (!ok) {
+    // "✗ Run failed", matching the row above it, not the wire name.
+    const failed = paint(`  ✗ ${describeToolCall(name, undefined).verb} failed`, 'red')
     const body = trimBlank(lines)
-    if (!body.length) return paint(`  ✗ ${name} failed`, 'red')
+    if (!body.length) return failed
     const shown = body.slice(0, FAILURE_LINES).map((l) => paint(`    ${truncate(l, 200)}`, 'dim'))
     const more =
       body.length > FAILURE_LINES
         ? [paint(`    … ${body.length - FAILURE_LINES} more lines (/output to see it all)`, 'dim')]
         : []
-    return [paint(`  ✗ ${name} failed`, 'red'), ...shown, ...more].join('\n')
+    return [failed, ...shown, ...more].join('\n')
   }
   if (opts.verbose) {
     const body = trimBlank(lines)
@@ -3638,7 +3646,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           }
           break
         case 'tool_start': {
-          deps.io.setSpinnerLabel?.(e.name)
+          deps.io.setSpinnerLabel?.(describeToolCall(e.name, e.args).verb)
           toolArgs.set(e.callId, e.args)
           // A todo update IS its list; showing "· todo_write" and then a count of
           // what changed tells you nothing about the plan.

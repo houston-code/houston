@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, normalize } from 'node:path'
+import { runGitCapture, runReadGit } from './gitRead'
 import {
   slugifyBranch,
   worktreePath,
@@ -455,6 +456,52 @@ describe('worktree integration (real git)', () => {
       rmSync(repo, { recursive: true, force: true })
     }
   }, TIMEOUT)
+
+  // Houston runs this git on the host, outside the sandbox, in a repo whose .git a
+  // sandboxed command can write. Nothing the repo's own config names may run.
+  ;(gitOk && process.platform !== 'win32' ? it : it.skip)(
+    'runs no repo-defined hook, fsmonitor, or filter driver',
+    async () => {
+      const repo = initRepo()
+      const marks = mkdtempSync(join(tmpdir(), 'wt-marks-'))
+      try {
+        const script = (name: string): string => {
+          const file = join(marks, `${name}.sh`)
+          writeFileSync(file, `#!/bin/sh\ntouch "${join(marks, name)}.ran"\ncat\n`, { mode: 0o755 })
+          return file
+        }
+        const g = (...args: string[]): void => {
+          execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore' })
+        }
+        writeFileSync(join(repo, '.git', 'hooks', 'post-checkout'), `#!/bin/sh\ntouch "${join(marks, 'hook')}.ran"\n`, {
+          mode: 0o755
+        })
+        writeFileSync(join(repo, '.git', 'hooks', 'reference-transaction'), `#!/bin/sh\ntouch "${join(marks, 'hook')}.ran"\n`, {
+          mode: 0o755
+        })
+        g('config', 'core.fsmonitor', script('fsmonitor'))
+        g('config', 'filter.planted.clean', script('clean'))
+        g('config', 'filter.planted.smudge', script('smudge'))
+        g('config', 'filter.planted.required', 'true')
+        writeFileSync(join(repo, '.git', 'info', 'attributes'), '* filter=planted\n')
+
+        const wt = await createWorktree({ workspace: repo, branch: 'planted' })
+        expect(readFileSync(join(wt.path, 'README.md'), 'utf8')).toBe('# repo\n')
+        writeFileSync(join(repo, 'README.md'), '# changed\n')
+        expect(await isWorktreeDisposable(wt)).toBe(true)
+        expect(await runReadGit(['status', '--porcelain'], repo)).toContain('README.md')
+        const diff = await runGitCapture(['diff', 'HEAD', '--no-ext-diff', '--no-textconv'], repo)
+        expect(diff.ok).toBe(true)
+        expect(diff.stdout).toContain('+# changed')
+
+        expect(readdirSync(marks).filter((n) => n.endsWith('.ran'))).toEqual([])
+      } finally {
+        rmSync(repo, { recursive: true, force: true })
+        rmSync(marks, { recursive: true, force: true })
+      }
+    },
+    TIMEOUT
+  )
 
   maybe('refuses a freshly initialized repo with no commits', async () => {
     const repo = mkdtempSync(join(tmpdir(), 'wt-int-'))

@@ -770,6 +770,42 @@ describe('multi_edit', () => {
   })
 })
 
+describe('editing a file that is not UTF-8', () => {
+  // "café = 1\nnaïve = 2\n" in Latin-1: é and ï are single bytes that aren't valid UTF-8.
+  const latin1 = Buffer.from('caf\xe9 = 1\nna\xefve = 2\n', 'latin1')
+  const write = (): void => writeFileSync(join(workspace, 'legacy.txt'), latin1)
+  const bytes = (): Buffer => readFileSync(join(workspace, 'legacy.txt'))
+
+  it('edit_file refuses instead of turning every legacy byte into U+FFFD', async () => {
+    write()
+    await expect(
+      run('edit_file', { path: 'legacy.txt', old_string: '= 2', new_string: '= 3' })
+    ).rejects.toThrow(/not UTF-8 text/)
+    expect(bytes().equals(latin1)).toBe(true)
+  })
+
+  it('multi_edit refuses too', async () => {
+    write()
+    await expect(
+      run('multi_edit', { path: 'legacy.txt', edits: [{ old_string: '= 1', new_string: '= 0' }] })
+    ).rejects.toThrow(/not UTF-8 text/)
+    expect(bytes().equals(latin1)).toBe(true)
+  })
+
+  it('apply_patch refuses an update and names the file', async () => {
+    write()
+    const patch = ['*** Begin Patch', '*** Update File: legacy.txt', '@@', '-na\ufffdve = 2', '+x = 2', '*** End Patch'].join('\n')
+    await expect(run('apply_patch', { patch })).rejects.toThrow(/Update File: legacy\.txt is not UTF-8 text/)
+    expect(bytes().equals(latin1)).toBe(true)
+  })
+
+  it('still edits UTF-8 text with non-ASCII characters and a BOM', async () => {
+    writeFileSync(join(workspace, 'u.txt'), '\ufeffcafé = 1\n', 'utf8')
+    await run('edit_file', { path: 'u.txt', old_string: '= 1', new_string: '= 2' })
+    expect(readFileSync(join(workspace, 'u.txt'), 'utf8')).toBe('\ufeffcafé = 2\n')
+  })
+})
+
 describe('apply_patch rollback on a phase-2 failure', () => {
   const patch = (...body: string[]): string =>
     ['*** Begin Patch', ...body, '*** End Patch'].join('\n')

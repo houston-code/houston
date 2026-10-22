@@ -69,3 +69,34 @@ describe('unicode width', () => {
     expect(truncateVisible('中文字', 4)).toMatch(/…$/) // width 6 > 4 → cut, ellipsis
   })
 })
+
+describe('emoji sequences and combining marks (grapheme clusters)', () => {
+  const family = '\u{1F468}‍\u{1F469}‍\u{1F467}' // 👨‍👩‍👧
+  const flag = '\u{1F1FA}\u{1F1F8}' // 🇺🇸
+  const thumbSkin = '\u{1F44D}\u{1F3FD}' // 👍🏽
+  const keycap = '1️⃣' // 1️⃣
+  const heart = '❤️' // ❤️
+  const accented = 'é̂' // e with two combining accents
+
+  it('measures each as the columns a terminal draws', () => {
+    expect(visibleWidth(family)).toBe(2)
+    expect(visibleWidth(flag)).toBe(2)
+    expect(visibleWidth(thumbSkin)).toBe(2)
+    expect(visibleWidth(keycap)).toBe(2)
+    expect(visibleWidth(heart)).toBe(2)
+    expect(visibleWidth('❤︎')).toBe(1) // text presentation
+    expect(visibleWidth(accented)).toBe(1)
+    expect(visibleWidth(`\x1b[1m${family} ok\x1b[0m`)).toBe(5)
+  })
+
+  it('never cuts inside a cluster when truncating', () => {
+    const out = truncateVisible(`ab${family}cd`, 4)
+    expect(out).toBe('ab…')
+    expect(truncateVisible(`ab${flag}cd`, 5)).toBe(`ab${flag}…`)
+  })
+
+  it('never splits a cluster when hard-wrapping', () => {
+    const rows = wrapAnsi(`${family}${flag}${keycap}${accented}`, 2).split('\n')
+    expect(rows).toEqual([family, flag, keycap, accented])
+  })
+})
