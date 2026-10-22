@@ -1579,6 +1579,37 @@ export function egressBlockHint(
 const SANDBOX_WRITE_ERROR_RE = /\beperm\b|\beacces\b|permission denied|read-only file system/i
 
 /**
+ * A write the macOS sandbox denied, in the shapes coreutils and shells report it: a
+ * bare "Operation not permitted" (EPERM, which macOS returns for a sandbox-denied file
+ * write) from a file-writing command (`mkdir: x: Operation not permitted`) or a
+ * "could not create/open/write" error. Without these a denied write fell through to
+ * the process-syscall hint about `ps`/`kill`, which sent the agent after the wrong cause.
+ */
+const SANDBOX_WRITE_EPERM_RE = new RegExp(
+  [
+    '(?:^|\\n)[^\\S\\n]*(?:\\S*/)?(?:mkdir|touch|cp|mv|rm|rmdir|ln|tee|install|truncate|dd|tar|unzip|sed|chmod)(?::|[^\\S\\n])[^\\n]*operation not permitted',
+    '(?:could not|cannot|unable to|failed to) (?:create|open|write|make)[^\\n]*operation not permitted'
+  ].join('|'),
+  'i'
+)
+
+/**
+ * The shell's own EPERM line (`bash: line 2: x: Operation not permitted`). A failed `>`
+ * redirect and a denied exec of a program (`bash: /bin/ps: …`) print the same shape;
+ * only the exit status tells them apart (126 is "found but could not execute").
+ */
+const SHELL_EPERM_RE = /(?:^|\n)[^\S\n]*(?:\S*\/)?(?:ba|z|da)?sh:[^\n]*operation not permitted/i
+
+/** Whether a failed command's output reads as a sandbox-denied filesystem write. */
+function isWriteDenial(output: string, exitCode: number | null): boolean {
+  return (
+    SANDBOX_WRITE_ERROR_RE.test(output) ||
+    SANDBOX_WRITE_EPERM_RE.test(output) ||
+    (exitCode !== 126 && SHELL_EPERM_RE.test(output))
+  )
+}
+
+/**
  * Surfaced when a command runs WITHOUT the Seatbelt sandbox confining it (e.g.
  * `sandbox-exec` is missing). run_shell's description and the system prompt both
  * promise sandboxing, so when that promise can't be kept the agent must be told —
@@ -1590,10 +1621,10 @@ export const UNSANDBOXED_SHELL_NOTE =
 
 /** The hint appended to a failure that looks like the sandbox denied a write. */
 export const SANDBOX_WRITE_BLOCKED_HINT =
-  '[note: the sandbox only allows writes inside the project and temp dirs. A write was denied, usually by a ' +
-  'tool writing to your home dir (e.g. ~/.npm, ~/.cache, ~/.config). Package-manager caches (npm/pip/yarn) ' +
-  'are already redirected to a writable temp dir; if a tool still needs to write elsewhere, point it at a ' +
-  'path inside the project.]'
+  '[note: the sandbox only allows writes inside the project and temp dirs. A write outside them was denied, ' +
+  'often a tool writing to your home dir (e.g. ~/.npm, ~/.cache, ~/.config), or a path in another folder such as ' +
+  'a different checkout of this repository. Package-manager caches (npm/pip/yarn) are already redirected to a ' +
+  'writable temp dir; write inside the project instead, and check the target path is the one you meant.]'
 
 /**
  * Return {@link SANDBOX_WRITE_BLOCKED_HINT} when a *failed* command looks like it
@@ -1608,7 +1639,7 @@ export function sandboxWriteBlockHint(
   const failed = result.timedOut === true || result.exitCode === null || result.exitCode !== 0
   if (!failed) return ''
   if (NETWORK_ERROR_RE.test(output)) return ''
-  return SANDBOX_WRITE_ERROR_RE.test(output) ? SANDBOX_WRITE_BLOCKED_HINT : ''
+  return isWriteDenial(output, result.exitCode) ? SANDBOX_WRITE_BLOCKED_HINT : ''
 }
 
 /**
@@ -1638,7 +1669,7 @@ export function sandboxOpDeniedHint(
   const failed = result.timedOut === true || result.exitCode === null || result.exitCode !== 0
   if (!failed) return ''
   if (NETWORK_ERROR_RE.test(output)) return ''
-  if (SANDBOX_WRITE_ERROR_RE.test(output)) return ''
+  if (isWriteDenial(output, result.exitCode)) return ''
   return SANDBOX_OP_DENIED_RE.test(output) ? SANDBOX_OP_DENIED_HINT : ''
 }
 

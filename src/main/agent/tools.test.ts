@@ -3671,6 +3671,23 @@ describe('sandboxWriteBlockHint', () => {
     )
   })
 
+  it('recognizes the bare EPERM macOS reports for a sandbox-denied write', () => {
+    // Each of these is a write outside the project, not a privileged syscall.
+    for (const out of [
+      'mkdir: ./.github/actions: Operation not permitted',
+      'mkdir: cannot create directory ‘/repo/.github’: Operation not permitted',
+      'touch: /Users/me/x: Operation not permitted',
+      'cp: /repo/a.txt: Operation not permitted',
+      '/bin/bash: line 2: /repo/.github/actions/x.yml: Operation not permitted',
+      'bash: /repo/out.txt: Operation not permitted',
+      'zsh: operation not permitted: /repo/out.txt',
+      "fatal: could not create work tree dir 'x': Operation not permitted"
+    ]) {
+      expect(sandboxWriteBlockHint(failed, out), out).toBe(SANDBOX_WRITE_BLOCKED_HINT)
+      expect(sandboxOpDeniedHint(failed, out), out).toBe('')
+    }
+  })
+
   it('stays silent when the command succeeded', () => {
     expect(sandboxWriteBlockHint({ exitCode: 0 }, npmEperm)).toBe('')
   })
@@ -3706,6 +3723,18 @@ describe('sandboxOpDeniedHint', () => {
 
   it('defers to the write hint for a write-shaped denial', () => {
     expect(sandboxOpDeniedHint(failed, 'EPERM: operation not permitted, open ~/.npm/x')).toBe('')
+  })
+
+  it('keeps the process hint for a denied exec, which bash reports in the redirect shape', () => {
+    // 126: bash found the program but the sandbox refused to execute it.
+    const out = '/bin/bash: /bin/ps: Operation not permitted'
+    expect(sandboxOpDeniedHint({ exitCode: 126 }, out)).toBe(SANDBOX_OP_DENIED_HINT)
+    expect(sandboxWriteBlockHint({ exitCode: 126 }, out)).toBe('')
+  })
+
+  it('keeps the process hint for kill and ps, which are not writes', () => {
+    expect(sandboxOpDeniedHint(failed, 'kill: (123) - Operation not permitted')).toBe(SANDBOX_OP_DENIED_HINT)
+    expect(sandboxOpDeniedHint(failed, 'ps: sysctl: Operation not permitted')).toBe(SANDBOX_OP_DENIED_HINT)
   })
 
   it('stays silent on success and on unrelated failures', () => {
