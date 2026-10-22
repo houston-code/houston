@@ -35,7 +35,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin(), vendorMermaid, bundledPackagesGuard('main')],
     resolve: { alias: sharedAlias },
     build: {
-      minify: 'esbuild',
+      minify: true,
       rollupOptions: {
         input: { index: resolve('src/main/index.ts') }
       }
@@ -45,7 +45,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin(), bundledPackagesGuard('preload')],
     resolve: { alias: sharedAlias },
     build: {
-      minify: 'esbuild',
+      minify: true,
       rollupOptions: {
         input: { index: resolve('src/preload/index.ts') }
       }
@@ -56,7 +56,7 @@ export default defineConfig({
     resolve: { alias: sharedAlias },
     plugins: [react(), bundledPackagesGuard('renderer')],
     build: {
-      minify: 'esbuild',
+      minify: true,
       rollupOptions: {
         input: { index: resolve('src/renderer/index.html') }
       }
