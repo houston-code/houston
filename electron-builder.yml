@@ -32,6 +32,18 @@ files:
   - package.json
   - '!node_modules/**/*.{map,d.ts,d.mts,d.cts}'
   - '!node_modules/**/*.ts' # raw TypeScript sources (e.g. openai/src); never executed
+  # node-pty compiles in place, so its dir also holds the build's leftovers: object files,
+  # MSBuild project and log files, gyp Makefiles, and a stray copy of the addon under bin/
+  # that the loader never reads (it loads build/Release, then prebuilds/). Several record
+  # the build machine's absolute paths. Ship only what runs: build/Release's addons,
+  # helpers and DLLs. (The afterPack hook scrubs paths out of those; see
+  # scripts/scrub-native-paths.mjs.)
+  - '!node_modules/node-pty/bin/**'
+  - '!node_modules/node-pty/node-addon-api/**'
+  - '!node_modules/node-pty/build/**/obj/**'
+  - '!node_modules/node-pty/build/**/obj.target/**'
+  - '!node_modules/node-pty/build/**/*.{tlog,recipe,lastbuildstate,iobj,ipdb,exp,lib,pdb,vcxproj,filters,sln,mk,stamp,d}'
+  - '!node_modules/node-pty/build/{Makefile,config.gypi,gyp-mac-tool}'
 
 # Vendor the per-(os,arch) CLI binaries (`rg`, `ast-grep`) into the app's Resources/bin
 # so search/structural-search work out of the box, independent of the user's PATH. We

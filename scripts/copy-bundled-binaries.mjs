@@ -10,8 +10,9 @@
 // THROWS if the sub-package is missing (electron-builder would only warn and ship a
 // broken app). The pure planners are unit-tested without ever packaging.
 
-import { copyFileSync, chmodSync, mkdirSync } from 'node:fs'
+import { copyFileSync, chmodSync, existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { scrubNativePaths } from './scrub-native-paths.mjs'
 
 /**
  * Single source of truth for the per-(os,arch) vendored binary layout. Verified
@@ -91,4 +92,12 @@ export default async function afterPack(context) {
     chmodSync(to, 0o755) // npm can drop the executable bit on extract
   }
   console.log(`✓ copied ${plan.length} vendored binaries for ${electronPlatformName}-${archName}`)
+
+  // The unpacked native addons (node-pty) were compiled on this machine and record its
+  // paths; scrub them before signing. See scrub-native-paths.mjs.
+  const unpacked = join(resourcesDir, 'app.asar.unpacked')
+  if (existsSync(unpacked)) {
+    const scrubbed = scrubNativePaths(unpacked, electronPlatformName, { root })
+    console.log(`✓ scrubbed build paths from ${scrubbed.length} native binaries`)
+  }
 }
