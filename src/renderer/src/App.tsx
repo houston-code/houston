@@ -273,6 +273,14 @@ export default function App(): JSX.Element {
   }, [])
   // The get-started checklist's inline "Connect a model" panel.
   const [connectOpen, setConnectOpen] = useState(false)
+  // Backing out of the Connect panel returns focus to step 1's button, which the
+  // panel replaced; see GetStarted's focusModelStep.
+  const [connectBackedOut, setConnectBackedOut] = useState(false)
+  // One-shot: GetStarted reads it in its mount effect, which runs before this one,
+  // so clear it after so a later remount of the checklist doesn't take focus.
+  useEffect(() => {
+    if (connectBackedOut) setConnectBackedOut(false)
+  }, [connectBackedOut])
   const onboarding = useOnboarding({
     settings,
     setSettings,
@@ -2029,7 +2037,10 @@ export default function App(): JSX.Element {
               <ConnectModel
                 settings={settings}
                 onConnected={(fresh, id, model) => void onModelConnected(fresh, id, model)}
-                onBack={() => setConnectOpen(false)}
+                onBack={() => {
+                  setConnectBackedOut(true)
+                  setConnectOpen(false)
+                }}
               />
             ) : showChecklist ? (
               <GetStarted
@@ -2043,6 +2054,7 @@ export default function App(): JSX.Element {
                 taskExample={firstTaskExample(workspaceKind)}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
+                focusModelStep={connectBackedOut}
               />
             ) : (
               <>

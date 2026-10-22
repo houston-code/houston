@@ -25,6 +25,19 @@ describe('renderMarkdownAnsi', () => {
     expect(out).toContain('• two')
   })
 
+  it('renders GFM task items with their box after the bullet', () => {
+    const out = render('- [ ] write it\n- [x] test it')
+    expect(out).toContain('• [ ] write it')
+    expect(out).toContain('• [x] test it')
+    const colored = renderMarkdownAnsi('- [x] done', { paint: makePainter(true), width: 0 })
+    expect(colored).toContain('\x1b[32m[x]')
+  })
+
+  it('wraps a task item under its text, past the box', () => {
+    const out = render('- [ ] alpha beta gamma delta', 14)
+    expect(out.split('\n')).toEqual(['• [ ] alpha', '      beta', '      gamma', '      delta'])
+  })
+
   it('renders an ordered list with numbers', () => {
     const out = render('1. first\n2. second')
     expect(out).toContain('1. first')

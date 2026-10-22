@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { McpHttpClient, extractSseData, pickJsonRpc, type FetchFn } from './http-client'
 
 describe('extractSseData', () => {
@@ -218,6 +218,99 @@ describe('McpHttpClient', () => {
     await new Promise((r) => setTimeout(r, 10))
     expect(client.tools.map((t) => t.name)).toEqual(['one', 'two'])
     client.close()
+  })
+
+  describe('a dropped notification stream', () => {
+    /** A server whose GET streams can be ended from the test; counts the GETs. */
+    function droppingServer(getStatus: () => number = () => 200) {
+      const state = {
+        toolset: [{ name: 'one' }],
+        gets: 0,
+        streams: [] as Array<{ emit: (e: unknown) => void; end: () => void }>
+      }
+      const fetch: FetchFn = async (_u, init) => {
+        if (init.method === 'GET') {
+          state.gets++
+          const status = getStatus()
+          if (status !== 200) return new Response('', { status })
+          const stream = new ReadableStream<Uint8Array>({
+            start(controller) {
+              state.streams.push({
+                emit: (e) => controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(e)}\n\n`)),
+                end: () => controller.close()
+              })
+            }
+          })
+          return new Response(stream, { status: 200, headers: new Headers({ 'content-type': 'text/event-stream' }) })
+        }
+        const req = JSON.parse(init.body as string) as { id?: number; method: string }
+        if (req.id === undefined) return new Response('', { status: 202 })
+        const result = req.method === 'tools/list' ? { tools: state.toolset } : {}
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }), {
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' })
+        })
+      }
+      return { fetch, state }
+    }
+    const names = (c: McpHttpClient): string[] => c.tools.map((t) => t.name)
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] })
+    })
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('is reopened, and catches up on a change announced while it was down', async () => {
+      const srv = droppingServer()
+      const client = new McpHttpClient(srv.fetch)
+      await client.connect({ url: 'https://x/mcp' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(srv.state.gets).toBe(1)
+
+      srv.state.streams[0].end() // a proxy idle timeout, say
+      srv.state.toolset = [{ name: 'one' }, { name: 'two' }] // changed while nobody listened
+      await vi.advanceTimersByTimeAsync(1_000)
+      expect(srv.state.gets).toBe(2)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(names(client)).toEqual(['one', 'two'])
+
+      // Notifications flow on the reopened stream.
+      srv.state.toolset = [{ name: 'three' }]
+      srv.state.streams[1].emit({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(names(client)).toEqual(['three'])
+      client.close()
+    })
+
+    it('backs off while the server keeps failing, and stops once closed', async () => {
+      let status = 200
+      const srv = droppingServer(() => status)
+      const client = new McpHttpClient(srv.fetch)
+      await client.connect({ url: 'https://x/mcp' })
+      await vi.advanceTimersByTimeAsync(0)
+      status = 503
+      srv.state.streams[0].end()
+      await vi.advanceTimersByTimeAsync(1_000) // 1st retry after 1 s
+      expect(srv.state.gets).toBe(2)
+      await vi.advanceTimersByTimeAsync(1_999) // 2nd waits 2 s
+      expect(srv.state.gets).toBe(2)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(srv.state.gets).toBe(3)
+      client.close()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(srv.state.gets).toBe(3)
+    })
+
+    it('is not retried when the server offers no stream (405)', async () => {
+      const srv = droppingServer(() => 405)
+      const client = new McpHttpClient(srv.fetch)
+      await client.connect({ url: 'https://x/mcp' })
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(srv.state.gets).toBe(1)
+      client.close()
+    })
   })
 
   it('marks itself closed when the server expires the session (404)', async () => {

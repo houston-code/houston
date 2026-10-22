@@ -51,7 +51,17 @@ export function osc52Copy(text: string): string {
  * these as 1 (or, for astral chars, as 2 code units), which was wrong both ways.
  */
 export function charWidth(cp: number): number {
-  if ((cp >= 0x0300 && cp <= 0x036f) || cp === 0x200b || (cp >= 0x200c && cp <= 0x200f) || cp === 0xfeff) {
+  if (
+    (cp >= 0x0300 && cp <= 0x036f) || // combining diacritics
+    (cp >= 0x1ab0 && cp <= 0x1aff) ||
+    (cp >= 0x1dc0 && cp <= 0x1dff) ||
+    (cp >= 0x20d0 && cp <= 0x20ff) || // combining marks for symbols (keycap U+20E3)
+    (cp >= 0xfe00 && cp <= 0xfe0f) || // variation selectors
+    (cp >= 0xfe20 && cp <= 0xfe2f) ||
+    cp === 0x200b ||
+    (cp >= 0x200c && cp <= 0x200f) || // ZWNJ, ZWJ, direction marks
+    cp === 0xfeff
+  ) {
     return 0 // combining marks / zero-width
   }
   if (
@@ -70,11 +80,62 @@ export function charWidth(cp: number): number {
   return 1
 }
 
-/** Visible column width of a string: sums per-code-point width, ignoring SGR escapes. */
+const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+
+/**
+ * The user-perceived characters of `s` (grapheme clusters): a family emoji joined with
+ * ZWJs, a flag's two regional indicators, a skin-toned or keycap emoji, or a letter
+ * with its combining accents is ONE cluster, drawn as one glyph.
+ */
+export function graphemes(s: string): string[] {
+  const out: string[] = []
+  for (const { segment } of segmenter.segment(s)) out.push(segment)
+  return out
+}
+
+/**
+ * Columns one grapheme cluster occupies. Summing its code points over-counted every
+ * multi-code-point emoji (a ZWJ family of three people measured 6 columns, a flag 4, a
+ * keycap 3, while terminals draw each in 2), which pushed the status line and wrapped
+ * text off by the difference. A cluster is as wide as its first code point, except that
+ * an emoji-presentation sequence (VS16, a ZWJ join, a keycap) is drawn 2 wide and a
+ * text-presentation one (VS15) 1 wide.
+ */
+export function clusterWidth(cluster: string): number {
+  const first = cluster.codePointAt(0) ?? 0
+  if (cluster.length <= 2 && String.fromCodePoint(first).length === cluster.length) return charWidth(first)
+  if (cluster.includes('\ufe0e')) return Math.min(1, charWidth(first))
+  if (cluster.includes('\ufe0f') || cluster.includes('\u200d') || cluster.includes('\u20e3')) return 2
+  return charWidth(first)
+}
+
+/** Printable ASCII only: one column per character, the common case. */
+const PLAIN_ASCII = /^[\x20-\x7e]*$/
+
+/** Visible column width of a string, by grapheme cluster, ignoring SGR escapes. */
 export function visibleWidth(s: string): number {
+  const text = stripAnsi(s)
+  if (PLAIN_ASCII.test(text)) return text.length
   let w = 0
-  for (const ch of stripAnsi(s)) w += charWidth(ch.codePointAt(0) ?? 0)
+  for (const g of graphemes(text)) w += clusterWidth(g)
   return w
+}
+
+/**
+ * `s` as a sequence of SGR escapes (width 0) and grapheme clusters, so a cut or a
+ * wrap never lands inside a cluster: splitting one draws half an emoji, or a flag as
+ * two letters.
+ */
+function units(s: string): Array<{ text: string; width: number }> {
+  const out: Array<{ text: string; width: number }> = []
+  let last = 0
+  for (const m of s.matchAll(SGR)) {
+    for (const g of graphemes(s.slice(last, m.index))) out.push({ text: g, width: clusterWidth(g) })
+    out.push({ text: m[0], width: 0 })
+    last = m.index + m[0].length
+  }
+  for (const g of graphemes(s.slice(last))) out.push({ text: g, width: clusterWidth(g) })
+  return out
 }
 
 /**
@@ -87,21 +148,10 @@ export function truncateVisible(s: string, max: number, ellipsis = '…'): strin
   const keep = Math.max(0, max - visibleWidth(ellipsis))
   let out = ''
   let shown = 0
-  let i = 0
-  while (i < s.length) {
-    const m = matchSgrAt(s, i)
-    if (m) {
-      out += m
-      i += m.length
-      continue
-    }
-    const cp = s.codePointAt(i) ?? 0
-    const ch = String.fromCodePoint(cp)
-    const w = charWidth(cp)
-    if (shown + w > keep) break // stop before a partial/over-width char
-    out += ch
-    shown += w
-    i += ch.length // advance a full code point (never split a surrogate pair)
+  for (const u of units(s)) {
+    if (shown + u.width > keep) break // stop before a partial/over-width cluster
+    out += u.text
+    shown += u.width
   }
   const hadColor = out.includes(`${ESC}[`)
   return `${out}${ellipsis}${hadColor ? `${ESC}[0m` : ''}`
@@ -152,37 +202,18 @@ function hardSplit(word: string, width: number): string[] {
   const chunks: string[] = []
   let cur = ''
   let shown = 0
-  let i = 0
-  while (i < word.length) {
-    const m = matchSgrAt(word, i)
-    if (m) {
-      cur += m
-      i += m.length
-      continue
-    }
-    const cp = word.codePointAt(i) ?? 0
-    const ch = String.fromCodePoint(cp)
-    const w = charWidth(cp)
-    // Break before a char that would overflow the row (only if we've placed one).
-    if (cur && shown + w > width) {
+  for (const u of units(word)) {
+    // Break before a cluster that would overflow the row (only if we've placed one).
+    if (cur && u.width > 0 && shown + u.width > width) {
       chunks.push(cur)
       cur = ''
       shown = 0
     }
-    cur += ch
-    shown += w
-    i += ch.length // full code point (never split a surrogate pair)
+    cur += u.text
+    shown += u.width
   }
   if (cur) chunks.push(cur)
   return chunks
-}
-
-/** If an SGR escape starts at index `i`, return it; else null. */
-function matchSgrAt(s: string, i: number): string | null {
-  if (s[i] !== ESC) return null
-  SGR.lastIndex = i
-  const m = SGR.exec(s)
-  return m && m.index === i ? m[0] : null
 }
 
 /**

@@ -93,6 +93,7 @@ import {
   abortableSleep,
   describeProviderError,
   isModelNotFoundError,
+  isQuotaExhaustedError,
   isRetryableError,
   isToolsUnsupportedError,
   MAX_PROVIDER_RETRIES,
@@ -2822,7 +2823,12 @@ export async function startRun(
             // to another model would fail the same way and just burn the chain. A
             // partial turn doesn't stop the hop: it is retracted first, exactly as
             // for a retry on the same model, so two models' output is never spliced.
-            if (isRetryableError(e) && hopToFallback((e as Error).message, discardPartial)) {
+            // An exhausted quota is final for this account but not for another
+            // provider's, so it hops too.
+            if (
+              (isRetryableError(e) || isQuotaExhaustedError(e)) &&
+              hopToFallback((e as Error).message, discardPartial)
+            ) {
               sendMessages = buildWindow()
               attempt = -1 // fresh transient-retry budget for the new model
               continue streaming
