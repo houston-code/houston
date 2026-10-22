@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { nativeKind, scrubPePdbPaths, scrubNativePaths } from './scrub-native-paths.mjs'
+import { nativeKind, scrubPePdbPaths, scrubNativePaths, stripRootFromStrings } from './scrub-native-paths.mjs'
 
 /**
  * A minimal PE32+ image: DOS header, PE signature, COFF header, optional header with
@@ -88,6 +88,43 @@ describe('scrubPePdbPaths', () => {
   })
 })
 
+describe('stripRootFromStrings', () => {
+  const ROOT = 'D:\\a\\houston\\houston'
+  const cstr = (b, at) => b.toString('utf8', at, b.indexOf(0, at))
+
+  it('cuts the root and its separator out of a narrow string, in place', () => {
+    const src = `${ROOT}\\node_modules\\node-pty\\deps\\winpty\\src\\agent\\Agent.cc`
+    const buf = Buffer.concat([Buffer.from('xx\0', 'utf8'), Buffer.from(src + '\0', 'utf8'), Buffer.from('tail', 'utf8')])
+    const before = buf.length
+    expect(stripRootFromStrings(buf, ROOT)).toBe(1)
+    expect(buf.length).toBe(before)
+    expect(cstr(buf, 3)).toBe('node_modules\\node-pty\\deps\\winpty\\src\\agent\\Agent.cc')
+    // The freed tail of the old string is NULs, and the bytes after it are untouched.
+    expect(buf.toString('utf8', buf.length - 4)).toBe('tail')
+    expect(buf.includes(Buffer.from('houston'))).toBe(false)
+  })
+
+  it('matches forward slashes and UTF-16LE strings', () => {
+    const fwd = Buffer.from('D:/a/houston/houston/src/x.cc\0', 'utf8')
+    expect(stripRootFromStrings(fwd, ROOT)).toBe(1)
+    expect(cstr(fwd, 0)).toBe('src/x.cc')
+
+    const wide = Buffer.from(`${ROOT}\\src\\y.cc\0`, 'utf16le')
+    expect(stripRootFromStrings(wide, ROOT)).toBe(1)
+    expect(wide.toString('utf16le', 0, wide.indexOf(Buffer.from('\0\0', 'latin1')) + 1).replace(/\0+$/, '')).toBe(
+      'src\\y.cc'
+    )
+    expect(wide.includes(Buffer.from('houston', 'utf16le'))).toBe(false)
+  })
+
+  it('handles several strings and leaves a lookalike prefix alone', () => {
+    const buf = Buffer.from(`${ROOT}\\a.cc\0${ROOT}2\\b.cc\0${ROOT}\\c.cc\0`, 'utf8')
+    expect(stripRootFromStrings(buf, ROOT)).toBe(2)
+    const parts = buf.toString('utf8').split('\0').filter(Boolean)
+    expect(parts).toEqual(['a.cc', `${ROOT}2\\b.cc`, 'c.cc'])
+  })
+})
+
 describe('scrubNativePaths', () => {
   function tree() {
     const dir = mkdtempSync(join(tmpdir(), 'scrub-native-'))
@@ -118,10 +155,18 @@ describe('scrubNativePaths', () => {
       const strip = () => {
         throw new Error('strip must not run on Windows')
       }
-      const changed = scrubNativePaths(dir, 'win32', { strip })
+      // A PE with no PDB path but an embedded __FILE__ string under the build root.
+      const agent = join(dir, 'build', 'Release', 'winpty-agent.exe')
+      const pe = fakePe('winpty-agent.pdb')
+      Buffer.from('C:\\build\\repo\\src\\Agent.cc\0', 'utf8').copy(pe, 0x300)
+      writeFileSync(agent, pe)
+
+      const changed = scrubNativePaths(dir, 'win32', { strip, root: 'C:\\build\\repo' })
       const file = join(dir, 'build', 'Release', 'conpty.node')
-      expect(changed).toEqual([file])
+      expect(changed.sort()).toEqual([file, agent].sort())
       expect(pdbAt(readFileSync(file))).toBe('conpty.pdb')
+      const scrubbed = readFileSync(agent)
+      expect(scrubbed.toString('utf8', 0x300, scrubbed.indexOf(0, 0x300))).toBe('src\\Agent.cc')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

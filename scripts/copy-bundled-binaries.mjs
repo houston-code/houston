@@ -97,7 +97,7 @@ export default async function afterPack(context) {
   // paths; scrub them before signing. See scrub-native-paths.mjs.
   const unpacked = join(resourcesDir, 'app.asar.unpacked')
   if (existsSync(unpacked)) {
-    const scrubbed = scrubNativePaths(unpacked, electronPlatformName)
+    const scrubbed = scrubNativePaths(unpacked, electronPlatformName, { root })
     console.log(`✓ scrubbed build paths from ${scrubbed.length} native binaries`)
   }
 }

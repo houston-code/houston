@@ -4,7 +4,8 @@
 //
 // Compilers record where they built: Mach-O binaries carry debug stabs (SO/OSO entries
 // naming each source and object file), and Windows PE binaries carry the absolute path
-// of their .pdb in a CodeView debug record. Shipped as-is, every locally built package
+// of their .pdb in a CodeView debug record and, where the code uses __FILE__ (winpty's
+// assertions do), each source file's absolute path as a string. Shipped as-is, every locally built package
 // names the builder's home directory, and CI builds name the runner's checkout. Neither
 // is needed at runtime: stabs only serve a debugger with the object files at hand, and
 // the loader never reads the .pdb path.
@@ -79,6 +80,41 @@ export function scrubPePdbPaths(buf) {
   return changed
 }
 
+/**
+ * Pure: cut `root` out of every string embedded in `buf` that starts with it, in place.
+ * A match must be followed by a path separator, which goes too, so
+ * `D:\a\repo\src\x.cc` becomes `src\x.cc`. The rest of the string moves left and the
+ * freed bytes become NULs, so the string stays NUL-terminated within its original span
+ * and nothing else in the file moves. Both slash forms are matched, as narrow (UTF-8)
+ * strings and as UTF-16LE ones (MSVC's wide __FILEW__). Returns how many strings changed.
+ */
+export function stripRootFromStrings(buf, root) {
+  const roots = [...new Set([root, root.replace(/\\/g, '/'), root.replace(/\//g, '\\')])]
+  let changed = 0
+  for (const r of roots) {
+    for (const wide of [false, true]) {
+      const unit = wide ? 2 : 1
+      const needle = Buffer.from(r, wide ? 'utf16le' : 'utf8')
+      const at = (i) => (wide ? buf.readUInt16LE(i) : buf[i])
+      let i = buf.indexOf(needle)
+      while (i !== -1) {
+        const after = i + needle.length
+        const sep = after + unit <= buf.length ? at(after) : 0
+        if (sep === 0x5c || sep === 0x2f) {
+          let end = after + unit
+          while (end + unit <= buf.length && at(end) !== 0) end += unit
+          const rest = Buffer.from(buf.subarray(after + unit, end))
+          rest.copy(buf, i)
+          buf.fill(0, i + rest.length, end)
+          changed++
+        }
+        i = buf.indexOf(needle, i + unit)
+      }
+    }
+  }
+  return changed
+}
+
 /** Every regular file under `dir`, as absolute paths. */
 function walk(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
@@ -89,10 +125,11 @@ function walk(dir) {
 
 /**
  * Scrub every native binary under `dir` for the platform being packaged: strip debug
- * symbols from Mach-O files with the system `strip`, and rewrite PE files' PDB paths.
+ * symbols from Mach-O files with the system `strip`, and on PE files rewrite the PDB
+ * path and cut `root` (the checkout the addons were built in) out of embedded strings.
  * Linux needs nothing: its addons build without debug info. Returns the files changed.
  */
-export function scrubNativePaths(dir, platform, { strip = (f) => execFileSync('strip', ['-S', f]) } = {}) {
+export function scrubNativePaths(dir, platform, { root, strip = (f) => execFileSync('strip', ['-S', f]) } = {}) {
   const changed = []
   for (const file of walk(dir)) {
     const buf = readFileSync(file)
@@ -100,9 +137,12 @@ export function scrubNativePaths(dir, platform, { strip = (f) => execFileSync('s
     if (platform === 'darwin' && kind === 'macho') {
       strip(file)
       changed.push(file)
-    } else if (platform === 'win32' && kind === 'pe' && scrubPePdbPaths(buf) > 0) {
-      writeFileSync(file, buf)
-      changed.push(file)
+    } else if (platform === 'win32' && kind === 'pe') {
+      const n = scrubPePdbPaths(buf) + (root ? stripRootFromStrings(buf, root) : 0)
+      if (n > 0) {
+        writeFileSync(file, buf)
+        changed.push(file)
+      }
     }
   }
   return changed
