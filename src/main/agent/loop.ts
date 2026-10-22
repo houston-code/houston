@@ -3680,8 +3680,8 @@ export async function startRun(
             // granted-host set stands in for the generic kind override on network calls.
             // A GitHub call's grant is scoped to the repository it acts on, read fresh per
             // call so a remote changed mid-chat gets a key (and a prompt) of its own.
-            const ghRepo =
-              tool.kind === 'network' && call.name.startsWith('gh_') ? await ghRepoKey(workspace) : null
+            const ghRepoCall = tool.kind === 'network' && call.name.startsWith('gh_')
+            const ghRepo = ghRepoCall ? await ghRepoKey(workspace) : null
             const netDest = tool.kind === 'network' ? networkDestination(call.name, execArgs, ghRepo) : null
             const kindOverride =
               netDest !== null ? run.networkHosts.has(netDest) : run.override.has(tool.kind)
@@ -3841,11 +3841,16 @@ export async function startRun(
                 // judgement its receipt records), so full auto can offer network now.
                 let networkBlocked = false
                 try {
-                  const ctx = makeToolContext(
-                    call.id,
-                    (img) => toolImages.push(img),
-                    (doc) => toolDocs.push(doc)
-                  )
+                  const ctx: ToolContext = {
+                    ...makeToolContext(
+                      call.id,
+                      (img) => toolImages.push(img),
+                      (doc) => toolDocs.push(doc)
+                    ),
+                    // gh is pinned to the repository this call's grant was keyed on, so
+                    // what ran is what the user approved (see ghRunner).
+                    ...(ghRepoCall ? { ghRepo } : {})
+                  }
                   output = await tool.execute(
                     execArgs,
                     tool.kind === 'shell'

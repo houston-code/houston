@@ -6266,6 +6266,56 @@ describe('egress hardening', () => {
       expect(approvalCallIds(r)).toEqual(['c1', 'c2'])
     })
 
+    it('hands each gh call the repository its grant was keyed on, so gh is pinned to it', async () => {
+      const pinned: Array<string | null | undefined> = []
+      const pinProbe = (name: string): ToolDef => ({
+        ...probe(name),
+        execute: async (_args, ctx) => {
+          pinned.push(ctx.ghRepo)
+          // Repointing the checkout mid-call (e.g. a gh-resolved change) can't move it.
+          h.ghRepo = 'github.com:evil/app'
+          return 'ok'
+        }
+      })
+      h.probeTools = [pinProbe('gh_pr_comment'), pinProbe('gh_pr_list')]
+      h.ghRepo = 'github.com:acme/app'
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          callOf('c1', 'gh_pr_comment', { body: 'x' }),
+          callOf('c2', 'gh_pr_comment', { body: 'y' }),
+          callOf('l1', 'gh_pr_list'),
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // c2 asked again (the key moved to evil/app) and ran pinned to that, the repository
+      // its own prompt named.
+      expect(approvalCallIds(r)).toEqual(['c1', 'c2'])
+      expect(approvals(r)[1].networkScope).toMatch(/on evil\/app/)
+      expect(pinned).toEqual(['github.com:acme/app', 'github.com:evil/app', 'github.com:evil/app'])
+    })
+
+    it('hands a gh call with no repository a null pin, which the tool refuses', async () => {
+      const pinned: Array<string | null | undefined> = []
+      h.probeTools = [
+        {
+          ...probe('gh_pr_comment'),
+          execute: async (_args, ctx) => {
+            pinned.push(ctx.ghRepo)
+            return 'ok'
+          }
+        }
+      ]
+      h.ghRepo = null
+      await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [callOf('c1', 'gh_pr_comment', { body: 'x' }), [{ type: 'done', stopReason: 'end_turn' }]]
+      })
+      expect(pinned).toEqual([null])
+    })
+
     it('asks once per host for view_localhost in full auto, and again before clicking', async () => {
       h.probeTools = [probe('view_localhost')]
       const r = await run({
