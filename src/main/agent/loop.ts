@@ -20,6 +20,7 @@ import type {
   ToolSchema
 } from '@shared/agent'
 import type { PlanReadiness } from '@shared/planReadiness'
+import type { ChatStatusMap, PendingPrompt } from '@shared/chatStatus'
 import type { Todo } from '@shared/todos'
 import type { TurnReceipt } from '@shared/evidence'
 import {
@@ -538,6 +539,84 @@ export function onActiveRunsChanged(fn: (ids: string[]) => void): () => void {
 function notifyActiveRunsChanged(): void {
   const ids = runningConversationIds()
   for (const fn of runsChangedListeners) fn(ids)
+  noteChatStatusChanged()
+}
+
+/**
+ * The live status of every conversation with a run: whether it is running and which
+ * prompts it is blocked on. Feeds the sidebar's per-chat signal (working vs. needs
+ * input); conversations without a live run are absent (idle).
+ */
+export function chatStatusSnapshot(): ChatStatusMap {
+  const out: ChatStatusMap = {}
+  for (const [conversationId, runId] of runsByConversation) {
+    const run = runs.get(runId)
+    out[conversationId] = { running: true, pending: run ? pendingPromptSummary(run) : [] }
+  }
+  return out
+}
+
+/** The prompts blocking a run, oldest first within each kind, reduced for display. */
+function pendingPromptSummary(run: RunState): PendingPrompt[] {
+  return [
+    ...[...run.pendingApprovals.values()].map((a): PendingPrompt => ({ kind: 'approval', label: a.name })),
+    ...[...run.pendingQuestions.values()].map((): PendingPrompt => ({ kind: 'question' })),
+    ...[...run.pendingPlans.values()].map((p): PendingPrompt => ({ kind: 'plan', label: p.title })),
+    ...[...run.pendingElicitations.values()].map(
+      (e): PendingPrompt => ({ kind: 'elicitation', label: e.serverId })
+    )
+  ]
+}
+
+const chatStatusListeners = new Set<(status: ChatStatusMap) => void>()
+let chatStatusQueued = false
+
+/**
+ * Subscribe to chat-status changes (a run started or ended, or a prompt began or
+ * stopped blocking one). Changes inside one tick are coalesced into one call, so an
+ * approval resolved and the next one raised in the same step broadcast once.
+ */
+export function onChatStatusChanged(fn: (status: ChatStatusMap) => void): () => void {
+  chatStatusListeners.add(fn)
+  return () => chatStatusListeners.delete(fn)
+}
+
+function noteChatStatusChanged(): void {
+  if (chatStatusQueued || chatStatusListeners.size === 0) return
+  chatStatusQueued = true
+  queueMicrotask(() => {
+    chatStatusQueued = false
+    const status = chatStatusSnapshot()
+    for (const fn of chatStatusListeners) fn(status)
+  })
+}
+
+/**
+ * A Map that reports every change, used for a run's pending-prompt maps so the chat
+ * status follows them without a notify call at each of their many set/delete sites
+ * (one missed call would leave a chat showing "needs input" after it was answered).
+ */
+class ObservedMap<K, V> extends Map<K, V> {
+  private readonly onChange: () => void
+  constructor(onChange: () => void) {
+    super()
+    this.onChange = onChange
+  }
+  override set(key: K, value: V): this {
+    super.set(key, value)
+    this.onChange()
+    return this
+  }
+  override delete(key: K): boolean {
+    const had = super.delete(key)
+    if (had) this.onChange()
+    return had
+  }
+  override clear(): void {
+    const had = this.size > 0
+    super.clear()
+    if (had) this.onChange()
+  }
 }
 
 export function cancelRun(runId: string): void {
@@ -1021,12 +1100,12 @@ export async function startRun(
     steering: [],
     approvals: new Map(),
     questions: new Map(),
-    pendingApprovals: new Map(),
-    pendingQuestions: new Map(),
+    pendingApprovals: new ObservedMap(noteChatStatusChanged),
+    pendingQuestions: new ObservedMap(noteChatStatusChanged),
     planDecisions: new Map(),
-    pendingPlans: new Map(),
+    pendingPlans: new ObservedMap(noteChatStatusChanged),
     elicitations: new Map(),
-    pendingElicitations: new Map(),
+    pendingElicitations: new ObservedMap(noteChatStatusChanged),
     elicitSeq: 0,
     override: seededOverride.kinds,
     networkHosts: seededOverride.networkHosts,

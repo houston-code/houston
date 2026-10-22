@@ -40,7 +40,7 @@ import {
   suggestBranch
 } from './lib/worktree'
 import { useApplyTheme } from './hooks/useApplyTheme'
-import { useRunningConversations } from './hooks/useRunningConversations'
+import { useChatStatus } from './hooks/useChatStatus'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
 import { useBackgroundShells } from './hooks/useBackgroundShells'
 import { useTerminals } from './hooks/useTerminals'
@@ -397,9 +397,19 @@ export default function App(): JSX.Element {
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
 
-  // Conversations with a live run, used to mark them "running" in the sidebar
-  // (including chats running in the background, not just the open one).
-  const runningIds = useRunningConversations()
+  // Live status of every conversation with a run (running, blocking prompts), used
+  // to mark chats in the sidebar, including ones running in the background.
+  const chatStatus = useChatStatus()
+  // The running set only changes when a run starts or ends, not when a prompt comes
+  // or goes, so key it by its members: the refresh below must not fire per prompt.
+  const runningKey = Object.keys(chatStatus)
+    .filter((id) => chatStatus[id].running)
+    .sort()
+    .join('\n')
+  const runningIds = useMemo<ReadonlySet<string>>(
+    () => new Set(runningKey ? runningKey.split('\n') : []),
+    [runningKey]
+  )
 
   // Refresh the conversation list whenever the running set changes so a background
   // run finishing updates its title/usage — and its `errored` flag, which the

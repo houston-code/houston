@@ -170,10 +170,10 @@ export const IPC = {
   agentPendingPrompts: 'agent:pendingPrompts',
   /** Query the live run's streamed-but-unpersisted transcript, to replay on re-adopt (mid-turn re-open). */
   agentLiveTranscript: 'agent:liveTranscript',
-  /** Query the ids of every conversation with a live run (drives the sidebar "running" dot). */
-  agentRunningList: 'agent:runningList',
-  /** Main → renderer: the set of conversations with a live run changed (started/ended). */
-  agentRunsChanged: 'agent:runsChanged',
+  /** Query the live status (running, blocking prompts) of every conversation with a run. */
+  chatStatusList: 'chat:statusList',
+  /** Main → renderer: a run started or ended, or a prompt began or stopped blocking one. */
+  chatStatusChanged: 'chat:statusChanged',
   agentEvent: 'agent:event',
   // Session proposals (propose_session cards)
   /** Renderer → main: start a proposed session as its own chat. */

@@ -66,6 +66,7 @@ import { getMcpStatuses } from './mcp/manager'
 import { openExternalSafely } from './safeExternal'
 import { shareHouston, shareHoustonFromMenu, shareHoustonVia } from './share'
 import type { ShareResult, ShareTarget } from '@shared/share'
+import type { ChatStatusMap } from '@shared/chatStatus'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
 import {
@@ -82,8 +83,8 @@ import {
   activeRunForConversation,
   pendingPromptsForConversation,
   liveTranscriptForConversation,
-  runningConversationIds,
-  onActiveRunsChanged
+  chatStatusSnapshot,
+  onChatStatusChanged
 } from './agent/loop'
 import { killShell, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds } from './agent/queue'
@@ -1481,17 +1482,18 @@ export function registerIpc(): void {
     liveTranscriptForConversation(conversationId)
   )
 
-  // The ids of every conversation with a live run, for the sidebar "running" dot.
-  // The renderer reads this once on load, then keeps it current via the
-  // IPC.agentRunsChanged broadcast below.
-  ipcMain.handle(IPC.agentRunningList, (): string[] => runningConversationIds())
+  // The live status of every conversation with a run (running, and which prompts
+  // block it), for the sidebar's per-chat signal. The renderer reads this once on
+  // load, then keeps it current via the IPC.chatStatusChanged broadcast below.
+  ipcMain.handle(IPC.chatStatusList, (): ChatStatusMap => chatStatusSnapshot())
 
-  // Push the running set to every renderer whenever a run starts or ends, so the
-  // sidebar dot stays live without polling. Broadcast (not sender-scoped) because
-  // a run can finish while a different window is focused.
-  onActiveRunsChanged((ids) => {
+  // Push the status to every renderer whenever a run starts or ends or a prompt
+  // starts or stops blocking one, so the sidebar stays live without polling.
+  // Broadcast (not sender-scoped) because a run can block or finish while a
+  // different window is focused.
+  onChatStatusChanged((status) => {
     for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.agentRunsChanged, ids)
+      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.chatStatusChanged, status)
     }
   })
 
