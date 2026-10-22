@@ -95,12 +95,15 @@ import { resolveRipgrep, searchContents } from './search'
 import { FALLBACK_SKIP_DIRS, gitListFiles, hasHiddenSegment } from './fileScope'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type EditStrategy } from './edit-match'
-import { displayLines, numberedLine, numberLines, numberWidth } from './line-numbers'
-import type { FileReadTracker, StaleWriteReason } from './readCache'
+import { displayLines, numberLines, numberWidth } from './line-numbers'
+import { MAX_READ_CHARS, numberedRead, streamNumberedRead } from './read-lines'
+import { fileDigest, type FileReadTracker, type StaleWriteReason } from './readCache'
 import type { EvidenceDraft } from './evidence'
 import { isSensitivePath } from './sensitive-paths'
 import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
+
+export { numberedRead }
 import { ghRepoEnv, ghRepoKey, resolveGh, runGh, type GhExec } from './github'
 import { runReadGit, captureTry, uncommittedDiffBase } from './gitRead'
 import { otherCheckout, otherCheckoutHint } from './other-checkout'
@@ -338,8 +341,9 @@ export interface ToolDef {
   execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<string>
 }
 
-const MAX_READ_CHARS = 100_000
 const MAX_GLOB_RESULTS = 200
+/** Largest notebook read_file parses and renders; JSON has to be held whole to parse. */
+const MAX_NOTEBOOK_BYTES = 64 * 1024 * 1024
 
 /** Whether `abs` is `root` itself or lives inside it. */
 function isWithin(root: string, abs: string): boolean {
@@ -500,13 +504,16 @@ const readFile: ToolDef = {
     // than returning garbled bytes as text.
     const imageType = imageMediaTypeForPath(rel)
     if (imageType) {
-      const buf = await fs.readFile(abs)
-      // Every outcome below counts as read, even the ones that can't attach: a write
-      // refused as "unread" would send the model back to a read that can't show more.
-      ctx.fileTracker?.noteRead(abs, buf)
-      if (buf.byteLength > MAX_ATTACH_IMAGE_BYTES) {
-        return `[image: ${rel} (${humanSize(buf.byteLength)}): too large to attach; limit is ${humanSize(MAX_ATTACH_IMAGE_BYTES)}]`
+      // Size first: an image too large to attach is never loaded, only hashed.
+      const size = (await fs.stat(abs)).size
+      if (size > MAX_ATTACH_IMAGE_BYTES) {
+        // Every outcome counts as read, even the ones that can't attach: a write
+        // refused as "unread" would send the model back to a read that can't show more.
+        ctx.fileTracker?.noteReadDigest(abs, await fileDigest(abs))
+        return `[image: ${rel} (${humanSize(size)}): too large to attach; limit is ${humanSize(MAX_ATTACH_IMAGE_BYTES)}]`
       }
+      const buf = await fs.readFile(abs)
+      ctx.fileTracker?.noteRead(abs, buf)
       if (!ctx.attachImage) {
         return `[image: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context]`
       }
@@ -514,11 +521,13 @@ const readFile: ToolDef = {
       return `[image: ${rel} (${imageType}, ${humanSize(buf.byteLength)}): attached below for viewing]`
     }
     if (isPdfPath(rel)) {
+      const size = (await fs.stat(abs)).size
+      if (size > MAX_PDF_BYTES) {
+        ctx.fileTracker?.noteReadDigest(abs, await fileDigest(abs))
+        return `[pdf: ${rel} (${humanSize(size)}): too large to attach; limit is ${humanSize(MAX_PDF_BYTES)}. Extract its text with run_shell (e.g. pdftotext) instead.]`
+      }
       const buf = await fs.readFile(abs)
       ctx.fileTracker?.noteRead(abs, buf)
-      if (buf.byteLength > MAX_PDF_BYTES) {
-        return `[pdf: ${rel} (${humanSize(buf.byteLength)}): too large to attach; limit is ${humanSize(MAX_PDF_BYTES)}. Extract its text with run_shell (e.g. pdftotext) instead.]`
-      }
       if (!ctx.attachDocument) {
         return `[pdf: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context; extract its text with run_shell (e.g. pdftotext)]`
       }
@@ -526,20 +535,33 @@ const readFile: ToolDef = {
       return `[pdf: ${rel} (${humanSize(buf.byteLength)}): attached below for viewing]`
     }
 
-    // Everything else is read as bytes first so a non-text file can be recognized
-    // before it is decoded. Decoding binary as UTF-8 does not fail — it silently
-    // yields replacement characters — so without this check the model would be
-    // handed a wall of mojibake and left to infer that the file was never text.
+    const offset = num(args, 'offset')
+    const limit = num(args, 'limit')
+
+    // A plain text file is streamed: only the lines the listing can show are kept, so
+    // a huge log costs one pass over the disk, not several copies of it in memory.
+    // Binary content is recognized from its first bytes before anything is decoded
+    // (decoding binary as UTF-8 doesn't fail, it yields a wall of mojibake).
+    if (!isNotebookPath(rel)) {
+      const read = await streamNumberedRead(abs, offset, limit)
+      ctx.fileTracker?.noteReadDigest(abs, read.digest)
+      if (read.binary) {
+        return `[binary file: ${rel} (${humanSize(read.bytes)}): not text, so there is nothing to show. Inspect it with run_shell (e.g. file, xxd, strings).]`
+      }
+      return read.output
+    }
+
+    // A notebook has to be parsed whole, so one too large to hold is described, not read.
+    const notebookSize = (await fs.stat(abs)).size
+    if (notebookSize > MAX_NOTEBOOK_BYTES) {
+      ctx.fileTracker?.noteReadDigest(abs, await fileDigest(abs))
+      return `[notebook: ${rel} (${humanSize(notebookSize)}): too large to render (limit ${humanSize(MAX_NOTEBOOK_BYTES)}), most likely from stored cell outputs. Inspect it with run_shell (e.g. jq '.cells[].source') or clear its outputs first.]`
+    }
     const buf = await fs.readFile(abs)
     ctx.fileTracker?.noteRead(abs, buf)
     if (looksBinary(buf)) {
       return `[binary file: ${rel} (${humanSize(buf.byteLength)}): not text, so there is nothing to show. Inspect it with run_shell (e.g. file, xxd, strings).]`
     }
-
-    const offset = num(args, 'offset')
-    const limit = num(args, 'limit')
-
-    if (!isNotebookPath(rel)) return numberedRead(buf.toString('utf8'), offset, limit)
 
     // A notebook is JSON, so it would "read" fine as text — as a wall of escaped
     // source split across line arrays and interleaved with base64 outputs. Render
@@ -571,47 +593,6 @@ const readFile: ToolDef = {
     }
     return data || '[empty file]'
   }
-}
-
-/**
- * A text file as `read_file` shows it: each line prefixed with its number (see
- * line-numbers.ts), `offset`/`limit` selecting a 1-based range, and the output cut
- * at a whole line once it reaches {@link MAX_READ_CHARS}. A range carries a
- * `[lines a-b of n]` header; a cut says which line it stopped after and where to
- * pick up, so the model can page through a large file without guessing.
- */
-export function numberedRead(text: string, offset?: number, limit?: number): string {
-  const lines = displayLines(text)
-  const total = lines.length
-  if (total === 0) return '[empty file]'
-  const ranged = offset !== undefined || limit !== undefined
-  const start = Math.max(0, Math.floor(offset ?? 1) - 1)
-  const end = limit !== undefined ? Math.min(total, start + Math.max(0, Math.floor(limit))) : total
-  if (start >= end) {
-    return `[no lines in range: offset ${start + 1}, file has ${total} line${total === 1 ? '' : 's'}]`
-  }
-
-  const width = numberWidth(total)
-  const rows: string[] = []
-  let size = 0
-  for (let i = start; i < end; i++) {
-    const row = numberedLine(i + 1, width, lines[i])
-    if (rows.length > 0 && size + 1 + row.length > MAX_READ_CHARS) break
-    rows.push(row)
-    size += (rows.length > 1 ? 1 : 0) + row.length
-  }
-  const last = start + rows.length // 1-based number of the last line shown
-  let notice = ''
-  if (rows[0].length > MAX_READ_CHARS) {
-    // A single line longer than the whole budget (minified code, a data blob) can't
-    // be shown whole; cut it rather than show nothing, and say so.
-    rows[0] = rows[0].slice(0, MAX_READ_CHARS)
-    notice = `\n[truncated: line ${start + 1} is ${lines[start].length} chars, cut at ${MAX_READ_CHARS}. The file has ${total} line${total === 1 ? '' : 's'}${last < total ? `; the next one is ${last + 1}` : ''}. Inspect long lines with run_shell (e.g. cut -c or fold).]`
-  } else if (last < end) {
-    notice = `\n[truncated at ${MAX_READ_CHARS} chars: showing lines ${start + 1}-${last} of ${total}. Continue with offset ${last + 1}.]`
-  }
-  const header = ranged ? `[lines ${start + 1}-${last} of ${total}]\n` : ''
-  return `${header}${rows.join('\n')}${notice}`
 }
 
 /**

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { promises as fs } from 'node:fs'
+import { createReadStream, promises as fs } from 'node:fs'
 import type { ImageAttachment } from '@shared/images'
 import type { DocumentAttachment } from '@shared/agent'
 import { ASK_USER_NAME, type ToolKind } from './tools'
@@ -377,6 +377,13 @@ export function contentDigest(data: Buffer | string): string {
   return createHash('sha256').update(data).digest('base64')
 }
 
+/** {@link contentDigest} of a file, read in chunks so a large one is never held in memory. */
+export async function fileDigest(abs: string): Promise<string> {
+  const hash = createHash('sha256')
+  for await (const chunk of createReadStream(abs) as AsyncIterable<Buffer>) hash.update(chunk)
+  return hash.digest('base64')
+}
+
 /** Why a write was refused: never read here, or changed on disk since. */
 export type StaleWriteReason = 'unread' | 'changed'
 
@@ -406,6 +413,11 @@ export class FileReadTracker {
   /** Record that `abs` was read and held `data`. */
   noteRead(abs: string, data: Buffer | string): void {
     this.remember(abs, contentDigest(data))
+  }
+
+  /** Record that `abs` was read, by the {@link contentDigest} of what it held. */
+  noteReadDigest(abs: string, digest: string): void {
+    this.remember(abs, digest)
   }
 
   /** Record that this run wrote `data` to `abs`. */
