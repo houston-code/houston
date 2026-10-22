@@ -27,7 +27,6 @@ export const DOCS_DIR = resolve(__dirname, "..", "public", "docs");
 export const SITEMAP = resolve(__dirname, "..", "public", "sitemap.xml");
 export const GUIDE_PATH = "docs/houston-guide.md";
 const ORIGIN = "https://houstoncode.ai";
-const REPO = "https://github.com/houston-code/houston";
 
 // ---- Source ----
 
@@ -441,7 +440,6 @@ ${content}
     return { file: `${s.slug}.html`, slug: s.slug, title: s.title, description: describe(content), body };
   });
 
-  const source = `${REPO}/blob/${version}/${GUIDE_PATH}`;
   const index = {
     file: "index.html",
     slug: "index",
@@ -451,8 +449,7 @@ ${content}
         <p class="docs-lede">How to use Houston, the cross-platform coding agent that works with your own model. These pages describe <strong>Houston ${escapeHtml(version)}</strong>, the latest release.</p>
         <ul class="docs-topics">
 ${pages.map((p) => `          <li><a href="/docs/${p.slug}">${inline(p.title)}</a><p>${escapeHtml(p.description)}</p></li>`).join("\n")}
-        </ul>
-        <p class="docs-source">These pages are generated from the <a href="${source}" rel="noopener">product guide in the Houston repository</a> at ${escapeHtml(version)}. The app has the same guide built in: ask Houston how one of its features works.</p>`,
+        </ul>`,
   };
 
   return [index, ...pages].map((p) => ({ ...p, output: shell({ ...p, version, sections }) }));

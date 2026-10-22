@@ -421,7 +421,6 @@ section { padding: 96px 0; }
 .docs-topics li { padding: 16px; border: 1px solid var(--n3); border-radius: var(--r-2); background: var(--n2); }
 .docs-topics a { font-weight: 600; }
 .docs-topics p { margin-top: 6px; font-size: var(--fs-2); color: var(--n4); }
-.docs-source { margin-top: 32px; font-size: var(--fs-2); color: var(--n4); }
 
 /* ---- Contact ---- */
 .contact { padding: 64px 0 96px; }
