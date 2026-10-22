@@ -17,27 +17,32 @@ npm run goldens:update # regenerate agent goldens after an intentional change
 
 Run `typecheck`, `test`, and `build` before opening a PR.
 
-## Client parity (GUI / TUI / headless)
+## Client parity (GUI / TUI / headless / ACP)
 
-Houston has three clients over one shared agent core: the GUI renderer, the
-interactive TUI (`src/main/tui.ts`), and the one-shot headless CLI
-(`src/main/headless.ts`). They all consume the same `AgentEvent` stream
+Houston has four clients over one shared agent core: the GUI renderer, the
+interactive TUI (`src/main/tui.ts`), the one-shot headless CLI
+(`src/main/headless.ts`), and the Agent Client Protocol server for editors
+(`src/main/acp.ts`, `--acp`). They all consume the same `AgentEvent` stream
 (`src/shared/agent.ts`) and resolve interactive tool calls through the same
 resolver pattern (`resolveApproval` / `resolveQuestion` / `resolvePlan`). Keep
 them from drifting:
 
-- **Every `AgentEvent` variant must be handled by all three consumers.** Each
+- **Every `AgentEvent` variant must be handled by all four consumers.** Each
   event switch ends in an exhaustiveness guard (`assertNever`, or a
   `const _: never = e`), so adding a variant to the union is a compile error until
   every client handles it. Do not defeat the guard with a catch-all `default` that
   swallows unknown events.
-- **Any event the loop blocks on must be resolved by all three clients.** A
+- **Any event the loop blocks on must be resolved by all four clients.** A
   blocking tool (approval, `ask_user`, `present_plan`) awaits its resolver; a
   client that drops the event hangs the run. The GUI resolves interactively, the
-  TUI prompts, and headless auto-resolves non-interactively. The parity test in
-  `tui.test.ts` (`resolves every blocking interaction`) is the runtime backstop.
-- When you add an `AgentEvent` or a blocking tool, wire the GUI, the TUI, and
-  headless in the same change, and add/extend the parity coverage.
+  TUI prompts, headless auto-resolves non-interactively, and ACP asks the editor
+  (`session/request_permission`, `elicitation/create`) or auto-resolves like headless
+  when the editor can't ask. The parity tests in `tui.test.ts` and `acp.test.ts`
+  (`resolves every blocking interaction`) are the runtime backstop; the ACP one is
+  keyed by `BLOCKING_EVENT_TYPES` in `src/shared/agent.ts`, so list a new blocking
+  event there.
+- When you add an `AgentEvent` or a blocking tool, wire the GUI, the TUI, headless,
+  and ACP in the same change, and add/extend the parity coverage.
 - **A prompt Houston writes for the user is never shown as their words.** Build it
   with a constructor in `src/shared/promptInvocation.ts` (`commandTurn`, `agentTurn`,
   `shipTurn`, `spawnedTurn`) and send it as an invoked turn (`onInvoke` in the GUI,

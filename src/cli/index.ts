@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { parseTuiArgs, type TuiOptions } from '../main/tui'
 import { parseHeadlessArgs, type HeadlessOptions } from '../main/headless'
-import { readAllStdin, runTuiEntry, runHeadlessEntry, stdinIsPiped } from '../main/terminalEntry'
+import { readAllStdin, runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from '../main/terminalEntry'
 import { configureAgentHost } from '../main/agentHost'
 import {
   addPermissionRule,
@@ -84,6 +84,7 @@ Usage:
   houston [options]                    stay-resident interactive session (bare command; same as -i)
   houston -p "<prompt>" [options]      one-shot run; assistant text on stdout
   houston -p - [options] < task.md     one-shot run with the prompt read from stdin
+  houston --acp                        serve the Agent Client Protocol on stdio, for editors
 
   houston providers [...]              manage model providers and their API keys
 
@@ -217,6 +218,7 @@ async function main(): Promise<number> {
   }
 
   const mode = selectRunMode(argv, process.cwd(), Boolean(process.stdin.isTTY), stdinIsPiped())
+  if (mode.kind === 'acp') return runAcpEntry({ version: VERSION })
   if (mode.kind === 'tui') return runTuiEntry(mode.options, { version: VERSION })
   if (mode.kind === 'headless') return runHeadlessEntry(mode.options, { version: VERSION })
 
@@ -242,14 +244,15 @@ function providersDeps(): ProvidersDeps {
 }
 
 export type RunMode =
+  | { kind: 'acp' }
   | { kind: 'tui'; options: TuiOptions }
   | { kind: 'headless'; options: HeadlessOptions }
   | { kind: 'usage' }
 
 /**
  * Decide what a standalone-CLI invocation runs, once `-h`/`-v`/node-version have
- * been ruled out. Explicit modes stay explicit — `-i` (or `--interactive`/`--tui`)
- * wins, then `-p` — but unlike the desktop binary (where a bare launch opens the
+ * been ruled out. Explicit modes stay explicit — `--acp` first, then `-i` (or
+ * `--interactive`/`--tui`), then `-p` — but unlike the desktop binary (where a bare launch opens the
  * GUI), a bare `houston` at a TTY defaults to interactive, so typing `houston`
  * alone drops into the REPL just like `houston -i`. A bare invocation with a prompt
  * piped in (`echo "fix the build" | houston --json`) is a one-shot run reading it.
@@ -259,6 +262,8 @@ export type RunMode =
  * unit-testable.
  */
 export function selectRunMode(argv: string[], cwd: string, isTTY: boolean, stdinPiped = false): RunMode {
+  // An editor launching the agent: stdin and stdout are its protocol channel.
+  if (argv.includes('--acp')) return { kind: 'acp' }
   const tui = parseTuiArgs(argv, cwd)
   if (tui) return { kind: 'tui', options: tui }
   const headless = parseHeadlessArgs(argv, cwd, { stdinPiped, bareStdinPrompt: true })

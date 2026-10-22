@@ -254,8 +254,13 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   user-configured shell command, beyond the built-in
   live-activity status bar.
 
-- **IDE integration.** VS Code / JetBrains extensions. Out of scope for a
-  standalone desktop app, but listed for completeness.
+- **IDE integration.** *Shipped as a protocol, not as extensions:* `houston --acp`
+  serves the Agent Client Protocol on stdio, so any ACP-capable editor runs Houston
+  as its agent (sessions, modes, approvals, plans, streamed tool calls and diffs,
+  session load). Still open: routing reads and writes through the editor's `fs/*`
+  methods so edits land in unsaved buffers, running commands in the editor's
+  terminal (`terminal/*`), advertising Houston's slash commands
+  (`available_commands_update`), and per-editor extensions for editors without ACP.
 
 - **Integrated-terminal enhancements.** The in-app terminal ships today as a
   resizable, multi-tab panel of full PTY sessions (interactive programs, colours,
@@ -310,10 +315,10 @@ and nothing is silently dropped):
   *hosted* bot/app side, which needs a multi-tenant backend and an OAuth app
   registration that don't fit a single-user desktop app.
 
-- **IDE / editor embedding** (VS Code/JetBrains extensions). Houston is a
-  standalone GUI desktop app with its own themes, status bar, and shortcuts; an
-  editor-embedded surface is a different product. (IDE extension also listed under
-  *Deferred: polish*.)
+- **Per-editor extensions.** Houston is a standalone GUI desktop app with its own
+  themes, status bar, and shortcuts; an editor-embedded surface built per editor is a
+  different product. Editors that speak ACP get Houston through `houston --acp`
+  instead (see the IDE integration entry above).
 
 - **Record & Replay / Computer-Use skill capture.** Turning a demonstrated
   desktop workflow into a reusable skill needs OS-level computer-use automation,

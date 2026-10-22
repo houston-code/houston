@@ -1008,6 +1008,53 @@ Example workflows with least-privilege `permissions:` are in
 [action/examples](action/examples/), and [action/README.md](action/README.md) lists every
 input and the security model.
 
+## Editor integration (ACP)
+
+Houston speaks the [Agent Client Protocol](https://agentclientprotocol.com) (ACP), so
+any editor that can run ACP agents can use Houston as its agent, with no
+Houston-specific extension. The editor starts `houston --acp` and talks JSON-RPC to it
+over stdio; the standalone CLI and the desktop binary both take the flag.
+
+Add Houston to your editor's list of ACP agents. Editors name the setting
+differently, but each takes a command, its arguments, and optional environment
+variables, along these lines:
+
+```json
+{
+  "agent_servers": {
+    "Houston": {
+      "command": "houston",
+      "args": ["--acp"],
+      "env": { "ANTHROPIC_API_KEY": "sk-..." }
+    }
+  }
+}
+```
+
+Use the full path to `houston` (or `node` with `houston-cli.cjs` as the first
+argument) if the editor doesn't inherit your shell's `PATH`. Credentials resolve as
+in the CLI, so keys already set up with `houston providers set-key` work without the
+`env` entry.
+
+What maps to what:
+
+- **Sessions** are ordinary Houston conversations in the editor's folder: the editor
+  can list and reopen them, and they also appear in the desktop app and in
+  `houston -i --resume <id>`.
+- **Modes** are the approval policies: Plan, Ask, Auto-edit, and Full auto.
+- **Approvals** use the editor's permission prompt (Allow, Always allow, Deny, Always
+  deny). "Always allow" saves a permission rule, exactly as in the app. A plan from
+  Plan mode is accepted or sent back the same way.
+- **Streaming**: replies, reasoning, tool calls (with before/after diffs for edits),
+  the todo list as a plan, and context and cost usage.
+- **Questions and MCP input requests** show as forms when the editor supports them;
+  otherwise they resolve the way headless mode does, so a run never waits forever.
+- **MCP servers** the editor passes for a session are added for that session only.
+
+File reads, writes, and commands still go through Houston's own tools, so the
+sandbox, workspace containment, and your permission rules behave exactly as in the
+other clients. Stdout carries protocol messages only; diagnostics go to stderr.
+
 ## Develop
 
 ```bash

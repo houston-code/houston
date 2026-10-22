@@ -30,7 +30,7 @@ import { wireImageDownscale } from './imageDownscale'
 import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation } from './quit-confirm'
 import { parseHeadlessArgs } from './headless'
 import { parseTuiArgs } from './tui'
-import { runTuiEntry, runHeadlessEntry, stdinIsPiped } from './terminalEntry'
+import { runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from './terminalEntry'
 import { activeBackendId, isSandboxed } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
 
@@ -87,7 +87,7 @@ process.once('exit', () => {
 trustSystemCertificates()
 
 // Bind the agent engine to its Electron-backed host capabilities before any run
-// can start (all three clients — GUI, headless, TUI — boot through here). The
+// can start (every client — GUI, headless, TUI, ACP — boots through here). The
 // engine never imports electron/store/secrets, so these are the wiring points:
 // settings + secret storage, and the view_localhost screenshot backend.
 wireAgentHost()
@@ -207,10 +207,15 @@ function createWindow(): void {
   }
 }
 
+// Agent Client Protocol mode: `Houston --acp`. An ACP-capable editor launches the
+// binary and speaks JSON-RPC over stdio; stdout carries protocol frames only.
+// Checked first, since the editor owns the whole session from here.
+const acp = process.argv.includes('--acp')
+
 // Interactive terminal mode: `Houston -i [--cwd dir] [--approval policy] ...`.
 // A stay-resident REPL with no window; checked before headless so a lone `-i`
 // (no `-p`) picks the interactive path.
-const tui = parseTuiArgs(process.argv, process.cwd())
+const tui = acp ? null : parseTuiArgs(process.argv, process.cwd())
 
 // One-shot headless mode: `Houston -p "<prompt>" [--cwd dir] [--full-auto] [--json]`.
 // Runs the agent without a window and exits with a status code; everything else
@@ -218,9 +223,15 @@ const tui = parseTuiArgs(process.argv, process.cwd())
 // edit, so it needs `--full-auto` (or `--approval auto-edit`) headless. `-p -` (or
 // a bare `-p` with input piped in) reads the prompt from stdin; with no `-p` at all
 // a launch opens the window, whatever stdin holds.
-const headless = tui ? null : parseHeadlessArgs(process.argv, process.cwd(), { stdinPiped: stdinIsPiped() })
+const headless = acp || tui ? null : parseHeadlessArgs(process.argv, process.cwd(), { stdinPiped: stdinIsPiped() })
 
-if (tui) {
+if (acp) {
+  app.whenReady().then(async () => {
+    await initSecrets()
+    const code = await runAcpEntry({ version: app.getVersion() })
+    app.exit(await flushBeforeExit(code))
+  })
+} else if (tui) {
   // The full client wiring lives in terminalEntry.ts, shared verbatim with the
   // standalone CLI (src/cli) — only the exit call is Electron's.
   app.whenReady().then(async () => {

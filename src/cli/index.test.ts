@@ -30,6 +30,13 @@ describe('selectRunMode', () => {
   const tty = (argv: string[]) => selectRunMode(argv, '/cwd', true)
   const piped = (argv: string[]) => selectRunMode(argv, '/cwd', false)
 
+  it('serves ACP on --acp, ahead of every other mode, piped stdin or not', () => {
+    expect(piped(['--acp']).kind).toBe('acp')
+    expect(selectRunMode(['--acp'], '/cwd', false, true).kind).toBe('acp')
+    expect(tty(['--acp', '-i']).kind).toBe('acp')
+    expect(tty(['--acp', '-p', 'x']).kind).toBe('acp')
+  })
+
   it('runs interactive on explicit -i / --interactive / --tui, TTY or not', () => {
     expect(tty(['-i']).kind).toBe('tui')
     expect(piped(['--interactive']).kind).toBe('tui')
