@@ -2275,8 +2275,9 @@ export async function startRun(
         : {}),
       // Back the schedule tools when a scheduler backend is wired. Create fills
       // in the run-scoped fields the tool doesn't take — provider/model, the
-      // workspace, and `run.policy` (read live) so scheduled sessions inherit the
-      // creating chat's CURRENT approval policy, never a more permissive one.
+      // workspace, the chat's own reasoning effort, and `run.policy` (read live) so
+      // scheduled sessions inherit the creating chat's CURRENT approval policy, never
+      // a more permissive one.
       ...(schedulerAvailable
         ? {
             scheduler: {
@@ -2286,6 +2287,7 @@ export async function startRun(
                   providerId: req.providerId,
                   model: req.model,
                   approvalPolicy: run.policy,
+                  ...(run.effort !== undefined ? { reasoningEffort: run.effort } : {}),
                   workspace
                 }),
               list: () => scheduleList(),

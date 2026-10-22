@@ -13,6 +13,8 @@ import type {
   ScheduledRunInput
 } from './agent/scheduler'
 import { spawnSession, isSpawnBackendConfigured } from './agent/spawn'
+import { isApprovalPolicy } from '@shared/types'
+import { isReasoningEffort } from '@shared/agent'
 import { getUserDataDir } from './userData'
 import { log } from './logger'
 
@@ -366,7 +368,10 @@ export function fireViaSpawn(): (s: ScheduledRunInfo) => Promise<void> {
       prompt: s.prompt,
       providerId: s.providerId,
       model: s.model,
-      approvalPolicy: s.approvalPolicy,
+      // The store is a file on disk: an unknown policy would fail open downstream,
+      // so coerce it to the most restrictive, and drop an unknown effort.
+      approvalPolicy: isApprovalPolicy(s.approvalPolicy) ? s.approvalPolicy : 'plan',
+      ...(isReasoningEffort(s.reasoningEffort) ? { reasoningEffort: s.reasoningEffort } : {}),
       workspace: s.workspace
     })
   }

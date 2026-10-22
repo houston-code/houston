@@ -1,4 +1,5 @@
 import type { ApprovalPolicy } from '@shared/types'
+import type { ReasoningEffort } from '@shared/agent'
 
 /**
  * Injection seam for scheduled (recurring or one-shot) agent runs — the engine
@@ -43,6 +44,12 @@ export interface ScheduledRunInput {
    * so a schedule is never more permissive than the chat that created it.
    */
   approvalPolicy: ApprovalPolicy
+  /**
+   * The creating chat's own reasoning effort, which fired sessions keep as theirs.
+   * Unset (a chat on the default, or a schedule from before this was stored): fired
+   * sessions use the default at the time they fire.
+   */
+  reasoningEffort?: ReasoningEffort
 }
 
 /** A stored schedule, as reported back to the model and shown in listings. */

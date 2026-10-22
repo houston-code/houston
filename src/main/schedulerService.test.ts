@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { POLL_MS, createSchedulerService } from './schedulerService'
+import { POLL_MS, createSchedulerService, fireViaSpawn } from './schedulerService'
 import type { ScheduledRunInfo, ScheduledRunInput } from './agent/scheduler'
+import { resetSpawnBackend, setSpawnBackend, type SpawnSessionInput } from './agent/spawn'
 
 let dir: string
 let file: string
@@ -214,5 +215,52 @@ describe('createSchedulerService', () => {
       expect(existsSync(`${file}.lock`)).toBe(false)
       expect(warns).toEqual([])
     })
+  })
+})
+
+describe('fireViaSpawn', () => {
+  const spawned: SpawnSessionInput[] = []
+  beforeEach(() => {
+    spawned.length = 0
+    setSpawnBackend({
+      spawn: async (i) => {
+        spawned.push(i)
+        return { conversationId: 'c', title: i.title ?? '', workspace: i.workspace }
+      }
+    })
+  })
+  afterEach(() => resetSpawnBackend())
+
+  const stored = (over: Partial<ScheduledRunInfo> = {}): ScheduledRunInfo => ({
+    ...input(),
+    id: 'sch-1',
+    nextRunAt: null,
+    createdAt: 0,
+    ...over
+  })
+
+  it("starts each occurrence on the schedule's stored effort and policy", async () => {
+    await fireViaSpawn()(stored({ reasoningEffort: 'low', approvalPolicy: 'auto-edit' }))
+    expect(spawned[0]).toMatchObject({ reasoningEffort: 'low', approvalPolicy: 'auto-edit', model: 'claude-test' })
+  })
+
+  it('leaves the effort to the default for a schedule without one', async () => {
+    await fireViaSpawn()(stored())
+    expect(spawned[0]).not.toHaveProperty('reasoningEffort')
+  })
+
+  it('coerces a hand-edited unknown policy to plan and drops an unknown effort', async () => {
+    await fireViaSpawn()(stored({ approvalPolicy: 'yolo' as never, reasoningEffort: 'max' as never }))
+    expect(spawned[0].approvalPolicy).toBe('plan')
+    expect(spawned[0]).not.toHaveProperty('reasoningEffort')
+  })
+})
+
+describe('reasoning effort on a stored schedule', () => {
+  it('survives the store round trip', () => {
+    const { service } = makeService()
+    service.create(input({ reasoningEffort: 'xhigh' }))
+    expect(service.list()[0].reasoningEffort).toBe('xhigh')
+    expect(JSON.parse(readFileSync(file, 'utf8')).schedules[0].reasoningEffort).toBe('xhigh')
   })
 })
