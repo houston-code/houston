@@ -895,7 +895,8 @@ Install it with any of these; each puts a `houston` command on your PATH:
 
 ```bash
 brew install houston-code/tap/houston                # Homebrew (macOS, Linux)
-npm install -g @houston-code/cli                     # npm, or: bun add -g @houston-code/cli
+npm install -g @houston-code/cli                     # npm
+bun add -g @houston-code/cli                         # bun
 curl -fsSL https://houstoncode.ai/install.sh | sh    # install script (macOS, Linux)
 ```
 
