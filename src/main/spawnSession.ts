@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { ApprovalPolicy } from '@shared/types'
-import type { ChatMessage, ConversationWorktree, SpawnedFrom } from '@shared/agent'
+import type { ChatMessage, ConversationWorktree, ReasoningEffort, SpawnedFrom } from '@shared/agent'
 import { spawnedTurn } from '@shared/promptInvocation'
 import type { SpawnBackend, SpawnSessionInput, SpawnSessionResult } from './agent/spawn'
 
@@ -46,6 +46,8 @@ export interface SpawnDeps {
     workspace: string
     providerId: string
     model: string
+    reasoningEffort?: ReasoningEffort
+    approvalPolicy?: ApprovalPolicy
     worktree?: ConversationWorktree
     spawnedFrom?: SpawnedFrom
   }): { id: string; title: string }
@@ -81,6 +83,7 @@ export interface SpawnDeps {
       providerId: string
       model: string
       approvalPolicy: ApprovalPolicy
+      reasoningEffort?: ReasoningEffort
       messages: ChatMessage[]
     },
     /** Whether the run counts toward the cap (`liveSpawnCount`) while it's live. */
@@ -147,6 +150,10 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
           workspace,
           providerId: input.providerId,
           model: input.model,
+          // The child keeps the settings it started under as its own, so changing the
+          // parent's (or the defaults) afterwards doesn't change it.
+          approvalPolicy: input.approvalPolicy,
+          ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
           worktree,
           ...(spawnedFrom ? { spawnedFrom } : {})
         })
@@ -174,6 +181,7 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
           providerId: input.providerId,
           model: input.model,
           approvalPolicy: input.approvalPolicy,
+          ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
           messages: seeded
         }, { countsTowardCap })
         // When the child's run settles (success or failure), tell its parent. Never

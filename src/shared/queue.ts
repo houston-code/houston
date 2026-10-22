@@ -1,4 +1,5 @@
 import type { ApprovalPolicy } from './types'
+import type { ReasoningEffort } from './agent'
 import { MAX_ATTACHMENTS, type ImageAttachment } from './images'
 import { invocationText, type PromptInvocation } from './promptInvocation'
 
@@ -27,6 +28,7 @@ export interface QueueAddRequest {
   providerId: string
   model: string
   approvalPolicy: ApprovalPolicy
+  reasoningEffort?: ReasoningEffort
 }
 
 /**

@@ -109,7 +109,12 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
   }
   const messages = [...conv.messages, userMessage]
   setMessages(conv.id, messages)
-  updateConversationMeta(conv.id, { providerId: taken.providerId, model: taken.model })
+  updateConversationMeta(conv.id, {
+    providerId: taken.providerId,
+    model: taken.model,
+    approvalPolicy: taken.approvalPolicy,
+    ...(taken.reasoningEffort !== undefined ? { reasoningEffort: taken.reasoningEffort } : {})
+  })
 
   // Tell a renderer viewing this conversation to render the user bubble and adopt
   // the run; the queue is now empty, so refresh its bar too.
@@ -132,6 +137,7 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
       providerId: taken.providerId,
       model: taken.model,
       approvalPolicy: taken.approvalPolicy,
+      ...(taken.reasoningEffort !== undefined ? { reasoningEffort: taken.reasoningEffort } : {}),
       messages
     },
     owner

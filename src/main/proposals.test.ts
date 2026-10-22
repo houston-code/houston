@@ -124,6 +124,12 @@ describe('startProposal', () => {
     expect(out.proposals.p1.status).toBe('started')
   })
 
+  it("starts the session on the parent chat's own reasoning effort", async () => {
+    const { deps, spawned } = fakeDeps(parent({ reasoningEffort: 'xhigh' }))
+    await startProposal({ conversationId: 'parent', callId: 'p1', approvalPolicy: 'ask' }, deps)
+    expect(spawned[0]).toMatchObject({ reasoningEffort: 'xhigh', approvalPolicy: 'ask' })
+  })
+
   it('shares the checkout outside a git repo, and honors a named branch', async () => {
     const plain = fakeDeps(parent(), false)
     await startProposal({ conversationId: 'parent', callId: 'p1', approvalPolicy: 'ask' }, plain.deps)

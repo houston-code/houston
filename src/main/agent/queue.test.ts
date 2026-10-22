@@ -16,6 +16,22 @@ function add(conversationId: string, userText: string, over: Partial<QueueAddReq
 const IMG = { mediaType: 'image/png', data: 'abc' }
 
 describe('main queue manager', () => {
+  it('carries the chat\'s effort to the drained turn, newest message winning', () => {
+    const cid = 'conv-effort'
+    add(cid, 'one', { reasoningEffort: 'low' })
+    add(cid, 'two', { reasoningEffort: 'xhigh', approvalPolicy: 'plan' })
+    expect(takeQueue(cid)).toMatchObject({ reasoningEffort: 'xhigh', approvalPolicy: 'plan' })
+  })
+
+  it('validates the policy and effort at the IPC boundary', () => {
+    const cid = 'conv-validate'
+    // An unknown policy fails open downstream, so it becomes the most restrictive one.
+    add(cid, 'x', { approvalPolicy: 'yolo' as never, reasoningEffort: 'max' as never })
+    const taken = takeQueue(cid)
+    expect(taken?.approvalPolicy).toBe('plan')
+    expect(taken).not.toHaveProperty('reasoningEffort')
+  })
+
   it('appends messages and returns the display list', () => {
     const cid = 'conv-append'
     expect(add(cid, 'first')).toEqual([{ id: expect.any(String), text: 'first', imageCount: 0 }])

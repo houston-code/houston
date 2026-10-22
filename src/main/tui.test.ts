@@ -5,7 +5,13 @@ import { join, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared/types'
 import { catalogForPlatform } from '@shared/provider-catalog'
-import type { AgentEvent, ChatMessage, ElicitationResult, PlanDecision } from '@shared/agent'
+import type {
+  AgentEvent,
+  ChatMessage,
+  ConversationSettingsPatch,
+  ElicitationResult,
+  PlanDecision
+} from '@shared/agent'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
 import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
@@ -23,6 +29,7 @@ import {
   HELP_TEXT,
   resolveQuestionAnswer,
   parseSlashCommand,
+  splitDefaultFlag,
   resolveModelArg,
   keyableProviders,
   renderProviderMenu,
@@ -1008,7 +1015,13 @@ function fakeIo(inputs: Array<string | null>) {
 }
 
 interface Recorder {
-  runs: Array<{ providerId: string; model: string; policy: string; messages: ChatMessage[] }>
+  runs: Array<{
+    providerId: string
+    model: string
+    policy: string
+    reasoningEffort?: string
+    messages: ChatMessage[]
+  }>
   approvals: Array<[string, string, string]>
   questions: Array<[string, string, string]>
   plans: Array<[string, string, PlanDecision]>
@@ -1036,6 +1049,7 @@ function deps(
         providerId: req.providerId,
         model: req.model,
         policy: req.approvalPolicy,
+        reasoningEffort: req.reasoningEffort,
         messages: req.messages.map((m) => ({ ...m }))
       })
       for (const e of events) send({ ...e, runId: req.runId } as AgentEvent)
@@ -1054,7 +1068,7 @@ function deps(
 
 /** An in-memory conversation store standing in for conversations.ts. */
 function fakePersist(
-  seed: Array<ResumeEntry & { messages: ChatMessage[]; providerId?: string; model?: string }> = []
+  seed: Array<ResumeEntry & { messages: ChatMessage[] } & ConversationSettingsPatch> = []
 ) {
   const store = new Map<
     string,
@@ -1063,9 +1077,7 @@ function fakePersist(
       updatedAt: number
       workspace: string
       messages: ChatMessage[]
-      providerId?: string
-      model?: string
-    }
+    } & ConversationSettingsPatch
   >()
   for (const s of seed) {
     store.set(s.id, {
@@ -1074,29 +1086,28 @@ function fakePersist(
       workspace: '/proj',
       messages: s.messages,
       providerId: s.providerId,
-      model: s.model
+      model: s.model,
+      ...(s.reasoningEffort ? { reasoningEffort: s.reasoningEffort } : {}),
+      ...(s.approvalPolicy ? { approvalPolicy: s.approvalPolicy } : {})
     })
   }
-  // Every setModel call, so a test can assert the meta was (or wasn't) rewritten.
-  const setModelCalls: Array<{ id: string; providerId: string; model: string }> = []
+  // Every setSettings call, so a test can assert the meta was (or wasn't) rewritten.
+  const setSettingsCalls: Array<{ id: string } & ConversationSettingsPatch> = []
   let seq = 0
   const persist: TuiPersist = {
-    create: ({ workspace, providerId, model }) => {
+    create: ({ workspace, ...chat }) => {
       const id = `conv-${++seq}`
-      store.set(id, { title: 'New chat', updatedAt: 0, workspace, messages: [], providerId, model })
+      store.set(id, { title: 'New chat', updatedAt: 0, workspace, messages: [], ...chat })
       return { id }
     },
     setMessages: (id, messages) => {
       const c = store.get(id)
       if (c) c.messages = messages
     },
-    setModel: (id, providerId, model) => {
-      setModelCalls.push({ id, providerId, model })
+    setSettings: (id, patch) => {
+      setSettingsCalls.push({ id, ...patch })
       const c = store.get(id)
-      if (c) {
-        c.providerId = providerId
-        c.model = model
-      }
+      if (c) Object.assign(c, patch)
     },
     list: (workspace) =>
       [...store.entries()]
@@ -1113,12 +1124,15 @@ function fakePersist(
       store.set(fid, { ...c, title: `${c.title} (fork)`, messages: [...c.messages] })
       return { id: fid }
     },
+    // Like the real store: the chat's messages plus the settings it has stored.
     get: (id) => {
       const c = store.get(id)
-      return c ? { messages: c.messages } : null
+      if (!c) return null
+      const { title: _t, updatedAt: _u, workspace: _w, ...chat } = c
+      return chat
     }
   }
-  return { persist, store, setModelCalls }
+  return { persist, store, setSettingsCalls }
 }
 
 const opts = {
@@ -1461,16 +1475,46 @@ describe('runTui', () => {
     expect(rec.runs).toHaveLength(0) // none of them started a turn
   })
 
-  it('/model persists the switch as the saved selection (like the GUI picker)', async () => {
+  it('/model switches this chat only, leaving the default model alone', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    const t = fakeIo(['/model ollama', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0]).toMatchObject({ providerId: 'ollama', model: 'llama' })
+    // A chat's model is its own: new chats (and the next launch) keep the default.
+    expect(saved).toEqual([])
+  })
+
+  it('/approval changes this chat only; --default also saves it for new chats', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (p) => saved.push(p)
+    const t = fakeIo(['/approval plan', 'go', '/approval ask --default', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0]).toMatchObject({ policy: 'plan' })
+    expect(saved).toEqual([{ approvalPolicy: 'ask' }])
+    expect(t.text()).toContain('approval policy → ask (new chats too)')
+  })
+
+  it('splits --default off wherever it appears', () => {
+    expect(splitDefaultFlag('ollama --default')).toEqual({ rest: 'ollama', asDefault: true })
+    expect(splitDefaultFlag('--default  high')).toEqual({ rest: 'high', asDefault: true })
+    expect(splitDefaultFlag(' ask ')).toEqual({ rest: 'ask', asDefault: false })
+    expect(splitDefaultFlag('')).toEqual({ rest: '', asDefault: false })
+  })
+
+  it('/model --default also saves it as the model new chats start on', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const saved: Array<Partial<AppSettings>> = []
     d.updateSettings = (p) => saved.push(p)
-    const t = fakeIo(['/model ollama', null])
+    const t = fakeIo(['/model ollama --default', null])
     d.io = t.io
     await runTui(opts, d)
-    // Without this write the next launch resolves the startup model from the old
-    // stored `selected` and the switch silently evaporates on restart.
     expect(saved).toEqual([{ selected: { providerId: 'ollama', model: 'llama' } }])
+    expect(t.text()).toContain('(new chats too)')
   })
 
   it('/model still switches in-memory when no settings writer is wired', async () => {
@@ -1494,8 +1538,9 @@ describe('runTui', () => {
     // The stored meta follows the model actually used, so the scorecard and a GUI
     // re-open don't attribute the chat to the model it was merely created under.
     expect(fp.store.get('conv-1')).toMatchObject({ providerId: 'ollama', model: 'llama' })
-    // create() already stored turn 1's model, so setModel fires only once — for the switch.
-    expect(fp.setModelCalls).toEqual([{ id: 'conv-1', providerId: 'ollama', model: 'llama' }])
+    // create() already stored turn 1's settings, so setSettings fires only once, for the switch.
+    expect(fp.setSettingsCalls).toHaveLength(1)
+    expect(fp.setSettingsCalls[0]).toMatchObject({ id: 'conv-1', providerId: 'ollama', model: 'llama' })
   })
 
   it('leaves the stored model untouched when it never changes', async () => {
@@ -1505,15 +1550,46 @@ describe('runTui', () => {
     const t = fakeIo(['first', 'second', null])
     d.io = t.io
     await runTui(opts, d)
-    // Two turns under the same model: create() covers it, so the setModel seam is
-    // never touched (the guard skips the redundant, updatedAt-bumping write).
-    expect(fp.setModelCalls).toEqual([])
+    // Two turns under the same settings: create() covers them, so the setSettings seam
+    // is never touched (the guard skips the redundant, updatedAt-bumping write).
+    expect(fp.setSettingsCalls).toEqual([])
     expect(fp.store.get('conv-1')).toMatchObject({ providerId: 'anthropic', model: 'claude' })
   })
 
-  it('re-syncs the stored model on the first turn after /resume', async () => {
+  it('/resume switches to the chat\'s own model, effort and approval policy', async () => {
     const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {}, (req) => req.messages)
-    // A saved chat created under a different model than this session's active one.
+    // A saved chat that ran under different settings than this session's defaults.
+    const fp = fakePersist([
+      {
+        id: 'saved',
+        title: 'Old',
+        updatedAt: 5,
+        messages: [],
+        providerId: 'ollama',
+        model: 'llama',
+        reasoningEffort: 'low',
+        approvalPolicy: 'plan'
+      }
+    ])
+    d.persist = fp.persist
+    d.now = () => 1000
+    const t = fakeIo(['/resume', '1', 'continue', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0]).toMatchObject({
+      providerId: 'ollama',
+      model: 'llama',
+      reasoningEffort: 'low',
+      policy: 'plan'
+    })
+    expect(t.text()).toContain("this chat's settings: ollama / llama, thinking low, approval plan")
+    // Nothing drifted, so the stored settings are left as they were (no new conv either).
+    expect(fp.store.size).toBe(1)
+    expect(fp.setSettingsCalls).toEqual([])
+  })
+
+  it('/resume of a chat that never stored its effort or policy writes the ones it ran under', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {}, (req) => req.messages)
     const fp = fakePersist([
       { id: 'saved', title: 'Old', updatedAt: 5, messages: [], providerId: 'ollama', model: 'llama' }
     ])
@@ -1522,12 +1598,28 @@ describe('runTui', () => {
     const t = fakeIo(['/resume', '1', 'continue', null])
     d.io = t.io
     await runTui(opts, d)
-    // The turn runs under the session's active model (resume doesn't switch it)...
+    expect(rec.runs[0]).toMatchObject({ providerId: 'ollama', model: 'llama' })
+    expect(fp.setSettingsCalls).toHaveLength(1)
+    expect(fp.store.get('saved')).toMatchObject({
+      providerId: 'ollama',
+      model: 'llama',
+      reasoningEffort: rec.runs[0].reasoningEffort,
+      approvalPolicy: rec.runs[0].policy
+    })
+  })
+
+  it('/resume keeps the session model when the chat\'s provider is no longer set up', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }], {}, (req) => req.messages)
+    const fp = fakePersist([
+      { id: 'saved', title: 'Old', updatedAt: 5, messages: [], providerId: 'gone', model: 'old-model' }
+    ])
+    d.persist = fp.persist
+    d.now = () => 1000
+    const t = fakeIo(['/resume', '1', 'continue', null])
+    d.io = t.io
+    await runTui(opts, d)
     expect(rec.runs[0]).toMatchObject({ providerId: 'anthropic', model: 'claude' })
-    // ...so the resumed chat's stored meta is rewritten to match, in place (no new conv).
-    expect(fp.store.size).toBe(1)
     expect(fp.store.get('saved')).toMatchObject({ providerId: 'anthropic', model: 'claude' })
-    expect(fp.setModelCalls).toEqual([{ id: 'saved', providerId: 'anthropic', model: 'claude' }])
   })
 
   it('preflights the key: submitting on a keyless provider skips the run and hints /login', async () => {
@@ -1552,7 +1644,7 @@ describe('runTui', () => {
       setMessages: () => {
         throw new Error('ENOSPC: no space left on device')
       },
-      setModel: () => {
+      setSettings: () => {
         throw new Error('ENOSPC: no space left on device')
       },
       list: () => [],
@@ -1568,13 +1660,13 @@ describe('runTui', () => {
     expect(t.text()).toMatch(/couldn't save the conversation/i)
   })
 
-  it('survives a setModel failure on a /model switch instead of crashing the REPL', async () => {
+  it('survives a setSettings failure on a /model switch instead of crashing the REPL', async () => {
     const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     // create + setMessages succeed; only the meta rewrite (triggered by the switch) throws.
     d.persist = {
       create: () => ({ id: 'c1' }),
       setMessages: () => {},
-      setModel: () => {
+      setSettings: () => {
         throw new Error('EROFS: read-only file system')
       },
       list: () => [],
@@ -4210,15 +4302,28 @@ describe('/reasoning', () => {
     expect(t.text()).toContain('thinking effort: high')
   })
 
-  it('sets it, and persists it through the settings the loop reads', async () => {
+  it('sets it for this chat, sending it with the next turn and leaving the default alone', async () => {
+    const { d, rec } = deps(done, { reasoningEffort: 'medium' })
+    const t = fakeIo(['/reasoning low', 'go', '/reasoning', null])
+    d.io = t.io
+    const patches: Partial<AppSettings>[] = []
+    d.updateSettings = (p) => patches.push(p)
+    await runTui(opts, d)
+    expect(patches).toEqual([])
+    expect(rec.runs[0]).toMatchObject({ reasoningEffort: 'low' })
+    expect(t.text()).toContain('thinking effort → low')
+    expect(t.text()).toContain('thinking effort: low') // the status reports this chat's
+  })
+
+  it('--default also makes it what new chats start with', async () => {
     const { d } = deps(done)
-    const t = fakeIo(['/reasoning high', null])
+    const t = fakeIo(['/reasoning high --default', null])
     d.io = t.io
     const patches: Partial<AppSettings>[] = []
     d.updateSettings = (p) => patches.push(p)
     await runTui(opts, d)
     expect(patches).toContainEqual({ reasoningEffort: 'high' })
-    expect(t.text()).toContain('thinking effort → high')
+    expect(t.text()).toContain('thinking effort → high (new chats too)')
   })
 
   it('rejects an effort that is not one, rather than storing nonsense', async () => {
@@ -4233,13 +4338,11 @@ describe('/reasoning', () => {
   })
 
   it('/think is the same command', async () => {
-    const { d } = deps(done)
-    const t = fakeIo(['/think low', null])
+    const { d, rec } = deps(done)
+    const t = fakeIo(['/think low', 'go', null])
     d.io = t.io
-    const patches: Partial<AppSettings>[] = []
-    d.updateSettings = (p) => patches.push(p)
     await runTui(opts, d)
-    expect(patches).toContainEqual({ reasoningEffort: 'low' })
+    expect(rec.runs[0]).toMatchObject({ reasoningEffort: 'low' })
   })
 })
 
@@ -4257,7 +4360,7 @@ describe('--continue / --resume at launch', () => {
     return {
       create: () => ({ id: 'new' }),
       setMessages: () => {},
-      setModel: () => {},
+      setSettings: () => {},
       list: () => entries,
       search: () => entries,
       fork: () => null,

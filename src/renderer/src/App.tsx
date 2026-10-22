@@ -30,6 +30,7 @@ import {
 } from '@shared/promptInvocation'
 import { resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
+import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import {
   branchNameError,
   canCreateWorktree,
@@ -84,6 +85,7 @@ import { activeTaskCount } from './components/BackgroundTasks'
 import { TasksPanel } from './components/TasksPanel'
 import type { DockTab } from './components/PreviewDock'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
+import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
 import { Transcript } from './components/Transcript'
 import { PlanPanel } from './components/PlanPanel'
 import { SideChatPanel } from './components/SideChatPanel'
@@ -169,9 +171,20 @@ function defaultSelection(settings: AppSettings): SelectedModel | null {
 }
 
 export default function App(): JSX.Element {
-  const [settings, setSettings] = useState<AppSettings | null>(null)
+  // The saved settings. Their model, reasoning effort and approval policy are only the
+  // defaults new chats start from: an open chat keeps its own (chatSettings), and
+  // `settings` below is what the open chat sees. Save from savedSettings or a fresh
+  // getSettings(), never from `settings`, or one chat's values become the defaults.
+  const [savedSettings, setSettings] = useState<AppSettings | null>(null)
   const [conversations, setConversations] = useState<ConversationMeta[]>([])
   const [currentId, setCurrentId] = useState<string | null>(null)
+  const [chatSettings, setChatSettings] = useState<ChatSettings | null>(null)
+  const settings = useMemo(
+    () => savedSettings && withChatSettings(savedSettings, currentId ? chatSettings : null),
+    [savedSettings, chatSettings, currentId]
+  )
+  const savedSettingsRef = useRef(savedSettings)
+  savedSettingsRef.current = savedSettings
   const [lastWorkspace, setLastWorkspace] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [doctorOpen, setDoctorOpen] = useState(false)
@@ -530,6 +543,8 @@ export default function App(): JSX.Element {
             workspace,
             providerId: settings.selected.providerId,
             model: settings.selected.model,
+            reasoningEffort: settings.reasoningEffort,
+            approvalPolicy: settings.approvalPolicy,
             ...(creatingWorktree
               ? { worktree: { branch: branchName.trim(), ...(baseBranch ? { base: baseBranch } : {}) } }
               : {})
@@ -543,6 +558,12 @@ export default function App(): JSX.Element {
           creatingConvRef.current = false
         }
         convId = conv.id
+        // The new chat keeps the defaults it started with as its own settings.
+        setChatSettings({
+          selected: settings.selected,
+          reasoningEffort: settings.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
+          approvalPolicy: settings.approvalPolicy
+        })
         setCurrentId(conv.id)
       }
       await chat.send({
@@ -552,7 +573,8 @@ export default function App(): JSX.Element {
         ...(invokedAs ? { invokedAs } : {}),
         providerId: settings.selected.providerId,
         model: settings.selected.model,
-        approvalPolicy: settings.approvalPolicy
+        approvalPolicy: settings.approvalPolicy,
+        reasoningEffort: settings.reasoningEffort
       })
       void refreshConversations()
     },
@@ -596,6 +618,9 @@ export default function App(): JSX.Element {
         window.api.getCheckpoint(id)
       ])
       if (!conv) return
+      const saved = savedSettingsRef.current
+      const own = saved ? chatSettingsFor(conv, saved) : null
+      setChatSettings(own?.settings ?? null)
       setCurrentId(id)
       setLastWorkspace(conv.workspace)
       setProposalStates(conv.proposals ?? {})
@@ -639,9 +664,27 @@ export default function App(): JSX.Element {
       // Restore the revert/redo affordance for the conversation's latest turn — the
       // checkpoint state is built only from live events and lost on a reset/rebuild.
       chat.seedCheckpoint(checkpoint)
+      // The chat's model is gone from settings: say which one it uses now.
+      if (own?.modelChanged) {
+        chat.notify(
+          own.settings.selected
+            ? `This chat's model (${conv.model}) is no longer set up, so it now uses ${own.settings.selected.model}.`
+            : `This chat's model (${conv.model}) is no longer set up. Pick a model to continue.`,
+          'info'
+        )
+      }
     },
     [chat]
   )
+
+  // A chat opened before the saved settings had loaded has no settings of its own in
+  // view yet; fill them in from its list entry once both are here, so it never runs
+  // on the defaults by accident.
+  useEffect(() => {
+    if (!currentId || chatSettings || !savedSettings) return
+    const meta = conversations.find((c) => c.id === currentId)
+    if (meta) setChatSettings(chatSettingsFor(meta, savedSettings).settings)
+  }, [currentId, chatSettings, savedSettings, conversations])
 
   // Enter the "new chat" screen for a workspace WITHOUT creating a conversation
   // yet. The chat — and its worktree, when the control-bar toggle is on — is
@@ -651,6 +694,7 @@ export default function App(): JSX.Element {
     (ws: string) => {
       setLastWorkspace(ws)
       setCurrentId(null)
+      setChatSettings(null)
       setProposalStates({})
       chat.reset([])
     },
@@ -845,14 +889,37 @@ export default function App(): JSX.Element {
     [conversations, saveGroups, refreshConversations]
   )
 
-  const onSelectModel = useCallback(async (sel: SelectedModel) => {
-    setSettings((s) => (s ? { ...s, selected: sel } : s))
-    const fresh = await window.api.saveSettings({
-      ...(await window.api.getSettings()),
-      selected: sel
-    })
-    setSettings(fresh)
-  }, [])
+  // Change the open chat's own settings: shown at once, saved to that chat only (the
+  // defaults stay as they are). Without an open chat, the change goes to the defaults.
+  const changeChatSettings = useCallback(
+    (patch: Partial<ChatSettings>): boolean => {
+      if (!currentId) return false
+      setChatSettings((cs) => {
+        const base = cs ?? (savedSettingsRef.current ? defaultChatSettings(savedSettingsRef.current) : null)
+        return base ? { ...base, ...patch } : cs
+      })
+      void window.api.setConversationSettings(currentId, {
+        ...(patch.selected ? { providerId: patch.selected.providerId, model: patch.selected.model } : {}),
+        ...(patch.reasoningEffort ? { reasoningEffort: patch.reasoningEffort } : {}),
+        ...(patch.approvalPolicy ? { approvalPolicy: patch.approvalPolicy } : {})
+      })
+      return true
+    },
+    [currentId]
+  )
+
+  const onSelectModel = useCallback(
+    async (sel: SelectedModel) => {
+      if (changeChatSettings({ selected: sel })) return
+      setSettings((s) => (s ? { ...s, selected: sel } : s))
+      const fresh = await window.api.saveSettings({
+        ...(await window.api.getSettings()),
+        selected: sel
+      })
+      setSettings(fresh)
+    },
+    [changeChatSettings]
+  )
 
   // The get-started "Connect a model" step succeeded: select that provider's default
   // model, so the step ticks off and the composer is ready without a trip to the picker.
@@ -877,26 +944,46 @@ export default function App(): JSX.Element {
 
   const onChangePolicy = useCallback(
     async (policy: ApprovalPolicy) => {
-      // Push the change into an in-flight run so it takes effect on the agent's
-      // next tool call, not just the next turn. Persisting it (below) makes it the
-      // default for future runs. No-op if nothing is running.
+      // Push the change into the open chat's in-flight run so it takes effect on the
+      // agent's next tool call, not just the next turn. No-op if nothing is running.
       chat.setPolicy(policy)
+      if (changeChatSettings({ approvalPolicy: policy })) return
       const fresh = await window.api.saveSettings({
         ...(await window.api.getSettings()),
         approvalPolicy: policy
       })
       setSettings(fresh)
     },
-    [chat]
+    [chat, changeChatSettings]
   )
 
-  const onChangeReasoning = useCallback(async (reasoningEffort: ReasoningEffort) => {
+  const onChangeReasoning = useCallback(
+    async (reasoningEffort: ReasoningEffort) => {
+      // Like the policy: the open chat's live run picks it up on its next model turn.
+      chat.setEffort(reasoningEffort)
+      if (changeChatSettings({ reasoningEffort })) return
+      const fresh = await window.api.saveSettings({
+        ...(await window.api.getSettings()),
+        reasoningEffort
+      })
+      setSettings(fresh)
+    },
+    [chat, changeChatSettings]
+  )
+
+  // Make the open chat's model, reasoning effort and approval policy the defaults
+  // that new chats start from. The only way a chat's settings reach the defaults.
+  const onMakeChatSettingsDefault = useCallback(async () => {
+    if (!chatSettings) return
     const fresh = await window.api.saveSettings({
       ...(await window.api.getSettings()),
-      reasoningEffort
+      ...(chatSettings.selected ? { selected: chatSettings.selected } : {}),
+      reasoningEffort: chatSettings.reasoningEffort,
+      approvalPolicy: chatSettings.approvalPolicy
     })
     setSettings(fresh)
-  }, [])
+    chat.notify('New chats will start with these settings.', 'info')
+  }, [chatSettings, chat])
 
   // ---- Sidebar sizing (resizable + collapsible, persisted) ----
 
@@ -1192,7 +1279,8 @@ export default function App(): JSX.Element {
       conversationId: currentId,
       providerId: settings.selected.providerId,
       model: settings.selected.model,
-      approvalPolicy: settings.approvalPolicy
+      approvalPolicy: settings.approvalPolicy,
+      reasoningEffort: settings.reasoningEffort
     })
   }, [chat, settings, currentId])
 
@@ -1213,7 +1301,8 @@ export default function App(): JSX.Element {
           ...(invokedAs ? { invokedAs } : {}),
           providerId: settings.selected.providerId,
           model: settings.selected.model,
-          approvalPolicy: settings.approvalPolicy
+          approvalPolicy: settings.approvalPolicy,
+          reasoningEffort: settings.reasoningEffort
         })
       } else void sendNow(text, images, invokedAs)
     },
@@ -1263,7 +1352,8 @@ export default function App(): JSX.Element {
             text,
             providerId: settings.selected.providerId,
             model: settings.selected.model,
-            approvalPolicy: settings.approvalPolicy
+            approvalPolicy: settings.approvalPolicy,
+            reasoningEffort: settings.reasoningEffort
           })
         }
       })
@@ -2116,6 +2206,9 @@ export default function App(): JSX.Element {
             onChangeReasoning={onChangeReasoning}
             onChangeWorkspace={onChangeWorkspace}
             onOpenSettings={() => setSettingsOpen(true)}
+            {...(currentId && chatSettings && savedSettings && differsFromDefaults(chatSettings, savedSettings)
+              ? { onMakeDefault: () => void onMakeChatSettingsDefault() }
+              : {})}
           />
           <Composer
             // Remount per conversation so each chat shows its own draft (and a
@@ -2212,7 +2305,7 @@ export default function App(): JSX.Element {
       <Suspense fallback={null}>
         {settingsOpen && (
           <SettingsModal
-            initial={settings}
+            initial={savedSettings ?? settings}
             onClose={() => setSettingsOpen(false)}
             onSaved={(s) => setSettings(s)}
             onShowScorecard={() => {
