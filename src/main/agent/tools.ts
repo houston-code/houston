@@ -500,6 +500,17 @@ const readFile: ToolDef = {
     const rel = str(args, 'path')
     const abs = resolveInRoots(rootsOf(ctx), rel)
 
+    // A directory can't be read as a file. Answer with its listing rather than a raw
+    // EISDIR error, which models tend to retry or route around with run_shell. A path
+    // that can't be stat'ed falls through so the read below reports the real error.
+    const isDir = await fs.stat(abs).then(
+      (st) => st.isDirectory(),
+      () => false
+    )
+    if (isDir) {
+      return `[directory: ${rel}: read_file reads files, so here are its entries (as list_dir shows them)]\n${await dirListing(abs)}`
+    }
+
     // Images and PDFs are binary — hand them to the model as attachments rather
     // than returning garbled bytes as text.
     const imageType = imageMediaTypeForPath(rel)
@@ -1261,14 +1272,18 @@ const listDir: ToolDef = {
   },
   async execute(args, ctx) {
     const target = str(args, 'path') || '.'
-    const abs = resolveInRoots(rootsOf(ctx), target)
-    const entries = await fs.readdir(abs, { withFileTypes: true })
-    if (entries.length === 0) return '[empty directory]'
-    return entries
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
-      .join('\n')
+    return dirListing(resolveInRoots(rootsOf(ctx), target))
   }
+}
+
+/** A directory's entries, sorted, with a trailing slash on subdirectories (list_dir's format). */
+async function dirListing(abs: string): Promise<string> {
+  const entries = await fs.readdir(abs, { withFileTypes: true })
+  if (entries.length === 0) return '[empty directory]'
+  return entries
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((e) => (e.isDirectory() ? `${e.name}/` : e.name))
+    .join('\n')
 }
 
 const searchTool: ToolDef = {
