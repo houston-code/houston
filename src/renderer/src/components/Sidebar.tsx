@@ -3,6 +3,14 @@ import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
 import type { EditorId, EditorStatus } from '@shared/editors'
 import {
+  chatSignal,
+  pendingReason,
+  signalLabel,
+  strongestSignal,
+  type ChatSignal,
+  type ChatStatusMap
+} from '@shared/chatStatus'
+import {
   buildSidebarSections,
   descendantsOf,
   dropIndexForY,
@@ -38,8 +46,13 @@ export interface SidebarProps {
   onToggleCollapse: () => void
   /** The toggle's keyboard shortcut as displayed on this platform (e.g. ⌘B, Ctrl+B). */
   toggleShortcut?: string
-  /** Conversation ids with a live agent run — each gets a pulsing "running" dot. */
-  runningIds: ReadonlySet<string>
+  /**
+   * Live status of every conversation with a run (running, blocking prompts). Drives
+   * each row's signal dot: needs input, working.
+   */
+  chatStatus: ChatStatusMap
+  /** Chats whose last run failed and that the user hasn't opened since (red ring). */
+  failedIds?: ReadonlySet<string>
   onSelect: (id: string) => void
   onNew: () => void
   onDelete: (id: string) => void
@@ -177,6 +190,22 @@ function OpenInSubmenu({
   )
 }
 
+/** The folded parent's tag for its spawned chats' strongest signal, e.g. "2 running". */
+function nestedTag(signal: ChatSignal, n: number): string {
+  switch (signal) {
+    case 'input':
+      return `${n} need${n === 1 ? 's' : ''} input`
+    case 'error':
+      return `${n} failed`
+    case 'working':
+      return `${n} running`
+    case 'unread':
+      return `${n} unread`
+    case 'idle':
+      return ''
+  }
+}
+
 function ConvRow({
   conv,
   active,
@@ -188,7 +217,8 @@ function ConvRow({
   onStartRenameGroup,
   depth = 0,
   nested,
-  gutter = false
+  signal,
+  reason
 }: {
   conv: ConversationMeta
   active: boolean
@@ -200,14 +230,21 @@ function ConvRow({
   onStartRenameGroup: (id: string) => void
   /** 0 for a top-level row; 1+ for a spawned chat nested under its parent. */
   depth?: number
-  /** Present when spawned chats nest under this row: their count, how many run, and the toggle. */
-  nested?: { count: number; running: number; expanded: boolean; onToggle: () => void }
   /**
-   * Reserve the fold arrow's slot even without one, so this row's title lines up
-   * with a sibling's that has the arrow. Set for every row at a level where any row
-   * has spawned chats under it.
+   * Present when spawned chats nest under this row: their count, the strongest signal
+   * among them with how many show it (for the folded tag), and the toggle.
    */
-  gutter?: boolean
+  nested?: {
+    count: number
+    childSignal: ChatSignal
+    childSignalCount: number
+    expanded: boolean
+    onToggle: () => void
+  }
+  /** What this row's dot shows (already folded with its children's when collapsed). */
+  signal: ChatSignal
+  /** Why the chat needs attention, shown at the start of the meta line. */
+  reason?: string
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
@@ -231,11 +268,14 @@ function ConvRow({
       // Only top-level rows take part in drag-to-reorder (see dropIndexFromEvent);
       // a nested chat goes where its parent goes.
       data-depth={depth}
+      data-signal={signal}
       // Keyboard-reachable so a row can be opened without the mouse. Not renaming:
       // the inline input owns focus/keys then. `aria-current` marks the open chat.
       tabIndex={renaming ? -1 : 0}
       aria-current={active ? 'true' : undefined}
-      aria-label={conv.title}
+      // The row's name carries its state, so a screen reader hears "needs approval"
+      // without having to find the dot.
+      aria-label={[conv.title, reason ?? signalLabel(signal)].filter(Boolean).join(', ')}
       // Renaming swaps in a text input; dragging would hijack its selection.
       draggable={!renaming && depth === 0}
       onDragStart={(e) => {
@@ -254,16 +294,10 @@ function ConvRow({
         }
       }}
     >
-      {/* The dot's slot is always present so the title never shifts when a run
-          starts/stops; only its visibility (and accessible name) toggle. */}
-      <span
-        className="conv__running"
-        data-running={props.runningIds.has(conv.id) ? '' : undefined}
-        {...(props.runningIds.has(conv.id)
-          ? { role: 'img', 'aria-label': 'Running', title: 'Running' }
-          : { 'aria-hidden': true })}
-      />
-      {nested && (
+      {/* Every row reserves the fold arrow's slot at its left edge (empty unless spawned
+          chats nest under it), so parents, pinned chats, and plain rows share one dot
+          and title edge. */}
+      {nested ? (
         <button
           type="button"
           className={`conv__nest-toggle${nested.expanded ? ' conv__nest-toggle--open' : ''}`}
@@ -275,11 +309,29 @@ function ConvRow({
             nested.onToggle()
           }}
         >
-          ›
+          <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+            <path
+              d="M6 3.5 10.5 8 6 12.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </button>
+      ) : (
+        <span className="conv__nest-spacer" aria-hidden="true" />
       )}
-      {!nested && gutter && <span className="conv__nest-spacer" aria-hidden="true" />}
-      {conv.pinned && <span className="conv__pin" title="Pinned">★</span>}
+      {/* The dot's slot is always present so the title never shifts as the signal
+          changes; only its look (and accessible name) does. */}
+      <span
+        className="conv__status"
+        data-signal={signal}
+        {...(signal !== 'idle'
+          ? { role: 'img', 'aria-label': signalLabel(signal), title: signalLabel(signal) }
+          : { 'aria-hidden': true })}
+      />
       <div className="conv__main">
         {renaming ? (
           <InlineEdit
@@ -301,16 +353,24 @@ function ConvRow({
           {conv.archived && props.statusFilter === 'active' && (
             <span className="conv__tag" title="Archived">Archived</span>
           )}
+          {reason && (
+            <span className="conv__reason">
+              {reason}
+              {' · '}
+            </span>
+          )}
           {nested && !nested.expanded && (
             <span
-              className={`conv__tag ${nested.running > 0 ? 'conv__tag--running' : 'conv__tag--count'}`}
+              className={`conv__tag conv__tag--${nested.childSignal === 'idle' ? 'count' : nested.childSignal}`}
               title={
-                nested.running > 0
-                  ? `${nested.running} of the ${nested.count} spawned sessions under this chat ${nested.running === 1 ? 'is' : 'are'} running`
-                  : 'Spawned sessions under this chat'
+                nested.childSignal === 'idle'
+                  ? 'Spawned sessions under this chat'
+                  : `${nested.childSignalCount} of the ${nested.count} spawned sessions under this chat: ${nestedTag(nested.childSignal, nested.childSignalCount)}`
               }
             >
-              {nested.running > 0 ? `${nested.running} running` : `${nested.count} spawned`}
+              {nested.childSignal === 'idle'
+                ? `${nested.count} spawned`
+                : nestedTag(nested.childSignal, nested.childSignalCount)}
             </span>
           )}
           {conv.worktree ? (
@@ -327,6 +387,12 @@ function ConvRow({
         </div>
       </div>
 
+      {/* Pinned sits at the trailing edge, so it never pushes the title right. */}
+      {conv.pinned && (
+        <span className="conv__pin" role="img" aria-label="Pinned" title="Pinned">
+          ★
+        </span>
+      )}
       <div className="conv__menu-wrap">
         <button
           ref={btnRef}
@@ -634,8 +700,7 @@ function SidebarSectionView({
   setRenamingConv,
   setRenamingGroup,
   collapsedParents,
-  toggleParent,
-  alignGutter
+  toggleParent
 }: {
   section: SidebarSection
   props: SidebarProps
@@ -647,9 +712,6 @@ function SidebarSectionView({
   /** Parents whose spawned chats the user folded away. */
   collapsedParents: ReadonlySet<string>
   toggleParent: (id: string) => void
-  /** Some section's top-level row has spawned chats, so every section reserves the fold
-   *  arrow's slot and titles line up across sections, not just within one. */
-  alignGutter: boolean
 }): JSX.Element {
   const { groups } = props
   // Slot the drop indicator sits at while dragging over this section, or null.
@@ -693,17 +755,34 @@ function SidebarSectionView({
     props.onReorder(orderedIds, move)
   }
 
+  // A chat's own signal: blocked or running from the live status, failed from the
+  // unseen-failure set. The open chat never shows failed (the user is looking at it).
+  const ownSignal = (c: ConversationMeta): ChatSignal =>
+    chatSignal(props.chatStatus[c.id], {
+      failed: props.failedIds?.has(c.id) ?? false,
+      active: c.id === currentId
+    })
+
   // A row plus, unless folded away, the spawned chats nested under it (recursively).
   // A parent holding the open chat stays unfolded, so the open chat is never hidden.
-  // Whether any of these sibling rows has spawned chats under it (so all of them
-  // reserve the fold arrow's slot and their titles stay in line).
-  const needsGutter = (siblings: ConversationMeta[]): boolean =>
-    siblings.some((c) => (section.children[c.id]?.length ?? 0) > 0)
-  const topGutter = alignGutter || needsGutter(section.conversations)
-  const renderTree = (c: ConversationMeta, depth: number, gutter: boolean): JSX.Element => {
+  // Every row reserves the fold arrow's slot, so titles line up at every level.
+  const renderTree = (c: ConversationMeta, depth: number): JSX.Element => {
     const kids = section.children[c.id] ?? []
     const all = kids.length ? descendantsOf(c.id, section.children) : []
     const expanded = !collapsedParents.has(c.id) || all.some((d) => d.id === currentId)
+    const own = ownSignal(c)
+    const childSignals = all.map(ownSignal)
+    const childSignal = strongestSignal(childSignals)
+    // Folded, the parent's dot stands for its hidden children too; open, they show
+    // their own dots, so the parent shows only its own state.
+    const signal = expanded ? own : strongestSignal([own, childSignal])
+    const live = props.chatStatus[c.id]
+    const reason =
+      own === 'input' && live
+        ? pendingReason(live.pending)
+        : own === 'error'
+          ? 'Last run failed'
+          : undefined
     return (
       <>
         <ConvRow
@@ -716,12 +795,14 @@ function SidebarSectionView({
           onStopRename={() => setRenamingConv(null)}
           onStartRenameGroup={(id) => setRenamingGroup(id)}
           depth={depth}
-          gutter={gutter}
+          signal={signal}
+          {...(reason ? { reason } : {})}
           {...(kids.length
             ? {
                 nested: {
                   count: all.length,
-                  running: all.filter((d) => props.runningIds.has(d.id)).length,
+                  childSignal,
+                  childSignalCount: childSignals.filter((x) => x === childSignal).length,
                   expanded,
                   onToggle: () => toggleParent(c.id)
                 }
@@ -731,7 +812,7 @@ function SidebarSectionView({
         {expanded && kids.length > 0 && (
           <div className="conv-children" role="group" aria-label={`Spawned from ${c.title}`}>
             {kids.map((k) => (
-              <Fragment key={k.id}>{renderTree(k, depth + 1, needsGutter(kids))}</Fragment>
+              <Fragment key={k.id}>{renderTree(k, depth + 1)}</Fragment>
             ))}
           </div>
         )}
@@ -759,7 +840,7 @@ function SidebarSectionView({
         section.conversations.map((c, i) => (
           <Fragment key={c.id}>
             {dropAt === i && <div className="conv-drop-line" aria-hidden="true" />}
-            {renderTree(c, 0, topGutter)}
+            {renderTree(c, 0)}
           </Fragment>
         ))}
       {!section.collapsed && rowCount > 0 && dropAt === rowCount && (
@@ -784,8 +865,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
   // Parents whose spawned chats are folded away (saved in settings; expanded by default).
   const collapsedParents = props.collapsedParents ?? NO_PARENTS
   const toggleParent = (id: string): void => props.onToggleParentCollapsed?.(id)
-  // Reserve the fold arrow's slot in every section when any top-level row needs it.
-  const alignGutter = sections.some((s) => s.conversations.some((c) => (s.children[c.id]?.length ?? 0) > 0))
 
   // Collapsed: a thin rail with just the expand toggle and the most-used actions.
   if (props.collapsed) {
@@ -874,7 +953,6 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             setRenamingGroup={setRenamingGroup}
             collapsedParents={collapsedParents}
             toggleParent={toggleParent}
-            alignGutter={alignGutter}
           />
         ))}
       </div>
