@@ -112,8 +112,10 @@ Open source under the [Apache License 2.0](LICENSE).
   when it is waiting on you (an approval, a question, a plan, a server asking for input,
   with the reason under the title), a grey pulse while it works, red when its last run
   failed, and blue when it finished while you were elsewhere. Mark any chat unread or
-  read from its ⋯ menu or with ⌥U (Alt+U), mark everything read from the filter menu,
-  or sort the chats that want attention to the top.
+  read from its ⋯ menu or with ⌥U (Alt+U), or from a specific reply with **Mark unread
+  from here**. Reopening an unread chat lands on a "New" divider above what you missed.
+  Mark everything read from the filter menu, or sort the chats that want attention to
+  the top.
 - **Background tasks.** The tasks button in the titlebar shows a pulsing count while
   terminals or commands the agent backgrounded in the open chat are running, and opens
   a **Tasks** tab in the same right-hand dock as Preview. Another chat's backgrounded

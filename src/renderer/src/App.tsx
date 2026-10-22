@@ -401,6 +401,18 @@ export default function App(): JSX.Element {
   // Live status of every conversation with a run (running, blocking prompts), used
   // to mark chats in the sidebar, including ones running in the background.
   const chatStatus = useChatStatus()
+  // Read when a chat opens: its unread anchor must be taken before the open marks it read.
+  const chatStatusRef = useRef(chatStatus)
+  chatStatusRef.current = chatStatus
+  // Where the open chat's unseen output starts (the "New" divider), set on open.
+  const [newFrom, setNewFrom] = useState<{ conversationId: string; itemId: string } | null>(null)
+  // A short confirmation with an Undo (marking a chat unread leaves it).
+  const [undoToast, setUndoToast] = useState<{ text: string; undo: () => void } | null>(null)
+  useEffect(() => {
+    if (!undoToast) return
+    const t = setTimeout(() => setUndoToast(null), 6000)
+    return () => clearTimeout(t)
+  }, [undoToast])
   // The running set only changes when a run starts or ends, not when a prompt comes
   // or goes, so key it by its members: the refresh below must not fire per prompt.
   const runningKey = Object.keys(chatStatus)
@@ -670,6 +682,7 @@ export default function App(): JSX.Element {
         window.api.getCheckpoint(id)
       ])
       if (!conv) return
+      const unreadAnchor = chatStatusRef.current[id]?.unread?.anchor
       const saved = savedSettingsRef.current
       const own = saved ? chatSettingsFor(conv, saved) : null
       setChatSettings(own?.settings ?? null)
@@ -693,9 +706,17 @@ export default function App(): JSX.Element {
               tone: 'handoff' as const,
               openConversationId: conv.spawnedFrom.conversationId
             },
-            ...itemsFromMessages(conv.messages.slice(forked))
+            ...itemsFromMessages(conv.messages.slice(forked), forked)
           ]
         : itemsFromMessages(conv.messages)
+      // Land on what's new: the first reply at or after the unread anchor.
+      const firstNew =
+        unreadAnchor === undefined
+          ? undefined
+          : items.find(
+              (it) => it.kind === 'assistant' && it.messageIndex !== undefined && it.messageIndex >= unreadAnchor
+            )
+      setNewFrom(firstNew ? { conversationId: id, itemId: firstNew.id } : null)
       if (conv.lastError && !endsWithRecordedError(conv.messages, conv.lastError.message)) {
         items.push({ kind: 'notice', id: `lasterror-${id}`, text: conv.lastError.message, tone: 'error' })
       }
@@ -847,18 +868,30 @@ export default function App(): JSX.Element {
     window.api.setChatViewing?.(currentId, windowFocused)
   }, [currentId, windowFocused])
 
-  // Mark a chat unread (or read). Marking the open chat unread also leaves it, as a
-  // mail client moves on: staying would mark it read again straight away.
+  // Mark a chat unread (or read), optionally from one of its replies. Marking the open
+  // chat unread also leaves it, as a mail client moves on: staying would mark it read
+  // again straight away. An Undo toast takes it back and reopens the chat.
   const onSetUnread = useCallback(
-    (id: string, unread: boolean) => {
-      void window.api.setChatUnread(id, unread)
+    (id: string, unread: boolean, fromReply?: number) => {
+      void window.api.setChatUnread(id, unread, fromReply)
       if (unread && id === currentId) {
-        const ws = conversations.find((c) => c.id === id)?.workspace ?? workspace
+        const meta = conversations.find((c) => c.id === id)
+        const ws = meta?.workspace ?? workspace
         if (ws) enterNewChat(ws)
         else setCurrentId(null)
+        setUndoToast({
+          text:
+            fromReply === undefined
+              ? `Marked “${meta?.title ?? 'chat'}” unread.`
+              : `Marked “${meta?.title ?? 'chat'}” unread from that reply.`,
+          undo: () => {
+            void window.api.setChatUnread(id, false)
+            void selectConversation(id)
+          }
+        })
       }
     },
-    [currentId, conversations, workspace, enterNewChat]
+    [currentId, conversations, workspace, enterNewChat, selectConversation]
   )
   const onMarkAllRead = useCallback(() => void window.api.markAllChatsRead(), [])
   const onToggleUnreadFirst = useCallback(async () => {
@@ -2501,6 +2534,10 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
+              ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
+              : {})}
+            {...(newFrom && newFrom.conversationId === currentId ? { newFromId: newFrom.itemId } : {})}
           />
         )}
 
@@ -2818,6 +2855,21 @@ export default function App(): JSX.Element {
         )}
       </Suspense>
 
+      {undoToast && (
+        <div className="undo-toast" role="status">
+          <span>{undoToast.text}</span>
+          <button
+            type="button"
+            className="undo-toast__btn"
+            onClick={() => {
+              undoToast.undo()
+              setUndoToast(null)
+            }}
+          >
+            Undo
+          </button>
+        </div>
+      )}
       <TipHost
         relevant={tipsRelevant}
         seen={onboarding.state.seenTips}

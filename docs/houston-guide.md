@@ -24,7 +24,9 @@ ships as a desktop app and as terminal clients.
   dot: amber when it waits on you (an approval, a question, a plan to review), a grey
   pulse while it works, red when its last run failed, and blue when it has a reply you
   haven't seen. A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read, and the
-  filter menu marks every chat read or sorts the ones that want attention first.
+  filter menu marks every chat read or sorts the ones that want attention first. A
+  reply's hover actions include **Mark unread from here**; reopening an unread chat
+  lands on a "New" divider above the first reply you haven't seen.
 - **Interactive terminal (`houston -i`).** A stay-resident REPL in the terminal.
   `--continue` reopens this folder's most recent chat at launch, `--resume <id>` a
   specific one.

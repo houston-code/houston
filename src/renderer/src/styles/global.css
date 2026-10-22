@@ -33,6 +33,8 @@
   --sig-working: #a3a6b0;
   --sig-input: #e8a33d;
   --sig-unread: #5b9bff;
+  /* Unread as a filled surface under white text (the jump pill): deepened for AA. */
+  --sig-unread-fill: #2f6fe0;
   --sig-error: var(--danger);
   /* Shadows read as noise on a near-black canvas — Graphite stays flat. */
   --shadow-card: none;
@@ -87,6 +89,7 @@
   --sig-working: #77736b;
   --sig-input: #b0731a;
   --sig-unread: #2563eb;
+  --sig-unread-fill: #2563eb;
   --sig-error: var(--danger);
   /* Soft warm elevation for cards, and an indigo glow for accent buttons/bubbles. */
   --shadow-card: 0 1px 3px rgba(47, 40, 30, 0.08);
@@ -2301,6 +2304,37 @@ body.is-resizing {
   color: var(--text-dim);
   border-color: var(--border);
 }
+/* "Mark unread from here" sits just right of the assistant's copy button. */
+.msg__mark-unread {
+  left: 26px;
+}
+.msg__mark-unread:focus-visible {
+  opacity: 1;
+}
+.msg__mark-unread:hover {
+  color: var(--sig-unread);
+  border-color: var(--sig-unread);
+}
+/* Where unseen output starts: a labelled rule in the unread blue, above the first
+   reply the user hasn't seen. */
+.transcript__new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 10px;
+  color: var(--sig-unread);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.transcript__new::before,
+.transcript__new::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--sig-unread) 60%, transparent);
+}
 
 /* ---- Markdown ---- */
 .md > *:first-child {
@@ -2627,6 +2661,67 @@ h6.md-h {
 }
 
 /* ---- Scroll-to-bottom ---- */
+/* Confirms an action that moved the user away (marking the open chat unread). */
+.undo-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: min(520px, calc(100vw - 32px));
+  padding: 8px 10px 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  color: var(--text);
+  font-size: 13px;
+  box-shadow: var(--shadow-popover, 0 8px 24px rgba(0, 0, 0, 0.35));
+}
+.undo-toast span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.undo-toast__btn {
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-weight: 600;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+.undo-toast__btn:hover {
+  background: var(--bg-hover);
+}
+.undo-toast__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* Shown once the "New" divider scrolls out of view above. */
+.jump-new {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 0;
+  border-radius: 999px;
+  padding: 5px 14px;
+  background: var(--sig-unread-fill);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.jump-new:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 .jump-bottom {
   position: absolute;
   bottom: 16px;

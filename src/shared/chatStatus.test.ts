@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import type { ChatMessage } from './agent'
 import {
   chatSignal,
   pendingReason,
   signalLabel,
+  rendersAsReply,
+  replyMessageIndexes,
   signalReason,
   statusSignal,
   strongestSignal,
@@ -126,5 +129,21 @@ describe('statusSignal and signalReason', () => {
     expect(signalReason({ running: true, pending: [] }, 'working')).toBeUndefined()
     expect(signalReason(unread('done'), 'idle')).toBeUndefined()
     expect(signalReason({ running: true, pending: [{ kind: 'question' }] }, 'input')).toBe('Has a question')
+  })
+})
+
+describe('replies', () => {
+  it('counts text and reasoning-only assistant messages, not empty tool-call ones', () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'hello' },
+      { role: 'assistant', content: '  ', toolCalls: [{ id: 't', name: 'x', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 't' },
+      { role: 'assistant', content: '', reasoning: [{ text: 'thinking' }] },
+      { role: 'assistant', content: '', reasoning: [{ text: '' }] }
+    ]
+    expect(messages.map(rendersAsReply)).toEqual([false, true, false, false, true, false])
+    expect(replyMessageIndexes(messages)).toEqual([1, 4])
+    expect(replyMessageIndexes([])).toEqual([])
   })
 })
