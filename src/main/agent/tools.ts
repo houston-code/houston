@@ -1289,7 +1289,7 @@ const searchTool: ToolDef = {
   schema: {
     name: 'search_files',
     description:
-      'Search file contents across the project using a regular expression. Returns matching "path:line: text" entries. Uses a bundled ripgrep for speed, falling back to a built-in scan. Skips hidden files and anything the project\'s .gitignore excludes (outside a git repo: node_modules, build output, and similar generated directories); every tracked file is searched.',
+      'Search file contents across the project using a regular expression. Returns matching "path:line: text" entries. Uses a bundled ripgrep for speed, falling back to a built-in scan. Skips hidden and .gitignored files; tracked files are always searched.',
     parameters: objectSchema(
       {
         pattern: { type: 'string', description: 'A regular expression.' },
@@ -1428,7 +1428,7 @@ const globTool: ToolDef = {
   schema: {
     name: 'glob',
     description:
-      'Find files whose path matches a glob pattern (e.g. "**/*.ts", "src/**/*.test.tsx"). Returns matching paths relative to the project root, most-recently-modified first. Skips dotfiles and anything the project\'s .gitignore excludes (outside a git repo: node_modules, build output, and similar generated directories).',
+      'Find files whose path matches a glob pattern (e.g. "**/*.ts", "src/**/*.test.tsx"). Returns matching paths relative to the project root, most-recently-modified first. Skips dotfiles and .gitignored files.',
     parameters: objectSchema(
       {
         pattern: { type: 'string', description: 'A glob pattern, e.g. "**/*.ts" or "src/*.json".' },

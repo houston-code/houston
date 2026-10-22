@@ -138,7 +138,7 @@ export async function runGitCapture(args: string[], cwd: string): Promise<GitCap
   try {
     hardening = await hardenedGitArgs(cwd)
   } catch (e) {
-    return { ok: false, stdout: '', stderr: (e as Error).message }
+    return { ok: false, code: null, stdout: '', stderr: (e as Error).message }
   }
   return new Promise((resolve) => {
     execFile(
