@@ -57,7 +57,9 @@ export function upgradeHint(method: InstallMethod): UpgradeHint {
     case 'bun':
       return command('bun add -g @houston-code/cli@latest')
     case 'homebrew':
-      return command('brew upgrade houston')
+      // Homebrew refreshes its formula lists at most once a day on its own, so a bare
+      // `brew upgrade` right after a release can still say the old version is current.
+      return command('brew update && brew upgrade houston')
     case 'aur':
       return command('paru -Syu houston-bin (or your AUR helper)')
     case 'install-script':

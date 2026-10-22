@@ -723,12 +723,13 @@ why a long conversation costs less than its token count suggests.
 The interactive terminal shows its version in the banner at startup, and
 `houston -v` prints it. Once a day it quietly checks whether a newer release
 exists and, if so, prints a short notice the next time it draws a prompt, with the
-command that upgrades this copy: `brew upgrade houston`, `npm i -g
+command that upgrades this copy: `brew update && brew upgrade houston`, `npm i -g
 @houston-code/cli@latest`, re-running the install script, and so on, depending on
 how Houston was installed (or the download link when it can't tell). A one-shot
 `-p` run prints the same notice on stderr after its answer, only when stderr is a
 terminal, and never in CI or with `--json`. The check never blocks startup or
-delays a run, and a failed check is silent. To turn it off, set
+delays a run. A failed check (offline, timed out, rate limited) is silent, keeps
+the last known result, and is retried after an hour. To turn it off, set
 `HOUSTON_NO_UPDATE_CHECK=1` (or `NO_UPDATE_NOTIFIER`). The desktop app updates
 itself separately.
 

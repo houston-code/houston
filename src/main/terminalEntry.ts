@@ -69,6 +69,9 @@ import {
   type UpdateAvailable
 } from './update-check'
 import { currentInstallMethod, upgradeHint } from './install-method'
+
+/** The interactive update check runs alongside the session, so it can wait longer than -p's. */
+const INTERACTIVE_UPDATE_TIMEOUT_MS = 10_000
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
 import { runHeadless, type HeadlessOptions } from './headless'
 import { serveAcp } from './acp'
@@ -550,7 +553,8 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       },
       takeLegacyRulesNotice: () => takeLegacyRulesTerminalNotice(() => legacyRulesNoticeApplies()),
       checkUpdate: async () => {
-        const found = await checkForUpdate(version)
+        // The session never waits on this, so it can afford a slow network.
+        const found = await checkForUpdate(version, { timeoutMs: INTERACTIVE_UPDATE_TIMEOUT_MS })
         latestUpdate = found ? { latest: found.latest, url: found.url, hint: hint.fix } : null
         return found ? { ...found, hint: hint.line } : null
       },
