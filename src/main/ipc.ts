@@ -66,7 +66,7 @@ import { getMcpStatuses } from './mcp/manager'
 import { openExternalSafely } from './safeExternal'
 import { shareHouston, shareHoustonFromMenu, shareHoustonVia } from './share'
 import type { ShareResult, ShareTarget } from '@shared/share'
-import type { ChatStatusMap } from '@shared/chatStatus'
+import { replyMessageIndexes, type ChatStatusMap } from '@shared/chatStatus'
 import { createChatAttention, type ChatAttention } from './chatAttention'
 import { join } from 'node:path'
 import { getUserDataDir } from './userData'
@@ -1537,13 +1537,15 @@ export function registerIpc(): void {
     }
     chat.setViewing(id, typeof conversationId === 'string' ? conversationId : null, focused === true)
   })
-  ipcMain.handle(IPC.chatSetUnread, (_event, conversationId: unknown, unread: unknown, anchor: unknown) => {
+  // "Mark unread from here" names a reply by its position among the transcript's
+  // replies (the renderer has no message log); it's resolved to a log index here.
+  ipcMain.handle(IPC.chatSetUnread, (_event, conversationId: unknown, unread: unknown, fromReply: unknown) => {
     if (typeof conversationId !== 'string') return
-    chat.setUnread(
-      conversationId,
-      unread === true,
-      typeof anchor === 'number' && Number.isInteger(anchor) && anchor >= 0 ? anchor : undefined
-    )
+    const anchor =
+      typeof fromReply === 'number' && Number.isInteger(fromReply) && fromReply >= 0
+        ? replyMessageIndexes(peekConversation(conversationId)?.messages ?? [])[fromReply]
+        : undefined
+    chat.setUnread(conversationId, unread === true, anchor)
   })
   ipcMain.handle(IPC.chatMarkAllRead, () => chat.markAllRead())
 

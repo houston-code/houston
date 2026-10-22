@@ -10,6 +10,27 @@
  * can show the same thing.
  */
 
+import type { ChatMessage } from './agent'
+
+/**
+ * Whether a message shows in the transcript as an assistant reply (text, or reasoning
+ * alone). The transcript and the unread anchor both count replies with this, so "the
+ * Nth reply" names the same message on either side of IPC.
+ */
+export function rendersAsReply(m: ChatMessage): boolean {
+  if (m.role !== 'assistant') return false
+  return m.content.trim() !== '' || (m.reasoning?.some((r) => r.text) ?? false)
+}
+
+/** The log index of each message that renders as an assistant reply, in order. */
+export function replyMessageIndexes(messages: readonly ChatMessage[]): number[] {
+  const out: number[] = []
+  messages.forEach((m, i) => {
+    if (rendersAsReply(m)) out.push(i)
+  })
+  return out
+}
+
 /** The kinds of prompt a live run can block on until the user answers. */
 export type PendingKind = 'approval' | 'question' | 'plan' | 'elicitation'
 

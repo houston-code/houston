@@ -15,6 +15,7 @@ import type { ImageAttachment } from '@shared/images'
 import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocation'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
 import { planOutcome } from '@shared/promptOutcome'
+import { rendersAsReply } from '@shared/chatStatus'
 import { upsertFinding } from '@shared/reviewFindings'
 import { capSteps, upsertStep, type SubagentRecord } from '@shared/subagents'
 import { turnLabel, turnText } from '@shared/rewind'
@@ -53,6 +54,12 @@ export interface AssistantItem {
   streaming: boolean
   /** Model reasoning ("thinking") streamed before the answer, if any. */
   reasoning?: string
+  /**
+   * The message's index in the conversation's persisted log, for items rebuilt from
+   * it (absent on live-streamed ones). Lets an unread anchor, which is a log index,
+   * find the reply to put the "New" divider above.
+   */
+  messageIndex?: number
 }
 /** A nested subagent spawned by a tool (e.g. a review_changes dimension reviewer), shown as its own row. */
 export interface SubAgentRow {
@@ -759,7 +766,11 @@ export function systemNoteSummary(content: string): string {
 }
 
 /** Build display items from a saved conversation's message log. */
-export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
+export function itemsFromMessages(
+  messages: ChatMessage[],
+  /** Where `messages` starts in the full log (a slice of it), for `messageIndex`. */
+  offset = 0
+): DisplayItem[] {
   const resultByCallId = new Map<
     string,
     { output: string; images?: ImageAttachment[]; subagents?: SubagentRecord[] }
@@ -775,7 +786,7 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
   }
 
   const items: DisplayItem[] = []
-  for (const m of messages) {
+  for (const [i, m] of messages.entries()) {
     if (m.role === 'user') {
       // An automated guidance turn the loop injected (a stall nudge, the budget
       // landing reminder) rides on a user message but isn't from the user — show it
@@ -797,8 +808,15 @@ export function itemsFromMessages(messages: ChatMessage[]): DisplayItem[] {
       }
     } else if (m.role === 'assistant') {
       const reasoning = m.reasoning?.map((r) => r.text).filter(Boolean).join('\n') || undefined
-      if (m.content.trim() || reasoning) {
-        items.push({ kind: 'assistant', id: nextId(), text: m.content, streaming: false, reasoning })
+      if (rendersAsReply(m)) {
+        items.push({
+          kind: 'assistant',
+          id: nextId(),
+          text: m.content,
+          streaming: false,
+          reasoning,
+          messageIndex: offset + i
+        })
       }
       for (const tc of m.toolCalls ?? []) {
         const res = resultByCallId.get(tc.id)

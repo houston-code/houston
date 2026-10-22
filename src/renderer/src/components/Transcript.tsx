@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   COMPACTION_SUMMARY_PREFIX,
   type ElicitationResult,
@@ -261,11 +261,14 @@ function PlanMarker({
 function AssistantMessage({
   text,
   streaming,
-  reasoning
+  reasoning,
+  onMarkUnread
 }: {
   text: string
   streaming?: boolean
   reasoning?: string
+  /** Mark the chat unread from this reply; absent hides the button. */
+  onMarkUnread?: () => void
 }): JSX.Element {
   return (
     <div className="msg msg--assistant">
@@ -282,6 +285,16 @@ function AssistantMessage({
         </div>
       )}
       {!streaming && text.trim() !== '' && <CopyButton text={text} />}
+      {!streaming && onMarkUnread && (
+        <button
+          className="msg__copy msg__mark-unread"
+          onClick={onMarkUnread}
+          title="Mark unread from here"
+          aria-label="Mark unread from here"
+        >
+          <Icon name="mail" />
+        </button>
+      )}
     </div>
   )
 }
@@ -344,7 +357,9 @@ export function Transcript({
   onRunInTerminal,
   proposals,
   onOpenConversation,
-  rewind
+  rewind,
+  onMarkUnreadFrom,
+  newFromId
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
@@ -361,6 +376,16 @@ export function Transcript({
   onOpenConversation?: (id: string) => void
   /** Rewind to (or edit and resend) one of the user's messages; absent hides the menu. */
   rewind?: RewindHandlers
+  /**
+   * Mark the chat unread from a reply, named by its position among the replies
+   * (0-based). Absent hides the button.
+   */
+  onMarkUnreadFrom?: (replyNumber: number) => void
+  /**
+   * The reply where unseen output starts: a "New" divider goes above it, and the
+   * view opens scrolled to it instead of to the bottom.
+   */
+  newFromId?: string
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -368,13 +393,29 @@ export function Transcript({
   // unpins, scrolling back to the bottom re-pins.
   const pinnedRef = useRef(true)
   const [showJump, setShowJump] = useState(false)
+  // The "New" divider, and whether it has scrolled out of view above (offer a jump).
+  const newRef = useRef<HTMLDivElement>(null)
+  const [newAbove, setNewAbove] = useState(false)
 
   function handleScroll(): void {
     const el = containerRef.current
     if (!el) return
     pinnedRef.current = isNearBottom(el)
     setShowJump(!pinnedRef.current)
+    const divider = newRef.current
+    setNewAbove(!!divider && divider.getBoundingClientRect().bottom < el.getBoundingClientRect().top)
   }
+
+  // Open on unseen output: start at the "New" divider rather than the bottom, and
+  // stop following the bottom so the next render doesn't scroll past it.
+  useEffect(() => {
+    const el = containerRef.current
+    const divider = newRef.current
+    if (!el || !divider) return
+    pinnedRef.current = false
+    el.scrollTop = Math.max(0, divider.offsetTop - 12)
+    setShowJump(!isNearBottom(el))
+  }, [newFromId])
 
   // Keep the latest output in view only while pinned. Using an instant jump
   // (not smooth) avoids restarting an animation on every streaming delta, which
@@ -383,6 +424,14 @@ export function Transcript({
     const el = containerRef.current
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
   }, [items])
+
+  function jumpToNew(): void {
+    const el = containerRef.current
+    const divider = newRef.current
+    if (!el || !divider) return
+    el.scrollTo({ top: Math.max(0, divider.offsetTop - 12), behavior: 'smooth' })
+    setNewAbove(false)
+  }
 
   function jumpToBottom(): void {
     const el = containerRef.current
@@ -397,6 +446,12 @@ export function Transcript({
   const nodes = useMemo(() => groupItems(items), [items])
   // Each user message's rewind point, by item id.
   const targets = useMemo(() => new Map(rewindTargets(items).map((t) => [t.id, t])), [items])
+  // Each reply's position among the replies, by item id ("Mark unread from here").
+  const replyNumbers = useMemo(() => {
+    const out = new Map<string, number>()
+    for (const it of items) if (it.kind === 'assistant') out.set(it.id, out.size)
+    return out
+  }, [items])
 
   // A coarse, polite status for screen readers — the streaming transcript is
   // otherwise silent to assistive tech. Announces on change only (not on mount).
@@ -434,15 +489,27 @@ export function Transcript({
                   />
                 )
               }
-              case 'assistant':
-                return (
+              case 'assistant': {
+                const n = replyNumbers.get(node.item.id)
+                const reply = (
                   <AssistantMessage
                     key={node.id}
                     text={node.item.text}
                     streaming={node.item.streaming}
                     reasoning={node.item.reasoning}
+                    {...(onMarkUnreadFrom && n !== undefined ? { onMarkUnread: () => onMarkUnreadFrom(n) } : {})}
                   />
                 )
+                if (node.item.id !== newFromId) return reply
+                return (
+                  <Fragment key={node.id}>
+                    <div ref={newRef} className="transcript__new" role="separator" aria-label="New since you last looked">
+                      New
+                    </div>
+                    {reply}
+                  </Fragment>
+                )
+              }
               case 'toolgroup':
                 return <ToolGroup key={node.id} items={node.items} onApprove={onApprove} />
               case 'question':
@@ -490,6 +557,11 @@ export function Transcript({
           })}
         </div>
       </div>
+      {newAbove && (
+        <button className="jump-new" onClick={jumpToNew}>
+          ↑ Jump to first unread
+        </button>
+      )}
       {showJump && (
         <button className="jump-bottom" onClick={jumpToBottom} title="Scroll to bottom">
           ↓
