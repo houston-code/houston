@@ -7,6 +7,7 @@ import {
   type Provider,
   type StoredSideChat
 } from '@shared/agent'
+import type { PermissionRule } from '@shared/types'
 import type { SubAgentOptions } from './agent/subagent'
 import {
   MAX_SIDE_QUESTION_CHARS,
@@ -18,6 +19,7 @@ import {
   clearSideChat,
   resetSideChats,
   sideChatContext,
+  sideChatGate,
   sideChatView,
   sideOutcome,
   type SideChatDeps
@@ -45,7 +47,7 @@ const conv = (over: Partial<Conversation> = {}): Conversation => ({
  * Deps over one in-memory chat (the "store"), with a scripted subagent that records
  * each call. `report` is what the subagent returns for each run, in order.
  */
-function harness(c: Conversation | null = conv(), reports: string[] = []) {
+function harness(c: Conversation | null = conv(), reports: string[] = [], rules: PermissionRule[] = []) {
   const runs: SubAgentOptions[] = []
   const changes: string[] = []
   const usage: Array<{ id: string; usage: Parameters<NonNullable<SideChatDeps['addUsage']>>[1] }> = []
@@ -62,6 +64,7 @@ function harness(c: Conversation | null = conv(), reports: string[] = []) {
     onChange: (id) => void changes.push(id),
     newId: () => `t${++n}`,
     now: () => 1000,
+    permissionRules: async () => rules,
     runSubAgent: async (opts) => {
       runs.push(opts)
       opts.onUsage?.({ inputTokens: 900, outputTokens: 40 })
@@ -230,6 +233,41 @@ describe('askSideChat: read-only, stored with the chat', () => {
     await expect(ask(deps, 'x'.repeat(MAX_SIDE_QUESTION_CHARS + 1))).rejects.toThrow(/too long/)
     expect(c.sideChat).toBeUndefined()
     await expect(ask(harness(null).deps)).rejects.toThrow(/no longer exists/)
+  })
+})
+
+describe('askSideChat: permission rules', () => {
+  const ran = async (): Promise<string> => 'contents'
+  const read = (path: string) => ({ path })
+
+  it('hands the subagent a gate built from the rules, scoped to the chat workspace', async () => {
+    const { deps, runs } = harness(conv(), [], [{ tool: 'read_file', match: 'secrets/**', action: 'deny' }])
+    await ask(deps)
+    const gate = runs[0].gateLocal!
+    expect(await gate('read_file', 'read', read('secrets/a.txt'), ran)).toMatch(/^Denied by a permission rule/)
+    expect(await gate('read_file', 'read', read('src/a.ts'), ran)).toBe('contents')
+  })
+
+  it('refuses a call an ask rule gates, since the side chat cannot ask', async () => {
+    const gate = sideChatGate([{ tool: 'read_file', match: '/repo/private/**', action: 'ask' }], ['/repo'])
+    expect(await gate('read_file', 'read', read('/repo/private/x'), ran)).toMatch(/can't ask/)
+  })
+
+  it('refuses a credential-file read unless an allow rule covers it', async () => {
+    expect(await sideChatGate([], ['/repo'])('read_file', 'read', read('.env'), ran)).toMatch(/credential or secret/)
+    const allowed = sideChatGate([{ tool: 'read_file', match: '.env', action: 'allow' }], ['/repo'])
+    expect(await allowed('read_file', 'read', read('.env'), ran)).toBe('contents')
+  })
+
+  it('lets a higher-tier deny win over a lower allow', async () => {
+    const gate = sideChatGate(
+      [
+        { tool: 'read_file', match: 'a.ts', action: 'deny' },
+        { tool: 'read_file', match: 'a.ts', action: 'allow' }
+      ],
+      ['/repo']
+    )
+    expect(await gate('read_file', 'read', read('a.ts'), ran)).toMatch(/^Denied/)
   })
 })
 
