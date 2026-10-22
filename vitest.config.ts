@@ -60,19 +60,19 @@ export default defineConfig({
         '*.config.{ts,mts,mjs,js}',
         '.claude/**'
       ],
-      // A ratchet, not a target: each floor sits about a point below the coverage
-      // measured when it was set, so a PR that lowers a directory's coverage
-      // noticeably fails CI, while PRs merging concurrently through the queue don't
-      // trip each other on rounding. When a PR raises coverage, bump the matching
-      // floor in the same change. Checked per directory because the layers differ
+      // A ratchet, not a target: each floor sits a few tenths of a point below the
+      // coverage measured when it was set (enough to absorb run-to-run noise from
+      // timing-dependent paths, about 0.05), so a PR that lowers a directory's
+      // coverage fails CI. When a PR raises coverage, bump the matching floor in the
+      // same change. Checked per directory because the layers differ
       // widely (shared logic is near-total, the renderer is not), and one global
       // number would let a drop in one hide behind a gain in another. src/preload has no unit tests (it is exercised by the
       // packaged-app e2e), so it carries no floor.
       thresholds: {
-        'src/main/**': { statements: 87, branches: 81, functions: 82, lines: 89 },
-        'src/renderer/**': { statements: 69, branches: 68, functions: 68, lines: 71 },
-        'src/shared/**': { statements: 94, branches: 87, functions: 97, lines: 95 },
-        'src/cli/**': { statements: 77, branches: 74, functions: 55, lines: 78 }
+        'src/main/**': { statements: 87.8, branches: 82.4, functions: 83.5, lines: 90 },
+        'src/renderer/**': { statements: 70, branches: 69.3, functions: 69.4, lines: 71.8 },
+        'src/shared/**': { statements: 95.2, branches: 88, functions: 98.7, lines: 96.1 },
+        'src/cli/**': { statements: 78.3, branches: 75.3, functions: 56.5, lines: 79 }
       }
     },
     projects: [
