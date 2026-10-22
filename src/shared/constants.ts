@@ -174,6 +174,12 @@ export const IPC = {
   chatStatusList: 'chat:statusList',
   /** Main → renderer: a run started or ended, or a prompt began or stopped blocking one. */
   chatStatusChanged: 'chat:statusChanged',
+  /** Renderer → main: which chat this window shows, and whether the window is focused. */
+  chatViewing: 'chat:viewing',
+  /** Renderer → main: mark a chat unread (optionally from a message index) or read. */
+  chatSetUnread: 'chat:setUnread',
+  /** Renderer → main: mark every chat read. */
+  chatMarkAllRead: 'chat:markAllRead',
   agentEvent: 'agent:event',
   // Session proposals (propose_session cards)
   /** Renderer → main: start a proposed session as its own chat. */

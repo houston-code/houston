@@ -821,6 +821,13 @@ body.is-resizing {
 .menu__item:hover {
   background: var(--bg-hover);
 }
+.menu__item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.menu__item:disabled:hover {
+  background: none;
+}
 .menu__item--indent {
   padding-left: 18px;
   font-size: 12.5px;

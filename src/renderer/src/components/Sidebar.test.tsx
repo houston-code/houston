@@ -185,15 +185,117 @@ describe('Sidebar — expanded rendering', () => {
     expect(screen.getByText(/Has a question/)).toBeInTheDocument()
   })
 
-  it('rings a failed chat until it is opened', () => {
-    const conversations = [makeConv({ id: 'a', title: 'Alpha', errored: true })]
-    const { rerender } = render(<Sidebar {...baseProps({ conversations, failedIds: new Set(['a']) })} />)
+  it('rings a failed chat, with the error in its meta line, except while it is open', () => {
+    const conversations = [makeConv({ id: 'a', title: 'Alpha' })]
+    const chatStatus: ChatStatusMap = {
+      a: { running: false, pending: [], unread: { since: 1, outcome: 'error', note: 'rate limited' } }
+    }
+    const { rerender } = render(<Sidebar {...baseProps({ conversations, chatStatus })} />)
     const alpha = (): HTMLElement => screen.getByText('Alpha').closest('.conv') as HTMLElement
     expect(alpha()).toHaveAttribute('data-signal', 'error')
-    expect(within(alpha()).getByText(/Last run failed/)).toBeInTheDocument()
-    // Open: the user is looking at it, so no ring.
-    rerender(<Sidebar {...baseProps({ conversations, failedIds: new Set(['a']), currentId: 'a' })} />)
+    expect(within(alpha()).getByText(/Failed: rate limited/)).toBeInTheDocument()
+    rerender(<Sidebar {...baseProps({ conversations, chatStatus, currentId: 'a' })} />)
     expect(alpha()).toHaveAttribute('data-signal', 'idle')
+  })
+
+  it('marks an unread chat with a blue dot and says what is new', () => {
+    const conversations = [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })]
+    const chatStatus: ChatStatusMap = {
+      a: { running: false, pending: [], unread: { since: 1, outcome: 'done', note: 'Opened PR #412' } },
+      b: { running: false, pending: [], unread: { since: 1, outcome: 'limit' } }
+    }
+    render(<Sidebar {...baseProps({ conversations, chatStatus })} />)
+    const row = (t: string): HTMLElement => screen.getByText(t).closest('.conv') as HTMLElement
+    expect(row('Alpha')).toHaveAttribute('data-signal', 'unread')
+    expect(within(row('Alpha')).getByText(/Opened PR #412/)).toBeInTheDocument()
+    expect(within(row('Beta')).getByText(/Stopped at step limit/)).toBeInTheDocument()
+  })
+
+  it('shows working over unread while a new run is going', () => {
+    const chatStatus: ChatStatusMap = {
+      a: { running: true, pending: [], unread: { since: 1, outcome: 'done' } }
+    }
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], chatStatus })} />)
+    expect(screen.getByText('Alpha').closest('.conv')).toHaveAttribute('data-signal', 'working')
+  })
+
+  it('offers Mark as unread / Mark as read in the row menu and from the keyboard', () => {
+    const onSetUnread = vi.fn()
+    const conversations = [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })]
+    const chatStatus: ChatStatusMap = { b: { running: false, pending: [], unread: { since: 1, outcome: 'done' } } }
+    render(<Sidebar {...baseProps({ conversations, chatStatus, onSetUnread })} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Alpha' }))
+    fireEvent.click(screen.getByRole('button', { name: /Mark as unread/ }))
+    expect(onSetUnread).toHaveBeenLastCalledWith('a', true)
+
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Beta' }))
+    fireEvent.click(screen.getByRole('button', { name: /Mark as read/ }))
+    expect(onSetUnread).toHaveBeenLastCalledWith('b', false)
+
+    // Option/Alt+U on a focused row toggles it (matched on the physical key).
+    const alpha = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    fireEvent.keyDown(alpha, { key: '¨', code: 'KeyU', altKey: true })
+    expect(onSetUnread).toHaveBeenLastCalledWith('a', true)
+  })
+
+  it('does not offer read toggles on a chat waiting for input', () => {
+    const onSetUnread = vi.fn()
+    const chatStatus: ChatStatusMap = { a: { running: true, pending: [{ kind: 'question' }] } }
+    render(
+      <Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], chatStatus, onSetUnread })} />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'More actions for Alpha' }))
+    expect(screen.queryByRole('button', { name: /Mark as (un)?read/ })).not.toBeInTheDocument()
+    fireEvent.keyDown(screen.getByText('Alpha').closest('.conv') as HTMLElement, { code: 'KeyU', altKey: true })
+    expect(onSetUnread).not.toHaveBeenCalled()
+  })
+
+  it('marks everything read and toggles unread-first from the filter menu', () => {
+    const onMarkAllRead = vi.fn()
+    const onToggleUnreadFirst = vi.fn()
+    const chatStatus: ChatStatusMap = {
+      a: { running: false, pending: [], unread: { since: 1, outcome: 'done' } },
+      b: { running: false, pending: [], unread: { since: 1, outcome: 'error' } }
+    }
+    render(
+      <Sidebar
+        {...baseProps({
+          conversations: [makeConv({ id: 'a', title: 'Alpha' }), makeConv({ id: 'b', title: 'Beta' })],
+          chatStatus,
+          onMarkAllRead,
+          onToggleUnreadFirst
+        })}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
+    const markAll = screen.getByRole('menuitem', { name: /Mark all as read/ })
+    expect(markAll).toHaveTextContent('2')
+    fireEvent.click(markAll)
+    expect(onMarkAllRead).toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Show unread first/ }))
+    expect(onToggleUnreadFirst).toHaveBeenCalled()
+  })
+
+  it('disables Mark all as read when nothing is unread', () => {
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], onMarkAllRead: vi.fn() })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
+    expect(screen.getByRole('menuitem', { name: /Mark all as read/ })).toBeDisabled()
+  })
+
+  it('floats chats wanting attention to the top when unread-first is on', () => {
+    const conversations = [
+      makeConv({ id: 'a', title: 'Alpha', updatedAt: 3 }),
+      makeConv({ id: 'b', title: 'Beta', updatedAt: 2 }),
+      makeConv({ id: 'c', title: 'Gamma', updatedAt: 1 })
+    ]
+    const chatStatus: ChatStatusMap = { c: { running: false, pending: [], unread: { since: 1, outcome: 'done' } } }
+    const titles = (): string[] => [...document.querySelectorAll('.conv__title')].map((el) => el.textContent ?? '')
+    const { rerender } = render(<Sidebar {...baseProps({ conversations, chatStatus })} />)
+    expect(titles()).toEqual(['Alpha', 'Beta', 'Gamma'])
+    rerender(<Sidebar {...baseProps({ conversations, chatStatus, unreadFirst: true })} />)
+    expect(titles()).toEqual(['Gamma', 'Alpha', 'Beta'])
   })
 
   it('selecting a conversation fires onSelect with its id', () => {

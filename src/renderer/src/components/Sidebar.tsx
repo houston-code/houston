@@ -3,9 +3,9 @@ import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
 import type { EditorId, EditorStatus } from '@shared/editors'
 import {
-  chatSignal,
-  pendingReason,
   signalLabel,
+  signalReason,
+  statusSignal,
   strongestSignal,
   type ChatSignal,
   type ChatStatusMap
@@ -19,6 +19,7 @@ import {
 } from '../lib/chatGroups'
 import { listEditors, fileManagerName } from '../lib/editors'
 import { baseName } from '../lib/paths'
+import { isMacPlatform } from '../lib/shortcuts'
 import { Icon } from './Icon'
 import { Popover } from './Popover'
 import { MenuExpander } from './MenuExpander'
@@ -47,12 +48,18 @@ export interface SidebarProps {
   /** The toggle's keyboard shortcut as displayed on this platform (e.g. ⌘B, Ctrl+B). */
   toggleShortcut?: string
   /**
-   * Live status of every conversation with a run (running, blocking prompts). Drives
-   * each row's signal dot: needs input, working.
+   * Status of every conversation with something to show: a live run, the prompts
+   * blocking it, or an unread mark. Drives each row's signal dot (needs input,
+   * failed, working, unread).
    */
   chatStatus: ChatStatusMap
-  /** Chats whose last run failed and that the user hasn't opened since (red ring). */
-  failedIds?: ReadonlySet<string>
+  /** Mark a chat unread or read by hand. */
+  onSetUnread?: (id: string, unread: boolean) => void
+  /** Mark every chat read. */
+  onMarkAllRead?: () => void
+  /** Whether chats wanting attention sort to the top of each section, and its toggle. */
+  unreadFirst?: boolean
+  onToggleUnreadFirst?: () => void
   onSelect: (id: string) => void
   onNew: () => void
   onDelete: (id: string) => void
@@ -248,6 +255,9 @@ function ConvRow({
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const [dragging, setDragging] = useState(false)
+  // A chat waiting on the user can't be marked read or unread: answering clears it.
+  const isUnread = props.chatStatus[conv.id]?.unread !== undefined
+  const canToggleRead = !!props.onSetUnread && (props.chatStatus[conv.id]?.pending.length ?? 0) === 0
   // Editors are probed lazily the first time this row's menu opens (null = not yet).
   const [editors, setEditors] = useState<EditorStatus[] | null>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -291,6 +301,12 @@ function ConvRow({
         if (!renaming && e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
           e.preventDefault()
           props.onSelect(conv.id)
+        }
+        // ⌥U / Alt+U toggles read state. Matched on the physical key: on macOS, Option+U
+        // is a dead key whose `key` is "¨", not "u".
+        if (!renaming && e.target === e.currentTarget && canToggleRead && e.altKey && e.code === 'KeyU') {
+          e.preventDefault()
+          props.onSetUnread?.(conv.id, !isUnread)
         }
       }}
     >
@@ -419,6 +435,18 @@ function ConvRow({
             >
               {conv.pinned ? '☆ Unpin' : '★ Pin'}
             </button>
+            {canToggleRead && (
+              <button
+                className="menu__item"
+                onClick={() => {
+                  props.onSetUnread?.(conv.id, !isUnread)
+                  close()
+                }}
+              >
+                {isUnread ? '○ Mark as read' : '● Mark as unread'}
+                <kbd className="menu__item-count">{isMacPlatform() ? '⌥U' : 'Alt+U'}</kbd>
+              </button>
+            )}
             <button
               className="menu__item"
               onClick={() => {
@@ -615,11 +643,20 @@ function GroupHeader({
 function FilterButton({
   filter,
   counts,
-  onChange
+  onChange,
+  unreadCount,
+  onMarkAllRead,
+  unreadFirst,
+  onToggleUnreadFirst
 }: {
   filter: ConversationStatusFilter
   counts: { active: number; archived: number }
   onChange: (filter: ConversationStatusFilter) => void
+  /** How many chats are unread (or failed and unseen), for "Mark all as read". */
+  unreadCount: number
+  onMarkAllRead?: () => void
+  unreadFirst: boolean
+  onToggleUnreadFirst?: () => void
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -668,6 +705,35 @@ function FilterButton({
               <span className="menu__item-count">{o.count}</span>
             </button>
           ))}
+          {(onMarkAllRead || onToggleUnreadFirst) && <div className="menu__sep" />}
+          {onMarkAllRead && (
+            <button
+              role="menuitem"
+              className="menu__item"
+              disabled={unreadCount === 0}
+              onClick={() => {
+                onMarkAllRead()
+                setOpen(false)
+              }}
+            >
+              Mark all as read
+              <span className="menu__item-count">{unreadCount}</span>
+            </button>
+          )}
+          {onToggleUnreadFirst && (
+            <button
+              role="menuitemcheckbox"
+              aria-checked={unreadFirst}
+              className="menu__item"
+              onClick={() => {
+                onToggleUnreadFirst()
+                setOpen(false)
+              }}
+            >
+              {unreadFirst ? '☑ ' : '☐ '}
+              Show unread first
+            </button>
+          )}
         </Popover>
       )}
     </div>
@@ -755,13 +821,10 @@ function SidebarSectionView({
     props.onReorder(orderedIds, move)
   }
 
-  // A chat's own signal: blocked or running from the live status, failed from the
-  // unseen-failure set. The open chat never shows failed (the user is looking at it).
+  // A chat's own signal from its status entry. The open chat never shows failed or
+  // unread (the user is looking at it).
   const ownSignal = (c: ConversationMeta): ChatSignal =>
-    chatSignal(props.chatStatus[c.id], {
-      failed: props.failedIds?.has(c.id) ?? false,
-      active: c.id === currentId
-    })
+    statusSignal(props.chatStatus[c.id], c.id === currentId)
 
   // A row plus, unless folded away, the spawned chats nested under it (recursively).
   // A parent holding the open chat stays unfolded, so the open chat is never hidden.
@@ -776,13 +839,7 @@ function SidebarSectionView({
     // Folded, the parent's dot stands for its hidden children too; open, they show
     // their own dots, so the parent shows only its own state.
     const signal = expanded ? own : strongestSignal([own, childSignal])
-    const live = props.chatStatus[c.id]
-    const reason =
-      own === 'input' && live
-        ? pendingReason(live.pending)
-        : own === 'error'
-          ? 'Last run failed'
-          : undefined
+    const reason = signalReason(props.chatStatus[c.id], own)
     return (
       <>
         <ConvRow
@@ -858,7 +915,18 @@ const NO_PARENTS: ReadonlySet<string> = new Set()
 export function Sidebar(props: SidebarProps): JSX.Element {
   const { conversations, groups, currentId } = props
   const shortcut = props.toggleShortcut ? ` (${props.toggleShortcut})` : ''
-  const sections = buildSidebarSections(conversations, groups, props.collapsedSections)
+  // A chat wants attention when it waits on the user or has something unseen.
+  const wantsAttention = (id: string): boolean => {
+    const st = props.chatStatus[id]
+    return !!st && (st.pending.length > 0 || (st.unread !== undefined && id !== currentId))
+  }
+  const sections = buildSidebarSections(
+    conversations,
+    groups,
+    props.collapsedSections,
+    props.unreadFirst ? wantsAttention : undefined
+  )
+  const unreadCount = Object.values(props.chatStatus).filter((st) => st.unread !== undefined).length
   // Which conversation/group is currently being renamed (id), if any.
   const [renamingConv, setRenamingConv] = useState<string | null>(null)
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
@@ -927,6 +995,10 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           filter={props.statusFilter}
           counts={props.statusCounts}
           onChange={props.onStatusFilterChange}
+          unreadCount={unreadCount}
+          {...(props.onMarkAllRead ? { onMarkAllRead: props.onMarkAllRead } : {})}
+          unreadFirst={props.unreadFirst ?? false}
+          {...(props.onToggleUnreadFirst ? { onToggleUnreadFirst: props.onToggleUnreadFirst } : {})}
         />
       </div>
 

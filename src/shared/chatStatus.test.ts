@@ -3,6 +3,8 @@ import {
   chatSignal,
   pendingReason,
   signalLabel,
+  signalReason,
+  statusSignal,
   strongestSignal,
   SIGNAL_PRIORITY,
   type ChatLiveStatus
@@ -93,5 +95,35 @@ describe('signalLabel', () => {
     expect(signalLabel('working')).toBe('Working')
     expect(signalLabel('unread')).toBe('Unread')
     expect(signalLabel('idle')).toBeUndefined()
+  })
+})
+
+describe('statusSignal and signalReason', () => {
+  const unread = (outcome: 'done' | 'limit' | 'error' | 'manual', note?: string) => ({
+    running: false,
+    pending: [],
+    unread: { since: 1, outcome, ...(note ? { note } : {}) }
+  })
+
+  it('reads failed and unread from the unread mark', () => {
+    expect(statusSignal(unread('error'), false)).toBe('error')
+    expect(statusSignal(unread('done'), false)).toBe('unread')
+    expect(statusSignal(unread('done'), true)).toBe('idle')
+    expect(statusSignal(undefined, false)).toBe('idle')
+  })
+
+  it('describes each outcome', () => {
+    expect(signalReason(unread('error', 'boom'), 'error')).toBe('Failed: boom')
+    expect(signalReason(unread('error'), 'error')).toBe('Failed')
+    expect(signalReason(unread('limit'), 'unread')).toBe('Stopped at step limit')
+    expect(signalReason(unread('manual'), 'unread')).toBe('Marked unread')
+    expect(signalReason(unread('done'), 'unread')).toBe('Finished')
+    expect(signalReason(unread('done', 'Opened PR #4'), 'unread')).toBe('Opened PR #4')
+  })
+
+  it('has no reason for working or idle, and names the prompt for input', () => {
+    expect(signalReason({ running: true, pending: [] }, 'working')).toBeUndefined()
+    expect(signalReason(unread('done'), 'idle')).toBeUndefined()
+    expect(signalReason({ running: true, pending: [{ kind: 'question' }] }, 'input')).toBe('Has a question')
   })
 })

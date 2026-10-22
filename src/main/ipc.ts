@@ -67,6 +67,10 @@ import { openExternalSafely } from './safeExternal'
 import { shareHouston, shareHoustonFromMenu, shareHoustonVia } from './share'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type { ChatStatusMap } from '@shared/chatStatus'
+import { createChatAttention, type ChatAttention } from './chatAttention'
+import { join } from 'node:path'
+import { getUserDataDir } from './userData'
+import { ReadStateStore } from './readState'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
 import {
@@ -126,6 +130,7 @@ import {
   searchConversations,
   getConversation,
   peekConversation,
+  conversationExists,
   createConversation,
   forkConversation,
   deleteConversation,
@@ -237,11 +242,19 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
   return mergeRunningTotals(e, total)
 }
 
+/**
+ * Unread tracking and the combined chat status (live runs + unread marks) the sidebar
+ * shows. Created in {@link registerIpc}; every run event passes through it so a run
+ * that ends out of view leaves its chat unread.
+ */
+let attention: ChatAttention | null = null
+
 /** Stream one agent event to the renderer, persisting usage totals along the way. */
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
   const ev = applyRunningUsage(conversationId, e)
   if (!sender.isDestroyed()) sender.send(IPC.agentEvent, ev)
   maybeNotify(sender, conversationId, ev)
+  attention?.noteEvent(conversationId, ev)
 }
 
 /**
@@ -306,6 +319,7 @@ function makeBroadcastIo(): DrainIO {
       toEach((wc) => wc.send(IPC.agentEvent, ev))
       const primary = BrowserWindow.getAllWindows()[0]?.webContents
       if (primary) maybeNotify(primary, conversationId, ev)
+      attention?.noteEvent(conversationId, ev)
     },
     emitQueueChanged: (conversationId, items) =>
       toEach((wc) => wc.send(IPC.agentQueueChanged, { conversationId, items })),
@@ -995,6 +1009,7 @@ export function registerIpc(): void {
       deleteConversation(id)
       // Drop the cached queue too: it went with the file, and must not linger in memory.
       forgetQueue(id)
+      attention?.forget(id)
       const worktree =
         action.removeWorktree && conv?.worktree ? await removeWorktree(conv.worktree) : null
       return { deleted: true, worktree }
@@ -1482,20 +1497,55 @@ export function registerIpc(): void {
     liveTranscriptForConversation(conversationId)
   )
 
-  // The live status of every conversation with a run (running, and which prompts
-  // block it), for the sidebar's per-chat signal. The renderer reads this once on
-  // load, then keeps it current via the IPC.chatStatusChanged broadcast below.
-  ipcMain.handle(IPC.chatStatusList, (): ChatStatusMap => chatStatusSnapshot())
-
-  // Push the status to every renderer whenever a run starts or ends or a prompt
-  // starts or stops blocking one, so the sidebar stays live without polling.
-  // Broadcast (not sender-scoped) because a run can block or finish while a
-  // different window is focused.
-  onChatStatusChanged((status) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.chatStatusChanged, status)
+  // Unread marks persist in userData; entries for chats deleted while the app was
+  // closed (or by another process) are pruned on startup.
+  const readState = new ReadStateStore(join(getUserDataDir(), 'read-state.json'))
+  readState.prune(conversationExists)
+  const chat = createChatAttention({
+    store: readState,
+    liveStatus: chatStatusSnapshot,
+    activeRun: activeRunForConversation,
+    messageCount: (id) => peekConversation(id)?.messages.length,
+    exists: conversationExists,
+    // Broadcast (not sender-scoped): a run can block or finish while a different
+    // window is focused, and every window's sidebar shows every chat.
+    broadcast: (status) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.webContents.isDestroyed()) win.webContents.send(IPC.chatStatusChanged, status)
+      }
     }
   })
+  attention = chat
+
+  // The status of every chat with something to show (a live run, its blocking
+  // prompts, or an unread mark), for the sidebar's per-chat signal. The renderer reads
+  // this once on load, then follows the IPC.chatStatusChanged broadcast.
+  ipcMain.handle(IPC.chatStatusList, (): ChatStatusMap => chat.snapshot())
+  onChatStatusChanged((live) => chat.onLiveChanged(live))
+
+  // Each window says which chat it shows and whether it has focus; a focused view
+  // marks the chat read. A closed window stops counting as a viewer.
+  const viewerIds = new Set<number>()
+  ipcMain.on(IPC.chatViewing, (event, conversationId: unknown, focused: unknown) => {
+    const id = event.sender.id
+    if (!viewerIds.has(id)) {
+      viewerIds.add(id)
+      event.sender.once('destroyed', () => {
+        viewerIds.delete(id)
+        chat.dropViewer(id)
+      })
+    }
+    chat.setViewing(id, typeof conversationId === 'string' ? conversationId : null, focused === true)
+  })
+  ipcMain.handle(IPC.chatSetUnread, (_event, conversationId: unknown, unread: unknown, anchor: unknown) => {
+    if (typeof conversationId !== 'string') return
+    chat.setUnread(
+      conversationId,
+      unread === true,
+      typeof anchor === 'number' && Number.isInteger(anchor) && anchor >= 0 ? anchor : undefined
+    )
+  })
+  ipcMain.handle(IPC.chatMarkAllRead, () => chat.markAllRead())
 
   // The background shells (run_shell background mode) for the tasks indicator —
   // queried once on load, then kept current via the shellsChanged broadcast.

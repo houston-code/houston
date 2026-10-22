@@ -361,6 +361,14 @@ const api = {
     ipcRenderer.on(IPC.chatStatusChanged, listener)
     return () => ipcRenderer.removeListener(IPC.chatStatusChanged, listener)
   },
+  /** Tell main which chat this window shows and whether it is focused (a focused view marks it read). */
+  setChatViewing: (conversationId: string | null, focused: boolean): void =>
+    ipcRenderer.send(IPC.chatViewing, conversationId, focused),
+  /** Mark a chat unread (from message `anchor` when given) or read. */
+  setChatUnread: (conversationId: string, unread: boolean, anchor?: number): Promise<void> =>
+    ipcRenderer.invoke(IPC.chatSetUnread, conversationId, unread, anchor),
+  /** Mark every chat read. */
+  markAllChatsRead: (): Promise<void> => ipcRenderer.invoke(IPC.chatMarkAllRead),
   /** The background shells (run_shell background mode) for the tasks indicator. */
   getBackgroundShells: (): Promise<BackgroundShellInfo[]> => ipcRenderer.invoke(IPC.shellList),
   /** Stop a background shell, or the processes it left running after it exited. */

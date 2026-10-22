@@ -215,3 +215,39 @@ describe('nesting spawned chats under their parent', () => {
     expect(parentOf.size).toBe(0)
   })
 })
+
+describe('buildSidebarSections: attention first', () => {
+  const at = (id: string, updatedAt: number, extra: Partial<ConversationMeta> = {}): ConversationMeta => ({
+    id,
+    title: id,
+    workspace: '/w',
+    providerId: 'p',
+    model: 'm',
+    createdAt: 0,
+    updatedAt,
+    ...extra
+  })
+
+  it('floats flagged chats to the top, keeping recency order within each half', () => {
+    const convs = [at('a', 4), at('b', 3), at('c', 2), at('d', 1)]
+    const flagged = new Set(['b', 'd'])
+    const [section] = buildSidebarSections(convs, [], {}, (id) => flagged.has(id))
+    expect(section.conversations.map((c) => c.id)).toEqual(['b', 'd', 'a', 'c'])
+  })
+
+  it('counts a parent as flagged when one of its spawned chats is', () => {
+    const convs = [
+      at('a', 4),
+      at('p', 1),
+      at('k', 0, { spawnedFrom: { conversationId: 'p', title: 'p' } })
+    ]
+    const [section] = buildSidebarSections(convs, [], {}, (id) => id === 'k')
+    expect(section.conversations.map((c) => c.id)).toEqual(['p', 'a'])
+  })
+
+  it('leaves the order alone without a predicate', () => {
+    const convs = [at('a', 2), at('b', 1)]
+    const [section] = buildSidebarSections(convs, [])
+    expect(section.conversations.map((c) => c.id)).toEqual(['a', 'b'])
+  })
+})
