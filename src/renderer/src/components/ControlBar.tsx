@@ -9,7 +9,7 @@ import {
 import { anthropicThinksByDefault } from '@shared/model-facts'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { Icon } from './Icon'
-import { branchNameError, canCreateWorktree } from '../lib/worktree'
+import { branchNameError, canCreateWorktree, remoteBaseLabel } from '../lib/worktree'
 import { baseName } from '../lib/paths'
 import { ModelPicker } from './ModelPicker'
 import { CostBreakdown } from './CostBreakdown'
@@ -142,6 +142,9 @@ export function ControlBar({
             >
               {/* Detached HEAD: '' means "branch from HEAD", so list it rather than
                   letting the select display a branch it won't send. */}
+              {repoInfo.remoteBase && (
+                <option value={repoInfo.remoteBase.ref}>{remoteBaseLabel(repoInfo)}</option>
+              )}
               {!repoInfo.currentBranch && <option value="">HEAD (detached)</option>}
               {repoInfo.currentBranch &&
                 !repoInfo.unborn &&

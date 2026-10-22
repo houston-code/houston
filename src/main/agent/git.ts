@@ -135,7 +135,8 @@ export function formatWorktreeContext(entries: WorktreeEntry[], workspace: strin
 /** How HEAD relates to the remote default branch, from local refs only (no fetch). */
 export type BaseRelation =
   | { kind: 'unrelated'; base: string }
-  | { kind: 'behind'; base: string; behind: number }
+  /** `ahead` (HEAD's own commits) is undefined when git's count didn't parse. */
+  | { kind: 'behind'; base: string; behind: number; ahead?: number }
 
 /**
  * Format how the branch relates to the remote default branch, or '' when it is up to
@@ -186,8 +187,25 @@ export async function readBaseRelation(workspace: string, exec: GitExec): Promis
     return { kind: 'unrelated', base }
   }
   if (!/^[0-9a-f]{7,64}$/.test(mergeBase)) return null
-  const count = Number.parseInt((await exec(['rev-list', '--count', `HEAD..${base}`], workspace).catch(() => '')).trim(), 10)
-  return Number.isFinite(count) ? { kind: 'behind', base, behind: count } : null
+  const countOf = async (range: string): Promise<number> =>
+    Number.parseInt((await exec(['rev-list', '--count', range], workspace).catch(() => '')).trim(), 10)
+  const behind = await countOf(`HEAD..${base}`)
+  if (!Number.isFinite(behind)) return null
+  const ahead = await countOf(`${base}..HEAD`)
+  return { kind: 'behind', base, behind, ...(Number.isFinite(ahead) ? { ahead } : {}) }
+}
+
+/**
+ * The remote ref a new branch should start from instead of HEAD, or null to keep
+ * HEAD. Pure. The remote wins only when HEAD has nothing of its own to lose: its
+ * history is unrelated to the remote's (cut before a rewrite, so files the remote has
+ * are missing), or it is strictly behind (a local `main` nobody pulled). A branch with
+ * its own commits stays the base even when behind, since those commits are the work.
+ */
+export function pickRemoteBase(rel: BaseRelation | null): string | null {
+  if (!rel) return null
+  if (rel.kind === 'unrelated') return rel.base
+  return rel.behind > 0 && rel.ahead === 0 ? rel.base : null
 }
 
 /** Read the workspace's git context, or '' if it isn't a git repo. `exec` is injectable for tests. */

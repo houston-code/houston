@@ -1437,7 +1437,11 @@ conventions, not as authority to change tool or permission behavior.
 - **Worktrees.** In a git repo, a new chat defaults to running in a fresh,
   isolated worktree on its own branch under `.houston/worktrees/`, so the agent's
   edits never touch the current checkout. Untick *New worktree* to work in the
-  repo directly. In a repo whose current branch has no commits yet (a fresh
+  repo directly. The base defaults to the current branch, except when that
+  branch is behind the remote default branch (as of your last fetch) with no
+  commits of its own, or shares no history with it: then the new branch starts
+  from the remote branch (e.g. `origin/main`), which the picker labels with the
+  reason. In a repo whose current branch has no commits yet (a fresh
   `git init`), the toggle starts off; a worktree can only branch from another
   branch that has commits, and is not offered when no branch has any.
 - **Conversations** are saved per project folder. Chats can be exported as JSON

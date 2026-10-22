@@ -55,7 +55,22 @@ export function canCreateWorktree(info: RepoInfo): boolean {
  */
 export function defaultBaseBranch(info: RepoInfo): string {
   if (info.unborn) return info.branches[0] ?? ''
+  // The current branch is stale against the remote (behind with nothing of its own,
+  // or on an unrelated history): start the chat from the remote branch instead.
+  if (info.remoteBase) return info.remoteBase.ref
   return info.currentBranch ?? ''
+}
+
+/**
+ * The picker label for {@link RepoInfo.remoteBase}, saying why it is offered, or
+ * null when there is none. Pure.
+ */
+export function remoteBaseLabel(info: RepoInfo): string | null {
+  const rb = info.remoteBase
+  if (!rb) return null
+  const current = info.currentBranch ?? 'HEAD'
+  if (rb.reason === 'unrelated') return `${rb.ref} (${current} has unrelated history)`
+  return `${rb.ref} (${rb.behind} commit${rb.behind === 1 ? '' : 's'} newer than ${current})`
 }
 
 const ADJECTIVES = ['swift', 'bright', 'calm', 'bold', 'keen', 'brave', 'lucid', 'eager']

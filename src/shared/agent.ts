@@ -296,6 +296,13 @@ export interface RepoInfo {
    * new-chat UI can drop the stale default instead of anchoring to a phantom.
    */
   exists: boolean
+  /**
+   * The remote branch a new worktree should start from instead of `currentBranch`,
+   * when there is one: `currentBranch` shares no history with it (`unrelated`), or
+   * is strictly behind it with no commits of its own (`behind`, by `behind` commits,
+   * as of the last fetch). Absent when the current branch is the right base.
+   */
+  remoteBase?: { ref: string; reason: 'unrelated' } | { ref: string; reason: 'behind'; behind: number }
 }
 
 /** Outcome of tearing down a conversation's worktree, for reporting to the user. */

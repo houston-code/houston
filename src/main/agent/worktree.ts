@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import type { ConversationWorktree, RepoInfo, WorktreeRemoval } from '@shared/agent'
 import { isSafeGitRef } from '@shared/git'
-import { parseWorktreePorcelain } from './git'
+import { parseWorktreePorcelain, pickRemoteBase, readBaseRelation, type BaseRelation } from './git'
 import { GIT_ENV, hardenedGitArgs } from './gitRead'
 
 /**
@@ -159,7 +159,17 @@ export async function getRepoInfo(
   } catch {
     // best-effort — an empty list just means no base suggestions
   }
-  return { isRepo: true, root, currentBranch, unborn, branches, isLinkedWorktreeRoot, exists: true }
+  const info: RepoInfo = { isRepo: true, root, currentBranch, unborn, branches, isLinkedWorktreeRoot, exists: true }
+  if (!unborn) {
+    const rel = await readBaseRelation(workspace, exec).catch(() => null)
+    const ref = pickRemoteBase(rel)
+    if (ref && rel) info.remoteBase = remoteBaseOf(ref, rel)
+  }
+  return info
+}
+
+function remoteBaseOf(ref: string, rel: BaseRelation): NonNullable<RepoInfo['remoteBase']> {
+  return rel.kind === 'behind' ? { ref, reason: 'behind', behind: rel.behind } : { ref, reason: 'unrelated' }
 }
 
 /** Append the worktrees-ignore line to `<repoRoot>/.git/info/exclude` if absent. Best-effort. */
@@ -191,7 +201,11 @@ export interface CreateWorktreeInput {
   workspace: string
   /** New branch name to create and check out. Validated before use. */
   branch: string
-  /** Optional base ref to branch from (defaults to the repo's current HEAD). */
+  /**
+   * Optional base ref to branch from. Without one the main worktree's HEAD is used,
+   * unless it is stale against the remote default branch (see {@link pickRemoteBase}),
+   * in which case the new branch starts from that remote branch instead.
+   */
   base?: string
 }
 
@@ -237,8 +251,15 @@ export async function createWorktree(
   const path = worktreePath(repo.root, slugifyBranch(branch))
   mkdirSync(join(repo.root, WORKTREES_SUBDIR), { recursive: true })
   await ensureExcluded(repo.root, exec)
-  const args = ['worktree', 'add', '-b', branch, path]
-  if (input.base) args.push(input.base)
+  // No base given: `worktree add` would branch from the main worktree's HEAD, which
+  // can be a local branch nobody has pulled, or one left on a rewritten history.
+  // Start from the remote default branch in exactly those cases.
+  const base =
+    input.base ?? pickRemoteBase(await readBaseRelation(repo.root, exec).catch(() => null)) ?? undefined
+  // --no-track: a branch started from origin/main must not adopt it as its upstream,
+  // or a plain `git push` would target main. (A local base never sets one anyway.)
+  const args = ['worktree', 'add', '--no-track', '-b', branch, path]
+  if (base) args.push(base)
   // `--` is implied for `worktree add`; refs are validated above. Run from the
   // repo root so a relative base resolves against the right repo.
   await exec(args, repo.root)

@@ -203,9 +203,9 @@ describe('createWorktree', () => {
     expect(wt.repoRoot).toBe(repo)
     expect(wt.path).toBe(join(repo, '.houston/worktrees/feature-login'))
 
-    // The add command used -b <branch> <path> <base>, in that order.
+    // The add command used --no-track -b <branch> <path> <base>, in that order.
     const add = calls.find((c) => c[0] === 'worktree' && c[1] === 'add')!
-    expect(add).toEqual(['worktree', 'add', '-b', 'feature/login', wt.path, 'main'])
+    expect(add).toEqual(['worktree', 'add', '--no-track', '-b', 'feature/login', wt.path, 'main'])
 
     // A `.git/info/exclude` entry keeps the nested worktree out of `git status`.
     const exclude = readFileSync(join(repo, '.git/info/exclude'), 'utf8')
@@ -228,7 +228,7 @@ describe('createWorktree', () => {
     )
     const wt = await createWorktree({ workspace: repo, branch: 'wip' }, exec)
     const add = calls.find((c) => c[1] === 'add')!
-    expect(add).toEqual(['worktree', 'add', '-b', 'wip', wt.path])
+    expect(add).toEqual(['worktree', 'add', '--no-track', '-b', 'wip', wt.path])
   })
 
   it('does not duplicate the exclude line on a second worktree', async () => {
@@ -581,4 +581,101 @@ describe('worktree integration (real git)', () => {
       rmSync(repo, { recursive: true, force: true })
     }
   }, TIMEOUT)
+})
+
+describe('remote default branch as the worktree base (real repo)', () => {
+  // A main checkout whose local branch is behind origin (never pulled) or on a
+  // rewritten, unrelated history must not seed new chat worktrees with stale code.
+  const git = (args: string[], cwd: string): string =>
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=Test', ...args], {
+      cwd,
+      stdio: 'pipe'
+    }).toString()
+  const commit = (cwd: string, file: string): void => {
+    writeFileSync(join(cwd, file), `${file}\n`)
+    git(['add', file], cwd)
+    git(['commit', '-qm', file], cwd)
+  }
+  /** A clone of a remote that has since gained one commit, fetched but not pulled. */
+  const behindClone = (): { root: string; clone: string } => {
+    const root = mkdtempSync(join(tmpdir(), 'wt-remote-base-'))
+    const remote = join(root, 'remote')
+    const clone = join(root, 'clone')
+    git(['init', '-q', '-b', 'main', remote], root)
+    commit(remote, 'a.txt')
+    git(['clone', '-q', remote, clone], root)
+    commit(remote, 'b.txt')
+    git(['fetch', '-q'], clone)
+    return { root, clone }
+  }
+  const upstreamOf = (cwd: string, branch: string): string => {
+    try {
+      return git(['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], cwd).trim()
+    } catch {
+      return ''
+    }
+  }
+
+  it('starts from origin when the local branch is strictly behind', { timeout: 30_000 }, async () => {
+    const { root, clone } = behindClone()
+    try {
+      expect((await getRepoInfo(clone)).remoteBase).toEqual({ ref: 'origin/main', reason: 'behind', behind: 1 })
+      const wt = await createWorktree({ workspace: clone, branch: 'chat-1' })
+      expect(git(['rev-parse', 'HEAD'], wt.path)).toBe(git(['rev-parse', 'origin/main'], clone))
+      expect(existsSync(join(wt.path, 'b.txt'))).toBe(true)
+      // The new branch must not track origin/main, or a bare `git push` would aim at main.
+      expect(upstreamOf(clone, 'chat-1')).toBe('')
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps a local branch that has commits of its own', { timeout: 30_000 }, async () => {
+    const { root, clone } = behindClone()
+    try {
+      commit(clone, 'mine.txt')
+      expect((await getRepoInfo(clone)).remoteBase).toBeUndefined()
+      const wt = await createWorktree({ workspace: clone, branch: 'chat-2' })
+      expect(git(['rev-parse', 'HEAD'], wt.path)).toBe(git(['rev-parse', 'main'], clone))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('honours an explicit base even when it is stale', { timeout: 30_000 }, async () => {
+    const { root, clone } = behindClone()
+    try {
+      const wt = await createWorktree({ workspace: clone, branch: 'chat-3', base: 'main' })
+      expect(git(['rev-parse', 'HEAD'], wt.path)).toBe(git(['rev-parse', 'main'], clone))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('starts from origin when the local branch has unrelated history', { timeout: 30_000 }, async () => {
+    const { root, clone } = behindClone()
+    try {
+      git(['checkout', '-q', '--orphan', 'rewritten'], clone)
+      git(['rm', '-rfq', '.'], clone)
+      commit(clone, 'old.txt')
+      expect((await getRepoInfo(clone)).remoteBase).toEqual({ ref: 'origin/main', reason: 'unrelated' })
+      const wt = await createWorktree({ workspace: clone, branch: 'chat-4' })
+      expect(git(['rev-parse', 'HEAD'], wt.path)).toBe(git(['rev-parse', 'origin/main'], clone))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('branches from HEAD as before when there is no remote', { timeout: 30_000 }, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'wt-no-remote-'))
+    try {
+      git(['init', '-q', '-b', 'main'], root)
+      commit(root, 'a.txt')
+      expect((await getRepoInfo(root)).remoteBase).toBeUndefined()
+      const wt = await createWorktree({ workspace: root, branch: 'chat-5' })
+      expect(git(['rev-parse', 'HEAD'], wt.path)).toBe(git(['rev-parse', 'main'], root))
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })

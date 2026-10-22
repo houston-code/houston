@@ -476,7 +476,9 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Start a chat in its own worktree.** Every new chat in a git repo defaults to
   running in a fresh, isolated worktree on its own branch, so the agent's edits
   never touch your current checkout. Right after the folder picker in the control
-  bar you choose the base branch to fork from and name the new branch (or untick
+  bar you choose the base branch to fork from (it starts on `origin/main` instead
+  of your current branch when that branch is behind it with nothing of its own, or
+  on an unrelated history) and name the new branch (or untick
   *New worktree* to work in the repo directly); picking a subdirectory of a repo
   keeps the chat scoped to that folder instead (the toggle defaults off there).
   The worktree is created on your

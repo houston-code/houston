@@ -5,7 +5,8 @@ import {
   branchNameError,
   canCreateWorktree,
   defaultBaseBranch,
-  planNewChatWorkspace
+  planNewChatWorkspace,
+  remoteBaseLabel
 } from './worktree'
 
 describe('suggestBranch', () => {
@@ -125,5 +126,21 @@ describe('unborn repos (no commits on the current branch)', () => {
     // Born branch: itself. Detached HEAD: '' (the "HEAD (detached)" option).
     expect(defaultBaseBranch(info({ unborn: false, branches: ['main'] }))).toBe('main')
     expect(defaultBaseBranch(info({ unborn: false, currentBranch: null }))).toBe('')
+  })
+
+  it('starts on the remote branch when the current one is stale against it', () => {
+    const behind = info({
+      unborn: false,
+      currentBranch: 'main',
+      branches: ['main'],
+      remoteBase: { ref: 'origin/main', reason: 'behind', behind: 3 }
+    })
+    expect(defaultBaseBranch(behind)).toBe('origin/main')
+    expect(remoteBaseLabel(behind)).toBe('origin/main (3 commits newer than main)')
+    const one = { ...behind, remoteBase: { ref: 'origin/main', reason: 'behind' as const, behind: 1 } }
+    expect(remoteBaseLabel(one)).toBe('origin/main (1 commit newer than main)')
+    const unrelated = { ...behind, remoteBase: { ref: 'origin/main', reason: 'unrelated' as const } }
+    expect(remoteBaseLabel(unrelated)).toBe('origin/main (main has unrelated history)')
+    expect(remoteBaseLabel(info({ unborn: false, branches: ['main'] }))).toBeNull()
   })
 })

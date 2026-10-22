@@ -2748,7 +2748,7 @@ const WORKTREE_PARAM = {
     },
     base: {
       type: 'string',
-      description: 'Optional base ref to branch from (defaults to the current HEAD).'
+      description: 'Optional base ref to branch from. Defaults to the current HEAD, or to the remote default branch (e.g. origin/main) when HEAD is behind it with no commits of its own or has unrelated history.'
     }
   },
   required: ['branch'],

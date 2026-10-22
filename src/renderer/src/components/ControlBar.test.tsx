@@ -270,6 +270,15 @@ describe('ControlBar', () => {
     expect(screen.getByRole('option', { name: 'HEAD (detached)' })).toBeInTheDocument()
   })
 
+  it('offers a stale branch\'s remote as a labelled base option', () => {
+    const stale: RepoInfo = { ...repo, remoteBase: { ref: 'origin/main', reason: 'behind', behind: 2 } }
+    render(
+      <ControlBar {...baseProps()} newChat={true} repoInfo={stale} worktreeMode={true} baseBranch="origin/main" />
+    )
+    expect((screen.getByLabelText('Base branch') as HTMLSelectElement).value).toBe('origin/main')
+    expect(screen.getByRole('option', { name: /^origin\/main \(2 commits newer than main\)$/ })).toBeInTheDocument()
+  })
+
   it('reports branch edits and base selection', () => {
     const props = baseProps()
     render(<ControlBar {...props} newChat={true} repoInfo={repo} />)

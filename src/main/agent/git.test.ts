@@ -11,6 +11,7 @@ import {
   gitDiff,
   isSafeGitRef,
   parseWorktreePorcelain,
+  pickRemoteBase,
   readBaseRelation,
 } from './git'
 
@@ -320,6 +321,21 @@ describe('readBaseRelation', () => {
       'rev-list --count HEAD..origin/main': '0\n'
     })
     expect(await readBaseRelation('/ws', exec)).toEqual({ kind: 'behind', base: 'origin/main', behind: 0 })
+  })
+})
+
+describe('pickRemoteBase', () => {
+  it('prefers the remote for unrelated history or a branch strictly behind', () => {
+    expect(pickRemoteBase({ kind: 'unrelated', base: 'origin/main' })).toBe('origin/main')
+    expect(pickRemoteBase({ kind: 'behind', base: 'origin/main', behind: 4, ahead: 0 })).toBe('origin/main')
+  })
+
+  it('keeps HEAD when up to date, ahead, diverged, or the ahead count is unknown', () => {
+    expect(pickRemoteBase({ kind: 'behind', base: 'origin/main', behind: 0, ahead: 0 })).toBeNull()
+    expect(pickRemoteBase({ kind: 'behind', base: 'origin/main', behind: 0, ahead: 2 })).toBeNull()
+    expect(pickRemoteBase({ kind: 'behind', base: 'origin/main', behind: 3, ahead: 1 })).toBeNull()
+    expect(pickRemoteBase({ kind: 'behind', base: 'origin/main', behind: 3 })).toBeNull()
+    expect(pickRemoteBase(null)).toBeNull()
   })
 })
 
