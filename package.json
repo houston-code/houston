@@ -10,7 +10,7 @@
   "bin": {
     "houston": "./out/cli/houston-cli.cjs"
   },
-  "homepage": "https://github.com/houston-code/houston",
+  "homepage": "https://houstoncode.ai",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/houston-code/houston.git"

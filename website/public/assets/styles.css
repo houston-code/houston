@@ -192,6 +192,8 @@ section { padding: 96px 0; }
 .hero { padding: 88px 0 0; }
 .eyebrow { margin-bottom: 16px; font-size: var(--fs-2); font-weight: 600; color: var(--a5); }
 .hero h1 { max-width: 18ch; }
+/* The eyebrow sits inside the h1 so the heading names the product; it keeps its own type. */
+.hero h1 .eyebrow { display: block; letter-spacing: normal; line-height: 1.5; }
 .lede { max-width: 58ch; margin-top: 20px; font-size: var(--fs-3); color: var(--n4); }
 .hero-cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 32px; }
 .hero-release { font-size: var(--fs-1); color: var(--n4); align-self: center; margin-left: 4px; }
