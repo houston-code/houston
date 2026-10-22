@@ -29,7 +29,10 @@ Open source under the [Apache License 2.0](LICENSE).
   (tool calling, vision, reasoning), read live from the host where it advertises
   them, so it warns before you pick a model that can't call tools. Name
   `fallbackModels` in settings.json and a turn the selected model can't serve
-  moves on to the next one.
+  moves on to the next one. Each chat keeps its own model, reasoning effort, and
+  approval mode, so switching in one chat never changes another; new chats start
+  from the defaults (**Use for new chats** makes an open chat's settings the
+  defaults).
 - **Image attachments.** Drag-drop or paste images (PNG/JPEG/GIF/WebP) into the
   composer to send them to a vision-capable model: screenshots, diagrams,
   mockups. The affordance is offered only when the selected model supports
@@ -628,7 +631,7 @@ Houston -i   # /resume picks up the same conversation
 ```
 
 Flags: `--cwd <dir>` (project folder, default the current directory),
-`--provider <id>` / `--model <id>` (default your selected model), `--approval
+`--provider <id>` / `--model <id>` (default: your default model), `--approval
 <plan|ask|auto-edit|full-auto>` (default `plan`), `--on-approval
 <allow|deny|fail>` (below), `--allow-shell-network` (below), `--json`,
 `--continue` (resume the most recent session in the folder), `--resume <id>`
@@ -818,11 +821,11 @@ Slash commands adjust the session without restarting:
 
 | Command | Effect |
 | --- | --- |
-| `/model [id]` | list configured models, or switch (`providerId`, `providerId/model`, or a bare model id) |
+| `/model [id]` | list configured models, or switch this chat's model (`providerId`, `providerId/model`, or a bare model id; add `--default` to also make it the default) |
 | `/login` (`/providers`) | set or update a provider's API key |
-| `/approval [policy]` | show or set the policy (`plan` \| `ask` \| `auto-edit` \| `full-auto`) |
+| `/approval [policy]` | show or set this chat's policy (`plan` \| `ask` \| `auto-edit` \| `full-auto`; `--default` also sets the default) |
 | `/plan` | switch to plan mode |
-| `/reasoning [level]` | show or set reasoning effort (`off` \| `low` \| `medium` \| `high` \| `xhigh`) |
+| `/reasoning [level]` | show or set this chat's reasoning effort (`off` \| `low` \| `medium` \| `high` \| `xhigh`; `--default` also sets the default) |
 | `/clear`, `/new` | start a fresh conversation |
 | `/compact` | summarize older turns to free up context now |
 | `/resume [query]` | list (or search by title) and reopen a saved session |
@@ -849,11 +852,12 @@ Slash commands adjust the session without restarting:
 
 Each session is saved as an ordinary conversation, so it survives restarts and
 shows up in the desktop app's sidebar: one history across both clients. `/resume`
-lists recent sessions for the current folder and reopens one where you left off;
-`/clear` starts a fresh one.
+lists recent sessions for the current folder and reopens one where you left off,
+with the model, reasoning effort, and approval mode it was using; `/clear` starts a
+fresh one.
 
 Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
-(default: the mode the desktop app last used), `--full-auto`, and `--continue` /
+(default: your default approval mode, shared with the desktop app), `--full-auto`, and `--continue` /
 `--resume <id>` to reopen a session at launch. It reuses your saved settings and
 stored API keys. Running in a pipe (no TTY) isn't interactive; use
 headless `-p` there instead.
