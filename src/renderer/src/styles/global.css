@@ -6146,6 +6146,88 @@ body:has(.coachmark) .get-started {
   align-items: center;
   margin-top: 4px;
 }
+/* Ordered rule view: number + drag handle + move buttons, and per-rule lint notes. */
+.rule-list {
+  margin-bottom: 8px;
+}
+.rule-row {
+  margin-bottom: 6px;
+}
+.rule-row .rule {
+  margin-bottom: 0;
+}
+.rule-row--warn .rule__match {
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--border));
+}
+.rule__handle {
+  cursor: grab;
+  color: var(--text-dim);
+  font-size: 12px;
+  letter-spacing: -3px;
+  padding: 0 4px 0 0;
+  user-select: none;
+}
+.rule__handle.is-disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+.rule__num {
+  min-width: 18px;
+  text-align: right;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.rule__move {
+  padding-inline: 7px;
+}
+.rule__issue {
+  margin: 3px 0 0 44px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.rule__issue--warn {
+  color: var(--warn);
+}
+.rule-summary {
+  font-size: 12px;
+  margin: -4px 0 10px;
+}
+.rule-summary--warn {
+  color: var(--warn);
+}
+/* Segmented control: a small exclusive button group. */
+.seg {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.seg__btn {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.seg__btn + .seg__btn {
+  border-left: 1px solid var(--border);
+}
+.seg__btn:hover {
+  color: var(--text);
+}
+.seg__btn.is-active {
+  background: var(--bg-input);
+  color: var(--text);
+  font-weight: 600;
+}
+.seg__btn:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
 .mcp-server {
   margin-bottom: 8px;
   display: flex;
