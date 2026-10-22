@@ -1051,6 +1051,14 @@ describe('apply_patch', () => {
     ).rejects.toThrow(/already exists.*Update File/s)
   })
 
+  it('applies a change at the end of a file closed by "*** End of File"', async () => {
+    await run('write_file', { path: 'tail.ts', content: 'const x = 1\nexport default x\n' })
+    await run('apply_patch', {
+      patch: patch('*** Update File: tail.ts', '@@', ' const x = 1', '-export default x', '+export { x }', '*** End of File')
+    })
+    expect(fileText('tail.ts')).toBe('const x = 1\nexport { x }\n')
+  })
+
   it('applies a hunk whose context drifted by whitespace (resilient match)', async () => {
     await run('write_file', { path: 'd.ts', content: 'function f() {\n      return 1\n}\n' })
     await run('apply_patch', {
