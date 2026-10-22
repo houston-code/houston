@@ -1,6 +1,6 @@
 import { safeStorage } from 'electron'
 import { secureStorageUnavailableMessage, type SecureStorageStatus } from '@shared/secureStorage'
-import { readFileSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { writeFileAtomicSync } from './atomic-write'
 import { join, dirname } from 'node:path'
 import type { McpOAuthTokens } from './mcp/oauth'
@@ -128,12 +128,31 @@ function emptyVault(): Vault {
 
 let vault: Vault = emptyVault()
 
+/**
+ * The ciphertext each vault entry was decrypted from (or encrypted to), per id/scope:
+ * what this process last knew to be on disk. Another Houston process (the desktop app
+ * and a terminal session share the store) writes the same file, and comparing against
+ * this is how {@link refreshSecretsFromDisk} finds the entries it changed.
+ */
+let synced: { keys: Map<string, string>; headers: Map<string, string> } = { keys: new Map(), headers: new Map() }
+/** Ids / scopes with a write of this process's own still queued: disk is behind memory there. */
+const pendingKeyIds = new Map<string, number>()
+const pendingHeaderScopes = new Map<string, number>()
+
+function bump(map: Map<string, number>, id: string, by: 1 | -1): void {
+  const n = (map.get(id) ?? 0) + by
+  if (n > 0) map.set(id, n)
+  else map.delete(id)
+}
+
 /** Tail of the ordered persist queue; every write chains onto it. */
 let writeQueue: Promise<void> = Promise.resolve()
 /** First failed write since the last {@link flushSecrets}, reported (and cleared) there. */
 let writeError: Error | null = null
 /** Writes queued but not yet on disk. */
 let pendingWrites = 0
+/** Writes ever queued, so a re-sync can tell one came and went while it decrypted. */
+let writesQueued = 0
 
 async function encrypt(plaintext: string): Promise<string> {
   return (await safeStorage.encryptStringAsync(plaintext)).toString('base64')
@@ -165,18 +184,22 @@ export async function initSecrets(): Promise<void> {
     available = false
   }
   const next: Vault = { ready: true, available, keys: new Map(), headers: new Map() }
+  const nextSynced = { keys: new Map<string, string>(), headers: new Map<string, string>() }
   const reEncryptKeys: string[] = []
   const reEncryptHeaders: string[] = []
+  const stamp = fileStamp()
   if (available) {
     const data = load()
     await Promise.all([
       ...Object.entries(data.keys).map(async ([id, stored]) => {
+        nextSynced.keys.set(id, stored)
         const out = await decrypt(stored)
         if (!out) return
         next.keys.set(id, decodeCredential(out.plaintext))
         if (out.reEncrypt) reEncryptKeys.push(id)
       }),
       ...Object.entries(data.headers ?? {}).map(async ([scope, stored]) => {
+        nextSynced.headers.set(scope, stored)
         const out = await decrypt(stored)
         const headers = out ? decodeHeaders(out.plaintext) : null
         if (!out || !headers) return
@@ -186,10 +209,101 @@ export async function initSecrets(): Promise<void> {
     ])
   }
   vault = next
+  synced = nextSynced
+  seenStamp = stamp
   cachedSecretValues = null
   if (available) warnIfWeakBackend()
   for (const id of reEncryptKeys) enqueueKeyWrite(id, next.keys.get(id)!)
   for (const scope of reEncryptHeaders) enqueueHeaderWrite(scope, next.headers.get(scope)!)
+}
+
+/** Shortest gap between two checks of the file for another process's changes. */
+const SYNC_CHECK_MS = 1_000
+
+/** The store file's mtime and size, or '' when it does not exist. */
+function fileStamp(): string {
+  try {
+    const st = statSync(secretsPath())
+    return `${st.mtimeMs}:${st.size}`
+  } catch {
+    return ''
+  }
+}
+
+/** The file stamp the vault was last brought up to date with. */
+let seenStamp = ''
+let lastSyncCheck = 0
+let syncing: Promise<void> | null = null
+
+/**
+ * Pick up changes another Houston process made to the store, at most once a
+ * {@link SYNC_CHECK_MS}: called from the getters, and cheap (one stat) when nothing
+ * changed. The re-sync itself runs in the background, so the read that notices a
+ * change still sees the previous value; the next one sees the new.
+ */
+function syncSoon(): void {
+  if (!vault.ready || !vault.available) return
+  const now = Date.now()
+  if (now - lastSyncCheck < SYNC_CHECK_MS) return
+  lastSyncCheck = now
+  if (fileStamp() === seenStamp) return
+  void refreshSecretsFromDisk()
+}
+
+/**
+ * Bring the vault up to date with the store on disk, decrypting only the entries
+ * whose ciphertext changed since this process last saw them. Without it a key saved,
+ * a sign-in completed, or an OAuth refresh token rotated in the desktop app stayed
+ * invisible to a terminal session already running (and the reverse) until restart,
+ * and a rotated refresh token left the other process refreshing with a revoked one.
+ * Entries with a write of this process's own still queued are left alone: memory is
+ * ahead of disk there. Resolves once the vault reflects what was read.
+ */
+export function refreshSecretsFromDisk(): Promise<void> {
+  if (!vault.ready || !vault.available) return Promise.resolve()
+  syncing ??= (async () => {
+    try {
+      seenStamp = fileStamp()
+      const data = load()
+      const writesAtStart = writesQueued
+      let changed = false
+      const syncMap = async <T>(
+        onDisk: Record<string, string>,
+        seen: Map<string, string>,
+        pending: Map<string, number>,
+        live: Map<string, T>,
+        decode: (plaintext: string) => T | null
+      ): Promise<void> => {
+        await Promise.all(
+          Object.entries(onDisk).map(async ([id, stored]) => {
+            if (pending.has(id) || seen.get(id) === stored) return
+            const out = await decrypt(stored)
+            // A local write started meanwhile: it wins, and the next check re-reads.
+            if (pending.has(id) || writesQueued !== writesAtStart) {
+              seenStamp = ''
+              return
+            }
+            const value = out ? decode(out.plaintext) : null
+            if (value !== null) live.set(id, value)
+            else live.delete(id)
+            seen.set(id, stored)
+            changed = true
+          })
+        )
+        for (const id of [...seen.keys()]) {
+          if (id in onDisk || pending.has(id)) continue
+          seen.delete(id)
+          if (live.delete(id)) changed = true
+        }
+      }
+      await syncMap(data.keys, synced.keys, pendingKeyIds, vault.keys, decodeCredential)
+      await syncMap(data.headers ?? {}, synced.headers, pendingHeaderScopes, vault.headers, decodeHeaders)
+      if (changed) cachedSecretValues = null
+    } finally {
+      syncing = null
+    }
+  })()
+  return syncing
 }
 
 /**
@@ -218,14 +332,18 @@ export async function flushSecrets(): Promise<void> {
  */
 function enqueueWrite(
   apply: (data: SecretsFile) => Promise<boolean> | boolean,
-  onFailure: () => Promise<void> | void
+  onFailure: () => Promise<void> | void,
+  track?: { pending: Map<string, number>; id: string; onPersisted: (data: SecretsFile) => void }
 ): void {
   pendingWrites++
+  writesQueued++
+  if (track) bump(track.pending, track.id, 1)
   writeQueue = writeQueue.then(async () => {
     try {
       // Re-read so a write never clobbers entries another Houston process added.
       const data = load()
       if (await apply(data)) persist(data)
+      track?.onPersisted(data)
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e))
       writeError ??= err
@@ -233,8 +351,33 @@ function enqueueWrite(
       await onFailure()
     } finally {
       pendingWrites--
+      if (track) bump(track.pending, track.id, -1)
     }
   })
+}
+
+/** Record what a write left on disk for one entry, so a re-sync doesn't take it for a change. */
+function keyTracker(id: string): { pending: Map<string, number>; id: string; onPersisted: (data: SecretsFile) => void } {
+  return {
+    pending: pendingKeyIds,
+    id,
+    onPersisted: (data) => {
+      if (id in data.keys) synced.keys.set(id, data.keys[id])
+      else synced.keys.delete(id)
+    }
+  }
+}
+
+function headerTracker(scope: string): { pending: Map<string, number>; id: string; onPersisted: (data: SecretsFile) => void } {
+  return {
+    pending: pendingHeaderScopes,
+    id: scope,
+    onPersisted: (data) => {
+      const stored = data.headers?.[scope]
+      if (stored !== undefined) synced.headers.set(scope, stored)
+      else synced.headers.delete(scope)
+    }
+  }
 }
 
 /** Whether a credential write is still waiting to reach disk. */
@@ -257,7 +400,8 @@ function enqueueKeyWrite(id: string, cred: StoredCredential): void {
       if (out) vault.keys.set(id, decodeCredential(out.plaintext))
       else vault.keys.delete(id)
       cachedSecretValues = null
-    }
+    },
+    keyTracker(id)
   )
 }
 
@@ -277,7 +421,8 @@ function enqueueHeaderWrite(scope: string, headers: Record<string, string>): voi
       if (previous) vault.headers.set(scope, previous)
       else vault.headers.delete(scope)
       cachedSecretValues = null
-    }
+    },
+    headerTracker(scope)
   )
 }
 
@@ -358,6 +503,7 @@ function decodeHeaders(plaintext: string): Record<string, string> | null {
 
 /** Main-process only. Returns the decrypted credential, or null if none/undecryptable. */
 export function getCredential(providerId: string): StoredCredential | null {
+  syncSoon()
   return vault.keys.get(providerId) ?? null
 }
 
@@ -384,7 +530,8 @@ export function deleteKey(providerId: string): void {
       delete data.keys[providerId]
       return true
     },
-    () => {}
+    () => {},
+    keyTracker(providerId)
   )
 }
 
@@ -476,6 +623,7 @@ export function setMcpOAuthTokens(serverId: string, tokens: McpOAuthTokens | nul
 
 /** Main-process only. Decrypted header map for a scope, or `{}` if none/undecryptable. */
 export function getSecretHeaders(scope: string): Record<string, string> {
+  syncSoon()
   const headers = vault.headers.get(scope)
   return headers ? { ...headers } : {}
 }
@@ -504,7 +652,8 @@ export function deleteSecretHeaders(scope: string): void {
       delete data.headers[scope]
       return true
     },
-    () => {}
+    () => {},
+    headerTracker(scope)
   )
 }
 
@@ -542,6 +691,7 @@ let cachedSecretValues: string[] | null = null
  * throwing. Cached until the next credential/header write.
  */
 export function collectSecretValues(): string[] {
+  syncSoon()
   if (cachedSecretValues) return cachedSecretValues
   const out = new Set<string>()
   try {
