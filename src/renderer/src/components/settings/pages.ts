@@ -20,6 +20,7 @@ import {
   LanguageServersSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
+import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import { AdditionalFoldersSection, SandboxEgressSection, TrustedFoldersSection } from './sections/workspace'
 import {
   AppearanceSection,
@@ -165,6 +166,11 @@ export const PAGES: SettingsPage[] = [
         Component: McpServersSection,
         keywords: ['model context protocol', 'connectors', 'plugins', 'oauth', 'integrations', 'server'],
         values: (s) => (s.mcpServers ?? []).flatMap((m) => [m.id, m.url, m.command])
+      },
+      {
+        id: 'project-mcp-servers',
+        Component: ProjectMcpSection,
+        keywords: ['project', 'repository', 'trusted', 'settings.json']
       }
     ]
   },
@@ -178,6 +184,11 @@ export const PAGES: SettingsPage[] = [
         Component: HooksSection,
         keywords: ['automation', 'scripts', 'pre tool use', 'post tool use', 'events', 'commands'],
         values: (s) => (s.hooks ?? []).flatMap((h) => [h.command, h.matcher])
+      },
+      {
+        id: 'project-hooks',
+        Component: ProjectHooksSection,
+        keywords: ['project', 'repository', 'trusted', 'settings.json']
       }
     ]
   },

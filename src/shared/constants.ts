@@ -100,6 +100,8 @@ export const IPC = {
   settingsSave: 'settings:save',
   // Tidy a permission-rule list (re-generalize + dedupe) for the "Clean up rules" action.
   permissionsCleanup: 'permissions:cleanup',
+  /** The managed policy + open project's permission config, read-only for Settings. */
+  permissionsPolicy: 'permissions:policy',
   settingsSetKey: 'settings:setKey',
   settingsDeleteKey: 'settings:deleteKey',
   settingsListModels: 'settings:listModels',

@@ -394,6 +394,27 @@ export interface FolderTrustStatus {
 }
 
 /**
+ * The permission configuration that applies alongside the user's own, for
+ * Settings to show read-only: the administrator's managed policy and the open
+ * project's `.houston/settings.json`. Only what the user needs to read; a project
+ * MCP server's header and env values (which may hold tokens) never leave main.
+ */
+export interface PermissionPolicyView {
+  /** Admin guardrails (deny/ask), checked before everything else. */
+  managed: PermissionRule[]
+  /** The open project's config, or null when it has none (or no project is open). */
+  project: {
+    /** Project guardrails (deny/ask), always applied, checked after the admin's. */
+    rules: PermissionRule[]
+    /** Elevating config, applied only while `trust` is 'trusted'. */
+    allowRules: PermissionRule[]
+    hooks: Hook[]
+    mcpServers: Array<{ id: string; transport: 'stdio' | 'http' | 'sse'; target: string }>
+    trust: FolderTrustState | 'none'
+  } | null
+}
+
+/**
  * Resolve a folder's trust state for the elevating config currently on disk.
  * `path` must already be realpath-normalized by the caller (the same discipline
  * as `gitInitDismissed`), and `hash` is the CURRENT elevated-config fingerprint.

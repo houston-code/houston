@@ -13,6 +13,7 @@ import type {
 } from '@shared/types'
 import { isApprovalPolicy } from '@shared/types'
 import { cleanupPermissionRules } from './agent/permissions'
+import { describePermissionPolicy, defaultPolicyDeps } from './permissionPolicy'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import {
   isPlanDecision,
@@ -733,6 +734,11 @@ export function registerIpc(): void {
   // Pure transform for the Settings "Clean up rules" button — no state read/write.
   ipcMain.handle(IPC.permissionsCleanup, (_event, rules: PermissionRule[]) =>
     cleanupPermissionRules(Array.isArray(rules) ? rules : [])
+  )
+
+  // Read-only view of the rules that apply beside the user's own (admin + project).
+  ipcMain.handle(IPC.permissionsPolicy, (_event, workspace: unknown) =>
+    describePermissionPolicy(typeof workspace === 'string' ? workspace : null, defaultPolicyDeps(folderTrustFor))
   )
 
   // Wait for the encrypted write so a failed save reaches the renderer as an error.

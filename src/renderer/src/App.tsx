@@ -2669,6 +2669,7 @@ export default function App(): JSX.Element {
           <SettingsModal
             initial={savedSettings ?? settings}
             initialTab={settingsSection}
+            workspace={workspace}
             onClose={() => {
               setSettingsOpen(false)
               setSettingsSection('models')
