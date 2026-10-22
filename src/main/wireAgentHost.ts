@@ -23,6 +23,7 @@ import {
   setSecretHeaders
 } from './secrets'
 import { configureLogRedactor } from './logger'
+import { noteRuleUsed } from './ruleUsage'
 import { configureTitleRedaction } from './conversations'
 import { redactSecrets } from './agent/redact'
 import { isSandboxed } from './sandbox'
@@ -66,6 +67,7 @@ export function wireAgentHost(): void {
     collectSecrets: collectSecretValues,
     getMcpOAuth: getMcpOAuthTokens,
     setMcpOAuth: setMcpOAuthTokens,
-    setModelUnavailable
+    setModelUnavailable,
+    noteRuleUsed
   })
 }

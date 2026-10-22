@@ -873,7 +873,12 @@ order they are checked, and you can drag a rule or use its arrows to move it. A 
 that can never apply because an earlier one already matches everything it would (a
 `*` pattern for the same tool, or the same pattern) is flagged, as is an empty
 pattern (it matches nothing) and an allow of `*`. **By tool** groups the list per
-tool instead. Matching normalizes the target so a rule cannot be dodged
+tool instead. Each rule notes when it was added (and whether from an approval prompt
+or by hand) and when it last decided a call, which helps prune rules you no longer
+need. **Test a call** takes a tool and a command, path, URL, or query and shows what
+the rules decide and which rule decides it, using your unsaved edits and the
+administrator and project rules; it covers rules only, so a write outside the project
+or to a sensitive file can still ask. Matching normalizes the target so a rule cannot be dodged
 by respelling it: a file rule is resolved and anchored to the workspace (so
 `src/*` covers the same file written as an absolute path, and a relative climb
 like `src/../../etc/passwd` does not slip past it), a URL rule is

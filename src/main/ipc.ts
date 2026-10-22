@@ -13,7 +13,8 @@ import type {
 } from '@shared/types'
 import { isApprovalPolicy } from '@shared/types'
 import { cleanupPermissionRules } from './agent/permissions'
-import { describePermissionPolicy, defaultPolicyDeps } from './permissionPolicy'
+import { describePermissionPolicy, defaultPolicyDeps, testPermission } from './permissionPolicy'
+import { getRuleUsage } from './ruleUsage'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 import {
   isPlanDecision,
@@ -740,6 +741,23 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.permissionsPolicy, (_event, workspace: unknown) =>
     describePermissionPolicy(typeof workspace === 'string' ? workspace : null, defaultPolicyDeps(folderTrustFor))
   )
+  // Settings' rule tester: matches only, reads nothing beyond the policy files above.
+  // Bounded so a pasted novel or a runaway list can't stall the main process.
+  ipcMain.handle(IPC.permissionsTest, (_event, input: unknown) => {
+    const i = (input ?? {}) as Record<string, unknown>
+    const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
+    return testPermission(
+      {
+        workspace: str(i.workspace, 4096) || null,
+        userRules: Array.isArray(i.userRules) ? (i.userRules as PermissionRule[]).slice(0, 5000) : [],
+        tool: str(i.tool, 200),
+        subject: str(i.subject, 20000),
+        additionalRoots: getSettings().additionalRoots ?? []
+      },
+      defaultPolicyDeps(folderTrustFor)
+    )
+  })
+  ipcMain.handle(IPC.permissionsUsage, () => getRuleUsage())
 
   // Wait for the encrypted write so a failed save reaches the renderer as an error.
   ipcMain.handle(IPC.settingsSetKey, async (_event, providerId: string, key: string) => {

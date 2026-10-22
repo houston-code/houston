@@ -55,6 +55,11 @@ export interface AgentHost {
    * pickers can mark it. Optional: a host that can't write settings just doesn't flag.
    */
   setModelUnavailable?(providerId: string, modelId: string, unavailable: boolean): void
+  /**
+   * Record that one of the user's permission rules just decided a call, for the
+   * "last used" note in Settings. Optional: a host without it just doesn't track.
+   */
+  noteRuleUsed?(rule: PermissionRule): void
 }
 
 let host: AgentHost | null = null
@@ -96,6 +101,15 @@ export function setModelUnavailable(providerId: string, modelId: string, unavail
     requireHost().setModelUnavailable?.(providerId, modelId, unavailable)
   } catch {
     // A settings write that fails must not turn a clear error into a crash.
+  }
+}
+
+/** See {@link AgentHost.noteRuleUsed}. Best effort: bookkeeping never fails a run. */
+export function noteRuleUsed(rule: PermissionRule): void {
+  try {
+    requireHost().noteRuleUsed?.(rule)
+  } catch {
+    // An unwired host or an unwritable store: skip the note.
   }
 }
 

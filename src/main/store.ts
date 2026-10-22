@@ -553,7 +553,7 @@ export function addPermissionRule(rule: PermissionRule): AppSettings {
   ) {
     return getSettings()
   }
-  return updateSettings({ permissionRules: [rule, ...current] })
+  return updateSettings({ permissionRules: [{ ...rule, addedAt: Date.now(), source: 'prompt' }, ...current] })
 }
 
 /** Look up a provider by id from current settings. */

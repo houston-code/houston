@@ -50,6 +50,7 @@ import { hostPlatform, installHost } from './installHost'
 import { resolveContextWindow, turnCostUsd } from '@shared/usage'
 import {
   addPermissionRule,
+  noteRuleUsed,
   collectSecrets,
   getKey,
   getProvider,
@@ -1774,8 +1775,33 @@ export async function startRun(
     // the scope already filtered, so it stays callable whatever the scope names.
     const inScope = (name: string, subject: string): boolean =>
       (findTools !== null && name === findTools.schema.name) || !scopeVerdict(req.toolScope, name, subject, roots)
-    const matchRun = (name: string, subject: string): PermissionRule['action'] | null =>
-      inScope(name, subject) ? matchRule(permissionRules, name, subject, roots) : 'deny'
+    const matchRun = (name: string, subject: string): PermissionRule['action'] | null => {
+      if (!inScope(name, subject)) return 'deny'
+      const action = matchRule(permissionRules, name, subject, roots)
+      if (action !== null) noteUserRuleUse(name, subject, action)
+      return action
+    }
+    // Note which of the user's own rules decided a call, for the "last used" note in
+    // Settings. Bookkeeping only: it runs after the gate has its answer, never changes
+    // it, and skips calls a guardrail tier decided. The user's rules sit between the
+    // guardrails and a trusted project's allow rules (see the tier order above).
+    const projectAllowCount = projectTrusted ? projectConfig.elevated.allowRules.length : 0
+    const noteUserRuleUse = (name: string, subject: string, action: PermissionRule['action']): void => {
+      queueMicrotask(() => {
+        try {
+          if (matchRule(permissionRules.slice(0, guardrailRuleCount), name, subject, roots) !== null) return
+          const userEnd = permissionRules.length - projectAllowCount
+          for (let i = guardrailRuleCount; i < userEnd; i++) {
+            if (matchRule([permissionRules[i]], name, subject, roots) === action) {
+              noteRuleUsed(permissionRules[i])
+              return
+            }
+          }
+        } catch {
+          // Bookkeeping never disturbs a run.
+        }
+      })
+    }
     const ruleDenialText = (name: string, args: Record<string, unknown>): string => {
       const subject = permissionSubject(name, args)
       const refusal = inScope(name, subject) ? null : scopeVerdict(req.toolScope, name, subject, roots)

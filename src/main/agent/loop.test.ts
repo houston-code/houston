@@ -81,6 +81,8 @@ const h = vi.hoisted(() => ({
   // Rules captured from the addPermissionRule mock, so tests can assert what an
   // "Always allow/deny" decision persisted.
   addedRules: [] as unknown[],
+  // User rules the loop reported as deciding a call ("last used" bookkeeping).
+  usedRules: [] as unknown[],
   // Calls to the setModelUnavailable host mock (a model flagged / cleared "not found").
   unavailableCalls: [] as Array<{ providerId: string; model: string; unavailable: boolean }>,
   // A stub verification runner the verify-gate mock delegates to, so tests can
@@ -130,6 +132,9 @@ vi.mock('../agentHost', () => ({
   getSettings: () => h.settings,
   addPermissionRule: (rule: unknown) => {
     h.addedRules.push(rule)
+  },
+  noteRuleUsed: (rule: unknown) => {
+    h.usedRules.push(rule)
   },
   getProvider: (id: string) =>
     h.extraConfigs[id] ?? {
@@ -285,6 +290,7 @@ beforeEach(() => {
   h.pluginEvents = []
   h.pluginThrowOn = null
   h.addedRules = []
+  h.usedRules = []
   h.unavailableCalls = []
   h.secrets = []
   h.verifyRunner = null
@@ -1850,6 +1856,34 @@ describe('startRun', () => {
       expect(res?.ok).toBe(false)
       // The message names the org so the user knows it isn't a rule they can lift.
       expect(res?.output).toBe("Denied by your organization's managed policy.")
+    } finally {
+      h.settings.permissionRules = []
+    }
+  })
+
+  it("notes which of the user's rules decided a call, and none for a guardrail's", async () => {
+    h.settings.permissionRules = [
+      { action: 'ask', tool: 'write_file', match: 'other.txt' },
+      { action: 'allow', tool: 'write_file', match: 'notes.txt', exact: true }
+    ]
+    h.managedRules = [{ action: 'deny', tool: 'write_file', match: 'secret.txt' }]
+    try {
+      await run({
+        policy: 'ask',
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'notes.txt', content: 'x' } } },
+            { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'secret.txt', content: 'x' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      await Promise.resolve()
+      expect(h.usedRules.length).toBeGreaterThan(0)
+      expect(new Set(h.usedRules.map((r) => JSON.stringify(r)))).toEqual(
+        new Set([JSON.stringify({ action: 'allow', tool: 'write_file', match: 'notes.txt', exact: true })])
+      )
     } finally {
       h.settings.permissionRules = []
     }

@@ -24,6 +24,8 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
   const cleanupPermissionRules = vi.fn((rules: unknown) => Promise.resolve(rules))
   const getMcpStatuses = vi.fn(() => Promise.resolve([]))
   const getPermissionPolicy = vi.fn(() => Promise.resolve({ managed: [], project: null }))
+  const getRuleUsage = vi.fn(() => Promise.resolve({}))
+  const testPermission = vi.fn(() => Promise.resolve({ decision: null, tier: null, userMatches: [] }))
   const api = {
     saveSettings,
     setKey,
@@ -36,6 +38,8 @@ function installApi(overrides: Partial<Record<string, ReturnType<typeof vi.fn>>>
     cleanupPermissionRules,
     getMcpStatuses,
     getPermissionPolicy,
+    getRuleUsage,
+    testPermission,
     ...overrides
   }
   window.api = api as unknown as typeof window.api
@@ -599,6 +603,64 @@ describe('SettingsModal', () => {
       expect(screen.queryByRole('button', { name: 'All sources' })).toBeNull()
       fireEvent.click(screen.getByRole('button', { name: 'Hooks' }))
       expect(screen.queryByRole('heading', { name: "This project's hooks" })).toBeNull()
+    })
+  })
+
+  describe('rule history and tester', () => {
+    it('shows when a rule was added and last used', async () => {
+      const day = 24 * 60 * 60 * 1000
+      const rule = { action: 'allow' as const, tool: 'run_shell', match: 'git *', addedAt: Date.now() - 3 * day, source: 'prompt' as const }
+      installApi({
+        getRuleUsage: vi.fn(() => Promise.resolve({ ['allow\u0000run_shell\u0000git *\u0000']: Date.now() - 1.5 * day }))
+      })
+      renderModal({ permissionRules: [rule] })
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      expect(await screen.findByText('Added 3 days ago from an approval prompt · last used yesterday')).toBeInTheDocument()
+    })
+
+    it('stamps a rule added in Settings', async () => {
+      const api = installApi()
+      renderModal()
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      fireEvent.click(screen.getByRole('button', { name: '+ Add rule' }))
+      expect(screen.getByText('Added today in Settings · not used yet')).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      const saved = (api.saveSettings.mock.calls.at(-1)![0] as AppSettings).permissionRules
+      expect(saved?.[0]).toMatchObject({ source: 'settings', addedAt: expect.any(Number) })
+    })
+
+    it('tests a call against the unsaved rules and highlights the rows that match', async () => {
+      const testPermission = vi.fn(() => Promise.resolve({ decision: 'deny', tier: 'user', userMatches: [1] }))
+      installApi({ testPermission })
+      renderModal(
+        {
+          permissionRules: [
+            { action: 'allow', tool: 'run_shell', match: 'git *' },
+            { action: 'deny', tool: 'run_shell', match: 'rm *' }
+          ]
+        },
+        { workspace: '/repo' }
+      )
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      // An unsaved edit is part of what gets tested.
+      fireEvent.change(screen.getByDisplayValue('rm *'), { target: { value: 'rm -rf *' } })
+      fireEvent.change(screen.getByRole('textbox', { name: 'Call to test' }), { target: { value: 'rm -rf build' } })
+      await waitFor(() =>
+        expect(testPermission).toHaveBeenCalledWith({
+          workspace: '/repo',
+          tool: 'run_shell',
+          subject: 'rm -rf build',
+          userRules: [
+            { action: 'allow', tool: 'run_shell', match: 'git *' },
+            { action: 'deny', tool: 'run_shell', match: 'rm -rf *' }
+          ]
+        })
+      )
+      expect(await screen.findByText('Deny, decided by your rule 2.')).toBeInTheDocument()
+      const rows = document.querySelectorAll('.rule-row')
+      expect(rows[1]).toHaveClass('rule-row--hit')
+      expect(rows[0]).not.toHaveClass('rule-row--hit')
     })
   })
 

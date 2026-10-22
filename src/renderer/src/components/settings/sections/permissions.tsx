@@ -1,9 +1,17 @@
-import { useMemo, useState } from 'react'
-import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, type ApprovalPolicy, type PermissionRule } from '@shared/types'
+import { useEffect, useMemo, useState } from 'react'
+import {
+  APPROVAL_POLICIES,
+  APPROVAL_POLICY_LABEL,
+  permissionRuleKey,
+  type ApprovalPolicy,
+  type PermissionRule,
+  type PermissionTestResult
+} from '@shared/types'
 import { lintPermissionRules, moveRule, type RuleIssue } from '@shared/permissionLint'
 import { SettingsSection } from '../fields'
 import { ReadOnlyRules, TrustBadge } from './project'
-import { groupPermissionRules, ruleMatchesFilter } from '../permissionRules'
+import { groupPermissionRules, ruleMatchesFilter, TOOL_NAMES } from '../permissionRules'
+import { ruleMetaText, testVerdictText } from '../ruleMeta'
 import type { SettingsCtx } from '../context'
 
 /** One line of copy per lint issue, naming rules by their 1-based position. */
@@ -46,6 +54,8 @@ function RuleRow({
   rules,
   showTool,
   order,
+  meta,
+  hit,
   onPatch,
   onRemove
 }: {
@@ -55,6 +65,10 @@ function RuleRow({
   rules: PermissionRule[]
   showTool: boolean
   order?: RowOrder
+  /** When the rule was added and last used, or ''. */
+  meta: string
+  /** The rule tester's call matches this rule. */
+  hit: boolean
   onPatch: (patch: Partial<PermissionRule>) => void
   onRemove: () => void
 }): JSX.Element {
@@ -62,7 +76,7 @@ function RuleRow({
   const warn = issues.some(isWarning)
   return (
     <div
-      className={`rule-row${warn ? ' rule-row--warn' : ''}`}
+      className={`rule-row${warn ? ' rule-row--warn' : ''}${hit ? ' rule-row--hit' : ''}`}
       onDragOver={order?.enabled ? (e) => e.preventDefault() : undefined}
       onDrop={
         order?.enabled
@@ -165,6 +179,7 @@ function RuleRow({
           {issueText(issue, rule, rules)}
         </p>
       ))}
+      {meta && <p className="rule__meta">{meta}</p>}
     </div>
   )
 }
@@ -198,7 +213,8 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
   // Default to 'ask', not 'allow': an all-approving rule shouldn't be one careless
   // click away (the empty match pattern would otherwise auto-approve every
   // run_shell call). New rules go last, so they never pre-empt an existing one.
-  const addRuleFor = (tool: string): void => setRules([...rules, { action: 'ask', tool, match: '' }])
+  const addRuleFor = (tool: string): void =>
+    setRules([...rules, { action: 'ask', tool, match: '', addedAt: Date.now(), source: 'settings' }])
   const patchRule = (i: number, patch: Partial<PermissionRule>): void =>
     setRules(rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
   const removeRule = (i: number): void => setRules(rules.filter((_, idx) => idx !== i))
@@ -224,6 +240,22 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
     }
   }
 
+  // When each rule last decided a call (recorded by the agent), for the meta line.
+  const [usage, setUsage] = useState<Record<string, number>>({})
+  useEffect(() => {
+    let alive = true
+    void window.api
+      .getRuleUsage?.()
+      .then((u) => {
+        if (alive) setUsage(u ?? {})
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+  const [now] = useState(() => Date.now())
+  const [tested, setTested] = useState<Set<number>>(new Set())
   const managed = ctx.policy?.managed ?? []
   const project = ctx.policy?.project ?? null
   const hasOtherSources = managed.length > 0 || project !== null
@@ -259,6 +291,8 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
             }
           : undefined
       }
+      meta={ruleMetaText(rule, usage[permissionRuleKey(rule)], now)}
+      hit={tested.has(index)}
       onPatch={(patch) => patchRule(index, patch)}
       onRemove={() => removeRule(index)}
     />
@@ -425,6 +459,8 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
           </details>
         ))}
 
+      <RuleTester ctx={ctx} rules={rules} onMatches={setTested} />
+
       {view !== 'sources' && (
         <div className="rule-add-other">
           <input
@@ -447,6 +483,87 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
         </div>
       )}
     </SettingsSection>
+  )
+}
+
+/** The subject a tool's rules match, as a placeholder for the tester's input. */
+const SUBJECT_HINT: Record<string, string> = {
+  run_shell: 'a command, e.g. git push origin main',
+  web_fetch: 'a URL, e.g. https://example.com/docs',
+  web_search: 'a search query'
+}
+
+/**
+ * "Test a call": what the rules decide for a tool call, from the real matcher in
+ * main (with the admin and project tiers), against the working copy of the rules,
+ * so an edit can be checked before it is saved. Matching rows are highlighted.
+ */
+function RuleTester({
+  ctx,
+  rules,
+  onMatches
+}: {
+  ctx: SettingsCtx
+  rules: PermissionRule[]
+  onMatches: (indices: Set<number>) => void
+}): JSX.Element {
+  const [tool, setTool] = useState('run_shell')
+  const [subject, setSubject] = useState('')
+  const [result, setResult] = useState<PermissionTestResult | null>(null)
+  const workspace = ctx.workspace
+  useEffect(() => {
+    if (subject.trim() === '') {
+      setResult(null)
+      onMatches(new Set())
+      return
+    }
+    let alive = true
+    // Debounced: each keystroke would otherwise be a round trip to main.
+    const timer = setTimeout(() => {
+      void window.api
+        .testPermission({ workspace, userRules: rules, tool, subject })
+        .then((r) => {
+          if (!alive) return
+          setResult(r)
+          onMatches(new Set(r.userMatches))
+        })
+        .catch(() => {})
+    }, 200)
+    return () => {
+      alive = false
+      clearTimeout(timer)
+    }
+  }, [workspace, rules, tool, subject, onMatches])
+
+  return (
+    <details className="rule-tester">
+      <summary>Test a call</summary>
+      <div className="rule-tester__row">
+        <select aria-label="Tool to test" value={tool} onChange={(e) => setTool(e.target.value)}>
+          {TOOL_NAMES.filter((t) => t !== '*').map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+        <input
+          className="rule-tester__subject"
+          aria-label="Call to test"
+          placeholder={SUBJECT_HINT[tool] ?? 'a path, e.g. src/index.ts'}
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+        />
+      </div>
+      {result && (
+        <p className={`rule-tester__verdict rule-tester__verdict--${result.decision ?? 'none'}`} role="status">
+          {testVerdictText(result, rules, ctx.settings.approvalPolicy)}
+        </p>
+      )}
+      <p className="rule__meta">
+        Rules only. A write outside the project or to a sensitive file can still ask, whatever
+        the rules say.
+      </p>
+    </details>
   )
 }
 

@@ -6189,6 +6189,77 @@ body:has(.coachmark) .get-started {
 .rule__issue--warn {
   color: var(--warn);
 }
+.rule__meta {
+  margin: 2px 0 0 44px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.rule-tester .rule__meta {
+  margin-left: 0;
+}
+.rule-row--hit .rule {
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.rule-tester {
+  margin: 10px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.rule-tester summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.rule-tester[open] summary {
+  margin-bottom: 8px;
+}
+.rule-tester__row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.rule-tester__row select,
+.rule-tester__row input {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: 13px;
+  min-height: var(--control-h);
+}
+.rule-tester__subject {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+}
+.rule-tester__row select:focus,
+.rule-tester__row input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+.rule-tester__verdict {
+  margin: 4px 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+.rule-tester__verdict--allow {
+  color: var(--ok);
+}
+.rule-tester__verdict--ask {
+  color: var(--warn);
+}
+.rule-tester__verdict--deny {
+  color: var(--danger);
+}
+.rule-tester__verdict--none {
+  color: var(--text);
+  font-weight: 500;
+}
 .rule-summary {
   font-size: 12px;
   margin: -4px 0 10px;
