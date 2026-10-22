@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { inflateSync } from 'node:zlib'
+import { crc32, inflateSync } from 'node:zlib'
 import { applyAppBadge, attentionCount, badgeDescription, dotPng } from './appBadge'
 
 describe('attentionCount', () => {
@@ -72,5 +72,8 @@ describe('dotPng', () => {
     const alpha = (x: number, y: number): number => raw[y * (1 + 16 * 4) + 1 + x * 4 + 3]
     expect(alpha(8, 8)).toBe(255)
     expect(alpha(0, 0)).toBe(0)
+    // Each chunk's CRC covers its type and data (a bad one makes decoders reject it).
+    const ihdrCrc = png.readUInt32BE(8 + 4 + 4 + 13)
+    expect(ihdrCrc).toBe(crc32(png.subarray(12, 12 + 4 + 13)))
   })
 })
