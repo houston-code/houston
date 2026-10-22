@@ -17,6 +17,7 @@ import type {
   ConversationUsage,
   ConversationWorktree,
   PromptSnapshot,
+  RewindBackup,
   ProposalState,
   ReasoningEffort,
   SpawnedFrom,
@@ -225,7 +226,12 @@ export function createConversation(input: {
  */
 export function getConversation(id: string): Conversation | null {
   const conv = read(id)
-  return conv && hydrateMedia(conv, mediaDir(conv.id))
+  if (!conv) return null
+  // The rewind backup is the store's own undo state (see agent/rewind.ts), read with
+  // peekConversation. Left out here, it can't reach an export, the renderer, or a
+  // provider: it holds the messages the user rewound away, attachments and all.
+  const { rewindBackup: _rewindBackup, ...rest } = conv
+  return hydrateMedia(rest, mediaDir(conv.id))
 }
 
 /**
@@ -343,6 +349,7 @@ function toMeta(conv: Conversation): ConversationMeta {
     proposals: _proposals,
     childReports: _childReports,
     sideChat: _sideChat,
+    rewindBackup: _rewindBackup,
     ...rest
   } = conv
   return { ...rest, errored: !!lastError }
@@ -654,6 +661,9 @@ export function setMessages(id: string, messages: ChatMessage[]): void {
   if (!conv) return
   conv.messages = messages
   conv.updatedAt = Date.now()
+  // The chat moved on from a rewind (a new message, a /compact): undoing it now would
+  // throw away what came after, so the backup is dropped, and its attachments with it.
+  if (conv.rewindBackup && conv.rewindBackup.afterLength !== messages.length) delete conv.rewindBackup
   // Only auto-derive over the placeholder, never over a user's own title — including a
   // deliberate rename to the literal "New chat" (guard on titleCustom, as the generated-
   // title path does), so setMessages can't clobber it on the next message.
@@ -661,6 +671,34 @@ export function setMessages(id: string, messages: ChatMessage[]): void {
     const title = deriveTitle(messages)
     if (title) conv.title = title
   }
+  write(conv)
+}
+
+/**
+ * Write a rewind (see agent/rewind.ts): the new log and compaction state (null
+ * clears it), the failed-turn marker cleared or restored, and the backup that undoes
+ * it (null drops it). One write, so the log and its backup can't disagree. Bumps
+ * `updatedAt` like any change to the log.
+ */
+export function writeRewind(
+  id: string,
+  next: {
+    messages: ChatMessage[]
+    compaction: ConversationCompaction | null
+    lastError: ConversationError | null
+    backup: RewindBackup | null
+  }
+): void {
+  const conv = read(id)
+  if (!conv) return
+  conv.messages = next.messages
+  if (next.compaction) conv.compaction = next.compaction
+  else delete conv.compaction
+  if (next.lastError) conv.lastError = next.lastError
+  else delete conv.lastError
+  if (next.backup) conv.rewindBackup = next.backup
+  else delete conv.rewindBackup
+  conv.updatedAt = Date.now()
   write(conv)
 }
 

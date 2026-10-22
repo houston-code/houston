@@ -566,6 +566,43 @@ full output allowance where Houston knows it.
 `/undo` covers the last turn's file writes only. It does not undo shell commands,
 and it does not touch git history.
 
+## Rewinding to an earlier message
+
+Rewind takes a chat back to just before one of your earlier messages. You choose
+what goes back:
+
+- **Conversation and code** (the default): remove that message and everything after
+  it, and put back the files the agent changed from that turn on.
+- **Conversation only**: remove the messages; files stay as they are.
+- **Code only**: put back the files; the chat stays.
+
+In the desktop app, hover one of your messages and click the rewind button for these
+choices, or press Esc twice in an empty composer (or type `/rewind`) to pick the
+message from a list. A confirmation shows how many messages and files are affected
+before anything changes. After a conversation rewind, the message you rewound to is
+back in the composer to send again or change. **Edit and resend** (in the same menu)
+puts a message in the composer for editing; sending it rewinds to that message first
+(conversation and code by default, or conversation only) and then sends the new
+text, so the agent re-runs from there.
+
+In the terminal, `/rewind` lists your messages by number, asks which and what to
+rewind, shows the same summary, and asks to confirm. `/rewind 3 code` skips the
+questions for message 3; the modes are `both`, `conversation`, and `code`.
+
+Things to know:
+
+- A file is put back only while it still holds what the agent wrote. A file you (or
+  anything else) changed since is left as it is and listed, so a rewind never
+  clobbers your edits. Files the rewound turns created are deleted, and files they
+  deleted come back.
+- Shell commands are not snapshotted: a rewind can't undo what `run_shell` did
+  (installed packages, generated files, git commits, deleted files).
+- **Undo rewind** (desktop) or `/rewind undo` (terminal) reverses the latest rewind,
+  messages and files both, until you send another message.
+- Rewind is unavailable while a turn is running; stop it first.
+- Houston keeps the snapshots for the most recent 200 turns across all chats. A turn
+  older than that can't have its files put back, and the confirmation says so.
+
 ## Being told when it needs you
 
 A long run can block on an approval, a question, or a plan, and then it is just
@@ -1338,8 +1375,9 @@ conventions, not as authority to change tool or permission behavior.
   multi-file patches (adds, updates, deletes, and moves) and edits made by a
   writable subagent the turn dispatched. Checkpoints persist on disk in your
   Houston profile, so the revert/redo affordance survives an app restart; the
-  most recent 50 turns' checkpoints are kept. Shell-command side effects are not
-  checkpointed: revert only restores files the editing tools touched.
+  most recent 200 turns' checkpoints are kept. Shell-command side effects are not
+  checkpointed: revert only restores files the editing tools touched. To go back
+  further than the last turn, see "Rewinding to an earlier message".
 
 ## Help menu
 

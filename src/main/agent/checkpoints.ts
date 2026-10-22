@@ -1,5 +1,8 @@
-import { promises as fs } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { constants as fsConstants, promises as fs, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { dirname, isAbsolute, join, relative } from 'node:path'
+import type { ChatMessage } from '@shared/agent'
+import { isRewindableTurn } from '@shared/rewind'
 import { writeFileAtomic } from '../atomic-write'
 import { resolveInRoots } from './tools'
 import { parsePatch } from './apply-patch'
@@ -18,12 +21,14 @@ import { getUserDataDir } from '../userData'
  *
  * Checkpoints are ALSO persisted to disk (userData/checkpoints), best-effort, so
  * the revert/redo affordance survives an app restart and non-GUI hosts (TUI,
- * headless) can grow a rewind later. Each run's checkpoint is one JSON file named
- * by its runId; `index.json` maps each conversation to its latest run. Memory
- * remains the in-session source of truth — disk is written through on every
- * mutation and read only on a miss (e.g. after a restart). A host with no
- * user-data directory wired (unit tests, embedders) silently keeps the
- * in-memory behavior.
+ * headless) can rewind too. Each run's checkpoint is one JSON file named by its
+ * runId. `index.json` keeps, per conversation, the ordered chain of its runs, each
+ * tied to the user message that started it (see {@link ChainEntry}), which is what
+ * lets a rewind put back every turn from an earlier message on; it also still maps
+ * each conversation to its latest run, the shape older builds read. Memory remains
+ * the in-session source of truth — disk is written through on every mutation and
+ * read only on a miss (e.g. after a restart). A host with no user-data directory
+ * wired (unit tests, embedders) silently keeps the in-memory behavior.
  */
 
 interface FileSnapshot {
@@ -37,6 +42,12 @@ interface FileSnapshot {
   afterBinary?: boolean
   /** Whether the post-turn content was captured, so redo skips files it can't restore. */
   afterCaptured: boolean
+  /**
+   * This file is back at `before` (a revert or rewind put it there). Tracked per file
+   * because a rewind can leave some of a run's files alone (changed outside the
+   * agent): a later rewind must skip the ones already put back and still reach the rest.
+   */
+  reverted?: boolean
 }
 
 interface Checkpoint {
@@ -65,13 +76,32 @@ interface PersistedCheckpoint {
     /** Set when the content is base64 bytes rather than text (schema version 2 on). */
     beforeEncoding?: 'base64'
     afterEncoding?: 'base64'
+    /** See FileSnapshot.reverted. Optional, so older builds simply ignore it. */
+    reverted?: boolean
   }[]
 }
 
 /** Don't snapshot files larger than this (a revert of a huge file isn't worth the memory). */
 const MAX_SNAPSHOT_BYTES = 5_000_000
-/** Retain at most this many turns' checkpoints; the oldest are evicted first. */
+/** Keep at most this many turns' checkpoints in memory; the oldest are evicted first. */
 const MAX_CHECKPOINTS = 50
+/**
+ * Keep at most this many run files on disk, across all conversations; the oldest
+ * are pruned first. Larger than the memory cap because a rewind reaches back several
+ * turns, and disk is only read on a miss.
+ */
+const MAX_DISK_CHECKPOINTS = 200
+/** Runs remembered per conversation chain; the oldest drop off first. */
+const MAX_CHAIN_ENTRIES = 100
+/**
+ * Chain entries index.json keeps across all conversations; the least recently run
+ * conversations drop off first. Disk keeps only MAX_DISK_CHECKPOINTS run files, so
+ * entries far beyond that point at pruned snapshots anyway, and the bound keeps the
+ * file (read synchronously on first use of a conversation) small.
+ */
+const MAX_INDEX_ENTRIES = 1000
+/** Version stamped on index.json. 3 added `chains`; older builds read only `conversations`. */
+const INDEX_SCHEMA_VERSION = 3
 /**
  * Bump when {@link PersistedCheckpoint} changes shape. Version 2 added the base64
  * encodings for binary snapshots; it is written so an older build, which would restore
@@ -102,12 +132,264 @@ const checkpoints = new Map<string, Checkpoint>()
  */
 const lastRunByConversation = new Map<string, string>()
 
-/** Remember the run currently/most-recently executing on a conversation. */
-export function noteConversationRun(conversationId: string, runId: string): void {
+/**
+ * One run in a conversation's chain, oldest first. `turn` ties it to the user
+ * message that started it, so rewinding to that message knows which runs to undo.
+ */
+export interface ChainEntry {
+  runId: string
+  /**
+   * Index in the conversation's log of the user message that started the run, or -1
+   * when it didn't start from one. Absent only on an entry migrated from the old
+   * latest-run-only index, whose message is inferred (see {@link resolveChainTurns}).
+   */
+  turn?: number
+  /** {@link turnFingerprint} of that message, so a rewritten log can't misattribute the run. */
+  fp?: string
+  /** The run changed files (a checkpoint exists or existed), so a missing one means pruned. */
+  files?: boolean
+  /** The run's turn was cut from the chat by a rewind; its files can still be put back. */
+  detached?: boolean
+  /** When the run started (ms), to bound the index by recency. */
+  at: number
+}
+
+/** Per-conversation run chains, hydrated from index.json on first use. */
+const chains = new Map<string, ChainEntry[]>()
+/** Which conversation each chained run belongs to, so recording can flag `files`. */
+const runConversation = new Map<string, string>()
+
+/** A short digest of a user message's text, to check a chain entry still points at it. */
+export function turnFingerprint(m: ChatMessage): string {
+  return createHash('sha256').update(m.content).digest('hex').slice(0, 16)
+}
+
+function isChainEntry(v: unknown): v is ChainEntry {
+  if (!v || typeof v !== 'object') return false
+  const e = v as Record<string, unknown>
+  return (
+    typeof e.runId === 'string' &&
+    RUN_ID_RE.test(e.runId) &&
+    (e.turn === undefined || (Number.isInteger(e.turn) && (e.turn as number) >= -1)) &&
+    (e.fp === undefined || typeof e.fp === 'string') &&
+    typeof e.at === 'number'
+  )
+}
+
+/** The persisted index, read synchronously (it is small) and validated. Never throws. */
+function readIndexSync(dir: string): {
+  conversations: Record<string, string>
+  chains: Record<string, ChainEntry[]>
+} {
+  try {
+    return parseIndex(JSON.parse(readFileSync(join(dir, 'index.json'), 'utf8')))
+  } catch {
+    return { conversations: {}, chains: {} }
+  }
+}
+
+function parseIndex(parsed: unknown): {
+  conversations: Record<string, string>
+  chains: Record<string, ChainEntry[]>
+} {
+  const conversations: Record<string, string> = {}
+  const out: Record<string, ChainEntry[]> = {}
+  const o = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+  const conv = o.conversations
+  if (conv && typeof conv === 'object' && !Array.isArray(conv)) {
+    for (const [k, v] of Object.entries(conv)) if (typeof v === 'string') conversations[k] = v
+  }
+  const ch = o.chains
+  if (ch && typeof ch === 'object' && !Array.isArray(ch)) {
+    for (const [k, v] of Object.entries(ch)) {
+      if (!Array.isArray(v)) continue
+      out[k] = v.filter(isChainEntry).map((e) => ({
+        runId: e.runId,
+        ...(e.turn !== undefined ? { turn: e.turn } : {}),
+        ...(e.fp !== undefined ? { fp: e.fp } : {}),
+        ...(e.files === true ? { files: true } : {}),
+        ...(e.detached === true ? { detached: true } : {}),
+        at: e.at
+      }))
+    }
+  }
+  return { conversations, chains: out }
+}
+
+/**
+ * The chain for a conversation, hydrating it from disk the first time. Migration
+ * from the latest-run-only index lives here: a conversation the old index maps to a
+ * run its chain doesn't end with (no chain yet, or an older build ran since) gets
+ * that run appended without a `turn`, which is then inferred from the log.
+ */
+function chainFor(conversationId: string): ChainEntry[] {
+  let chain = chains.get(conversationId)
+  if (chain) return chain
+  chain = []
+  const dir = checkpointsDirOrNull()
+  if (dir) {
+    const index = readIndexSync(dir)
+    if (Object.prototype.hasOwnProperty.call(index.chains, conversationId)) {
+      chain = index.chains[conversationId]
+    }
+    const latest = Object.prototype.hasOwnProperty.call(index.conversations, conversationId)
+      ? index.conversations[conversationId]
+      : undefined
+    if (latest && RUN_ID_RE.test(latest) && chain.at(-1)?.runId !== latest) {
+      // Ordered after what the chain already has (chains sort by `at`): an older
+      // build ran it last. A chain-less index migrates as one entry at 0.
+      const rest = chain.filter((e) => e.runId !== latest)
+      chain = [...rest, { runId: latest, at: rest.length ? (rest[rest.length - 1].at ?? 0) + 1 : 0 }]
+    }
+  }
+  for (const e of chain) runConversation.set(e.runId, conversationId)
+  chains.set(conversationId, chain)
+  return chain
+}
+
+/**
+ * Remember the run currently/most-recently executing on a conversation, appended to
+ * its chain. `turn` is the user message that started it, when there is one.
+ */
+export function noteConversationRun(
+  conversationId: string,
+  runId: string,
+  turn?: { index: number; fp: string }
+): void {
   lastRunByConversation.set(conversationId, runId)
+  const chain = chainFor(conversationId)
+  const existing = chain.find((e) => e.runId === runId)
+  if (existing) {
+    if (turn) Object.assign(existing, { turn: turn.index, fp: turn.fp })
+  } else {
+    chain.push({
+      runId,
+      turn: turn ? turn.index : -1,
+      ...(turn ? { fp: turn.fp } : {}),
+      at: Date.now()
+    })
+    while (chain.length > MAX_CHAIN_ENTRIES) {
+      const dropped = chain.shift()
+      if (dropped) runConversation.delete(dropped.runId)
+    }
+  }
+  runConversation.set(runId, conversationId)
   // Fire-and-forget: the caller (startRun) is sync, and losing an index write only
   // costs the affordance after a restart, never in-session correctness.
   void scheduleWriteIndex()
+}
+
+/**
+ * Point a run's chain entry at the user message that started it. startRun calls this
+ * once the log is final for the turn's start: an automated note inserted ahead of the
+ * user's message, or the intake repair, can move it after {@link noteConversationRun}.
+ */
+export function setRunTurn(conversationId: string, runId: string, index: number, fp: string): void {
+  const entry = chainFor(conversationId).find((e) => e.runId === runId)
+  if (!entry || (entry.turn === index && entry.fp === fp)) return
+  entry.turn = index
+  entry.fp = fp
+  void scheduleWriteIndex()
+}
+
+/**
+ * One conversation's chain from two sources (disk and this process's memory): the
+ * union by runId, oldest first. A run this process knows wins whole (so a detached
+ * flag it cleared stays cleared); runs only the other source has are kept. That is
+ * what lets the desktop app and the terminal app, which share one profile, work on
+ * the same chat without either dropping the other's runs.
+ */
+function mergeChains(disk: ChainEntry[], mem: ChainEntry[]): ChainEntry[] {
+  const byId = new Map<string, ChainEntry>()
+  for (const e of disk) byId.set(e.runId, e)
+  for (const e of mem) byId.set(e.runId, e)
+  // Array.prototype.sort is stable: equal times (a migrated entry's 0) keep their order.
+  return [...byId.values()].sort((a, b) => a.at - b.at).slice(-MAX_CHAIN_ENTRIES)
+}
+
+/** Fold the on-disk chain into memory, picking up runs another process recorded. */
+function refreshChain(conversationId: string): ChainEntry[] {
+  const mem = chainFor(conversationId)
+  const dir = checkpointsDirOrNull()
+  if (!dir) return mem
+  const index = readIndexSync(dir)
+  if (!Object.prototype.hasOwnProperty.call(index.chains, conversationId)) return mem
+  const merged = mergeChains(index.chains[conversationId], mem)
+  for (const e of merged) runConversation.set(e.runId, conversationId)
+  chains.set(conversationId, merged)
+  return merged
+}
+
+/**
+ * A copy of a conversation's chain, oldest first, including runs another Houston
+ * process recorded since this one first loaded it.
+ */
+export function conversationChain(conversationId: string): ChainEntry[] {
+  return refreshChain(conversationId).map((e) => ({ ...e }))
+}
+
+/**
+ * Mark runs whose turns a rewind cut from the chat (or, undoing it, put back). A
+ * detached run is never offered as the latest turn's revert, and is never the run a
+ * rewind starts from, but an earlier rewind still includes it, so code put back to
+ * before an older message is put back fully.
+ */
+export function setRunsDetached(conversationId: string, runIds: string[], detached: boolean): void {
+  const ids = new Set(runIds)
+  let changed = false
+  for (const e of chainFor(conversationId)) {
+    if (!ids.has(e.runId) || (e.detached === true) === detached) continue
+    if (detached) e.detached = true
+    else delete e.detached
+    changed = true
+  }
+  if (changed) void scheduleWriteIndex()
+}
+
+/**
+ * The message index each chain entry stands for in `messages`, or null when it can't
+ * be placed: a detached run, a run with no user message, or an entry whose recorded
+ * message no longer matches (the log was rewritten, e.g. by /compact). An entry
+ * migrated from the old index has no recorded message; it was the latest run then,
+ * so it maps to the last rewind point before the next placed entry (or the end).
+ */
+export function resolveChainTurns(chain: ChainEntry[], messages: ChatMessage[]): (number | null)[] {
+  const out: (number | null)[] = new Array(chain.length).fill(null)
+  let bound = messages.length
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const e = chain[i]
+    if (e.detached) continue
+    let idx: number | null = null
+    if (e.turn === undefined) {
+      for (let j = bound - 1; j >= 0; j--) {
+        if (isRewindableTurn(messages[j])) {
+          idx = j
+          break
+        }
+      }
+    } else if (
+      e.turn >= 0 &&
+      e.turn < messages.length &&
+      isRewindableTurn(messages[e.turn]) &&
+      (e.fp === undefined || e.fp === turnFingerprint(messages[e.turn]))
+    ) {
+      idx = e.turn
+    }
+    out[i] = idx
+    if (idx !== null) bound = idx
+  }
+  return out
+}
+
+/**
+ * The runs a rewind to the message at `messageIndex` undoes: the first run placed at
+ * or after that message, and every run after it in time (placed or not: a later run
+ * is later whatever happened to its message). Empty when no run is placed there.
+ */
+export function runsFromTurn(chain: ChainEntry[], messages: ChatMessage[], messageIndex: number): ChainEntry[] {
+  const placed = resolveChainTurns(chain, messages)
+  const start = placed.findIndex((idx) => idx !== null && idx >= messageIndex)
+  return start === -1 ? [] : chain.slice(start)
 }
 
 function resolveOrNull(roots: string[], relPath: string): string | null {
@@ -145,13 +427,32 @@ async function readCapped(
  * Write `content` back (decoding base64 when `binary`), or delete the file when
  * `content` is null. Recreates parent dirs.
  */
-async function applyState(abs: string, content: string | null, binary = false): Promise<void> {
+async function applyState(
+  abs: string,
+  content: string | null,
+  binary = false,
+  opts: { noFollow?: boolean } = {}
+): Promise<void> {
   if (content === null) {
+    // rm on a symlink removes the link, never its target.
     await fs.rm(abs, { force: true })
   } else {
     await fs.mkdir(dirname(abs), { recursive: true })
-    if (binary) await fs.writeFile(abs, Buffer.from(content, 'base64'))
-    else await fs.writeFile(abs, content, 'utf8')
+    // `noFollow` (the rewind path, which refuses a symlinked file outright): a symlink
+    // swapped in at the file itself between that check and this write fails the open
+    // rather than redirecting the write. Not defined on Windows, where it is 0. The
+    // single-turn revert keeps following a symlink inside the roots, as it always has.
+    const flags =
+      fsConstants.O_WRONLY |
+      fsConstants.O_CREAT |
+      fsConstants.O_TRUNC |
+      (opts.noFollow ? (fsConstants.O_NOFOLLOW ?? 0) : 0)
+    const handle = await fs.open(abs, flags, 0o666)
+    try {
+      await handle.writeFile(binary ? Buffer.from(content, 'base64') : Buffer.from(content, 'utf8'))
+    } finally {
+      await handle.close()
+    }
   }
 }
 
@@ -212,7 +513,8 @@ async function writeRunFile(runId: string): Promise<void> {
       after: s.after,
       afterCaptured: s.afterCaptured,
       ...(s.beforeBinary ? { beforeEncoding: 'base64' as const } : {}),
-      ...(s.afterBinary ? { afterEncoding: 'base64' as const } : {})
+      ...(s.afterBinary ? { afterEncoding: 'base64' as const } : {}),
+      ...(s.reverted ? { reverted: true } : {})
     }))
   }
   await writeJsonAtomic(join(dir, `${runId}.json`), data)
@@ -229,23 +531,21 @@ function schedulePersistRun(runId: string): Promise<void> {
 }
 
 async function readIndexConversations(dir: string): Promise<Record<string, string>> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(join(dir, 'index.json'), 'utf8')) as {
-      conversations?: unknown
-    }
-    const conv = parsed?.conversations
-    if (conv && typeof conv === 'object' && !Array.isArray(conv)) {
-      const out: Record<string, string> = {}
-      for (const [k, v] of Object.entries(conv)) if (typeof v === 'string') out[k] = v
-      return out
-    }
-  } catch {
-    // absent or corrupt — start fresh
-  }
-  return {}
+  return (await readIndex(dir)).conversations
 }
 
-/** Queue an index.json write mapping each conversation to its latest run. */
+async function readIndex(dir: string): Promise<ReturnType<typeof parseIndex>> {
+  try {
+    return parseIndex(JSON.parse(await fs.readFile(join(dir, 'index.json'), 'utf8')))
+  } catch {
+    return { conversations: {}, chains: {} } // absent or corrupt — start fresh
+  }
+}
+
+/**
+ * Queue an index.json write: each conversation's latest run (the shape older builds
+ * read) and its run chain.
+ */
 function scheduleWriteIndex(): Promise<void> {
   const dir = checkpointsDirOrNull()
   if (!dir) return Promise.resolve()
@@ -256,11 +556,34 @@ function scheduleWriteIndex(): Promise<void> {
     await ensureDir(dir)
     // Read-merge-write: another Houston process (GUI + TUI share one profile) may
     // have recorded runs for conversations this one has never seen — keep them.
-    const conversations = await readIndexConversations(dir)
+    // A conversation this process has loaded is written from memory, which was
+    // hydrated from disk before its first change.
+    const index = await readIndex(dir)
+    const conversations = index.conversations
     for (const [conv, runId] of lastRunByConversation) conversations[conv] = runId
+    const merged: Record<string, ChainEntry[]> = index.chains
+    for (const [conv, chain] of chains) {
+      const own = Object.prototype.hasOwnProperty.call(merged, conv) ? merged[conv] : []
+      const next = mergeChains(own, chain)
+      merged[conv] = next
+      chains.set(conv, next)
+      for (const e of next) runConversation.set(e.runId, conv)
+    }
+    // Bound the index: the most recently run conversations' chains, up to the cap.
+    const byRecency = Object.entries(merged)
+      .filter(([, chain]) => chain.length > 0)
+      .sort((a, b) => (b[1].at(-1)?.at ?? 0) - (a[1].at(-1)?.at ?? 0))
+    const kept: [string, ChainEntry[]][] = []
+    let total = 0
+    for (const entry of byRecency) {
+      if (kept.length > 0 && total + entry[1].length > MAX_INDEX_ENTRIES) break
+      kept.push(entry)
+      total += entry[1].length
+    }
     await writeJsonAtomic(join(dir, 'index.json'), {
-      version: CHECKPOINT_SCHEMA_VERSION,
-      conversations
+      version: INDEX_SCHEMA_VERSION,
+      conversations,
+      chains: Object.fromEntries(kept)
     })
   })
 }
@@ -277,7 +600,7 @@ function schedulePrune(): Promise<void> {
       return
     }
     const runFiles = entries.filter((f) => f.endsWith('.json') && f !== 'index.json')
-    if (runFiles.length <= MAX_CHECKPOINTS) return
+    if (runFiles.length <= MAX_DISK_CHECKPOINTS) return
     const stats: { f: string; mtime: number }[] = []
     for (const f of runFiles) {
       try {
@@ -287,7 +610,7 @@ function schedulePrune(): Promise<void> {
       }
     }
     stats.sort((a, b) => a.mtime - b.mtime)
-    for (const s of stats.slice(0, Math.max(0, stats.length - MAX_CHECKPOINTS))) {
+    for (const s of stats.slice(0, Math.max(0, stats.length - MAX_DISK_CHECKPOINTS))) {
       await fs.rm(join(dir, s.f), { force: true })
     }
   })
@@ -336,7 +659,11 @@ async function loadRunIntoMemory(runId: string): Promise<Checkpoint | null> {
       ...(entry.beforeEncoding === 'base64' ? { beforeBinary: true } : {}),
       after: entry.after,
       ...(entry.afterEncoding === 'base64' ? { afterBinary: true } : {}),
-      afterCaptured: entry.afterCaptured === true
+      afterCaptured: entry.afterCaptured === true,
+      // A file written before per-file tracking follows its run's flag.
+      ...(entry.reverted === true || (entry.reverted === undefined && parsed.reverted === true)
+        ? { reverted: true }
+        : {})
     })
   }
   const cp: Checkpoint = { roots: parsed.roots, files, reverted: parsed.reverted === true }
@@ -366,7 +693,7 @@ async function runIdFromDiskIndex(conversationId: string): Promise<string | null
  */
 export async function conversationForLatestRun(runId: string): Promise<string | null> {
   for (const [conversationId, r] of lastRunByConversation) {
-    if (r === runId) return conversationId
+    if (r === runId) return latestIsDetached(conversationId, runId) ? null : conversationId
   }
   const dir = checkpointsDirOrNull()
   if (!dir || !RUN_ID_RE.test(runId)) return null
@@ -376,10 +703,19 @@ export async function conversationForLatestRun(runId: string): Promise<string | 
     // newer run for the conversation (its index write may still be queued), the
     // queried run is superseded, not latest.
     if (r === runId && (lastRunByConversation.get(conversationId) ?? runId) === runId) {
-      return conversationId
+      return latestIsDetached(conversationId, runId) ? null : conversationId
     }
   }
   return null
+}
+
+/**
+ * Whether a rewind cut the latest run's turn from the chat. Its single-turn
+ * revert/redo is then withdrawn: redoing it would bring back code for a turn the
+ * chat no longer has.
+ */
+function latestIsDetached(conversationId: string, runId: string): boolean {
+  return chainFor(conversationId).find((e) => e.runId === runId)?.detached === true
 }
 
 // ---- Recording ----
@@ -456,6 +792,13 @@ async function openCheckpoint(runId: string, roots: string[]): Promise<{ cp: Che
     evictForNewCheckpoint()
     const created: Checkpoint = { roots, files: new Map(), reverted: false }
     checkpoints.set(runId, created)
+    // Flag the chain entry, so a rewind can tell "changed nothing" from "pruned".
+    const conv = runConversation.get(runId)
+    const entry = conv ? chains.get(conv)?.find((e) => e.runId === runId) : undefined
+    if (entry && !entry.files) {
+      entry.files = true
+      void scheduleWriteIndex()
+    }
     return created
   })()
   opening.set(runId, load)
@@ -549,6 +892,7 @@ export async function getConversationCheckpoint(
     // Cache the mapping so a later restore/reapply round-trip stays consistent.
     lastRunByConversation.set(conversationId, runId)
   }
+  if (latestIsDetached(conversationId, runId)) return null
   const cp = checkpoints.get(runId) ?? (await loadRunIntoMemory(runId))
   if (!cp || cp.files.size === 0) return null
   return { runId, files: cp.files.size, reverted: cp.reverted }
@@ -571,6 +915,7 @@ export async function restoreCheckpoint(runId: string): Promise<number> {
     if (!resolveOrNull(cp.roots, abs)) continue
     try {
       await applyState(abs, snap.before, snap.beforeBinary)
+      snap.reverted = true
       restored++
     } catch {
       // Best effort — keep going with the rest.
@@ -597,6 +942,7 @@ export async function reapplyCheckpoint(runId: string): Promise<number> {
     if (!resolveOrNull(cp.roots, abs)) continue
     try {
       await applyState(abs, snap.after, snap.afterBinary)
+      snap.reverted = false
       reapplied++
     } catch {
       // Best effort — keep going with the rest.
@@ -607,10 +953,186 @@ export async function reapplyCheckpoint(runId: string): Promise<number> {
   return reapplied
 }
 
+// ---- Rewind: guarded multi-turn revert and its undo ----
+
+/** A file's content as {@link readCapped} reads it, for comparing against a snapshot. */
+interface FileState {
+  content: string | null
+  binary: boolean
+}
+
+function sameState(cur: FileState, content: string | null, binary: boolean | undefined): boolean {
+  if (cur.content === null || content === null) return cur.content === content
+  return cur.content === content && cur.binary === (binary === true)
+}
+
+/** A path for the user to read: relative to the run's first root when inside it. */
+function displayPath(roots: string[], abs: string): string {
+  const rel = relative(roots[0] ?? '', abs)
+  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : abs
+}
+
+/**
+ * The file's current state, or null when the guard can't vouch for it: it escapes
+ * the run's roots now (a symlink planted on a parent since the snapshot), its last
+ * component is a symlink (the agent's write tools never leave one, so something else
+ * put it there), or it's too large to compare.
+ */
+async function currentState(roots: string[], abs: string): Promise<FileState | null> {
+  if (!resolveOrNull(roots, abs)) return null
+  try {
+    if ((await fs.lstat(abs)).isSymbolicLink()) return null
+  } catch {
+    // absent: readCapped reports it as null content
+  }
+  const { content, binary, capped } = await readCapped(abs)
+  return capped ? null : { content, binary }
+}
+
+/** The files one run's rewind put back, so undoing the rewind re-applies exactly those. */
+export interface RevertedRun {
+  runId: string
+  files: string[]
+}
+
+export interface GuardedRevertResult {
+  /** Distinct files written back to their pre-turn content. */
+  restored: number
+  /** Files left alone because they changed outside the agent (display paths). */
+  conflicts: string[]
+  /** Runs that changed files but whose snapshots are gone (pruned). */
+  unavailable: number
+  /** Per run, newest first: the files written back (what an undo re-applies). */
+  runs: RevertedRun[]
+}
+
+/**
+ * Put back the file changes of `entries` (a chain slice, oldest first) newest run
+ * first, so each file walks back through every turn that touched it.
+ *
+ * Guarded like the stale-write check the write tools use: a file is restored only
+ * when it still holds what the agent last wrote to it (or already holds what it was
+ * before). Anything else changed outside the agent since, by the user, a formatter,
+ * or a shell command, and is reported as a conflict and left alone rather than
+ * clobbered. Containment is re-validated against the run's roots at apply time and a
+ * symlinked file is refused, as in {@link restoreCheckpoint}.
+ *
+ * A run already reverted (the single-turn Revert, or an earlier code rewind) is
+ * skipped. With `dryRun`, nothing is written: the walk runs over an in-memory
+ * overlay of the files, so the preview's counts match what the real rewind does.
+ */
+export async function revertRunsGuarded(
+  entries: ChainEntry[],
+  opts: { dryRun?: boolean } = {}
+): Promise<GuardedRevertResult> {
+  const overlay = new Map<string, FileState>()
+  const restored = new Set<string>()
+  const conflicts = new Set<string>()
+  const runs: RevertedRun[] = []
+  let unavailable = 0
+  for (const entry of [...entries].reverse()) {
+    const cp = checkpoints.get(entry.runId) ?? (await loadRunIntoMemory(entry.runId))
+    if (!cp) {
+      if (entry.files) unavailable++
+      continue
+    }
+    if (cp.reverted) continue
+    const files: string[] = []
+    let changed = false
+    for (const [abs, snap] of cp.files) {
+      // Put back by an earlier revert or rewind already.
+      if (snap.reverted) continue
+      const cur = overlay.get(abs) ?? (await currentState(cp.roots, abs))
+      const target: FileState = { content: snap.before, binary: snap.beforeBinary === true }
+      // Already at its pre-turn content (put back by hand, or by a later turn's
+      // revert): nothing to write, nothing to count, nothing for an undo to redo.
+      if (cur && sameState(cur, snap.before, snap.beforeBinary)) {
+        if (!opts.dryRun) {
+          snap.reverted = true
+          changed = true
+        }
+        continue
+      }
+      if (!cur || !snap.afterCaptured || !sameState(cur, snap.after, snap.afterBinary)) {
+        conflicts.add(displayPath(cp.roots, abs))
+        continue
+      }
+      if (!opts.dryRun) {
+        try {
+          await applyState(abs, snap.before, snap.beforeBinary, { noFollow: true })
+        } catch {
+          conflicts.add(displayPath(cp.roots, abs))
+          continue
+        }
+        snap.reverted = true
+        changed = true
+      }
+      overlay.set(abs, target)
+      files.push(abs)
+      restored.add(abs)
+    }
+    runs.push({ runId: entry.runId, files })
+    if (!opts.dryRun && changed) {
+      // The run counts as reverted only once every file is back. One with a file
+      // left alone stays open, so a later rewind (once the user has sorted that file
+      // out) still reaches it, and the latest-turn bar doesn't claim a revert that
+      // didn't happen.
+      cp.reverted = [...cp.files.values()].every((f) => f.reverted)
+      await schedulePersistRun(entry.runId)
+    }
+  }
+  return { restored: restored.size, conflicts: [...conflicts], unavailable, runs }
+}
+
+/**
+ * Undo a rewind's code half: re-apply what each run wrote, oldest run first, for the
+ * files that rewind put back. Same guard in the other direction: a file is written
+ * only while it still holds its pre-turn content.
+ */
+export async function reapplyRunsGuarded(
+  runs: RevertedRun[]
+): Promise<{ reapplied: number; conflicts: string[] }> {
+  const reapplied = new Set<string>()
+  const conflicts = new Set<string>()
+  for (const run of [...runs].reverse()) {
+    if (!RUN_ID_RE.test(run.runId)) continue
+    const cp = checkpoints.get(run.runId) ?? (await loadRunIntoMemory(run.runId))
+    if (!cp) continue
+    for (const abs of run.files) {
+      // Only paths the checkpoint itself holds (validated on load): the list comes
+      // from the conversation file, so it never names a path on its own authority.
+      const snap = cp.files.get(abs)
+      if (!snap || !snap.afterCaptured) continue
+      const cur = await currentState(cp.roots, abs)
+      if (cur && sameState(cur, snap.after, snap.afterBinary)) {
+        snap.reverted = false
+        reapplied.add(abs)
+        continue
+      }
+      if (!cur || !sameState(cur, snap.before, snap.beforeBinary)) {
+        conflicts.add(displayPath(cp.roots, abs))
+        continue
+      }
+      try {
+        await applyState(abs, snap.after, snap.afterBinary, { noFollow: true })
+        snap.reverted = false
+        reapplied.add(abs)
+      } catch {
+        conflicts.add(displayPath(cp.roots, abs))
+      }
+    }
+    cp.reverted = [...cp.files.values()].every((f) => f.reverted)
+    await schedulePersistRun(run.runId)
+  }
+  return { reapplied: reapplied.size, conflicts: [...conflicts] }
+}
+
 /** Drop all in-memory checkpoints (e.g. on app shutdown). The on-disk copies remain. */
 export function clearCheckpoints(): void {
   checkpoints.clear()
   lastRunByConversation.clear()
+  chains.clear()
+  runConversation.clear()
   dirtyRuns.clear()
   indexDirty = false
 }

@@ -78,7 +78,7 @@ import { useInputQueue } from './hooks/useInputQueue'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
 import type { ShipAction } from '@shared/shipAction'
 import { saveComposerDraft } from './lib/composerDraft'
-import { itemsFromMessages, lastUserText } from './lib/items'
+import { itemsFromMessages, lastUserText, rewindTargets, showsHandoff, type RewindItemTarget } from './lib/items'
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
 import { activeTaskCount } from './components/BackgroundTasks'
@@ -86,7 +86,10 @@ import { TasksPanel } from './components/TasksPanel'
 import type { DockTab } from './components/PreviewDock'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
-import { Transcript } from './components/Transcript'
+import { Transcript, type RewindHandlers } from './components/Transcript'
+import { RewindDialog } from './components/RewindDialog'
+import { RewindPicker } from './components/RewindPicker'
+import { rewindDoneText, rewindsConversation, type RewindMode, type RewindOutcome } from '@shared/rewind'
 import { PlanPanel } from './components/PlanPanel'
 import { SideChatPanel } from './components/SideChatPanel'
 import type { ProposalHandlers } from './components/ProposalCard'
@@ -197,6 +200,22 @@ export default function App(): JSX.Element {
   const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
   const [scorecardOpen, setScorecardOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
+  // Rewind (see components/RewindDialog): the Esc Esc picker, the confirmation for a
+  // chosen message, an edit-and-resend in progress, the text to put in the composer,
+  // and whether the open chat's last rewind can still be undone.
+  const [rewindPickerOpen, setRewindPickerOpen] = useState(false)
+  const [rewindConfirm, setRewindConfirm] = useState<{ target: RewindItemTarget; mode: RewindMode } | null>(
+    null
+  )
+  const [editing, setEditing] = useState<{ target: RewindItemTarget; mode: 'both' | 'conversation' } | null>(
+    null
+  )
+  // Tagged with its chat: the Composer remounts per chat and applies a prefill on
+  // mount, so one meant for another chat must never reach it.
+  const [composerPrefill, setComposerPrefill] = useState<
+    { text: string; images?: ImageAttachment[]; seq: number; conversationId: string | null } | undefined
+  >()
+  const [canUndoRewind, setCanUndoRewind] = useState(false)
   // The full-size image viewer (a show_images gallery or a tool-card screenshot).
   const [viewer, setViewer] = useState<{ images: ViewerImage[]; index: number } | null>(null)
   // Inline visuals in replies: running interactive HTML is the user's opt-in.
@@ -631,7 +650,7 @@ export default function App(): JSX.Element {
       // child's log starts with the parent's copied history, so the banner goes
       // after that, right above the hand-off itself.
       const forked = conv.spawnedFrom?.historyLength ?? 0
-      const items = conv.spawnedFrom
+      const items = conv.spawnedFrom && showsHandoff(forked, conv.messages.length)
         ? [
             ...itemsFromMessages(conv.messages.slice(0, forked)),
             {
@@ -1310,14 +1329,151 @@ export default function App(): JSX.Element {
   )
 
   // A message the user wrote in the composer.
+  // ---- Rewind ----
+
+  const prefillComposer = useCallback(
+    (text: string, images?: ImageAttachment[]) => {
+      setComposerPrefill((prev) => ({
+        text,
+        ...(images?.length ? { images } : {}),
+        seq: (prev?.seq ?? 0) + 1,
+        conversationId: currentId
+      }))
+    },
+    [currentId]
+  )
+
+  // Rewind the open chat to just before `target`, then reload it (transcript, usage,
+  // the latest turn's revert) from what main stored. Null when refused or failed;
+  // the reason is shown in the transcript.
+  const performRewind = useCallback(
+    async (target: RewindItemTarget, mode: RewindMode): Promise<RewindOutcome | null> => {
+      if (!currentId) return null
+      let res
+      try {
+        res = await window.api.rewind(currentId, target.turn, mode, target.text)
+      } catch {
+        res = { ok: false as const, error: "Couldn't rewind this conversation." }
+      }
+      if (!res.ok) {
+        chat.notify(res.error, 'error')
+        return null
+      }
+      await selectConversation(currentId)
+      chat.notify(rewindDoneText(mode, res), res.conflicts.length > 0 ? 'error' : 'info')
+      setCanUndoRewind(res.undoable)
+      return res
+    },
+    [currentId, chat, selectConversation]
+  )
+
+  const onConfirmRewind = useCallback(
+    async (mode: RewindMode) => {
+      const pending = rewindConfirm
+      setRewindConfirm(null)
+      if (!pending) return
+      const done = await performRewind(pending.target, mode)
+      // The message left the chat: put it back in the composer to send again or change.
+      if (done && rewindsConversation(mode)) prefillComposer(done.text)
+    },
+    [rewindConfirm, performRewind, prefillComposer]
+  )
+
+  const onEditMessage = useCallback(
+    (target: RewindItemTarget) => {
+      setRewindConfirm(null)
+      setRewindPickerOpen(false)
+      setEditing({ target, mode: 'both' })
+      prefillComposer(target.text, target.images)
+    },
+    [prefillComposer]
+  )
+
+  const onUndoRewind = useCallback(async () => {
+    if (!currentId) return
+    const res = await window.api.undoRewind(currentId)
+    setCanUndoRewind(false)
+    if (!res.ok) {
+      chat.notify(res.error, 'error')
+      return
+    }
+    await selectConversation(currentId)
+    const left = res.conflicts.length
+      ? ` Left ${res.conflicts.length} file${res.conflicts.length === 1 ? '' : 's'} that changed since: ${res.conflicts.slice(0, 5).join(', ')}.`
+      : ''
+    chat.notify(
+      `Undid the rewind${res.reapplied ? ` and put back ${res.reapplied} file${res.reapplied === 1 ? '' : 's'}` : ''}.${left}`,
+      left ? 'error' : 'info'
+    )
+  }, [currentId, chat, selectConversation])
+
+  const rewindHandlers = useMemo<RewindHandlers | undefined>(
+    () =>
+      currentId
+        ? {
+            disabled: chat.running,
+            onRewind: (target, mode) => setRewindConfirm({ target, mode }),
+            onEdit: onEditMessage
+          }
+        : undefined,
+    [currentId, chat.running, onEditMessage]
+  )
+
+  // A different chat: whatever rewind UI was up belongs to the old one.
+  useEffect(() => {
+    setEditing(null)
+    setRewindConfirm(null)
+    setRewindPickerOpen(false)
+    setCanUndoRewind(false)
+    setComposerPrefill(undefined)
+    if (!currentId) return
+    let live = true
+    void window.api
+      .canUndoRewind(currentId)
+      .then((ok) => live && setCanUndoRewind(ok))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [currentId])
+
+  // A new turn moves the chat on from a rewind: main drops the undo then too.
+  useEffect(() => {
+    if (chat.running) setCanUndoRewind(false)
+  }, [chat.running])
+
+  // Edit and resend: a message sent while editing first rewinds to the edited one.
+  // If the rewind is refused, the text goes back in the field and nothing is sent.
+  const sendAfterEdit = useCallback(
+    async (text: string, images: ImageAttachment[] | undefined, send: () => void) => {
+      const pending = editing
+      if (!pending) return send()
+      setEditing(null)
+      const done = await performRewind(pending.target, pending.mode)
+      if (!done) {
+        prefillComposer(text, images)
+        return
+      }
+      send()
+    },
+    [editing, performRewind, prefillComposer]
+  )
+
   const onSend = useCallback(
-    (text: string, images?: ImageAttachment[]) => dispatch(text, images),
-    [dispatch]
+    (text: string, images?: ImageAttachment[]) =>
+      void sendAfterEdit(text, images, () => dispatch(text, images)),
+    [dispatch, sendAfterEdit]
   )
 
   // A prompt Houston wrote on the user's behalf (see @shared/promptInvocation): the
   // transcript shows what they did, not the instructions it expanded to.
-  const onInvoke = useCallback((turn: InvokedTurn) => dispatch(turn.text, undefined, turn.invokedAs), [dispatch])
+  const onInvoke = useCallback(
+    (turn: InvokedTurn) =>
+      void sendAfterEdit(turn.invokedAs.typed ?? turn.text, undefined, () =>
+        dispatch(turn.text, undefined, turn.invokedAs)
+      ),
+    [dispatch, sendAfterEdit]
+  )
 
   // Save a `#`-captured standing instruction to the workspace's (or every project's)
   // rules file — the files Houston already loads each run — and say where it landed.
@@ -1487,6 +1643,10 @@ export default function App(): JSX.Element {
         if (turn) onInvoke(turn)
         else chat.notify('Usage: /agent <name> <task>. The name matches a file in .houston/agents', 'error')
       } else if (cmd.name === 'doctor') setDoctorOpen(true)
+      else if (cmd.name === 'rewind') {
+        if (currentId) setRewindPickerOpen(true)
+        else chat.notify('Nothing to rewind yet: send a message first.')
+      }
       else if (cmd.name === 'help') {
         chat.notify(
           'Commands: ' + BUILTIN_COMMANDS.map((c) => `/${c.name}`).join('  ') +
@@ -1498,7 +1658,7 @@ export default function App(): JSX.Element {
         chat.notify(`Approval mode: ${POLICY_LABEL[policy]}`)
       }
     },
-    [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, commands]
+    [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, commands, currentId]
   )
 
   // ---- Keyboard shortcuts, command palette, mode cycling ----
@@ -1749,7 +1909,8 @@ export default function App(): JSX.Element {
     palette: paletteOpen,
     find: findOpen,
     connect: connectOpen,
-    whatsNew: whatsNew !== null
+    whatsNew: whatsNew !== null,
+    rewind: rewindPickerOpen || rewindConfirm !== null
   }
   const overlaysRef = useRef(overlays)
   overlaysRef.current = overlays
@@ -2086,6 +2247,7 @@ export default function App(): JSX.Element {
             onRunInTerminal={(command) => void runInTerminal(command)}
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
+            rewind={rewindHandlers}
           />
         )}
 
@@ -2135,6 +2297,15 @@ export default function App(): JSX.Element {
                 ↶ Revert
               </button>
             )}
+          </div>
+        )}
+
+        {canUndoRewind && !chat.running && currentId && (
+          <div className="checkpoint-bar">
+            <span className="checkpoint-bar__label">Rewound to an earlier message.</span>
+            <button className="btn btn--sm" onClick={() => void onUndoRewind()}>
+              ↶ Undo rewind
+            </button>
           </div>
         )}
 
@@ -2232,6 +2403,11 @@ export default function App(): JSX.Element {
             onSteer={onSteer}
             onSaveMemory={onSaveMemory}
             onCancel={chat.cancel}
+            editing={editing ? { label: editing.target.label, mode: editing.mode } : undefined}
+            onEditModeChange={(mode) => setEditing((prev) => (prev ? { ...prev, mode } : prev))}
+            onCancelEdit={() => setEditing(null)}
+            prefill={composerPrefill?.conversationId === currentId ? composerPrefill : undefined}
+            onRewindPicker={currentId ? () => setRewindPickerOpen(true) : undefined}
           />
         </div>
 
@@ -2342,6 +2518,28 @@ export default function App(): JSX.Element {
         {whatsNew && <WhatsNewModal info={whatsNew} onClose={() => setWhatsNew(null)} />}
 
         {helpOpen && <ShortcutsHelp shortcuts={shortcuts} onClose={() => setHelpOpen(false)} />}
+
+        {rewindPickerOpen && (
+          <RewindPicker
+            targets={rewindTargets(chat.items)}
+            onClose={() => setRewindPickerOpen(false)}
+            onPick={(target) => {
+              setRewindPickerOpen(false)
+              setRewindConfirm({ target, mode: 'both' })
+            }}
+          />
+        )}
+
+        {rewindConfirm && currentId && (
+          <RewindDialog
+            conversationId={currentId}
+            target={rewindConfirm.target}
+            initialMode={rewindConfirm.mode}
+            onCancel={() => setRewindConfirm(null)}
+            onConfirm={(mode) => void onConfirmRewind(mode)}
+            onEdit={() => onEditMessage(rewindConfirm.target)}
+          />
+        )}
 
         {paletteOpen && (
           <CommandPalette

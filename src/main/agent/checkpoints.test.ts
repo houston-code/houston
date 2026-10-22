@@ -594,19 +594,19 @@ describe('checkpoints', () => {
     })
 
     it('prunes the oldest run files beyond the cap', async () => {
-      // MAX_CHECKPOINTS is 50; record 51 runs, each snapshotting the same one file
+      // MAX_DISK_CHECKPOINTS is 200; record 201 runs, each snapshotting the same one file
       // (see the in-memory eviction test: the per-run checkpoint files are the disk
       // writes under test here, a fresh workspace file per run is not).
       writeFileSync(join(ws, 'f.txt'), 'x')
-      for (let i = 0; i < 51; i++) {
+      for (let i = 0; i < 201; i++) {
         await recordOriginal(`run-${i}`, [ws], 'f.txt')
       }
       await flushCheckpoints()
       const files = readdirSync(join(dataDir, 'checkpoints')).filter(
         (f) => f.endsWith('.json') && f !== 'index.json'
       )
-      expect(files).toHaveLength(50)
-      expect(files).toContain('run-50.json')
+      expect(files).toHaveLength(200)
+      expect(files).toContain('run-200.json')
     })
 
     it('conversationForLatestRun answers from the disk index after a restart', async () => {

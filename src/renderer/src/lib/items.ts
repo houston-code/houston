@@ -16,6 +16,7 @@ import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocat
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
 import { planOutcome } from '@shared/promptOutcome'
 import { upsertFinding } from '@shared/reviewFindings'
+import { turnLabel, turnText } from '@shared/rewind'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
 
@@ -196,6 +197,53 @@ export function lastUserText(items: DisplayItem[]): string | undefined {
     return it.text
   }
   return undefined
+}
+
+/** One of the user's messages as a rewind point (see RewindDialog), keyed to its bubble. */
+export interface RewindItemTarget {
+  /** The transcript item it belongs to. */
+  id: string
+  turn: number
+  text: string
+  label: string
+  /** The message's attachments, so edit and resend sends them again. */
+  images?: ImageAttachment[]
+}
+
+/**
+ * The user's messages the transcript can rewind to, oldest first, numbered the way
+ * main numbers the stored log (`rewindableTurnIndices`): every user bubble except the
+ * compaction summary and a steered correction. Automated notes are notices here, so
+ * they never count.
+ */
+export function rewindTargets(items: DisplayItem[]): RewindItemTarget[] {
+  const out: RewindItemTarget[] = []
+  for (const it of items) {
+    if (it.kind !== 'user' || it.isSummary || it.steered) continue
+    const m: ChatMessage = {
+      role: 'user',
+      content: it.text,
+      ...(it.images ? { images: it.images } : {}),
+      ...(it.invokedAs ? { invokedAs: it.invokedAs } : {})
+    }
+    out.push({
+      id: it.id,
+      turn: out.length,
+      text: turnText(m),
+      label: turnLabel(m),
+      ...(it.images?.length ? { images: it.images } : {})
+    })
+  }
+  return out
+}
+
+/**
+ * Whether a spawned chat still holds its hand-off message (at `historyLength`, after
+ * any history copied from the parent), so the "Handoff from" banner has something to
+ * sit above. A rewind to before it removes the hand-off, and the banner with it.
+ */
+export function showsHandoff(historyLength: number, messageCount: number): boolean {
+  return historyLength < messageCount
 }
 
 /** Parse a tool call's `options` argument into display options (string[] or {label,…}[]). */

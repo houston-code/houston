@@ -250,12 +250,6 @@ it's deferred and roughly *what* it would take, so nothing is silently dropped.
   `.gitignore` files, negations, etc.). Low marginal value given the existing
   dir/dotfile skips.
 
-- **Edit & resend a message.** Edit an earlier user message and re-run from that
-  point (truncating the later turns). *Why deferred:* needs conversation-history
-  rewind + a branching/transcript-truncation model: a real feature, not a tweak.
-  (Retry-the-last-failed-turn and Esc Esc to bring your last message back into the
-  composer already ship, and **Fork** branches a whole chat; see the README.)
-
 - **Custom-command status line.** A status line whose content comes from a
   user-configured shell command, beyond the built-in
   live-activity status bar.

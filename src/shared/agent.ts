@@ -561,6 +561,29 @@ export interface Conversation extends ConversationMeta {
    * context. Never part of `messages`: the main chat's model never sees it.
    */
   sideChat?: StoredSideChat
+  /**
+   * What the latest rewind replaced, so it can be undone until the chat moves on
+   * (see main/agent/rewind.ts). Kept in the conversation file so the attachments of
+   * the removed messages stay referenced, and never sent to a provider.
+   */
+  rewindBackup?: RewindBackup
+}
+
+/** See {@link Conversation.rewindBackup}. */
+export interface RewindBackup {
+  /** Which halves the rewind touched: 'conversation', 'code', or 'both'. */
+  mode: 'conversation' | 'code' | 'both'
+  at: number
+  /** The log before the rewind; absent when only code was rewound. */
+  messages?: ChatMessage[]
+  compaction?: ConversationCompaction
+  lastError?: ConversationError
+  /** Length of the log right after the rewind. Once it differs, undo is no longer offered. */
+  afterLength: number
+  /** Runs whose files the rewind put back, newest first, with the files it put back. */
+  code: { runId: string; files: string[] }[]
+  /** Runs whose turns the rewind cut from the chat. */
+  detached: string[]
 }
 
 /** One side-chat exchange. `error` instead of `answer` when it failed or was stopped. */

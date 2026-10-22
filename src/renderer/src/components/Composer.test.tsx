@@ -333,6 +333,82 @@ describe('Composer edit-last-message (Esc Esc)', () => {
   })
 })
 
+describe('Composer rewind (Esc Esc picker, edit and resend)', () => {
+  it('opens the rewind picker on double-Esc in an empty field, instead of recalling', () => {
+    const onRewindPicker = vi.fn()
+    render(<Composer {...baseProps({ lastUserMessage: 'earlier', onRewindPicker })} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(onRewindPicker).not.toHaveBeenCalled()
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(onRewindPicker).toHaveBeenCalledTimes(1)
+    expect(input.value).toBe('')
+  })
+
+  it('never opens the picker while a turn runs (Esc stops it there)', () => {
+    const onRewindPicker = vi.fn()
+    render(<Composer {...baseProps({ running: true, onRewindPicker })} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(onRewindPicker).not.toHaveBeenCalled()
+  })
+
+  it('leaves a draft alone on double-Esc', () => {
+    const onRewindPicker = vi.fn()
+    render(<Composer {...baseProps({ onRewindPicker })} />)
+    const input = type('typing')
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(onRewindPicker).not.toHaveBeenCalled()
+    expect(input.value).toBe('typing')
+  })
+
+  it('puts a prefilled message in the field, again for each new seq', () => {
+    const { rerender } = render(<Composer {...baseProps({ prefill: { text: 'edit me', seq: 1 } })} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(input.value).toBe('edit me')
+    fireEvent.change(input, { target: { value: 'changed' } })
+    rerender(<Composer {...baseProps({ prefill: { text: 'edit me', seq: 1 } })} />)
+    expect(input.value).toBe('changed')
+    rerender(<Composer {...baseProps({ prefill: { text: 'edit me', seq: 2 } })} />)
+    expect(input.value).toBe('edit me')
+  })
+
+  it('puts an edited message\'s images back with its text (vision models only)', () => {
+    const img = { mediaType: 'image/png', data: 'AA==' }
+    render(<Composer {...baseProps({ prefill: { text: 'see this', images: [img], seq: 1 } })} />)
+    expect(screen.getAllByAltText('attachment')).toHaveLength(1)
+  })
+
+  it('drops prefilled images for a model that can\'t see them', () => {
+    const img = { mediaType: 'image/png', data: 'AA==' }
+    render(<Composer {...baseProps({ vision: false, prefill: { text: 'see this', images: [img], seq: 1 } })} />)
+    expect(screen.queryByAltText('attachment')).toBeNull()
+  })
+
+  it('shows the editing bar with a mode choice and a cancel', () => {
+    const onEditModeChange = vi.fn()
+    const onCancelEdit = vi.fn()
+    render(
+      <Composer
+        {...baseProps({
+          editing: { label: 'fix the bug', mode: 'both' },
+          onEditModeChange,
+          onCancelEdit
+        })}
+      />
+    )
+    const bar = screen.getByRole('group', { name: 'Editing an earlier message' })
+    expect(bar.textContent).toContain('fix the bug')
+    expect(bar.textContent).not.toContain('\u2014')
+    fireEvent.change(within(bar).getByRole('combobox'), { target: { value: 'conversation' } })
+    expect(onEditModeChange).toHaveBeenCalledWith('conversation')
+    fireEvent.click(within(bar).getByRole('button', { name: 'Cancel edit' }))
+    expect(onCancelEdit).toHaveBeenCalled()
+  })
+})
+
 describe('Composer draft persistence', () => {
   it('restores a conversation’s unsent draft after a restart (unmount + remount)', () => {
     const { unmount } = render(<Composer {...baseProps({ conversationId: 'c1' })} />)

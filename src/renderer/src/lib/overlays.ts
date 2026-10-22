@@ -21,11 +21,23 @@ export interface OverlayFlags {
   connect: boolean
   /** The post-update "What's new" card (bottom-right, non-modal). */
   whatsNew: boolean
+  /** The rewind picker or its confirmation. */
+  rewind: boolean
 }
 
 /** A full-window modal or side drawer is open over the chat (each has a backdrop). */
 export function modalOpen(f: OverlayFlags): boolean {
-  return f.settings || f.doctor || f.changes || f.files || f.scorecard || f.help || f.viewer || f.palette
+  return (
+    f.settings ||
+    f.doctor ||
+    f.changes ||
+    f.files ||
+    f.scorecard ||
+    f.help ||
+    f.viewer ||
+    f.palette ||
+    f.rewind
+  )
 }
 
 /**

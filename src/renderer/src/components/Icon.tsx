@@ -44,8 +44,16 @@ export type IconName =
   | 'warning'
   | 'settings'
   | 'refresh'
+  | 'rewind'
 
 const PATHS: Record<IconName, ReactNode> = {
+  // Counter-clockwise arrow: going back to an earlier point.
+  rewind: (
+    <>
+      <path d="M3.2 7.6a5 5 0 1 1 1.5 4.1" />
+      <path d="M2.6 4.4v3.4H6" />
+    </>
+  ),
   // Funnel.
   filter: <path d="M2.5 4h11L9.5 8.6v4.1l-3 1.3V8.6z" />,
   // Storage box with a down arrow — putting a chat away.

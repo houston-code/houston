@@ -383,6 +383,14 @@ Open source under the [Apache License 2.0](LICENSE).
   after the agent writes it, so when a turn edits files a **Revert** button appears:
   one click restores everything that turn changed (and deletes files it created).
   Changed your mind? **Redo** puts the changes back.
+- **Rewind to any earlier message.** Hover one of your messages and pick **Rewind**
+  to go back to just before it: the conversation only, the code only, or both. The
+  confirmation says how many messages and files it affects, files you changed since
+  the agent wrote them are left alone, and **Undo rewind** reverses it until you send
+  again. **Edit and resend** rewinds to a message and sends your edited version in
+  its place. Esc Esc in an empty composer (or `/rewind`, also in the terminal app)
+  picks the message from a list. Shell commands' side effects aren't snapshotted, so
+  a rewind can't undo them.
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right
   now (Ready, Responding…, running a tool, or waiting for your approval, answer, or
   plan review) and the active model.
@@ -397,7 +405,7 @@ Open source under the [Apache License 2.0](LICENSE).
   folder, also in the File menu with recent folders), ⌘1–9 / ⌃Tab to switch
   chats, Shift+Tab to cycle approval mode, ⌘F find-in-conversation, ⌘⇧M to switch
   model, ⌃` to toggle the terminal, ⌘, for Settings, ↑/↓ to recall earlier prompts,
-  Esc Esc to edit your last message, and Esc to stop a running turn (Ctrl replaces ⌘
+  Esc Esc to rewind to an earlier message, and Esc to stop a running turn (Ctrl replaces ⌘
   on Windows and Linux). Press ⌘/ (or ?) for the full list; rebind any of them
   under Settings → Keyboard.
 - **Accessible.** The Settings dialog is a proper focus-trapped `dialog` (focus

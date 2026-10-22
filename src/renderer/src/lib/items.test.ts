@@ -9,6 +9,8 @@ import {
 import {
   itemsFromMessages,
   lastUserText,
+  rewindTargets,
+  showsHandoff,
   systemNoteSummary,
   reduceEvent,
   type DisplayItem,
@@ -18,6 +20,7 @@ import {
   type ToolItem,
   type UserItem
 } from './items'
+import { rewindableTurnIndices } from '@shared/rewind'
 import { describeTool } from './toolDisplay'
 
 describe('itemsFromMessages', () => {
@@ -988,3 +991,49 @@ describe('steered messages after a reload', () => {
   })
 })
 
+
+describe('rewindTargets', () => {
+  it('numbers the bubbles built from a log exactly as main numbers the log', () => {
+    const log: ChatMessage[] = [
+      { role: 'user', content: `${COMPACTION_SUMMARY_PREFIX} earlier` },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'a' },
+      { role: 'user', content: `${SYSTEM_NOTE_PREFIX} a nudge` },
+      { role: 'user', content: 'steer', steered: true },
+      { role: 'user', content: 'x', invokedAs: { kind: 'command', label: '/review', typed: '/review' } },
+      { role: 'assistant', content: 'b' },
+      { role: 'user', content: '', images: [{ mediaType: 'image/png', data: 'AA==' }] }
+    ]
+    const targets = rewindTargets(itemsFromMessages(log))
+    expect(targets.map((t) => t.turn)).toEqual([0, 1, 2])
+    expect(targets.map((t) => t.text)).toEqual(['first', '/review', ''])
+    expect(targets).toHaveLength(rewindableTurnIndices(log).length)
+  })
+
+  it('counts a live steered bubble out, like the stored one', () => {
+    const items = reduceEvent(
+      [{ kind: 'user', id: 'u1', text: 'go' } as UserItem],
+      { runId: 'r', type: 'steered', text: 'also this' } as AgentEvent
+    )
+    expect(rewindTargets(items).map((t) => t.text)).toEqual(['go'])
+  })
+})
+
+describe('showsHandoff', () => {
+  it('shows the banner only while the hand-off message is still in the log', () => {
+    expect(showsHandoff(0, 1)).toBe(true)
+    expect(showsHandoff(4, 6)).toBe(true)
+    // Rewound to before the hand-off (or everything): no banner over nothing.
+    expect(showsHandoff(4, 4)).toBe(false)
+    expect(showsHandoff(0, 0)).toBe(false)
+  })
+})
+
+describe('rewindTargets images', () => {
+  it('carries a message\'s images, so edit and resend sends them again', () => {
+    const img = { mediaType: 'image/png', data: 'AA==' }
+    const [t] = rewindTargets([{ kind: 'user', id: 'u', text: 'look', images: [img] } as UserItem])
+    expect(t.images).toEqual([img])
+  })
+})

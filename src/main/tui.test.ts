@@ -97,7 +97,10 @@ import {
   type TuiDeps,
   type TuiIo,
   type TuiPersist,
-  type ResumeEntry
+  type ResumeEntry,
+  renderRewindPoints,
+  parseRewindSelection,
+  parseRewindMode
 } from './tui'
 import type { PickerOutcome, PickerSpec } from './tui-picker'
 import { COMMANDS } from './tui-complete'
@@ -4622,6 +4625,165 @@ describe('/vim', () => {
 // Houston has snapshotted every write since forever, and the desktop can roll a
 // turn back with a click. From the terminal there was no way in — so under
 // auto-edit or full-auto, "that was wrong, put it back" meant reverting by hand.
+describe('/rewind', () => {
+  const paintNo = makePainter(false)
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('parses the bare command, a number, a mode, and undo', () => {
+    const st = settings()
+    expect(parseSlashCommand('/rewind', st)).toEqual({ kind: 'rewind', undo: false })
+    expect(parseSlashCommand('/rewind 3', st)).toEqual({ kind: 'rewind', undo: false, turn: 2 })
+    expect(parseSlashCommand('/rewind 3 code', st)).toEqual({ kind: 'rewind', undo: false, turn: 2, mode: 'code' })
+    expect(parseSlashCommand('/rewind 1 2', st)).toEqual({
+      kind: 'rewind',
+      undo: false,
+      turn: 0,
+      mode: 'conversation'
+    })
+    expect(parseSlashCommand('/rewind undo', st)).toEqual({ kind: 'rewind', undo: true })
+    expect(parseSlashCommand('/rewind zero', st)).toEqual({ kind: 'rewind', undo: false })
+  })
+
+  it('numbers the user’s messages oldest first and parses a pick', () => {
+    const points = [
+      { turn: 0, messageIndex: 0, label: 'first' },
+      { turn: 1, messageIndex: 2, label: 'second' }
+    ]
+    const out = renderRewindPoints(points, paintNo)
+    expect(out).toMatch(/1\s+first[\s\S]*2\s+second/)
+    expect(renderRewindPoints([], paintNo)).toContain('nothing to rewind to yet')
+    expect(parseRewindSelection('2', 2)).toBe(1)
+    expect(parseRewindSelection('0', 2)).toBeNull()
+    expect(parseRewindSelection('3', 2)).toBeNull()
+    expect(parseRewindSelection('', 2)).toBeNull()
+    expect(parseRewindSelection('x', 2)).toBeNull()
+  })
+
+  it('parses a mode by number or name, defaulting to both', () => {
+    expect(parseRewindMode('')).toBe('both')
+    expect(parseRewindMode('1')).toBe('both')
+    expect(parseRewindMode('2')).toBe('conversation')
+    expect(parseRewindMode('3')).toBe('code')
+    expect(parseRewindMode('Code')).toBe('code')
+    expect(parseRewindMode('4')).toBeNull()
+    expect(parseRewindMode('nope')).toBeNull()
+  })
+
+  function rewindDeps() {
+    const calls: Array<[string, ...unknown[]]> = []
+    const rewind: NonNullable<TuiDeps['rewind']> = {
+      preview: async (id, turn, mode, text) => {
+        calls.push(['preview', id, turn, mode, text])
+        return { ok: true, turns: 2, files: 1, conflicts: [], unavailable: 0 }
+      },
+      apply: async (id, turn, mode, text) => {
+        calls.push(['apply', id, turn, mode, text])
+        return {
+          ok: true,
+          messages: [],
+          text,
+          restored: 1,
+          conflicts: [],
+          unavailable: 0,
+          undoable: true
+        }
+      },
+      undo: async (id) => {
+        calls.push(['undo', id])
+        return { ok: true, messages: [{ role: 'user', content: 'first' }], reapplied: 1, conflicts: [] }
+      }
+    }
+    return { rewind, calls }
+  }
+
+  it('lists the messages, asks for a mode, confirms, and rewinds the chat it continues with', async () => {
+    const { d, rec } = deps(done)
+    const fp = fakePersist()
+    d.persist = fp.persist
+    const { rewind, calls } = rewindDeps()
+    d.rewind = rewind
+    const t = fakeIo(['first', 'second', '/rewind', '1', '2', 'y', 'third', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(calls).toEqual([
+      ['preview', 'conv-1', 0, 'conversation', 'first'],
+      ['apply', 'conv-1', 0, 'conversation', 'first']
+    ])
+    const text = t.text()
+    expect(text).toContain('Rewind to just before which message?')
+    expect(text).toContain('Removes 2 messages')
+    expect(text).toContain('Rewound the conversation.')
+    expect(text).toContain('your message was: first')
+    // The next turn continues from the rewound log.
+    expect(rec.runs.at(-1)?.messages.map((m) => m.content)).toEqual(['third'])
+    // Every rewind prompt (the pick, the mode, the confirmation) drops type-ahead.
+    for (const r of t.reads.slice(3, 6)) expect(r.discardPending).toBe(true)
+  })
+
+  it('says the shell caveat before a code rewind', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    const { rewind } = rewindDeps()
+    d.rewind = rewind
+    const t = fakeIo(['first', '/rewind 1 code', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain("Changes made by shell commands aren't tracked")
+  })
+
+  it('cancels without rewinding on an empty pick or a no', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    const { rewind, calls } = rewindDeps()
+    d.rewind = rewind
+    const t = fakeIo(['first', '/rewind', '', '/rewind 1 both', 'n', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(calls.filter((c) => c[0] === 'apply')).toEqual([])
+    expect(t.text().match(/cancelled/g)).toHaveLength(2)
+  })
+
+  it('reports a refusal from main', async () => {
+    const { d } = deps(done)
+    d.persist = fakePersist().persist
+    const { rewind } = rewindDeps()
+    rewind.preview = async () => ({ ok: false, error: 'Stop the running turn before rewinding.' })
+    d.rewind = rewind
+    const t = fakeIo(['first', '/rewind 1 both', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('Stop the running turn before rewinding.')
+  })
+
+  it('/rewind undo restores the log', async () => {
+    const { d, rec } = deps(done)
+    d.persist = fakePersist().persist
+    const { rewind, calls } = rewindDeps()
+    d.rewind = rewind
+    const t = fakeIo(['first', '/rewind undo', 'next', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(calls).toEqual([['undo', 'conv-1']])
+    expect(t.text()).toContain('undid the rewind')
+    expect(rec.runs.at(-1)?.messages.map((m) => m.content)).toEqual(['first', 'next'])
+  })
+
+  it('says so before any message, or when rewind is not wired', async () => {
+    const { d } = deps(done)
+    d.rewind = rewindDeps().rewind
+    let t = fakeIo(['/rewind', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('nothing to rewind yet')
+
+    const other = deps(done).d
+    t = fakeIo(['/rewind', null])
+    other.io = t.io
+    await runTui(opts, other)
+    expect(t.text()).toContain('rewind is unavailable here')
+  })
+})
+
 describe('/undo, /redo and /changes', () => {
   const paintNo = makePainter(false)
   const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]

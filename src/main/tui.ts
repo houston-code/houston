@@ -83,6 +83,19 @@ import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
 import { workspaceLabel } from '@shared/notify'
+import {
+  REWIND_MODE_INFO,
+  rewindConfirmText,
+  rewindDoneText,
+  rewindPoints,
+  rewindsConversation,
+  turnText,
+  type RewindMode,
+  type RewindPoint,
+  type RewindPreviewResult,
+  type RewindResult,
+  type UndoRewindResult
+} from '@shared/rewind'
 import { ComposerBuffer } from './tui-composer'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
@@ -937,6 +950,37 @@ export function renderCheckpoint(cp: CheckpointInfo | null, paint: Painter): str
 }
 
 /**
+ * `/rewind`: the user's earlier messages, numbered from 1 oldest first (the number
+ * `/rewind <n>` takes), showing at most the last `max`.
+ */
+export function renderRewindPoints(points: RewindPoint[], paint: Painter, max = 20): string {
+  if (points.length === 0) return paint('· nothing to rewind to yet: send a message first', 'dim')
+  const shown = points.slice(-max)
+  const lines = [paint('Rewind to just before which message?', 'bold')]
+  if (shown.length < points.length) lines.push(paint(`  (${points.length - shown.length} older not shown)`, 'dim'))
+  for (const p of shown) lines.push(`  ${paint(String(p.turn + 1).padStart(3), 'cyan')}  ${p.label}`)
+  lines.push(paint('  enter a number, or nothing to cancel', 'dim'))
+  return lines.join('\n')
+}
+
+/** A 1-based message number from `/rewind`'s list, or null when it isn't one. */
+export function parseRewindSelection(answer: string, count: number): number | null {
+  const n = Number(answer.trim())
+  return answer.trim() !== '' && Number.isInteger(n) && n >= 1 && n <= count ? n - 1 : null
+}
+
+/** A mode from `/rewind`'s mode prompt (a number or a name), or null to cancel. */
+export function parseRewindMode(answer: string): RewindMode | null {
+  const a = answer.trim().toLowerCase()
+  if (a === '') return 'both' // the default, as the prompt says
+  const n = Number(a)
+  if (Number.isInteger(n) && n >= 1 && n <= REWIND_MODE_INFO.length) return REWIND_MODE_INFO[n - 1].mode
+  if (a === 'both' || a === 'conversation' || a === 'code') return a
+  if (a === 'chat') return 'conversation'
+  return null
+}
+
+/**
  * `/changes`: everything different in the working tree, as one summary.
  *
  * Answers the question you actually have after a long autonomous run — "what did
@@ -1238,6 +1282,11 @@ export type SlashResult =
   | { kind: 'vim'; on?: boolean }
   /** Revert (or restore) the files the last turn changed (/undo, /redo). */
   | { kind: 'undo'; redo: boolean }
+  /**
+   * Rewind to an earlier message (/rewind [n] [mode]), or undo the last rewind
+   * (/rewind undo). Without `turn` the driver lists the messages and asks.
+   */
+  | { kind: 'rewind'; undo: boolean; turn?: number; mode?: RewindMode }
   /** Summarize everything different in the working tree (/changes). */
   | { kind: 'changes' }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
@@ -1342,6 +1391,14 @@ export function parseSlashCommand(
       if (a === 'on') return { kind: 'vim', on: true }
       if (a === 'off') return { kind: 'vim', on: false }
       return { kind: 'vim' } // bare /vim toggles
+    }
+    case 'rewind': {
+      const [first, second] = arg.trim().split(/\s+/)
+      if (first?.toLowerCase() === 'undo') return { kind: 'rewind', undo: true }
+      const n = Number(first)
+      const turn = first && Number.isInteger(n) && n >= 1 ? n - 1 : undefined
+      const mode = second ? (parseRewindMode(second) ?? undefined) : undefined
+      return { kind: 'rewind', undo: false, ...(turn !== undefined ? { turn } : {}), ...(mode ? { mode } : {}) }
     }
     case 'undo':
       return { kind: 'undo', redo: false }
@@ -1481,6 +1538,7 @@ export const HELP_TEXT = [
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
+  '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
@@ -2282,6 +2340,15 @@ export interface TuiDeps {
     info: (conversationId: string) => Promise<CheckpointInfo | null>
     undo: (runId: string) => Promise<number>
     redo: (runId: string) => Promise<number>
+  }
+  /**
+   * Rewind the chat to an earlier message (agent/rewind.ts): preview, apply, undo.
+   * Absent ⇒ /rewind says it is unavailable.
+   */
+  rewind?: {
+    preview: (conversationId: string, turn: number, mode: RewindMode, text: string) => Promise<RewindPreviewResult>
+    apply: (conversationId: string, turn: number, mode: RewindMode, text: string) => Promise<RewindResult>
+    undo: (conversationId: string) => Promise<UndoRewindResult>
   }
   /** Everything different in the working tree, for /changes. */
   workingTree?: () => Promise<{
@@ -3189,6 +3256,84 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(
             paint(`· note: ${model} does not support reasoning, so this has no effect on it\n`, 'yellow')
           )
+        }
+        continue
+      }
+      if (result.kind === 'rewind') {
+        if (!deps.rewind) {
+          deps.io.out(paint('· rewind is unavailable here\n', 'dim'))
+          continue
+        }
+        if (!conversationId) {
+          deps.io.out(paint('· nothing to rewind yet: send a message first\n', 'dim'))
+          continue
+        }
+        if (result.undo) {
+          const res = await deps.rewind.undo(conversationId)
+          if (!res.ok) {
+            deps.io.out(paint(`· ${res.error}\n`, 'yellow'))
+            continue
+          }
+          messages = res.messages
+          const left = res.conflicts.length ? `; left ${res.conflicts.length} file(s) that changed since: ${res.conflicts.join(', ')}` : ''
+          deps.io.out(paint(`· undid the rewind (${res.reapplied} file(s) put back${left})\n`, 'dim'))
+          continue
+        }
+        const points = rewindPoints(messages)
+        let turn = result.turn
+        if (turn === undefined) {
+          deps.io.out(`${renderRewindPoints(points, paint)}\n`)
+          if (!points.length) continue
+          // discardPending like the other prompts, so type-ahead can't pick a message.
+          const ans = await deps.io.readLine('> ', { discardPending: true })
+          const picked = ans === null ? null : parseRewindSelection(ans, points.length)
+          if (picked === null) {
+            deps.io.out(paint('· cancelled\n', 'dim'))
+            continue
+          }
+          turn = picked
+        }
+        const point = points[turn]
+        if (!point) {
+          deps.io.out(paint(`· no message ${turn + 1} to rewind to (there are ${points.length})\n`, 'yellow'))
+          continue
+        }
+        let mode = result.mode
+        if (!mode) {
+          deps.io.out(
+            `${paint('Rewind what?', 'bold')}\n${REWIND_MODE_INFO.map((c, i) => `  ${paint(String(i + 1), 'cyan')}  ${c.label}  ${paint(c.hint, 'dim')}`).join('\n')}\n`
+          )
+          const ans = await deps.io.readLine('[1] > ', { discardPending: true })
+          mode = ans === null ? undefined : (parseRewindMode(ans) ?? undefined)
+          if (!mode) {
+            deps.io.out(paint('· cancelled\n', 'dim'))
+            continue
+          }
+        }
+        const text = turnText(messages[point.messageIndex])
+        const preview = await deps.rewind.preview(conversationId, turn, mode, text)
+        if (!preview.ok) {
+          deps.io.out(paint(`· ${preview.error}\n`, 'yellow'))
+          continue
+        }
+        deps.io.out(`${paint(`Rewind to “${point.label}”?`, 'bold')} ${rewindConfirmText(mode, preview)}\n`)
+        const yes = await deps.io.readLine('Rewind? [y/N] ', { discardPending: true })
+        if (!yes || !/^y(es)?$/i.test(yes.trim())) {
+          deps.io.out(paint('· cancelled\n', 'dim'))
+          continue
+        }
+        const res = await deps.rewind.apply(conversationId, turn, mode, text)
+        if (!res.ok) {
+          deps.io.out(paint(`· ${res.error}\n`, 'yellow'))
+          continue
+        }
+        messages = res.messages
+        // The last turn's run may be gone from the chat, or reverted already: /undo
+        // must not fall back to it.
+        lastRunId = null
+        deps.io.out(paint(`· ${rewindDoneText(mode, res)} /rewind undo reverses it.\n`, res.conflicts.length ? 'yellow' : 'dim'))
+        if (rewindsConversation(mode) && res.text.trim()) {
+          deps.io.out(paint(`· your message was: ${res.text}\n`, 'dim'))
         }
         continue
       }
