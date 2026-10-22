@@ -24,6 +24,7 @@ import {
   toolArgHint,
   renderApprovalPrompt,
   approvalOutcome,
+  modelChoices,
   parseApprovalAnswer,
   renderQuestion,
   HELP_TEXT,
@@ -428,8 +429,56 @@ describe('parseSlashCommand', () => {
       providerId: 'ollama',
       model: 'llama'
     })
-    expect(parseSlashCommand('/model', s)).toEqual({ kind: 'handled' })
+    expect(parseSlashCommand('/model', s)).toEqual({ kind: 'pick-model' })
     expect(parseSlashCommand('/model nope', s)).toEqual({ kind: 'handled' })
+  })
+
+  it('offers ready models by display name, current first, skipping keyless and missing ones', () => {
+    const st = settings({
+      providers: [
+        prov({ id: 'anthropic', kind: 'anthropic', label: 'Anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude-opus-5-5' }, { id: 'claude-sonnet-5-5' }, { id: 'old', unavailableAt: '2026-01-01' }] }),
+        prov({ id: 'openai', kind: 'openai', label: 'OpenAI', requiresKey: true, hasKey: false, models: [{ id: 'gpt-6-astra' }] })
+      ]
+    })
+    const choices = modelChoices(st, 'anthropic', 'claude-sonnet-5-5')
+    expect(choices.map((c) => c.model)).toEqual(['claude-sonnet-5-5', 'claude-opus-5-5'])
+    expect(choices[0].label).toBe('claude-sonnet-5.5')
+    expect(choices[0].description).toBe('Anthropic · claude-sonnet-5-5 · current')
+  })
+
+  it('switches to the model picked from bare /model and names it as the desktop does', async () => {
+    const { d } = deps([], {
+      providers: [prov({ id: 'anthropic', kind: 'anthropic', label: 'Anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }, { id: 'claude-opus-5-5' }] })]
+    })
+    const saved: unknown[] = []
+    d.updateSettings = (patch) => saved.push(patch)
+    const t = fakeIo(['/model', null])
+    const specs: Array<{ title: string; options: Array<{ label: string }> }> = []
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return { kind: 'commit', value: '1' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(specs[0].title).toBe('Model:')
+    expect(specs[0].options[1].label).toBe('claude-opus-5.5')
+    // A switch is this chat's; only --default saves it for new chats.
+    expect(saved).toEqual([])
+    expect(t.text()).toContain('· model → claude-opus-5.5  (anthropic / claude-opus-5-5)\n')
+  })
+
+  it('carries --default through the /model picker', async () => {
+    const { d } = deps([], {
+      providers: [prov({ id: 'anthropic', kind: 'anthropic', label: 'Anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude' }, { id: 'claude-opus-5-5' }] })]
+    })
+    const saved: unknown[] = []
+    d.updateSettings = (patch) => saved.push(patch)
+    const t = fakeIo(['/model --default', null])
+    t.io.select = async () => ({ kind: 'commit', value: '1' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toContainEqual({ selected: { providerId: 'anthropic', model: 'claude-opus-5-5' } })
+    expect(t.text()).toContain('· model → claude-opus-5.5  (anthropic / claude-opus-5-5) (new chats too)')
   })
 
   it('maps /plan to plan mode and /compact to compact', () => {
