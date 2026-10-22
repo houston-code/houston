@@ -602,8 +602,13 @@ export function numberedRead(text: string, offset?: number, limit?: number): str
   return `${header}${rows.join('\n')}${notice}`
 }
 
-/** The tools {@link staleWriteRefusal} guards: the ones that change an existing file in place. */
-const GUARDED_WRITES = new Set(['write_file', 'edit_file', 'multi_edit'])
+/**
+ * The tools {@link staleWriteRefusal} guards: the ones that change an existing file in
+ * place. notebook_edit is one of them: it addresses a cell by its number in the last
+ * read and rewrites the whole notebook, so after the user reorders cells or saves from
+ * Jupyter it would edit the wrong cell and overwrite their work.
+ */
+const GUARDED_WRITES = new Set(['write_file', 'edit_file', 'multi_edit', 'notebook_edit'])
 
 /** The refusal the model sees when a write would land on content it has not seen. */
 function staleWriteMessage(rel: string, reason: StaleWriteReason, name: string): string {
@@ -973,13 +978,14 @@ const notebookEdit: ToolDef = {
     if (!['replace', 'insert', 'delete'].includes(mode)) {
       throw new Error(`Unknown mode "${mode}": expected replace, insert, or delete.`)
     }
-    let raw: string
+    let bytes: Buffer
     try {
-      raw = await fs.readFile(abs, 'utf8')
+      bytes = await fs.readFile(abs)
     } catch {
       throw new Error(`${rel} does not exist. Create a notebook with write_file before editing its cells.`)
     }
-    const nb = parseNotebook(raw)
+    assertSeen(ctx, 'notebook_edit', abs, rel, bytes)
+    const nb = parseNotebook(bytes.toString('utf8'))
     const cell = num(args, 'cell')
     if (cell === undefined) throw new Error('notebook_edit requires a "cell" number.')
     const updated = editNotebook(nb, {
