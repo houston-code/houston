@@ -17,6 +17,7 @@ import {
   renderPlan,
   toolArgHint,
   renderApprovalPrompt,
+  approvalOutcome,
   parseApprovalAnswer,
   renderQuestion,
   HELP_TEXT,
@@ -243,6 +244,21 @@ describe('approval prompt', () => {
     expect(p).toContain('run_shell')
     expect(p).toContain('[shell]')
     expect(p).toContain('rm -rf build')
+  })
+
+  it('keeps the typed-answer keys out of the picker prompt', () => {
+    expect(renderApprovalPrompt(ev(), makePainter(false))).toContain('[y] allow')
+    expect(renderApprovalPrompt(ev(), makePainter(false), { picker: true })).not.toContain('[y] allow')
+    expect(renderApprovalPrompt(ev({ shellNetwork: true }), makePainter(false), { picker: true })).not.toContain('[y]')
+  })
+
+  it('words each approval outcome', () => {
+    expect(approvalOutcome('allow')).toBe('Allowed')
+    expect(approvalOutcome('rule-allow')).toBe('Always allowed (rule saved)')
+    expect(approvalOutcome('rule-deny')).toBe('Always denied (rule saved)')
+    expect(approvalOutcome('deny', { note: 'use pnpm' })).toBe('Denied: use pnpm')
+    expect(approvalOutcome('deny', { shellNetwork: true })).toBe('Running offline')
+    expect(approvalOutcome('always', { shellNetwork: true })).toBe('Network allowed for this run')
   })
 
   it('warns when a shell command runs unsandboxed', () => {
@@ -1218,6 +1234,38 @@ describe('runTui', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(rec.approvals).toEqual([['run-1', 'c1', 'always']])
+  })
+
+  it('lists the choices once under the picker, and records the one taken', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['run ls', null])
+    t.io.select = async () => ({ kind: 'commit', value: 'always' })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'always']])
+    expect(t.text()).not.toContain('[y] allow')
+    expect(t.text()).toContain('↳ Allowed for this run')
+  })
+
+  it('says Esc at the approval picker denied the call', async () => {
+    const { d, rec } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'run_shell', summary: 'ls', kind: 'shell' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['run ls', null])
+    const specs: Array<{ escLabel?: string }> = []
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return { kind: 'cancel' }
+    }
+    d.io = t.io
+    await runTui(opts, d)
+    expect(specs[0].escLabel).toBe('deny')
+    expect(rec.approvals).toEqual([['run-1', 'c1', 'deny']])
+    expect(t.text()).toContain('↳ Denied')
   })
 
   it('falls back to typing when the picker returns type', async () => {
