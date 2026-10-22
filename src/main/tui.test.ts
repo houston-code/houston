@@ -2470,6 +2470,12 @@ describe('runTui', () => {
     expect(missing).toEqual([])
   })
 
+  it('describes bare /model as the picker it opens', () => {
+    const line = HELP_TEXT.split('\n').find((l) => l.includes('/model'))!
+    expect(line).toContain('pick')
+    expect(line).not.toContain('list models')
+  })
+
   it('names the themes /theme actually has', () => {
     const line = HELP_TEXT.split('\n').find((l) => l.includes('/theme'))!
     for (const name of Object.keys(THEMES)) expect(line).toContain(name)
