@@ -1,6 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  promises as fsp,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { withFileLock } from './fileLock'
@@ -131,5 +140,126 @@ describe('withFileLock', () => {
       writeFileSync(`${target}.lock`, 'someone-else') // ours was taken over meanwhile
     })
     expect(readFileSync(`${target}.lock`, 'utf8')).toBe('someone-else')
+  })
+})
+
+const realFs = { writeFile: fsp.writeFile, readFile: fsp.readFile, unlink: fsp.unlink }
+
+/**
+ * Make `fs.promises[method]` on `path` fail with `errCode` on the calls `fails`
+ * picks (all of them by default, numbered from 1), passing every other call through.
+ * Returns a live count of the calls it saw on `path`.
+ */
+function failOn(
+  method: keyof typeof realFs,
+  path: string,
+  errCode: string,
+  fails: (call: number) => boolean = () => true
+): { calls: number } {
+  const real = realFs[method] as (...args: unknown[]) => Promise<unknown>
+  const seen = { calls: 0 }
+  vi.spyOn(fsp, method).mockImplementation(((p: unknown, ...rest: unknown[]) => {
+    if (p !== path) return real.call(fsp, p, ...rest)
+    seen.calls++
+    if (!fails(seen.calls)) return real.call(fsp, p, ...rest)
+    return Promise.reject(Object.assign(new Error(`${errCode}: injected, open '${path}'`), { code: errCode, path }))
+  }) as never)
+  return seen
+}
+
+// Windows refuses an exclusive create of a lock that another waiter has just
+// unlinked while some handle on it is still open (the file is "delete pending"), and
+// says EPERM instead of EEXIST. These inject that refusal, so every OS runs them.
+describe('withFileLock with Windows file errors', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it.each(['EPERM', 'EBUSY', 'EACCES'])('retries a create Windows refuses with %s, then takes the lock', async (errCode) => {
+    const create = failOn('writeFile', `${target}.lock`, errCode, (n) => n <= 2)
+    expect(await withFileLock(target, () => 'ok', { platform: 'win32', retryMs: 1 })).toBe('ok')
+    expect(create.calls).toBe(3)
+    expect(existsSync(`${target}.lock`)).toBe(false)
+  })
+
+  it('still lets only one waiter in at a time when Windows refuses some creates', async () => {
+    failOn('writeFile', `${target}.lock`, 'EPERM', (n) => n % 3 === 0)
+    let inside = 0
+    let most = 0
+    let done = 0
+    await Promise.all(
+      Array.from({ length: 6 }, () =>
+        withFileLock(
+          target,
+          async () => {
+            inside++
+            most = Math.max(most, inside)
+            await new Promise((r) => setTimeout(r, 5))
+            inside--
+            done++
+          },
+          { platform: 'win32', retryMs: 1 }
+        )
+      )
+    )
+    expect(done).toBe(6)
+    expect(most).toBe(1)
+    expect(existsSync(`${target}.lock`)).toBe(false)
+  })
+
+  it('throws the refusal itself if Windows keeps refusing until the timeout', async () => {
+    const create = failOn('writeFile', `${target}.lock`, 'EPERM')
+    let ran = false
+    await expect(
+      withFileLock(
+        target,
+        () => {
+          ran = true
+        },
+        { platform: 'win32', timeoutMs: 60, retryMs: 5 }
+      )
+    ).rejects.toMatchObject({ code: 'EPERM' })
+    expect(ran).toBe(false)
+    expect(create.calls).toBeGreaterThan(1)
+  })
+
+  it('throws EPERM at once on other platforms, where it is a real permission error', async () => {
+    const create = failOn('writeFile', `${target}.lock`, 'EPERM')
+    await expect(withFileLock(target, () => 'ok', { platform: 'linux', retryMs: 1 })).rejects.toMatchObject({
+      code: 'EPERM'
+    })
+    expect(create.calls).toBe(1)
+  })
+
+  it('throws an error that is not a busy file at once on Windows too', async () => {
+    const create = failOn('writeFile', `${target}.lock`, 'ENOENT') // the folder is gone
+    await expect(withFileLock(target, () => 'ok', { platform: 'win32', retryMs: 1 })).rejects.toMatchObject({
+      code: 'ENOENT'
+    })
+    expect(create.calls).toBe(1)
+  })
+
+  it('waits out a lock it cannot read instead of spinning past the timeout', async () => {
+    writeFileSync(`${target}.lock`, 'busy')
+    failOn('readFile', `${target}.lock`, 'EBUSY')
+    await expect(
+      withFileLock(target, () => 'ok', { platform: 'win32', timeoutMs: 80, retryMs: 10 })
+    ).rejects.toThrow(/being saved by another Houston window/)
+    expect(readFileSync(`${target}.lock`, 'utf8')).toBe('busy')
+  })
+
+  it('keeps trying to remove its lock while Windows reports it busy', async () => {
+    const remove = failOn('unlink', `${target}.lock`, 'EBUSY', (n) => n <= 2)
+    expect(await withFileLock(target, () => 'ok', { platform: 'win32', retryMs: 1 })).toBe('ok')
+    expect(remove.calls).toBe(3)
+    expect(existsSync(`${target}.lock`)).toBe(false)
+  })
+
+  it('keeps trying to remove the takeover guard while Windows reports it busy', async () => {
+    writeFileSync(`${target}.lock`, 'dead')
+    const old = new Date(Date.now() - 60_000)
+    utimesSync(`${target}.lock`, old, old)
+    const remove = failOn('unlink', `${target}.lock.takeover`, 'EPERM', (n) => n === 1)
+    expect(await withFileLock(target, () => 'ok', { platform: 'win32', retryMs: 1 })).toBe('ok')
+    expect(remove.calls).toBe(2)
+    expect(readdirSync(dir)).toEqual([])
   })
 })
