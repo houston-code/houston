@@ -664,6 +664,71 @@ describe('SettingsModal', () => {
     })
   })
 
+  describe('rules as text', () => {
+    const rules = [
+      { action: 'allow' as const, tool: 'run_shell', match: 'git *', addedAt: 7, source: 'prompt' as const },
+      { action: 'deny' as const, tool: 'run_shell', match: 'rm *' }
+    ]
+    const editor = (): HTMLTextAreaElement => screen.getByRole('textbox', { name: 'Rules as JSON' }) as HTMLTextAreaElement
+    const open = (): void => {
+      fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Edit as text' }))
+    }
+
+    it('shows the rules as JSON, one per line, without bookkeeping fields', () => {
+      installApi()
+      renderModal({ permissionRules: rules })
+      open()
+      expect(editor().value).toBe(
+        '[\n  {"action":"allow","tool":"run_shell","match":"git *"},\n  {"action":"deny","tool":"run_shell","match":"rm *"}\n]\n'
+      )
+      expect(screen.getByText('No changes yet.')).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
+    })
+
+    it('blocks Apply on invalid text and says where', () => {
+      installApi()
+      renderModal({ permissionRules: rules })
+      open()
+      fireEvent.change(editor(), { target: { value: '[\n  {"acton":"deny","tool":"*","match":"*"}\n]' } })
+      expect(screen.getByRole('alert')).toHaveTextContent('Line 2: Rule 1 has an unknown field "acton".')
+      expect(editor()).toHaveAttribute('aria-invalid', 'true')
+      expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled()
+    })
+
+    it('summarizes and lints the edit, then applies it keeping each rule\'s history', async () => {
+      const api = installApi()
+      renderModal({ permissionRules: rules })
+      open()
+      fireEvent.change(editor(), {
+        target: {
+          value:
+            '[{"action":"allow","tool":"run_shell","match":"*"},{"action":"deny","tool":"run_shell","match":"rm *"},{"action":"allow","tool":"run_shell","match":"git *"}]'
+        }
+      })
+      expect(screen.getByText('Applying adds 1 rule and changes the order.')).toBeInTheDocument()
+      expect(screen.getByText(/Rule 2: Never applies: rule 1/)).toBeInTheDocument()
+      fireEvent.click(screen.getByRole('button', { name: 'Apply' }))
+      // Back to the list, in the new order.
+      expect([...document.querySelectorAll<HTMLInputElement>('.rule__match')].map((i) => i.value)).toEqual(['*', 'rm *', 'git *'])
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+      const saved = (api.saveSettings.mock.calls.at(-1)![0] as AppSettings).permissionRules
+      expect(saved?.[0]).toMatchObject({ match: '*', source: 'settings', addedAt: expect.any(Number) })
+      expect(saved?.[1]).toEqual({ action: 'deny', tool: 'run_shell', match: 'rm *' })
+      expect(saved?.[2]).toEqual({ action: 'allow', tool: 'run_shell', match: 'git *', addedAt: 7, source: 'prompt' })
+    })
+
+    it('leaves the rules alone on Cancel', () => {
+      installApi()
+      renderModal({ permissionRules: rules })
+      open()
+      fireEvent.change(editor(), { target: { value: '[]' } })
+      fireEvent.click(within(document.querySelector('.rules-text') as HTMLElement).getByRole('button', { name: 'Cancel' }))
+      expect(document.querySelectorAll('.rule-row')).toHaveLength(2)
+    })
+  })
+
   describe('rule order', () => {
     const ordered = [
       { action: 'allow' as const, tool: 'run_shell', match: '*' },

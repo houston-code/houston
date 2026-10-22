@@ -8,6 +8,7 @@ import {
   type PermissionTestResult
 } from '@shared/types'
 import { lintPermissionRules, moveRule, type RuleIssue } from '@shared/permissionLint'
+import { carryRuleMeta, diffRules, parseRulesText, rulesToText } from '@shared/permissionRulesText'
 import { SettingsSection } from '../fields'
 import { ReadOnlyRules, TrustBadge } from './project'
 import { groupPermissionRules, ruleMatchesFilter, TOOL_NAMES } from '../permissionRules'
@@ -200,6 +201,7 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
   const [newRuleTool, setNewRuleTool] = useState('')
   const [collapsedRuleGroups, setCollapsedRuleGroups] = useState<Set<string>>(new Set())
   const [dragFrom, setDragFrom] = useState<number | null>(null)
+  const [editingText, setEditingText] = useState(false)
   const toggleRuleGroup = (tool: string, open: boolean): void =>
     setCollapsedRuleGroups((prev) => {
       const next = new Set(prev)
@@ -298,20 +300,34 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
     />
   )
 
+  const desc = (
+    <>
+      Checked top to bottom before the approval mode; the first matching rule decides.{' '}
+      <strong>Allow</strong> runs without asking, <strong>Ask</strong> always prompts,{' '}
+      <strong>Deny</strong> refuses. A pattern is a glob over the command, path, URL, or query;
+      an <strong>Exact</strong> rule matches only that one target. An administrator policy or a
+      project&apos;s <code>.houston/settings.json</code> may add rules that are checked first: see{' '}
+      <strong>All sources</strong>.
+    </>
+  )
+
+  if (editingText) {
+    return (
+      <SettingsSection title="Permissions" desc={desc}>
+        <RulesTextEditor
+          rules={rules}
+          onApply={(next) => {
+            setRules(carryRuleMeta(next, rules, Date.now()))
+            setEditingText(false)
+          }}
+          onCancel={() => setEditingText(false)}
+        />
+      </SettingsSection>
+    )
+  }
+
   return (
-    <SettingsSection
-      title="Permissions"
-      desc={
-        <>
-          Checked top to bottom before the approval mode; the first matching rule decides.{' '}
-          <strong>Allow</strong> runs without asking, <strong>Ask</strong> always prompts,{' '}
-          <strong>Deny</strong> refuses. A pattern is a glob over the command, path, URL, or
-          query; an <strong>Exact</strong> rule matches only that one target. An administrator
-          policy or a project&apos;s <code>.houston/settings.json</code> may add rules that are
-          checked first: see <strong>All sources</strong>.
-        </>
-      }
-    >
+    <SettingsSection title="Permissions" desc={desc}>
       {(rules.length > 0 || hasOtherSources) && (
         <div className="rule-toolbar">
           {view !== 'sources' ? (
@@ -480,9 +496,95 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
           >
             + Add rule
           </button>
+          <button className="btn btn--sm rule-add-other__text" onClick={() => setEditingText(true)}>
+            Edit as text
+          </button>
         </div>
       )}
     </SettingsSection>
+  )
+}
+
+/**
+ * The rules as JSON text (the settings.json shape), for bulk edits and pasting
+ * between machines. Validated on every keystroke; Apply stays off until the text
+ * parses, and the summary says what applying would change and flags rules that
+ * could never apply or allow everything.
+ */
+function RulesTextEditor({
+  rules,
+  onApply,
+  onCancel
+}: {
+  rules: PermissionRule[]
+  onApply: (next: PermissionRule[]) => void
+  onCancel: () => void
+}): JSX.Element {
+  const [text, setText] = useState(() => rulesToText(rules))
+  const parsed = useMemo(() => parseRulesText(text), [text])
+  const issues = useMemo(() => (parsed.ok ? lintPermissionRules(parsed.rules) : new Map<number, RuleIssue[]>()), [parsed])
+  const diff = parsed.ok ? diffRules(rules, parsed.rules) : null
+  const changed = diff !== null && (diff.added > 0 || diff.removed > 0 || diff.reordered)
+  const rows = Math.min(24, Math.max(6, text.split('\n').length + 1))
+  const summary = (): string => {
+    if (!diff || !changed) return 'No changes yet.'
+    const parts: string[] = []
+    if (diff.added) parts.push(`adds ${diff.added} ${diff.added === 1 ? 'rule' : 'rules'}`)
+    if (diff.removed) parts.push(`removes ${diff.removed} ${diff.removed === 1 ? 'rule' : 'rules'}`)
+    if (diff.reordered) parts.push('changes the order')
+    const joined = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : parts[0]
+    return `Applying ${joined}.`
+  }
+  return (
+    <div className="rules-text">
+      <p className="field__hint">
+        One rule per line: <code>{'{"action": "allow" | "ask" | "deny", "tool": "run_shell", "match": "git *"}'}</code>
+        , with <code>{'"exact": true'}</code> to match one target only. Order matters: the first match wins.
+      </p>
+      <textarea
+        className="rules-text__input"
+        aria-label="Rules as JSON"
+        aria-invalid={!parsed.ok}
+        aria-describedby="rules-text-status"
+        spellCheck={false}
+        rows={rows}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <div id="rules-text-status">
+        {!parsed.ok ? (
+          <p className="rules-text__error" role="alert">
+            {parsed.line ? `Line ${parsed.line}: ` : ''}
+            {parsed.error}
+          </p>
+        ) : (
+          <>
+            <p className="rules-text__summary" role="status">
+              {summary()}
+            </p>
+            {[...issues.entries()].map(([i, list]) =>
+              list.map((issue, k) => (
+                <p key={`${i}-${k}`} className={`rule__issue${isWarning(issue) ? ' rule__issue--warn' : ''} rules-text__issue`}>
+                  Rule {i + 1}: {issueText(issue, parsed.rules[i], parsed.rules)}
+                </p>
+              ))
+            )}
+          </>
+        )}
+      </div>
+      <div className="rules-text__actions">
+        <button className="btn btn--sm" onClick={onCancel}>
+          Cancel
+        </button>
+        <button
+          className="btn btn--sm btn--accent"
+          disabled={!parsed.ok || !changed}
+          onClick={() => parsed.ok && onApply(parsed.rules)}
+        >
+          Apply
+        </button>
+      </div>
+    </div>
   )
 }
 

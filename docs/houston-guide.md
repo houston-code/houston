@@ -878,7 +878,11 @@ or by hand) and when it last decided a call, which helps prune rules you no long
 need. **Test a call** takes a tool and a command, path, URL, or query and shows what
 the rules decide and which rule decides it, using your unsaved edits and the
 administrator and project rules; it covers rules only, so a write outside the project
-or to a sensitive file can still ask. Matching normalizes the target so a rule cannot be dodged
+or to a sensitive file can still ask. **Edit as text** shows the rules as JSON, one per line, in the
+same shape as `permissionRules` in settings.json, for bulk edits or pasting rules
+between machines. It checks the text as you type (a misspelt field is an error, not
+ignored), flags rules that could never apply, says what applying would add, remove, or
+reorder, and keeps each surviving rule's history. Matching normalizes the target so a rule cannot be dodged
 by respelling it: a file rule is resolved and anchored to the workspace (so
 `src/*` covers the same file written as an absolute path, and a relative climb
 like `src/../../etc/passwd` does not slip past it), a URL rule is
