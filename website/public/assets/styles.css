@@ -175,6 +175,9 @@ code { font-family: var(--mono); font-size: 0.9em; }
 .btn-primary:hover { background: var(--a4); }
 .btn-secondary { background: var(--n1); color: var(--n5); border-color: var(--n3); }
 .btn-secondary:hover { background: var(--n2); }
+/* A second path next to the primary action: accent-tinted, but lighter than primary. */
+.btn-tint { background: var(--a1); color: var(--a5); border-color: var(--a2); }
+.btn-tint:hover { background: var(--a2); }
 .btn svg { width: 16px; height: 16px; flex-shrink: 0; }
 .btn-sm { height: 34px; padding: 0 12px; }
 .btn-lg { height: 46px; padding: 0 20px; font-size: var(--fs-3); }
@@ -254,8 +257,49 @@ section { padding: 96px 0; }
   margin-top: 24px; padding: 12px 16px; border-radius: var(--r-1);
   background: var(--a1); border: 1px solid var(--a2); font-size: var(--fs-2);
 }
+/* Terminal CLI: one row per install channel, the command selectable in one click. */
+.cli-install { margin: 40px 0 0; padding: 32px 0 0; border-top: 1px solid var(--n3); }
+.cli-install > p { margin-top: 4px; font-size: var(--fs-2); color: var(--n4); }
+.cli-install > .dl-note { margin-top: 12px; }
+.cli-cmds { display: grid; gap: 8px; margin: 16px 0 0; }
+.cli-cmds > div { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 12px; align-items: center; }
+.cli-cmds dt { font-size: var(--fs-2); font-weight: 500; color: var(--a5); }
+.cli-cmds dt span { display: block; font-size: var(--fs-1); font-weight: 400; color: var(--n4); }
+.cli-cmds dd { position: relative; margin: 0; min-width: 0; }
+.cli-cmds code {
+  display: block; padding: 8px 12px; user-select: all;
+  /* Wrap rather than scroll or hide behind the copy button; one line wherever it fits. */
+  white-space: normal; overflow-wrap: anywhere;
+  border: 1px solid var(--n3); border-radius: 6px;
+  /* A hint of the accent (half-way from neutral), echoing the hero's Install the CLI button
+     without turning the commands blue; the plain fill is the fallback. */
+  background: var(--n2);
+  background: color-mix(in srgb, var(--a1) 50%, var(--n2));
+  border-color: color-mix(in srgb, var(--a2) 40%, var(--n3));
+}
+/* Room for the copy button, which app.js reveals only where the clipboard API works. */
+.cli-cmds dd:has(.copy-btn:not([hidden])) code { padding-right: 76px; }
+.copy-btn {
+  /* Pinned to the first line, so it stays put when a command wraps. */
+  position: absolute; top: 5px; right: 6px;
+  height: 28px; padding: 0 10px; font: inherit; font-size: var(--fs-1); color: var(--n5);
+  background: var(--n1); border: 1px solid var(--n3); border-radius: 6px; cursor: pointer;
+}
+.copy-btn:hover { border-color: var(--n4); }
+/* The command the reader types afterwards, styled like the commands above it. */
+.cmd-name {
+  padding: 1px 6px; color: var(--n5); border: 1px solid var(--n3); border-radius: 4px;
+  background: var(--n2);
+  background: color-mix(in srgb, var(--a1) 50%, var(--n2));
+  border-color: color-mix(in srgb, var(--a2) 40%, var(--n3));
+}
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
 .dl-extra {
-  display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px 32px;
+  display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px 32px;
   margin: 40px 0 0; padding: 32px 0 0; list-style: none; border-top: 1px solid var(--n3);
 }
 .dl-extra h3 { font-size: var(--fs-2); }
@@ -358,6 +402,7 @@ section { padding: 96px 0; }
 }
 @media (max-width: 560px) {
   .download-grid { grid-template-columns: 1fr; }
+  .cli-cmds > div { grid-template-columns: 1fr; gap: 4px; }
   /* One column: put the visitor's build first instead of making them scroll for it. */
   .dl-card.is-recommended { order: -1; }
   .btn-lg { flex: 1 1 100%; }

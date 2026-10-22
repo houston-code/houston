@@ -139,6 +139,51 @@
     syncHeroDownload();
   }
 
+  // ---- Copy buttons on the CLI install commands ----
+  // The buttons ship hidden, so a browser without the async clipboard (or without
+  // JavaScript) shows none that can't work; each command still selects in one click.
+  // When the browser refuses the write, the command is selected and the older copy
+  // command tried; if that fails too, the selection stays for Cmd/Ctrl+C.
+  function selectText(el) {
+    var range = document.createRange();
+    range.selectNodeContents(el);
+    var sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+    var copyStatus = $("#copy-status");
+    $all(".copy-btn").forEach(function (btn) {
+      var code = btn.parentNode.querySelector("code");
+      if (!code) return;
+      var label = btn.textContent;
+      var reset = null;
+      function show(text, status) {
+        btn.textContent = text;
+        if (copyStatus) copyStatus.textContent = status;
+        clearTimeout(reset);
+        reset = setTimeout(function () {
+          btn.textContent = label;
+          if (copyStatus) copyStatus.textContent = "";
+        }, 1500);
+      }
+      btn.hidden = false;
+      btn.addEventListener("click", function () {
+        navigator.clipboard.writeText(code.textContent).then(
+          function () { show("Copied", "Command copied."); },
+          function () {
+            selectText(code);
+            var copied = false;
+            try { copied = document.execCommand("copy"); } catch (e) { copied = false; }
+            if (copied) show("Copied", "Command copied.");
+            else show("Selected", "Command selected. Press Ctrl+C or Cmd+C to copy it.");
+          }
+        );
+      });
+    });
+  }
+
   if (window.fetch) {
     // Abort after 6s so a slow or unreachable GitHub API falls back fast.
     var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;

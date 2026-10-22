@@ -891,13 +891,29 @@ script with no Electron inside: no Chromium is ever loaded, no display server is
 needed, and a full run peaks around **60 MB of RAM**, so it works on headless
 Linux servers and small VPSes where the desktop app cannot even start.
 
+Install it with any of these; each puts a `houston` command on your PATH:
+
 ```bash
-# grab houston-cli.cjs from the latest release (optionally verify it first, see
-# "Verifying downloads": sha256sum -c --ignore-missing SHA256SUMS), then:
-node houston-cli.cjs --help          # or: chmod +x houston-cli.cjs && ./houston-cli.cjs
-ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -p "Summarize the architecture" --cwd ~/code/myproj
-ANTHROPIC_API_KEY=sk-... node houston-cli.cjs -i
+brew install houston-code/tap/houston                # Homebrew (macOS, Linux)
+npm install -g @houston-code/cli                     # npm, or: bun add -g @houston-code/cli
+curl -fsSL https://houstoncode.ai/install.sh | sh    # install script (macOS, Linux)
 ```
+
+The install script downloads the latest release's `houston-cli.cjs`, checks it against
+the release's `SHA256SUMS`, and installs it to `~/.local/bin/houston`
+(`HOUSTON_INSTALL_DIR` changes where, `HOUSTON_VERSION` pins a version). When a newer
+release is out, `houston` tells you the command that updates it for the way you
+installed it.
+
+```bash
+houston --help
+ANTHROPIC_API_KEY=sk-... houston -p "Summarize the architecture" --cwd ~/code/myproj
+ANTHROPIC_API_KEY=sk-... houston -i
+```
+
+Or skip installing: grab `houston-cli.cjs` from the latest release (optionally verify
+it first, see "Verifying downloads": `sha256sum -c --ignore-missing SHA256SUMS`) and run
+it with `node houston-cli.cjs`.
 
 Runs on **macOS, Windows, and Linux**, on x64 or Arm, and requires **Node ≥ 22**:
 that's the only dependency. All the flags, slash commands, approvals, and session

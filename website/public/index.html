@@ -150,6 +150,10 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11m0 0-4-4m4 4 4-4M5 20h14"/></svg>
             <span id="hero-download-label">Download Houston</span>
           </a>
+          <a class="btn btn-tint btn-lg" href="#cli">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 7l5 5-5 5M12 19h7"/></svg>
+            Install the CLI
+          </a>
           <a class="btn btn-secondary btn-lg" href="https://github.com/houston-code/houston" rel="noopener">View on GitHub</a>
           <a class="hero-release" id="hero-version" rel="noopener" hidden></a>
         </div>
@@ -314,13 +318,21 @@
 
         <p class="dl-hint" id="mac-arch-hint" hidden>Not sure which Mac you have? Open the Apple menu and choose About This Mac. If it lists a <strong>Chip</strong> (M1 or newer), get Apple Silicon. If it lists a <strong>Processor</strong>, get Intel.</p>
 
-        <p class="dl-hint" id="linux-arm-hint" hidden>On Linux for Arm? There is no desktop build for it yet, but the <a data-asset-suffix="houston-cli.cjs" href="https://github.com/houston-code/houston/releases/latest">standalone CLI</a> runs there with Node 22 or newer.</p>
+        <p class="dl-hint" id="linux-arm-hint" hidden>On Linux for Arm? There is no desktop build for it yet, but the <a href="#cli">terminal CLI</a> runs there with Node 22 or newer.</p>
+
+        <div class="cli-install" id="cli">
+          <h3>Terminal CLI</h3>
+          <p>The same agent in your terminal, with no desktop app. Runs on macOS, Linux, and Windows, on x64 or Arm, with Node 22 or newer.</p>
+          <dl class="cli-cmds">
+            <div><dt>Homebrew <span>macOS, Linux</span></dt><dd><code>brew install houston-code/tap/houston</code><button class="copy-btn" type="button" aria-label="Copy the Homebrew command" hidden>Copy</button></dd></div>
+            <div><dt>npm <span>any OS</span></dt><dd><code>npm install -g @houston-code/cli</code><button class="copy-btn" type="button" aria-label="Copy the npm command" hidden>Copy</button></dd></div>
+            <div><dt>Install script <span>macOS, Linux</span></dt><dd><code>curl -fsSL https://houstoncode.ai/install.sh | sh</code><button class="copy-btn" type="button" aria-label="Copy the install script command" hidden>Copy</button></dd></div>
+          </dl>
+          <p class="dl-note">Then start it with <code class="cmd-name">houston</code>. Prefer a single file? Download <a data-asset-suffix="houston-cli.cjs" href="https://github.com/houston-code/houston/releases/latest"><code>houston-cli.cjs</code></a> and run it with Node.</p>
+          <p class="sr-only" id="copy-status" role="status" aria-live="polite"></p>
+        </div>
 
         <ul class="dl-extra">
-          <li>
-            <h3>Terminal CLI</h3>
-            <p>A single <a data-asset-suffix="houston-cli.cjs" href="https://github.com/houston-code/houston/releases/latest"><code>houston-cli.cjs</code></a> file for macOS, Windows, and Linux, on x64 or Arm. Needs Node 22+.</p>
-          </li>
           <li>
             <h3>Verify your download</h3>
             <p>macOS builds are signed and notarized, Linux packages are GPG-signed, and every release has a signed SHA256SUMS. <a href="https://github.com/houston-code/houston#verifying-downloads" rel="noopener">How to verify</a>.</p>

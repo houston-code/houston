@@ -84,3 +84,66 @@ describe("download card buttons", () => {
     expect(r.primaryCards).toEqual(["mac-arm", "mac-x64", "win", "linux"]);
   });
 });
+
+describe("CLI install copy buttons", () => {
+  async function page(clipboard) {
+    const dom = new JSDOM(html, { url: "https://houstoncode.ai/", runScripts: "outside-only" });
+    const { window } = dom;
+    window.HoustonPlatform = { classify: () => ({ os: "mac", card: "mac-arm" }) };
+    window.fetch = () => Promise.reject(new Error("offline"));
+    window.HTMLCanvasElement.prototype.getContext = () => null;
+    if (clipboard) Object.defineProperty(window.navigator, "clipboard", { value: clipboard, configurable: true });
+    window.eval(appJs);
+    await new Promise((r) => setTimeout(r, 20));
+    return window.document;
+  }
+
+  it("ships one hidden button per command", () => {
+    const doc = new JSDOM(html).window.document;
+    const rows = [...doc.querySelectorAll(".cli-cmds dd")];
+    expect(rows).toHaveLength(3);
+    for (const dd of rows) {
+      const btn = dd.querySelector(".copy-btn");
+      expect(btn.hidden).toBe(true);
+      expect(btn.getAttribute("type")).toBe("button");
+      expect(btn.getAttribute("aria-label")).toMatch(/^Copy the .+ command$/);
+    }
+  });
+
+  it("stays hidden where the clipboard API is missing", async () => {
+    const doc = await page(null);
+    expect([...doc.querySelectorAll(".copy-btn")].every((b) => b.hidden)).toBe(true);
+  });
+
+  it("copies exactly the command on its row and confirms it", async () => {
+    const written = [];
+    const doc = await page({ writeText: (t) => (written.push(t), Promise.resolve()) });
+    const buttons = [...doc.querySelectorAll(".copy-btn")];
+    expect(buttons.every((b) => !b.hidden)).toBe(true);
+    buttons[2].click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(written).toEqual(["curl -fsSL https://houstoncode.ai/install.sh | sh"]);
+    expect(buttons[2].textContent).toBe("Copied");
+    expect(doc.getElementById("copy-status").textContent).toBe("Command copied.");
+  });
+
+  it("selects the command for Cmd/Ctrl+C when every copy route is refused", async () => {
+    const doc = await page({ writeText: () => Promise.reject(new Error("denied")) });
+    doc.execCommand = () => false;
+    const btn = doc.querySelector(".copy-btn");
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(btn.textContent).toBe("Selected");
+    expect(doc.defaultView.getSelection().toString()).toBe("brew install houston-code/tap/houston");
+    expect(doc.getElementById("copy-status").textContent).toMatch(/Press Ctrl\+C or Cmd\+C/);
+  });
+
+  it("falls back to the older copy command when the clipboard API is refused", async () => {
+    const doc = await page({ writeText: () => Promise.reject(new Error("denied")) });
+    doc.execCommand = (cmd) => cmd === "copy";
+    const btn = doc.querySelector(".copy-btn");
+    btn.click();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(btn.textContent).toBe("Copied");
+  });
+});
