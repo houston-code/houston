@@ -3,7 +3,9 @@ import {
   capSteps,
   formatDuration,
   limitSubagentHistory,
+  modelSourceLabel,
   recordBytes,
+  recordHeadline,
   recordDiffStat,
   recordToMarkdown,
   resumeNote,
@@ -14,8 +16,10 @@ import {
   subagentSpend,
   subagentTree,
   SubagentTermLines,
+  statusLabel,
   SUBAGENT_CAPS,
   toolStepCount,
+  trimRecord,
   upsertStep,
   type SubagentRecord,
   type SubagentStep
@@ -229,5 +233,96 @@ describe('summaries', () => {
     ])
     expect(rows.map((r) => r.id)).toEqual(['b', 'a'])
     expect(rows[0].label).toBe('ag2 · Trace the flow')
+  })
+})
+
+describe('labels and edge cases', () => {
+  it('formats bad durations as empty and names every model source', () => {
+    expect(formatDuration(Number.NaN)).toBe('')
+    expect(formatDuration(-1)).toBe('')
+    expect(modelSourceLabel('agent-file')).toBe("set in the agent's file")
+    expect(modelSourceLabel('run')).toBe("the chat's model")
+  })
+
+  it('says how an agent ended for every status', () => {
+    const label = (over: Partial<SubagentRecord>): string => statusLabel(rec(over))
+    expect(label({ status: 'running' })).toBe('running')
+    expect(label({ status: 'error' })).toBe('failed')
+    expect(label({ status: 'aborted' })).toBe('stopped')
+    expect(label({ status: 'step-limit' })).toBe('stopped at its step limit')
+    expect(label({ status: 'step-limit', budget: { used: 5, limit: 5, ceiling: 5, hardCap: 5 } })).toBe('stopped at its 5-step limit')
+    expect(label({ status: 'stalled' })).toBe('stopped after repeating itself')
+  })
+
+  it('trims a record once, and skips messages with no records', () => {
+    const r = rec({ steps: [tool(0, { output: 'x'.repeat(3000) })] })
+    const t = trimRecord(r)
+    expect(trimRecord(t)).toBe(t)
+    const msgs = [{}, { subagents: [] }, { subagents: [t] }, { subagents: [r] }]
+    const out = limitSubagentHistory(msgs, recordBytes(t) * 2 + 10)
+    expect(out[2].subagents![0]).toBe(t)
+    expect(out[3].subagents![0].trimmed).toBe(true)
+  })
+
+  it('prints every step glyph and a bare headline', () => {
+    expect(stepLine({ index: 0, turn: 1, kind: 'text', summary: 'thinking' })).toBe('· thinking')
+    expect(stepLine(tool(0, { ok: undefined }))).toBe('… Read f0')
+    expect(recordHeadline(rec({ endedAt: undefined, steps: [tool(0), tool(1)] }))).toBe('Trace the flow (claude-haiku-5-5, 2 steps)')
+  })
+
+  it('renders Markdown for writable, reviewer and custom agents, with omitted steps and no report', () => {
+    const md = (over: Partial<SubagentRecord>): string => recordToMarkdown({ record: rec(over), children: [] })
+    expect(md({ kind: 'writable' })).toContain('- Agent: default writable agent')
+    expect(md({ kind: 'reviewer' })).toContain('- Agent: reviewer')
+    expect(md({ agentName: 'auditor' })).toContain('- Agent: auditor')
+    const capped = md({ steps: [tool(0)], stepsOmitted: 3, endedAt: undefined, budget: { used: 4, limit: 40, ceiling: 200 } })
+    expect(capped).toContain('(3 steps omitted)')
+    expect(capped).toContain('- Steps: 4 of 40')
+    expect(capped).not.toContain('- Time:')
+    expect(capped).not.toContain('**Report**')
+  })
+
+  it('describes more outcomes', () => {
+    expect(stepHint('read_file', 'a\nb', true, { durationMs: 2500 })).toBe('2 lines · 2.5s')
+    expect(stepHint('read_file', 'a', true)).toBe('1 line')
+    expect(stepHint('run_shell', 'no marker', true)).toBe('')
+    expect(stepHint('run_shell', 'no marker', false)).toBe('failed')
+    expect(stepHint('run_shell', '[exit code: killed]', false)).toBe('killed')
+    expect(stepHint('ast_grep', 'a.ts:1:1: x', true)).toBe('1 match')
+    expect(stepHint('glob', 'No files matched', true)).toBe('no files')
+    expect(stepHint('glob', 'a\nb', true)).toBe('2 files')
+    expect(stepHint('list_dir', 'only', true)).toBe('1 entry')
+    expect(stepHint('web_fetch', 'x'.repeat(4096), true)).toBe('4 KB')
+    expect(stepHint('lsp_hover', 'whatever', true)).toBe('')
+  })
+
+  it('handles terminal events for unknown agents, text and notices, failures, and every end', () => {
+    const t = new SubagentTermLines()
+    expect(t.line({ type: 'subagent_step', parentCallId: 'c', recordId: 'nope', step: tool(0) })).toBeNull()
+    t.line({ type: 'subagent_start', parentCallId: 'c', record: rec() })
+    expect(t.line({ type: 'subagent_step', parentCallId: 'c', recordId: 'sa1', step: { index: 1, turn: 1, kind: 'notice', summary: 'Grew' } })?.tone).toBe('yellow')
+    expect(t.line({ type: 'subagent_step', parentCallId: 'c', recordId: 'sa1', step: tool(2, { ok: false }) })?.tone).toBe('red')
+    const long = t.line({ type: 'subagent_step', parentCallId: 'c', recordId: 'sa1', step: { index: 3, turn: 1, kind: 'text', summary: 'word '.repeat(80) } })
+    expect(long!.text.length).toBeLessThanOrEqual(170)
+    expect(long!.text.endsWith('…')).toBe(true)
+    const end = (status: SubagentRecord['status']): ReturnType<SubagentTermLines['line']> =>
+      t.line({ type: 'subagent_end', parentCallId: 'c', recordId: 'sa1', update: { status, endedAt: 0 } })
+    expect(end('stalled')).toMatchObject({ tone: 'yellow', text: expect.stringMatching(/^! /) })
+    expect(end('error')).toMatchObject({ tone: 'red', text: expect.stringMatching(/^✗ .*\(1 step\)$/) })
+    expect(end('running')?.text.startsWith('… ')).toBe(true)
+    const quiet = new SubagentTermLines()
+    quiet.line({ type: 'subagent_start', parentCallId: 'c', record: rec({ kind: 'reviewer' }) })
+    expect(quiet.line({ type: 'subagent_end', parentCallId: 'c', recordId: 'sa1', update: { status: 'done', endedAt: 1 } })).toBeNull()
+  })
+
+  it('orders equal-cost spend by output and treats a missing cost as zero', () => {
+    const rows = subagentSpend([
+      rec({ id: 'a', usage: { input: 1, output: 5 } }),
+      rec({ id: 'b', usage: { input: 1, output: 9 } })
+    ])
+    expect(rows.map((r) => [r.id, r.costUsd])).toEqual([
+      ['b', 0],
+      ['a', 0]
+    ])
   })
 })
