@@ -1,4 +1,4 @@
-import { charWidth, visibleWidth } from './tui-wrap'
+import { clusterWidth, graphemes, visibleWidth } from './tui-wrap'
 import type { EditorKey } from './tui-keys'
 import type { Painter } from './tui'
 
@@ -423,13 +423,13 @@ export interface EditorView {
   cursorCol: number
 }
 
-/** Hard-split into chunks of at most `width` columns (wide chars never split). */
+/** Hard-split into chunks of at most `width` columns (a wide char or emoji sequence never split). */
 function splitToWidth(s: string, width: number): string[] {
   const out: string[] = []
   let cur = ''
   let w = 0
-  for (const ch of s) {
-    const cw = charWidth(ch.codePointAt(0) ?? 0)
+  for (const ch of graphemes(s)) {
+    const cw = clusterWidth(ch)
     if (w + cw > width && cur) {
       out.push(cur)
       cur = ''

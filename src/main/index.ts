@@ -19,6 +19,7 @@ import { log } from './logger'
 import { pruneRecentWorkspaces } from './store'
 import { setUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
+import { flushSecrets, hasPendingSecretWrites, initSecrets } from './secrets'
 import { wireLocalhostCapture } from './localhostCapture'
 import { wireMockupCapture } from './mockupCapture'
 import { registerPrivilegedSchemes } from './schemes'
@@ -219,14 +220,20 @@ if (tui) {
   // The full client wiring lives in terminalEntry.ts, shared verbatim with the
   // standalone CLI (src/cli) — only the exit call is Electron's.
   app.whenReady().then(async () => {
-    app.exit(await runTuiEntry(tui, { version: app.getVersion() }))
+    await initSecrets()
+    const code = await runTuiEntry(tui, { version: app.getVersion() })
+    app.exit(await flushBeforeExit(code))
   })
 } else if (headless) {
   app.whenReady().then(async () => {
-    app.exit(await runHeadlessEntry(headless))
+    await initSecrets()
+    const code = await runHeadlessEntry(headless)
+    app.exit(await flushBeforeExit(code))
   })
 } else {
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    // Decrypt the credential store before anything (settings, IPC, the window) reads it.
+    await initSecrets()
     log.info(`Houston ${app.getVersion()} starting`)
     log.info(`sandbox backend = ${activeBackendId()} (sandboxed=${isSandboxed()})`)
     // Drop recents whose folder vanished since last launch (e.g. a worktree removed
@@ -258,8 +265,31 @@ app.on('before-quit', (e) =>
   guardQuitWithLiveWork(e, BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined)
 )
 
+/**
+ * `app.exit` skips will-quit, so the terminal clients wait for queued credential writes
+ * themselves. A write that failed turns a clean exit into a failure.
+ */
+async function flushBeforeExit(code: number): Promise<number> {
+  try {
+    await flushSecrets()
+    return code
+  } catch {
+    // flushSecrets already logged it.
+    return code === 0 ? 1 : code
+  }
+}
+
 // Don't leave the agent's background shells or terminals running after the app exits.
-app.on('will-quit', () => {
+app.on('will-quit', (e) => {
+  // A credential saved just before quitting is still being encrypted: hold the quit
+  // until it's on disk, then quit again (this handler runs the cleanup on that pass).
+  if (hasPendingSecretWrites()) {
+    e.preventDefault()
+    void flushSecrets()
+      .catch(() => {})
+      .finally(() => app.quit())
+    return
+  }
   destroyAllPreviewPanes()
   killAllShells()
   killAllTerminals()

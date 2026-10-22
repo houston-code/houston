@@ -37,7 +37,7 @@
   --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
   --mono: 'SF Mono', ui-monospace, 'Menlo', monospace;
   /* Syntax-highlight token colors for the Files preview code pane (Graphite). */
-  --syn-comment: #6b7280;
+  --syn-comment: #8b93a1;
   --syn-keyword: #c792ea;
   --syn-string: #9ece6a;
   --syn-number: #ff9e64;
@@ -82,15 +82,16 @@
   --shadow-accent: 0 4px 12px rgba(79, 70, 229, 0.25);
   /* A softer, warmer drop for floating menus against the off-white canvas. */
   --shadow-popover: 0 12px 28px rgba(47, 40, 30, 0.18);
-  /* Syntax tokens deepened for AA contrast on the warm light code surface. */
-  --syn-comment: #8a8f98;
+  /* Syntax tokens deepened for AA contrast (4.5:1) on the warm light code surface
+     (--bg-code) and the elevated panels; syntaxContrast.test.ts holds them to it. */
+  --syn-comment: #646973;
   --syn-keyword: #8839ef;
-  --syn-string: #2f7d32;
-  --syn-number: #b4540a;
-  --syn-function: #1e66f5;
-  --syn-type: #9a6700;
+  --syn-string: #2a7030;
+  --syn-number: #a14a08;
+  --syn-function: #1a56d6;
+  --syn-type: #8a5c00;
   --syn-tag: #c01c28;
-  --syn-attr: #9a6700;
+  --syn-attr: #8a5c00;
   --syn-meta: #0e7490;
 }
 /* Respect the OS "reduce motion" preference: disable the blink/spin animations
@@ -814,12 +815,21 @@ body.is-resizing {
   /* Fixed width so the menu doesn't jump narrower as the search filters the list. */
   width: 400px;
   max-width: calc(100vw - 16px);
+  /* Only the list scrolls, so the search field below it stays on screen. */
+  overflow: hidden;
 }
-/* Filter field pinned above the list; focus lands here when the menu opens. */
+.model-menu__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* Filter field pinned below the list, nearest the model button; focus lands here
+   when the menu opens. */
 .model-menu__search {
+  flex: none;
   width: 100%;
   box-sizing: border-box;
-  margin: 2px 0 4px;
+  margin: 4px 0 2px;
   padding: 5px 8px;
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -922,6 +932,7 @@ body.is-resizing {
 }
 /* One line naming the providers with no models yet, instead of an empty group each. */
 .model-menu__footnote {
+  flex: none;
   padding: 6px 9px 3px;
   border-top: 1px solid var(--border);
   margin-top: 4px;
@@ -1166,11 +1177,15 @@ body.is-resizing {
 .control--input {
   min-width: 0;
   max-width: 180px;
+  /* As wide as the name typed, not a fixed 20 characters. */
+  field-sizing: content;
 }
 .control--input[aria-invalid='true'] {
   border-color: var(--danger);
 }
 .control--branch {
+  /* Capped by .control's max-width; its .control__text truncates a long branch name
+     (full name in the title) rather than wrapping the chip onto two lines. */
   flex-shrink: 0;
   color: var(--accent);
   cursor: default;
@@ -1258,6 +1273,9 @@ body.is-resizing {
   /* Let dropdowns concede width once the folder hits its floor, instead of
      forcing all the squeeze onto the folder button. */
   min-width: 0;
+  /* As wide as the chosen option, not the longest one ("Full auto" was sized for
+     its longest mode, the base-branch picker for the longest branch name). */
+  field-sizing: content;
   appearance: none;
   padding-right: 22px;
   background-image: linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
@@ -1987,23 +2005,6 @@ body.is-resizing {
   display: flex;
   justify-content: flex-end;
 }
-/* A message steered into a running turn: labelled, with an accent edge, so it reads
-   as a course correction to the run in progress rather than a new turn. */
-.msg--steered {
-  flex-direction: column;
-  align-items: flex-end;
-}
-.msg--user.msg--steered .msg__body {
-  border-color: var(--accent);
-}
-.msg__steered-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 4px;
-  font-size: 11px;
-  color: var(--accent);
-}
 .msg--user .msg__body {
   max-width: 86%;
   background: var(--bg-input);
@@ -2228,6 +2229,38 @@ h6.md-h {
 }
 .md-list .md-list {
   margin: 4px 0 4px;
+}
+/* GFM task items: the box replaces the bullet and hangs in the list's indent. */
+.md-task {
+  list-style: none;
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-left: -20px;
+}
+.md-task__box {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--text-dim);
+  border-radius: 4px;
+  transform: translateY(2px);
+}
+.md-task__box.is-checked {
+  border-color: var(--accent-fill);
+  background: var(--accent-fill);
+  color: #fff;
+}
+.md-task__box .icon {
+  stroke-width: 2.2;
+}
+.md-task__body {
+  flex: 1;
+  min-width: 0;
 }
 .md-link {
   color: var(--accent);
@@ -3466,7 +3499,8 @@ pre.diff {
   font-weight: 700;
   line-height: 1;
   color: #fff;
-  background: var(--accent);
+  /* --accent-fill, not --accent: white on dark mode's bright --accent is 3.2:1. */
+  background: var(--accent-fill);
   border: 1.5px solid var(--bg-elevated);
   border-radius: 999px;
 }
@@ -3682,6 +3716,21 @@ body.is-resizing .preview-dock__resizer::after {
   color: var(--text-dim);
   border-top: 1px solid var(--border);
   text-align: center;
+}
+.preview-dock__reopen {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.preview-dock__reopen:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
 }
 .preview-dock__add {
   display: flex;
@@ -4722,8 +4771,8 @@ body.is-resizing .preview-dock__resizer::after {
   user-select: all;
 }
 
-/* What Houston recorded running during a turn, under the turn's last message. Its own
-   bordered row so it never reads as part of the model's reply. */
+/* What ran during a turn (recorded locally by the agent loop), under the turn's last
+   message. Its own bordered row so it never reads as part of the model's reply. */
 .receipt {
   width: 100%;
   border: 1px solid var(--border);
@@ -4778,11 +4827,12 @@ body.is-resizing .preview-dock__resizer::after {
   padding: 0;
   list-style: none;
 }
+/* One line per check: mark, kind, the command (truncated, full text on hover), outcome. */
 .receipt__check {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
-  gap: 2px 8px;
+  gap: 8px;
+  min-width: 0;
 }
 .receipt__glyph {
   width: 1em;
@@ -4795,10 +4845,26 @@ body.is-resizing .preview-dock__resizer::after {
   color: var(--danger);
 }
 .receipt__kind {
+  flex: none;
   min-width: 64px;
   color: var(--text);
 }
-.receipt__cmd,
+.receipt__cmd {
+  /* Gives up space well before the outcome does. */
+  flex: 0 20 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+}
+.receipt__detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .receipt__files code {
   font-family: var(--mono);
   word-break: break-all;

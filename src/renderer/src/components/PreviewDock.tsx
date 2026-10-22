@@ -32,7 +32,8 @@ export function PreviewDock({
   onTabChange,
   tasks,
   taskCount = 0,
-  focusServerId = null
+  focusServerId = null,
+  focusRequest
 }: {
   servers: PreviewServer[]
   /** An overlay (modal, palette, find bar) is on top — hide the native views. */
@@ -49,6 +50,9 @@ export function PreviewDock({
   taskCount?: number
   /** A server to keep on screen even past the pane cap (Tasks' "Open preview"). */
   focusServerId?: string | null
+  /** Changes identity on every "Open preview", so a repeat request for the same server
+   *  still reopens its pane if the user closed it. */
+  focusRequest?: object | null
 }): JSX.Element {
   // While Tasks is showing, Preview stays mounted (its pages and added URLs survive
   // the switch) but its native views are hidden, exactly as under an overlay.
@@ -59,13 +63,28 @@ export function PreviewDock({
   const [draftError, setDraftError] = useState(false)
   // Which of a server's printed URLs each pane shows, when the user switched it.
   const [chosen, setChosen] = useState<Record<string, string>>({})
+  // Servers whose pane the user closed. The server keeps running (Tasks stops it); its
+  // pane just stops taking a slot until reopened.
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
   // The pane whose URL was just copied, for a moment of "Copied" feedback.
   const [copied, setCopied] = useState<string | null>(null)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dockRef = useRef<HTMLDivElement>(null)
 
+  // Tasks' "Open preview" names a server: reopen it if its pane was closed.
+  useEffect(() => {
+    if (!focusServerId) return
+    setClosed((prev) => {
+      if (!prev.has(focusServerId)) return prev
+      const next = new Set(prev)
+      next.delete(focusServerId)
+      return next
+    })
+  }, [focusServerId, focusRequest])
+
+  const closedCount = servers.filter((s) => closed.has(s.id) && s.running && s.url).length
   const { panes, hiddenCount, startingCount } = selectPreviewPanes(
-    servers,
+    servers.filter((s) => !closed.has(s.id)),
     manualUrls,
     MAX_PREVIEW_PANES,
     chosen,
@@ -141,6 +160,10 @@ export function PreviewDock({
     setManualUrls((prev) => prev.filter((u) => u !== url))
   }, [])
 
+  const closeServer = useCallback((id: string) => {
+    setClosed((prev) => new Set(prev).add(id))
+  }, [])
+
   return (
     <aside className="preview-dock" ref={dockRef} aria-label={onTabChange ? 'Side panel' : 'Preview'}>
       <div
@@ -211,7 +234,9 @@ export function PreviewDock({
         <div className="preview-dock__body">
           {panes.length === 0 ? (
             <div className="preview-dock__empty">
-              {startingCount > 0 ? (
+              {closedCount > 0 ? (
+                <p>All previews are closed. Their servers are still running.</p>
+              ) : startingCount > 0 ? (
                 <p>Waiting for a server to report its URL…</p>
               ) : (
                 <>
@@ -293,7 +318,7 @@ export function PreviewDock({
                       >
                         ↗
                       </button>
-                      {pane.kind === 'manual' && (
+                      {pane.kind === 'manual' ? (
                         <button
                           type="button"
                           title="Remove"
@@ -302,6 +327,17 @@ export function PreviewDock({
                         >
                           ✕
                         </button>
+                      ) : (
+                        serverId && (
+                          <button
+                            type="button"
+                            title="Close preview (the server keeps running)"
+                            aria-label={`Close preview of ${hostport}`}
+                            onClick={() => closeServer(serverId)}
+                          >
+                            ✕
+                          </button>
+                        )
                       )}
                     </span>
                   </div>
@@ -316,6 +352,14 @@ export function PreviewDock({
         {hiddenCount > 0 && (
           <div className="preview-dock__overflow">
             +{hiddenCount} more not shown (max {MAX_PREVIEW_PANES})
+          </div>
+        )}
+        {closedCount > 0 && (
+          <div className="preview-dock__overflow">
+            {closedCount === 1 ? '1 preview closed' : `${closedCount} previews closed`}.{' '}
+            <button type="button" className="preview-dock__reopen" onClick={() => setClosed(new Set())}>
+              Show {closedCount === 1 ? 'it' : 'them'}
+            </button>
           </div>
         )}
 

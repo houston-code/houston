@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { isSafeGitRef } from '@shared/git'
-import { GIT_ENV, GIT_HARDENING, uncommittedDiffBase } from './gitRead'
+import { GIT_ENV, hardenedGitArgs, uncommittedDiffBase } from './gitRead'
 
 export { isSafeGitRef }
 
@@ -15,7 +15,7 @@ export { isSafeGitRef }
  * opened, so they MUST neutralize the repo-local `.git/config` keys that make git
  * execute an external program during ordinary reads — `core.fsmonitor` (run by
  * `git status`), `diff.external` / textconv (run by `git diff`), pagers, and the
- * `ext` protocol. We reuse the same `GIT_HARDENING` args + `GIT_ENV` as the
+ * `ext` protocol. We reuse the same `hardenedGitArgs` + `GIT_ENV` as the
  * read-only git tools (gitRead.ts) so an untrusted checkout can't get code
  * execution in the unsandboxed main process.
  */
@@ -28,11 +28,12 @@ const MAX_WORKTREES = 10
 
 export type GitExec = (args: string[], cwd: string) => Promise<string>
 
-function runGit(args: string[], cwd: string): Promise<string> {
+async function runGit(args: string[], cwd: string): Promise<string> {
+  const hardening = await hardenedGitArgs(cwd)
   return new Promise((resolve, reject) => {
     execFile(
       'git',
-      [...GIT_HARDENING, '--no-pager', ...args],
+      [...hardening, '--no-pager', ...args],
       { cwd, env: GIT_ENV, timeout: 5000, maxBuffer: 1_000_000, windowsHide: true },
       (err, stdout) => (err ? reject(err) : resolve(stdout))
     )

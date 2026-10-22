@@ -319,9 +319,11 @@ describe('release-publish sync to main', () => {
   it('places the notes in version order and queues the PR through auto-merge', () => {
     const sync = job('sync-main')
     expect(sync).toContain('changelog-upsert.mjs" "$VERSION"')
-    expect(sync).toContain('gh pr merge --auto --merge "$url"')
-    // Without rights to turn on auto-merge, the PR still exists: warn instead of failing.
-    expect(sync).toContain("|| echo \"::warning::Couldn't turn on auto-merge for $url; add it to the merge queue yourself.\"")
+    expect(sync).toContain('if gh pr merge --auto --merge "$url"; then')
+    // Without rights to turn on auto-merge, the PR still exists: warn instead of failing, in the
+    // log and the job summary.
+    expect(sync).toContain("echo \"::warning::Couldn't turn on auto-merge for $url; add it to the merge queue yourself.\"")
+    expect(sync).toContain('**Add $url to the merge queue yourself** once its checks pass')
     // Only an X.Y.0 release moves main's version, and never backwards.
     expect(sync).toContain('if [ "${VERSION##*.}" = 0 ]; then')
   })

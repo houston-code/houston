@@ -25,8 +25,9 @@ type Available = Extract<UpdateCheckResult, { status: 'available' }>
  *    installed app), so it can't install in place; shows the manual "Download" link.
  *
  * The user can dismiss it for the session; the next check (on launch, then every 6
- * hours) re-surfaces it until
- * they're on the new version.
+ * hours) re-surfaces it until they're on the new version. While the macOS download is
+ * still running, the close button reads "Cancel download" and stops it, so the update
+ * isn't installed on the next quit.
  */
 export function UpdateBanner({
   update,
@@ -43,16 +44,14 @@ export function UpdateBanner({
   onInstall: () => void
   onDismiss: () => void
 }): JSX.Element | null {
-  const dismiss = (
-    <button
-      className="update-banner__dismiss"
-      onClick={onDismiss}
-      aria-label="Dismiss update notice"
-      title="Dismiss"
-    >
+  const closeButton = (label: string, title: string): JSX.Element => (
+    <button className="update-banner__dismiss" onClick={onDismiss} aria-label={label} title={title}>
       ✕
     </button>
   )
+  const dismiss = closeButton('Dismiss update notice', 'Dismiss')
+  // While the download runs, closing the banner stops it (see useUpdateBanner).
+  const cancel = closeButton('Cancel update download', 'Cancel download')
 
   // macOS refused the download, so a manual install is the only way forward. Takes
   // precedence over every other state: none of them can install it anymore.
@@ -110,7 +109,7 @@ export function UpdateBanner({
             <span className="update-banner__progress-fill" style={{ width: `${pct}%` }} />
           </span>
         </span>
-        {dismiss}
+        {cancel}
       </div>
     )
   }
@@ -138,7 +137,7 @@ export function UpdateBanner({
             Download
           </a>
         )}
-        {dismiss}
+        {update.autoInstall ? cancel : dismiss}
       </div>
     )
   }

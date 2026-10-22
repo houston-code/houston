@@ -16,16 +16,16 @@ const receipt = (over: Partial<TurnReceipt> = {}): TurnReceipt => ({
 })
 
 describe('Receipt', () => {
-  it('shows one summary line that names Houston as its author, collapsed', () => {
+  it('shows one summary line under a "What ran" heading, collapsed', () => {
     const { container } = render(<Receipt receipt={receipt()} />)
-    expect(screen.getByText('Recorded by Houston')).toBeInTheDocument()
+    expect(screen.getByText('What ran')).toBeInTheDocument()
     expect(screen.getByText('No tests ran · install failed (no network) · server started · 2 files changed')).toBeInTheDocument()
     expect(container.querySelector('details')?.open).toBe(false)
   })
 
   it('expands to each check, the commands not listed, and the files changed', () => {
     const { container } = render(<Receipt receipt={receipt()} />)
-    fireEvent.click(screen.getByText('Recorded by Houston'))
+    fireEvent.click(screen.getByText('What ran'))
     expect(container.querySelector('details')?.open).toBe(true)
     expect(screen.getByText('pip install -r requirements.txt')).toBeInTheDocument()
     expect(screen.getByText('exit 1, no network')).toBeInTheDocument()
@@ -54,7 +54,15 @@ describe('Receipt', () => {
     )
     expect(container.querySelector('img')).toBeNull()
     expect(container.querySelector('strong')).toBeNull()
-    expect(screen.getByText(label)).toBeInTheDocument()
+    expect(screen.getByTitle(label)).toBeInTheDocument()
+  })
+
+  it('shows each command without its cd and redirection scaffolding, the full one on hover', () => {
+    const label = 'cd /home/me/project/server && PORT=3002 npm run dev 2>&1'
+    render(<Receipt receipt={receipt({ checks: [{ kind: 'server', label, ok: null, unknown: 'still-running', background: true, runs: 1 }] })} />)
+    const cmd = screen.getByText('PORT=3002 npm run dev')
+    expect(cmd).toHaveAttribute('title', label)
+    expect(screen.queryByText(/\/home\/me/)).toBeNull()
   })
 
   it('says how many changed files were left off the list', () => {
@@ -66,7 +74,7 @@ describe('Receipt', () => {
 describe('Receipt todo gaps', () => {
   it('lists the todos marked done with nothing recorded', () => {
     const { container } = render(<Receipt receipt={receipt({ todoGaps: ['Backend tests with pytest'] })} />)
-    fireEvent.click(screen.getByText('Recorded by Houston'))
+    fireEvent.click(screen.getByText('What ran'))
     expect(screen.getByText('Marked done with nothing recorded')).toBeInTheDocument()
     expect(screen.getByText('Backend tests with pytest')).toBeInTheDocument()
     expect(container.querySelector('.receipt--failed')).not.toBeNull()
@@ -89,7 +97,7 @@ describe('Receipt plan progress', () => {
         })}
       />
     )
-    fireEvent.click(screen.getByText('Recorded by Houston'))
+    fireEvent.click(screen.getByText('What ran'))
     expect(screen.getByText('Plan: Todo app')).toBeInTheDocument()
     expect(screen.getByText('not run yet')).toBeInTheDocument()
     expect(screen.getByText('Files not changed yet: web/App.jsx.')).toBeInTheDocument()

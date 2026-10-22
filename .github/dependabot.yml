@@ -20,13 +20,6 @@ updates:
       production-dependencies:
         dependency-type: production
     ignore:
-      # vite 8 requires electron-vite 6, which is still beta — holding the whole
-      # dev-deps group's install hostage. Pin to vite 7 (and its compatible
-      # @vitejs/plugin-react 5) until electron-vite 6 ships stable, then remove.
-      - dependency-name: vite
-        versions: ['>=8']
-      - dependency-name: '@vitejs/plugin-react'
-        versions: ['>=6']
       # typescript-eslint 8.x peers on `typescript >=4.8.4 <6.1.0`, so it cannot
       # resolve the native TypeScript 7 compiler — grouping TS 7 in dev-deps makes
       # `npm ci` fail on the peer conflict. Pin to TypeScript 6 until typescript-eslint
@@ -35,6 +28,8 @@ updates:
         versions: ['>=7']
       # mermaid 12 adds elkjs, which is EPL-2.0 and not on the license-gate allowlist.
       # Stay on mermaid 11 until that license is reviewed or mermaid drops elkjs.
+      # When lifting this: reopen Dependabot alert #63 (katex GHSA-238p-pmpm-9mq7), which
+      # was dismissed because mermaid 11 caps katex at ^0.16; it needs katex >=0.18.2.
       - dependency-name: mermaid
         versions: ['>=12']
   # Keep GitHub Actions pinned-SHAs up to date.

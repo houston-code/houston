@@ -123,14 +123,17 @@ test('⌘W is bound to a custom terminal-aware Close, not the default window clo
     // Inspect the live application menu from the main process. The File → Close
     // item must carry ⌘W and our own click handler (role null) rather than the
     // built-in role:'close', which is what routes ⌘W to the active terminal tab
-    // when focused and to the window otherwise.
-    const close = await app.evaluate(({ Menu }) => {
-      const menu = Menu.getApplicationMenu()
-      const file = menu?.items.find((i) => i.label === 'File')
-      const item = file?.submenu?.items.find((i) => i.label === 'Close')
-      return item ? { accelerator: item.accelerator, role: item.role ?? null } : null
-    })
-    expect(close).not.toBeNull()
+    // when focused and to the window otherwise. The menu is built once startup has
+    // decrypted the credential store, so wait for it rather than reading it at launch.
+    const readClose = () =>
+      app.evaluate(({ Menu }) => {
+        const menu = Menu.getApplicationMenu()
+        const file = menu?.items.find((i) => i.label === 'File')
+        const item = file?.submenu?.items.find((i) => i.label === 'Close')
+        return item ? { accelerator: item.accelerator, role: item.role ?? null } : null
+      })
+    await expect.poll(readClose).not.toBeNull()
+    const close = await readClose()
     expect(close?.accelerator).toBe('CmdOrCtrl+W')
     expect(close?.role).toBeNull()
   } finally {

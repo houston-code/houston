@@ -105,9 +105,10 @@ export function replacementPairs(lines: NumberedLine[]): Map<number, number> {
 }
 
 /**
- * Above this many lines on either side we skip the O(m·n) LCS table and fall back
- * to a coarse "remove all, then add all" diff, so a huge file overwrite can't lock
- * up the renderer.
+ * Above this many changed lines on either side we skip the O(m·n) LCS table and fall
+ * back to a coarse "remove all, then add all" diff, so a huge rewrite can't lock up
+ * the renderer. Only the stretch between the common head and tail counts: an edit to
+ * a long file is a few changed lines inside thousands of unchanged ones.
  */
 const MAX_LCS_LINES = 2000
 
@@ -127,6 +128,28 @@ export function diffLines(oldStr: string, newStr: string): DiffLine[] {
   const newEol = newStr.endsWith('\n')
   if (oldEol && (newEol || newStr === '')) a.pop()
   if (newEol && (oldEol || oldStr === '')) b.pop()
+
+  // Lines shared at the start and end are unchanged context however the middle is
+  // diffed. Peeling them off first keeps a one-line edit in a 3,000-line file out of
+  // the coarse fallback below, which would otherwise report every line of the file as
+  // removed and re-added, and a preview cut to its first lines would never reach the
+  // change being approved.
+  let head = 0
+  while (head < a.length && head < b.length && a[head] === b[head]) head++
+  let tail = 0
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) {
+    tail++
+  }
+  const ctx = (text: string): DiffLine => ({ type: 'ctx', text })
+  return [
+    ...a.slice(0, head).map(ctx),
+    ...diffMiddle(a.slice(head, a.length - tail), b.slice(head, b.length - tail)),
+    ...a.slice(a.length - tail).map(ctx)
+  ]
+}
+
+/** LCS line diff of two line lists, or the coarse fallback when either is huge. */
+function diffMiddle(a: string[], b: string[]): DiffLine[] {
   const m = a.length
   const n = b.length
 

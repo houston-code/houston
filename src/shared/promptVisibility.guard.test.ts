@@ -111,12 +111,13 @@ describe('prompt visibility guard', () => {
       'main/tui.ts': 2
     })
     // A ship action's prompt is read only by shipTurn; the renderer's other
-    // `.prompt`s are tool arguments shown to the user: spawn_session's in a tool
-    // row, and propose_session's brief on its card (sent only via proposalHereTurn).
+    // `.prompt` is a tool argument shown to the user: propose_session's brief on its
+    // card (sent only via proposalHereTurn). spawn_session's prompt labels its tool
+    // row in shared/toolLabel.ts, which both clients use.
     expect(occurrences(['renderer/src'], /\.prompt\b/)).toEqual({
-      'renderer/src/lib/toolDisplay.ts': 1,
       'renderer/src/components/ProposalCard.tsx': 1
     })
+    expect(occurrences(['shared'], /\ba\.prompt\b/)).toEqual({ 'shared/toolLabel.ts': 1 })
     expect(occurrences(['shared'], /\baction\.prompt\b/)).toEqual({ 'shared/promptInvocation.ts': 1 })
   })
 })

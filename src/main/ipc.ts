@@ -26,7 +26,7 @@ import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDa
 import { sanitizeInvocation } from '@shared/promptInvocation'
 import { MAX_ATTACHMENT_FILES, type ClipboardContent, type PickedFile } from '@shared/composerContext'
 import { readPickedFile } from './pickedFiles'
-import { checkForUpdates, installUpdate, takePendingWhatsNew } from './updater'
+import { cancelDownload, checkForUpdates, installUpdate, takePendingWhatsNew } from './updater'
 import {
   getSettings,
   saveSettings,
@@ -46,7 +46,7 @@ import {
   revealInFileManager
 } from './openInEditor'
 import { relaunchApp } from './quit-confirm'
-import { setKey, deleteKey, setMcpOAuthTokens, secureStorageStatus } from './secrets'
+import { setKey, deleteKey, setMcpOAuthTokens, secureStorageStatus, flushSecrets } from './secrets'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { getMcpStatuses } from './mcp/manager'
 import { openExternalSafely } from './safeExternal'
@@ -110,6 +110,7 @@ import {
   createConversation,
   forkConversation,
   deleteConversation,
+  otherConversationsInWorktree,
   importConversation,
   organizeConversation,
   reorderConversations,
@@ -429,6 +430,8 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
   // "Restart to install" — apply a downloaded update now instead of on next quit.
   ipcMain.handle(IPC.updateInstall, () => installUpdate())
+  // Closing the banner mid-download stops it, so nothing installs on the next quit.
+  ipcMain.handle(IPC.updateCancelDownload, () => cancelDownload())
 
   // Share Houston: the sidebar button anchors the macOS share menu at the point it
   // passes (window-relative CSS px); a non-finite point falls back to the cursor.
@@ -685,13 +688,16 @@ export function registerIpc(): void {
     cleanupPermissionRules(Array.isArray(rules) ? rules : [])
   )
 
-  ipcMain.handle(IPC.settingsSetKey, (_event, providerId: string, key: string) => {
+  // Wait for the encrypted write so a failed save reaches the renderer as an error.
+  ipcMain.handle(IPC.settingsSetKey, async (_event, providerId: string, key: string) => {
     setKey(providerId, key)
+    await flushSecrets()
     return getSettings()
   })
 
-  ipcMain.handle(IPC.settingsDeleteKey, (_event, providerId: string) => {
+  ipcMain.handle(IPC.settingsDeleteKey, async (_event, providerId: string) => {
     deleteKey(providerId)
+    await flushSecrets()
     return getSettings()
   })
 
@@ -736,6 +742,7 @@ export function registerIpc(): void {
           openUrl: (url) => openExternalSafely(url)
         })
         setMcpOAuthTokens(serverId, tokens)
+        await flushSecrets()
         return { ok: true, settings: getSettings() }
       } catch (e) {
         return { ok: false, error: (e as Error).message, settings: getSettings() }
@@ -824,7 +831,10 @@ export function registerIpc(): void {
       const conv = getConversation(id)
       const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
       const title = conv?.title ?? 'this chat'
-      const kind: DeleteDialogKind = !conv?.worktree
+      // A worktree another chat still runs in (a fork shares its source's) is never
+      // offered for removal, even when it looks disposable.
+      const shared = conv?.worktree ? otherConversationsInWorktree(id, conv.worktree.path) > 0 : false
+      const kind: DeleteDialogKind = !conv?.worktree || shared
         ? 'plain'
         : (await isWorktreeDisposable(conv.worktree))
           ? 'disposableWorktree'
@@ -857,7 +867,10 @@ export function registerIpc(): void {
                 kind === 'disposableWorktree'
                   ? `Its worktree on branch “${conv!.worktree!.branch}” has no changes or ` +
                     `unmerged commits, so it will be removed too. This cannot be undone.`
-                  : 'This cannot be undone.'
+                  : shared
+                    ? `This cannot be undone. Its worktree on branch “${conv!.worktree!.branch}” ` +
+                      `stays, because another chat still uses it.`
+                    : 'This cannot be undone.'
             }
       )
 

@@ -77,6 +77,7 @@ import { pathToFileURL } from 'node:url'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
 import { SHARE_MESSAGE } from '@shared/share'
 import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
+import { describeToolCall } from '@shared/toolLabel'
 import { renderPreviewView } from './tui-diff'
 import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
@@ -298,11 +299,16 @@ export function renderTodoList(todos: Todo[], paint: Painter): string {
   return lines.join('\n')
 }
 
-/** One-line summary of a tool starting, e.g. "· read_file  src/x.ts". */
+/**
+ * One-line summary of a tool starting, named the way the desktop's tool row names
+ * it: "· Read  src/x.ts", "· Run  npm test", not the wire name ("read_file").
+ */
 export function renderToolStart(name: string, args: Record<string, unknown>, paint: Painter): string {
-  const hint = toolArgHint(args)
+  const { verb, target } = describeToolCall(name, args)
+  // A tool the shared labels don't know keeps the old best-effort argument hint.
+  const hint = truncate((target || (verb === name ? toolArgHint(args) : '')).replace(/\s+/g, ' ').trim(), 80)
   const suffix = hint ? `  ${paint(hint, 'dim')}` : ''
-  return `${paint('·', 'dim')} ${paint(name, 'cyan')}${suffix}`
+  return `${paint('·', 'dim')} ${paint(verb, 'cyan')}${suffix}`
 }
 
 /** Best-effort one-liner describing a tool call's most salient argument. */
@@ -320,7 +326,9 @@ export function toolArgHint(args: Record<string, unknown>): string {
  */
 export function renderApprovalPrompt(
   ev: Extract<AgentEvent, { type: 'tool_approval' }>,
-  paint: Painter
+  paint: Painter,
+  /** The arrow-key picker lists the choices itself; the typed-answer keys would repeat them. */
+  opts: { picker?: boolean } = {}
 ): string {
   // The full-auto shell-network question comes after a command already failed offline.
   // It decides the chat's shell network, not the command, so frame it as a network grant
@@ -331,7 +339,8 @@ export function renderApprovalPrompt(
       '  Shell commands in this chat run offline until you allow it. Allowing applies to the rest of this chat, not just this command.',
       'dim'
     )
-    return `\n${head}\n  ${ev.summary}\n${note}\n${paint('  [y] allow network for this chat   [n] keep offline', 'dim')}`
+    const keys = opts.picker ? '' : `\n${paint('  [y] allow network for this chat   [n] keep offline', 'dim')}`
+    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
   }
   const warn =
     ev.kind === 'shell' && ev.sandboxed === false
@@ -348,11 +357,38 @@ export function renderApprovalPrompt(
     : ''
   const head = paint(`Approve ${ev.name}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
-  return (
-    `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}\n` +
-    paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim') +
-    paint('\n  …or type why not, and that goes back to the agent', 'dim')
-  )
+  const keys = opts.picker
+    ? ''
+    : `\n${paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim')}` +
+      paint('\n  …or type why not, and that goes back to the agent', 'dim')
+  return `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}${keys}`
+}
+
+/**
+ * The line recording how an approval was answered, as the desktop's card shows its
+ * outcome once decided. Without it the scrollback kept only the menu, and Esc
+ * (which denies) left no sign of what happened.
+ */
+export function approvalOutcome(
+  decision: ToolApprovalDecision,
+  opts: { shellNetwork?: boolean; note?: string } = {}
+): string {
+  if (opts.shellNetwork) {
+    if (decision === 'deny') return 'Running offline'
+    return decision === 'always' ? 'Network allowed for this run' : 'Network allowed'
+  }
+  switch (decision) {
+    case 'allow':
+      return 'Allowed'
+    case 'always':
+      return 'Allowed for this run'
+    case 'rule-allow':
+      return 'Always allowed (rule saved)'
+    case 'rule-deny':
+      return 'Always denied (rule saved)'
+    case 'deny':
+      return opts.note ? `Denied: ${opts.note}` : 'Denied'
+  }
 }
 
 /**
@@ -516,14 +552,16 @@ export function renderToolResult(
   if (ok && name === PRESENT_PLAN_TOOL) return paint(`  ↳ ${PLAN_OUTCOME_LABEL[planOutcome(output)]}`, 'dim')
   const lines = output.split('\n')
   if (!ok) {
+    // "✗ Run failed", matching the row above it, not the wire name.
+    const failed = paint(`  ✗ ${describeToolCall(name, undefined).verb} failed`, 'red')
     const body = trimBlank(lines)
-    if (!body.length) return paint(`  ✗ ${name} failed`, 'red')
+    if (!body.length) return failed
     const shown = body.slice(0, FAILURE_LINES).map((l) => paint(`    ${truncate(l, 200)}`, 'dim'))
     const more =
       body.length > FAILURE_LINES
         ? [paint(`    … ${body.length - FAILURE_LINES} more lines (/output to see it all)`, 'dim')]
         : []
-    return [paint(`  ✗ ${name} failed`, 'red'), ...shown, ...more].join('\n')
+    return [failed, ...shown, ...more].join('\n')
   }
   if (opts.verbose) {
     const body = trimBlank(lines)
@@ -1421,7 +1459,7 @@ export const HELP_TEXT = [
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
-  '  /theme [name]         list or switch color theme (default | bright | mono)',
+  `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
   '  /image [path]         attach an image from your clipboard, or a file',
   '  /cwd                  show the working directory',
   '  /share                copy an invite to Houston to send a friend',
@@ -3430,6 +3468,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // (and per subagent), which would be noisy to print each time — the live
     // session total already sits in the status line above the composer. So we sum
     // the round usages here and print one compact summary when the turn ends.
+    // Back-to-back retries of one request: the first prints a line and later ones
+    // only relabel the spinner, as the desktop updates one line in place instead of
+    // stacking six. Any other output ends the streak.
+    let retryStreak = 0
     let turnInputTokens = 0
     let turnOutputTokens = 0
     let turnCost = 0
@@ -3468,6 +3510,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // bell + notification honor the user's existing "notify me" setting.
       if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
       if (e.type === 'text') {
+        retryStreak = 0 // the request got through
         const s = md.push(e.delta)
         if (s) roundShown = true
         deps.io.out(s)
@@ -3480,6 +3523,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // Any event but reasoning means the streaming round is over (or gone).
       const roundWasShown = roundShown
       if (e.type !== 'reasoning') roundShown = false
+      // Usage and a discarded partial round belong to the retry they surround.
+      if (e.type !== 'retry' && e.type !== 'error' && e.type !== 'usage' && e.type !== 'turn_discarded') {
+        retryStreak = 0
+      }
       switch (e.type) {
         case 'reasoning':
           deps.io.setSpinnerLabel?.('Thinking')
@@ -3494,7 +3541,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           }
           break
         case 'tool_start': {
-          deps.io.setSpinnerLabel?.(e.name)
+          deps.io.setSpinnerLabel?.(describeToolCall(e.name, e.args).verb)
           toolArgs.set(e.callId, e.args)
           // A todo update IS its list; showing "· todo_write" and then a count of
           // what changed tells you nothing about the plan.
@@ -3560,8 +3607,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
         case 'retry':
-          deps.io.setSpinnerLabel?.('Retrying')
-          deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
+          deps.io.setSpinnerLabel?.(`Retrying ${e.attempt}/${e.max}`)
+          if (retryStreak === 0) deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
+          retryStreak = e.attempt
           break
         case 'model_fallback':
           deps.io.setSpinnerLabel?.('Switching model')
@@ -3570,7 +3618,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_approval':
           enqueue(async () => {
             // Context (name, kind, unsandboxed warning) + the diff for a write.
-            deps.io.out(`${renderApprovalPrompt(e, paint)}\n`)
+            deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select })}\n`)
             if (e.kind === 'write') {
               // Prefer the main process's preview: it is diffed against the files'
               // actual contents, so an overwrite shows what changed rather than the
@@ -3596,6 +3644,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               // reason" there would be nonsense, so keep that prompt to three options.
               const r = await deps.io.select({
                 title: 'Choose:',
+                // Esc is a refusal here (the safe default), so the footer says so.
+                escLabel: e.shellNetwork ? 'keep offline' : 'deny',
                 options: e.shellNetwork
                   ? [
                       { label: 'Allow network for this chat', value: 'always' },
@@ -3627,6 +3677,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               decision = parsed.decision
               note = parsed.note
             }
+            const outcome = approvalOutcome(decision, { shellNetwork: e.shellNetwork, note })
+            deps.io.out(paint(`  ↳ ${stripControlChars(outcome)}\n`, decision === 'deny' || decision === 'rule-deny' ? 'yellow' : 'dim'))
             deps.resolveApproval(e.runId, e.callId, decision, note)
           })
           break
@@ -3726,6 +3778,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           if (e.inputTokens) contextTokens = e.inputTokens
           break
         case 'error':
+          // The run gave up mid-streak: say the retries are over, so the line above
+          // doesn't read as still in progress.
+          if (retryStreak > 0) {
+            deps.io.out(
+              paint(`\n· tried ${retryStreak} more time${retryStreak === 1 ? '' : 's'}, then stopped\n`, 'yellow')
+            )
+          }
           deps.io.out(paint(`\nError: ${e.message}\n`, 'red'))
           break
         case 'limit':

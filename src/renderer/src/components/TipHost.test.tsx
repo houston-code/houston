@@ -63,11 +63,12 @@ describe('TipHost', () => {
   it('picks up an anchor that mounts later', async () => {
     render(<TipHost {...props({ relevant: ['worktree'] })} />)
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-    await act(async () => {
+    act(() => {
       cleanupAnchors = anchors(['worktree'])
-      await new Promise((r) => setTimeout(r, 50))
     })
-    expect(screen.getByRole('dialog', { name: 'Keep your checkout clean' })).toBeInTheDocument()
+    // The anchor is noticed by a MutationObserver and re-rendered on the next animation
+    // frame; poll for it rather than sleeping a fixed time a loaded runner can overrun.
+    expect(await screen.findByRole('dialog', { name: 'Keep your checkout clean' })).toBeInTheDocument()
   })
 
   it('holds tips while a modal is open', () => {

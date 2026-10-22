@@ -8,7 +8,7 @@ name: Dependabot auto-queue
 # before anything lands. This workflow only saves a maintainer the click.
 #
 # Major bumps are left for a human. They are the updates that tend to need code changes
-# (see the TypeScript 7 and vite 8 holds in dependabot.yml), and green CI on a major is
+# (see the TypeScript 7 hold in dependabot.yml), and green CI on a major is
 # weaker evidence than on a patch. That covers security updates too: a patch or minor
 # security fix is queued here, a major one waits for review like any other major.
 #

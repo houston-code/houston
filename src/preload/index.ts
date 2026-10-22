@@ -504,7 +504,9 @@ const api = {
     return () => ipcRenderer.removeListener(IPC.updateInstallFailed, listener)
   },
   /** Install a downloaded update now (quit, apply, relaunch). */
-  installUpdate: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateInstall)
+  installUpdate: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateInstall),
+  /** Cancel the background update download; resolves false if there was none to cancel. */
+  cancelUpdateDownload: (): Promise<boolean> => ipcRenderer.invoke(IPC.updateCancelDownload)
 }
 
 export type CoderApi = typeof api

@@ -39,7 +39,7 @@ const h = vi.hoisted(() => {
       autoInstallOnAppQuit: boolean
       on: (event: string, cb: (arg: unknown) => void) => void
       checkForUpdates: () => Promise<unknown>
-      downloadUpdate: () => Promise<unknown>
+      downloadUpdate: (token?: unknown) => Promise<unknown>
       quitAndInstall: () => void
     }
   }
@@ -110,8 +110,42 @@ vi.mock('electron', () => ({
   }
 }))
 
+/** Stand-in for electron-updater's CancellationToken: cancel() runs what's registered. */
+class FakeToken {
+  cancelled = false
+  onCancel: () => void = () => {}
+  cancel(): void {
+    this.cancelled = true
+    this.onCancel()
+  }
+}
+
+/** A download that never finishes on its own and rejects once its token is cancelled,
+ *  the way electron-updater's does. */
+function cancellableDownload(token = new FakeToken()): {
+  token: FakeToken
+  promise: Promise<unknown>
+} {
+  const promise = new Promise((_resolve, reject) => {
+    token.onCancel = () => reject(new Error('cancelled'))
+  })
+  return { token, promise }
+}
+
+/** An available update whose background download can be cancelled. */
+function availableWithDownload(): { token: FakeToken; promise: Promise<unknown> } {
+  const download = cancellableDownload()
+  h.checkResult = {
+    isUpdateAvailable: true,
+    updateInfo: { version: '0.3.0' },
+    downloadPromise: download.promise,
+    cancellationToken: download.token
+  }
+  return download
+}
+
 vi.mock('electron-updater', () => ({
-  default: { autoUpdater: h.autoUpdater }
+  default: { autoUpdater: h.autoUpdater, CancellationToken: FakeToken }
 }))
 
 // Keep the real update-policy behaviour but make the "may auto-install?" gate
@@ -597,6 +631,98 @@ describe('checkForUpdatesFromMenu', () => {
     await checkForUpdatesFromMenu()
     expect(h.quitAndInstallCalls).toBe(0)
     expect(h.opened).toEqual(['https://houstoncode.ai/#download'])
+  })
+})
+
+describe('cancelDownload (the banner close button)', () => {
+  beforeEach(() => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+  })
+
+  it('cancels the background download a check started', async () => {
+    const download = availableWithDownload()
+    const { cancelDownload, checkForUpdates } = await load()
+    await checkForUpdates()
+
+    expect(cancelDownload()).toBe(true)
+    expect(download.token.cancelled).toBe(true)
+    await expect(download.promise).rejects.toThrow('cancelled')
+    // Nothing is left to cancel, and nothing was handed over to install on quit.
+    expect(cancelDownload()).toBe(false)
+    expect(h.sent.some((s) => s.channel === IPC.updateDownloaded)).toBe(false)
+  })
+
+  it('does nothing when no download is running', async () => {
+    h.checkResult = { isUpdateAvailable: false, updateInfo: { version: '0.2.0' } }
+    const { cancelDownload, checkForUpdates } = await load()
+    expect(cancelDownload()).toBe(false)
+    await checkForUpdates()
+    expect(cancelDownload()).toBe(false)
+  })
+
+  it('leaves a download alone once it is handed to Squirrel.Mac', async () => {
+    const download = availableWithDownload()
+    const { cancelDownload, checkForUpdates } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+
+    // Squirrel is verifying it, and will install it on quit whatever we do now.
+    expect(cancelDownload()).toBe(false)
+    fireNative('update-downloaded')
+    expect(cancelDownload()).toBe(false)
+    expect(download.token.cancelled).toBe(false)
+  })
+
+  it('lets the next check download the update again', async () => {
+    const first = availableWithDownload()
+    const { cancelDownload, checkForUpdates } = await load()
+    await checkForUpdates()
+    cancelDownload()
+    await first.promise.catch(() => {})
+
+    const second = availableWithDownload()
+    await checkForUpdates()
+    expect(h.sent.filter((s) => s.channel === IPC.updateAvailable)).toHaveLength(2)
+    expect(cancelDownload()).toBe(true)
+    expect(second.token.cancelled).toBe(true)
+  })
+
+  it('stops a menu Update that is waiting on the download, without an error dialog', async () => {
+    availableWithDownload()
+    h.dialogResponses = [0] // Update
+    const { cancelDownload, checkForUpdatesFromMenu } = await load()
+    const done = checkForUpdatesFromMenu()
+    await new Promise((r) => setTimeout(r, 0))
+
+    expect(cancelDownload()).toBe(true)
+    await done
+    expect(h.quitAndInstallCalls).toBe(0)
+    expect(h.dialogs).toHaveLength(1) // just the "Update available" prompt
+    expect(h.opened).toEqual([])
+  })
+
+  it('can cancel a download the menu started itself', async () => {
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    let started: FakeToken | null = null
+    const original = h.autoUpdater.downloadUpdate
+    h.autoUpdater.downloadUpdate = (token) => {
+      started = token as FakeToken
+      return cancellableDownload(started).promise
+    }
+    h.dialogResponses = [0] // Update
+    const { cancelDownload, checkForUpdatesFromMenu } = await load()
+    try {
+      const done = checkForUpdatesFromMenu()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(started).toBeInstanceOf(FakeToken)
+      expect(cancelDownload()).toBe(true)
+      await done
+    } finally {
+      h.autoUpdater.downloadUpdate = original
+    }
+    expect(started!.cancelled).toBe(true)
+    expect(h.quitAndInstallCalls).toBe(0)
+    expect(h.dialogs).toHaveLength(1)
   })
 })
 

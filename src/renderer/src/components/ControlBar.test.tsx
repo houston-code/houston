@@ -292,6 +292,16 @@ describe('ControlBar', () => {
     expect(screen.getByText('⑂ houston/feat')).toBeInTheDocument()
   })
 
+  it('keeps a long branch name on one line, truncated, with the full name on hover', () => {
+    const branch = 'houston/mini-hello-world-file-824a89'
+    render(
+      <ControlBar {...baseProps()} newChat={false} currentWorktree={{ path: '/wt', branch, repoRoot: '/repo' }} />
+    )
+    const text = screen.getByText(`⑂ ${branch}`)
+    expect(text).toHaveClass('control__text')
+    expect(text.parentElement).toHaveAttribute('title', expect.stringContaining(branch))
+  })
+
   it('surfaces token usage only when there are tokens', () => {
     const { unmount } = render(<ControlBar {...baseProps()} usage={null} />)
     expect(screen.queryByTitle(/Output this conversation/)).not.toBeInTheDocument()

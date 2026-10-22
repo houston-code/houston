@@ -23,7 +23,8 @@ function progress(percent: number): UpdateDownloadProgress {
   return { percent, bytesPerSecond: 1000, transferred: percent, total: 100 }
 }
 
-/** Install a fake `window.api` exposing the four updater subscriptions; returns emitters. */
+/** Install a fake `window.api` exposing the four updater subscriptions and the download
+ *  cancel; returns emitters. */
 function installApi() {
   const handlers: {
     available?: (u: Available) => void
@@ -32,6 +33,7 @@ function installApi() {
     failed?: (f: UpdateInstallFailed) => void
   } = {}
   const unsubscribe = vi.fn()
+  const cancelUpdateDownload = vi.fn(async () => true)
   const sub =
     <K extends keyof typeof handlers>(key: K) =>
     (cb: NonNullable<(typeof handlers)[K]>) => {
@@ -42,10 +44,12 @@ function installApi() {
     onUpdateAvailable: vi.fn(sub('available')),
     onUpdateDownloadProgress: vi.fn(sub('progress')),
     onUpdateDownloaded: vi.fn(sub('downloaded')),
-    onUpdateInstallFailed: vi.fn(sub('failed'))
+    onUpdateInstallFailed: vi.fn(sub('failed')),
+    cancelUpdateDownload
   } as unknown as typeof window.api
   return {
     unsubscribe,
+    cancelUpdateDownload,
     available: (u: Available) => act(() => handlers.available!(u)),
     progress: (p: UpdateDownloadProgress) => act(() => handlers.progress!(p)),
     downloaded: (d: UpdateDownloaded) => act(() => handlers.downloaded!(d)),
@@ -80,6 +84,28 @@ describe('useUpdateBanner', () => {
 
     expect(result.current.update).toBeNull()
     expect(result.current.progress).toBeNull()
+  })
+
+  it('cancels the download when dismissed', () => {
+    const emit = installApi()
+    const { result } = renderHook(() => useUpdateBanner())
+    emit.available(available)
+    emit.progress(progress(30))
+
+    act(() => result.current.dismiss())
+
+    expect(emit.cancelUpdateDownload).toHaveBeenCalledOnce()
+  })
+
+  it('still dismisses when the cancel request fails', async () => {
+    const emit = installApi()
+    emit.cancelUpdateDownload.mockRejectedValueOnce(new Error('ipc gone'))
+    const { result } = renderHook(() => useUpdateBanner())
+    emit.available(available)
+
+    await act(async () => result.current.dismiss())
+
+    expect(result.current.update).toBeNull()
   })
 
   it('resurfaces on the next check', () => {

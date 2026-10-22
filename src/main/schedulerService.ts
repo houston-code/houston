@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import {
@@ -30,6 +30,14 @@ import { log } from './logger'
  * missed while Houston was closed fire once at the next `start()` — anacron
  * semantics, so a "daily at 9" still happens on a machine that was asleep at 9 —
  * and then the schedule realigns to its normal cadence.
+ *
+ * The file is the source of truth, not any one process's copy of it. The desktop app
+ * and a terminal session can run at once, and either can create or cancel a schedule
+ * (the one-shot CLI only manages them). So every change re-reads the file, applies
+ * itself, and writes it back under a lock file, and a firing host advances a due
+ * schedule on disk BEFORE starting its run, so a second host that wakes for the same
+ * occurrence sees it already taken. Hosts re-read the file at least every
+ * {@link POLL_MS}, so a schedule created in another process fires on time.
  *
  * Everything host-specific is injected: hosts that only manage schedules (the
  * one-shot headless CLI) create the service and never `start()` it, so creating/
@@ -72,6 +80,40 @@ export interface SchedulerService extends SchedulerBackend {
  */
 const MAX_TIMER_MS = 12 * 60 * 60 * 1000
 
+/**
+ * Longest a running host goes without re-reading the store, so a schedule another
+ * process created (the desktop app and a terminal session share the file) is picked
+ * up within a minute of when it is due. Well under the 5-minute minimum interval.
+ */
+export const POLL_MS = 60 * 1000
+
+/** Attempts to take the store's lock file before going ahead without it. */
+const LOCK_ATTEMPTS = 200
+/** Pause between lock attempts. The critical section is a few synchronous file ops. */
+const LOCK_RETRY_MS = 5
+
+/** Block this thread for `ms` (the lock is taken from synchronous code). */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/** Whether a lock file names a process that no longer exists (it died holding it). */
+function lockIsStale(lock: string): boolean {
+  let pid: number
+  try {
+    pid = Number(readFileSync(lock, 'utf8').trim())
+  } catch {
+    return false // gone already, or unreadable: let the next attempt find out
+  }
+  if (!Number.isInteger(pid) || pid <= 0) return false // still being written
+  try {
+    process.kill(pid, 0)
+    return false
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === 'ESRCH'
+  }
+}
+
 export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerService {
   const now = deps.now ?? Date.now
   const warn = deps.warn ?? ((m: string) => log.warn(m))
@@ -83,6 +125,52 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
   let schedules: ScheduledRunInfo[] = load()
   let timer: NodeJS.Timeout | null = null
   let started = false
+
+  /**
+   * Run `fn` holding `<file>.lock`, so two processes' read-modify-write of the store
+   * can't interleave. A lock left by a process that died is broken; one that stays
+   * held past the retry budget is waited out no longer (a lost update beats a host
+   * that can never change its schedules).
+   */
+  function locked<T>(fn: () => T): T {
+    const lock = `${deps.file}.lock`
+    let held = false
+    for (let attempt = 0; attempt < LOCK_ATTEMPTS && !held; attempt++) {
+      try {
+        mkdirSync(dirname(deps.file), { recursive: true })
+        writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 })
+        held = true
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== 'EEXIST') break // can't lock here at all
+        if (lockIsStale(lock)) {
+          try {
+            unlinkSync(lock)
+          } catch {
+            // another process broke it first
+          }
+          continue
+        }
+        sleepSync(LOCK_RETRY_MS)
+      }
+    }
+    if (!held) warn(`could not lock ${deps.file}; updating schedules without the lock`)
+    try {
+      return fn()
+    } finally {
+      if (held) {
+        try {
+          unlinkSync(lock)
+        } catch {
+          // already gone
+        }
+      }
+    }
+  }
+
+  /** Replace the in-memory copy with what is on disk now. */
+  function reload(): void {
+    schedules = load()
+  }
 
   function load(): ScheduledRunInfo[] {
     let raw: string
@@ -142,8 +230,10 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
     const times = schedules
       .map((s) => s.nextRunAt)
       .filter((t): t is number => t !== null)
-    if (times.length === 0) return
-    const delay = Math.min(Math.max(Math.min(...times) - now(), 0), MAX_TIMER_MS)
+    // Wake at the earliest known occurrence, and at least every POLL_MS regardless, to
+    // pick up schedules another process added since the last read.
+    const earliest = times.length ? Math.max(Math.min(...times) - now(), 0) : POLL_MS
+    const delay = Math.min(earliest, POLL_MS, MAX_TIMER_MS)
     timer = setTimeout(fireDue, delay)
     // A pending timer must not hold the process open (the CLI exits when its
     // session ends; Electron quits on window close).
@@ -153,35 +243,53 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
   function fireDue(): void {
     timer = null
     const at = now()
-    let fired = false
-    for (const s of schedules) {
-      if (s.nextRunAt === null || s.nextRunAt > at) continue
-      fired = true
-      const spec = specOf(s)
-      // Advance BEFORE firing so a fire that throws synchronously can't wedge the
-      // schedule into refiring the same occurrence forever.
-      s.lastFiredAt = at
-      s.nextRunAt = spec ? nextOccurrence(spec, new Date(at)) : null
+    // Claim every due occurrence on disk before starting any run, so another host
+    // waking for the same occurrence finds it already advanced.
+    const due = locked(() => {
+      reload()
+      const claimed: ScheduledRunInfo[] = []
+      for (const s of schedules) {
+        if (s.nextRunAt === null || s.nextRunAt > at) continue
+        const spec = specOf(s)
+        // Advance BEFORE firing so a fire that throws synchronously can't wedge the
+        // schedule into refiring the same occurrence forever.
+        s.lastFiredAt = at
+        s.nextRunAt = spec ? nextOccurrence(spec, new Date(at)) : null
+        claimed.push({ ...s })
+      }
+      if (claimed.length > 0) {
+        // Spent one-shots ('once' after firing) are removed rather than listed forever.
+        schedules = schedules.filter((s) => s.nextRunAt !== null || s.lastFiredAt === undefined)
+        save()
+      }
+      return claimed
+    })
+    for (const s of due) {
       deps
         .fire(s)
-        .then(() => {
-          s.lastResult = 'ok'
-          delete s.lastError
-          save()
-        })
-        .catch((e: unknown) => {
-          s.lastResult = 'error'
-          s.lastError = e instanceof Error ? e.message : String(e)
-          warn(`scheduled run "${s.name}" (${s.id}) failed to start: ${s.lastError}`)
-          save()
-        })
-    }
-    if (fired) {
-      // Spent one-shots ('once' after firing) are removed rather than listed forever.
-      schedules = schedules.filter((s) => s.nextRunAt !== null || s.lastFiredAt === undefined)
-      save()
+        .then(
+          () => recordResult(s.id, { lastResult: 'ok' }),
+          (e: unknown) => {
+            const lastError = e instanceof Error ? e.message : String(e)
+            warn(`scheduled run "${s.name}" (${s.id}) failed to start: ${lastError}`)
+            recordResult(s.id, { lastResult: 'error', lastError })
+          }
+        )
     }
     arm()
+  }
+
+  /** Store how a fire went on the schedule as it is on disk now (it may be gone). */
+  function recordResult(id: string, result: { lastResult: 'ok' | 'error'; lastError?: string }): void {
+    locked(() => {
+      reload()
+      const s = schedules.find((x) => x.id === id)
+      if (!s) return
+      s.lastResult = result.lastResult
+      if (result.lastError === undefined) delete s.lastError
+      else s.lastError = result.lastError
+      save()
+    })
   }
 
   return {
@@ -197,23 +305,31 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
         nextRunAt: nextOccurrence(parsed, new Date(at)),
         createdAt: at
       }
-      schedules.push(info)
-      save()
+      locked(() => {
+        reload()
+        schedules.push(info)
+        save()
+      })
       arm()
       return { ...info }
     },
 
     list(): ScheduledRunInfo[] {
+      reload()
       return schedules.map((s) => ({ ...s }))
     },
 
     cancel(id: string): boolean {
-      const before = schedules.length
-      schedules = schedules.filter((s) => s.id !== id)
-      if (schedules.length === before) return false
-      save()
-      arm()
-      return true
+      const removed = locked(() => {
+        reload()
+        const before = schedules.length
+        schedules = schedules.filter((s) => s.id !== id)
+        if (schedules.length === before) return false
+        save()
+        return true
+      })
+      if (removed) arm()
+      return removed
     },
 
     start(): void {
