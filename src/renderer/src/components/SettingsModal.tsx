@@ -952,11 +952,13 @@ export function SettingsModal({
         </div>
 
         <div className="modal__main">
-          <nav className="modal__nav">
+          <nav className="modal__nav" aria-label="Settings sections">
             {TABS.map((t) => (
               <button
                 key={t.id}
                 className={t.id === tab ? 'is-active' : ''}
+                // The highlighted section is otherwise only a color and a rail.
+                aria-current={t.id === tab ? 'page' : undefined}
                 onClick={() => setTab(t.id)}
               >
                 <span className="set-nav__icon" aria-hidden="true">
