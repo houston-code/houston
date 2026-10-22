@@ -33,7 +33,8 @@ const FOCUSABLE =
  * menu opens fully visible and only scrolls internally when the content genuinely
  * can't fit. Pin it to the trigger's left or right edge with `align`.
  *
- * Keyboard: focus moves onto the first item on open; ArrowUp/Down roves between
+ * Keyboard: focus moves onto the first item on open (or the element marked
+ * `data-autofocus`, when a menu wants focus somewhere other than its first item); ArrowUp/Down roves between
  * items; Escape closes (and is swallowed so it can't also cancel a running turn);
  * focus is restored to the trigger on close.
  */
@@ -108,7 +109,9 @@ export function Popover({
     if (!positioned) return
     const trigger = anchorRef.current
     const menu = ref.current
-    menu?.querySelector<HTMLElement>(FOCUSABLE)?.focus()
+    const first =
+      menu?.querySelector<HTMLElement>('[data-autofocus]') ?? menu?.querySelector<HTMLElement>(FOCUSABLE)
+    first?.focus()
     return () => {
       const active = document.activeElement
       if (!active || active === document.body || menu?.contains(active)) trigger?.focus?.()
