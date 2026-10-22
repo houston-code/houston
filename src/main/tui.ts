@@ -729,10 +729,16 @@ export interface StatusState {
   contextTokens: number
 }
 
+/** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
+export function homeRelative(path: string, home = process.env.HOME ?? process.env.USERPROFILE): string {
+  if (!home) return path
+  if (path === home || path.startsWith(`${home}/`) || path.startsWith(`${home}\\`)) return `~${path.slice(home.length)}`
+  return path
+}
+
 /** Shorten a path for the status line: `~` for home, and only the last two segments. */
 export function shortCwd(cwd: string, home = process.env.HOME): string {
-  let p = cwd
-  if (home && (p === home || p.startsWith(`${home}/`))) p = `~${p.slice(home.length)}`
+  const p = homeRelative(cwd, home)
   const segs = p.split('/').filter(Boolean)
   if (segs.length <= 2) return p
   return `${p.startsWith('~') ? '~/' : '…/'}${segs.slice(-2).join('/')}`
@@ -2764,7 +2770,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
 
   deps.io.out(
     `${paint('Houston', 'bold', 'cyan')} ${paint(deps.version ? `v${deps.version}` : '', 'dim')} ${paint('(interactive)', 'dim')}\n` +
-      `${paint(`  cwd:      ${opts.cwd}`, 'dim')}\n` +
+      // `~` for the home folder keeps the usual path on one line; /cwd prints it in full.
+      `${paint(`  cwd:      ${homeRelative(opts.cwd)}`, 'dim')}\n` +
       `${paint(
         providerId && model
           ? `  model:    ${providerId} / ${model}`
