@@ -18,7 +18,7 @@ pull request, or discussion for a suspected vulnerability.
 
 Please include, as far as you can:
 
-- the affected version (shown in **Settings → Updates**, or **Houston → About** on
+- the affected version (shown in **Settings → About → Updates**, or **Houston → About** on
   macOS; `houston -v` for the terminal CLI) and your operating system;
 - a description of the issue and its security impact;
 - clear steps to reproduce, ideally with a minimal proof of concept;

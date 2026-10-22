@@ -1014,7 +1014,7 @@ which agent and model ran it and who chose the model, its tools, its step
 budget, its usage, and its system prompt). **Open transcript** shows the whole
 run in order in a side panel, with a Copy as Markdown button. A review's row
 links to the same view for each of its reviewers. This record is saved with the
-chat, so it's there after a restart; Settings > Loop control sets how much of it
+chat, so it's there after a restart; Settings > Agent Behavior > Loop control sets how much of it
 a chat keeps (4 MB by default, after which the oldest subagents keep their task,
 steps and report but drop step results and diffs). The terminal prints a line per
 step under the dispatch (a review's reviewers only with `/verbose`) and the
