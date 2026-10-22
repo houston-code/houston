@@ -28,6 +28,7 @@ import {
   type AgentEvent,
   type AgentRunRequest,
   type ChatMessage,
+  type ConversationSettingsPatch,
   type ElicitationResult,
   type PlanDecision,
   type ReasoningEffort,
@@ -536,10 +537,15 @@ export type ResolvedModel =
   | { providerId: string; model: string }
   | { error: string; recoverable: boolean }
 
-/** Resolve the provider + model to use for a headless run from flags and settings. */
+/**
+ * Resolve the provider + model to use for a headless run from flags and settings.
+ * `resumed` is the model a resumed chat last ran on: with no --provider/--model it
+ * wins over the saved selection, as long as its provider is still set up.
+ */
 export function resolveHeadlessModel(
   settings: AppSettings,
-  opts: Pick<HeadlessOptions, 'providerId' | 'model'>
+  opts: Pick<HeadlessOptions, 'providerId' | 'model'>,
+  resumed?: { providerId?: string; model?: string }
 ): ResolvedModel {
   const pick = (p: ProviderConfig): string => opts.model ?? pickDefaultModel(p) ?? ''
   // Preflight: a provider that needs a key but has none would otherwise start the
@@ -558,6 +564,15 @@ export function resolveHeadlessModel(
     const noKey = keyError(p)
     if (noKey) return { error: noKey, recoverable: true }
     return { providerId: p.id, model }
+  }
+
+  if (!opts.model && resumed?.providerId && resumed.model) {
+    const p = settings.providers.find((pr) => pr.id === resumed.providerId)
+    if (p) {
+      const noKey = keyError(p)
+      if (noKey) return { error: noKey, recoverable: true }
+      return { providerId: p.id, model: resumed.model }
+    }
   }
 
   if (settings.selected) {
@@ -622,16 +637,28 @@ export interface HeadlessDeps {
    */
   session?: {
     /** Load the target conversation: by `id`, else the most recent for `workspace`. */
-    load: (opts: { workspace: string; id?: string }) => { id: string; messages: ChatMessage[] } | null
-    create: (input: { workspace: string; providerId: string; model: string }) => { id: string }
+    /** The chat's messages, plus the model and reasoning effort it keeps, when it has them. */
+    load: (opts: {
+      workspace: string
+      id?: string
+    }) =>
+      | ({ id: string; messages: ChatMessage[] } & Pick<ConversationSettingsPatch, 'providerId' | 'model' | 'reasoningEffort'>)
+      | null
+    create: (input: {
+      workspace: string
+      providerId: string
+      model: string
+      reasoningEffort?: ReasoningEffort
+    }) => { id: string }
     setMessages: (id: string, messages: ChatMessage[]) => void
     /**
-     * Rewrite a conversation's stored provider+model. Only needed when resuming a
-     * prior session under a different model than it was created with, so its stored
-     * meta (and the model a GUI re-open lands on) tracks what actually ran. The
-     * fresh-create path already stores the right model via `create`.
+     * Rewrite a resumed conversation's stored model and reasoning effort to the ones
+     * this run used, so usage attribution and a later GUI re-open or `/resume` track
+     * what actually ran. Never the approval policy: a headless run's policy comes
+     * from its flags (default plan) and says nothing about how the chat is used
+     * interactively. The fresh-create path stores its settings via `create`.
      */
-    setModel: (id: string, providerId: string, model: string) => void
+    setSettings: (id: string, patch: Pick<ConversationSettingsPatch, 'providerId' | 'model' | 'reasoningEffort'>) => void
   }
 }
 
@@ -980,7 +1007,17 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
       error
     })
 
-  const resolved = resolveHeadlessModel(settings, opts)
+  // --continue / --resume: load the prior conversation first, so a run with no
+  // --provider/--model/--effort continues on the chat's own model and effort. Its
+  // approval policy is deliberately NOT taken: an unattended run's policy comes from
+  // its flags only (default plan), so a chat saved in full-auto can't loosen it.
+  const wantsPrior = !!deps.session && (opts.continueSession || opts.resumeId !== undefined)
+  const prior = wantsPrior ? deps.session!.load({ workspace: opts.cwd, id: opts.resumeId }) : null
+  const priorEffort = isReasoningEffort(prior?.reasoningEffort) ? prior.reasoningEffort : undefined
+  // The effort this run uses as the chat's own; --effort still overrides it per run.
+  const chatEffort = opts.effort ?? priorEffort
+
+  const resolved = resolveHeadlessModel(settings, opts, prior ?? undefined)
   if ('error' in resolved) {
     deps.err(`${resolved.error}\n`)
     writeEarlyResult('error', resolved.error)
@@ -994,22 +1031,23 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
   // next --continue — or an interactive `-i` /resume — can take over from here.
   let history: ChatMessage[] = []
   if (deps.session) {
-    const wantsPrior = opts.continueSession || opts.resumeId !== undefined
-    const prior = wantsPrior ? deps.session.load({ workspace: opts.cwd, id: opts.resumeId }) : null
     if (wantsPrior && !prior) {
       deps.err('· no prior session to resume; starting a fresh one\n')
     }
     if (prior) {
       conversationId = prior.id
       history = [...prior.messages]
-      // The conversation stored its provider+model at create time, but this run
-      // executes under the resolved --provider/--model (or settings.selected),
-      // which can differ from what the resumed session was created with. Rewrite
-      // the stored meta so usage attribution and a later GUI re-open track the
-      // model that actually ran. Best-effort: a store failure must not crash the
-      // run (the create path needs no such rewrite — `create` stored it already).
+      // This run can execute under a different model or effort than the chat last
+      // used (a --provider/--model/--effort flag). Rewrite the stored settings so
+      // usage attribution and a later GUI re-open track what actually ran.
+      // Best-effort: a store failure must not crash the run (the create path needs
+      // no such rewrite — `create` stored them already).
       try {
-        deps.session.setModel(prior.id, resolved.providerId, resolved.model)
+        deps.session.setSettings(prior.id, {
+          providerId: resolved.providerId,
+          model: resolved.model,
+          ...(chatEffort ? { reasoningEffort: chatEffort } : {})
+        })
       } catch {
         // ignore — persistence is best-effort
       }
@@ -1017,7 +1055,8 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
       conversationId = deps.session.create({
         workspace: opts.cwd,
         providerId: resolved.providerId,
-        model: resolved.model
+        model: resolved.model,
+        ...(opts.effort ? { reasoningEffort: opts.effort } : {})
       }).id
     }
   }
@@ -1101,6 +1140,8 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
       providerId: resolved.providerId,
       model: resolved.model,
       approvalPolicy: opts.approvalPolicy,
+      // The resumed chat's own effort; an --effort flag (in the overrides) still wins.
+      ...(priorEffort ? { reasoningEffort: priorEffort } : {}),
       messages,
       // No one can answer ask_user here, so the loop doesn't offer it.
       unattended: true,

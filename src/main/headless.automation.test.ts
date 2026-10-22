@@ -504,7 +504,7 @@ describe('the checked-in --json schema', () => {
         load: () => null,
         create: () => ({ id: 'conv-1' }),
         setMessages: () => {},
-        setModel: () => {}
+        setSettings: () => {}
       },
       readFile: async () => '{"type":"object"}'
     })

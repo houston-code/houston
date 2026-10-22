@@ -717,14 +717,21 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
                   .sort((a, b) => b.updatedAt - a.updatedAt)[0]
                 return meta ? getConversation(meta.id) : null
               })()
-          return conv ? { id: conv.id, messages: conv.messages } : null
+          return conv
+            ? {
+                id: conv.id,
+                messages: conv.messages,
+                providerId: conv.providerId,
+                model: conv.model,
+                ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {})
+              }
+            : null
         },
-        create: ({ workspace, providerId, model }) =>
-          createConversation({ workspace, providerId, model }),
+        create: (input) => createConversation(input),
         setMessages,
-        // Keep a resumed conversation's stored model in step with the model this
+        // Keep a resumed conversation's stored model and effort in step with what this
         // run actually used, so usage attribution and a GUI re-open don't diverge.
-        setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model })
+        setSettings: (id, patch) => updateConversationMeta(id, patch)
       }
     })
     // Don't let the one-shot exit tear down sessions the run spawned; their
