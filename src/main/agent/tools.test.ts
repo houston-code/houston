@@ -15,7 +15,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { spawn, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import {
   getTool,
   sandboxedLoopbackHint,
@@ -50,6 +50,8 @@ import type { EvidenceDraft } from './evidence'
 import type { FetchedDocument } from './webfetch'
 import type { GhResult } from './github'
 import { readShellOutput, registerShell } from './shells'
+import { createShellSession } from './shell-session'
+import { backendSupportsSession } from '../sandbox'
 import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
 import { MAX_PAGE_TEXT_CHARS, type CaptureInput, type LocalhostCapture } from './viewlocalhost'
 import { prNoticeFromToolResult } from '@shared/prNotice'
@@ -2548,6 +2550,33 @@ describe('run_shell missing-runtime hint', () => {
     const out = await run('run_shell', { command: 'export PATH=/houston-no-such-dir; frobnicate' })
     expect(out).toContain('[exit code: 127]')
     expect(out).not.toMatch(/\[Houston: /)
+  })
+})
+
+describe('run_shell other-checkout hint', () => {
+  // A worktree conversation whose shell cd's into the main checkout reads another
+  // branch's files and git state from then on; every command run there says so.
+  it.skipIf(!backendSupportsSession())('flags the main checkout until the shell comes back', { timeout: 30_000 }, async () => {
+    const git = (args: string[], cwd: string): void => {
+      execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=Test', ...args], { cwd, stdio: 'pipe' })
+    }
+    git(['init', '-q', '-b', 'main'], workspace)
+    writeFileSync(join(workspace, 'a.txt'), 'a\n')
+    git(['add', 'a.txt'], workspace)
+    git(['commit', '-qm', 'init'], workspace)
+    const wt = join(workspace, '.houston', 'worktrees', 'wt')
+    git(['worktree', 'add', '-q', '-b', 'wt', wt], workspace)
+    ctx = { workspace: wt, allowNetwork: false, shellSession: createShellSession(wt) }
+
+    const away = await run('run_shell', { command: `cd '${workspace}' && git log --oneline -1` })
+    expect(away).toContain(`inside the repository's main checkout ("${workspace}")`)
+    expect(away).toContain(`cd "${wt}"`)
+    // The cd persisted, so a plain follow-up command is still flagged.
+    expect(await run('run_shell', { command: 'pwd' })).toContain("the repository's main checkout")
+
+    const back = await run('run_shell', { command: `cd '${wt}' && pwd` })
+    expect(back).not.toContain('[note: the shell is now in')
+    expect(await run('run_shell', { command: 'cd /' })).not.toContain('[note: the shell is now in')
   })
 })
 
