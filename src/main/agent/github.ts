@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { joinFor, pathDelimiter, withExeSuffix } from '../binaries'
-import { hardenedGitArgs } from './gitRead'
+import { captureTry, hardenedGitArgs, type GitTry } from './gitRead'
 
 /**
  * First-class GitHub integration via the `gh` CLI. Houston never stores a GitHub
@@ -147,7 +147,8 @@ export function githubContext(resolve: () => string | null = resolveGh): string 
   if (!resolve()) return ''
   return (
     'GitHub: the `gh` CLI is available. Prefer the dedicated gh_* tools over raw ' +
-    '`gh` shell commands — each requires approval (network egress): pull requests ' +
+    '`gh` shell commands. Reads (lists, views, checks, runs) run without approval ' +
+    'in full auto; the rest require approval (network egress): pull requests ' +
     '(gh_pr_create, gh_pr_list, gh_pr_view, gh_pr_comment, gh_pr_review, ' +
     'gh_pr_checkout, gh_pr_checks, gh_pr_merge, gh_pr_set_state to close/reopen ' +
     'or toggle draft), issues (gh_issue_list, gh_issue_view, gh_issue_create, ' +
@@ -159,4 +160,68 @@ export function githubContext(resolve: () => string | null = resolveGh): string 
     'current directory and pushed, so commit the project first. If a call reports ' +
     'you are not authenticated, tell the user to run `gh auth login`.'
   )
+}
+
+/**
+ * The `<host>:<owner>/<repo>` a git remote URL points at (`git@github.com:o/r.git`,
+ * `https://github.com/o/r`, `ssh://git@host/o/r.git`), lowercased, or null for a URL
+ * that names no repository. Any credentials in the URL are dropped.
+ */
+export function remoteRepoSlug(url: string): string | null {
+  const u = url.trim()
+  let host: string
+  let path: string
+  const scp = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.+)$/.exec(u)
+  if (scp && !/^[a-z][a-z0-9+.-]*:\/\//i.test(u)) {
+    host = scp[1]
+    path = scp[2]
+  } else {
+    try {
+      const parsed = new URL(u)
+      if (!['https:', 'http:', 'ssh:', 'git:'].includes(parsed.protocol)) return null
+      host = parsed.hostname
+      path = parsed.pathname
+    } catch {
+      return null
+    }
+  }
+  const parts = path.replace(/^\/+|\/+$/g, '').replace(/\.git$/i, '').split('/')
+  if (parts.length !== 2 || !parts[0] || !parts[1] || !host) return null
+  return `${host}:${parts[0]}/${parts[1]}`.toLowerCase()
+}
+
+/**
+ * Which repository the `gh_*` tools act on in `cwd`, as the key their network grants
+ * are scoped by (see networkDestination): `GH_REPO` when set (gh honors it first),
+ * else every repository the checkout's remotes point at, sorted and comma-joined. All
+ * of them, not the one gh would pick, so adding or repointing a remote mid-chat
+ * changes the key and the next write asks again. Null outside a repository or with
+ * no GitHub-shaped remote.
+ */
+export async function ghRepoKey(
+  cwd: string,
+  env: NodeJS.ProcessEnv = process.env,
+  git: GitTry = captureTry(cwd)
+): Promise<string | null> {
+  const ghRepo = env.GH_REPO?.trim()
+  if (ghRepo) {
+    const parts = ghRepo.split('/')
+    if (parts.length === 2) return `github.com:${ghRepo}`.toLowerCase()
+    if (parts.length === 3) return `${parts[0]}:${parts[1]}/${parts[2]}`.toLowerCase()
+  }
+  const out = await git(['remote', '-v'])
+  if (!out) return null
+  const slugs = new Set<string>()
+  for (const line of out.split(/\r?\n/)) {
+    const url = line.split(/\s+/)[1]
+    const slug = url ? remoteRepoSlug(url) : null
+    if (slug) slugs.add(slug)
+  }
+  if (!slugs.size) return null
+  const sorted = [...slugs].sort()
+  // One host in practice; written once so the key reads `<host>:<a>,<b>`.
+  const host = sorted[0].split(':')[0]
+  return sorted.every((s) => s.startsWith(`${host}:`))
+    ? `${host}:${sorted.map((s) => s.slice(host.length + 1)).join(',')}`
+    : sorted.join(',')
 }

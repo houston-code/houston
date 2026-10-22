@@ -75,8 +75,11 @@ the sandbox can read your whole filesystem: network egress is granted **per dest
 (not all-or-nothing), shell commands run **offline until you allow network** for the
 chat (Houston asks the first time a command fails without it, so blanket outbound access
 is never automatic, and a decline keeps commands offline), and
-Houston's own network tools (`web_fetch` / `web_search`) **refuse to send** a URL or query
-that carries a recognized credential. Granted shell network is additionally confined to a
+Houston's own network tools (`web_fetch`, `web_search`, and the GitHub tools) **refuse to send**
+a URL, query, title, body, or comment that carries a recognized credential. In *full auto*
+the GitHub calls that only read (lists, views, check and run status) run without asking;
+GitHub calls that publish are granted per repository, and a merge, close, checkout, or repository
+creation is never covered by a grant for another kind of call. Granted shell network is additionally confined to a
 **per-domain egress allowlist** on macOS and Linux: the OS sandbox blocks direct sockets
 and routes shell egress through a Houston-controlled loopback proxy, which allows only
 package registries, VCS hosts, and domains you add in Settings (see

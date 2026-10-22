@@ -106,6 +106,33 @@ describe('decideApproval', () => {
     ...over
   })
 
+  describe('network reads (networkRead)', () => {
+    it('full auto runs a network read without asking', () => {
+      expect(decideApproval(base({ policy: 'full-auto', kind: 'network', networkRead: true })).mustApprove).toBe(false)
+    })
+
+    it('full auto still asks for a network call that is not a read', () => {
+      expect(decideApproval(base({ policy: 'full-auto', kind: 'network' })).mustApprove).toBe(true)
+      expect(decideApproval(base({ policy: 'full-auto', kind: 'network', networkRead: false })).mustApprove).toBe(true)
+    })
+
+    it('every other policy still asks for a network read', () => {
+      for (const policy of ['ask', 'auto-edit', 'plan'] as const) {
+        expect(decideApproval(base({ policy, kind: 'network', networkRead: true })).mustApprove).toBe(true)
+      }
+    })
+
+    it('an ask rule still asks, even for a read in full auto', () => {
+      expect(
+        decideApproval(base({ policy: 'full-auto', kind: 'network', networkRead: true, ruleAction: 'ask' })).mustApprove
+      ).toBe(true)
+    })
+
+    it('applies only to network calls', () => {
+      expect(decideApproval(base({ policy: 'full-auto', kind: 'mcp', networkRead: true })).mustApprove).toBe(true)
+    })
+  })
+
   describe('on a confining host (shellSandboxed=true) — prior behavior preserved', () => {
     it('an allow rule skips the prompt', () => {
       expect(decideApproval(base({ ruleAction: 'allow', kind: 'shell' }))).toEqual({

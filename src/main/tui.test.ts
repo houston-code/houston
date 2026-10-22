@@ -299,6 +299,12 @@ describe('approval prompt', () => {
     expect(renderApprovalPrompt(ev(), makePainter(false))).not.toContain('Runs without network')
   })
 
+  it('names what "Allow for run" covers on a network prompt', () => {
+    const p = renderApprovalPrompt(ev({ networkScope: 'GitHub reads on acme/app' }), makePainter(false))
+    expect(p).toContain('"Allow for run" covers GitHub reads on acme/app for the rest of this chat.')
+    expect(renderApprovalPrompt(ev(), makePainter(false))).not.toContain('covers')
+  })
+
   it('parses answers, defaulting to deny', () => {
     expect(parseApprovalAnswer('y')).toEqual({ decision: 'allow' })
     expect(parseApprovalAnswer('YES')).toEqual({ decision: 'allow' })

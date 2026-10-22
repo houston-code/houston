@@ -1091,6 +1091,12 @@ export type AgentEvent =
        * prompting even in full-auto. Lets the UI explain why.
        */
       sensitiveWrite?: boolean
+      /**
+       * On a network call only: a readable name for what "Allow for run" grants (one
+       * site, GitHub posts on one repository, one merge tool), so the card can say how
+       * far the grant reaches before the user picks it.
+       */
+      networkScope?: string
     }
   | {
       runId: string

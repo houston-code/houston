@@ -1,6 +1,6 @@
 import { homedir, tmpdir } from 'node:os'
 import { resolve, relative, isAbsolute, posix, sep } from 'node:path'
-import type { PermissionRule } from '@shared/types'
+import type { AppSettings, PermissionRule } from '@shared/types'
 import { parsePatch } from './apply-patch'
 import { isSensitivePath, writesSensitivePath } from './sensitive-paths'
 import type { ToolKind } from './tools'
@@ -17,6 +17,41 @@ import type { ToolKind } from './tools'
  */
 
 /**
+ * The `gh_*` tools that only read from GitHub (lists, views, check and run status).
+ * They change nothing on GitHub or on disk, so full auto runs them without asking
+ * (see {@link fullAutoNetworkRead}); every other `gh_*` tool publishes or changes
+ * something and is gated by {@link networkDestination}.
+ */
+export const GH_READ_TOOLS: ReadonlySet<string> = new Set([
+  'gh_pr_list',
+  'gh_pr_view',
+  'gh_pr_checks',
+  'gh_issue_list',
+  'gh_issue_view',
+  'gh_run_list',
+  'gh_run_view'
+])
+
+/**
+ * The `gh_*` calls that can't be taken back, or that change the user's own checkout,
+ * so an "Allow for run" on one never also covers another: merging a PR, creating a
+ * repository, checking out a PR's branch, and closing a PR or issue. Each gets a
+ * destination of its own (see {@link networkDestination}).
+ */
+function ghOwnGrant(toolName: string, args: Record<string, unknown>): boolean {
+  if (toolName === 'gh_pr_merge' || toolName === 'gh_repo_create' || toolName === 'gh_pr_checkout') return true
+  if (toolName === 'gh_pr_set_state' || toolName === 'gh_issue_set_state') return args.action === 'close'
+  return false
+}
+
+/**
+ * The repository key a `gh_*` call without a known repository is gated under. Such a
+ * call usually fails (gh can't tell which repository to use), and the key still keeps
+ * its grant apart from any known repository's.
+ */
+export const GH_UNKNOWN_REPO = 'github:unknown-repo'
+
+/**
  * The egress DESTINATION a `kind:'network'` tool call reaches — the unit of the
  * per-destination network consent (see RunState.networkHosts). "Allow for run" grants
  * this key, not the whole `network` kind, so approving a fetch to `api.github.com`
@@ -24,7 +59,14 @@ import type { ToolKind } from './tools'
  *
  * - `web_fetch` / `view_localhost` (any `url` arg) → the URL's lowercased hostname;
  *   a `view_localhost` with `steps` → `<host> (interactive)`, a separate grant.
- * - `gh_*` → `github.com` (every gh call targets GitHub; one grant covers them all).
+ * - `gh_*` → keyed by what the call does and which repository it acts on (`ghRepo`,
+ *   from {@link ghRepoKey}, e.g. `github.com:owner/repo`), so allowing one kind of
+ *   GitHub call never also allows a more consequential one:
+ *   - a read (see {@link GH_READ_TOOLS}) → `<repo>:read`;
+ *   - a publishing call (open a PR or issue, comment, review, reopen, mark ready) →
+ *     `<repo>:write`, one grant for those on that repository;
+ *   - a merge, a close, or a PR checkout → `<repo>:<tool>`, its own grant;
+ *   - `gh_repo_create` → `github:gh_repo_create:<name>`, per new repository.
  * - `web_search` → `web_search` (the query goes to the one configured search provider,
  *   which the user selected; a stable key means a single grant per run).
  * - anything else → the tool name, so an unrecognized network tool still gets a stable,
@@ -33,8 +75,20 @@ import type { ToolKind } from './tools'
  * Always returns a non-empty key (an unparseable URL falls back to the tool name), so
  * the caller never has to treat "no destination" as "allow".
  */
-export function networkDestination(toolName: string, args: Record<string, unknown>): string {
-  if (toolName.startsWith('gh_')) return 'github.com'
+export function networkDestination(
+  toolName: string,
+  args: Record<string, unknown>,
+  ghRepo?: string | null
+): string {
+  if (toolName.startsWith('gh_')) {
+    if (toolName === 'gh_repo_create') {
+      const name = typeof args.name === 'string' ? args.name.trim().toLowerCase() : ''
+      return `github:gh_repo_create:${name || '?'}`
+    }
+    const repo = ghRepo || GH_UNKNOWN_REPO
+    if (GH_READ_TOOLS.has(toolName)) return `${repo}:read`
+    return ghOwnGrant(toolName, args) ? `${repo}:${toolName}` : `${repo}:write`
+  }
   if (toolName === 'web_search') return 'web_search'
   const url = typeof args.url === 'string' ? args.url : ''
   if (url) {
@@ -43,7 +97,7 @@ export function networkDestination(toolName: string, args: Record<string, unknow
       // Clicking and typing can change a local app's data in a way a screenshot
       // can't, so an interactive view_localhost is its own destination: allowing
       // views of a host for the run never also allows interacting with it.
-      if (host && toolName === 'view_localhost' && Array.isArray(args.steps) && args.steps.length) {
+      if (host && toolName === 'view_localhost' && isInteractiveView(args)) {
         return `${host} (interactive)`
       }
       if (host) return host
@@ -53,6 +107,60 @@ export function networkDestination(toolName: string, args: Record<string, unknow
     }
   }
   return toolName
+}
+
+/** Whether a `view_localhost` call clicks or types (it passes `steps`). */
+function isInteractiveView(args: Record<string, unknown>): boolean {
+  return Array.isArray(args.steps) && args.steps.length > 0
+}
+
+/**
+ * How full auto treats web reads (`web_fetch` and `web_search`): `ask` (the default)
+ * asks once per site, and once for search, per chat; `allow` runs them without asking.
+ * The egress credential check refuses a URL or query carrying a secret either way.
+ */
+export type WebReadsMode = NonNullable<AppSettings['webReads']>
+
+/**
+ * Whether full auto runs this network call without asking: it only reads, so the
+ * per-destination prompt guards nothing a user would want to stop. That is a GitHub
+ * read ({@link GH_READ_TOOLS}) and, when the user chose `webReads: 'allow'`, a
+ * `web_fetch` (always a GET) or `web_search`. Other policies keep asking, and a
+ * permission rule still decides first (see decideApproval).
+ *
+ * A `view_localhost` is not on the list, even a plain view: the page it loads runs its
+ * own script, and the capture session lets that script reach public hosts (only
+ * private addresses are blocked), so a page the agent wrote into a served folder
+ * could send data anywhere. Its per-host prompt is the checkpoint on that path.
+ */
+export function fullAutoNetworkRead(
+  toolName: string,
+  _args: Record<string, unknown>,
+  webReads: WebReadsMode = 'ask'
+): boolean {
+  if (GH_READ_TOOLS.has(toolName)) return true
+  if (toolName === 'web_fetch' || toolName === 'web_search') return webReads === 'allow'
+  return false
+}
+
+/**
+ * A readable name for what an "Allow for run" on a network call grants (the key from
+ * {@link networkDestination}), for the approval card.
+ */
+export function describeNetworkDestination(dest: string): string {
+  if (dest === 'web_search') return 'web searches'
+  const create = /^github:gh_repo_create:(.*)$/.exec(dest)
+  if (create) return `creating the repository ${create[1]}`
+  // `<host>:<owner/repo>[,<owner/repo>…]:<read|write|tool>`, or the unknown-repo key.
+  const gh = /^([^:]+):([^:]*\/[^:]*|unknown-repo):([^:]+)$/.exec(dest)
+  if (gh) {
+    const repo = gh[2] === 'unknown-repo' ? 'this repository' : gh[2].replace(/,/g, ', ')
+    if (gh[3] === 'read') return `GitHub reads on ${repo}`
+    if (gh[3] === 'write') return `GitHub posts and updates on ${repo} (PRs, issues, comments, reviews)`
+    return `${gh[3]} on ${repo}`
+  }
+  if (dest.endsWith(' (interactive)')) return `clicking and typing on ${dest.slice(0, -' (interactive)'.length)}`
+  return dest
 }
 
 /**
@@ -2221,6 +2329,22 @@ function shellAllowRule(match: string): PermissionRule {
     : { action: 'allow', tool: 'run_shell', match }
 }
 
+/**
+ * The `scheme://host[:port]` an http(s) URL is served from, lowercased, or null. No
+ * userinfo, path, query, or fragment, and never a `*` (which a rule would read as a
+ * wildcard), so an allow saved from it covers that one origin.
+ */
+function urlOrigin(url: string): string | null {
+  try {
+    const u = new URL(url)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    const origin = u.origin.toLowerCase()
+    return origin.includes('*') ? null : origin
+  } catch {
+    return null
+  }
+}
+
 /** The argument(s) {@link permissionSubject} reads a tool's subject from. */
 function subjectArgKeys(toolName: string): string[] {
   if (toolName === 'run_shell') return ['command']
@@ -2239,8 +2363,8 @@ function subjectArgKeys(toolName: string): string[] {
  *   except that a sub-command kept verbatim and holding `*`, or changing directory, is
  *   exact (see {@link shellAllowRule}); a shell deny stays as typed (a broadened deny
  *   is risky).
- * - Any other ALLOW is `exact` (see {@link PermissionRule.exact}): it covers the one
- *   path, URL, or query the user approved. Saved as a glob instead, a model-chosen
+ * - Any other ALLOW (but the web tools below) is `exact` (see
+ *   {@link PermissionRule.exact}): it covers the one path the user approved. Saved as a glob instead, a model-chosen
  *   path would widen it: a file named `*` would allow every write, and a directory
  *   path would allow everything inside it.
  * - `apply_patch` stores one rule per file the patch touches, so a later patch is
@@ -2249,6 +2373,13 @@ function subjectArgKeys(toolName: string): string[] {
  *   which would allow (or deny) every patch to every file.
  * - An allow on a call that passes its subject argument blank (`path: ''`) stores
  *   nothing, for the same reason.
+ * - An ALLOW on `web_fetch` stores the URL's origin (`https://host`, port kept) as a
+ *   prefix rule, which the matcher reads as that origin and every path under it (see
+ *   {@link patternMatches}): the user approved the site, and an exact URL would never
+ *   match again. A URL without an http(s) origin, or whose origin holds `*`, stores
+ *   nothing.
+ * - An ALLOW on `web_search` stores `*`: every query goes to the one search provider
+ *   the user configured, so an exact query would never match again either.
  * - A DENY stores the subject as a glob, so it can only be broader than the call
  *   (tightening). A tool whose calls carry no subject argument at all stores `*` (the
  *   rule then names the tool itself).
@@ -2263,6 +2394,11 @@ export function persistedRules(
   const rule = (match: string): PermissionRule =>
     exact ? { action, tool: toolName, match, exact: true } : { action, tool: toolName, match }
   if (toolName === 'apply_patch') return patchSubjectPaths(permissionSubject(toolName, args)).map(rule)
+  if (action === 'allow' && toolName === 'web_search') return [{ action, tool: toolName, match: '*' }]
+  if (action === 'allow' && toolName === 'web_fetch') {
+    const origin = urlOrigin(permissionSubject(toolName, args))
+    return origin ? [{ action, tool: toolName, match: origin }] : []
+  }
   const subject = permissionSubject(toolName, args)
   if (subject.trim()) {
     if (action === 'allow' && toolName === 'run_shell') return shellRulePatterns(subject, roots).map(shellAllowRule)

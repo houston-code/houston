@@ -117,6 +117,8 @@ import { isBlockedByPlan, decideApproval } from './approval'
 import { repairDanglingToolResults } from './repair'
 import {
   alreadyAllowedAsRule,
+  describeNetworkDestination,
+  fullAutoNetworkRead,
   matchRule,
   networkDestination,
   permissionSubject,
@@ -183,7 +185,7 @@ import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
 import { formatPromptSnapshot, localDateStamp, resolvePromptSnapshot } from './promptSnapshot'
 import { gitWritableRoots } from './gitDirs'
-import { githubContext, resolveGh, runGh } from './github'
+import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
 import {
   COMPACTION_TAIL_FRACTION,
   EVICTION_TARGET_FRACTION,
@@ -345,6 +347,7 @@ interface RunState {
       shellOffline?: boolean
       sensitiveRead?: boolean
       sensitiveWrite?: boolean
+      networkScope?: string
     }
   >
   pendingQuestions: Map<string, { question: string; options: QuestionOption[]; multiSelect?: boolean }>
@@ -670,7 +673,8 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       ...(a.shellNetwork ? { shellNetwork: true } : {}),
       ...(a.shellOffline ? { shellOffline: true } : {}),
       ...(a.sensitiveRead ? { sensitiveRead: true } : {}),
-      ...(a.sensitiveWrite ? { sensitiveWrite: true } : {})
+      ...(a.sensitiveWrite ? { sensitiveWrite: true } : {}),
+      ...(a.networkScope ? { networkScope: a.networkScope } : {})
     })
   }
   for (const [callId, q] of run.pendingQuestions) {
@@ -1417,10 +1421,12 @@ export async function startRun(
       toolName: string,
       execArgs: Record<string, unknown>,
       kind: ToolKind,
-      unsandboxedShell: boolean
+      unsandboxedShell: boolean,
+      /** The network call's destination as the gate computed it (see networkDestination). */
+      gatedNetDest?: string
     ): boolean => {
       if (decision === 'always') {
-        const netDest = kind === 'network' ? networkDestination(toolName, execArgs) : null
+        const netDest = kind === 'network' ? (gatedNetDest ?? networkDestination(toolName, execArgs)) : null
         if (netDest !== null) {
           // "Allow for run" on a network call — grant THIS destination only, not the
           // whole kind, so approving one host never opens egress to another. Remembered
@@ -1565,6 +1571,8 @@ export async function startRun(
       sensitiveWrite?: boolean
       /** A write's per-file diffs, for the approval card and the live row. */
       preview?: FileDiffPreview[] | null
+      /** A network call's destination (see networkDestination): what "Allow for run" grants. */
+      networkDest?: string
       denyNote: string
       runCall: () => Promise<string>
     }): Promise<string> => {
@@ -1578,9 +1586,11 @@ export async function startRun(
         sensitiveRead,
         sensitiveWrite,
         preview,
+        networkDest,
         denyNote,
         runCall
       } = input
+      const networkScope = networkDest ? describeNetworkDestination(networkDest) : undefined
       const summary = `Subagent: ${getTool(name)!.summarize(args)}`
       if (mustApprove) {
         // Track + emit like any approval so re-adopt replay and cancelRun
@@ -1593,7 +1603,8 @@ export async function startRun(
           ...(preview ? { preview } : {}),
           ...(unsandboxedShell ? { sandboxed: false } : {}),
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
-          ...(sensitiveWrite ? { sensitiveWrite: true } : {})
+          ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(networkScope ? { networkScope } : {})
         })
         // Register the resolver before emitting: a host that answers inside its
         // send callback (headless) would otherwise resolve a prompt nobody awaits.
@@ -1608,11 +1619,12 @@ export async function startRun(
           ...(preview ? { preview } : {}),
           ...(unsandboxedShell ? { sandboxed: false } : {}),
           ...(sensitiveRead ? { sensitiveRead: true } : {}),
-          ...(sensitiveWrite ? { sensitiveWrite: true } : {})
+          ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(networkScope ? { networkScope } : {})
         })
         const { decision, note } = await approval
         run.pendingApprovals.delete(subCallId)
-        const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell)
+        const approved = applyApprovalDecision(decision, name, args, kind, unsandboxedShell, networkDest)
         if (!approved) {
           emit({
             type: 'tool_result',
@@ -1786,13 +1798,15 @@ export async function startRun(
       ): Promise<string> => {
         const ruleAction = matchRun(name, permissionSubject(name, gateArgs))
         if (ruleAction === 'deny') return ruleDenialText(name, gateArgs)
+        const networkDest = networkDestination(name, gateArgs)
         const { mustApprove } = decideApproval({
           ruleAction,
           policy: run.policy,
           kind: 'network',
-          override: run.networkHosts.has(networkDestination(name, gateArgs)),
+          override: run.networkHosts.has(networkDest),
           shellSandboxed: isSandboxed(),
-          shellUnsandboxedOverride: run.shellUnsandboxedOverride
+          shellUnsandboxedOverride: run.shellUnsandboxedOverride,
+          networkRead: fullAutoNetworkRead(name, gateArgs, settings.webReads)
         })
         return promptGatedCall({
           subCallId: mintSubCallId(callId, 'net'),
@@ -1801,6 +1815,7 @@ export async function startRun(
           kind: 'network',
           mustApprove,
           unsandboxedShell: false,
+          networkDest,
           denyNote:
             'Denied by the user. Do not retry this request; work without it or note it in your report.',
           runCall
@@ -3643,7 +3658,11 @@ export async function startRun(
             // Network consent is per-DESTINATION: "Allow for run" grants only this host,
             // so approving a fetch to one host never opens egress to every host. The
             // granted-host set stands in for the generic kind override on network calls.
-            const netDest = tool.kind === 'network' ? networkDestination(call.name, execArgs) : null
+            // A GitHub call's grant is scoped to the repository it acts on, read fresh per
+            // call so a remote changed mid-chat gets a key (and a prompt) of its own.
+            const ghRepo =
+              tool.kind === 'network' && call.name.startsWith('gh_') ? await ghRepoKey(workspace) : null
+            const netDest = tool.kind === 'network' ? networkDestination(call.name, execArgs, ghRepo) : null
             const kindOverride =
               netDest !== null ? run.networkHosts.has(netDest) : run.override.has(tool.kind)
             const { mustApprove, unsandboxedShell } = decideApproval({
@@ -3656,8 +3675,10 @@ export async function startRun(
               shellEscapesWorkspace,
               shellDiscardsWork: discardsWork,
               sensitiveRead,
-              sensitiveWrite
+              sensitiveWrite,
+              networkRead: tool.kind === 'network' && fullAutoNetworkRead(call.name, execArgs, settings.webReads)
             })
+            const networkScope = netDest !== null ? describeNetworkDestination(netDest) : undefined
 
             // A shell command on a confining host with no shell-network grant yet runs
             // offline. Flag its prompt so the card can say only "Allow for run" also grants
@@ -3710,7 +3731,8 @@ export async function startRun(
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
-                ...(sensitiveWrite ? { sensitiveWrite: true } : {})
+                ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+                ...(networkScope ? { networkScope } : {})
               })
               // Registered before the emit so a synchronous answer (headless resolves
               // inside its send callback) finds the resolver instead of being dropped.
@@ -3726,7 +3748,8 @@ export async function startRun(
                 ...(unsandboxedShell ? { sandboxed: false } : {}),
                 ...(shellOffline ? { shellOffline: true } : {}),
                 ...(sensitiveRead ? { sensitiveRead: true } : {}),
-                ...(sensitiveWrite ? { sensitiveWrite: true } : {})
+                ...(sensitiveWrite ? { sensitiveWrite: true } : {}),
+                ...(networkScope ? { networkScope } : {})
               })
               const { decision, note: denyGuidance } = await approval
               // Resolved (or cancelled) — it's no longer awaiting the user.
@@ -3735,7 +3758,14 @@ export async function startRun(
               // Overrides + rule persistence live in applyApprovalDecision (shared with
               // the writable subagent's unconfined-shell gate) — including the
               // per-destination network grant and shell → network coupling.
-              approved = applyApprovalDecision(decision, call.name, execArgs, tool.kind, unsandboxedShell)
+              approved = applyApprovalDecision(
+                decision,
+                call.name,
+                execArgs,
+                tool.kind,
+                unsandboxedShell,
+                netDest ?? undefined
+              )
             }
 
             if (!approved) {

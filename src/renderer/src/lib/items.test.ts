@@ -508,6 +508,22 @@ describe('reduceEvent — prompt replay on re-adopt (upsert by callId)', () => {
     expect(reduceEvent([], granted).find((i): i is ToolItem => i.kind === 'tool')!.shellOffline).toBeUndefined()
   })
 
+  it('carries the network scope onto an approval row', () => {
+    const ev = {
+      runId: 'r',
+      type: 'tool_approval' as const,
+      callId: 'c2',
+      name: 'web_fetch',
+      summary: 'Fetch https://x.example',
+      args: { url: 'https://x.example' },
+      kind: 'network' as const,
+      networkScope: 'x.example'
+    }
+    expect(reduceEvent([], ev).find((i): i is ToolItem => i.kind === 'tool')!.networkScope).toBe('x.example')
+    const { networkScope: _, ...plain } = ev
+    expect(reduceEvent([], plain).find((i): i is ToolItem => i.kind === 'tool')!.networkScope).toBeUndefined()
+  })
+
   it('updates an existing question card instead of duplicating it', () => {
     const fromLog = itemsFromMessages([
       {

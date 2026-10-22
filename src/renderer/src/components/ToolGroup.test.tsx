@@ -734,4 +734,40 @@ describe('ToolGroup', () => {
     )
     expect(screen.queryByText(/Runs without network/)).not.toBeInTheDocument()
   })
+
+  it('names what "Allow for run" covers on a network prompt', () => {
+    const onApprove = vi.fn()
+    render(
+      <ToolGroup
+        items={[
+          tool({
+            id: 'call-14',
+            name: 'gh_pr_comment',
+            status: 'awaiting-approval',
+            networkScope: 'GitHub posts and updates on acme/app (PRs, issues, comments, reviews)',
+            args: { body: 'x' }
+          })
+        ]}
+        onApprove={onApprove}
+      />
+    )
+    const note = screen.getByText(/covers GitHub posts/)
+    expect(note).toHaveTextContent(
+      '"Allow for run" covers GitHub posts and updates on acme/app (PRs, issues, comments, reviews) for the rest of this chat.'
+    )
+    expect(note.textContent).not.toContain('\u2014')
+  })
+
+  it('says "Always allow" on a fetch saves the site', () => {
+    render(
+      <ToolGroup
+        items={[tool({ id: 'call-15', name: 'web_fetch', status: 'awaiting-approval', args: { url: 'https://x.example/a' } })]}
+        onApprove={vi.fn()}
+      />
+    )
+    expect(screen.getByRole('button', { name: 'Always allow' })).toHaveAttribute(
+      'title',
+      'Save a permission rule so fetches from this site are allowed in future runs too'
+    )
+  })
 })
