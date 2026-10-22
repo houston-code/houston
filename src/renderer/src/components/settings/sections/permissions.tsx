@@ -232,8 +232,8 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
         JSON.stringify(next) === JSON.stringify(rules)
           ? 'Rules are already tidy.'
           : removed > 0
-            ? `Removed ${removed} redundant ${removed === 1 ? 'rule' : 'rules'}. Save to apply.`
-            : 'Rules tidied. Save to apply.'
+            ? `Removed ${removed} redundant ${removed === 1 ? 'rule' : 'rules'}.`
+            : 'Rules tidied.'
       )
     } catch {
       setCleanupStatus('Could not clean up rules.')
