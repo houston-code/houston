@@ -401,6 +401,7 @@ body.is-resizing {
   padding: 38px 6px 10px;
 }
 .sidebar__rail-btn {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -591,6 +592,45 @@ body.is-resizing {
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
   opacity: 0.7;
+}
+/* A collapsed section's strongest waiting state and how many chats show it. */
+.section-head__attention {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding-right: 4px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-dim);
+}
+/* The collapsed rail's expand button: an amber count of chats needing input, or a
+   blue pip when something is only unread. */
+.sidebar__rail-badge {
+  position: absolute;
+  top: 1px;
+  right: 0;
+  min-width: 15px;
+  height: 15px;
+  padding: 0 3px;
+  border-radius: 999px;
+  background: var(--sig-input);
+  color: #1a1206;
+  font-size: 9.5px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.sidebar__rail-pip {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sig-unread);
 }
 .section-head--pinned .section-head__name {
   color: var(--warn);
@@ -4003,6 +4043,38 @@ body.is-resizing .preview-dock__resizer::after {
    live, so "something is working" reads the same as the sidebar's running dot. */
 .bgtasks__count[data-running] {
   animation: conv-pulse 1.2s ease-in-out infinite;
+  /* Working reads in the same quiet grey as a working chat's dot. */
+  background: var(--sig-working);
+  color: var(--bg);
+}
+/* "N need you": other chats waiting on the user; opens the next one. */
+.titlebar__needs-you {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--sig-input) 50%, var(--border));
+  border-radius: 999px;
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.titlebar__needs-you:hover {
+  background: var(--bg-hover);
+}
+.titlebar__needs-you:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.titlebar__needs-you-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--sig-input);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--sig-input) 28%, transparent);
 }
 @media (prefers-reduced-motion: reduce) {
   .bgtasks__count[data-running],

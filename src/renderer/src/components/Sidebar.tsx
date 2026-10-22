@@ -564,13 +564,16 @@ function GroupHeader({
   props,
   renaming,
   onStartRename,
-  onStopRename
+  onStopRename,
+  attention
 }: {
   section: SidebarSection
   props: SidebarProps
   renaming: boolean
   onStartRename: () => void
   onStopRename: () => void
+  /** For a collapsed section: the strongest state among its chats that wants the user, and how many show it. */
+  attention?: { signal: ChatSignal; count: number }
 }): JSX.Element {
   const [menuOpen, setMenuOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -598,6 +601,17 @@ function GroupHeader({
           </span>
         )}
         <span className="section-head__count">{section.conversations.length || ''}</span>
+        {attention && (
+          <span
+            className="section-head__attention"
+            role="img"
+            aria-label={`${attention.count} ${signalLabel(attention.signal)?.toLowerCase()}`}
+            title={`${attention.count} ${signalLabel(attention.signal)?.toLowerCase()}`}
+          >
+            <span className="conv__status" data-signal={attention.signal} aria-hidden="true" />
+            {attention.count}
+          </span>
+        )}
       </button>
 
       {isGroup && !renaming && (
@@ -828,6 +842,18 @@ function SidebarSectionView({
   const ownSignal = (c: ConversationMeta): ChatSignal =>
     statusSignal(props.chatStatus[c.id], c.id === currentId)
 
+  // A collapsed section hides its rows, so its header carries the strongest state
+  // that wants the user (needs input, failed, unread) among them, with a count.
+  // Working never shows here: a header pulsing for every busy chat would be noise.
+  const sectionAttention = (() => {
+    if (!section.collapsed) return undefined
+    const all = section.conversations.flatMap((c) => [c, ...descendantsOf(c.id, section.children)])
+    const signals = all.map(ownSignal).filter((x) => x === 'input' || x === 'error' || x === 'unread')
+    if (signals.length === 0) return undefined
+    const signal = strongestSignal(signals)
+    return { signal, count: signals.filter((x) => x === signal).length }
+  })()
+
   // A row plus, unless folded away, the spawned chats nested under it (recursively).
   // A parent holding the open chat stays unfolded, so the open chat is never hidden.
   // Every row reserves the fold arrow's slot, so titles line up at every level.
@@ -893,6 +919,7 @@ function SidebarSectionView({
           renaming={renamingGroup === section.id}
           onStartRename={() => setRenamingGroup(section.id)}
           onStopRename={() => setRenamingGroup(null)}
+          {...(sectionAttention ? { attention: sectionAttention } : {})}
         />
       )}
       {!section.collapsed &&
@@ -929,6 +956,14 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     props.unreadFirst ? wantsAttention : undefined
   )
   const unreadCount = Object.values(props.chatStatus).filter((st) => st.unread !== undefined).length
+  const needInput = Object.values(props.chatStatus).filter((st) => st.pending.length > 0).length
+  // The collapsed rail hides every row, so its expand button says what's waiting.
+  const railTitle =
+    needInput > 0
+      ? `, ${needInput} ${needInput === 1 ? 'chat needs' : 'chats need'} input`
+      : unreadCount > 0
+        ? `, ${unreadCount} unread`
+        : ''
   // Which conversation/group is currently being renamed (id), if any.
   const [renamingConv, setRenamingConv] = useState<string | null>(null)
   const [renamingGroup, setRenamingGroup] = useState<string | null>(null)
@@ -943,10 +978,17 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <button
           className="sidebar__rail-btn"
           onClick={props.onToggleCollapse}
-          title={`Expand sidebar${shortcut}`}
-          aria-label="Expand sidebar"
+          title={`Expand sidebar${shortcut}${railTitle}`}
+          aria-label={`Expand sidebar${railTitle}`}
         >
           »
+          {needInput > 0 ? (
+            <span className="sidebar__rail-badge" aria-hidden="true">
+              {needInput}
+            </span>
+          ) : (
+            unreadCount > 0 && <span className="sidebar__rail-pip" aria-hidden="true" />
+          )}
         </button>
         <button
           className="sidebar__rail-btn"

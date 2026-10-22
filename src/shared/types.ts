@@ -718,6 +718,12 @@ export interface AppSettings {
    * focused window. On by default.
    */
   desktopNotifications?: boolean
+  /**
+   * Show a count on the app icon (the macOS Dock badge, the Linux launcher count, a
+   * dot on the Windows taskbar button) of chats that need input, failed, or have
+   * unread replies. On by default.
+   */
+  appBadge?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
   /**

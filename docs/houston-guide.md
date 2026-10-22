@@ -26,7 +26,11 @@ ships as a desktop app and as terminal clients.
   haven't seen. A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read, and the
   filter menu marks every chat read or sorts the ones that want attention first. A
   reply's hover actions include **Mark unread from here**; reopening an unread chat
-  lands on a "New" divider above the first reply you haven't seen.
+  lands on a "New" divider above the first reply you haven't seen. A collapsed group's
+  header, the collapsed sidebar, and the app icon (the Dock badge on macOS, a dot on the
+  Windows taskbar button; turn it off under Settings, Notifications) count what is
+  waiting, a "N need you" pill in the title bar opens the next chat waiting on you, and
+  clicking a desktop notification opens the chat it is about.
 - **Interactive terminal (`houston -i`).** A stay-resident REPL in the terminal.
   `--continue` reopens this folder's most recent chat at launch, `--resume <id>` a
   specific one.

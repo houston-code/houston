@@ -894,6 +894,27 @@ export default function App(): JSX.Element {
     [currentId, conversations, workspace, enterNewChat, selectConversation]
   )
   const onMarkAllRead = useCallback(() => void window.api.markAllChatsRead(), [])
+
+  // A clicked desktop notification opens the chat it was about.
+  useEffect(
+    () => window.api.onChatOpenRequest?.((id) => void selectConversation(id)),
+    [selectConversation]
+  )
+
+  // Other chats waiting on the user, in sidebar recency order, for the titlebar's
+  // "N need you" pill; each click opens the next one after the open chat.
+  const waitingIds = useMemo(
+    () =>
+      conversations
+        .filter((c) => c.id !== currentId && (chatStatus[c.id]?.pending.length ?? 0) > 0)
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((c) => c.id),
+    [conversations, chatStatus, currentId]
+  )
+  const openNextWaiting = useCallback(() => {
+    const next = waitingIds[0]
+    if (next) void selectConversation(next)
+  }, [waitingIds, selectConversation])
   const onToggleUnreadFirst = useCallback(async () => {
     const current = await window.api.getSettings()
     const fresh = await window.api.saveSettings({
@@ -2470,6 +2491,7 @@ export default function App(): JSX.Element {
           onToggleSideChat={currentId ? () => setSideChatOpen((o) => !o) : undefined}
           sideChatOpen={sideChatVisible}
           terminalShortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
+          needsYou={{ count: waitingIds.length, onNext: openNextWaiting }}
         />
 
         <UpdateBanner

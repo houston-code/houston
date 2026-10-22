@@ -1283,3 +1283,50 @@ describe('Sidebar: fold state comes from the app', () => {
     expect(onToggleParentCollapsed).toHaveBeenCalledWith('p')
   })
 })
+
+describe('Sidebar: attention outside the rows', () => {
+  const unread: ChatStatusMap = {
+    a: { running: false, pending: [], unread: { since: 1, outcome: 'done' } },
+    b: { running: true, pending: [{ kind: 'question' }] },
+    c: { running: true, pending: [] }
+  }
+  const convs = [
+    makeConv({ id: 'a', title: 'Alpha', groupId: 'g1' }),
+    makeConv({ id: 'b', title: 'Beta', groupId: 'g1' }),
+    makeConv({ id: 'c', title: 'Gamma', groupId: 'g1' })
+  ]
+
+  it("puts a collapsed group's strongest waiting state and count on its header", () => {
+    const { rerender } = render(
+      <Sidebar {...baseProps({ conversations: convs, chatStatus: unread, groups: [{ id: 'g1', name: 'Work', collapsed: true }] })} />
+    )
+    const badge = screen.getByRole('img', { name: '1 needs input' })
+    expect(badge.querySelector('.conv__status')).toHaveAttribute('data-signal', 'input')
+    // Expanded, the rows speak for themselves.
+    rerender(<Sidebar {...baseProps({ conversations: convs, chatStatus: unread, groups: [{ id: 'g1', name: 'Work' }] })} />)
+    expect(screen.queryByRole('img', { name: '1 needs input' })).not.toBeInTheDocument()
+  })
+
+  it('never aggregates working into a header', () => {
+    render(
+      <Sidebar
+        {...baseProps({
+          conversations: [convs[2]],
+          chatStatus: { c: unread.c },
+          groups: [{ id: 'g1', name: 'Work', collapsed: true }]
+        })}
+      />
+    )
+    expect(document.querySelector('.section-head__attention')).toBeNull()
+  })
+
+  it('badges the collapsed rail with chats needing input, else an unread pip', () => {
+    const { rerender } = render(<Sidebar {...baseProps({ collapsed: true, chatStatus: unread })} />)
+    expect(screen.getByRole('button', { name: 'Expand sidebar, 1 chat needs input' })).toHaveTextContent('1')
+    rerender(<Sidebar {...baseProps({ collapsed: true, chatStatus: { a: unread.a } })} />)
+    const btn = screen.getByRole('button', { name: 'Expand sidebar, 1 unread' })
+    expect(btn.querySelector('.sidebar__rail-pip')).not.toBeNull()
+    rerender(<Sidebar {...baseProps({ collapsed: true })} />)
+    expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+  })
+})

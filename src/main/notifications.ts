@@ -1,4 +1,5 @@
 import { Notification, type BrowserWindow } from 'electron'
+import { IPC } from '@shared/constants'
 import type { AgentEvent } from '@shared/agent'
 import { notificationFor, workspaceLabel, type NotifySpec } from '@shared/notify'
 
@@ -26,7 +27,7 @@ export { notificationFor, workspaceLabel, type NotifySpec }
 export function notifyAgentEvent(
   e: AgentEvent,
   win: BrowserWindow | null,
-  opts: { enabled: boolean; workspaceName?: string }
+  opts: { enabled: boolean; workspaceName?: string; conversationId?: string }
 ): void {
   if (!opts.enabled || !Notification.isSupported()) return
   // Focused window → the user is already watching; don't interrupt.
@@ -39,6 +40,9 @@ export function notifyAgentEvent(
     if (win.isMinimized()) win.restore()
     win.show()
     win.focus()
+    // Land on the chat the notification is about, not whatever was open.
+    if (opts.conversationId && !win.webContents.isDestroyed())
+      win.webContents.send(IPC.chatOpenRequest, opts.conversationId)
   })
   n.show()
 }
