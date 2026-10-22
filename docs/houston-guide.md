@@ -784,7 +784,10 @@ run" covers only that destination (the prompt says which):
   and a call that clicks or types (`steps`) asks once more per host.
 - GitHub calls that post or update something (open a PR or issue, comment,
   review, reopen, mark ready or draft) share one grant per repository, so
-  allowing a comment on one repository never allows anything on another.
+  allowing a comment on one repository never allows anything on another. The
+  repository is the one `gh` would pick (your `gh repo set-default` choice
+  included), and every call is told to use exactly that one, so pointing the
+  remotes or the default repository somewhere else asks again.
 - Merging a PR, closing a PR or issue, checking out a PR, and creating a
   repository each ask on their own: allowing a comment never allows a merge.
 

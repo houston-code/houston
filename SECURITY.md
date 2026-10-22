@@ -79,7 +79,9 @@ Houston's own network tools (`web_fetch`, `web_search`, and the GitHub tools) **
 a URL, query, title, body, or comment that carries a recognized credential. In *full auto*
 the GitHub calls that only read (lists, views, check and run status) run without asking;
 GitHub calls that publish are granted per repository, and a merge, close, checkout, or repository
-creation is never covered by a grant for another kind of call. Granted shell network is additionally confined to a
+creation is never covered by a grant for another kind of call. Each GitHub call is pinned to the
+repository its grant names (`GH_REPO`), so a remote or `gh repo set-default` change made by the
+agent can't redirect an approved call; it changes the repository, and the next call asks again. Granted shell network is additionally confined to a
 **per-domain egress allowlist** on macOS and Linux: the OS sandbox blocks direct sockets
 and routes shell egress through a Houston-controlled loopback proxy, which allows only
 package registries, VCS hosts, and domains you add in Settings (see

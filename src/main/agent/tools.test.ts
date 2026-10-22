@@ -60,6 +60,8 @@ import { GH_READ_TOOLS } from './permissions'
 
 let workspace: string
 let ctx: ToolContext
+/** The repository a gh call was approved for, which the loop hands the tool (see ghRunner). */
+const GH_REPO = 'github.com:o/r'
 
 beforeEach(() => {
   workspace = realpathSync(mkdtempSync(join(tmpdir(), 'houston-test-')))
@@ -1650,6 +1652,7 @@ describe('gh_run_view standing', () => {
     const ctx: ToolContext = {
       workspace,
       allowNetwork: true,
+      ghRepo: GH_REPO,
       ghExec: async (a) => {
         calls.push(a)
         if (a[0] === 'run' && a[1] === 'view' && a.includes('--log-failed')) return ok('log line')
@@ -2280,7 +2283,7 @@ describe('GitHub tools refuse to send a credential', () => {
     ['gh_repo_create', { name: 'x', description: TOKEN }]
   ])('%s never runs gh with a token in its arguments', async (name, args) => {
     const ghExec = vi.fn(async () => ok('https://github.com/o/r/pull/1'))
-    const ctx: ToolContext = { workspace, allowNetwork: true, ghExec }
+    const ctx: ToolContext = { workspace, allowNetwork: true, ghExec, ghRepo: GH_REPO }
     await expect(getTool(name)!.execute(args, ctx)).rejects.toThrow(/Refusing to send this GitHub request.*github-token/)
     expect(ghExec).not.toHaveBeenCalled()
   })
@@ -2290,6 +2293,7 @@ describe('GitHub tools refuse to send a credential', () => {
     const ctx: ToolContext = {
       workspace,
       allowNetwork: true,
+      ghRepo: GH_REPO,
       ghExec,
       collectSecrets: () => ['hunter2-very-secret-value']
     }
@@ -2303,7 +2307,7 @@ describe('GitHub tools refuse to send a credential', () => {
 
   it('still runs a call with nothing secret in it', async () => {
     const ghExec = vi.fn(async () => ok('https://github.com/o/r/pull/1#issuecomment-1'))
-    const ctx: ToolContext = { workspace, allowNetwork: true, ghExec }
+    const ctx: ToolContext = { workspace, allowNetwork: true, ghExec, ghRepo: GH_REPO }
     await getTool('gh_pr_comment')!.execute({ number: 1, body: 'LGTM' }, ctx)
     expect(ghExec).toHaveBeenCalledTimes(1)
   })
@@ -2322,6 +2326,7 @@ describe('untrusted-content fencing beyond web_fetch', () => {
       ctx: {
         workspace,
         allowNetwork: true,
+        ghRepo: GH_REPO,
         ghExec: async () => ok(stdout),
         quarantineExtract: async () => {
           isolated = true
@@ -2431,6 +2436,7 @@ describe('untrusted-content fencing beyond web_fetch', () => {
     const ctx: ToolContext = {
       workspace,
       allowNetwork: true,
+      ghRepo: GH_REPO,
       ghExec: async (argv) => ok(argv[1] === 'diff' ? diff : JSON.stringify(pr))
     }
     const out = (await getTool('gh_pr_view')!.execute({ number: 5, diff: true }, ctx)) as string
@@ -2446,7 +2452,7 @@ describe('untrusted-content fencing beyond web_fetch', () => {
     expect(outside).not.toContain('looks like a prompt-injection attempt')
 
     const loud = { ...pr, body: PAYLOAD }
-    const ctx2: ToolContext = { workspace, allowNetwork: true, ghExec: async () => ok(JSON.stringify(loud)) }
+    const ctx2: ToolContext = { workspace, allowNetwork: true, ghRepo: GH_REPO, ghExec: async () => ok(JSON.stringify(loud)) }
     const warned = (await getTool('gh_pr_view')!.execute({ number: 5 }, ctx2)) as string
     expect(splitFences(warned).outside).toContain('This pull request looks like a prompt-injection attempt')
   })
@@ -2480,6 +2486,7 @@ describe('untrusted-content fencing beyond web_fetch', () => {
     const ctx: ToolContext = {
       workspace,
       allowNetwork: true,
+      ghRepo: GH_REPO,
       ghExec: async (a) => {
         if (!argv.length) argv = a
         return ok(log)
@@ -2530,6 +2537,7 @@ describe('untrusted-content fencing beyond web_fetch', () => {
     const ctx: ToolContext = {
       workspace,
       allowNetwork: true,
+      ghRepo: GH_REPO,
       ghExec: async (a) => {
         if (!argv.length) argv = a
         return ok(JSON.stringify(run))
@@ -2621,6 +2629,7 @@ describe('untrusted-content fencing beyond web_fetch', () => {
     const ctx: ToolContext = {
       workspace,
       allowNetwork: true,
+      ghRepo: GH_REPO,
       ghExec: async () => ({ ok: false, stdout: json, stderr: '', code: 1 })
     }
     const out = (await getTool('gh_pr_checks')!.execute({ number: 5 }, ctx)) as string
@@ -2965,6 +2974,7 @@ describe('github (gh) tools', () => {
     const ctx: ToolContext = {
       workspace,
       allowNetwork: true,
+      ghRepo: GH_REPO,
       ghExec: async (argv) => {
         calls.push(argv)
         return typeof result === 'function' ? result(argv) : result
@@ -2972,6 +2982,80 @@ describe('github (gh) tools', () => {
     }
     return { ctx, calls }
   }
+
+  // Enough arguments for each gh tool to reach gh.
+  const GH_ARGS: Record<string, Record<string, unknown>> = {
+    gh_issue_comment: { number: 1, body: 'b' },
+    gh_issue_create: { title: 't', body: 'b' },
+    gh_issue_list: {},
+    gh_issue_set_state: { number: 1, action: 'close' },
+    gh_issue_view: { number: 1 },
+    gh_pr_checkout: { number: 1 },
+    gh_pr_checks: { number: 1 },
+    gh_pr_comment: { number: 1, body: 'b' },
+    gh_pr_create: { title: 't', body: 'b' },
+    gh_pr_list: {},
+    gh_pr_merge: { number: 1 },
+    gh_pr_review: { number: 1, action: 'approve' },
+    gh_pr_set_state: { number: 1, action: 'close' },
+    gh_pr_view: { number: 1 },
+    gh_repo_create: { name: 'app' },
+    gh_run_list: {},
+    gh_run_view: { run_id: 1 }
+  }
+
+  it('pins every gh call but a repo create to the repository it was approved for', async () => {
+    const names = toolSchemas()
+      .map((t) => t.name)
+      .filter((n) => n.startsWith('gh_'))
+    expect(names.sort()).toEqual(Object.keys(GH_ARGS).sort())
+    for (const name of names) {
+      const envs: (NodeJS.ProcessEnv | undefined)[] = []
+      const c: ToolContext = {
+        workspace,
+        allowNetwork: true,
+        ghRepo: 'github.com:me/proj',
+        ghExec: async (_argv, _cwd, _signal, env) => {
+          envs.push(env)
+          return ok('[]')
+        }
+      }
+      await getTool(name)!.execute(GH_ARGS[name], c)
+      expect({ name, called: envs.length > 0 }).toEqual({ name, called: true })
+      const want = name === 'gh_repo_create' ? undefined : { GH_REPO: 'github.com/me/proj' }
+      for (const env of envs) expect({ name, env }).toEqual({ name, env: want })
+    }
+  })
+
+  it('refuses a gh call when there is no GitHub repository to pin it to', async () => {
+    const ghExec = vi.fn(async () => ok('[]'))
+    const c: ToolContext = { workspace, allowNetwork: true, ghRepo: null, ghExec }
+    await expect(getTool('gh_pr_comment')!.execute({ number: 1, body: 'b' }, c)).rejects.toThrow(
+      /No GitHub repository found/
+    )
+    expect(ghExec).not.toHaveBeenCalled()
+    // A repo create names its own repository, so it still runs.
+    await getTool('gh_repo_create')!.execute({ name: 'app' }, c)
+    expect(ghExec).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolves the repository itself outside the approval path, gh-resolved included', async () => {
+    const git = (...a: string[]) => execFileSync('git', a, { cwd: workspace, stdio: 'ignore' })
+    git('init', '-q')
+    git('remote', 'add', 'origin', 'https://github.com/me/proj.git')
+    git('config', 'remote.origin.gh-resolved', 'other/repo')
+    const envs: (NodeJS.ProcessEnv | undefined)[] = []
+    const c: ToolContext = {
+      workspace,
+      allowNetwork: true,
+      ghExec: async (_argv, _cwd, _signal, env) => {
+        envs.push(env)
+        return ok('https://github.com/other/repo/pull/1#issuecomment-1')
+      }
+    }
+    await getTool('gh_pr_comment')!.execute({ number: 1, body: 'b' }, c)
+    expect(envs).toEqual([{ GH_REPO: 'github.com/other/repo' }])
+  })
 
   it('marks mutating PR tools as blocked in plan mode, read-only ones as not', () => {
     expect(getTool('gh_pr_create')!.blockedInPlan).toBe(true)
