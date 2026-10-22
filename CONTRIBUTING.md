@@ -79,8 +79,8 @@ This runs the suite with v8 coverage and writes a per-file table plus HTML and
 lcov reports under `coverage/`. Every file under `src/` counts, including files
 no test imports (those count as 0%), so the numbers reflect the whole product.
 `vitest.config.ts` sets a coverage floor per directory (`src/main`,
-`src/renderer`, `src/shared`, `src/cli`) about a point below the measured
-values, and CI fails a PR that drops any of them. If your change raises a
+`src/renderer`, `src/shared`, `src/cli`) a few tenths of a point below the
+measured values, and CI fails a PR that drops any of them. If your change raises a
 directory's coverage, raise its floor in the same PR so the gain is locked in.
 
 ### Agent-behavior goldens
