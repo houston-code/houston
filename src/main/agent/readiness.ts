@@ -137,7 +137,7 @@ export function gatherReadinessFacts(
 }
 
 const NETWORK_BLOCKER: Record<Exclude<ShellNetworkState, 'granted' | 'ungated'>, string> = {
-  ask: 'Shell commands run offline until you choose "Allow for run" on one, so choose it on the install command.',
+  ask: 'Shell commands run offline until you allow network. In full auto you are asked when a command fails without it; otherwise choose "Allow for run" on the install command.',
   declined: 'Network for shell commands was declined for this run.',
   unattended: 'This headless run has no network for shell commands; run it with --allow-shell-network.'
 }

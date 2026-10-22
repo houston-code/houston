@@ -1012,10 +1012,10 @@ export type AgentEvent =
        */
       sandboxed?: boolean
       /**
-       * Present and `true` only on the one-time full-auto shell-network consent: the
-       * decision governs whether the sandbox lets shell commands reach the network for
-       * the rest of the run, NOT whether this command runs (it runs either way — a
-       * decline just runs it offline). Lets the UI frame the prompt as a network grant.
+       * Present and `true` only on the full-auto shell-network question, raised once per
+       * chat after a shell command fails for lack of network. The command has already
+       * run (offline); the decision governs only whether later shell commands in the
+       * chat may reach the network. Lets the UI frame the prompt as a network grant.
        */
       shellNetwork?: boolean
       /**
