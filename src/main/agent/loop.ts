@@ -34,6 +34,7 @@ import {
 import type { FileDiffPreview } from '@shared/diff'
 import {
   folderTrustState,
+  APPROVAL_POLICY_LABEL,
   isApprovalPolicy,
   type ApprovalPolicy,
   type ModelCaps,
@@ -70,6 +71,7 @@ import {
   ASK_USER_NAME,
   builtinToolset,
   getTool,
+  PRESENT_PLAN_NAME,
   resolveInRoots,
   staleWriteRefusal,
   SHELL_NETWORK_DECLINED_NOTE,
@@ -209,7 +211,13 @@ import {
   summarizationSystemPrompt,
   summaryMaxTokens
 } from './compaction'
-import { peekConversation, setCompaction, setPromptSnapshot, takeChildReports } from '../conversations'
+import {
+  peekConversation,
+  setAnnouncedPolicy,
+  setCompaction,
+  setPromptSnapshot,
+  takeChildReports
+} from '../conversations'
 import { buildPinnedMessages, latestTodos, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
 import { todoEvidenceGaps, todoGapNote } from './todoEvidence'
 import { findAcceptedPlan, planProgress, planStillOpen } from './planChecklist'
@@ -422,6 +430,13 @@ interface RunState {
    * than only on the next turn. Read at call time everywhere policy is gated.
    */
   policy: ApprovalPolicy
+  /**
+   * The approval mode the model was last told about: the starting policy (the system
+   * prompt states it), then whatever a Plan-mode note or an accepted plan switched it
+   * to. When `policy` and this disagree about Plan mode at an iteration boundary, the
+   * loop tells the model before its next request (see {@link planModeNote}).
+   */
+  announcedPolicy: ApprovalPolicy
   /**
    * The live reasoning effort for a run whose chat keeps its own (the request's
    * `reasoningEffort`), changed mid-run by {@link setRunEffort} like `policy`. Unset
@@ -640,6 +655,8 @@ export function resolvePlan(runId: string, callId: string, decision: PlanDecisio
 function planDecisionResult(run: RunState, decision: PlanDecision, readiness?: PlanReadiness): string {
   if (decision.kind === 'accept') {
     run.policy = decision.mode
+    // This result already tells the model Plan mode is off, so no separate note follows.
+    run.announcedPolicy = decision.mode
     run.planAcceptedAt = Date.now()
     const how =
       decision.mode === 'auto-edit'
@@ -785,6 +802,38 @@ function waitForApproval(run: RunState, callId: string): Promise<ApprovalResolut
  */
 function denialText(base: string, note?: string): string {
   return note ? `${base} They said: ${note}` : base
+}
+
+/**
+ * The note telling the model that Plan mode switched on or off, so it never works from
+ * a stale belief: the system prompt is built once per run, and its own earlier "I'm in
+ * Plan mode" messages outweigh a rebuilt one. `sinceLastTurn` is for a switch made
+ * between runs; `presentPlan` is whether this run offers present_plan (only a run
+ * that starts in Plan mode does).
+ */
+export function planModeNote(policy: ApprovalPolicy, sinceLastTurn: boolean, presentPlan: boolean): string {
+  const when = sinceLastTurn ? 'since your last turn' : 'while you were working'
+  if (policy === 'plan') {
+    const finish = presentPlan
+      ? 'then finish by calling present_plan with your plan.'
+      : 'then finish by writing your plan in your reply; the user will switch Plan mode off to let you carry it out.'
+    return (
+      `The user switched on Plan mode ${when}. Plan mode is ON now, whatever earlier messages in this ` +
+      'conversation say: you are read-only, so Houston refuses file edits, shell commands, and any other ' +
+      `change. Keep investigating with the read-only tools, ${finish}`
+    )
+  }
+  const how =
+    policy === 'ask'
+      ? 'each edit and command asks for the user\'s approval'
+      : policy === 'auto-edit'
+        ? 'edits inside the workspace apply automatically and shell commands ask for approval'
+        : 'edits and commands run without asking'
+  return (
+    `The user switched off Plan mode ${when}. Plan mode is OFF now, whatever earlier messages in this ` +
+    `conversation say, and the active mode is "${APPROVAL_POLICY_LABEL[policy]}": you can edit files and ` +
+    `run commands again, and ${how}. Don't ask the user to turn Plan mode off.`
+  )
 }
 
 /** Most `propose_session` cards one turn may raise. */
@@ -975,6 +1024,7 @@ export async function startRun(
     shellNetworkGranted: seededOverride.shellNetworkGranted || seededShellNetwork,
     shellNetworkDecided: seededOverride.shellNetworkDecided || seededShellNetwork,
     policy: req.approvalPolicy,
+    announcedPolicy: req.approvalPolicy,
     ...(isReasoningEffort(req.reasoningEffort) ? { effort: req.reasoningEffort } : {}),
     transcript: [],
     evidence: new EvidenceLedger(),
@@ -1055,6 +1105,10 @@ export async function startRun(
   let scrubError = (text: string): string => text
   // Titles this run has proposed (propose_session), for its per-turn cap.
   const proposedThisRun = new Set<string>()
+  // The mode last saved as told to the model (Conversation.announcedPolicy). Unset
+  // until the run reaches the turn-start check, so a run that fails before it never
+  // records a mode the model wasn't told about.
+  let storedAnnounced: ApprovalPolicy | undefined
 
   try {
     let workspace: string
@@ -1287,6 +1341,30 @@ export async function startRun(
         })
       }
     }
+    // The model's earlier messages say whether it was in Plan mode, and they outweigh
+    // the system prompt rebuilt for this run, so a switch across the Plan-mode boundary
+    // since the last run is spelled out once, just before the user's new message.
+    // Recorded as told right away, so a failure later in the run can't repeat it.
+    const presentPlanOffered = builtinNames.includes(PRESENT_PLAN_NAME)
+    if (conversationId) {
+      const before = peekConversation(conversationId)?.announcedPolicy
+      if (before !== undefined && (before === 'plan') !== (req.approvalPolicy === 'plan')) {
+        if (messages[messages.length - 1]?.role === 'user') {
+          messages.splice(
+            messages.length - 1,
+            0,
+            systemNoteMessage(planModeNote(req.approvalPolicy, true, presentPlanOffered))
+          )
+          persist(messages)
+        } else {
+          // No new message to sit before (a continued run): the first iteration's
+          // check below appends the note instead.
+          run.announcedPolicy = before
+        }
+      }
+      setAnnouncedPolicy(conversationId, run.announcedPolicy)
+    }
+    storedAnnounced = run.announcedPolicy
     // Date + git/GitHub awareness folded into the prompt, captured once per
     // conversation and reused on later runs so the system prompt (and with it the
     // provider's cached history) survives the agent's own edits between turns; it is
@@ -2841,6 +2919,21 @@ export async function startRun(
         }
       }
 
+      // A mid-run switch across the Plan-mode boundary: tool gating already follows
+      // `run.policy`, so tell the model before its next request. Checked once per
+      // iteration, so toggles within one step collapse to the final state, and a
+      // double toggle back to the announced side says nothing. Accepting a plan
+      // updates `announcedPolicy` itself, since its tool result already says so.
+      if ((run.policy === 'plan') !== (run.announcedPolicy === 'plan')) {
+        run.announcedPolicy = run.policy
+        messages.push(systemNoteMessage(planModeNote(run.policy, false, presentPlanOffered)))
+        persist(messages)
+      }
+      if (conversationId && storedAnnounced !== run.announcedPolicy) {
+        storedAnnounced = run.announcedPolicy
+        setAnnouncedPolicy(conversationId, storedAnnounced)
+      }
+
       // Landing reminder: once the run is within a small margin of the iteration
       // cap, or has crossed the cumulative-cost ceiling, push a single guidance
       // message so the model wraps up cleanly instead of being cut off. It's a
@@ -4163,6 +4256,11 @@ export async function startRun(
     // the caller they were in, so it fell back to nothing; hand them back so they
     // go out as a follow-up instead of vanishing with the run.
     if (run.steering.length) emit({ type: 'steers_returned', texts: run.steering.splice(0).map((s) => s.text) })
+    // A plan accepted on the run's last step is told in its tool result; save that,
+    // so the next turn doesn't repeat it.
+    if (conversationId && storedAnnounced !== undefined && storedAnnounced !== run.announcedPolicy) {
+      setAnnouncedPolicy(conversationId, run.announcedPolicy)
+    }
     runs.delete(runId)
     // Only clear the conversation's slot if it still points at this run, so a
     // (guarded-against, but defensive) later run can't have its entry removed.

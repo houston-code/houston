@@ -122,6 +122,7 @@ function migrate(conv: Conversation): Conversation {
 function dropUnknownChatSettings(conv: Conversation): Conversation {
   if (conv.reasoningEffort !== undefined && !isReasoningEffort(conv.reasoningEffort)) delete conv.reasoningEffort
   if (conv.approvalPolicy !== undefined && !isApprovalPolicy(conv.approvalPolicy)) delete conv.approvalPolicy
+  if (conv.announcedPolicy !== undefined && !isApprovalPolicy(conv.announcedPolicy)) delete conv.announcedPolicy
   return conv
 }
 
@@ -348,6 +349,7 @@ function toMeta(conv: Conversation): ConversationMeta {
     schemaVersion: _schemaVersion,
     compaction: _compaction,
     promptSnapshot: _promptSnapshot,
+    announcedPolicy: _announcedPolicy,
     proposals: _proposals,
     childReports: _childReports,
     sideChat: _sideChat,
@@ -679,6 +681,17 @@ export function setPromptSnapshot(id: string, snapshot: PromptSnapshot): void {
   const conv = read(id)
   if (!conv) return
   conv.promptSnapshot = snapshot
+  write(conv)
+}
+
+/**
+ * Persist the approval mode the model was last told about (see
+ * Conversation.announcedPolicy). Bookkeeping: never bumps `updatedAt`.
+ */
+export function setAnnouncedPolicy(id: string, policy: ApprovalPolicy): void {
+  const conv = read(id)
+  if (!conv || conv.announcedPolicy === policy) return
+  conv.announcedPolicy = policy
   write(conv)
 }
 

@@ -573,6 +573,14 @@ export interface Conversation extends ConversationMeta {
   /** Present once the chat has run; see {@link PromptSnapshot}. */
   promptSnapshot?: PromptSnapshot
   /**
+   * The approval mode the model was last told about in this chat: the latest run's
+   * starting mode (its system prompt states it), or the mode a Plan-mode note or an
+   * accepted plan switched it to. The next run compares its own mode with this one
+   * and opens with a note when exactly one of them is Plan mode, since the chat's
+   * earlier messages would otherwise outweigh the rebuilt prompt.
+   */
+  announcedPolicy?: ApprovalPolicy
+  /**
    * What the user did with each `propose_session` card in this chat, keyed by the
    * proposing tool call's id. A call with no entry is still open (nothing has run).
    */

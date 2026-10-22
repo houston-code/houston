@@ -121,11 +121,12 @@ vi.mock('./promptSnapshot', async (importActual) => ({
   localDateStamp: () => '2026-01-15'
 }))
 // A desktop run always belongs to a saved chat. The loop reads and writes a few
-// per-chat records (prompt snapshot, compaction, finished-child reports); keep the
-// goldens off the real conversation store.
+// per-chat records (prompt snapshot, compaction, finished-child reports, the mode
+// the model was last told about); keep the goldens off the real conversation store.
 vi.mock('../conversations', () => ({
   getConversation: () => null,
   peekConversation: () => null,
+  setAnnouncedPolicy: () => {},
   setCompaction: () => {},
   setPromptSnapshot: () => {},
   takeChildReports: () => []

@@ -766,7 +766,8 @@ Approval is layered. From most to least restrictive:
   the network to install them (for example, "choose Allow for run on the install
   command"). Houston works this out from the machine without running anything, and
   tells the agent about any problem when you accept, so it can say a check couldn't
-  run instead of claiming it.
+  run instead of claiming it. Switching Plan mode on or off takes effect at once, even
+  mid-turn, and Houston tells the agent about the switch before its next step.
 - **Ask every time:** every edit and command needs a click.
 - **Auto-approve edits:** file edits go through automatically; shell commands
   still ask.

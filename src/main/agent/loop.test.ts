@@ -5203,6 +5203,189 @@ describe('present_plan (Plan mode review)', () => {
   })
 })
 
+describe('Plan-mode switch notes', () => {
+  let userData: string
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'houston-loop-userdata-'))
+    setUserDataDir(userData)
+  })
+  afterEach(async () => {
+    resetUserDataDir()
+    await removeUserData(userData)
+  })
+
+  const readTurn = (id: string): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name: 'list_dir', arguments: { path: '.' } } },
+    { type: 'done', stopReason: 'tool_use' }
+  ]
+  const endTurn: ProviderStreamEvent[] = [
+    { type: 'text', text: 'done' },
+    { type: 'done', stopReason: 'end_turn' }
+  ]
+  const planNotes = (msgs: ChatMessage[]): string[] =>
+    msgs
+      .map((m) => (typeof m.content === 'string' ? m.content : ''))
+      .filter((c) => c.startsWith(SYSTEM_NOTE_PREFIX) && /switched (on|off) Plan mode/.test(c))
+
+  /**
+   * Run `turns` on a known runId, calling `before[i]` as model request i starts (a
+   * toggle while the model is mid-turn), and record each request's messages.
+   */
+  async function runWithToggles(
+    policy: ApprovalPolicy,
+    turns: ProviderStreamEvent[][],
+    before: Record<number, (runId: string) => void>,
+    extra: { conversationId?: string; messages?: ChatMessage[]; onPlan?: PlanDecision } = {}
+  ): Promise<{ requests: ChatMessage[][]; messages: ChatMessage[] }> {
+    const runId = `run-plan-note-${Math.round(Math.random() * 1e9)}`
+    const requests: ChatMessage[][] = []
+    let i = 0
+    h.provider = {
+      async *streamChat(req) {
+        requests.push([...req.messages])
+        before[i]?.(runId)
+        const turn = turns[i++] ?? endTurn
+        for (const ev of turn) yield ev
+      }
+    }
+    let messages: ChatMessage[] = []
+    await startRun(
+      {
+        runId,
+        ...(extra.conversationId ? { conversationId: extra.conversationId } : {}),
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: policy,
+        messages: extra.messages ?? [{ role: 'user', content: 'do it' }]
+      },
+      (e) => {
+        if (e.type === 'plan_ready' && extra.onPlan) {
+          const d = extra.onPlan
+          setTimeout(() => resolvePlan(runId, e.callId, d), 0)
+        }
+      },
+      (m) => {
+        messages = m
+      }
+    )
+    return { requests, messages }
+  }
+
+  it('tells the model once when Plan mode switches on mid-run', async () => {
+    const r = await runWithToggles('auto-edit', [readTurn('r1'), readTurn('r2'), endTurn], {
+      0: (id) => setRunPolicy(id, 'plan')
+    })
+    const notes = planNotes(r.messages)
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toMatch(/Plan mode is ON now/)
+    // This run started outside Plan mode, so present_plan isn't offered: no naming it.
+    expect(notes[0]).not.toContain('present_plan')
+    // The note reaches the very next request, and only once.
+    expect(planNotes(r.requests[0]!)).toHaveLength(0)
+    expect(planNotes(r.requests[1]!)).toHaveLength(1)
+    expect(planNotes(r.requests[2]!)).toHaveLength(1)
+  })
+
+  it('tells the model which mode is active when Plan mode switches off mid-run', async () => {
+    const r = await runWithToggles('plan', [readTurn('r1'), endTurn], {
+      0: (id) => setRunPolicy(id, 'full-auto')
+    })
+    const notes = planNotes(r.messages)
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toMatch(/Plan mode is OFF now/)
+    expect(notes[0]).toContain('"Full auto"')
+    expect(planNotes(r.requests[1]!)).toHaveLength(1)
+  })
+
+  it('says nothing for a double toggle that returns to the same side of Plan mode', async () => {
+    const r = await runWithToggles('ask', [readTurn('r1'), endTurn], {
+      0: (id) => {
+        setRunPolicy(id, 'plan')
+        setRunPolicy(id, 'auto-edit')
+      }
+    })
+    expect(planNotes(r.messages)).toHaveLength(0)
+  })
+
+  it('collapses toggles within one step to the final state', async () => {
+    const r = await runWithToggles('ask', [readTurn('r1'), endTurn], {
+      0: (id) => {
+        setRunPolicy(id, 'plan')
+        setRunPolicy(id, 'ask')
+        setRunPolicy(id, 'plan')
+      }
+    })
+    const notes = planNotes(r.messages)
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toMatch(/Plan mode is ON now/)
+  })
+
+  it('notes a switch made between turns, just before the new message', async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const first = await runWithToggles('plan', [endTurn], {}, { conversationId: conv.id })
+    expect(planNotes(first.messages)).toHaveLength(0)
+    expect(getConversation(conv.id)?.announcedPolicy).toBe('plan')
+
+    const second = await runWithToggles('auto-edit', [endTurn], {}, {
+      conversationId: conv.id,
+      messages: [...first.messages, { role: 'user', content: 'now build it' }]
+    })
+    const notes = planNotes(second.messages)
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toMatch(/since your last turn/)
+    expect(notes[0]).toContain('"Auto-approve edits"')
+    const sent = second.requests[0]!
+    expect(sent.at(-1)?.content).toBe('now build it')
+    expect(planNotes([sent.at(-2)!])).toHaveLength(1)
+    expect(getConversation(conv.id)?.announcedPolicy).toBe('auto-edit')
+
+    // Same side again on the next turn: no note.
+    const third = await runWithToggles('full-auto', [endTurn], {}, {
+      conversationId: conv.id,
+      messages: [...second.messages, { role: 'user', content: 'and test it' }]
+    })
+    expect(planNotes(third.messages)).toHaveLength(1) // only the earlier one
+  })
+
+  it('notes a switch into Plan mode between turns and names present_plan', async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const first = await runWithToggles('ask', [endTurn], {}, { conversationId: conv.id })
+    const second = await runWithToggles('plan', [endTurn], {}, {
+      conversationId: conv.id,
+      messages: [...first.messages, { role: 'user', content: 'plan the next step' }]
+    })
+    const notes = planNotes(second.messages)
+    expect(notes).toHaveLength(1)
+    expect(notes[0]).toMatch(/Plan mode is ON now/)
+    expect(notes[0]).toContain('present_plan')
+  })
+
+  it('leaves accepting a plan to its own tool result, with no extra note', async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const planCall: ProviderStreamEvent[] = [
+      { type: 'tool_call', call: { id: 'p1', name: 'present_plan', arguments: { title: 'T', plan: '1. step' } } },
+      { type: 'done', stopReason: 'tool_use' }
+    ]
+    const r = await runWithToggles(
+      'plan',
+      [planCall, readTurn('r1'), endTurn],
+      {},
+      { conversationId: conv.id, onPlan: { kind: 'accept', mode: 'auto-edit' } }
+    )
+    expect(planNotes(r.messages)).toHaveLength(0)
+    const result = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 'p1')
+    expect(result?.content).toMatch(/ACCEPTED/)
+    // The next turn, in the accepted mode, doesn't repeat it either.
+    expect(getConversation(conv.id)?.announcedPolicy).toBe('auto-edit')
+    const next = await runWithToggles('auto-edit', [endTurn], {}, {
+      conversationId: conv.id,
+      messages: [...r.messages, { role: 'user', content: 'go on' }]
+    })
+    expect(planNotes(next.messages)).toHaveLength(0)
+  })
+})
+
 describe('missing runtime', () => {
   // A stand-in registered under the run_shell name, so no real shell runs; the
   // loop keys the announcement off the tool name and its output.
