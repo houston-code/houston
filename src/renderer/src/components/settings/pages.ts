@@ -1,5 +1,6 @@
 import type { AppSettings } from '@shared/types'
 import type { ResettableKey } from '@shared/settingsPortable'
+import { PAGE_LABELS, type TabId } from './pageIds'
 import type { SectionComponent } from './context'
 import {
   AddProviderSection,
@@ -33,22 +34,13 @@ import {
   UpdatesSection
 } from './sections/app'
 
-/** Settings pages shown in the left-hand nav. */
-export type TabId =
-  | 'models'
-  | 'agent'
-  | 'tools'
-  | 'mcp'
-  | 'hooks'
-  | 'workspace'
-  | 'general'
-  | 'appearance'
-  | 'keyboard'
-  | 'permissions'
-  | 'about'
+export type { TabId } from './pageIds'
 
-/** The nav's headed groups, in order. */
-export type PageGroup = 'AI' | 'Workspace' | 'App' | 'Security' | 'About'
+/**
+ * The nav's groups. Every group shown under a heading has several pages; About
+ * is not a group of settings at all and sits apart at the foot of the nav.
+ */
+export type PageGroup = 'AI' | 'App' | 'Security' | 'About'
 
 /**
  * One section on a page, plus what settings search matches it on beyond its own
@@ -76,7 +68,7 @@ export interface SettingsPage {
 export const PAGES: SettingsPage[] = [
   {
     id: 'models',
-    label: 'Providers & Models',
+    label: PAGE_LABELS.models,
     group: 'AI',
     sections: [
       {
@@ -99,7 +91,7 @@ export const PAGES: SettingsPage[] = [
   },
   {
     id: 'agent',
-    label: 'Agent Behavior',
+    label: PAGE_LABELS.agent,
     group: 'AI',
     sections: [
       {
@@ -132,7 +124,7 @@ export const PAGES: SettingsPage[] = [
   },
   {
     id: 'tools',
-    label: 'Tools',
+    label: PAGE_LABELS.tools,
     group: 'AI',
     sections: [
       {
@@ -170,7 +162,7 @@ export const PAGES: SettingsPage[] = [
   },
   {
     id: 'mcp',
-    label: 'MCP Servers',
+    label: PAGE_LABELS.mcp,
     group: 'AI',
     sections: [
       {
@@ -188,7 +180,7 @@ export const PAGES: SettingsPage[] = [
   },
   {
     id: 'hooks',
-    label: 'Hooks',
+    label: PAGE_LABELS.hooks,
     group: 'AI',
     sections: [
       {
@@ -205,20 +197,8 @@ export const PAGES: SettingsPage[] = [
     ]
   },
   {
-    id: 'workspace',
-    label: 'Workspace',
-    group: 'Workspace',
-    sections: [
-      {
-        id: 'additional-folders',
-        Component: AdditionalFoldersSection,
-        keywords: ['directories', 'roots', 'paths', 'monorepo', 'access']
-      }
-    ]
-  },
-  {
     id: 'general',
-    label: 'General',
+    label: PAGE_LABELS.general,
     group: 'App',
     sections: [
       {
@@ -236,7 +216,7 @@ export const PAGES: SettingsPage[] = [
   },
   {
     id: 'appearance',
-    label: 'Appearance',
+    label: PAGE_LABELS.appearance,
     group: 'App',
     sections: [
       {
@@ -249,7 +229,7 @@ export const PAGES: SettingsPage[] = [
   },
   {
     id: 'keyboard',
-    label: 'Keyboard',
+    label: PAGE_LABELS.keyboard,
     group: 'App',
     sections: [
       {
@@ -262,7 +242,7 @@ export const PAGES: SettingsPage[] = [
   },
   {
     id: 'permissions',
-    label: 'Permissions',
+    label: PAGE_LABELS.permissions,
     group: 'Security',
     sections: [
       {
@@ -297,8 +277,20 @@ export const PAGES: SettingsPage[] = [
     ]
   },
   {
+    id: 'workspace',
+    label: PAGE_LABELS.workspace,
+    group: 'Security',
+    sections: [
+      {
+        id: 'additional-folders',
+        Component: AdditionalFoldersSection,
+        keywords: ['directories', 'roots', 'paths', 'monorepo', 'access']
+      }
+    ]
+  },
+  {
     id: 'about',
-    label: 'About',
+    label: PAGE_LABELS.about,
     group: 'About',
     sections: [
       {
@@ -320,7 +312,8 @@ export const PAGES: SettingsPage[] = [
   }
 ]
 
-export const PAGE_GROUPS: PageGroup[] = ['AI', 'Workspace', 'App', 'Security', 'About']
+/** The headed groups, top to bottom (About is the nav's footer). */
+export const PAGE_GROUPS: PageGroup[] = ['AI', 'App', 'Security']
 
 /** The page that holds a given page id, falling back to the first. */
 export function pageById(id: TabId): SettingsPage {

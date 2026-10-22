@@ -277,8 +277,10 @@ on the client, but the common built-ins are:
 - `/changes` (also `/diff`), `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`,
   `/cost`, `/cwd`, `/share`, `/doctor`.
 - `/settings`, `/login`, `/mcp`, `/hooks`, `/trust`, `/theme`: in the desktop app
-  these open the matching section of Settings; the terminal edits a safe subset
-  in place.
+  these open the matching page of Settings; the terminal edits a safe subset
+  in place. In the desktop app, `/settings <page>` opens that page
+  (`/settings permissions`) and `/settings <words>` opens Settings searching for them
+  (`/settings proxy`).
 - `/skills`, `/agents`: list the workspace's skills and custom agents.
 - `/help`: list the available commands.
 
@@ -1569,11 +1571,13 @@ tracking parameters.
 
 ## Settings and keys
 
-Settings is grouped into pages: **AI** (Providers & Models, Agent Behavior, Tools,
-MCP Servers, Hooks), **Workspace** (additional folders), **App** (General,
-Appearance, Keyboard), **Security** (Permissions: the default approval mode,
-permission rules, trusted folders, sandbox egress), and **About** (installed version
-and a manual "Check for updates", diagnostics, legal). **Check for Updates…** is also
+Settings opens as a full page over the window (**Back to app**, at the top of the sidebar, or Esc returns to the chat) and is
+grouped into pages: **AI** (Providers & Models, Agent Behavior, Tools,
+MCP Servers, Hooks), **App** (General, Appearance, Keyboard), **Security**
+(Permissions: the default approval mode, permission rules, trusted folders, sandbox
+egress; and Workspace: additional folders the agent may use), and **About** at the
+foot of the list (installed version and a manual "Check for updates", diagnostics,
+legal). **Check for Updates…** is also
 in the app menu on macOS and the Help menu on Windows and Linux. API keys
 are encrypted with the OS keychain and stay in the main process.
 

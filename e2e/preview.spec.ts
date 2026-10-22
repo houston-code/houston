@@ -102,12 +102,12 @@ test('preview dock renders a live dev server and enforces its limits', async () 
     await app.evaluate(({ BrowserWindow }) => {
       BrowserWindow.getAllWindows()[0].webContents.send('menu:openSettings')
     })
-    await expect(window.locator('.modal[role="dialog"]')).toBeVisible()
+    await expect(window.getByRole('dialog', { name: 'Settings' })).toBeVisible()
     await window.waitForTimeout(400)
     const occluded = await inspectPanes(app)
     console.log('STEP5 with Settings open, pane visibility:', occluded.map((p) => p.visible))
     expect(occluded.find((p) => p.url === real.url)?.visible).toBe(false)
-    // Close the modal (Esc) and let the views re-show.
+    // Close Settings (Esc) and let the views re-show.
     await window.keyboard.press('Escape')
     await window.waitForTimeout(300)
 

@@ -213,7 +213,7 @@ describe('SettingsModal', () => {
     expect(current()).toEqual(['Keyboard'])
   })
 
-  it('groups the nav under headings, with Permissions right after Keyboard and About last', () => {
+  it('groups the nav under headings, with Permissions right after Keyboard and About apart at the foot', () => {
     installApi()
     renderModal()
     const nav = screen.getByRole('navigation', { name: 'Settings sections' })
@@ -221,24 +221,40 @@ describe('SettingsModal', () => {
       .getAllByRole('button')
       .map((b) => b.textContent?.trim())
     expect(labels).toEqual([
+      'Back to app',
       'Providers & Models',
       'Agent Behavior',
       'Tools',
       'MCP Servers',
       'Hooks',
-      'Workspace',
       'General',
       'Appearance',
       'Keyboard',
       'Permissions',
+      'Workspace',
       'About'
     ])
-    // Group headings, except where a one-page group is named like its page.
-    expect([...nav.querySelectorAll('.set-nav__heading')].map((h) => h.textContent)).toEqual([
+    // Every group has a heading (no headless group leaving a stray gap); About is the footer.
+    const groups = [...nav.querySelectorAll('.set-nav__group')]
+    expect(groups.map((g) => g.querySelector('.set-nav__heading')?.textContent ?? null)).toEqual([
       'AI',
       'App',
-      'Security'
+      'Security',
+      null
     ])
+    expect(groups.at(-1)).toHaveClass('set-nav__footer')
+    expect(within(groups.at(-1) as HTMLElement).getByRole('button').textContent).toBe('About')
+  })
+
+  it('starts each page with its title and then its first section, so no divider sits above it', () => {
+    installApi()
+    renderModal()
+    for (const page of ['Providers & Models', 'Permissions', 'General']) {
+      fireEvent.click(screen.getByRole('button', { name: page }))
+      const body = document.querySelector('.modal__body')!
+      expect(body.firstElementChild?.tagName).toBe('H1')
+      expect(body.firstElementChild?.nextElementSibling).toHaveClass('set-section')
+    }
   })
 
   it('shows the legal links on About', () => {
@@ -292,17 +308,17 @@ describe('SettingsModal', () => {
     renderModal()
 
     // Nothing from Permissions is present until the page is selected.
-    expect(screen.queryByRole('heading', { name: 'Permissions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 3, name: 'Permissions' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
     for (const h of ['Approval mode', 'Web reads in full auto', 'Permissions', 'Trusted folders', 'Sandbox egress']) {
-      expect(screen.getByRole('heading', { name: h })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 3, name: h })).toBeInTheDocument()
     }
     expect(screen.getByRole('button', { name: '+ Add rule' })).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'MCP servers' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
     expect(screen.getByRole('heading', { name: 'Web search' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { name: 'Permissions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 3, name: 'Permissions' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
     expect(screen.getByRole('heading', { name: 'MCP servers' })).toBeInTheDocument()
@@ -1191,7 +1207,7 @@ describe('SettingsModal', () => {
       const box = screen.getByPlaceholderText(/Extra instructions appended/)
       box.focus()
       fireEvent.change(box, { target: { value: 'pending edit' } })
-      fireEvent.click(screen.getByRole('button', { name: 'Close settings' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Back to app' }))
       expect(onClose).toHaveBeenCalledTimes(1)
       unmount()
       await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
@@ -1221,12 +1237,35 @@ describe('SettingsModal', () => {
     expect(api.saveSettings).not.toHaveBeenCalled()
   })
 
-  it('closes on Escape (focus trap) and not on inner clicks', () => {
+  it('leaves through one quiet "Back to app" row leading the sidebar, with no ✕ in the title strip', () => {
+    installApi()
+    const { onClose } = renderModal()
+    const nav = screen.getByRole('navigation', { name: 'Settings sections' })
+    const back = within(nav).getByRole('button', { name: 'Back to app' })
+    expect(nav.firstElementChild).toBe(back)
+    const head = document.querySelector('.settings-page__head') as HTMLElement
+    expect(within(head).queryAllByRole('button')).toEqual([])
+    expect(within(head).getByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    fireEvent.click(back)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('titles each page, so it is clear where you are', () => {
+    installApi()
+    renderModal()
+    expect(screen.getByRole('heading', { level: 1, name: 'Providers & Models' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+    expect(screen.getByRole('heading', { level: 1, name: 'Permissions' })).toBeInTheDocument()
+  })
+
+  it('opens as a full page that closes on Escape (focus trap), not on a click', () => {
     installApi()
     const { onClose } = renderModal()
     const dialog = screen.getByRole('dialog')
+    // A page over the whole window, with no backdrop to click away on.
+    expect(dialog).toHaveClass('settings-page')
+    expect(document.querySelector('.modal-backdrop')).toBeNull()
 
-    // Clicking inside the dialog must not bubble to the backdrop's onClose.
     fireEvent.click(dialog)
     expect(onClose).not.toHaveBeenCalled()
 

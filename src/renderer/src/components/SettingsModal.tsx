@@ -211,19 +211,49 @@ export function SettingsModal({
   }
   const mac = isMacPlatform()
 
-  return (
-    <div className="modal-backdrop" onClick={requestClose}>
-      <div
-        className="modal"
-        ref={modalRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-        tabIndex={-1}
-        onClick={(e) => e.stopPropagation()}
+  const navButton = (t: (typeof PAGES)[number]): JSX.Element => {
+    const count = searching ? pageMatches(t.id) : 0
+    const active = !searching && t.id === tab
+    return (
+      <button
+        key={t.id}
+        className={`${active ? 'is-active' : ''}${searching && count === 0 ? ' is-dim' : ''}`}
+        // The highlighted section is otherwise only a color and a rail.
+        aria-current={active ? 'page' : undefined}
+        onClick={() => goToPage(t.id)}
       >
-        <div className="modal__head">
-          <h2 id="settings-title">Settings</h2>
+        <span className="set-nav__icon" aria-hidden="true">
+          {NAV_ICON[t.id]}
+        </span>
+        {t.label}
+        {searching && count > 0 && (
+          <span className="set-nav__count" aria-label={`${count} ${count === 1 ? 'match' : 'matches'}`}>
+            {count}
+          </span>
+        )}
+      </button>
+    )
+  }
+
+  // A full-window page rather than a box floating over the chat: a dozen pages and a
+  // search need the room. Still a modal dialog to assistive tech and the focus trap,
+  // since nothing behind it is reachable while it is open; Esc or ✕ returns.
+  return (
+    <div
+      className={`settings-page${mac ? ' settings-page--mac' : ''}`}
+      ref={modalRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      tabIndex={-1}
+    >
+      <div className="settings-page__frame">
+        <div className="modal__head settings-page__head">
+          {/* The window strip, like the app's own titlebar: the title centered (clear
+              of the macOS window controls) and the save state at the right. */}
+          <h2 id="settings-title" className="settings-page__title">
+            Settings
+          </h2>
           <p className={`set-status set-status--${autosave.status}`} aria-live="polite">
             {autosave.status === 'pending' && 'Not saved yet'}
             {autosave.status === 'saving' && 'Saving…'}
@@ -235,13 +265,19 @@ export function SettingsModal({
               </button>
             )}
           </p>
-          <button className="modal__close" onClick={requestClose} aria-label="Close settings">
-            ✕
-          </button>
         </div>
 
         <div className="modal__main">
           <nav className="modal__nav" aria-label="Settings sections">
+            {/* The way out leads the sidebar, styled as navigation rather than a button
+                beside the title: it is the first thing on the left, and nowhere near
+                the macOS window close button, which a far-right ✕ used to invite. */}
+            <button className="set-nav__back" onClick={requestClose} title="Back to the app (Esc)">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M10 3.5L5.5 8l4.5 4.5" />
+              </svg>
+              Back to app
+            </button>
             <div className="set-search" role="search">
               <svg className="set-search__icon" viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
                 <circle cx="7" cy="7" r="4.5" />
@@ -264,51 +300,18 @@ export function SettingsModal({
                 </kbd>
               )}
             </div>
-            {PAGE_GROUPS.map((group) => {
-              const pages = PAGES.filter((p) => p.group === group)
-              // A group of one page named like the group needs no header of its own.
-              const headed = !(pages.length === 1 && pages[0].label === group)
-              return (
-                <div className="set-nav__group" key={group}>
-                  {headed && <div className="set-nav__heading">{group}</div>}
-                  {pages.map((t) => {
-                    const count = searching ? pageMatches(t.id) : 0
-                    const active = !searching && t.id === tab
-                    return (
-                      <button
-                        key={t.id}
-                        className={`${active ? 'is-active' : ''}${searching && count === 0 ? ' is-dim' : ''}`}
-                        // The highlighted section is otherwise only a color and a rail.
-                        aria-current={active ? 'page' : undefined}
-                        onClick={() => goToPage(t.id)}
-                      >
-                        <span className="set-nav__icon" aria-hidden="true">
-                          {NAV_ICON[t.id]}
-                        </span>
-                        {t.label}
-                        {searching && count > 0 && (
-                          <span className="set-nav__count" aria-label={`${count} ${count === 1 ? 'match' : 'matches'}`}>
-                            {count}
-                          </span>
-                        )}
-                      </button>
-                    )
-                  })}
-                </div>
-              )
-            })}
+            {PAGE_GROUPS.map((group) => (
+              <div className="set-nav__group" key={group}>
+                <div className="set-nav__heading">{group}</div>
+                {PAGES.filter((p) => p.group === group).map(navButton)}
+              </div>
+            ))}
+            <div className="set-nav__group set-nav__footer">
+              {PAGES.filter((p) => p.group === 'About').map(navButton)}
+            </div>
           </nav>
 
           <div className="modal__body" id="settings-body" ref={bodyRef}>
-            {/* Tool-name suggestions shared by the rule and hook editors. */}
-            <datalist id="tool-names">
-              {TOOL_NAMES.map((t) => (
-                <option key={t} value={t} />
-              ))}
-            </datalist>
-            <p className="sr-only" aria-live="polite">
-              {searching ? `${resultCount} ${resultCount === 1 ? 'result' : 'results'}` : ''}
-            </p>
             {searching ? (
               <>
                 {PAGES.map((p) => (
@@ -338,8 +341,23 @@ export function SettingsModal({
                 )}
               </>
             ) : (
-              page.sections.map((entry) => <SectionFrame key={`${page.id}-${entry.id}`} entry={entry} ctx={ctx} />)
+              <>
+                <h1 className="set-page__title">{page.label}</h1>
+                {page.sections.map((entry) => (
+                  <SectionFrame key={`${page.id}-${entry.id}`} entry={entry} ctx={ctx} />
+                ))}
+              </>
             )}
+            {/* After the sections, so the first section stays :first-child (no hairline above it). */}
+            {/* Tool-name suggestions shared by the rule and hook editors. */}
+            <datalist id="tool-names">
+              {TOOL_NAMES.map((t) => (
+                <option key={t} value={t} />
+              ))}
+            </datalist>
+            <p className="sr-only" aria-live="polite">
+              {searching ? `${resultCount} ${resultCount === 1 ? 'result' : 'results'}` : ''}
+            </p>
           </div>
         </div>
 
