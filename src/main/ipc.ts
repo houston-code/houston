@@ -1544,6 +1544,9 @@ export function registerIpc(): void {
     }
   })
   attention = chat
+  // Unread marks come back from disk on launch; show them on the app icon now rather
+  // than waiting for the first status change.
+  updateAppBadge(chat.snapshot())
 
   // The status of every chat with something to show (a live run, its blocking
   // prompts, or an unread mark), for the sidebar's per-chat signal. The renderer reads
