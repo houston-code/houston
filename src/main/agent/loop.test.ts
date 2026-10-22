@@ -1173,6 +1173,27 @@ describe('startRun', () => {
       expect(types(r).at(-1)).toBe('error')
     })
 
+    it('does not retry an exhausted quota, but still hops to the next model', async () => {
+      const quota = {
+        type: 'error' as const,
+        message: '429 You exceeded your current quota, please check your plan and billing details.',
+        status: 429
+      }
+      registerFallback(backupReplies())
+      const r = await run({ turns: [[quota]] })
+      expect(types(r)).not.toContain('retry')
+      expect(types(r)).toContain('model_fallback')
+      expect(r.messages.find((m) => m.role === 'assistant')?.content).toBe('from backup')
+    })
+
+    it('fails an exhausted quota at once when there is no next model', async () => {
+      const r = await run({
+        turns: [[{ type: 'error', message: '429 You exceeded your current quota, please check your plan.', status: 429 }]]
+      })
+      expect(types(r)).not.toContain('retry')
+      expect(types(r).at(-1)).toBe('error')
+    })
+
     it('retracts a partial reply before hopping, so two models are never spliced', async () => {
       registerFallback(backupReplies())
       const r = await run({
