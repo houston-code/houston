@@ -1225,7 +1225,8 @@ the agent loop and UI never depend on a specific provider.
   content in a sandboxed, isolated, no-Node window; its main frame can't be
   navigated or redirected off loopback, and its requests can't reach
   private/LAN/metadata hosts (public CDNs are still allowed so pages render).
-  Any file picker the page opens is cancelled before it reaches your screen.
+  Any file picker the page opens is cancelled, and any alert or confirm dialog
+  dismissed, before it reaches your screen.
 - **Outsider-written text is data, not instructions.** `web_fetch` resolves each
   host once, checks every address, and connects to exactly those addresses, so a
   name can't resolve public for the check and private for the connect (DNS

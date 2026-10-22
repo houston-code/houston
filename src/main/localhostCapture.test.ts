@@ -3,9 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // A fake BrowserWindow just deep enough to drive the capture backend: it records
 // the step scripts it is asked to run (answering from `results`, then `fallback`)
 // and the input events sent to it, answers the page-text read with `pageText`, and
-// finishes loading as soon as loadURL is called. Its DevTools client logs each
-// command (alongside each load, in `log`), fails the one named `cdpFails`, and
-// lets a test deliver protocol events through `cdpEvent`.
+// finishes loading as soon as loadURL is called. It keeps the options the window
+// was built with. Its DevTools client logs each command (alongside each load, in
+// `log`), fails the one named `cdpFails`, and lets a test deliver protocol events
+// through `cdpEvent`.
 const fake = vi.hoisted(() => {
   const state = {
     results: [] as unknown[],
@@ -18,7 +19,14 @@ const fake = vi.hoisted(() => {
     log: [] as string[],
     cdpParams: new Map<string, unknown>(),
     cdpFails: '',
-    cdpEvent: (_method: string, _params?: unknown): void => {},
+    cdpListeners: [] as ((event: unknown, method: string, params: unknown) => void)[],
+    /** Deliver a DevTools protocol event to every listener on the page's client. */
+    cdpEvent: (method: string, params: unknown = {}): void => {
+      for (const listener of state.cdpListeners) listener(null, method, params)
+    },
+    windowOptions: null as { webPreferences?: Record<string, unknown> } | null,
+    /** Called as each URL loads, before it finishes, so a test can raise protocol events. */
+    onLoad: (_url: string): void => {},
     /** Called with each step script before it answers, so a test can raise protocol events. */
     onScript: (_script: string): void => {}
   }
@@ -54,7 +62,7 @@ const fake = vi.hoisted(() => {
         return {}
       },
       on(_event: string, listener: (event: unknown, method: string, params: unknown) => void): void {
-        state.cdpEvent = (method, params) => listener(null, method, params)
+        state.cdpListeners.push(listener)
       }
     }
     getURL(): string {
@@ -79,8 +87,12 @@ const fake = vi.hoisted(() => {
   }
   class BrowserWindow {
     webContents = new FakeWebContents()
+    constructor(options: { webPreferences?: Record<string, unknown> }) {
+      state.windowOptions = options
+    }
     async loadURL(url: string): Promise<void> {
       state.log.push(`load ${url}`)
+      state.onLoad(url)
       this.webContents.emit('did-finish-load')
     }
     getTitle(): string {
@@ -100,6 +112,7 @@ const {
   INVALID_SELECTOR,
   PAGE_TEXT_SCRIPT,
   PRESS_INPUT,
+  dialogConsoleEntry,
   expectTextError,
   stepScript,
   textScript,
@@ -424,6 +437,9 @@ describe('file pickers in the Electron backend', () => {
       log: [],
       cdpParams: new Map(),
       cdpFails: '',
+      cdpListeners: [],
+      windowOptions: null,
+      onLoad: () => {},
       onScript: () => {}
     })
     wireLocalhostCapture()
@@ -485,5 +501,76 @@ describe('file pickers in the Electron backend', () => {
     await capture({ selector: '#hero' })
     expect(fake.state.gestures.length).toBeGreaterThanOrEqual(2) // the rect, then the page text
     expect(fake.state.gestures.every((g) => !g)).toBe(true)
+  })
+})
+
+describe('dialogs in the Electron backend', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    Object.assign(fake.state, {
+      results: [],
+      fallback: 'ok',
+      pageText: '',
+      scripts: [],
+      inputs: [],
+      gestures: [],
+      log: [],
+      cdpParams: new Map(),
+      cdpFails: '',
+      cdpListeners: [],
+      windowOptions: null,
+      onLoad: () => {},
+      onScript: () => {}
+    })
+    wireLocalhostCapture()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    resetCaptureBackend()
+  })
+
+  const capture = async (input: Omit<Parameters<typeof captureLocalhost>[0], 'url'>): ReturnType<typeof captureLocalhost> => {
+    const p = captureLocalhost({ url: 'http://localhost:3000', ...input })
+    await vi.runAllTimersAsync()
+    return p
+  }
+
+  const dialog = (type: string, message: string): object => ({
+    frameId: 'F1',
+    url: 'http://localhost:3000/',
+    message,
+    type,
+    hasBrowserHandler: true,
+    defaultPrompt: ''
+  })
+
+  it('turns native dialogs off, so a page cannot block its load or put one on screen', async () => {
+    await capture({})
+    expect(fake.state.windowOptions?.webPreferences).toMatchObject({ offscreen: true, disableDialogs: true })
+  })
+
+  it('reports dialogs the page raised while loading, and the steps after them still run', async () => {
+    // A page script calls alert() and confirm() on load; the browser dismisses both.
+    fake.state.onLoad = (url) => {
+      if (url === 'about:blank') return
+      fake.state.cdpEvent('Page.javascriptDialogOpening', dialog('alert', 'hi from load'))
+      fake.state.cdpEvent('Page.javascriptDialogClosed', { frameId: 'F1', result: false, userInput: '' })
+      fake.state.cdpEvent('Page.javascriptDialogOpening', dialog('confirm', 'Leave this page?'))
+    }
+    const cap = await capture({ steps: [{ action: 'click', selector: '#save' }] })
+    expect(cap.loadError).toBeUndefined()
+    expect(cap.steps).toEqual([{ step: 'click "#save"', ok: true }])
+    expect(cap.console).toEqual(['INFO: [alert] hi from load', 'INFO: [confirm] Leave this page? (answered cancel)'])
+  })
+
+  it('says how each kind of dismissed dialog was answered', () => {
+    expect(dialogConsoleEntry(dialog('alert', 'Saved'))).toEqual({ level: 'info', text: '[alert] Saved' })
+    expect(dialogConsoleEntry(dialog('confirm', 'Delete?')).text).toBe('[confirm] Delete? (answered cancel)')
+    expect(dialogConsoleEntry(dialog('beforeunload', '')).text).toBe(
+      '[beforeunload] (answered stay: navigation cancelled)'
+    )
+    // Malformed params still produce a line rather than throwing.
+    expect(dialogConsoleEntry(undefined).text).toBe('[dialog] (answered cancel)')
+    expect(dialogConsoleEntry({ type: 7, message: { toString: () => 'x' } }).text).toBe('[dialog] (answered cancel)')
   })
 })

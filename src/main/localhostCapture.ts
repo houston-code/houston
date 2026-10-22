@@ -37,10 +37,10 @@ const RAW_PAGE_TEXT_CHARS = 50_000
 const FILLED_PASSWORD = 'ok:password'
 
 /**
- * Prepended to every step script. The capture window is hidden, so a native
- * alert/confirm/prompt would block the page with no one to answer it: record the
- * message on the console instead (the model sees it) and answer confirm with OK,
- * since the agent chose to click whatever asked. Idempotent per document.
+ * Prepended to every step script. The capture window disables native dialogs
+ * (see openElectronWindow), so an unguarded confirm would answer cancel. A step is
+ * the agent choosing to click whatever asked, so answer confirm with OK instead and
+ * record each message on the console (the model sees it). Idempotent per document.
  */
 const DIALOG_GUARD = `if (!window.__houstonDialogs) {
   window.__houstonDialogs = true;
@@ -209,6 +209,21 @@ export function visibleScript(selector: string): string {
   })()`
 }
 
+/**
+ * The console line for a dialog the capture window dismissed, from DevTools'
+ * `Page.javascriptDialogOpening` params. With dialogs disabled an alert returns at
+ * once, a confirm answers cancel, and a beforeunload prompt keeps the page (the
+ * navigation a step started doesn't happen).
+ */
+export function dialogConsoleEntry(params: unknown): ConsoleEntry {
+  const p = (params ?? {}) as { type?: unknown; message?: unknown }
+  const type = typeof p.type === 'string' ? p.type : 'dialog'
+  const message = typeof p.message === 'string' ? p.message : ''
+  const answer =
+    type === 'alert' ? '' : type === 'beforeunload' ? '(answered stay: navigation cancelled)' : '(answered cancel)'
+  return { level: 'info', text: [`[${type}]`, message, answer].filter(Boolean).join(' ') }
+}
+
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 /**
@@ -318,7 +333,13 @@ async function openElectronWindow(opts: {
       contextIsolation: true,
       nodeIntegration: false,
       webSecurity: true,
-      backgroundThrottling: false
+      backgroundThrottling: false,
+      // A native alert/confirm raised outside a step's DIALOG_GUARD (during load,
+      // after a navigation, or through a fresh iframe's window) would block the page
+      // with no one to answer it, and Electron would show it on the user's screen
+      // and un-hide this window behind it. Return at once instead: alert returns,
+      // confirm answers cancel. Each one is still reported to the model (below).
+      disableDialogs: true
     }
   })
   markHelperWindow(win)
@@ -369,6 +390,11 @@ async function openElectronWindow(opts: {
     fileChoosersBlocked = await blockFileChoosers(cdp, () =>
       entries.push({ level: 'warning', text: '[file chooser] cancelled: view_localhost cannot choose files' })
     )
+    // With the Page domain on (blockFileChoosers enabled it), the client still sees
+    // every dialog disableDialogs dismissed, so the model reads what it said.
+    cdp.on((method, params) => {
+      if (method === 'Page.javascriptDialogOpening') entries.push(dialogConsoleEntry(params))
+    })
     if (opts.emulate) await emulateViewport(cdp, { width: opts.width, height: opts.height, ...opts.emulate })
   } catch (err) {
     // The caller only closes a session it got back, so don't leave the window behind.

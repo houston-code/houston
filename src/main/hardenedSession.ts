@@ -29,9 +29,10 @@ import type { Cdp } from './cdp'
  * name resolving to a private IP is a known, deferred gap — see ROADMAP.md.
  *
  * The hidden capture window adds one per-page guard on top, {@link blockFileChoosers}:
- * no one is watching that window, so any file picker its page opens is cancelled.
- * The Preview dock doesn't take it. There the user clicks, and choosing a file to
- * upload into their own app is theirs to do.
+ * no one is watching that window, so any file picker its page opens is cancelled
+ * (and, for the same reason, localhostCapture.ts disables its alert/confirm dialogs).
+ * The Preview dock takes neither. There the user clicks, so choosing a file to
+ * upload into their own app is theirs to do, and its dialogs are theirs to answer.
  */
 
 /**
