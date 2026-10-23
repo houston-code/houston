@@ -1,6 +1,6 @@
-import { mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { AppSettings, LegacyRulesDecideResult } from '@shared/types'
 import {
   GLOBAL_RULES_DIRNAME,
@@ -63,6 +63,39 @@ function canonical(path: string): string {
 }
 
 /**
+ * The file a write to the rules file `file` should change. A rules file is often a
+ * symlink (`AGENTS.md` to `CLAUDE.md`, or `~/.houston/AGENTS.md` into a dotfiles repo),
+ * and an atomic write (temp file, then rename) over the link would replace it with a
+ * plain copy: the file it pointed at never gets the change, and the link is gone. So a
+ * write goes through the link to its target.
+ *
+ * With `within`, the target must lie inside that folder: a project's rules file that
+ * links out of the project is refused, as the rules loader refuses to read one. A link
+ * whose target is missing is refused too, since there is nothing to write through to.
+ * A missing `file` is returned as is, to be created.
+ */
+export function rulesWriteTarget(file: string, within?: string): string {
+  try {
+    if (!lstatSync(file).isSymbolicLink()) return file
+  } catch {
+    return file
+  }
+  let target: string
+  try {
+    target = realpathSync(file)
+  } catch {
+    throw new Error(`${basename(file)} is a link to a file that doesn't exist. Fix or remove the link, then try again.`)
+  }
+  if (within !== undefined) {
+    const rel = relative(canonical(within), target)
+    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+      throw new Error(`${basename(file)} links to ${target}, outside this project. Add the note there instead.`)
+    }
+  }
+  return target
+}
+
+/**
  * Whether the global file already brings in the legacy rules: it IS the legacy file
  * (a symlink either way), or imports it directly or through other imports. The walk
  * mirrors the loader's depth cap and compares canonical paths, so `~/`, absolute,
@@ -117,9 +150,12 @@ export async function importLegacyRules(home: string = homedir()): Promise<strin
   if (alreadyHasLegacy(home)) return file
   mkdirSync(globalRulesDir(home), { recursive: true })
   // Under the same lock a `#` note save takes, so the two can't overwrite each other.
-  return withFileLock(file, () => {
+  // Through a symlinked global file to its target, under the target's lock (the one a
+  // `#` note save through the same link takes).
+  const target = rulesWriteTarget(file)
+  return withFileLock(target, () => {
     if (alreadyHasLegacy(home)) return file // added while we waited for the lock
-    writeFileAtomicSync(file, withLegacyImport(readTextOrNull(file)))
+    writeFileAtomicSync(target, withLegacyImport(readTextOrNull(target)))
     return file
   })
 }
