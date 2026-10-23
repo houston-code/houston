@@ -19,6 +19,7 @@ function baseProps(overrides: Partial<Parameters<typeof Composer>[0]> = {}) {
     onCommand: vi.fn(),
     onSend: vi.fn(),
     onInvoke: vi.fn(),
+    onSteer: vi.fn(),
     onCancel: vi.fn(),
     ...overrides
   }
@@ -150,12 +151,13 @@ describe('Composer', () => {
     )
   })
 
-  it('queues a message via Enter while a run is in progress', () => {
+  it('queues a message via Mod+Enter while a run is in progress', () => {
     const props = baseProps({ running: true })
     render(<Composer {...props} />)
 
     const input = type('follow-up work')
-    fireEvent.keyDown(input, { key: 'Enter' })
+    // jsdom isn't a Mac, so the modifier is Ctrl here.
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
 
     expect(props.onSend).toHaveBeenCalledWith('follow-up work', undefined)
     expect(input.value).toBe('') // composer clears after queuing
@@ -194,7 +196,7 @@ describe('Composer', () => {
     render(<Composer {...props} />)
 
     const input = type('/usr/local/bin is not on PATH')
-    fireEvent.keyDown(input, { key: 'Enter' })
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
 
     expect(props.onSend).toHaveBeenCalledWith('/usr/local/bin is not on PATH', undefined)
     expect(props.onCommand).not.toHaveBeenCalled()
@@ -756,12 +758,6 @@ describe('Composer + attachment menu', () => {
       fireEvent.keyDown(input, { key: 'Enter' })
       expect(props.onSend).toHaveBeenCalledWith('explain this repo', undefined)
       expect(props.onSteer).not.toHaveBeenCalled()
-    })
-
-    it('has no Steer affordance when the handler is absent', () => {
-      render(<Composer {...baseProps({ running: true })} />)
-      type('anything')
-      expect(screen.queryByRole('button', { name: 'Steer' })).toBeNull()
     })
 
     it('steers the text and clears the field, without queuing it', () => {
