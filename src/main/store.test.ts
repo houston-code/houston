@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -8,7 +9,7 @@ import {
   symlinkSync,
   writeFileSync
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { McpServerConfig, PermissionRule } from '@shared/types'
 import { REDACTED_HEADER_VALUE, mcpHeaderScope, providerHeaderScope } from '@shared/types'
@@ -702,6 +703,34 @@ describe('recent workspaces — existence pruning', () => {
       rmSync(a, { recursive: true, force: true })
       rmSync(b, { recursive: true, force: true })
     }
+  })
+
+  it('workspacePickerStartDir opens at the parent of the latest live recent', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'ws-parent-'))
+    const older = mkdtempSync(join(tmpdir(), 'ws-older-'))
+    try {
+      const { rememberWorkspace, workspacePickerStartDir } = await loadStore()
+      const latest = join(parent, 'project')
+      mkdirSync(latest)
+      rememberWorkspace(older)
+      rememberWorkspace(latest)
+      expect(workspacePickerStartDir()).toBe(parent)
+      // The latest recent is gone: fall through to the next live one's parent.
+      rmSync(parent, { recursive: true, force: true })
+      expect(workspacePickerStartDir()).toBe(tmpdir())
+    } finally {
+      rmSync(parent, { recursive: true, force: true })
+      rmSync(older, { recursive: true, force: true })
+    }
+  })
+
+  it('workspacePickerStartDir falls back to the home folder with no live recents', async () => {
+    const gone = mkdtempSync(join(tmpdir(), 'ws-gone-'))
+    const { rememberWorkspace, workspacePickerStartDir } = await loadStore()
+    expect(workspacePickerStartDir()).toBe(homedir())
+    rememberWorkspace(gone)
+    rmSync(gone, { recursive: true, force: true })
+    expect(workspacePickerStartDir()).toBe(homedir())
   })
 
   it('onSettingsSaved notifies on every save until unsubscribed', async () => {
