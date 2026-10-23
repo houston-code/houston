@@ -441,14 +441,40 @@ function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
-/** The finished-row label + status for one dimension, reflecting what it found. */
-function dimensionOutcome(dimension: string, report: string): ReviewSubAgentEvent {
+/**
+ * The finished-row label + status for one dimension, reflecting what it found.
+ * `failedParts` of `parts` chunks didn't complete: a dimension that looked at only
+ * some of the diff is never shown as plainly clean.
+ */
+function dimensionOutcome(dimension: string, report: string, failedParts = 0, parts = 1): ReviewSubAgentEvent {
   const title = titleCase(dimension)
   if (isErrorReport(report)) return { id: dimension, label: `${title}, failed`, status: 'error' }
-  if (isClean(report)) return { id: dimension, label: `${title}, clean`, status: 'done' }
+  const missed = failedParts > 0 ? ` (${failedParts} of ${parts} parts failed)` : ''
+  if (isClean(report)) {
+    return failedParts > 0
+      ? { id: dimension, label: `${title}, incomplete${missed}`, status: 'error' }
+      : { id: dimension, label: `${title}, clean`, status: 'done' }
+  }
   const n = parseFindings(report).length
   const found = n > 0 ? `${n} issue${n === 1 ? '' : 's'}` : 'findings'
-  return { id: dimension, label: `${title}, ${found}`, status: 'done' }
+  return { id: dimension, label: `${title}, ${found}${missed}`, status: 'done' }
+}
+
+/**
+ * Notes for the chunks of one dimension's review that didn't complete, when others
+ * did. mergeChunkReports keeps only what the completed chunks found (or calls them
+ * clean), so without these a failed part's files would read as reviewed and clean.
+ * A dimension where every part failed already gets its own note.
+ */
+function failedPartNotes(dimension: string, chunkReports: string[]): string[] {
+  if (chunkReports.length < 2 || chunkReports.every(isErrorReport)) return []
+  return chunkReports.flatMap((r, i) =>
+    isErrorReport(r)
+      ? [
+          `⚠ Part ${i + 1} of ${chunkReports.length} of the ${dimension} review could not complete: ${r || 'no output'}. The files in that part were not reviewed for ${dimension}.`
+        ]
+      : []
+  )
 }
 
 export interface RunReviewOptions {
@@ -623,22 +649,26 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
         )
       )
       const report = mergeChunkReports(chunkReports)
-      sub(dimensionOutcome(dimension, report))
+      const partNotes = failedPartNotes(dimension, chunkReports)
+      sub(dimensionOutcome(dimension, report, partNotes.length, chunkReports.length))
       // Show this dimension's findings now, before the other reviewers finish.
       const parsed: IdentifiedFinding[] =
         isErrorReport(report) || isClean(report)
           ? []
           : parseFindings(report).map((f, i) => ({ ...f, dimension, id: `${dimension}:${i}` }))
       for (const p of parsed) finding(toReviewFinding(p.id, p, 'candidate', redact))
-      return { dimension, report, parsed }
+      return { dimension, report, parsed, partNotes }
     })
   )
 
   if (signal.aborted) return '[review aborted]'
 
-  const notes = reports
-    .filter((r) => isErrorReport(r.report))
-    .map((r) => `⚠ The ${r.dimension} review could not complete: ${r.report || 'no output'}.`)
+  const notes = [
+    ...reports
+      .filter((r) => isErrorReport(r.report))
+      .map((r) => `⚠ The ${r.dimension} review could not complete: ${r.report || 'no output'}.`),
+    ...reports.flatMap((r) => r.partNotes)
+  ]
   const candidates = reports.filter((r) => !isErrorReport(r.report) && !isClean(r.report))
 
   if (candidates.length === 0) {

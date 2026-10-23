@@ -184,6 +184,34 @@ describe('runReview', () => {
     expect(out).toContain('confirmed')
   })
 
+  it('says which part of a chunked review failed instead of calling it clean', async () => {
+    const { fn } = fakeAgent((o) =>
+      dimensionOf(o) === 'SECURITY' && o.prompt.includes('CHUNK_B') ? '[subagent error: overloaded]' : 'No issues found.'
+    )
+    const rows: { id: string; label: string; status: string }[] = []
+    const out = await runReview(
+      base({ runAgent: fn, chunks: ['CHUNK_A diff', 'CHUNK_B diff'], onSubAgent: (e) => rows.push(e) })
+    )
+    expect(out).toContain('Part 2 of 2 of the security review could not complete')
+    expect(out).toContain('overloaded')
+    expect(rows.find((r) => r.id === 'security' && r.status !== 'running')).toEqual({
+      id: 'security',
+      label: 'Security, incomplete (1 of 2 parts failed)',
+      status: 'error'
+    })
+  })
+
+  it('keeps the findings of the parts that completed and notes the one that failed', async () => {
+    const { fn } = fakeAgent((o) => {
+      if (isVerifier(o)) return '- [high] a.ts:1 — confirmed\nConfirmed 1 of 1 candidate findings.'
+      if (dimensionOf(o) !== 'CORRECTNESS') return 'No issues found.'
+      return o.prompt.includes('CHUNK_A') ? '- [SEVERITY: high] a.ts:1 — bug' : '[subagent reached its step limit]'
+    })
+    const out = await runReview(base({ runAgent: fn, chunks: ['CHUNK_A diff', 'CHUNK_B diff'] }))
+    expect(out).toContain('confirmed')
+    expect(out).toContain('Part 2 of 2 of the correctness review could not complete')
+  })
+
   it('honours a custom dimension list', async () => {
     const { fn, calls } = fakeAgent(() => 'No issues found.')
     await runReview(base({ runAgent: fn, dimensions: ['correctness'] }))
