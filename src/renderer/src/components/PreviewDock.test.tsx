@@ -210,7 +210,7 @@ describe('PreviewDock', () => {
   })
 })
 
-describe('PreviewDock tabs (Preview | Tasks)', () => {
+describe('PreviewDock tabs (Background tasks | Preview)', () => {
   function renderTabbed(tab: 'preview' | 'tasks', onTabChange = vi.fn(), servers: PreviewServer[] = []) {
     const utils = render(
       <PreviewDock
@@ -236,7 +236,7 @@ describe('PreviewDock tabs (Preview | Tasks)', () => {
   it('shows the Preview tab selected with the Tasks tab carrying the live count', () => {
     renderTabbed('preview')
     const preview = screen.getByRole('tab', { name: 'Preview' })
-    const tasks = screen.getByRole('tab', { name: /Tasks/ })
+    const tasks = screen.getByRole('tab', { name: /Background tasks/ })
     expect(preview).toHaveAttribute('aria-selected', 'true')
     expect(tasks).toHaveAttribute('aria-selected', 'false')
     expect(within(tasks).getByLabelText('2 running')).toHaveTextContent('2')
@@ -246,12 +246,20 @@ describe('PreviewDock tabs (Preview | Tasks)', () => {
 
   it('switches tabs on click and with the arrow keys', () => {
     const { onTabChange } = renderTabbed('preview')
-    fireEvent.click(screen.getByRole('tab', { name: /Tasks/ }))
+    fireEvent.click(screen.getByRole('tab', { name: /Background tasks/ }))
     expect(onTabChange).toHaveBeenLastCalledWith('tasks')
     fireEvent.keyDown(screen.getByRole('tab', { name: 'Preview' }), { key: 'ArrowRight' })
     expect(onTabChange).toHaveBeenLastCalledWith('tasks')
-    fireEvent.keyDown(screen.getByRole('tab', { name: 'Preview' }), { key: 'End' })
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Preview' }), { key: 'Home' })
     expect(onTabChange).toHaveBeenLastCalledWith('tasks')
+    fireEvent.keyDown(screen.getByRole('tab', { name: /Background tasks/ }), { key: 'End' })
+    expect(onTabChange).toHaveBeenLastCalledWith('preview')
+  })
+
+  it('puts Background tasks before Preview, matching the title-bar buttons', () => {
+    renderTabbed('preview')
+    expect(screen.getAllByRole('tab').map((t) => t.id)).toEqual(['dock-tab-tasks', 'dock-tab-preview'])
+    expect(screen.getByRole('tab', { name: /Background tasks/ })).toHaveTextContent('Background tasks')
   })
 
   it('keeps Preview mounted but hides its native pages while Tasks shows', () => {

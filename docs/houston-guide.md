@@ -45,8 +45,8 @@ only the desktop app lists them in a sidebar.
 The full GUI:
 
 - a chat sidebar and diffs
-- a right-hand dock with the live **Preview** and a **Tasks** list of background
-  commands (stop them, read their output, see which port each one holds)
+- a right-hand dock with a **Background tasks** list of background commands (stop
+  them, read their output, see which port each one holds) and the live **Preview**
 - Settings
 
 **Chat status.** Each chat in the sidebar has a status dot:

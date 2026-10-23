@@ -176,7 +176,7 @@ export function PreviewDock({
       <header className="preview-dock__header">
         {onTabChange ? (
           <div className="dock-tabs" role="tablist" aria-label="Side panel">
-            {(['preview', 'tasks'] as const).map((id) => (
+            {(['tasks', 'preview'] as const).map((id) => (
               <button
                 key={id}
                 ref={(el) => {
@@ -192,16 +192,17 @@ export function PreviewDock({
                 onClick={() => onTabChange(id)}
                 onKeyDown={(e) => {
                   // Arrow keys move between tabs (roving tabindex), per the ARIA tabs pattern.
+                  // Tasks comes first, matching the title-bar buttons.
                   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End')
                     return
                   e.preventDefault()
                   const next: DockTab =
-                    e.key === 'Home' ? 'preview' : e.key === 'End' ? 'tasks' : id === 'preview' ? 'tasks' : 'preview'
+                    e.key === 'Home' ? 'tasks' : e.key === 'End' ? 'preview' : id === 'preview' ? 'tasks' : 'preview'
                   onTabChange(next)
                   tabRefs.current[next]?.focus()
                 }}
               >
-                {id === 'preview' ? 'Preview' : 'Tasks'}
+                {id === 'preview' ? 'Preview' : 'Background tasks'}
                 {id === 'tasks' && taskCount > 0 && (
                   <span className="dock-tabs__count" aria-label={`${taskCount} running`}>
                     {taskCount}

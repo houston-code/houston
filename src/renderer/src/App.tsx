@@ -2366,17 +2366,6 @@ export default function App(): JSX.Element {
   const worktreeBlocked =
     creatingWorktree && branchNameError(branchName, repoInfo?.branches ?? []) !== null
   const canChat = Boolean(settings.selected && workspace && selectionReady && !worktreeBlocked)
-  // The specific reason the composer is disabled, so its placeholder names the real
-  // blocker instead of always saying "pick a model and folder".
-  const disabledReason = !workspace
-    ? 'Choose a project folder to start…'
-    : !settings.selected
-      ? 'Pick a model to start…'
-      : !selectionReady
-        ? 'Set an API key for this model in Settings…'
-        : worktreeBlocked
-          ? 'Enter a valid worktree branch name to start…'
-          : undefined
   // First-run onboarding (see @shared/onboarding): the checklist reads real state, so
   // each step ticks itself off; tips show once each, when their control first matters.
   const checklistFacts: ChecklistFacts = {
@@ -2385,6 +2374,22 @@ export default function App(): JSX.Element {
     hasConversation: conversations.length > 0
   }
   const showChecklist = checklistVisible(onboarding.state, checklistFacts, conversationsLoaded)
+  // The specific reason the composer is disabled, so its placeholder names the real
+  // blocker instead of always saying "pick a model and folder". The model comes
+  // before the folder, in the same order as the setup checklist, and while the
+  // connect card is up the placeholder points at it.
+  const disabledReason =
+    showChecklist && connectOpen && !checklistFacts.modelReady
+      ? 'Connect a model above to start…'
+      : !settings.selected
+        ? 'Pick a model to start…'
+        : !selectionReady
+          ? 'Set an API key for this model in Settings…'
+          : !workspace
+            ? 'Choose a project folder to start…'
+            : worktreeBlocked
+              ? 'Enter a valid worktree branch name to start…'
+              : undefined
   // Setup is down to step 3: point the user at the message box (cursor + glow).
   const awaitingFirstTask =
     showChecklist && !connectOpen && checklistFacts.modelReady && checklistFacts.hasWorkspace

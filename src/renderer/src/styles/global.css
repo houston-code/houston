@@ -3900,22 +3900,24 @@ body.is-resizing .preview-dock__resizer::after {
   background: var(--border);
   overflow: hidden;
 }
+/* Same placement and type as the Background tasks empty state (.tasks--empty), so
+   switching dock tabs doesn't move the message. */
 .preview-dock__empty {
   flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 20px;
+  justify-content: flex-start;
+  padding: 24px 16px;
   text-align: center;
   background: var(--bg);
   color: var(--text-dim);
-  font-size: 12px;
+  font-size: 12.5px;
+  line-height: 1.45;
 }
-.preview-dock__hint {
-  font-size: 11px;
-  opacity: 0.8;
+.preview-dock__empty p,
+.tasks--empty p {
+  margin: 0 0 12px;
 }
 .preview-dock__hint code {
   font-family: var(--font-mono, monospace);
