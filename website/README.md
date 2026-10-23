@@ -47,7 +47,7 @@ website/
     assets/
       styles.css        All styles; its header documents the design tokens
       theme.js          Light/dark toggle (follows the OS until a visitor picks one)
-      app.js            Live release data + applies the platform recommendation
+      app.js            Live release data, the platform recommendation, and the phone menu
       platform.js       Which download card fits the visitor (pure, tested in tools/)
       icon.png          App icon (copied from build/icon.png)
       icon-60.png       Header/footer logo, 60 px for 30 px CSS (generated from icon.png)
@@ -63,6 +63,7 @@ website/
     llms.txt            curated product summary for AI assistants (llmstxt.org)
   tools/              Build scripts (not deployed)
     site-chrome.mjs       the header and footer the generated pages share
+    site-chrome.test.mjs  fails CI if a hand-written page's header or footer drifts from site-chrome.mjs
     build-legal.mjs       docs/PRIVACY.md → privacy.html
     build-legal.test.mjs  fails CI if the committed HTML drifts from docs/
     build-docs.mjs        docs/houston-guide.md at a release → docs/*.html + sitemap entries
@@ -70,7 +71,9 @@ website/
                           working-tree guide uses Markdown the generator can't render
     download-links.test.mjs  fails CI if a download link's asset suffix matches no build (or the CLI)
     platform.test.mjs     platform.js recommendations for each browser/OS/CPU
-    app.test.mjs          app.js on the real page: hero button downloads the detected build, else scrolls
+    app.test.mjs          app.js on the real page: hero button downloads the detected build, else scrolls;
+                          the release feed is read only there; the phone menu opens and closes
+    theme.test.mjs        theme.js: a pinned theme carries the screenshot and toolbar color with it
     security-txt.test.mjs fails CI if security.txt expires or points at an unmonitored contact
     headers.test.mjs      assets revalidate on every use (no fixed cache lifetime; files keep their names)
     palette.test.mjs      no colors outside the design tokens; every text pairing clears WCAG AA

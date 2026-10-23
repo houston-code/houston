@@ -96,6 +96,58 @@ describe("release feed", () => {
   });
 });
 
+describe("phone menu", () => {
+  async function page() {
+    const dom = new JSDOM(html, { url: "https://houstoncode.ai/", runScripts: "outside-only" });
+    const { window } = dom;
+    window.HoustonPlatform = { classify: () => ({ os: null, card: null }) };
+    window.fetch = () => Promise.reject(new Error("offline"));
+    window.eval(appJs);
+    await new Promise((r) => setTimeout(r, 20));
+    const doc = window.document;
+    const button = doc.getElementById("nav-menu-button");
+    const menu = doc.getElementById("nav-menu");
+    const open = () => button.getAttribute("aria-expanded") === "true" && menu.classList.contains("is-open");
+    const closed = () => button.getAttribute("aria-expanded") === "false" && !menu.classList.contains("is-open");
+    return { window, doc, button, menu, open, closed };
+  }
+
+  it("reveals the button and opens and closes the panel with it", async () => {
+    const { button, open, closed } = await page();
+    expect(button.hidden).toBe(false);
+    expect(closed()).toBe(true);
+    button.click();
+    expect(open()).toBe(true);
+    button.click();
+    expect(closed()).toBe(true);
+  });
+
+  it("closes when a link in it is followed, but not on the theme switch", async () => {
+    const { doc, button, menu, open, closed } = await page();
+    button.click();
+    doc.getElementById("theme-toggle").click();
+    expect(open()).toBe(true);
+    menu.querySelector('a[href="#faq"]').click();
+    expect(closed()).toBe(true);
+  });
+
+  it("closes on a click elsewhere on the page", async () => {
+    const { doc, button, closed } = await page();
+    button.click();
+    doc.querySelector("main").click();
+    expect(closed()).toBe(true);
+  });
+
+  it("closes on Escape and gives focus back to the button", async () => {
+    const { window, doc, button, menu, closed } = await page();
+    button.click();
+    menu.querySelector("a").focus();
+    doc.dispatchEvent(new window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(closed()).toBe(true);
+    expect(doc.activeElement).toBe(button);
+  });
+});
+
 describe("download card buttons", () => {
   it("highlights only the recommended card's button", async () => {
     const r = await run({ platform: { os: "win", card: "win" }, release: RELEASE });

@@ -112,6 +112,35 @@
     gatherSignals().then(function (signals) { applyPlatform(window.HoustonPlatform.classify(signals)); });
   }
 
+  // ---- Phone menu ----
+  // Below 720px the header's links and theme switch sit in a panel behind one button.
+  // The button ships hidden, so without JavaScript the header is the logo and Download.
+  var menuButton = $("#nav-menu-button");
+  var menu = $("#nav-menu");
+  if (menuButton && menu) {
+    var setMenu = function (open) {
+      menu.classList.toggle("is-open", open);
+      menuButton.setAttribute("aria-expanded", String(open));
+    };
+    menuButton.hidden = false;
+    menuButton.addEventListener("click", function () {
+      setMenu(menuButton.getAttribute("aria-expanded") !== "true");
+    });
+    // Following a link closes the panel; the theme switch leaves it open.
+    menu.addEventListener("click", function (e) {
+      if (e.target.closest && e.target.closest("a")) setMenu(false);
+    });
+    document.addEventListener("click", function (e) {
+      if (!menu.contains(e.target) && !menuButton.contains(e.target)) setMenu(false);
+    });
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && menu.classList.contains("is-open")) {
+        setMenu(false);
+        menuButton.focus();
+      }
+    });
+  }
+
   // ---- Live release data ----
   function applyRelease(release) {
     if (!release || !Array.isArray(release.assets)) return;
