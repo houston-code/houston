@@ -398,10 +398,10 @@ export function diffRepo(before: RepoSnap | undefined, after: RepoSnap): GitChan
   return changes
 }
 
-/** Display path relative to the workspace when inside it. */
+/** Display path relative to the workspace when inside it, with `/` separators on every platform. */
 function shown(p: string, workspace: string): string {
   const rel = relative(workspace, p)
-  return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : p
+  return (rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : p).replace(/\\/g, '/')
 }
 
 function clip(s: string, max = 120): string {

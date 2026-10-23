@@ -369,6 +369,9 @@ describe('GitGuard on real repositories', () => {
     await guard.ensureBaseline()
     const pointer = readFileSync(join(wt, '.git'), 'utf8')
     mkdirSync(join(wt, 'fake'))
+    // Replaced rather than overwritten: git marks the file hidden on Windows, which
+    // refuses to open a hidden file for truncation.
+    rmSync(join(wt, '.git'))
     writeFileSync(join(wt, '.git'), 'gitdir: fake\n')
     const { changes } = await guard.check()
     expect(changes.some((c) => c.kind === 'dotgit')).toBe(true)
