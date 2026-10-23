@@ -2079,6 +2079,10 @@ stop and open an editor.
   backticks, and never loaded as an import. To import a file, edit the rules file
   yourself.
 - `#` alone isn't a note, and a `#` in the middle of a line is ordinary text.
+- When the rules file is a symlink (`AGENTS.md` pointing at `CLAUDE.md`, or
+  `~/.houston/AGENTS.md` pointing into a dotfiles folder), the note goes into the file
+  it points to and the link stays. A project's `AGENTS.md` that points outside the
+  project is refused, since Houston doesn't read it as the project's rules either.
 
 ## Project rules
 

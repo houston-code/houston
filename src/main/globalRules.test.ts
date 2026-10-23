@@ -151,6 +151,17 @@ describe('importLegacyRules', () => {
     expect(readFileSync(legacyRulesFile(home), 'utf8')).toBe('Legacy rule.')
   })
 
+  it('adds the import through a global file linked elsewhere, keeping the link', async () => {
+    writeLegacy('Legacy rule.')
+    mkdirSync(join(home, 'dotfiles'), { recursive: true })
+    writeFileSync(join(home, 'dotfiles', 'AGENTS.md'), '# Mine\n\nUse tabs.\n')
+    mkdirSync(join(home, '.houston'), { recursive: true })
+    symlinkSync(join(home, 'dotfiles', 'AGENTS.md'), globalRulesFile(home))
+    await importLegacyRules(home)
+    expect(lstatSync(globalRulesFile(home)).isSymbolicLink()).toBe(true)
+    expect(readFileSync(join(home, 'dotfiles', 'AGENTS.md'), 'utf8')).toBe(`# Mine\n\n${LEGACY_RULES_IMPORT}\n\nUse tabs.\n`)
+  })
+
   it('does not make a file import itself through a reverse symlink', async () => {
     writeGlobal('Houston rules.\n')
     mkdirSync(join(home, '.claude'), { recursive: true })

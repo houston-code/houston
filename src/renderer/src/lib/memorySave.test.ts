@@ -26,6 +26,24 @@ describe('saveMemoryAndNotify', () => {
     const notify = vi.fn()
     const save = vi.fn().mockRejectedValue(new Error('busy'))
     await expect(saveMemoryAndNotify(save, notify, '/w', 'project', 'x')).resolves.toBeUndefined()
+    expect(notify).toHaveBeenCalledWith("Couldn't save that instruction: busy", 'error')
+  })
+
+  it("names main's reason without Electron's IPC prefix", async () => {
+    const notify = vi.fn()
+    const err = new Error(
+      "Error invoking remote method 'memory:save': Error: AGENTS.md links to /etc/x, outside this project. Add the note there instead."
+    )
+    await saveMemoryAndNotify(vi.fn().mockRejectedValue(err), notify, '/w', 'project', 'x')
+    expect(notify).toHaveBeenCalledWith(
+      "Couldn't save that instruction: AGENTS.md links to /etc/x, outside this project. Add the note there instead.",
+      'error'
+    )
+  })
+
+  it('falls back to a generic message when the failure carries none', async () => {
+    const notify = vi.fn()
+    await saveMemoryAndNotify(vi.fn().mockRejectedValue('x'), notify, '/w', 'project', 'x')
     expect(notify).toHaveBeenCalledWith("Couldn't save that instruction. Try again.", 'error')
   })
 })

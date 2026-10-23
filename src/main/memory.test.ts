@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs'
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveMemory, saveMemoryTo } from './memory'
@@ -76,6 +76,14 @@ describe('saveMemoryTo', () => {
     expect(read()).toContain('- spread out\n')
   })
 
+  it('files a note under the Notes heading of a CRLF file, keeping its line endings', async () => {
+    writeFileSync(join(dir, 'AGENTS.md'), '# Rules\r\n\r\n## Notes\r\n\r\n- old\r\n\r\n## Build\r\n\r\nnpm run build\r\n')
+    await saveMemoryTo(dir, 'new')
+    const out = read()
+    expect(out.match(/## Notes/g)).toHaveLength(1)
+    expect(out).toBe('# Rules\r\n\r\n## Notes\r\n\r\n- old\r\n- new\r\n\r\n## Build\r\n\r\nnpm run build\r\n')
+  })
+
   it('writes atomically, leaving no temp file behind', async () => {
     await saveMemoryTo(dir, 'note')
     const { readdirSync } = await import('node:fs')
@@ -110,6 +118,41 @@ describe('saveMemory scopes', () => {
     const file = await saveMemory(ws, 'project', 'run the linter')
     expect(file).toBe(join(ws, 'AGENTS.md'))
     expect(readFileSync(file, 'utf8').startsWith('# Project instructions\n')).toBe(true)
+  })
+
+  it('writes a project note through an AGENTS.md symlink to its target, keeping the link', async () => {
+    writeFileSync(join(ws, 'CLAUDE.md'), '# Rules\n')
+    symlinkSync('CLAUDE.md', join(ws, 'AGENTS.md'))
+    const file = await saveMemory(ws, 'project', 'run the linter')
+    expect(file).toBe(join(ws, 'AGENTS.md'))
+    expect(lstatSync(join(ws, 'AGENTS.md')).isSymbolicLink()).toBe(true)
+    expect(readFileSync(join(ws, 'CLAUDE.md'), 'utf8')).toContain('- run the linter')
+  })
+
+  it('refuses a project note when AGENTS.md links outside the project, changing nothing', async () => {
+    const outside = join(home, 'elsewhere.md')
+    writeFileSync(outside, 'not the project\n')
+    symlinkSync(outside, join(ws, 'AGENTS.md'))
+    await expect(saveMemory(ws, 'project', 'run the linter')).rejects.toThrow(/outside this project/)
+    expect(lstatSync(join(ws, 'AGENTS.md')).isSymbolicLink()).toBe(true)
+    expect(readFileSync(outside, 'utf8')).toBe('not the project\n')
+  })
+
+  it('refuses a note when AGENTS.md is a dangling link', async () => {
+    symlinkSync(join(ws, 'missing.md'), join(ws, 'AGENTS.md'))
+    await expect(saveMemory(ws, 'project', 'x')).rejects.toThrow(/doesn't exist/)
+    expect(lstatSync(join(ws, 'AGENTS.md')).isSymbolicLink()).toBe(true)
+  })
+
+  it('writes a global note through ~/.houston/AGENTS.md linked into a dotfiles folder', async () => {
+    const dotfiles = join(home, 'dotfiles')
+    mkdirSync(dotfiles)
+    writeFileSync(join(dotfiles, 'AGENTS.md'), '# Mine\n')
+    mkdirSync(join(home, '.houston'))
+    symlinkSync(join(dotfiles, 'AGENTS.md'), join(home, '.houston', 'AGENTS.md'))
+    await saveMemory(ws, 'global', 'prefer small PRs')
+    expect(lstatSync(join(home, '.houston', 'AGENTS.md')).isSymbolicLink()).toBe(true)
+    expect(readFileSync(join(dotfiles, 'AGENTS.md'), 'utf8')).toContain('- prefer small PRs')
   })
 
   it('a global note that mentions a path does not pull the file into the rules', async () => {

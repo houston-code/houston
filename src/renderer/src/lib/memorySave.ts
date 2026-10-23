@@ -19,8 +19,11 @@ export async function saveMemoryAndNotify(
   let path: string | null
   try {
     path = await save(workspace, scope, text)
-  } catch {
-    notify("Couldn't save that instruction. Try again.", 'error')
+  } catch (e) {
+    // Main says why (a rules file that links out of the project, the file busy in
+    // another window); show that, without Electron's "Error invoking remote method".
+    const reason = e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']*':\s*(?:\w*Error:\s*)?/, '') : ''
+    notify(reason ? `Couldn't save that instruction: ${reason}` : "Couldn't save that instruction. Try again.", 'error')
     return
   }
   if (path) {
