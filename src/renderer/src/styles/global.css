@@ -2415,7 +2415,8 @@ h6.md-h {
 .md-list li {
   margin: 3px 0;
 }
-.md-list li > .md-p {
+.md-list li > .md-p,
+.md-task__body > .md-p {
   margin: 0;
 }
 .md-list .md-list {
