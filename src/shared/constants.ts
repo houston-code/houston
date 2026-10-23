@@ -176,6 +176,8 @@ export const IPC = {
   chatStatusChanged: 'chat:statusChanged',
   /** Renderer → main: which chat this window shows, and whether the window is focused. */
   chatViewing: 'chat:viewing',
+  /** Renderer → main: the chat to reopen at launch (the one open at quit), or null. */
+  chatLaunch: 'chat:launch',
   /** Renderer → main: mark a chat unread (optionally from its Nth reply) or read. */
   chatSetUnread: 'chat:setUnread',
   /** Renderer → main: mark every chat read. */

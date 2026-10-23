@@ -63,6 +63,9 @@ The full GUI:
 - **Picking up where you left off.** A reply's hover actions include **Mark unread from
   here**, and reopening an unread chat lands on a "New" divider above the first reply
   you haven't seen.
+- **Back where you were after a restart.** Houston reopens the chat that was open when
+  you quit. If that chat was deleted, or its folder or worktree is gone, it opens a new
+  chat in your last folder instead.
 - **Seeing what's waiting at a glance.** A collapsed group's header, the collapsed
   sidebar, and the app icon count what's waiting (the Dock badge on macOS, a dot on the
   Windows taskbar button; turn it off under Settings, Notifications). A "N need you"

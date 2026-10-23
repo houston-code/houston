@@ -326,6 +326,12 @@ export default function App(): JSX.Element {
   )
 
   const [conversationsLoaded, setConversationsLoaded] = useState(false)
+  // The chat open at the last quit has been reopened (or there was none to reopen).
+  // Until then the window shows neither the empty new chat nor the checklist, which
+  // would flash before the chat replaced them.
+  const [launchSettled, setLaunchSettled] = useState(false)
+  // selectConversation is defined further down; the launch below reads it from here.
+  const selectConversationRef = useRef<((id: string) => Promise<void>) | null>(null)
   const refreshConversations = useCallback(async () => {
     setConversations(await window.api.listConversations())
     setConversationsLoaded(true)
@@ -343,14 +349,14 @@ export default function App(): JSX.Element {
   const onboarding = useOnboarding({
     settings,
     setSettings,
-    conversationsLoaded,
+    conversationsLoaded: conversationsLoaded && launchSettled,
     hasConversation: conversations.length > 0
   })
   const { startTour } = onboarding
 
   useEffect(() => {
     void (async () => {
-      const s = await window.api.getSettings()
+      const [s, launchId] = await Promise.all([window.api.getSettings(), window.api.getLaunchChat()])
       const sel = defaultSelection(s)
       const withSel = sel && !s.selected ? { ...s, selected: sel } : s
       setSettings(withSel)
@@ -368,6 +374,10 @@ export default function App(): JSX.Element {
       if (s.previewOpen) setPreviewOpen(true)
       if (typeof s.planWidth === 'number') setPlanWidth(clampPlanWidth(s.planWidth))
       await refreshConversations()
+      // Reopen the chat that was open at quit, as a click in the sidebar would. Skip it
+      // if the user already opened one while this loaded.
+      if (launchId && currentIdRef.current === null) await selectConversationRef.current?.(launchId)
+      setLaunchSettled(true)
     })()
   }, [refreshConversations])
 
@@ -764,6 +774,7 @@ export default function App(): JSX.Element {
     },
     [chat]
   )
+  selectConversationRef.current = selectConversation
 
   // A chat opened before the saved settings had loaded has no settings of its own in
   // view yet; fill them in from its list entry once both are here, so it never runs
@@ -2439,12 +2450,12 @@ export default function App(): JSX.Element {
     hasWorkspace: Boolean(workspace),
     hasConversation: conversations.length > 0
   }
-  const showChecklist = checklistVisible(onboarding.state, checklistFacts, conversationsLoaded)
+  const showChecklist = checklistVisible(onboarding.state, checklistFacts, conversationsLoaded && launchSettled)
   // Setup is down to step 3: point the user at the message box (cursor + glow).
   const awaitingFirstTask =
     showChecklist && !connectOpen && checklistFacts.modelReady && checklistFacts.hasWorkspace
   const tipsRelevant = relevantTips({
-    readyToSend: chat.items.length === 0 && canChat && !chat.running,
+    readyToSend: launchSettled && chat.items.length === 0 && canChat && !chat.running,
     afterEdit: Boolean(chat.checkpoint && !chat.checkpoint.reverted && !chat.running),
     touring: onboarding.touring
   })
@@ -2563,7 +2574,9 @@ export default function App(): JSX.Element {
           <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} focusRequest={findRequest} />
         )}
 
-        {chat.items.length === 0 ? (
+        {!launchSettled ? (
+          <div className="welcome" aria-busy="true" />
+        ) : chat.items.length === 0 ? (
           <div className="welcome">
             <h1>Houston</h1>
             <p>A model-agnostic, sandboxed coding agent. Decoupled from your model bill.</p>

@@ -72,6 +72,7 @@ import { createChatAttention, type ChatAttention } from './chatAttention'
 import { join } from 'node:path'
 import { getUserDataDir } from './userData'
 import { ReadStateStore } from './readState'
+import { isDirectory, LastChatStore, launchChat } from './lastChat'
 import { applyAppBadge, attentionCount, dotPng } from './appBadge'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
@@ -1561,6 +1562,16 @@ export function registerIpc(): void {
   ipcMain.handle(IPC.chatStatusList, (): ChatStatusMap => chat.snapshot())
   onChatStatusChanged((live) => chat.onLiveChanged(live))
 
+  // The chat a window showed last, reopened at launch. A window's views are only
+  // remembered once it has asked for its launch chat: before that it reports the new
+  // chat it starts on, which would forget the chat it is about to reopen.
+  const lastChat = new LastChatStore(join(getUserDataDir(), 'last-chat.json'))
+  const launchedIds = new Set<number>()
+  ipcMain.handle(IPC.chatLaunch, (event): string | null => {
+    launchedIds.add(event.sender.id)
+    return launchChat(lastChat.get(), (id) => peekConversation(id)?.workspace, isDirectory)
+  })
+
   // Each window says which chat it shows and whether it has focus; a focused view
   // marks the chat read. A closed window stops counting as a viewer.
   const viewerIds = new Set<number>()
@@ -1570,10 +1581,13 @@ export function registerIpc(): void {
       viewerIds.add(id)
       event.sender.once('destroyed', () => {
         viewerIds.delete(id)
+        launchedIds.delete(id)
         chat.dropViewer(id)
       })
     }
-    chat.setViewing(id, typeof conversationId === 'string' ? conversationId : null, focused === true)
+    const viewing = typeof conversationId === 'string' ? conversationId : null
+    chat.setViewing(id, viewing, focused === true)
+    if (launchedIds.has(id) && (viewing === null || conversationExists(viewing))) lastChat.set(viewing)
   })
   // "Mark unread from here" names a reply by its position among the transcript's
   // replies (the renderer has no message log); it's resolved to a log index here.
