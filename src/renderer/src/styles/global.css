@@ -6395,7 +6395,8 @@ body:has(.coachmark) .get-started {
   align-items: center;
 }
 .rule select,
-.rule input {
+.rule input,
+.rule-add-other input {
   background: var(--bg-input);
   border: 1px solid var(--border);
   color: var(--text);
@@ -6414,7 +6415,8 @@ body:has(.coachmark) .get-started {
   font-family: var(--mono);
 }
 .rule select:focus,
-.rule input:focus {
+.rule input:focus,
+.rule-add-other input:focus {
   outline: none;
   border-color: var(--accent);
 }
