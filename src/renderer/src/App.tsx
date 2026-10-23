@@ -440,7 +440,9 @@ export default function App(): JSX.Element {
     void refreshConversations()
   }, [runningIds, refreshConversations])
 
-  // Debounced full-text search across conversations (title + message content).
+  // Debounced full-text search across conversations (title, folder/branch, message
+  // content). It re-runs when the list refreshes, so a new or renamed chat shows up,
+  // and every few seconds while a chat runs, since its saved messages keep growing.
   useEffect(() => {
     const q = search.trim()
     if (!q) {
@@ -448,16 +450,19 @@ export default function App(): JSX.Element {
       return
     }
     let cancelled = false
-    const t = setTimeout(() => {
+    const run = (): void => {
       void window.api.searchConversations(q).then((results) => {
         if (!cancelled) setMatchIds(new Set(results.map((r) => r.id)))
       })
-    }, 180)
+    }
+    const t = setTimeout(run, 180)
+    const poll = runningIds.size > 0 ? setInterval(run, 3000) : undefined
     return () => {
       cancelled = true
       clearTimeout(t)
+      clearInterval(poll)
     }
-  }, [search])
+  }, [search, conversations, runningIds])
 
   const visibleConversations = useMemo(() => {
     // Search spans both active and archived chats, so an explicit query bypasses
