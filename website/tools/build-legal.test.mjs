@@ -15,6 +15,20 @@ describe("generated pages stay in sync with docs/", () => {
   }
 });
 
+describe("generated page metadata", () => {
+  // A shared link to a legal page gets the same social card as the rest of the site.
+  for (const p of buildPages()) {
+    it(`${p.slug} carries Open Graph and Twitter card tags`, () => {
+      const meta = (attr, name) => p.output.match(new RegExp(`<meta ${attr}="${name}" content="([^"]*)"`))?.[1];
+      expect(meta("property", "og:url")).toBe(`https://houstoncode.ai/${p.slug}`);
+      expect(meta("property", "og:title")).toBe(meta("name", "twitter:title"));
+      expect(meta("property", "og:description")).toBe(p.output.match(/<meta name="description" content="([^"]*)"/)[1]);
+      expect(meta("property", "og:image")).toBe("https://houstoncode.ai/assets/og.png");
+      expect(meta("name", "twitter:card")).toBe("summary_large_image");
+    });
+  }
+});
+
 describe("mdToHtml lists", () => {
   it("joins an item's wrapped lines instead of turning the list into a paragraph", () => {
     const { html } = mdToHtml("- **One.** First line\n  continues here.\n- Two");
