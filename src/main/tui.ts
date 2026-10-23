@@ -72,7 +72,7 @@ import { assertNever } from '@shared/assert'
 import { PROPOSE_SESSION_TOOL } from '@shared/constants'
 import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
-import { PRESENT_PLAN_TOOL } from '@shared/constants'
+import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, deniedPromptText, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
 import { truncateVisible, stripControlChars, osc52Copy, osc8Link, visibleWidth, wrapAnsi } from './tui-wrap'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
@@ -376,7 +376,8 @@ export function renderApprovalPrompt(
   const scope = ev.networkScope
     ? `\n${paint(`  "Allow for run" covers ${ev.networkScope} for the rest of this chat.`, 'dim')}`
     : ''
-  const head = paint(`Approve ${ev.name}`, 'bold')
+  // Named as the call's tool line names it ("Run", "Write"), not by its wire name.
+  const head = paint(`Approve ${describeToolCall(ev.name, ev.args).verb}`, 'bold')
   const kind = paint(`[${ev.kind}]`, 'dim')
   const keys = opts.picker
     ? ''
@@ -1224,7 +1225,11 @@ export function renderPlan(
   // machine (not the agent's text), so it reads in the warning color when they can't.
   if (plan.readiness?.items.length) {
     const [head, ...rows] = formatReadinessLines(plan.readiness)
-    lines.push('', paint(head, readinessOk(plan.readiness) ? 'dim' : 'yellow'), ...rows.map((r) => paint(r, 'dim')))
+    // Each row ("  ! npm packages: Not installed yet. …") continues under its text,
+    // rather than the terminal breaking a long one mid-word at the left edge.
+    const fit = (r: string): string =>
+      opts.width && opts.width > 24 ? `  ${wrapAnsi(r.trimStart(), opts.width - 4).replace(/\n/g, '\n    ')}` : r
+    lines.push('', paint(head, readinessOk(plan.readiness) ? 'dim' : 'yellow'), ...rows.map((r) => paint(fit(r), 'dim')))
   }
   if (opts.actions !== false) lines.push('', renderPlanActions(paint))
   return lines.join('\n')
@@ -3961,6 +3966,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             todoCalls.add(e.callId)
             break
           }
+          // A question or a plan prints itself as the prompt that follows; a "· ask_user"
+          // line in front of it is only the wire name.
+          if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) break
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
           break
         }
