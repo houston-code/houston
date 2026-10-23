@@ -74,7 +74,7 @@ import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, deniedPromptText, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
-import { truncateVisible, stripControlChars, osc52Copy, osc8Link } from './tui-wrap'
+import { truncateVisible, stripControlChars, osc52Copy, osc8Link, visibleWidth, wrapAnsi } from './tui-wrap'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -1619,6 +1619,33 @@ export const HELP_TEXT = [
   '',
   'While a turn runs: Ctrl-C interrupts it. Answer approvals with y / n / a.'
 ].join('\n')
+
+/** Where /help's descriptions start: two spaces, then the command padded to 22. */
+const HELP_DESC_COLUMN = 24
+
+/**
+ * Help rows (`  /name   description`) fitted to the terminal: a description too
+ * long for the line continues on the next one under the description column,
+ * instead of the terminal breaking it mid-word back at the left edge. Other lines
+ * wrap at words. Left as is when the terminal is too narrow for the column to help.
+ */
+export function wrapHelp(text: string, width: number, column = HELP_DESC_COLUMN): string {
+  const descWidth = width - column
+  if (descWidth < 20) return text
+  const pad = ' '.repeat(column)
+  return text
+    .split('\n')
+    .map((line) => {
+      if (visibleWidth(line) <= width) return line
+      // Not a command row, or a name so long it runs into the column: plain wrap.
+      if (!line.startsWith('  /') || line[column - 1] !== ' ') return wrapAnsi(line, width)
+      return wrapAnsi(line.slice(column), descWidth)
+        .split('\n')
+        .map((part, i) => (i === 0 ? line.slice(0, column) : pad) + part)
+        .join('\n')
+    })
+    .join('\n')
+}
 
 // --- Settings editing (/settings, /hooks, /mcp) ------------------------------
 // A small, safe subset of settings editing for the terminal. The desktop app has
@@ -4375,10 +4402,11 @@ function handleInfoCommand(
   const name = nameOf(parts[0])
   const arg = parts.slice(1).join(' ') // present only when the user passed an (invalid) arg
   if (name === 'help') {
-    deps.io.out(`${HELP_TEXT}\n`)
+    const width = deps.columns?.() ?? 80
+    deps.io.out(`${wrapHelp(HELP_TEXT, width)}\n`)
     if (customCommands.length) {
       const rows = customCommands.map((c) => `  ${`/${c.name}`.padEnd(20)}${c.description}`).join('\n')
-      deps.io.out(paint(`\nCustom commands (.houston/commands):\n${rows}\n`, 'dim'))
+      deps.io.out(paint(`\nCustom commands (.houston/commands):\n${wrapHelp(rows, width, 22)}\n`, 'dim'))
     }
     return
   }
