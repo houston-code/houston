@@ -1169,6 +1169,13 @@ export type AgentEvent =
        */
       shellNetwork?: boolean
       /**
+       * Present only on the question raised after the sandbox's egress proxy refused a
+       * host that isn't on the allowlist: the host. The command has already run (the
+       * connection was refused); allowing lets the chat's shell commands reach this one
+       * host from now on, and denying keeps it blocked without asking again.
+       */
+      egressHost?: string
+      /**
        * Present and `true` only on a shell command that will run with the sandbox's
        * network off because the run has no shell-network grant yet. "Allow" and "Always
        * allow" run it offline; only "Allow for run" also grants network. Lets the UI say

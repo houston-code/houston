@@ -458,7 +458,23 @@ function ToolRow({
         </div>
       )}
 
-      {awaiting && item.shellNetwork && (
+      {awaiting && item.egressHost && (
+        <div className="tool-row__approval">
+          <p className="tool-row__approval-note">
+            A command tried to reach <strong>{item.egressHost}</strong>, which isn't on the sandbox's
+            list of allowed domains, so it was blocked. Allowing it applies to shell commands in
+            the rest of this chat, for this host only.
+          </p>
+          <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'always')}>
+            Allow {item.egressHost} for this chat
+          </button>
+          <button className="btn btn--sm" onClick={() => onApprove(item.id, 'deny')}>
+            Keep blocked
+          </button>
+        </div>
+      )}
+
+      {awaiting && item.shellNetwork && !item.egressHost && (
         <div className="tool-row__approval">
           <p className="tool-row__approval-note">
             This command could not reach the network. Shell commands in this chat run offline
@@ -474,7 +490,7 @@ function ToolRow({
         </div>
       )}
 
-      {awaiting && !item.shellNetwork && (
+      {awaiting && !item.shellNetwork && !item.egressHost && (
         <div className="tool-row__approval">
           {item.sensitiveRead && (
             <p className="tool-row__approval-note">

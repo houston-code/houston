@@ -13,7 +13,9 @@ import {
   EGRESS_PROXY_INNER_PORT,
   FORWARDER_SOURCE,
   egressProxyEnv,
+  egressProxyUrl,
   parseConnectTarget,
+  proxyAuthToken,
   startEgressProxy
 } from './egress-proxy'
 import type { EgressLogEvent, EgressProxyHandle } from './egress-proxy'
@@ -78,6 +80,56 @@ describe('egressProxyEnv', () => {
     expect(env.ALL_PROXY).toBe('http://127.0.0.1:9999')
     expect(env.NO_PROXY).toContain('localhost')
     expect(env.no_proxy).toContain('127.0.0.1')
+  })
+})
+
+describe('egressProxyUrl / proxyAuthToken', () => {
+  it('carries a run token in the userinfo, and reads it back from Proxy-Authorization', () => {
+    expect(egressProxyUrl('127.0.0.1:9')).toBe('http://127.0.0.1:9')
+    const url = egressProxyUrl('127.0.0.1:9', 'abc123')
+    expect(url).toBe('http://houston:abc123@127.0.0.1:9')
+    // What a client sends for that URL's userinfo.
+    const u = new URL(url)
+    const header = `Basic ${Buffer.from(`${u.username}:${decodeURIComponent(u.password)}`).toString('base64')}`
+    expect(proxyAuthToken(header)).toBe('abc123')
+  })
+
+  it('reads no token from a missing or malformed header', () => {
+    expect(proxyAuthToken(undefined)).toBeUndefined()
+    expect(proxyAuthToken('Bearer abc')).toBeUndefined()
+    expect(proxyAuthToken(`Basic ${Buffer.from('no-colon').toString('base64')}`)).toBeUndefined()
+    expect(proxyAuthToken(`Basic ${Buffer.from('houston:').toString('base64')}`)).toBeUndefined()
+    expect(proxyAuthToken(`Basic ${Buffer.from('houston:%E0%A4%A').toString('base64')}`)).toBeUndefined()
+  })
+})
+
+describe('startEgressProxy run tokens', () => {
+  it('hands checkHost the token each request carried, over CONNECT and plain HTTP', async () => {
+    const seen: Array<string | undefined> = []
+    const proxy = await startEgressProxy({
+      checkHost: (_host, token) => {
+        seen.push(token)
+        return { allowed: false }
+      }
+    })
+    try {
+      const auth = `Basic ${Buffer.from('houston:tok1').toString('base64')}`
+      const send = (req: string): Promise<void> =>
+        new Promise((resolve, reject) => {
+          const sock = netConnect(proxy.endpoints.tcpPort, '127.0.0.1', () => sock.write(req))
+          sock.once('data', () => {
+            sock.destroy()
+            resolve()
+          })
+          sock.on('error', reject)
+        })
+      await send(`CONNECT a.example:443 HTTP/1.1\r\nHost: a.example:443\r\nProxy-Authorization: ${auth}\r\n\r\n`)
+      await send(`GET http://b.example/ HTTP/1.1\r\nHost: b.example\r\nProxy-Authorization: ${auth}\r\nConnection: close\r\n\r\n`)
+      await send('CONNECT c.example:443 HTTP/1.1\r\nHost: c.example:443\r\n\r\n')
+      expect(seen).toEqual(['tok1', 'tok1', undefined])
+    } finally {
+      await proxy.close()
+    }
   })
 })
 

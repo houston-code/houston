@@ -227,6 +227,31 @@ Per-platform enforcement of "the proxy is the only road out":
 Failure is **closed**: if the proxy cannot start, the run's shell network stays off
 rather than falling back to unrestricted egress.
 
+**When shell has network.** With the proxy in place, full auto gives shell commands
+proxied network from the start: the allowlist, not an offline default, is what bounds a
+prompt-injected command. Ask and auto-edit grant it with "Allow for run" on a shell
+command. Under mode `all` there is no proxy, so full auto runs shell offline until the
+one-time shell-network consent (`offerShellNetwork` in
+[`src/main/agent/loop.ts`](../src/main/agent/loop.ts)), as before.
+
+**Per-chat host grants.** Each run registers a random token with the policy
+(`registerEgressRun` in [`src/main/agent/egress.ts`](../src/main/agent/egress.ts)), and
+its commands carry it in the proxy URL's userinfo, which the toolchain sends back as
+`Proxy-Authorization`. A host refused only for not being listed is reported to the run
+whose token the request carried, and after the current tool call the user is asked
+whether to allow that exact host for the chat (`offerEgressHosts`). The refusal comes
+from the proxy, so the question appears even when the command piped its output away or
+ran in the background. The token is an attribution tag, not access control: a request
+without one (a client that drops proxy credentials) gets the settings alone, deny
+entries and private literals win over any chat grant, only plain DNS names are ever
+offered, and a token stops naming a run when the run ends (a background command that
+outlives its run falls back to the settings alone). Because the sandbox can
+read the user's files, a command that reads another live run's environment could
+borrow that token, and with it the hosts the user allowed in that chat; that widens
+nothing past what the user already approved. A run holds at most 20 refused hosts and
+raises at most 3 questions per tool call, naming the rest to the agent instead. Grants
+live in memory per conversation, like the other "Allow for run" grants.
+
 Known residuals, accepted and documented: an allowlisted collaborative host (e.g.
 github.com) still accepts authenticated writes, so exfiltration to *your own
 reachable services* on allowed domains remains possible (authenticated, attributable,

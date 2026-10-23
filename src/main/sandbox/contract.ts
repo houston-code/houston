@@ -38,6 +38,12 @@ export interface EgressProxyEndpoints {
    */
   unixSocketPath?: string
   forwarderPath?: string
+  /**
+   * The run this launch belongs to, carried to the proxy in the proxy URL's userinfo
+   * (see egressProxyUrl) so a host the user allowed for one chat is allowed for that
+   * chat's commands only. Absent: the proxy applies the settings-wide policy alone.
+   */
+  token?: string
 }
 
 export interface SandboxRunOptions {

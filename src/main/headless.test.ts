@@ -688,6 +688,22 @@ describe('runHeadless', () => {
     })
   })
 
+  it('keeps a refused egress host blocked whatever --on-approval says', async () => {
+    const ask: AgentEvent = {
+      runId: 'run-1',
+      type: 'tool_approval',
+      callId: 'f1',
+      name: 'run_shell',
+      summary: 'npm ci',
+      kind: 'shell',
+      egressHost: 'registry.example.com'
+    }
+    const { d, approvals } = deps([ask, { runId: 'run-1', type: 'done', stopReason: 'end_turn' }])
+    const code = await runHeadless({ ...baseOpts, approvalPolicy: 'full-auto', onApproval: 'allow' }, d)
+    expect(code).toBe(0)
+    expect(approvals).toEqual([['run-1', 'f1', 'deny']])
+  })
+
   it('resolves a plan_ready (reject) and prints the plan so present_plan cannot hang', async () => {
     const { d, out, plans } = deps([
       { runId: 'run-1', type: 'plan_ready', callId: 'p1', plan: { title: 'My Plan', body: 'Do it.' } },

@@ -242,6 +242,22 @@ describe('BubblewrapBackend', () => {
     expect(launch.env?.NO_PROXY).toContain('localhost')
   })
 
+  it("puts the run's egress token in the forwarder's proxy URL", () => {
+    const launch = BubblewrapBackend.buildLaunch({
+      command: 'npm ci',
+      roots: ['/'],
+      allowNetwork: true,
+      egressProxy: {
+        tcpPort: 9137,
+        unixSocketPath: '/tmp/he/proxy.sock',
+        forwarderPath: '/tmp/he/forwarder.cjs',
+        token: 'abc123'
+      },
+      cwd: '/'
+    })
+    expect(launch.env?.HTTPS_PROXY).toBe('http://houston:abc123@127.0.0.1:24127')
+  })
+
   it('unproxied launches carry no env overrides', () => {
     const launch = BubblewrapBackend.buildLaunch({
       command: 'echo hi',

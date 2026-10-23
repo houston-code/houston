@@ -95,9 +95,11 @@ Each model round's text is written once that round has finished.
   non-zero, so a script can tell the run hit a permission wall.
 - **Questions.** The agent isn't offered `ask_user`. It is told no user is
   available, makes the call itself, and states its assumptions in the final answer.
-- **Shell network.** Approving a shell command with `--on-approval allow` is a plain
-  "Allow", so the command runs without network. Pass `--allow-shell-network` to let
-  shell commands reach the network for the run (see "Shell sandbox and network").
+- **Shell network.** Under `--full-auto`, shell commands reach the network through the
+  egress allowlist from the start. Under ask or auto-edit, approving a shell command
+  with `--on-approval allow` is a plain "Allow", so the command runs without network.
+  Pass `--allow-shell-network` to let shell commands reach the network for the run
+  under any policy (see "Shell sandbox and network").
 
 #### Prompt from stdin
 
@@ -1090,11 +1092,13 @@ The sandbox can read your whole filesystem, so a few controls hold even in full 
 
 - **Network, per destination.** Approving a fetch to one host doesn't open egress to
   another. See "Network calls in full auto" below.
-- **Shell commands start offline.** The first time one fails for lack of network,
-  Houston asks once whether shell commands in this chat may reach the network (the
-  **shell-network consent**). Declining keeps them offline. When you allow it, the
-  agent retries the command if that's safe. Blanket outbound access is never
-  automatic.
+- **Shell network stays on the allowlist.** Shell commands reach package registries
+  and code hosts (plus any domains you add) through the egress allowlist. When one
+  tries a host that isn't on it, the connection is refused and Houston asks whether to
+  allow that host for this chat. When you allow it, the agent retries the command if
+  that's safe. Blanket outbound access is never automatic: with egress set to "All
+  domains", shell commands start offline and Houston asks once, the first time one
+  fails for lack of network (the **shell-network consent**).
 - **Paths outside the project.** A shell command that names one, quoted or not, asks
   first. `/dev/null` and the temp directory the sandbox can already write to don't
   count.
@@ -1875,30 +1879,32 @@ tools' allowed roots and to the shell sandbox.
 
 ### Network for shell commands
 
-Network from `run_shell` is *gated*, not permanently off, and full auto doesn't imply
-it. The sandbox can read your whole filesystem, so blanket outbound access plus full
-auto would be a one-command read-and-exfiltrate.
+Network from `run_shell` always goes through the egress allowlist (see "Egress
+allowlist" below), never straight out. The sandbox can read your whole filesystem, so
+blanket outbound access plus full auto would be a one-command read-and-exfiltrate; the
+allowlist bounds where a command can send anything.
 
-**Shell reaches the network only after a conscious grant for the chat:**
+**When shell commands have network:**
 
-- **Full auto:** the **shell-network consent**, asked once after a command first fails
-  without network.
-- **Ask / auto-edit:** "Allow for run" on a shell command.
+- **Full auto:** from the start, through the allowlist. Installing dependencies,
+  cloning, and fetching toolchains just work.
+- **Ask / auto-edit:** after "Allow for run" on a shell command. Plain "Allow" and
+  "Always allow" run that one command offline, and until the run has the grant, each
+  shell approval prompt says so.
+- **Egress set to "All domains":** there is no allowlist to bound it, so even full
+  auto starts offline and asks once, the first time a command fails for lack of
+  network (the **shell-network consent**). Declining runs commands offline instead of
+  blocking them.
 
-Plain "Allow" and "Always allow" run that one command offline, and until the run has
-the grant, each shell approval prompt says so.
+A command that needs the network and doesn't have it (cloning, installing
+dependencies, `gh`, `curl`) isn't impossible; it just needs that grant.
 
-A command that needs the network (cloning, installing dependencies, `gh`, `curl`)
-isn't impossible; it just needs that grant. Declining runs the command offline instead
-of blocking it.
+**Headless runs** (`-p`) have no prompt to grant it from:
 
-**Headless runs** (`-p`) have no prompt to grant it from, so the grant is a flag:
-
+- Under `--full-auto`, shell commands have network through the allowlist from the
+  start.
 - `--allow-shell-network` lets shell commands reach the network for that run under any
   policy. It isn't remembered for the next run.
-- Without it, shell runs offline, except under `--full-auto`, where
-  `--on-approval allow` (its default) also answers the shell-network consent when a
-  command fails without network.
 - `--on-approval allow` alone never grants it under ask or auto-edit, since it
   approves each command the way plain "Allow" does.
 
@@ -1954,6 +1960,13 @@ proxy is the only road out.
 - Edits apply immediately, mid-run.
 - A refused destination fails with an `EGRESS_BLOCKED` message naming the domain.
   That's policy, not an outage.
+- In a chat, Houston then asks whether to allow that host for the chat: **Allow for
+  this chat** or **Keep blocked**. It asks even when the command hid the error (piped
+  its output away, or ran in the background), because the proxy reports the refusal
+  itself. An allowed host is that exact name, not its subdomains, for this chat's shell
+  commands only, and the answer holds until Houston quits. A deny-list entry or a
+  private address is never offered. Headless runs keep the host blocked and tell the
+  agent so.
 - Only HTTP(S) flows through the proxy, so other protocols (SSH, for example) are
   blocked under the allowlist. Use HTTPS remotes inside the sandbox, or switch the
   egress mode to "All domains" (Settings) to restore unrestricted granted network.
@@ -1996,7 +2009,7 @@ Houston's own network tools refuse to *send* a credential:
 This is the outbound counterpart to secret redaction (which scrubs secrets on the way
 back in), so a prompt-injected agent can't leak a key by pasting it into a request.
 It covers Houston's own tools; a raw `curl` inside `run_shell` is bounded by the
-shell-network consent instead.
+egress allowlist instead.
 
 ### Untrusted content
 

@@ -277,6 +277,23 @@ describe('approval prompt', () => {
     expect(approvalOutcome('deny', { note: 'use pnpm' })).toBe('Denied: use pnpm')
     expect(approvalOutcome('deny', { shellNetwork: true })).toBe('Running offline')
     expect(approvalOutcome('always', { shellNetwork: true })).toBe('Network allowed for this run')
+    expect(approvalOutcome('always', { egressHost: 'registry.example.com' })).toBe(
+      'Allowed registry.example.com for this chat'
+    )
+    expect(approvalOutcome('deny', { egressHost: 'registry.example.com' })).toBe('Kept registry.example.com blocked')
+  })
+
+  it('frames a refused egress host as a per-host grant for the chat', () => {
+    const p = renderApprovalPrompt(ev({ egressHost: 'registry.example.com' }), makePainter(false))
+    expect(p).toContain("A command tried to reach registry.example.com, which isn't on the sandbox's allowed domains.")
+    expect(p).toContain('[y] allow registry.example.com for this chat   [n] keep blocked')
+    expect(p).not.toContain('offline')
+    expect(p).not.toContain('\u2014')
+    expect(renderApprovalPrompt(ev({ egressHost: 'registry.example.com' }), makePainter(false), { picker: true })).not.toContain(
+      '[y]'
+    )
+    // Control characters in the host never reach the terminal.
+    expect(renderApprovalPrompt(ev({ egressHost: 'a.example\u001b[2J' }), makePainter(false))).not.toContain('\u001b[2J')
   })
 
   it('warns when a shell command runs unsandboxed', () => {

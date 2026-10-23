@@ -91,6 +91,12 @@ export interface ToolItem {
    */
   shellNetwork?: boolean
   /**
+   * The host on the question raised after the egress proxy refused a host that isn't on
+   * the allowlist: the approval decides whether the chat's shell commands may reach it,
+   * not whether this command runs (it already has).
+   */
+  egressHost?: string
+  /**
    * True on a shell prompt whose command runs offline unless the user picks "Allow for
    * run" (the run has no shell-network grant yet), so the card can say so up front.
    */
@@ -390,6 +396,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.preview ? { preview: e.preview } : {}),
           toolKind: e.kind,
           shellNetwork: e.shellNetwork === true,
+          egressHost: e.egressHost,
           shellOffline: e.shellOffline === true,
           sensitiveRead: e.sensitiveRead === true,
           sensitiveWrite: e.sensitiveWrite === true,
@@ -408,6 +415,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.preview ? { preview: e.preview } : {}),
           toolKind: e.kind,
           ...(e.shellNetwork ? { shellNetwork: true } : {}),
+          ...(e.egressHost ? { egressHost: e.egressHost } : {}),
           ...(e.shellOffline ? { shellOffline: true } : {}),
           ...(e.sensitiveRead ? { sensitiveRead: true } : {}),
           ...(e.sensitiveWrite ? { sensitiveWrite: true } : {}),

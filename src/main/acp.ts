@@ -918,7 +918,11 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     const approval = async (e: Extract<AgentEvent, { type: 'tool_approval' }>): Promise<void> => {
       const args = e.args ?? {}
       const warnings: string[] = []
-      if (e.shellNetwork) {
+      if (e.egressHost) {
+        warnings.push(
+          `A shell command tried to reach ${e.egressHost}, which isn't on the sandbox's allowed domains, so it was blocked. Allow shell commands to reach this host for the rest of this session?`
+        )
+      } else if (e.shellNetwork) {
         warnings.push(
           'Allow shell commands to reach the network for the rest of this prompt? Shell runs in a sandbox that can read your files; declining runs commands offline.'
         )
@@ -937,7 +941,12 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       if (!announced.has(e.callId)) announce(e.callId, e.name, args, e.kind, 'pending', content, e.preview)
       // The shell-network consent is a yes/no about egress, not a rule about a
       // command, so it gets no "always" choices.
-      const options = e.shellNetwork
+      const options = e.egressHost
+        ? [
+            { optionId: 'allow', name: `Allow ${e.egressHost}`, kind: 'allow_once' },
+            { optionId: 'deny', name: 'Keep blocked', kind: 'reject_once' }
+          ]
+        : e.shellNetwork
         ? [
             { optionId: 'allow', name: 'Allow network', kind: 'allow_once' },
             { optionId: 'deny', name: 'No network', kind: 'reject_once' }

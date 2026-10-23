@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import type { EgressProxyEndpoints, SandboxBackend, ShellLaunch } from './contract'
-import { EGRESS_PROXY_INNER_PORT, egressProxyEnv } from './egress-proxy'
+import { EGRESS_PROXY_INNER_PORT, egressProxyEnv, egressProxyUrl } from './egress-proxy'
 import { resolvePosixShell } from './shared'
 
 /**
@@ -271,7 +271,7 @@ export const BubblewrapBackend: SandboxBackend = {
         ? {
             env: {
               ELECTRON_RUN_AS_NODE: '1',
-              ...egressProxyEnv(`http://127.0.0.1:${EGRESS_PROXY_INNER_PORT}`)
+              ...egressProxyEnv(egressProxyUrl(`127.0.0.1:${EGRESS_PROXY_INNER_PORT}`, egressProxy?.token))
             }
           }
         : {})

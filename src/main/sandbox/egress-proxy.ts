@@ -48,6 +48,36 @@ export const EGRESS_PROXY_INNER_PORT = 24127
 const NO_PROXY_HOSTS = 'localhost,127.0.0.1,::1'
 
 /**
+ * The proxy URL a proxied launch points the toolchain at. A run's `token` rides in
+ * the userinfo, so the toolchain sends it back as `Proxy-Authorization: Basic …` on
+ * every request; the proxy reads it to tell which run a request came from, which
+ * is what scopes a host the user allowed for one chat to that chat. It is an
+ * attribution tag, not access control: a request without it still gets the
+ * settings-wide policy, and nothing it names is secret.
+ */
+export function egressProxyUrl(hostPort: string, token?: string): string {
+  return token ? `http://houston:${encodeURIComponent(token)}@${hostPort}` : `http://${hostPort}`
+}
+
+/**
+ * The run token a request carried in `Proxy-Authorization` (see {@link egressProxyUrl}),
+ * or undefined when it carried none or one in another shape.
+ */
+export function proxyAuthToken(header: string | string[] | undefined): string | undefined {
+  const value = Array.isArray(header) ? header[0] : header
+  const m = value?.match(/^\s*basic\s+([A-Za-z0-9+/=]+)\s*$/i)
+  if (!m) return undefined
+  const decoded = Buffer.from(m[1], 'base64').toString('utf8')
+  const colon = decoded.indexOf(':')
+  if (colon < 0) return undefined
+  try {
+    return decodeURIComponent(decoded.slice(colon + 1)) || undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * Proxy environment for a proxied launch. Both cases so every tool sees it
  * (curl reads lowercase; many CLIs read uppercase; ALL_PROXY catches the rest).
  * NO_PROXY keeps loopback traffic direct — dev servers must not detour through
@@ -80,8 +110,11 @@ export interface EgressLogEvent {
 }
 
 export interface StartEgressProxyOptions {
-  /** The policy: may the sandbox reach `host`? Called per request with the normalized hostname. */
-  checkHost: (host: string) => EgressCheck
+  /**
+   * The policy: may the sandbox reach `host`? Called per request with the normalized
+   * hostname and the run token the request carried, if any (see {@link egressProxyUrl}).
+   */
+  checkHost: (host: string, token?: string) => EgressCheck
   /**
    * Also listen on a unix socket and write the in-namespace forwarder script
    * (the bubblewrap transport — see {@link FORWARDER_SOURCE}). POSIX only.
@@ -218,8 +251,13 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
     s.on('close', () => sockets.delete(s))
   }
 
-  const decide = (host: string, port: number, via: 'connect' | 'http'): EgressCheck => {
-    const check = opts.checkHost(host)
+  const decide = (
+    host: string,
+    port: number,
+    via: 'connect' | 'http',
+    req: IncomingMessage
+  ): EgressCheck => {
+    const check = opts.checkHost(host, proxyAuthToken(req.headers['proxy-authorization']))
     opts.log?.({ allowed: check.allowed, host, port, via })
     return check
   }
@@ -239,7 +277,7 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
     }
     const host = url.hostname.toLowerCase()
     const port = url.port ? Number(url.port) : 80
-    const check = decide(host, port, 'http')
+    const check = decide(host, port, 'http', req)
     if (!check.allowed) {
       res.writeHead(403, { 'content-type': 'text/plain' })
       res.end(denyBody(host, check.reason))
@@ -284,7 +322,7 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
       client.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n')
       return
     }
-    const check = decide(target.host, target.port, 'connect')
+    const check = decide(target.host, target.port, 'connect', req)
     if (!check.allowed) {
       const body = denyBody(target.host, check.reason)
       client.end(

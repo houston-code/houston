@@ -101,6 +101,18 @@ describe('SeatbeltBackend.buildLaunch', () => {
     expect(launch.env?.NO_PROXY).toContain('localhost')
   })
 
+  it("puts the run's egress token in the proxy URL so the proxy can tell which chat asked", () => {
+    const launch = SeatbeltBackend.buildLaunch({
+      command: 'npm ci',
+      roots: ['/work'],
+      allowNetwork: true,
+      egressProxy: { tcpPort: 9137, token: 'abc123' },
+      cwd: '/work'
+    })
+    expect(launch.env?.HTTPS_PROXY).toBe('http://houston:abc123@127.0.0.1:9137')
+    expect(launch.env?.all_proxy).toBe('http://houston:abc123@127.0.0.1:9137')
+  })
+
   it('granted network WITHOUT egress endpoints stays full (legacy mode-all), no proxy env', () => {
     const launch = SeatbeltBackend.buildLaunch({
       command: 'curl https://anything.example/',

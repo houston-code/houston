@@ -1230,6 +1230,13 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // command (it runs either way), so it's not a permission wall — resolve it per
           // --on-approval without ever flipping the failure flag. 'allow' lets shell reach
           // the network this run; otherwise shell runs offline.
+          // The egress-host question is raised only in an attended run, so a headless
+          // one never sees it; if one arrives, keep the host blocked, as the run's
+          // own policy would.
+          if (e.egressHost) {
+            deps.resolveApproval(e.runId, e.callId, 'deny')
+            break
+          }
           if (e.shellNetwork) {
             const grant = opts.onApproval === 'allow'
             if (!opts.json) {
