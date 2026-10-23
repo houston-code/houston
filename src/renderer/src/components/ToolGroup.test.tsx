@@ -700,6 +700,37 @@ describe('ToolGroup', () => {
     expect(onApprove).toHaveBeenCalledWith('call-13', 'deny')
   })
 
+  it('asks about a refused egress host as a per-host choice for this chat', () => {
+    const onApprove = vi.fn()
+    render(
+      <ToolGroup
+        items={[
+          tool({
+            id: 'call-14',
+            name: 'run_shell',
+            status: 'awaiting-approval',
+            egressHost: 'registry.example.com',
+            args: { command: 'npm ci' }
+          })
+        ]}
+        onApprove={onApprove}
+      />
+    )
+    const note = screen.getByText(/tried to reach/)
+    expect(note).toHaveTextContent(
+      "A command tried to reach registry.example.com, which isn't on the sandbox's list of allowed domains, so it " +
+        'was blocked. Allowing it applies to shell commands in the rest of this chat, for this host only.'
+    )
+    expect(note.textContent).not.toContain('\u2014')
+    // Only the two choices: not the generic approval buttons, nor the network-wide card.
+    expect(screen.queryByRole('button', { name: 'Allow network for this chat' })).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Reason for denying, sent to the agent')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Allow registry.example.com for this chat' }))
+    expect(onApprove).toHaveBeenCalledWith('call-14', 'always')
+    fireEvent.click(screen.getByRole('button', { name: 'Keep blocked' }))
+    expect(onApprove).toHaveBeenCalledWith('call-14', 'deny')
+  })
+
   // "Allow" runs a shell command offline until the run has a shell-network grant;
   // only "Allow for run" grants it, so the card has to say so before the user picks.
   it('tells the user a shell command runs offline and which choice grants network', () => {

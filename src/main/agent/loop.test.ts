@@ -29,8 +29,13 @@ import {
   NETWORK_BLOCKED_HINT,
   SHELL_NETWORK_DECLINED_NOTE,
   SHELL_NETWORK_GRANTED_NOTE,
+  egressHostAllowedNote,
+  egressHostDeclinedNote,
+  egressHostUnattendedNote,
+  egressHostsUnaskedNote,
   type ToolDef
 } from './tools'
+import { checkEgressHost, type EgressRunScope } from './egress'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
@@ -124,6 +129,9 @@ const h = vi.hoisted(() => ({
   // Makes the `./egress` partial mock below fail to start the egress proxy, so a test
   // can drive the fail-closed path (shell network withheld for the whole run).
   egressFails: false,
+  // The scope the latest run registered with the egress policy, captured by the
+  // `./egress` partial mock so a probe can stand in for the proxy refusing a host.
+  egressScope: null as EgressRunScope | null,
   // The repository the `./github` partial mock reports the gh_* tools act on; null
   // (the default) is "unknown", as in a temp workspace with no remotes.
   ghRepo: null as string | null
@@ -208,7 +216,11 @@ vi.mock('./egress', async (importActual) => {
   return {
     ...actual,
     egressEndpointsForRun: (...args: Parameters<typeof actual.egressEndpointsForRun>) =>
-      h.egressFails ? Promise.reject(new Error('proxy failed to start')) : actual.egressEndpointsForRun(...args)
+      h.egressFails ? Promise.reject(new Error('proxy failed to start')) : actual.egressEndpointsForRun(...args),
+    registerEgressRun: (scope: EgressRunScope) => {
+      h.egressScope = scope
+      return actual.registerEgressRun(scope)
+    }
   }
 })
 // Stub the plugin loader with a host that records every event the loop fires, so
@@ -301,8 +313,10 @@ beforeEach(() => {
   h.managedRules = []
   h.sandboxed = null
   h.egressFails = false
+  h.egressScope = null
   h.ghRepo = null
   delete h.settings.webReads
+  delete h.settings.sandboxEgress
   h.providerModels = []
   h.extraConfigs = {}
   h.extraClients = {}
@@ -6733,17 +6747,21 @@ describe('egress hardening', () => {
   })
 
   describe('#3b full-auto shell-network consent', () => {
-    // Full auto runs shell offline and asks once per chat, only after a command fails for
-    // lack of network. The consent only exists on a confining host (offerShellNetwork
-    // requires isSandboxed()). Force it true so these run identically on a sandboxed
-    // macOS dev machine and on unsandboxed Linux CI; the probe shell tools don't spawn a
-    // real sandbox, so this drives the approval logic, not execution. Reset by the
-    // top-level beforeEach (h.sandboxed = null).
+    // Under egress mode "All domains" there is no proxy to bound where shell network
+    // goes, so full auto runs shell offline and asks once per chat, only after a command
+    // fails for lack of network. (Under the default allowlist mode full auto has proxied
+    // network from the start: see the describe after this one.) The consent only exists
+    // on a confining host (offerShellNetwork requires isSandboxed()). Force it true so
+    // these run identically on a sandboxed macOS dev machine and on unsandboxed Linux
+    // CI; the probe shell tools don't spawn a real sandbox, so this drives the approval
+    // logic, not execution. Reset by the top-level beforeEach (h.sandboxed = null, and
+    // sandboxEgress deleted).
     beforeEach(() => {
       shellSawNetwork = undefined
       shellNetPerCall.length = 0
       needsNetRuns.length = 0
       h.sandboxed = true
+      h.settings.sandboxEgress = { mode: 'all' }
     })
 
     it('runs a command that needs no network offline, without asking', async () => {
@@ -6948,6 +6966,190 @@ describe('egress hardening', () => {
     })
   })
 
+  describe('full-auto shell network through the egress proxy', () => {
+    // Under the default allowlist mode, full auto gives shell commands proxied network
+    // from the start, and a host the proxy refuses for not being listed gets its own
+    // question. Forced confining host, as in #3b.
+    beforeEach(() => {
+      shellSawNetwork = undefined
+      needsNetRuns.length = 0
+      h.sandboxed = true
+    })
+
+    // A shell stand-in that reports what it was handed and asks the egress policy about
+    // a host with the run's registered scope, as the proxy does for a request carrying
+    // the run's token.
+    const reached: Array<{ host: string; allowed: boolean }> = []
+    let sawEgress: { token?: string } | undefined
+    const probeFetchShell = (): ToolDef => ({
+      kind: 'shell',
+      summarize: (a) => `curl ${String((a as { host?: string }).host ?? '')}`,
+      schema: {
+        name: 'fetch_shell',
+        description: 'probe shell that reaches a host through the proxy',
+        parameters: {
+          type: 'object',
+          properties: { host: { type: 'string' } },
+          required: ['host'],
+          additionalProperties: false
+        }
+      },
+      execute: async (a, ctx) => {
+        shellSawNetwork = ctx.allowNetwork
+        sawEgress = ctx.egressProxy
+        // One host, or several comma-separated (a command that walks many).
+        const hosts = String((a as { host?: string }).host).split(',')
+        let allowed = true
+        for (const host of hosts) {
+          // The proxy's own decision for this run's token: settings first, then the chat.
+          const check = checkEgressHost(host, h.settings, h.egressScope!)
+          reached.push({ host, allowed: check.allowed })
+          allowed &&= check.allowed
+        }
+        // Piped through `tail`, as in a real chat: exit 0, no error text to scan.
+        return allowed ? 'ok\n[exit code: 0]' : '[exit code: 0]'
+      }
+    })
+    const fetchCall = (id: string, host: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'fetch_shell', arguments: { host } }
+    })
+    beforeEach(() => {
+      reached.length = 0
+      sawEgress = undefined
+    })
+
+    it('gives a shell command proxied network without asking, tagged with the run token', async () => {
+      h.probeTools = [probeNetShell(), probeFetchShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('deny'),
+        turns: [
+          [fetchCall('f1', 'registry.npmjs.org'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual([])
+      expect(shellSawNetwork).toBe(true)
+      expect(sawEgress?.token).toMatch(/^[0-9a-f]{32}$/)
+    })
+
+    it('keeps shell offline when the proxy failed to start (fail closed)', async () => {
+      h.egressFails = true
+      h.probeTools = [probeNetShell()]
+      const r = await run({
+        policy: 'full-auto',
+        turns: [
+          [shellCall('s1'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual([])
+      expect(shellSawNetwork).toBe(false)
+    })
+
+    it('asks about a refused host after the command, even when its output hid the failure', async () => {
+      h.probeTools = [probeFetchShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('always'),
+        turns: [
+          [fetchCall('f1', 'registry.example.com'), { type: 'done', stopReason: 'tool_use' }],
+          [fetchCall('f2', 'registry.example.com'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const approvals = r.events.filter((e) => e.type === 'tool_approval')
+      expect(approvals).toHaveLength(1)
+      expect(approvals[0]).toMatchObject({ callId: 'f1', kind: 'shell', egressHost: 'registry.example.com' })
+      expect((approvals[0] as { shellNetwork?: boolean }).shellNetwork).toBeUndefined()
+      // Asked after the command ran, and its answer is told in that call's result.
+      const startIdx = r.events.findIndex((e) => e.type === 'tool_start' && e.callId === 'f1')
+      expect(r.events.indexOf(approvals[0])).toBeGreaterThan(startIdx)
+      expect(resultOf(r, 'f1')).toContain(egressHostAllowedNote('registry.example.com'))
+      // The retry reaches it, unasked.
+      expect(reached).toEqual([
+        { host: 'registry.example.com', allowed: false },
+        { host: 'registry.example.com', allowed: true }
+      ])
+    })
+
+    it('keeping a host blocked is remembered: a later refusal is not re-asked', async () => {
+      h.probeTools = [probeFetchShell()]
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('deny'),
+        turns: [
+          [fetchCall('f1', 'registry.example.com'), { type: 'done', stopReason: 'tool_use' }],
+          [fetchCall('f2', 'registry.example.com'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual(['f1'])
+      expect(resultOf(r, 'f1')).toContain(egressHostDeclinedNote('registry.example.com'))
+      expect(resultOf(r, 'f2')).not.toContain('[note:')
+      expect(reached.map((x) => x.allowed)).toEqual([false, false])
+    })
+
+    it('carries an allowed host to later turns of the same chat, and to that chat only', async () => {
+      h.probeTools = [probeFetchShell()]
+      const turn = (id: string): ProviderStreamEvent[][] => [
+        [fetchCall(id, 'registry.example.com'), { type: 'done', stopReason: 'tool_use' }],
+        [{ type: 'done', stopReason: 'end_turn' }]
+      ]
+      await run({
+        policy: 'full-auto',
+        conversationId: 'conv-egress-a',
+        onApproval: (_id, decide) => decide('always'),
+        turns: turn('f1')
+      })
+      const later = await run({ policy: 'full-auto', conversationId: 'conv-egress-a', turns: turn('f2') })
+      expect(approvalCallIds(later)).toEqual([])
+      const other = await run({
+        policy: 'full-auto',
+        conversationId: 'conv-egress-b',
+        onApproval: (_id, decide) => decide('deny'),
+        turns: turn('f3')
+      })
+      expect(approvalCallIds(other)).toEqual(['f3'])
+      expect(reached.map((x) => x.allowed)).toEqual([false, true, false])
+    })
+
+    it('asks about a few refused hosts per call and only names the rest', async () => {
+      h.probeTools = [probeFetchShell()]
+      const hosts = ['a.example.com', 'b.example.com', 'c.example.com', 'd.example.com', 'e.example.com']
+      const r = await run({
+        policy: 'full-auto',
+        onApproval: (_id, decide) => decide('deny'),
+        turns: [
+          [fetchCall('f1', hosts.join(',')), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const asked = r.events
+        .filter((e) => e.type === 'tool_approval')
+        .map((e) => (e as { egressHost?: string }).egressHost)
+      expect(asked).toEqual(['a.example.com', 'b.example.com', 'c.example.com'])
+      expect(resultOf(r, 'f1')).toContain(egressHostsUnaskedNote(['d.example.com', 'e.example.com']))
+    })
+
+    it('tells an unattended run the host was refused instead of asking', async () => {
+      h.probeTools = [probeFetchShell()]
+      const r = await run({
+        policy: 'full-auto',
+        unattended: true,
+        onApproval: (_id, decide) => decide('allow'),
+        turns: [
+          [fetchCall('f1', 'registry.example.com'), { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(approvalCallIds(r)).toEqual([])
+      expect(shellSawNetwork).toBe(true)
+      expect(resultOf(r, 'f1')).toContain(egressHostUnattendedNote('registry.example.com'))
+    })
+  })
+
   describe('offline note on shell prompts (shellOffline)', () => {
     // "Allow" runs a shell command offline until the run has a shell-network grant, and
     // only "Allow for run" grants it, so the prompt carries a flag the UI turns into a
@@ -7017,6 +7219,8 @@ describe('egress hardening', () => {
     })
 
     it('leaves the full-auto network question unflagged (it asks the network question itself)', async () => {
+      // The question exists only without the proxy (egress mode "All domains").
+      h.settings.sandboxEgress = { mode: 'all' }
       needsNetRuns.length = 0
       h.probeTools = [probeNeedsNetShell()]
       const r = await run({
@@ -7132,7 +7336,8 @@ describe('egress hardening', () => {
       expect(shellSawUnattended).toBe(true)
     })
 
-    it('without the flag, full auto still asks after a network failure so --on-approval answers it', async () => {
+    it('without the flag, full auto under "All domains" still asks after a network failure so --on-approval answers it', async () => {
+      h.settings.sandboxEgress = { mode: 'all' }
       needsNetRuns.length = 0
       h.probeTools = [probeNeedsNetShell()]
       const r = await run({
@@ -7152,6 +7357,7 @@ describe('egress hardening', () => {
     })
 
     it('a headless decline keeps the hint that names --allow-shell-network', async () => {
+      h.settings.sandboxEgress = { mode: 'all' }
       needsNetRuns.length = 0
       h.probeTools = [probeNeedsNetShell()]
       const r = await run({

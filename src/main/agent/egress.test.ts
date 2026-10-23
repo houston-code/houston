@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkEgressHost, egressEndpointsForRun, resetEgressProxyForTests } from './egress'
+import { checkEgressHost, egressEndpointsForRun, registerEgressRun, resetEgressProxyForTests } from './egress'
+import type { EgressRunScope } from './egress'
 import type { StartEgressProxyOptions } from '../sandbox'
 
 afterEach(async () => {
@@ -27,6 +28,40 @@ describe('checkEgressHost', () => {
       allowed: false,
       reason: 'the domain is on the deny list'
     })
+  })
+})
+
+describe('checkEgressHost with a run scope', () => {
+  const scope = (allowed: string[] = []): EgressRunScope & { refused: string[] } => {
+    const refused: string[] = []
+    return { refused, allowed: (h) => allowed.includes(h), onRefused: (h) => void refused.push(h) }
+  }
+
+  it('lets through a host the chat allowed, and reports an unlisted one', () => {
+    const s = scope(['registry.example.com'])
+    expect(checkEgressHost('Registry.Example.com.', {}, s).allowed).toBe(true)
+    expect(checkEgressHost('other.example.com', {}, s)).toEqual({ allowed: false, reason: 'not on the allowlist' })
+    expect(s.refused).toEqual(['other.example.com'])
+  })
+
+  it('a chat grant never overrides the deny list, and a deny-listed host is not asked about', () => {
+    const s = scope(['gitlab.com'])
+    expect(checkEgressHost('gitlab.com', { sandboxEgress: { deny: ['gitlab.com'] } }, s).allowed).toBe(false)
+    expect(s.refused).toEqual([])
+  })
+
+  it('never asks about private literals, public IP literals, or single-label names', () => {
+    const s = scope(['10.0.0.8', '8.8.8.8', 'intranet'])
+    for (const host of ['10.0.0.8', '8.8.8.8', 'intranet']) {
+      expect(checkEgressHost(host, {}, s).allowed).toBe(false)
+    }
+    expect(s.refused).toEqual([])
+  })
+
+  it('consults no scope for a host the settings already allow', () => {
+    const s = scope()
+    expect(checkEgressHost('registry.npmjs.org', {}, s).allowed).toBe(true)
+    expect(s.refused).toEqual([])
   })
 })
 
@@ -105,5 +140,34 @@ describe('egressEndpointsForRun', () => {
     })
     expect(head).toContain('403')
     expect(head).toContain('EGRESS_BLOCKED')
+  })
+
+  it('integration: a request carrying a run token reaches that run, until the run releases it', async () => {
+    const endpoints = await egressEndpointsForRun({ settings: () => ({}), platform: 'darwin' })
+    const refused: string[] = []
+    const run = registerEgressRun({ allowed: () => false, onRefused: (h) => void refused.push(h) })
+    const { connect } = await import('node:net')
+    const connectWith = (token: string): Promise<string> =>
+      new Promise((resolve, reject) => {
+        const auth = Buffer.from(`houston:${token}`).toString('base64')
+        const sock = connect(endpoints!.tcpPort, '127.0.0.1', () => {
+          sock.write(
+            `CONNECT unlisted.example.com:443 HTTP/1.1\r\nHost: unlisted.example.com:443\r\nProxy-Authorization: Basic ${auth}\r\n\r\n`
+          )
+        })
+        sock.once('data', (c) => {
+          resolve(c.toString('utf8'))
+          sock.destroy()
+        })
+        sock.on('error', reject)
+      })
+    expect(await connectWith(run.token)).toContain('403')
+    expect(refused).toEqual(['unlisted.example.com'])
+    // Another token names no run: still refused, and nobody is told.
+    expect(await connectWith('0'.repeat(32))).toContain('403')
+    expect(refused).toHaveLength(1)
+    run.release()
+    expect(await connectWith(run.token)).toContain('403')
+    expect(refused).toHaveLength(1)
   })
 })

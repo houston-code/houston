@@ -350,6 +350,18 @@ export function renderApprovalPrompt(
   // The full-auto shell-network question comes after a command already failed offline.
   // It decides the chat's shell network, not the command, so frame it as a network grant
   // and "deny" as "keep offline", not "block".
+  // The egress question likewise comes after the proxy refused a host the allowlist
+  // doesn't name; it decides that one host for the chat.
+  if (ev.egressHost) {
+    const host = stripControlChars(ev.egressHost)
+    const head = paint(`A command tried to reach ${host}, which isn't on the sandbox's allowed domains.`, 'bold')
+    const note = paint(
+      '  It was blocked. Allowing it applies to shell commands in the rest of this chat, for this host only.',
+      'dim'
+    )
+    const keys = opts.picker ? '' : `\n${paint(`  [y] allow ${host} for this chat   [n] keep blocked`, 'dim')}`
+    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
+  }
   if (ev.shellNetwork) {
     const head = paint('This command could not reach the network.', 'bold')
     const note = paint(
@@ -393,8 +405,13 @@ export function renderApprovalPrompt(
  */
 export function approvalOutcome(
   decision: ToolApprovalDecision,
-  opts: { shellNetwork?: boolean; note?: string } = {}
+  opts: { shellNetwork?: boolean; egressHost?: string; note?: string } = {}
 ): string {
+  if (opts.egressHost) {
+    return decision === 'deny' || decision === 'rule-deny'
+      ? `Kept ${opts.egressHost} blocked`
+      : `Allowed ${opts.egressHost} for this chat`
+  }
   if (opts.shellNetwork) {
     if (decision === 'deny') return 'Running offline'
     return decision === 'always' ? 'Network allowed for this run' : 'Network allowed'
@@ -4077,8 +4094,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               const r = await deps.io.select({
                 title: 'Choose:',
                 // Esc is a refusal here (the safe default), so the footer says so.
-                escLabel: e.shellNetwork ? 'keep offline' : 'deny',
-                options: e.shellNetwork
+                escLabel: e.egressHost ? 'keep blocked' : e.shellNetwork ? 'keep offline' : 'deny',
+                options: e.egressHost
+                  ? [
+                      { label: `Allow ${stripControlChars(e.egressHost)} for this chat`, value: 'always' },
+                      { label: 'Keep blocked', value: 'deny' }
+                    ]
+                  : e.shellNetwork
                   ? [
                       { label: 'Allow network for this chat', value: 'always' },
                       { label: 'Keep offline', value: 'deny' }
@@ -4109,7 +4131,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               decision = parsed.decision
               note = parsed.note
             }
-            const outcome = approvalOutcome(decision, { shellNetwork: e.shellNetwork, note })
+            const outcome = approvalOutcome(decision, {
+              shellNetwork: e.shellNetwork,
+              ...(e.egressHost ? { egressHost: e.egressHost } : {}),
+              note
+            })
             deps.io.out(paint(`  ↳ ${stripControlChars(outcome)}\n`, decision === 'deny' || decision === 'rule-deny' ? 'yellow' : 'dim'))
             deps.resolveApproval(e.runId, e.callId, decision, note)
           })

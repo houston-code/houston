@@ -1523,6 +1523,46 @@ export const SHELL_NETWORK_DECLINED_NOTE =
   'chat. Do not retry it. Work offline, or tell the user which step needs the network.]'
 
 /**
+ * Told to the agent when the user allowed a host the egress proxy had refused (see
+ * offerEgressHosts in loop.ts). The refused command may be an earlier or background
+ * one, so the note names the host, not the call it is attached to.
+ */
+export function egressHostAllowedNote(host: string): string {
+  return (
+    `[note: a shell command tried to reach ${host}, which is not on the sandbox's egress allowlist, so the connection ` +
+    'was refused. The user has now allowed that host for shell commands in this chat. If running the command again ' +
+    'is safe (it did not already half-finish something you would repeat), retry it.]'
+  )
+}
+
+/** The same note when the user chose to keep the host blocked. */
+export function egressHostDeclinedNote(host: string): string {
+  return (
+    `[note: a shell command tried to reach ${host}, which is not on the sandbox's egress allowlist, so the connection ` +
+    'was refused, and the user chose to keep it blocked in this chat. Do not retry it. Work without it, or tell the ' +
+    'user which step needs it.]'
+  )
+}
+
+/** The note for a run nobody attends, where no one can allow the host mid-run. */
+export function egressHostUnattendedNote(host: string): string {
+  return (
+    `[note: a shell command tried to reach ${host}, which is not on the sandbox's egress allowlist, so the connection ` +
+    'was refused. Nobody can allow it during this run: do not retry it. Say in your final message that adding the ' +
+    'host under "Sandbox egress" in Settings would allow it.]'
+  )
+}
+
+/** Hosts refused after the per-call questions ran out: named for the agent, not asked. */
+export function egressHostsUnaskedNote(hosts: string[]): string {
+  return (
+    `[note: shell commands also tried to reach ${hosts.join(', ')}, which are not on the sandbox's egress ` +
+    'allowlist, so those connections were refused. The user was not asked about them yet; if one is needed, ' +
+    'reaching it again will ask.]'
+  )
+}
+
+/**
  * Swap the "ran without network" hint in a command's output for the user's answer to
  * the shell-network question, or append the answer when the tool added no hint.
  */

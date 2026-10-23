@@ -1,7 +1,7 @@
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import type { EgressProxyEndpoints, SandboxBackend, ShellLaunch } from './contract'
-import { egressProxyEnv } from './egress-proxy'
+import { egressProxyEnv, egressProxyUrl } from './egress-proxy'
 
 /**
  * macOS Seatbelt backend.
@@ -143,7 +143,7 @@ export const SeatbeltBackend: SandboxBackend = {
       // Proxied mode: point the toolchain at the egress proxy on the host's
       // loopback, which the loopback-only profile permits reaching directly.
       ...(mode === 'loopback' && egressProxy
-        ? { env: egressProxyEnv(`http://127.0.0.1:${egressProxy.tcpPort}`) }
+        ? { env: egressProxyEnv(egressProxyUrl(`127.0.0.1:${egressProxy.tcpPort}`, egressProxy.token)) }
         : {})
     }
   }

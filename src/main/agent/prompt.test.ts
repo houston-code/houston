@@ -276,8 +276,17 @@ describe('buildSystemPrompt', () => {
     const unattended = promptFor(toolNames({ askUser: false }))
     expect(unattended).toContain('re-running with --allow-shell-network')
     expect(unattended).not.toContain('Allow for run')
-    // The allowlist bullet next to it survives the swap.
-    expect(unattended).toContain('- Granted network is limited to an allowlist')
+    // The allowlist bullet next to it survives the swap, without the per-host question
+    // nobody is there to answer.
+    expect(unattended).toContain('- Network from run_shell is limited to an allowlist')
+    expect(unattended).not.toContain('the user is asked whether to allow that host')
+  })
+
+  it('tells an attended run full auto has proxied network, and that a refused host is asked about', () => {
+    const attended = promptFor(toolNames())
+    expect(attended).toContain('in full auto it is on from the start, limited to the allowlist below')
+    expect(attended).toContain('the user is asked whether to allow that host for the chat')
+    expect(promptFor(toolNames({ askUser: false }))).toContain('under full auto it is on, limited to the allowlist below')
   })
 
   it('lists the schedule tools by default but omits them when no scheduler is wired', () => {
@@ -362,7 +371,7 @@ describe('buildSystemPrompt', () => {
       )
     const CONFINED = 'Shell commands run inside an OS sandbox confined to the project'
     const UNCONFINED = 'This host has no OS sandbox, so run_shell commands run unconfined'
-    const EGRESS = 'Granted network is limited to an allowlist'
+    const EGRESS = 'Network from run_shell is limited to an allowlist'
 
     it('defaults to a sandboxed macOS host', () => {
       expect(buildSystemPrompt('/tmp/x')).toBe(withHost({ platform: 'darwin', sandboxBackend: 'seatbelt' }))

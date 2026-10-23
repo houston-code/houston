@@ -41,6 +41,13 @@ export interface ConversationOverride {
    * (auto-edit/ask). Drives the sandbox's network switch (RunState.shellNetworkGranted).
    */
   shellNetworkGranted: boolean
+  /**
+   * Hosts the egress proxy refused for not being on the allowlist that the user then
+   * allowed for this chat's shell commands. Exact hostnames, not their subdomains.
+   */
+  egressHosts: Set<string>
+  /** Hosts the user chose to keep blocked when asked, so later refusals don't re-ask. */
+  egressHostsDeclined: Set<string>
 }
 
 const store = new Map<string, ConversationOverride>()
@@ -52,7 +59,9 @@ export function emptyOverride(): ConversationOverride {
     unsandboxedShell: false,
     networkHosts: new Set(),
     shellNetworkDecided: false,
-    shellNetworkGranted: false
+    shellNetworkGranted: false,
+    egressHosts: new Set(),
+    egressHostsDeclined: new Set()
   }
 }
 
@@ -69,7 +78,9 @@ export function overrideForConversation(conversationId: string | undefined): Con
     unsandboxedShell: stored.unsandboxedShell,
     networkHosts: new Set(stored.networkHosts),
     shellNetworkDecided: stored.shellNetworkDecided,
-    shellNetworkGranted: stored.shellNetworkGranted
+    shellNetworkGranted: stored.shellNetworkGranted,
+    egressHosts: new Set(stored.egressHosts),
+    egressHostsDeclined: new Set(stored.egressHostsDeclined)
   }
 }
 
@@ -117,6 +128,22 @@ export function grantConversationShellNetwork(
   const cur = store.get(conversationId) ?? emptyOverride()
   cur.shellNetworkDecided = true
   if (granted) cur.shellNetworkGranted = true
+  store.set(conversationId, cur)
+}
+
+/**
+ * Record the answer to "allow this host for the chat?" (asked after the egress proxy
+ * refused a host the allowlist doesn't name) so later turns inherit it. No-op headless.
+ */
+export function recordConversationEgressHost(
+  conversationId: string | undefined,
+  host: string,
+  allowed: boolean
+): void {
+  if (!conversationId) return
+  const cur = store.get(conversationId) ?? emptyOverride()
+  if (allowed) cur.egressHosts.add(host)
+  else cur.egressHostsDeclined.add(host)
   store.set(conversationId, cur)
 }
 

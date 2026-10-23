@@ -80,6 +80,10 @@ import {
   staleWriteRefusal,
   SHELL_NETWORK_DECLINED_NOTE,
   SHELL_NETWORK_GRANTED_NOTE,
+  egressHostAllowedNote,
+  egressHostDeclinedNote,
+  egressHostUnattendedNote,
+  egressHostsUnaskedNote,
   withShellNetworkDecision,
   type DispatchAgentOptions,
   type ToolDef,
@@ -139,6 +143,7 @@ import {
   grantConversationNetworkHost,
   grantConversationOverride,
   grantConversationShellNetwork,
+  recordConversationEgressHost,
   overrideForConversation
 } from './overrides'
 import { isRewindableTurn } from '@shared/rewind'
@@ -158,7 +163,7 @@ import { isSensitiveRead } from './sensitive-paths'
 import { lspManager } from './lsp/manager'
 import { afterWrite, captureBeforeWrite, type WriteSeamTarget } from './lsp/writeSeam'
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
-import { egressEndpointsForRun } from './egress'
+import { egressEndpointsForRun, registerEgressRun } from './egress'
 import { formatFile } from './format'
 import { MAX_SUBAGENT_DEPTH, runSubAgent } from './subagent'
 import { SubagentRecorder, type SubagentHandle } from './subagentRecorder'
@@ -370,6 +375,7 @@ interface RunState {
       preview?: FileDiffPreview[]
       sandboxed?: boolean
       shellNetwork?: boolean
+      egressHost?: string
       shellOffline?: boolean
       sensitiveRead?: boolean
       sensitiveWrite?: boolean
@@ -438,6 +444,21 @@ interface RunState {
    */
   shellNetworkDecided: boolean
   /**
+   * Hosts the user allowed for this chat's shell commands after the egress proxy
+   * refused them for not being on the allowlist (exact hostnames). Read by the proxy
+   * per request through the run's egress token.
+   */
+  egressHosts: Set<string>
+  /** Hosts the user chose to keep blocked when asked; a later refusal doesn't re-ask. */
+  egressHostsDeclined: Set<string>
+  /**
+   * Hosts the proxy refused this run that the user hasn't been asked about yet. Filled
+   * from the proxy's callback, which fires whatever the command does with the refusal
+   * (a pipe, a background shell, a swallowed error), and drained after the next tool
+   * call by asking about each one.
+   */
+  egressRefused: Set<string>
+  /**
    * The live approval policy. Seeded from the run request, but mutable so a
    * change made mid-run (e.g. the user switches the mode dropdown while the
    * agent is working) takes effect on the *next* tool-permission check rather
@@ -490,6 +511,11 @@ interface RunState {
    */
   owner?: number
 }
+
+/** Refused egress hosts a run holds for questioning at once (see offerEgressHosts). */
+const MAX_EGRESS_REFUSED = 20
+/** Egress-host questions raised after one tool call; the rest are only named. */
+const MAX_EGRESS_ASKS_PER_CALL = 3
 
 const runs = new Map<string, RunState>()
 
@@ -808,6 +834,7 @@ export function pendingPromptsForConversation(conversationId: string): AgentEven
       ...(a.preview ? { preview: a.preview } : {}),
       ...(a.sandboxed === false ? { sandboxed: false } : {}),
       ...(a.shellNetwork ? { shellNetwork: true } : {}),
+      ...(a.egressHost ? { egressHost: a.egressHost } : {}),
       ...(a.shellOffline ? { shellOffline: true } : {}),
       ...(a.sensitiveRead ? { sensitiveRead: true } : {}),
       ...(a.sensitiveWrite ? { sensitiveWrite: true } : {}),
@@ -1115,6 +1142,9 @@ export async function startRun(
     shellUnsandboxedOverride: seededOverride.unsandboxedShell,
     shellNetworkGranted: seededOverride.shellNetworkGranted || seededShellNetwork,
     shellNetworkDecided: seededOverride.shellNetworkDecided || seededShellNetwork,
+    egressHosts: seededOverride.egressHosts,
+    egressHostsDeclined: seededOverride.egressHostsDeclined,
+    egressRefused: new Set(),
     policy: req.approvalPolicy,
     announcedPolicy: req.approvalPolicy,
     ...(isReasoningEffort(req.reasoningEffort) ? { effort: req.reasoningEffort } : {}),
@@ -1143,6 +1173,9 @@ export async function startRun(
   // the `fail` call that emitted it) or the user's Stop. Logged, and recorded on the
   // turn when the run left no reply, by the `finally` below.
   let ended: { cls: RunEndClass; message?: string; detail?: string } | undefined
+  // Drops the run's egress token (see registerEgressRun) when the run ends, however
+  // it ends, so the proxy stops honoring this chat's host grants for a dead run.
+  let releaseEgressRun: (() => void) | undefined
   // The class (and log detail) of the error `emit` is about to send; set by `fail`.
   let failing: { cls: RunEndClass; detail?: string } | undefined
   // The model serving the run, for the log line; moves with a fallback hop.
@@ -1718,6 +1751,32 @@ export async function startRun(
     } catch {
       egressUnavailable = true
     }
+    // Tag this run's proxied commands with a token, so the proxy can let through the
+    // hosts this chat allowed and tell this run about the ones it refused.
+    if (egressProxy) {
+      const registered = registerEgressRun({
+        allowed: (host) => run.egressHosts.has(host),
+        onRefused: (host) => {
+          // Bounded, so a command that walks many hosts can't grow it without limit.
+          if (!run.egressHostsDeclined.has(host) && run.egressRefused.size < MAX_EGRESS_REFUSED) {
+            run.egressRefused.add(host)
+          }
+        }
+      })
+      releaseEgressRun = registered.release
+      egressProxy = { ...egressProxy, token: registered.token }
+    }
+    // Whether shell commands reach the network right now (read per call, so a mid-run
+    // grant or policy change applies to the next command). Full auto has it from the
+    // start when granted network is proxied: the allowlist bounds where it can go, and
+    // a refused host gets its own question (offerEgressHosts). Under egress mode "All
+    // domains" there is no proxy, so unrestricted network still waits for the user's
+    // grant, as does a chat whose user declined shell network. Never when the proxy
+    // failed to start: no grant may fall back to unrestricted egress.
+    const shellNetworkOn = (): boolean =>
+      !egressUnavailable &&
+      (run.shellNetworkGranted ||
+        (run.policy === 'full-auto' && egressProxy !== undefined && !run.shellNetworkDecided))
 
     // Resolve `gh` once for the run; the GitHub tools fall back to their own
     // resolution (and a guiding error) when it isn't installed.
@@ -2396,7 +2455,7 @@ export async function startRun(
       tool: ToolDef,
       output: string
     ): Promise<string> => {
-      if (run.policy !== 'full-auto' || !isSandboxed() || run.shellNetworkGranted || egressUnavailable) {
+      if (run.policy !== 'full-auto' || !isSandboxed() || shellNetworkOn() || egressUnavailable) {
         return output
       }
       const unattended = req.unattended === true
@@ -2426,6 +2485,53 @@ export async function startRun(
       return unattended ? output : withShellNetworkDecision(output, SHELL_NETWORK_DECLINED_NOTE)
     }
 
+    // Ask about each host the egress proxy refused since the last tool call for not
+    // being on the allowlist: whether this chat's shell commands may reach it. Asked
+    // here, after a tool call, because the proxy is what saw the refusal: the command
+    // may have piped its output away, run in the background, or swallowed the error.
+    // The answer is told to the agent in this call's result (which may not be the
+    // command that was refused). A run nobody attends just tells the agent.
+    const offerEgressHosts = async (
+      call: ToolCall,
+      execArgs: Record<string, unknown>,
+      tool: ToolDef,
+      output: string
+    ): Promise<string> => {
+      const hosts = [...run.egressRefused].filter((h) => !run.egressHosts.has(h) && !run.egressHostsDeclined.has(h))
+      run.egressRefused.clear()
+      const notes: string[] = []
+      // A few questions per call at most: a command that tried many hosts gets them
+      // named instead, and any it tries again is asked about after a later call. (An
+      // unattended run asks nothing, so each host just gets its note.)
+      const unasked = req.unattended === true ? [] : hosts.splice(MAX_EGRESS_ASKS_PER_CALL)
+      for (const host of hosts) {
+        if (abort.signal.aborted) break
+        if (req.unattended === true) {
+          notes.push(egressHostUnattendedNote(host))
+          continue
+        }
+        const prompt = {
+          name: call.name,
+          summary: tool.summarize(execArgs),
+          args: execArgs,
+          kind: tool.kind,
+          egressHost: host
+        }
+        run.pendingApprovals.set(call.id, prompt)
+        emit({ type: 'tool_approval', callId: call.id, ...prompt })
+        const { decision } = await waitForApproval(run, call.id)
+        run.pendingApprovals.delete(call.id)
+        // A stopped run resolves the card as a deny; that is not the user's answer.
+        if (abort.signal.aborted) break
+        const allow = decision !== 'deny' && decision !== 'rule-deny'
+        ;(allow ? run.egressHosts : run.egressHostsDeclined).add(host)
+        recordConversationEgressHost(conversationId, host, allow)
+        notes.push(allow ? egressHostAllowedNote(host) : egressHostDeclinedNote(host))
+      }
+      if (unasked.length) notes.push(egressHostsUnaskedNote(unasked))
+      return notes.length ? `${output}\n${notes.join('\n')}` : output
+    }
+
     // Shared tool-execution context. `run.policy` and `run.shellNetworkGranted` are
     // read at call time so a mid-run policy change or a network-consent decision earlier
     // in the turn takes effect. `allowNetwork` governs the shell sandbox's network
@@ -2442,7 +2548,7 @@ export async function startRun(
       workspace,
       roots,
       lsp: lspManager,
-      allowNetwork: run.shellNetworkGranted && !egressUnavailable,
+      allowNetwork: shellNetworkOn(),
       egressProxy,
       signal: abort.signal,
       ...(conversationId ? { conversationId } : {}),
@@ -2503,7 +2609,7 @@ export async function startRun(
             gatherReadinessFacts(workspace, plan, {
               network: !isSandboxed()
                 ? 'ungated'
-                : run.shellNetworkGranted && !egressUnavailable
+                : shellNetworkOn()
                   ? 'granted'
                   : req.unattended === true
                     ? 'unattended'
@@ -4160,7 +4266,7 @@ export async function startRun(
             const shellOffline =
               tool.kind === 'shell' &&
               isSandboxed() &&
-              !run.shellNetworkGranted &&
+              !shellNetworkOn() &&
               !egressUnavailable
 
             // An `ask` mandated by the managed policy or the project guardrails can
@@ -4328,6 +4434,8 @@ export async function startRun(
                   )
                 }
               }
+              // Outside the cache: the note belongs to this moment, not to the read.
+              if (run.egressRefused.size > 0) output = await offerEgressHosts(call, execArgs, tool, output)
               // PostToolUse hooks run after the tool; their output is shown to the agent.
               const post = await runHooks(
                 hooks,
@@ -4505,6 +4613,7 @@ export async function startRun(
     if (conversationId && storedAnnounced !== undefined && storedAnnounced !== run.announcedPolicy) {
       setAnnouncedPolicy(conversationId, run.announcedPolicy)
     }
+    releaseEgressRun?.()
     runs.delete(runId)
     // Only clear the conversation's slot if it still points at this run, so a
     // (guarded-against, but defensive) later run can't have its entry removed.
