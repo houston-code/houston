@@ -13,4 +13,5 @@
 const DOCS_BASE = 'https://github.com/houston-code/houston/blob/main'
 
 export const LICENSE_URL = `${DOCS_BASE}/LICENSE`
-export const PRIVACY_URL = `${DOCS_BASE}/docs/PRIVACY.md`
+/** The site's privacy page, generated from docs/PRIVACY.md (website/tools/build-legal.mjs). */
+export const PRIVACY_URL = 'https://houstoncode.ai/privacy'

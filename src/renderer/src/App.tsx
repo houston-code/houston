@@ -771,7 +771,7 @@ export default function App(): JSX.Element {
   // created lazily on the first message (see sendNow), so the worktree controls
   // are picked first. New worktree is the default for git repos.
   const enterNewChat = useCallback(
-    (ws: string) => {
+    (ws: string | null) => {
       setLastWorkspace(ws)
       setCurrentId(null)
       setChatSettings(null)
@@ -781,9 +781,11 @@ export default function App(): JSX.Element {
     [chat]
   )
 
-  const onNewChat = useCallback(async () => {
-    const ws = workspace ?? (await window.api.pickWorkspace())
-    if (ws) enterNewChat(ws)
+  // New chat never opens the folder picker: with no folder yet it lands on the empty
+  // new-chat screen, where the setup checklist and the composer's folder button ask
+  // for one.
+  const onNewChat = useCallback(() => {
+    enterNewChat(workspace)
   }, [workspace, enterNewChat])
 
   const onChangeWorkspace = useCallback(async () => {
