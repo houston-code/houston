@@ -315,7 +315,7 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
  * outside state (v10 checks whether the desktop app has run) must be decided once, not
  * re-run on a later launch after that state has changed.
  */
-function loadFromDisk(): { settings: AppSettings; upgraded: boolean } {
+function loadFromDisk(): { settings: AppSettings; upgraded: boolean; unreadable?: boolean } {
   const path = settingsPath()
   // Only a missing file is a fresh install. An unreadable one belongs to an existing
   // install, which gets the plain defaults rather than the fresh-install mode.
@@ -325,7 +325,7 @@ function loadFromDisk(): { settings: AppSettings; upgraded: boolean } {
     const fromVersion = typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 0
     return { settings: migrate(parsed), upgraded: fromVersion < SETTINGS_SCHEMA_VERSION }
   } catch {
-    return { settings: defaultSettings(), upgraded: false }
+    return { settings: defaultSettings(), upgraded: false, unreadable: true }
   }
 }
 
@@ -482,27 +482,45 @@ function withKeyFlags(settings: AppSettings): AppSettings {
 }
 
 export function getSettings(): AppSettings {
-  // Another Houston process saved settings since this one last read or wrote them: read
-  // them again. Otherwise each process kept its own copy until restart, so a rule
-  // removed in the desktop app still applied in a running terminal session, and the
-  // next save from either one wrote its stale copy over what the other had saved.
-  // Every read-modify-write here goes through this read, so it starts from the file.
-  const reloading = cache !== null && fileStamp() !== cacheStamp
-  if (reloading) cache = null
-  if (!cache) {
+  if (cache) {
+    // Another Houston process saved settings since this one last read or wrote them:
+    // read them again. Otherwise each process kept its own copy until restart, so a
+    // rule removed in the desktop app still applied in a running terminal session, and
+    // the next save from either one wrote its stale copy over what the other had saved.
+    // Every read-modify-write here goes through this read, so it starts from the file.
+    const stamp = fileStamp()
+    if (stamp === cacheStamp) return withKeyFlags(cache)
     const loaded = loadFromDisk()
-    const { settings, migrated } = extractHeaderSecrets(loaded.settings)
-    cache = settings
-    cacheStamp = fileStamp()
-    // A legacy settings.json with cleartext header values: rewrite it now (0600, values
-    // stripped) so the plaintext doesn't linger on disk until the next explicit save.
-    // Likewise save a schema upgrade, so its one-time decisions stick.
-    if (migrated || loaded.upgraded) persist(cache)
+    if (loaded.unreadable) {
+      // A file that no longer parses (a hand edit mid-typo) is not a change to adopt:
+      // keep what this process has, rather than the defaults, which its next save
+      // would write over everything. Read again once the file changes.
+      cacheStamp = stamp
+      return withKeyFlags(cache)
+    }
+    const fresh = adopt(loaded, stamp)
     // What follows settings (the native menu's recents and shortcuts) follows a change
     // made elsewhere too.
-    if (reloading) for (const listener of settingsListeners) listener(cache)
+    for (const listener of settingsListeners) listener(fresh)
+    return withKeyFlags(fresh)
   }
-  return withKeyFlags(cache)
+  const stamp = fileStamp()
+  return withKeyFlags(adopt(loadFromDisk(), stamp))
+}
+
+/**
+ * Make settings read from disk the cache. `stamp` is the file as it was before the
+ * read, so a save landing mid-read is picked up by the next one rather than missed.
+ */
+function adopt(loaded: ReturnType<typeof loadFromDisk>, stamp: string): AppSettings {
+  const { settings, migrated } = extractHeaderSecrets(loaded.settings)
+  cache = settings
+  cacheStamp = stamp
+  // A legacy settings.json with cleartext header values: rewrite it now (0600, values
+  // stripped) so the plaintext doesn't linger on disk until the next explicit save.
+  // Likewise save a schema upgrade, so its one-time decisions stick.
+  if (migrated || loaded.upgraded) persist(settings)
+  return settings
 }
 
 const settingsListeners = new Set<(settings: AppSettings) => void>()

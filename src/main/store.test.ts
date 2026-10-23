@@ -587,6 +587,18 @@ describe('two Houston processes sharing settings.json', () => {
     expect(JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8')).permissionRules).toEqual([])
   })
 
+  it('keeps its settings when the file stops parsing, and reads it again once fixed', async () => {
+    const rule: PermissionRule = { action: 'deny', tool: 'run_shell', match: 'rm -rf *' }
+    seed([rule])
+    const store = await loadStore()
+    expect(store.getSettings().permissionRules).toEqual([rule])
+    writeFileSync(join(state.userData, 'settings.json'), '{ "permissionRules": [', 'utf8')
+    // Not the defaults: a save from here would otherwise write them over everything.
+    expect(store.getSettings().permissionRules).toEqual([rule])
+    seed([])
+    expect(store.getSettings().permissionRules).toEqual([])
+  })
+
   it('tells its listeners when the other process changed settings', async () => {
     seed([])
     const [app, terminal] = await twoProcesses()
