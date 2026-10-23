@@ -131,12 +131,17 @@ import {
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
 import { Icon } from './components/Icon'
+import { CommandPalette } from './components/CommandPalette'
+import { FindBar } from './components/FindBar'
 import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
 import type { WhatsNew } from '@shared/update'
 
 // These overlays aren't on the initial render path, so load them as separate
 // chunks fetched on first open instead of bloating the main bundle. SettingsModal
-// alone is the largest component in the renderer.
+// alone is the largest component in the renderer. The command palette and the find
+// bar are imported above instead: they open on a keystroke and are typed into at
+// once, and while a lazy chunk loaded on first open, the next keys went to the
+// message box (and Enter sent them as a message).
 const DoctorModal = lazy(() =>
   import('./components/DoctorModal').then((m) => ({ default: m.DoctorModal }))
 )
@@ -162,10 +167,6 @@ const WhatsNewModal = lazy(() =>
 const ShortcutsHelp = lazy(() =>
   import('./components/ShortcutsHelp').then((m) => ({ default: m.ShortcutsHelp }))
 )
-const CommandPalette = lazy(() =>
-  import('./components/CommandPalette').then((m) => ({ default: m.CommandPalette }))
-)
-const FindBar = lazy(() => import('./components/FindBar').then((m) => ({ default: m.FindBar })))
 
 /** Built-in slash commands, derived from the shared catalog (custom ones are
  * loaded from the workspace). Same source the TUI and the agent's product
@@ -2503,9 +2504,7 @@ export default function App(): JSX.Element {
         />
 
         {findOpen && (
-          <Suspense fallback={null}>
-            <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} focusRequest={findRequest} />
-          </Suspense>
+          <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} focusRequest={findRequest} />
         )}
 
         {chat.items.length === 0 ? (
