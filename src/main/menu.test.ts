@@ -15,6 +15,7 @@ vi.mock('electron', () => {
 import {
   appMenuTemplate,
   bindingToAccelerator,
+  normalizeMenuState,
   recentFolderLabel,
   resolveCloseAction,
   setTerminalFocused,
@@ -76,18 +77,30 @@ describe('Help menu', () => {
   const itemLabels = (menu: { submenu?: unknown }): string[] =>
     ((menu.submenu ?? []) as { label?: string }[]).map((i) => i.label ?? '')
 
-  it.each([true, false])('is the last menu: the tour, then the guide and issue links (isMac=%s)', (isMac) => {
+  it.each([true, false])('is the last menu: shortcuts and the tour, then the guide and issue links (isMac=%s)', (isMac) => {
     const template = appMenuTemplate(isMac)
     const help = template[template.length - 1]
     // role 'help' is what gives macOS its native menu search field.
     expect(help.role).toBe('help')
     expect(template.filter((m) => m.role === 'help')).toHaveLength(1)
-    expect(itemLabels(help).slice(0, 4)).toEqual(['Take the Tour…', '', 'Houston Guide', 'Report an Issue'])
+    expect(itemLabels(help).slice(0, 5)).toEqual([
+      'Keyboard Shortcuts',
+      'Take the Tour…',
+      '',
+      'Houston Guide',
+      'Report an Issue'
+    ])
   })
 
   it('carries only the tour and the links on macOS, where share and updates live in the app menu', () => {
     const help = appMenuTemplate(true).at(-1)!
-    expect(itemLabels(help)).toEqual(['Take the Tour…', '', 'Houston Guide', 'Report an Issue'])
+    expect(itemLabels(help)).toEqual([
+      'Keyboard Shortcuts',
+      'Take the Tour…',
+      '',
+      'Houston Guide',
+      'Report an Issue'
+    ])
   })
 
   it.each([true, false])('Take the Tour… asks the renderer to replay the tips (isMac=%s)', (isMac) => {
@@ -129,16 +142,17 @@ describe('File menu', () => {
   it('lists the chat items above Close on every platform', () => {
     for (const mac of [true, false]) {
       const labels = fileMenu(appMenuTemplate(mac, ctx)).map((i) => i.label ?? i.role ?? i.type)
-      expect(labels.slice(0, 7)).toEqual([
+      expect(labels.slice(0, 8)).toEqual([
         'New Chat',
         'New Chat in Another Folder…',
+        'New Side Chat',
         'Open Recent',
         'separator',
         'Import Chat…',
         'Export Chat',
         'separator'
       ])
-      expect(labels[7]).toBe('Close')
+      expect(labels[8]).toBe('Close')
       expect(labels.includes('quit')).toBe(!mac)
     }
   })
@@ -168,10 +182,12 @@ describe('File menu', () => {
     expect(item(items, 'New Chat in Another Folder…').accelerator).toBeUndefined()
   })
 
-  it('greys out Export Chat when no chat is open', () => {
+  it('greys out Export Chat and New Side Chat when no chat is open', () => {
     expect(item(fileMenu(appMenuTemplate(true, ctx)), 'Export Chat').enabled).toBe(true)
+    expect(item(fileMenu(appMenuTemplate(true, ctx)), 'New Side Chat').enabled).toBe(true)
     const none = fileMenu(appMenuTemplate(true, { ...ctx, hasConversation: false }))
     expect(item(none, 'Export Chat').enabled).toBe(false)
+    expect(item(none, 'New Side Chat').enabled).toBe(false)
     expect(item(none, 'Export Chat').submenu!.map((i) => i.label)).toEqual([
       'As JSON…',
       'As HTML…'
@@ -223,5 +239,161 @@ describe('recentFolderLabel', () => {
   it('escapes & on Windows/Linux, where it marks a mnemonic', () => {
     expect(recentFolderLabel('/srv/R&D', false, '/home/x')).toBe('/srv/R&&D')
     expect(recentFolderLabel('/srv/R&D', true, '/home/x')).toBe('/srv/R&D')
+  })
+})
+
+describe('Edit, View, and Go menus', () => {
+  type Item = {
+    label?: string
+    role?: string
+    type?: string
+    accelerator?: string
+    registerAccelerator?: boolean
+    enabled?: boolean
+    click?: () => void
+    submenu?: Item[]
+  }
+  const menu = (template: unknown[], label: string): Item[] =>
+    ((template as Item[]).find((m) => m.label === label)?.submenu ?? []) as Item[]
+  const names = (items: Item[]): string[] => items.map((i) => i.label ?? i.role ?? i.type ?? '')
+  const item = (items: Item[], label: string): Item => {
+    const found = items.find((i) => i.label === label)
+    expect(found, `missing "${label}"`).toBeDefined()
+    return found!
+  }
+  const ctx = { recentWorkspaces: [] as string[], hasConversation: true, hasWorkspace: true }
+
+  it('orders the menus File, Edit, View, Go, Window, Help on every platform', () => {
+    expect(appMenuTemplate(true, ctx).map((m) => m.label ?? m.role)).toEqual([
+      'Houston',
+      'File',
+      'Edit',
+      'View',
+      'Go',
+      'Window',
+      'help'
+    ])
+    expect(appMenuTemplate(false, ctx).map((m) => m.label ?? m.role)).toEqual([
+      'File',
+      'Edit',
+      'View',
+      'Go',
+      'Window',
+      'help'
+    ])
+  })
+
+  it("keeps each platform's standard Edit items and adds Find in Chat", () => {
+    expect(names(menu(appMenuTemplate(true, ctx), 'Edit'))).toEqual([
+      'undo',
+      'redo',
+      'separator',
+      'cut',
+      'copy',
+      'paste',
+      'pasteAndMatchStyle',
+      'delete',
+      'selectAll',
+      'separator',
+      'Find in Chat…',
+      'Speech'
+    ])
+    expect(names(menu(appMenuTemplate(false, ctx), 'Edit'))).toEqual([
+      'undo',
+      'redo',
+      'separator',
+      'cut',
+      'copy',
+      'paste',
+      'delete',
+      'separator',
+      'selectAll',
+      'separator',
+      'Find in Chat…'
+    ])
+    expect(item(menu(appMenuTemplate(true, ctx), 'Edit'), 'Find in Chat…')).toMatchObject({
+      accelerator: 'CmdOrCtrl+F',
+      registerAccelerator: false
+    })
+  })
+
+  it('lists the panels above the standard reload, zoom, and full-screen items', () => {
+    expect(names(menu(appMenuTemplate(true, ctx), 'View'))).toEqual([
+      'Command Palette…',
+      'Show Sidebar',
+      'separator',
+      'Show Terminal',
+      'Show Background Tasks',
+      'Show Preview',
+      'Show Side Chat',
+      'Show Changes',
+      'Show Files',
+      'separator',
+      'reload',
+      'forceReload',
+      'toggleDevTools',
+      'separator',
+      'resetZoom',
+      'zoomIn',
+      'zoomOut',
+      'separator',
+      'togglefullscreen'
+    ])
+  })
+
+  it('reads Hide for each open panel and sends a toggle for it', () => {
+    const view = menu(
+      appMenuTemplate(true, {
+        ...ctx,
+        open: { sidebar: true, terminal: true, tasks: true, preview: false, 'side-chat': true }
+      }),
+      'View'
+    )
+    for (const label of ['Hide Sidebar', 'Hide Terminal', 'Hide Background Tasks', 'Show Preview', 'Hide Side Chat'])
+      item(view, label)
+    item(view, 'Hide Terminal').click!()
+    expect(sentCommands.at(-1)).toEqual({ type: 'toggle-panel', panel: 'terminal' })
+    expect(item(view, 'Hide Terminal')).toMatchObject({ accelerator: 'Ctrl+`', registerAccelerator: false })
+    expect(item(view, 'Hide Sidebar').accelerator).toBe('CmdOrCtrl+B')
+  })
+
+  it('greys out the side chat without a chat, and Changes and Files without a folder', () => {
+    const view = menu(appMenuTemplate(true, { recentWorkspaces: [], hasConversation: false }), 'View')
+    expect(item(view, 'Show Side Chat').enabled).toBe(false)
+    expect(item(view, 'Show Changes').enabled).toBe(false)
+    expect(item(view, 'Show Files').enabled).toBe(false)
+    const ready = menu(appMenuTemplate(true, ctx), 'View')
+    expect(item(ready, 'Show Changes').enabled).toBe(true)
+  })
+
+  it('moves between chats from Go, with the renderer-owned chords shown', () => {
+    const go = menu(appMenuTemplate(false, ctx), 'Go')
+    expect(names(go)).toEqual(['Previous Chat', 'Next Chat', 'separator', 'Search Chats…', 'Switch Model…'])
+    expect(item(go, 'Next Chat')).toMatchObject({ accelerator: 'Ctrl+Tab', registerAccelerator: false })
+    expect(item(go, 'Previous Chat').accelerator).toBe('Ctrl+Shift+Tab')
+    expect(item(go, 'Switch Model…').accelerator).toBe('CmdOrCtrl+Shift+M')
+    item(go, 'Previous Chat').click!()
+    expect(sentCommands.at(-1)).toEqual({ type: 'cycle-chat', delta: -1 })
+  })
+
+  it('follows a rebound shortcut in the new menus too', () => {
+    const go = menu(appMenuTemplate(true, { ...ctx, keybindings: { 'next-chat': 'mod+alt+ArrowRight' } }), 'Go')
+    expect(item(go, 'Next Chat').accelerator).toBe('CmdOrCtrl+Alt+Right')
+  })
+})
+
+describe('normalizeMenuState', () => {
+  it('reads anything but true as closed, and fills in every panel', () => {
+    expect(normalizeMenuState(undefined)).toEqual({
+      hasConversation: false,
+      hasWorkspace: false,
+      open: { sidebar: false, terminal: false, tasks: false, preview: false, 'side-chat': false }
+    })
+    const odd = { hasConversation: 'yes', open: { terminal: 1, sidebar: true, bogus: true } }
+    expect(normalizeMenuState(odd as never)).toEqual({
+      hasConversation: false,
+      hasWorkspace: false,
+      open: { sidebar: true, terminal: false, tasks: false, preview: false, 'side-chat': false }
+    })
   })
 })

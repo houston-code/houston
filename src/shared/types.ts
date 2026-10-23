@@ -531,10 +531,38 @@ export type MenuCommand =
   | { type: 'export-chat'; format: 'json' | 'html' }
   /** Help → Take the Tour…: replay the getting-started tips. */
   | { type: 'take-tour' }
+  /** File → New Side Chat: open the side chat on a fresh, empty thread. */
+  | { type: 'new-side-chat' }
+  /** View → Show/Hide …: open or close a panel. */
+  | { type: 'toggle-panel'; panel: MenuPanel }
+  /** View → Show Changes / Show Files: open that dialog. */
+  | { type: 'show-changes' }
+  | { type: 'show-files' }
+  | { type: 'command-palette' }
+  /** Edit → Find in Chat…: open the find bar. */
+  | { type: 'find-in-chat' }
+  /** Go → Previous / Next Chat: step through the chat list. */
+  | { type: 'cycle-chat'; delta: 1 | -1 }
+  /** Go → Search Chats…: focus the sidebar's search field. */
+  | { type: 'search-chats' }
+  | { type: 'switch-model' }
+  /** Help → Keyboard Shortcuts. */
+  | { type: 'show-shortcuts' }
 
-/** Renderer UI state the native menu reflects (Export is greyed out with no chat open). */
+/** The panels the View menu shows and hides. */
+export type MenuPanel = 'sidebar' | 'terminal' | 'tasks' | 'preview' | 'side-chat'
+
+/**
+ * Renderer UI state the native menu reflects: Export and the side-chat items are
+ * greyed out with no chat open, Changes and Files with no folder, and each panel's
+ * View item reads Show or Hide. Only `hasConversation` is required, so a partial
+ * report (or an older renderer) falls back to "closed" for the rest.
+ */
 export interface MenuState {
   hasConversation: boolean
+  hasWorkspace?: boolean
+  /** The panels open right now. */
+  open?: Partial<Record<MenuPanel, boolean>>
 }
 
 export interface AppSettings {

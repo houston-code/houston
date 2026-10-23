@@ -40,6 +40,8 @@ export interface SidebarProps {
   groups: ChatGroup[]
   search: string
   onSearch: (query: string) => void
+  /** Bumped (Go → Search Chats…) to move focus into the search field. */
+  focusSearchSignal?: number
   currentId: string | null
   /** Whether the sidebar is collapsed to a thin rail. */
   collapsed: boolean
@@ -957,6 +959,11 @@ const NO_PARENTS: ReadonlySet<string> = new Set()
 
 export function Sidebar(props: SidebarProps): JSX.Element {
   const { conversations, groups, currentId } = props
+  const searchRef = useRef<HTMLInputElement>(null)
+  // Runs after the render that un-collapses the sidebar, so the field exists by now.
+  useEffect(() => {
+    if (props.focusSearchSignal) searchRef.current?.focus()
+  }, [props.focusSearchSignal])
   const shortcut = props.toggleShortcut ? ` (${props.toggleShortcut})` : ''
   // A chat wants attention when it waits on the user or has something unseen.
   const wantsAttention = (id: string): boolean => {
@@ -1042,6 +1049,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
 
       <div className="sidebar__searchrow">
         <input
+          ref={searchRef}
           className="sidebar__search"
           type="search"
           placeholder="Search chats…"

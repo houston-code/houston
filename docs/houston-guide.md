@@ -2181,7 +2181,8 @@ checkout.
 - **Export** as JSON or self-contained HTML, and **import** from either. An HTML export
   from an older version brings back only the chat text.
 - **The File menu** starts a new chat (⌘N), a new chat in another folder (⇧⌘N), or one
-  in a recent folder (**Open Recent**), and imports or exports chats.
+  in a recent folder (**Open Recent**), starts a fresh side chat for the open chat
+  (**New Side Chat**), and imports or exports chats.
 
 ### Undoing a turn's file changes
 
@@ -2197,10 +2198,27 @@ be reverted with one click (and re-applied after a revert).
 
 To go back further than the last turn, see "Rewinding to an earlier message".
 
+## Edit, View, and Go menus
+
+The desktop app's menus list what its shortcuts do, with the shortcut beside each
+item. A shortcut you rebind in Settings shows up in the menus too.
+
+- **Edit** has the usual editing commands for your platform, plus **Find in Chat…**
+  (⌘F).
+- **View** opens the **Command Palette…** (⌘K) and shows or hides the sidebar (⌘B),
+  the terminal (⌃`), **Background Tasks**, **Preview**, and the **Side Chat**. Each
+  item reads **Show** or **Hide** by whether that panel is open. **Show Changes** and
+  **Show Files** open those views of the project folder. Zoom and full screen are
+  below them.
+- **Go** moves to the **Previous Chat** (⌃⇧Tab) or **Next Chat** (⌃Tab), puts the
+  cursor in the sidebar's search field (**Search Chats…**), and opens the model list
+  (**Switch Model…**, ⇧⌘M).
+
 ## Help menu
 
 The desktop app's **Help** menu is last in the menu bar on every platform.
 
+- **Keyboard Shortcuts** (⌘/) lists every shortcut.
 - **Houston Guide** opens this guide on houstoncode.ai/docs, written for the latest
   release.
 - **Report an Issue** opens a new GitHub issue.
