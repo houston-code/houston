@@ -304,13 +304,28 @@ const plain = (html) =>
     .replace(/\s+/g, " ")
     .trim();
 
-// A meta description from a page's first paragraph (or list item, for a page that opens
-// with a list), cut at a word near 160 characters.
+// A meta description (also the topic's blurb on the docs index) from a page's first
+// paragraph, or its first list item for a page that opens with a list. It ends at a
+// sentence: the whole paragraph when it fits in 160 characters, else the sentences that
+// do, leaving off a last one that only introduces a list ("...tells you:"). A sentence
+// break under 40 characters in (a bold lead-in like "Compaction.") is too short to stand
+// alone. With no usable break, the text is cut at a word, back before an unclosed
+// parenthesis and any trailing comma, and ends in "...".
 export function describe(html) {
   const first = html.match(/<p>([\s\S]*?)<\/p>/) || html.match(/<li>([\s\S]*?)<\/li>/);
   const text = first ? plain(first[1]) : "";
-  if (text.length <= 160) return text;
-  return text.slice(0, 157).replace(/\s+\S*$/, "") + "...";
+  const fits = text.length <= 160;
+  if (fits && !text.endsWith(":")) return text;
+  // . ! or ? before a space and a capital, quote, or parenthesis; "e.g. Ubuntu" is no break.
+  const ends = [...text.matchAll(/(?<!\b(?:e\.g|i\.e|vs))[.!?](?= +["(A-Z])/g)]
+    .map((m) => m.index + 1)
+    .filter((end) => end >= 40 && end <= 160);
+  if (ends.length) return text.slice(0, ends.at(-1));
+  if (fits) return text;
+  let cut = text.slice(0, 157).replace(/\s+\S*$/, "");
+  const open = cut.lastIndexOf("(");
+  if (open > cut.lastIndexOf(")")) cut = cut.slice(0, open);
+  return cut.replace(/[\s,;:]+$/, "") + "...";
 }
 
 const canonical = (slug) => `${ORIGIN}/docs/${slug === "index" ? "" : slug}`;

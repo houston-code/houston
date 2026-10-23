@@ -82,10 +82,10 @@
         <section class="docs-group" aria-labelledby="getting-started">
           <h2 id="getting-started">Getting started</h2>
           <ul class="docs-topics">
-            <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a><p>On a first launch the welcome screen shows a three-step Get started checklist: connect a model (paste an API key for Anthropic, OpenAI, or Gemini, which is...</p></li>
-            <li><a href="/docs/what-houston-is">What Houston is</a><p>Houston is a coding agent that runs on the user's own machine and works inside a single project directory. It brings its own model connections (the user...</p></li>
-            <li><a href="/docs/clients">Clients (where Houston runs)</a><p>All clients share one agent core, so tools, permissions, and skills behave the same across them. Some surfaces are desktop-only (the preview panel, spawning...</p></li>
-            <li><a href="/docs/models">Models</a><p>Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in Settings,...</p></li>
+            <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a><p>On a first launch the welcome screen shows a three-step Get started checklist: connect a model...</p></li>
+            <li><a href="/docs/what-houston-is">What Houston is</a><p>Houston is a coding agent that runs on the user's own machine and works inside a single project directory.</p></li>
+            <li><a href="/docs/clients">Clients (where Houston runs)</a><p>All clients share one agent core, so tools, permissions, and skills behave the same across them.</p></li>
+            <li><a href="/docs/models">Models</a><p>Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime.</p></li>
             <li><a href="/docs/settings-and-keys">Settings and keys</a><p>Settings covers providers and keys, web search, approval mode and permission rules, hooks, MCP servers, additional folders, context threshold, appearance...</p></li>
           </ul>
         </section>
@@ -93,25 +93,25 @@
           <h2 id="working-with-the-agent">Working with the agent</h2>
           <ul class="docs-topics">
             <li><a href="/docs/the-terminal-composer">The terminal composer</a><p>The interactive terminal's composer is a full line editor, so a message can be as long as it needs to be.</p></li>
-            <li><a href="/docs/slash-commands">Slash commands</a><p>Type / in the composer for the command menu. In the terminal it appears under what you are typing and filters as you go, listing each command with what it...</p></li>
-            <li><a href="/docs/typing-while-it-works">Typing while it works (steering)</a><p>You do not have to wait for a turn to finish before saying the next thing. Type while the agent works: what you type appears on the status line, and Enter...</p></li>
-            <li><a href="/docs/how-long-a-turn-runs">How long a turn runs</a><p>A turn has a step budget (40 by default; each model reply is one step). Near the end the agent is told to wrap up, so it finishes the edit in hand or...</p></li>
-            <li><a href="/docs/how-hard-the-model-thinks">How hard the model thinks (/reasoning)</a><p>/reasoning shows the current thinking effort; /reasoning high (or off, low, medium, xhigh) sets it. It applies to every model that supports reasoning, and...</p></li>
-            <li><a href="/docs/being-told-when-it-needs-you">Being told when it needs you</a><p>A long run can block on an approval, a question, or a plan, and then it is just waiting. So the interactive terminal tells you:</p></li>
+            <li><a href="/docs/slash-commands">Slash commands</a><p>Type / in the composer for the command menu.</p></li>
+            <li><a href="/docs/typing-while-it-works">Typing while it works (steering)</a><p>You do not have to wait for a turn to finish before saying the next thing.</p></li>
+            <li><a href="/docs/how-long-a-turn-runs">How long a turn runs</a><p>A turn has a step budget (40 by default; each model reply is one step).</p></li>
+            <li><a href="/docs/how-hard-the-model-thinks">How hard the model thinks (/reasoning)</a><p>/reasoning shows the current thinking effort; /reasoning high (or off, low, medium, xhigh) sets it.</p></li>
+            <li><a href="/docs/being-told-when-it-needs-you">Being told when it needs you</a><p>A long run can block on an approval, a question, or a plan, and then it is just waiting.</p></li>
             <li><a href="/docs/running-your-own-commands">Running your own commands (!)</a><p>Type ! followed by a command to run it in your own shell, without leaving the session: !git status, !npm test. Output streams as it happens.</p></li>
-            <li><a href="/docs/remembering-an-instruction">Remembering an instruction (#)</a><p>Start a line with # to turn it into a standing instruction: # always run the linter before committing. Houston asks whether it applies to this project or to...</p></li>
-            <li><a href="/docs/side-chat">Side chat (/btw)</a><p>The side chat answers a quick question about the open chat without adding anything to it. Open it from the titlebar (or the command palette); it sees the...</p></li>
+            <li><a href="/docs/remembering-an-instruction">Remembering an instruction (#)</a><p>Start a line with # to turn it into a standing instruction: # always run the linter before committing.</p></li>
+            <li><a href="/docs/side-chat">Side chat (/btw)</a><p>The side chat answers a quick question about the open chat without adding anything to it.</p></li>
           </ul>
         </section>
         <section class="docs-group" aria-labelledby="reviewing-and-undoing-changes">
           <h2 id="reviewing-and-undoing-changes">Reviewing and undoing changes</h2>
           <ul class="docs-topics">
-            <li><a href="/docs/seeing-what-the-tools-did">Seeing what the tools did</a><p>While a turn runs, each tool result collapses to one line: the transcript is a conversation, not a log. Two ways to see more:</p></li>
+            <li><a href="/docs/seeing-what-the-tools-did">Seeing what the tools did</a><p>While a turn runs, each tool result collapses to one line: the transcript is a conversation, not a log.</p></li>
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a><p>A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message, for example No tests ran · install...</p></li>
-            <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a><p>You can keep working in your own editor while a turn runs. Before the agent overwrites or edits a file, Houston checks two things: that the agent has read...</p></li>
+            <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a><p>You can keep working in your own editor while a turn runs.</p></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a><p>/undo covers the last turn's file writes only. It does not undo shell commands, and it does not touch git history.</p></li>
-            <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a><p>review_changes (or /review) reviews uncommitted changes for correctness, security, and quality. It runs an independent read-only reviewer per dimension,...</p></li>
-            <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a><p>In the desktop app, the agent can answer with pictures as well as text. A ```mermaid block in a reply (a flowchart, sequence, state, or entity diagram) is...</p></li>
+            <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a><p>review_changes (or /review) reviews uncommitted changes for correctness, security, and quality.</p></li>
+            <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a><p>In the desktop app, the agent can answer with pictures as well as text.</p></li>
           </ul>
         </section>
         <section class="docs-group" aria-labelledby="permissions-and-safety">
@@ -125,7 +125,7 @@
         <section class="docs-group" aria-labelledby="sessions-and-automation">
           <h2 id="sessions-and-automation">Sessions and automation</h2>
           <ul class="docs-topics">
-            <li><a href="/docs/context-worktrees-and-history">Context, worktrees, and history</a><p>Compaction. When a conversation grows too large, Houston first trims large tool output the agent has moved past (it can re-read anything it still needs),...</p></li>
+            <li><a href="/docs/context-worktrees-and-history">Context, worktrees, and history</a><p>Compaction. When a conversation grows too large, Houston first trims large tool output the agent has moved past (it can re-read anything it still needs)...</p></li>
             <li><a href="/docs/spawn-separate-sessions">Spawn separate sessions</a><p>Where a subagent reports back into the current turn, spawn_session spins off a separate chat: the agent hands it a task, optionally on its own git branch...</p></li>
             <li><a href="/docs/proposed-sessions">Proposed sessions</a><p>When the agent spots parallel work you didn't ask for (a fix noticed in passing, the natural follow-up), it proposes it with propose_session instead of...</p></li>
             <li><a href="/docs/watching-work-you-sent-off">Watching work you sent off (/spawned)</a><p>When the agent hands a task to a separate session (see &quot;Spawn separate sessions&quot;), that session runs in the background, often on its own branch and...</p></li>
@@ -135,23 +135,23 @@
         <section class="docs-group" aria-labelledby="extending-houston">
           <h2 id="extending-houston">Extending Houston</h2>
           <ul class="docs-topics">
-            <li><a href="/docs/skills">Skills</a><p>A skill is a reusable instruction bundle at .houston/skills/&lt;name&gt;/SKILL.md, with front-matter name and description and a body of instructions. Only the...</p></li>
-            <li><a href="/docs/custom-subagents">Custom subagents</a><p>Drop a Markdown file in .houston/agents/&lt;name&gt;.md to define a specialized subagent: front-matter description plus a system-prompt body. The main agent...</p></li>
-            <li><a href="/docs/hooks">Hooks</a><p>Hooks (Settings, Hooks) run your own shell commands at set points in the agent loop. Each hook names an event and, for the tool events, a matcher glob on...</p></li>
+            <li><a href="/docs/skills">Skills</a><p>A skill is a reusable instruction bundle at .houston/skills/&lt;name&gt;/SKILL.md, with front-matter name and description and a body of instructions.</p></li>
+            <li><a href="/docs/custom-subagents">Custom subagents</a><p>Drop a Markdown file in .houston/agents/&lt;name&gt;.md to define a specialized subagent: front-matter description plus a system-prompt body.</p></li>
+            <li><a href="/docs/hooks">Hooks</a><p>Hooks (Settings, Hooks) run your own shell commands at set points in the agent loop.</p></li>
             <li><a href="/docs/plugins">Plugins</a><p>Drop a JS file in .houston/plugins/ to register observational lifecycle hooks: houston.on('onToolStart' | 'onToolResult' | 'onUserMessage', fn), for...</p></li>
-            <li><a href="/docs/mcp-servers">MCP servers</a><p>Connect Model Context Protocol servers in Settings: a local stdio process or a remote HTTP (streamable) or SSE endpoint. Their tools are offered to the...</p></li>
-            <li><a href="/docs/github-tools">GitHub tools</a><p>When the gh CLI is installed and authenticated, Houston offers dedicated tools for the GitHub loop: pull requests (gh_pr_create, gh_pr_list, gh_pr_view,...</p></li>
+            <li><a href="/docs/mcp-servers">MCP servers</a><p>Connect Model Context Protocol servers in Settings: a local stdio process or a remote HTTP (streamable) or SSE endpoint.</p></li>
+            <li><a href="/docs/github-tools">GitHub tools</a><p>When the gh CLI is installed and authenticated, Houston offers dedicated tools for the GitHub loop: pull requests...</p></li>
           </ul>
         </section>
         <section class="docs-group" aria-labelledby="reference">
           <h2 id="reference">Reference</h2>
           <ul class="docs-topics">
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a><p>/cost breaks the session down by model: tokens in and out, how many of the input tokens were served from the prompt cache, and the dollar cost, with a total...</p></li>
-            <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a><p>/doctor reports what Houston can see: the version (and whether a newer one is out), Node and platform, the active model and every provider's key status,...</p></li>
-            <li><a href="/docs/version-and-updates">Version and updates</a><p>The interactive terminal shows its version in the banner at startup, and houston -v prints it. Once a day it quietly checks whether a newer release exists...</p></li>
+            <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a><p>/doctor reports what Houston can see: the version (and whether a newer one is out), Node and platform, the active model and every provider's key status...</p></li>
+            <li><a href="/docs/version-and-updates">Version and updates</a><p>The interactive terminal shows its version in the banner at startup, and houston -v prints it.</p></li>
             <li><a href="/docs/help-menu">Help menu</a><p>The desktop app's Help menu (last in the menu bar on every platform) has Houston Guide, which opens this guide, and Report an Issue, which opens a new...</p></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a><p>To invite a friend, click Share Houston at the bottom of the sidebar (the share icon when the sidebar is collapsed), choose Share Houston… from the app menu...</p></li>
-            <li><a href="/docs/license-and-legal">License and legal</a><p>Houston is open-source software under the Apache License 2.0 (LICENSE in the repository, and a copy inside the packaged app under Resources/). That means...</p></li>
+            <li><a href="/docs/license-and-legal">License and legal</a><p>Houston is open-source software under the Apache License 2.0 (LICENSE in the repository, and a copy inside the packaged app under Resources/).</p></li>
           </ul>
         </section>
       </main>
