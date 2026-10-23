@@ -20,11 +20,6 @@ import { Receipt } from './Receipt'
 import { Markdown } from './Markdown'
 import { Icon, type IconName } from './Icon'
 
-/**
- * Subtle, hover-revealed copy affordance shared by user and assistant turns. The
- * `className` lets each turn place it (the assistant pins it to the top-right; the
- * user turn tucks it to the left of the right-aligned bubble — see global.css).
- */
 /** Visually hidden, but read by screen readers (for the live status region). */
 const SR_ONLY: CSSProperties = {
   position: 'absolute',
@@ -35,6 +30,11 @@ const SR_ONLY: CSSProperties = {
   whiteSpace: 'nowrap'
 }
 
+/**
+ * Subtle, hover-revealed copy affordance shared by user and assistant turns. The
+ * `className` lets each turn place it (the assistant pins it to the top-right; the
+ * user turn tucks it to the left of the right-aligned bubble — see global.css).
+ */
 function CopyButton({ text, className }: { text: string; className?: string }): JSX.Element {
   const [copied, setCopied] = useState(false)
   const copy = (): void => {

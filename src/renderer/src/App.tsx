@@ -1445,7 +1445,6 @@ export default function App(): JSX.Element {
     [chat.running, settings, queue, sendNow]
   )
 
-  // A message the user wrote in the composer.
   // ---- Rewind ----
 
   const prefillComposer = useCallback(
@@ -1576,6 +1575,7 @@ export default function App(): JSX.Element {
     [editing, performRewind, prefillComposer]
   )
 
+  // A message the user wrote in the composer.
   const onSend = useCallback(
     (text: string, images?: ImageAttachment[]) =>
       void sendAfterEdit(text, images, () => dispatch(text, images)),
@@ -1658,10 +1658,6 @@ export default function App(): JSX.Element {
     [chat, settings, queue, currentId, openQuestion, prefillComposer, sendNow]
   )
 
-  // Hand shipping off to the agent: close the panel and send the chosen action's
-  // standing prompt (Create PR / Publish to GitHub / Commit & push, see
-  // @shared/shipAction) as a normal turn, so the git and gh work runs through the
-  // agent's tools and approval gate rather than the renderer touching git.
   // propose_session cards: start one as its own chat, ask for it here, or dismiss it.
   // Each decision is persisted on the chat (main returns the updated map).
   const proposalHandlers = useMemo<ProposalHandlers | undefined>(() => {
@@ -1716,6 +1712,10 @@ export default function App(): JSX.Element {
     [currentId, refreshConversations, selectConversation]
   )
 
+  // Hand shipping off to the agent: close the panel and send the chosen action's
+  // standing prompt (Create PR / Publish to GitHub / Commit & push, see
+  // @shared/shipAction) as a normal turn, so the git and gh work runs through the
+  // agent's tools and approval gate rather than the renderer touching git.
   const onShip = useCallback(
     (action: ShipAction) => {
       setChangesOpen(false)
