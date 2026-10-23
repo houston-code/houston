@@ -52,6 +52,7 @@ import type { FetchedDocument } from './webfetch'
 import type { GhResult } from './github'
 import { readShellOutput, registerShell } from './shells'
 import { createShellSession } from './shell-session'
+import { GIT_GUARD_UNDO, GitGuard } from './gitGuard'
 import { backendSupportsSession } from '../sandbox'
 import { MAX_ATTACH_IMAGE_BYTES } from './attachments'
 import { MAX_PAGE_TEXT_CHARS, type CaptureInput, type LocalhostCapture } from './viewlocalhost'
@@ -2807,6 +2808,41 @@ describe('run_shell other-checkout hint', () => {
     const back = await run('run_shell', { command: `cd '${wt}' && pwd` })
     expect(back).not.toContain('[note: the shell is now in')
     expect(await run('run_shell', { command: 'cd /' })).not.toContain('[note: the shell is now in')
+  })
+})
+
+describe('run_shell git guard', () => {
+  // A command that plants a hook for the user's own git to run outside the sandbox is
+  // caught after it runs; the user is asked, and the result says what happened.
+  const git = (args: string[]): void => {
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=Test', ...args], { cwd: workspace, stdio: 'pipe' })
+  }
+
+  it('asks about a planted hook and undoes it on the answer', { timeout: 30_000 }, async () => {
+    git(['init', '-q'])
+    const asked: string[] = []
+    ctx = {
+      ...ctx,
+      gitGuard: new GitGuard([workspace]),
+      askGitGuard: async (q) => {
+        asked.push(q.question)
+        return GIT_GUARD_UNDO
+      }
+    }
+    const out = await run('run_shell', { command: "printf '#!/bin/sh\\n' > .git/hooks/post-checkout" })
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toContain('new hook .git/hooks/post-checkout')
+    expect(out).toContain('The user chose to undo them')
+    expect(existsSync(join(workspace, '.git/hooks/post-checkout'))).toBe(false)
+  })
+
+  it('says nothing and asks nothing for ordinary git work', { timeout: 30_000 }, async () => {
+    git(['init', '-q'])
+    const ask = vi.fn()
+    ctx = { ...ctx, gitGuard: new GitGuard([workspace]), askGitGuard: ask }
+    const out = await run('run_shell', { command: 'git config user.email a@b && git config user.name a' })
+    expect(ask).not.toHaveBeenCalled()
+    expect(out).not.toContain('[git:')
   })
 })
 

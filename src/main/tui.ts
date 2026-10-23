@@ -365,7 +365,7 @@ export function renderApprovalPrompt(
       : ev.sensitiveRead
         ? `\n${paint('⚠ reads a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
         : ev.sensitiveWrite
-          ? `\n${paint('⚠ changes a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
+          ? `\n${paint('⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)', 'yellow', 'bold')}`
           : ''
   // Until the run has a shell-network grant, "allow" runs the command offline; say
   // which answer also grants network before the user picks, not after it fails.

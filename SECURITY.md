@@ -101,6 +101,19 @@ across line continuations), but like the workspace-escape check it is a static
 tripwire: a command assembled from variables isn't seen. A new install starts in full
 auto only where the OS sandbox confines shell commands, and in ask elsewhere.
 
+The sandbox also leaves the project's `.git` writable, so ordinary git (commits,
+`git config`, upstreams, hook installers) works inside it. What a command could plant
+there for the user's **own** git to run later, outside the sandbox (a hook,
+`core.fsmonitor`, a filter driver or other command-valued setting, a `commondir`
+redirect, or a nested repository registered as a submodule that carries one), is
+**detected after each shell command** rather than blocked: Houston compares those
+parts of each root's repository with their state before the command and, on a change,
+asks the user to keep or undo it (an unattended run undoes it). Houston's own git
+calls run hardened against all of these regardless. This is detection, not
+prevention: a program something else runs in the window between the command finishing
+and the question (a shell prompt calling `git status`) has already run. Details and
+the options weighed are in [docs/sandboxing.md](docs/sandboxing.md#git-hooks-and-settings-all-backends).
+
 Text that outsiders write and Houston's tools pull into the agent's context (fetched web
 pages, web search results, GitHub issue and pull request titles, bodies, comments, and
 diffs, GitHub Actions run, job, step, and check names and failed-step logs, and MCP tool

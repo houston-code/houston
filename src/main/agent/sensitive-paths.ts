@@ -104,6 +104,28 @@ export function isSensitivePath(path: string): boolean {
   return false
 }
 
+/** Files directly in a git dir that make git run, or find, commands (see gitGuard.ts). */
+const GIT_EXEC_FILES = new Set(['config', 'config.worktree', 'commondir'])
+
+/**
+ * Whether `path` names a part of a repository's git data that makes git run a command
+ * on its own: a hook, the repo's config (core.fsmonitor, filter drivers, …), a
+ * `commondir` redirect, or the `.git` pointer file itself. A write there lands outside
+ * anything `git status` or a diff shows, and runs the next time the user's own git
+ * touches the repo, outside the sandbox. Covers submodule and linked-worktree git dirs
+ * (`.git/modules/…`, `.git/worktrees/…`). Matched by path segment; pure.
+ */
+export function isGitExecPath(path: string): boolean {
+  if (!path) return false
+  const segments = path.replace(/\\/g, '/').toLowerCase().split('/').filter((s) => s && s !== '.')
+  const last = segments.length - 1
+  if (segments[last] === '.git') return true
+  const at = segments.indexOf('.git')
+  if (at < 0) return false
+  const tail = segments.slice(at + 1)
+  return tail.includes('hooks') || GIT_EXEC_FILES.has(segments[last]!)
+}
+
 /**
  * Whether a tool call is a read of a credential / secret file: a read-kind call
  * whose `path` argument {@link isSensitivePath}. The one definition shared by the
@@ -127,22 +149,25 @@ export function isSensitiveRead(kind: ToolKind, args: Record<string, unknown>): 
 
 /**
  * Whether a file-writing tool call targets a credential / secret file (see
- * {@link isSensitivePath}): `path` for the single-file tools, every added, updated,
- * deleted, or moved-to path for `apply_patch`. Writes to these files prompt even in
- * full-auto: they are rarely edited, and overwriting one (a build check that resets
- * `.env`, a write-back of a masked value) silently destroys something only the user
- * can restore. A patch that doesn't parse names no targets; the tool itself rejects it.
+ * {@link isSensitivePath}) or git's exec-capable data (see {@link isGitExecPath}):
+ * `path` for the single-file tools, every added, updated, deleted, or moved-to path
+ * for `apply_patch`. Writes to these files prompt even in full-auto: they are rarely
+ * edited, overwriting a secret (a build check that resets `.env`, a write-back of a
+ * masked value) silently destroys something only the user can restore, and a hook or
+ * git setting runs code outside the sandbox later. A patch that doesn't parse names
+ * no targets; the tool itself rejects it.
  */
 export function writesSensitivePath(toolName: string, args: Record<string, unknown>): boolean {
+  const sensitive = (p: string): boolean => isSensitivePath(p) || isGitExecPath(p)
   if (toolName === 'apply_patch') {
     if (typeof args.patch !== 'string') return false
     try {
       return parsePatch(args.patch).some(
-        (op) => isSensitivePath(op.path) || (op.type === 'update' && !!op.moveTo && isSensitivePath(op.moveTo))
+        (op) => sensitive(op.path) || (op.type === 'update' && !!op.moveTo && sensitive(op.moveTo))
       )
     } catch {
       return false
     }
   }
-  return typeof args.path === 'string' && isSensitivePath(args.path)
+  return typeof args.path === 'string' && sensitive(args.path)
 }
