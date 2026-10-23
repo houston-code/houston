@@ -1001,7 +1001,7 @@ describe('runHeadless', () => {
     expect(err.join('')).toContain('stalled')
   })
 
-  it('prints a verification event without altering the exit code', async () => {
+  it('prints each verification, and exits by the last one', async () => {
     const passed = deps([
       { runId: 'run-1', type: 'verification', passed: true },
       { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
@@ -1009,14 +1009,22 @@ describe('runHeadless', () => {
     expect(await runHeadless(baseOpts, passed.d)).toBe(0)
     expect(passed.err.join('')).toContain('verification passed')
 
-    const failedPass = deps([
+    // A failing check is fed back inside the loop for self-correction; one the agent
+    // then fixed (the next check passes) is a success.
+    const fixed = deps([
+      { runId: 'run-1', type: 'verification', passed: false },
+      { runId: 'run-1', type: 'verification', passed: true },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ])
+    expect(await runHeadless(baseOpts, fixed.d)).toBe(0)
+    expect(fixed.err.join('')).toContain('verification failed')
+
+    // The fix-up passes ran out with the check still failing: not a finished task.
+    const stillFailing = deps([
       { runId: 'run-1', type: 'verification', passed: false },
       { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
     ])
-    // A failing pass is fed back inside the loop for self-correction, so a clean
-    // 'done' after it still exits 0 — the event is informational here.
-    expect(await runHeadless(baseOpts, failedPass.d)).toBe(0)
-    expect(failedPass.err.join('')).toContain('verification failed')
+    expect(await runHeadless(baseOpts, stillFailing.d)).toBe(HEADLESS_EXIT.verify)
   })
 
   it('prints the receipt to stderr and puts it on the result line, without altering the exit code', async () => {
@@ -1452,6 +1460,29 @@ describe('runHeadless --json result line', () => {
         code: 1,
         stopReason: null,
         limitReason: 'max-steps'
+      },
+      {
+        name: 'last verification still failing',
+        events: [
+          { runId: 'run-1', type: 'verification', passed: true },
+          { runId: 'run-1', type: 'verification', passed: false },
+          { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+        ],
+        status: 'verify_failed',
+        code: 5,
+        stopReason: 'end_turn'
+      },
+      {
+        name: 'a failing verification, then the step cap (the budget stop wins)',
+        events: [
+          { runId: 'run-1', type: 'verification', passed: false },
+          { runId: 'run-1', type: 'limit', reason: 'max-steps' },
+          { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+        ],
+        status: 'limit',
+        code: 3,
+        stopReason: 'end_turn',
+        limitReason: 'max-steps'
       }
     ]
     for (const c of cases) {
@@ -1502,7 +1533,7 @@ describe('runHeadless --json result line', () => {
 })
 
 describe('headlessExitCode', () => {
-  it('gives success 0, a budget stop 3, a schema miss 4, a bad input line 2, and every failure 1', () => {
+  it('gives success 0, a budget stop 3, a schema miss 4, a failed check 5, a bad input line 2, and every failure 1', () => {
     expect(headlessExitCode('success')).toBe(0)
     expect(headlessExitCode('limit')).toBe(3)
     expect(headlessExitCode('stalled')).toBe(1)
@@ -1510,7 +1541,8 @@ describe('headlessExitCode', () => {
     expect(headlessExitCode('error')).toBe(1)
     expect(headlessExitCode('schema_invalid')).toBe(4)
     expect(headlessExitCode('input_error')).toBe(2)
-    expect(HEADLESS_EXIT).toEqual({ ok: 0, failed: 1, usage: 2, limit: 3, schema: 4 })
+    expect(headlessExitCode('verify_failed')).toBe(5)
+    expect(HEADLESS_EXIT).toEqual({ ok: 0, failed: 1, usage: 2, limit: 3, schema: 4, verify: 5 })
   })
 })
 

@@ -262,6 +262,13 @@ describe('fix-ci', { timeout: 30_000 }, () => {
     expect(w.gh('pr', 'create')[0].args).toContain('--draft')
   })
 
+  it('opens a draft when the CLI reports the last verification still failing', async () => {
+    const out = ['{"type":"verification","passed":false}', resultLine({ status: 'verify_failed' })].join('\n')
+    const w = world({ eventName: 'workflow_run', event: failed, onCli: fix, cliOut: out })
+    expect(await w.go()).toBe(0)
+    expect(w.gh('pr', 'create')[0].args).toContain('--draft')
+  })
+
   it('refuses to commit when the run rewrote .git/config', async () => {
     const w = world({
       eventName: 'workflow_run',

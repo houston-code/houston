@@ -236,7 +236,9 @@ export async function run({ env, exec, log = (s) => process.stdout.write(`${s}\n
   setOutput('reply-file', replyPath)
   const runUrl = `${env.GITHUB_SERVER_URL || 'https://github.com'}/${repository}/actions/runs/${env.GITHUB_RUN_ID ?? ''}`
   const footer = `\n\n<sub>Posted by Houston from [this workflow run](${runUrl}).</sub>`
-  const finished = result.status === 'success' || result.status === 'limit'
+  // A run whose last --verify check still failed (`verify_failed`) did its work; fix-ci
+  // opens its pull request as a draft, like a run stopped at its budget.
+  const finished = result.status === 'success' || result.status === 'limit' || result.status === 'verify_failed'
   const limitNote = result.status === 'limit' ? '\n\n_Houston stopped at its budget before it was done; this is as far as it got._' : ''
 
   /** Write a body, refuse it if it carries a credential, and record it in the job summary. */
@@ -288,7 +290,7 @@ function dryRun(notice, setOutput) {
 /** fix-ci's ending: commit what the run changed to a new branch and open a pull request. */
 async function openFixPullRequest(o) {
   const { ctx, exec, workspace, before, secrets, post, ghToken, branchPrefix, result, out, setOutput } = o
-  if (result.status !== 'success' && result.status !== 'limit') {
+  if (result.status !== 'success' && result.status !== 'limit' && result.status !== 'verify_failed') {
     return o.fail(`the fix run ended with ${result.status}; no pull request opened`)
   }
   const changed = changedControlFiles(before, snapshotGitControl(workspace))
@@ -323,7 +325,7 @@ async function openFixPullRequest(o) {
   setOutput('branch', branch)
 
   const verified = out.verification === null ? 'not run' : out.verification ? 'passed' : 'failed'
-  const draft = result.status === 'limit' || out.verification === false
+  const draft = result.status === 'limit' || result.status === 'verify_failed' || out.verification === false
   const summary = o.finalText || 'Houston changed the files below to fix the failing run.'
   const failed = ctx.runUrl ? `[run ${ctx.runId}](${ctx.runUrl})` : `run ${ctx.runId}`
   const file = o.prepare(

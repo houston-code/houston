@@ -164,7 +164,7 @@ Lines arrive in this order:
 In the result line:
 
 - `status` is `success`, `limit`, `stalled`, `approval_denied`, `error`,
-  `schema_invalid`, or `input_error`.
+  `schema_invalid`, `input_error`, or `verify_failed`.
 - `finalText` is the agent's closing answer (the text after its last tool call).
 - `receipt` is Houston's record of what the run actually ran (see "What actually
   ran"), present when it ran checks or changed files.
@@ -182,6 +182,7 @@ repository.
 | 2 | a usage error (a bad flag value, an unreadable flag file, or an empty prompt on stdin; nothing ran), or a bad stream-json input line |
 | 3 | the run hit a budget before finishing (its step cap or the model's output limit) |
 | 4 | the final answer still didn't match `--output-schema` after the corrective round |
+| 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
 
 ### Standalone CLI
 

@@ -244,7 +244,8 @@
             "approval_denied",
             "error",
             "schema_invalid",
-            "input_error"
+            "input_error",
+            "verify_failed"
           ]
         },
         "stopReason": {

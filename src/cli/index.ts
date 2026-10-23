@@ -128,6 +128,7 @@ One-shot exit codes:
   0  the agent finished              1  error, stall, or --on-approval fail
   2  bad flag value or empty prompt  3  hit a budget (step cap or output limit)
   4  the answer did not match --output-schema
+  5  the last --verify check still failed
 
 Providers:
   houston providers                    list configured providers and hosts to add
