@@ -381,19 +381,24 @@ describe('ControlBar reasoning control', () => {
 })
 
 describe('ControlBar rows', () => {
-  it('ends the first row after the worktree setup on a new chat in a repo', () => {
+  const groups = (container: HTMLElement): HTMLElement[] => [
+    ...container.querySelectorAll<HTMLElement>('.control-bar > .control-bar__group')
+  ]
+
+  it('groups where the chat runs apart from how it runs, with no forced row break', () => {
     const { container } = render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={true} />)
-    const bar = container.querySelector('.control-bar') as HTMLElement
-    const kids = [...bar.children]
-    const brk = bar.querySelector('.control-bar__break') as HTMLElement
-    expect(brk).not.toBeNull()
-    // Right after the worktree group, before the model picker.
-    expect(kids.indexOf(brk)).toBe(kids.indexOf(bar.querySelector('.control-bar__wt') as HTMLElement) + 1)
-    expect(kids.indexOf(brk)).toBeLessThan(kids.indexOf(bar.querySelector('.model-control') as HTMLElement))
+    expect(container.querySelector('.control-bar__break')).toBeNull()
+    const [where, how] = groups(container)
+    expect(within(where).getByLabelText(/Project folder/)).toBeInTheDocument()
+    expect(within(where).getByRole('group', { name: 'New worktree' })).toBeInTheDocument()
+    expect(within(how).getByRole('combobox', { name: 'Reasoning effort' })).toBeInTheDocument()
+    expect(within(how).getByRole('combobox', { name: 'Approval mode' })).toBeInTheDocument()
+    expect(within(where).queryByRole('combobox', { name: 'Approval mode' })).toBeNull()
   })
 
-  it('keeps one row for an open chat', () => {
+  it('uses the same two groups in an open chat', () => {
     const { container } = render(<ControlBar {...baseProps()} newChat={false} repoInfo={repo} />)
+    expect(groups(container)).toHaveLength(2)
     expect(container.querySelector('.control-bar__break')).toBeNull()
   })
 })

@@ -1286,11 +1286,16 @@ body.is-resizing {
   width: 100%;
   padding: 9px var(--chat-gap) 0;
 }
-/* Ends the new-chat screen's first row (folder + worktree setup), so the model,
-   thinking and approval controls always start the second. */
-.control-bar__break {
-  flex-basis: 100%;
-  height: 0;
+/* "Where it runs" and "how it runs": each group wraps as one unit when the bar is
+   too narrow for both, and only wraps inside itself when it alone is too wide. */
+.control-bar__group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  row-gap: 6px;
+  min-width: 0;
+  max-width: 100%;
 }
 /* The inline worktree setup (checkbox + base + branch name) wraps as one unit. */
 .control-bar__wt {
