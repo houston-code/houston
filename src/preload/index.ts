@@ -364,6 +364,12 @@ const api = {
   /** Tell main which chat this window shows and whether it is focused (a focused view marks it read). */
   setChatViewing: (conversationId: string | null, focused: boolean): void =>
     ipcRenderer.send(IPC.chatViewing, conversationId, focused),
+  /**
+   * The chat this window showed when the app last quit, if it still exists and its
+   * folder is still there; null opens a new chat. Asking also starts this window
+   * remembering its open chat for the next launch.
+   */
+  getLaunchChat: (): Promise<string | null> => ipcRenderer.invoke(IPC.chatLaunch),
   /** Mark a chat unread (from its reply number `fromReply`, 0-based, when given) or read. */
   setChatUnread: (conversationId: string, unread: boolean, fromReply?: number): Promise<void> =>
     ipcRenderer.invoke(IPC.chatSetUnread, conversationId, unread, fromReply),
