@@ -168,21 +168,17 @@ function OpenInSubmenu({
   }
 
   return (
-    <MenuExpander label="Open in">
+    <MenuExpander label="Open in" icon="external">
       {editors === null ? (
         <div className="menu__note">Checking…</div>
       ) : (
         <>
           {available.map((e) => (
-            <button
-              key={e.id}
-              className="menu__item"
-              onClick={() => openIn(e.id)}
-            >
+            <button key={e.id} role="menuitem" className="menu__item" onClick={() => openIn(e.id)}>
               {e.label}
             </button>
           ))}
-          <button className="menu__item" onClick={reveal}>
+          <button role="menuitem" className="menu__item" onClick={reveal}>
             {fileManagerName()}
           </button>
           {available.length === 0 && <div className="menu__note">No editors detected</div>}
@@ -427,38 +423,42 @@ function ConvRow({
           ⋯
         </button>
         {menuOpen && (
-          <Popover anchorRef={btnRef} onClose={close}>
+          <Popover anchorRef={btnRef} onClose={close} role="menu" ariaLabel={`Actions for ${conv.title}`}>
             <button
+              role="menuitem"
               className="menu__item"
               onClick={() => {
                 props.onSetPinned(conv.id, !conv.pinned)
                 close()
               }}
             >
-              {conv.pinned ? '☆ Unpin' : '★ Pin'}
+              <Icon name="star" /> {conv.pinned ? 'Unpin' : 'Pin'}
             </button>
             {canToggleRead && (
               <button
+                role="menuitem"
                 className="menu__item"
                 onClick={() => {
                   props.onSetUnread?.(conv.id, !isUnread)
                   close()
                 }}
               >
-                {isUnread ? '○ Mark as read' : '● Mark as unread'}
+                <Icon name={isUnread ? 'check' : 'mail'} /> {isUnread ? 'Mark as read' : 'Mark as unread'}
                 <kbd className="menu__item-count">{isMacPlatform() ? '⌥U' : 'Alt+U'}</kbd>
               </button>
             )}
             <button
+              role="menuitem"
               className="menu__item"
               onClick={() => {
                 onStartRename()
                 close()
               }}
             >
-              ✎ Rename
+              <Icon name="pencil" /> Rename
             </button>
             <button
+              role="menuitem"
               className="menu__item"
               onClick={() => {
                 props.onFork(conv.id)
@@ -468,6 +468,7 @@ function ConvRow({
               <Icon name="gitBranch" /> Fork
             </button>
             <button
+              role="menuitem"
               className="menu__item"
               onClick={() => {
                 props.onSetArchived(conv.id, !conv.archived)
@@ -486,21 +487,23 @@ function ConvRow({
             </button>
             <div className="menu__sep" />
             <OpenInSubmenu workspace={conv.workspace} editors={editors} onDone={close} />
-            <MenuExpander label="Move to group">
+            <MenuExpander label="Move to group" icon="folder">
               {groups.map((g) => (
                 <button
                   key={g.id}
+                  role="menuitemradio"
+                  aria-checked={conv.groupId === g.id}
                   className="menu__item"
                   onClick={() => {
                     props.onMove(conv.id, g.id)
                     close()
                   }}
                 >
-                  {conv.groupId === g.id ? '● ' : '○ '}
-                  {g.name}
+                  {conv.groupId === g.id ? <Icon name="check" /> : <span className="menu__icon-slot" />} {g.name}
                 </button>
               ))}
               <button
+                role="menuitem"
                 className="menu__item"
                 onClick={() => {
                   void props.onCreateGroup().then((id) => {
@@ -510,10 +513,11 @@ function ConvRow({
                   close()
                 }}
               >
-                ＋ New group
+                <Icon name="plus" /> New group
               </button>
               {conv.groupId && (
                 <button
+                  role="menuitem"
                   className="menu__item"
                   onClick={() => {
                     props.onMove(conv.id, null)
@@ -526,6 +530,7 @@ function ConvRow({
             </MenuExpander>
             <div className="menu__sep" />
             <button
+              role="menuitem"
               className="menu__item"
               onClick={() => {
                 props.onExport(conv.id)
@@ -535,6 +540,7 @@ function ConvRow({
               <Icon name="export" /> Export
             </button>
             <button
+              role="menuitem"
               className="menu__item"
               onClick={() => {
                 props.onExportHtml(conv.id)
@@ -544,13 +550,14 @@ function ConvRow({
               <Icon name="export" /> Export as HTML
             </button>
             <button
+              role="menuitem"
               className="menu__item menu__item--danger"
               onClick={() => {
                 props.onDelete(conv.id)
                 close()
               }}
             >
-              ✕ Delete
+              <Icon name="trash" /> Delete
             </button>
           </Popover>
         )}
@@ -628,24 +635,31 @@ function GroupHeader({
             ⋯
           </button>
           {menuOpen && (
-            <Popover anchorRef={btnRef} onClose={() => setMenuOpen(false)}>
+            <Popover
+              anchorRef={btnRef}
+              onClose={() => setMenuOpen(false)}
+              role="menu"
+              ariaLabel={`Options for group ${section.name}`}
+            >
               <button
+                role="menuitem"
                 className="menu__item"
                 onClick={() => {
                   onStartRename()
                   setMenuOpen(false)
                 }}
               >
-                ✎ Rename group
+                <Icon name="pencil" /> Rename group
               </button>
               <button
+                role="menuitem"
                 className="menu__item menu__item--danger"
                 onClick={() => {
                   props.onDeleteGroup(section.id)
                   setMenuOpen(false)
                 }}
               >
-                ✕ Delete group
+                <Icon name="trash" /> Delete group
               </button>
             </Popover>
           )}
@@ -1031,7 +1045,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           className="sidebar__search"
           type="search"
           placeholder="Search chats…"
-          aria-label="Search conversations"
+          aria-label="Search chats"
           value={props.search}
           onChange={(e) => props.onSearch(e.target.value)}
         />
@@ -1050,10 +1064,10 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         {conversations.length === 0 && (
           <div className="sidebar__empty">
             {props.search
-              ? 'No matching conversations.'
+              ? 'No matching chats.'
               : props.statusFilter === 'archived'
                 ? 'No archived chats.'
-                : 'No conversations yet.'}
+                : 'No chats yet.'}
           </div>
         )}
 

@@ -45,6 +45,10 @@ export type IconName =
   | 'settings'
   | 'refresh'
   | 'rewind'
+  | 'star'
+  | 'pencil'
+  | 'trash'
+  | 'external'
 
 const PATHS: Record<IconName, ReactNode> = {
   // Counter-clockwise arrow: going back to an earlier point.
@@ -282,6 +286,32 @@ const PATHS: Record<IconName, ReactNode> = {
     <>
       <path d="M13 8a5 5 0 1 1-1.46-3.54" />
       <path d="M12.2 2.2v2.6H9.6" />
+    </>
+  ),
+  // A five-pointed star — pin a chat to the top.
+  star: <path d="M8 2.6l1.65 3.35 3.7.54-2.68 2.6.63 3.68L8 11.03l-3.3 1.74.63-3.68-2.68-2.6 3.7-.54z" />,
+  // A pencil — rename.
+  pencil: (
+    <>
+      <path d="M10.6 2.9l2.5 2.5-7.4 7.4-3.1.6.6-3.1z" />
+      <path d="M9.2 4.3l2.5 2.5" />
+    </>
+  ),
+  // A lidded bin — delete.
+  trash: (
+    <>
+      <path d="M3 4.5h10" />
+      <path d="M6.2 4.5V3h3.6v1.5" />
+      <path d="M4.3 4.5l.6 8.5h6.2l.6-8.5" />
+      <path d="M6.8 7v3.8M9.2 7v3.8" />
+    </>
+  ),
+  // An arrow leaving a box — open in another app.
+  external: (
+    <>
+      <path d="M12.5 9v3.5h-9v-9H7" />
+      <path d="M9.5 2.5h4v4" />
+      <path d="M13.5 2.5 8 8" />
     </>
   )
 }

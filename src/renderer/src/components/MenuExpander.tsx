@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Icon, type IconName } from './Icon'
 
 /** Hover-intent: only open after the pointer rests on the row this long, so a quick
  *  pass over it on the way to another item doesn't flash the card open. */
@@ -21,9 +22,12 @@ const CLOSE_DELAY = 130
  */
 export function MenuExpander({
   label,
+  icon,
   children
 }: {
   label: ReactNode
+  /** An icon before the label, matching the menu's other rows. */
+  icon?: IconName
   children: ReactNode
 }): JSX.Element {
   const [open, setOpen] = useState(false)
@@ -123,6 +127,7 @@ export function MenuExpander({
         ref={triggerRef}
         type="button"
         className="menu__item menu__item--expander"
+        role="menuitem"
         aria-haspopup="true"
         aria-expanded={open}
         // Hover opens only after the intent delay; leaving before it fires cancels it.
@@ -141,7 +146,14 @@ export function MenuExpander({
           else if (e.key === 'ArrowRight' || e.key === 'Enter' || e.key === ' ') doOpen()
         }}
       >
-        <span className="menu__expander-label">{label}</span>
+        <span className="menu__expander-label">
+          {icon && (
+            <>
+              <Icon name={icon} />{' '}
+            </>
+          )}
+          {label}
+        </span>
         <span className="menu__expander-caret" aria-hidden="true">
           ▸
         </span>

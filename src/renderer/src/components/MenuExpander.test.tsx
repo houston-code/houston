@@ -13,7 +13,7 @@ function setup(): { trigger: HTMLElement; other: HTMLElement } {
     </div>
   )
   return {
-    trigger: screen.getByRole('button', { name: 'Open in' }),
+    trigger: screen.getByRole('menuitem', { name: 'Open in' }),
     other: screen.getByRole('button', { name: 'Export' })
   }
 }
@@ -76,7 +76,7 @@ describe('MenuExpander', () => {
         <div className="menu__sep" data-testid="sep" />
       </div>
     )
-    const trigger = screen.getByRole('button', { name: 'Open in' })
+    const trigger = screen.getByRole('menuitem', { name: 'Open in' })
     fireEvent.click(trigger)
     expect(card()).toBeInTheDocument()
     fireEvent.mouseOver(screen.getByTestId('sep')) // menu chrome, not a .menu__item

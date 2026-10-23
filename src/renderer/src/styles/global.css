@@ -875,6 +875,12 @@ body.is-resizing {
   padding-left: 18px;
   font-size: 12.5px;
 }
+/* Holds an icon's place in a row that has none (an unchecked choice), so every
+   label in the menu starts at the same edge. */
+.menu__icon-slot {
+  display: inline-block;
+  width: 14px;
+}
 .menu__item--danger {
   color: var(--danger);
 }

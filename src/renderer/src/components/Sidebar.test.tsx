@@ -68,7 +68,7 @@ function openConvMenu(title: string): void {
 
 /** Open an expand-on-highlight submenu (e.g. "Open in", "Move to group") by its row. */
 function openSubmenu(name: string): void {
-  fireEvent.click(screen.getByRole('button', { name }))
+  fireEvent.click(screen.getByRole('menuitem', { name }))
 }
 
 /** Open the ⋯ options menu for a given group header. */
@@ -226,11 +226,11 @@ describe('Sidebar — expanded rendering', () => {
     render(<Sidebar {...baseProps({ conversations, chatStatus, onSetUnread })} />)
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions for Alpha' }))
-    fireEvent.click(screen.getByRole('button', { name: /Mark as unread/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Mark as unread/ }))
     expect(onSetUnread).toHaveBeenLastCalledWith('a', true)
 
     fireEvent.click(screen.getByRole('button', { name: 'More actions for Beta' }))
-    fireEvent.click(screen.getByRole('button', { name: /Mark as read/ }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /Mark as read/ }))
     expect(onSetUnread).toHaveBeenLastCalledWith('b', false)
 
     // Option/Alt+U on a focused row toggles it (matched on the physical key).
@@ -247,7 +247,7 @@ describe('Sidebar — expanded rendering', () => {
       />
     )
     fireEvent.click(screen.getByRole('button', { name: 'More actions for Alpha' }))
-    expect(screen.getByRole('button', { name: /Mark as unread/ })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /Mark as unread/ })).toBeInTheDocument()
   })
 
   it('does not offer read toggles on a chat waiting for input', () => {
@@ -326,7 +326,7 @@ describe('Sidebar — expanded rendering', () => {
     fireEvent.click(screen.getByText('＋ New chat'))
     expect(props.onNew).toHaveBeenCalledOnce()
 
-    fireEvent.change(screen.getByLabelText('Search conversations'), { target: { value: 'beta' } })
+    fireEvent.change(screen.getByLabelText('Search chats'), { target: { value: 'beta' } })
     expect(props.onSearch).toHaveBeenCalledWith('beta')
   })
 
@@ -406,12 +406,12 @@ describe('Sidebar — expanded rendering', () => {
 describe('Sidebar — empty states', () => {
   it('shows the no-conversations message when the list is empty', () => {
     render(<Sidebar {...baseProps({ conversations: [] })} />)
-    expect(screen.getByText('No conversations yet.')).toBeInTheDocument()
+    expect(screen.getByText('No chats yet.')).toBeInTheDocument()
   })
 
   it('shows the no-matches message when a search is active but the list is empty', () => {
     render(<Sidebar {...baseProps({ conversations: [], search: 'xyz' })} />)
-    expect(screen.getByText('No matching conversations.')).toBeInTheDocument()
+    expect(screen.getByText('No matching chats.')).toBeInTheDocument()
   })
 
   it('shows a drop hint inside an empty group', () => {
@@ -429,7 +429,7 @@ describe('Sidebar — collapse / expand rail', () => {
     const collapse = screen.getByLabelText('Collapse sidebar')
     expect(collapse).toBeInTheDocument()
     // The full sidebar shows search; the rail does not.
-    expect(screen.getByLabelText('Search conversations')).toBeInTheDocument()
+    expect(screen.getByLabelText('Search chats')).toBeInTheDocument()
 
     fireEvent.click(collapse)
     expect(props.onToggleCollapse).toHaveBeenCalledOnce()
@@ -442,7 +442,7 @@ describe('Sidebar — collapse / expand rail', () => {
     // Rail shows Expand (not Collapse) and hides the search field + conversation list.
     expect(screen.getByLabelText('Expand sidebar')).toBeInTheDocument()
     expect(screen.queryByLabelText('Collapse sidebar')).not.toBeInTheDocument()
-    expect(screen.queryByLabelText('Search conversations')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Search chats')).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByLabelText('Expand sidebar'))
     expect(props.onToggleCollapse).toHaveBeenCalledOnce()
@@ -520,9 +520,9 @@ describe('Sidebar — group collapse', () => {
     const props = baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })
     render(<Sidebar {...props} />)
 
-    // The only "＋ New group" affordance lives inside a conversation's ⋯ menu,
+    // The only "New group" affordance lives inside a conversation's ⋯ menu,
     // which is closed here — so none is visible in the footer.
-    expect(screen.queryByText('＋ New group')).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'New group' })).not.toBeInTheDocument()
   })
 })
 
@@ -576,7 +576,7 @@ describe('Sidebar — row overflow menu', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
-    fireEvent.click(screen.getByText('★ Pin'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Pin' }))
     expect(props.onSetPinned).toHaveBeenCalledWith('a', true)
 
     openConvMenu('Alpha')
@@ -588,7 +588,7 @@ describe('Sidebar — row overflow menu', () => {
     expect(props.onExport).toHaveBeenCalledWith('a')
 
     openConvMenu('Alpha')
-    fireEvent.click(screen.getByText('✕ Delete'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }))
     expect(props.onDelete).toHaveBeenCalledWith('a')
   })
 
@@ -599,7 +599,7 @@ describe('Sidebar — row overflow menu', () => {
     render(<Sidebar {...props} />)
 
     openConvMenu('Alpha')
-    fireEvent.click(screen.getByText('☆ Unpin'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Unpin' }))
     expect(props.onSetPinned).toHaveBeenCalledWith('a', false)
   })
 
@@ -738,7 +738,7 @@ describe('Sidebar — moving chats between groups', () => {
     openConvMenu('Alpha')
     // "Move to group" opens a flyout with a button per group ("○ Work" when not in it).
     openSubmenu('Move to group')
-    fireEvent.click(screen.getByRole('button', { name: '○ Work' }))
+    fireEvent.click(screen.getByRole('menuitemradio', { name: 'Work', checked: false }))
     expect(props.onMove).toHaveBeenCalledWith('a', 'g1')
   })
 
@@ -755,7 +755,7 @@ describe('Sidebar — moving chats between groups', () => {
 
     openConvMenu('Alpha')
     openSubmenu('Move to group')
-    fireEvent.click(screen.getByText('＋ New group'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'New group' }))
     expect(onCreateGroup).toHaveBeenCalledOnce()
 
     // After the create resolves, the new group's header shows an inline editor
@@ -822,7 +822,7 @@ describe('Sidebar — Open in (per-chat menu)', () => {
     openConvMenu('Alpha')
     await waitFor(() => expect(api.listEditors).toHaveBeenCalled())
     openSubmenu('Open in')
-    fireEvent.click(await screen.findByRole('button', { name: 'VS Code' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'VS Code' }))
     await waitFor(() => expect(api.openInEditor).toHaveBeenCalledWith('vscode', '/Users/me/proj'))
   })
 
@@ -833,10 +833,10 @@ describe('Sidebar — Open in (per-chat menu)', () => {
 
     openConvMenu('Alpha')
     openSubmenu('Open in')
-    expect(await screen.findByRole('button', { name: 'VS Code' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Cursor' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Zed' })).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: /^(finder|file explorer|file manager)$/i })).toBeInTheDocument()
+    expect(await screen.findByRole('menuitem', { name: 'VS Code' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Cursor' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Zed' })).not.toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: /^(finder|file explorer|file manager)$/i })).toBeInTheDocument()
   })
 
   it('reveals the chat workspace in the file manager', async () => {
@@ -848,7 +848,7 @@ describe('Sidebar — Open in (per-chat menu)', () => {
 
     openConvMenu('Alpha')
     openSubmenu('Open in')
-    fireEvent.click(await screen.findByRole('button', { name: /^(finder|file explorer|file manager)$/i }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: /^(finder|file explorer|file manager)$/i }))
     await waitFor(() => expect(api.revealInFileManager).toHaveBeenCalledWith('/Users/me/proj'))
   })
 
@@ -862,7 +862,7 @@ describe('Sidebar — Open in (per-chat menu)', () => {
 
     openConvMenu('Alpha')
     openSubmenu('Open in')
-    fireEvent.click(await screen.findByRole('button', { name: 'VS Code' }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'VS Code' }))
     expect(await screen.findByRole('alert')).toHaveTextContent("VS Code isn't installed.")
   })
 })
@@ -1103,7 +1103,7 @@ describe('Sidebar — group header menu', () => {
     render(<Sidebar {...props} />)
 
     openGroupMenu('Work')
-    fireEvent.click(screen.getByText('✎ Rename group'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rename group' }))
 
     const input = screen.getByDisplayValue('Work') as HTMLInputElement
     fireEvent.change(input, { target: { value: 'Renamed Group' } })
@@ -1120,7 +1120,7 @@ describe('Sidebar — group header menu', () => {
     render(<Sidebar {...props} />)
 
     openGroupMenu('Work')
-    fireEvent.click(screen.getByText('✕ Delete group'))
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Delete group' }))
     expect(props.onDeleteGroup).toHaveBeenCalledWith('g1')
   })
 })
@@ -1328,5 +1328,56 @@ describe('Sidebar: attention outside the rows', () => {
     expect(btn.querySelector('.sidebar__rail-pip')).not.toBeNull()
     rerender(<Sidebar {...baseProps({ collapsed: true })} />)
     expect(screen.getByRole('button', { name: 'Expand sidebar' })).toBeInTheDocument()
+  })
+})
+
+describe('Sidebar: the ⋯ menus', () => {
+  it('is a named menu of items that each lead with an icon, so their labels line up', () => {
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })} />)
+    openConvMenu('Alpha')
+    const menu = screen.getByRole('menu', { name: 'Actions for Alpha' })
+    const items = within(menu).getAllByRole('menuitem')
+    expect(items.map((i) => i.textContent?.trim())).toEqual(
+      expect.arrayContaining(['Pin', 'Rename', 'Fork', 'Archive', 'Open in▸', 'Move to group▸', 'Export', 'Delete'])
+    )
+    for (const item of items) expect(item.querySelector('svg.icon')).not.toBeNull()
+  })
+
+  it('marks the group a chat is in among the Move to group choices', () => {
+    render(
+      <Sidebar
+        {...baseProps({
+          groups: [
+            { id: 'g1', name: 'Work' },
+            { id: 'g2', name: 'Home' }
+          ],
+          conversations: [makeConv({ id: 'a', title: 'Alpha', groupId: 'g1' })]
+        })}
+      />
+    )
+    openConvMenu('Alpha')
+    openSubmenu('Move to group')
+    expect(screen.getByRole('menuitemradio', { name: 'Work' })).toHaveAttribute('aria-checked', 'true')
+    const home = screen.getByRole('menuitemradio', { name: 'Home' })
+    expect(home).toHaveAttribute('aria-checked', 'false')
+    // An unchecked choice keeps the icon's place, so the names still line up.
+    expect(home.querySelector('.menu__icon-slot')).not.toBeNull()
+  })
+
+  it('names the group header menu after its group', () => {
+    render(
+      <Sidebar
+        {...baseProps({
+          groups: [{ id: 'g1', name: 'Work' }],
+          conversations: [makeConv({ id: 'a', title: 'Alpha', groupId: 'g1' })]
+        })}
+      />
+    )
+    openGroupMenu('Work')
+    const menu = screen.getByRole('menu', { name: 'Options for group Work' })
+    expect(within(menu).getAllByRole('menuitem').map((i) => i.textContent?.trim())).toEqual([
+      'Rename group',
+      'Delete group'
+    ])
   })
 })
