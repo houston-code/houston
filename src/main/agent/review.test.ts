@@ -236,6 +236,17 @@ describe('runReview', () => {
     expect(out).not.toContain('could not be verified')
   })
 
+  it("returns the reviewers' findings as unverified when the verifier fails", async () => {
+    const { fn } = fakeAgent((o) => {
+      if (isVerifier(o)) return '[subagent error: overloaded]'
+      return dimensionOf(o) === 'CORRECTNESS' ? '- [SEVERITY: high] a.ts:1 — real bug' : 'No issues found.'
+    })
+    const out = await runReview(base({ runAgent: fn }))
+    expect(out).toContain('verifier could not complete')
+    expect(out).toContain('overloaded')
+    expect(out).toContain('real bug')
+  })
+
   it('honours a custom dimension list', async () => {
     const { fn, calls } = fakeAgent(() => 'No issues found.')
     await runReview(base({ runAgent: fn, dimensions: ['correctness'] }))

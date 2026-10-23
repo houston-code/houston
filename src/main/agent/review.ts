@@ -808,9 +808,14 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     for (const f of settleVerified(pending, verified, redact)) finding(f)
   }
 
+  // A verifier that failed checked nothing: hand back the reviewers' findings as
+  // unverified rather than a report that is only the verifier's error.
+  if (isErrorReport(verified)) {
+    const header = `Review of the current changes (${dimsLabel}): the verifier could not complete (${verified || 'no output'}), so these candidate findings are unverified; check each one directly:`
+    return assemble(header, candidateText, ...notes, footer, costLine())
+  }
   const header = `Adversarial review of the current changes (${dimsLabel}), each candidate finding verified in a separate context:`
-  const body = verified.trim() || '[verifier returned no output]'
-  return assemble(header, body, ...notes, footer, costLine())
+  return assemble(header, verified.trim(), ...notes, footer, costLine())
 }
 
 export interface ReviewWorkspaceOptions {
