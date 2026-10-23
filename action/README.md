@@ -84,8 +84,8 @@ built-in Seatbelt sandbox. Windows runners are not supported.
 | `cli-version` | pinned | Houston CLI release to run. Defaults to the release in [cli-release.json](cli-release.json). |
 | `github-token` | `github.token` | Token for reading threads and logs and for posting. |
 
-Outputs: `status` (`success`, `limit`, `stalled`, `approval_denied`, `error`, or
-`skipped`), `skipped`, `url`, `branch`, `reply-file`, `cost-usd`, `turns`, `cli-version`.
+Outputs: `status` (`success`, `limit`, `verify_failed`, `stalled`, `approval_denied`,
+`error`, or `skipped`), `skipped`, `url`, `branch`, `reply-file`, `cost-usd`, `turns`, `cli-version`.
 
 ## Other providers
 

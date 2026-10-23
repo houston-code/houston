@@ -67,7 +67,9 @@ export const HEADLESS_EXIT = {
   /** The run hit a budget (its step cap or the model's output limit) before finishing. */
   limit: 3,
   /** `--output-schema`: the final answer still didn't match the schema after one corrective turn. */
-  schema: 4
+  schema: 4,
+  /** The agent finished, but the last `--verify` (or verifyOnStop) check it ran failed. */
+  verify: 5
 } as const
 
 /**
@@ -91,6 +93,7 @@ export type HeadlessStatus =
   | 'error'
   | 'schema_invalid'
   | 'input_error'
+  | 'verify_failed'
 
 /**
  * The first line a `--json` run prints: what the run is about to do, so a harness
@@ -874,6 +877,8 @@ export function parseStreamJsonLine(line: string): { prompt: string } | { error:
 interface TurnTally {
   errored: boolean
   approvalDenied: boolean
+  /** The outcome of the last end-of-run verification check, when one ran. */
+  verified?: boolean
   limitReason?: HeadlessResult['limitReason']
   stopReason: StopReason | null
   inTok: number
@@ -898,7 +903,9 @@ const emptyTally = (): TurnTally => ({
 /** A run that ended with `t`, before any output-schema check. */
 function tallyStatus(t: TurnTally): HeadlessStatus {
   // A failure outranks a budget stop: a run that also hit an error or a refused
-  // approval didn't merely run out of room.
+  // approval didn't merely run out of room. A failed verification only qualifies a
+  // run that otherwise finished: the agent stopped, but the check it was held to (the
+  // last one, after its fix-up passes ran out) still fails.
   return t.errored
     ? 'error'
     : t.approvalDenied
@@ -907,7 +914,9 @@ function tallyStatus(t: TurnTally): HeadlessStatus {
         ? 'stalled'
         : t.limitReason
           ? 'limit'
-          : 'success'
+          : t.verified === false
+            ? 'verify_failed'
+            : 'success'
 }
 
 /**
@@ -1298,6 +1307,8 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // A failure sends the agent back to work, so the answer before it is no
           // longer its last word; a pass follows the final answer and keeps it.
           if (!e.passed) t.finalText = ''
+          // The last check decides the run's status: a later pass clears an earlier failure.
+          t.verified = e.passed
           if (!opts.json) deps.err(`· verification ${e.passed ? 'passed' : 'failed'}\n`)
           break
         case 'error':
@@ -1497,6 +1508,8 @@ export function headlessExitCode(status: HeadlessStatus): number {
       return HEADLESS_EXIT.schema
     case 'input_error':
       return HEADLESS_EXIT.usage
+    case 'verify_failed':
+      return HEADLESS_EXIT.verify
     default:
       return assertNever(status, 'headless:unhandled status')
   }

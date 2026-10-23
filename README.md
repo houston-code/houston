@@ -752,8 +752,9 @@ new optional fields and new event types can appear in the same version, so ignor
 what you don't recognize.
 
 `status` is `success`, `limit`, `stalled`, `approval_denied`, `error`,
-`schema_invalid` (the answer never matched `--output-schema`), or `input_error` (a
-bad `--input-format stream-json` line).
+`schema_invalid` (the answer never matched `--output-schema`), `input_error` (a
+bad `--input-format stream-json` line), or `verify_failed` (the last `--verify`
+check still failed).
 `limitReason` (`max-steps`, `max-output`, or `stalled`) is present when the loop
 stopped short. `turns` counts the agent's model steps (the unit `--max-turns`
 caps); `costUsd` and the token totals include subagent and review rounds.
@@ -773,10 +774,11 @@ matching value) or `schemaErrors` (why it didn't match).
 | 2 | Usage error: a bad flag value, an unreadable flag file, or an empty prompt on stdin (nothing ran); or a bad `--input-format stream-json` line. | (no result line), `input_error` |
 | 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit) or the model's output limit. | `limit` |
 | 4 | The final answer still didn't match `--output-schema` after one corrective round. | `schema_invalid` |
+| 5 | The agent finished, but the last `--verify` check it ran still failed once its fix-up passes ran out. | `verify_failed` |
 
-When several apply, a failure wins over a budget stop. The outcome of a
-`--verify` check doesn't change the code; in `--json` mode each check is a
-`verification` event.
+When several apply, a failure wins over a budget stop, and both win over a failed
+check. Only the last `--verify` check counts: a failure the agent then fixed is a
+success. In `--json` mode each check is a `verification` event.
 
 **Nobody to ask.** A headless run doesn't offer the agent `ask_user`. Its system
 prompt says no user is available, so it makes judgment calls itself and states
