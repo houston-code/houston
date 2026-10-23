@@ -547,6 +547,61 @@ describe('addPermissionRule — from an in-prompt "Always allow/deny"', () => {
   })
 })
 
+// The desktop app and a terminal session share one profile, each with its own store
+// module (and cache). Two fresh module instances over one userData dir stand in for them.
+describe('two Houston processes sharing settings.json', () => {
+  const seed = (permissionRules: PermissionRule[]): void =>
+    writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o'])], permissionRules })
+  const twoProcesses = async (): Promise<[StoreModule, StoreModule]> => {
+    const app = await loadStore()
+    vi.resetModules()
+    const terminal = await loadStore()
+    return [app, terminal]
+  }
+
+  it("sees a rule the other process saved, and doesn't write over it on its next save", async () => {
+    seed([])
+    const [app, terminal] = await twoProcesses()
+    app.getSettings()
+    terminal.getSettings()
+    const fromTerminal: PermissionRule = { action: 'allow', tool: 'run_shell', match: 'npm test' }
+    terminal.addPermissionRule(fromTerminal)
+    expect(app.getSettings().permissionRules).toEqual([expect.objectContaining(fromTerminal)])
+    // The app's own change keeps the terminal's rule.
+    const fromApp: PermissionRule = { action: 'deny', tool: 'run_shell', match: 'rm -rf *' }
+    app.addPermissionRule(fromApp)
+    expect(terminal.getSettings().permissionRules).toEqual([
+      expect.objectContaining(fromApp),
+      expect.objectContaining(fromTerminal)
+    ])
+  })
+
+  it('stops applying a rule the other process removed, and never writes it back', async () => {
+    const risky: PermissionRule = { action: 'allow', tool: 'run_shell', match: '*' }
+    seed([risky])
+    const [app, terminal] = await twoProcesses()
+    expect(terminal.getSettings().permissionRules).toEqual([risky])
+    app.saveSettings({ ...app.getSettings(), permissionRules: [] })
+    expect(terminal.getSettings().permissionRules).toEqual([])
+    terminal.updateSettings({ sidebarUnreadFirst: true })
+    expect(JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8')).permissionRules).toEqual([])
+  })
+
+  it('tells its listeners when the other process changed settings', async () => {
+    seed([])
+    const [app, terminal] = await twoProcesses()
+    app.getSettings()
+    const heard: unknown[] = []
+    app.onSettingsSaved((s) => heard.push(s.sidebarUnreadFirst))
+    terminal.updateSettings({ sidebarUnreadFirst: true })
+    app.getSettings()
+    expect(heard).toEqual([true])
+    // Reading again with nothing changed is not a change.
+    app.getSettings()
+    expect(heard).toEqual([true])
+  })
+})
+
 describe('setModelUnavailable — a model its provider answered "not found" for', () => {
   const seed = (): void =>
     writeSettings({ schemaVersion: 2, providers: [openaiProvider(['gpt-4o', 'gpt-9'])], permissionRules: [] })

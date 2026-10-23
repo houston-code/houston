@@ -170,8 +170,28 @@ export function canPersistHeaderSecrets(): boolean {
 
 let cache: AppSettings | null = null
 
+/**
+ * The settings file as {@link cache} last saw it (see {@link fileStamp}). The desktop
+ * app and a terminal session share the profile, and each keeps its own cache, so a
+ * file that no longer matches was saved by the other process since.
+ */
+let cacheStamp = ''
+
 function settingsPath(): string {
   return join(getUserDataDir(), 'settings.json')
+}
+
+/**
+ * The settings file's identity: inode, mtime and size, or `missing`. Every save is an
+ * atomic rename, so each one gets a fresh inode. One stat, cheap enough per read.
+ */
+function fileStamp(): string {
+  try {
+    const st = statSync(settingsPath())
+    return `${st.ino}:${st.mtimeMs}:${st.size}`
+  } catch {
+    return 'missing'
+  }
 }
 
 /**
@@ -435,6 +455,7 @@ function persist(settings: AppSettings): void {
   // 0600 — owner read/write only. Matches secrets.json: even with header secrets moved
   // out, settings.json still holds workspace paths, prompts, and MCP endpoints.
   writeFileAtomicSync(path, JSON.stringify(toWrite, null, 2), 0o600)
+  cacheStamp = fileStamp()
 }
 
 /**
@@ -461,14 +482,25 @@ function withKeyFlags(settings: AppSettings): AppSettings {
 }
 
 export function getSettings(): AppSettings {
+  // Another Houston process saved settings since this one last read or wrote them: read
+  // them again. Otherwise each process kept its own copy until restart, so a rule
+  // removed in the desktop app still applied in a running terminal session, and the
+  // next save from either one wrote its stale copy over what the other had saved.
+  // Every read-modify-write here goes through this read, so it starts from the file.
+  const reloading = cache !== null && fileStamp() !== cacheStamp
+  if (reloading) cache = null
   if (!cache) {
     const loaded = loadFromDisk()
     const { settings, migrated } = extractHeaderSecrets(loaded.settings)
     cache = settings
+    cacheStamp = fileStamp()
     // A legacy settings.json with cleartext header values: rewrite it now (0600, values
     // stripped) so the plaintext doesn't linger on disk until the next explicit save.
     // Likewise save a schema upgrade, so its one-time decisions stick.
     if (migrated || loaded.upgraded) persist(cache)
+    // What follows settings (the native menu's recents and shortcuts) follows a change
+    // made elsewhere too.
+    if (reloading) for (const listener of settingsListeners) listener(cache)
   }
   return withKeyFlags(cache)
 }
