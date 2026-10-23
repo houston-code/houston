@@ -55,7 +55,7 @@ import {
 import { chatAtIndex, cycleChatId } from './lib/sessionNav'
 import { nextApprovalPolicy } from './lib/policyCycle'
 import { resolveShortcuts } from './lib/keybindingOverrides'
-import type { PaletteItem } from './lib/palette'
+import { modelPaletteItems, type PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
 import { newGroupId } from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
@@ -2142,21 +2142,9 @@ export default function App(): JSX.Element {
         run: () => void onChangePolicy(p)
       })
     }
-    for (const prov of settings?.providers ?? []) {
-      for (const m of prov.models) {
-        const current =
-          settings?.selected?.providerId === prov.id && settings?.selected?.model === m.id
-        items.push({
-          id: `model-${prov.id}-${m.id}`,
-          title: `Use ${m.label ?? m.id}`,
-          subtitle: prov.label,
-          section: 'Model',
-          keywords: `${m.id} ${prov.id}`,
-          hint: current ? '✓ current' : undefined,
-          run: () => void onSelectModel({ providerId: prov.id, model: m.id })
-        })
-      }
-    }
+    items.push(
+      ...modelPaletteItems(settings?.providers ?? [], settings?.selected, (sel) => void onSelectModel(sel))
+    )
     for (const c of conversations) {
       if (c.id === currentId) continue
       items.push({
