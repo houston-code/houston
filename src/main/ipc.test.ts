@@ -126,6 +126,7 @@ import {
   setMessages
 } from './conversations'
 import { configureHasKey, updateSettings } from './store'
+import { takeQueue } from './agent/queue'
 
 // registerIpc wires the scheduler, whose store lives under the profile directory.
 // Production sets the userData seam before app.whenReady() (index.ts); mirror that
@@ -879,6 +880,16 @@ describe('agentStart / agentRetry approval-policy validation', () => {
       reasoningEffort: 'xhigh'
     })
     expect(meta).toMatchObject({ id, approvalPolicy: 'plan', reasoningEffort: 'xhigh' })
+  })
+
+  it('conversationSetSettings carries the change to a message queued behind the live run', async () => {
+    const id = freshConv()
+    await handler(IPC.agentQueueAdd)(from(SENDER), {
+      conversationId: id, userText: 'then this', providerId: 'p', model: 'm', approvalPolicy: 'full-auto'
+    })
+    await handler(IPC.conversationSetSettings)(from(SENDER), id, { approvalPolicy: 'plan', reasoningEffort: 'high' })
+    // The follow-up runs (and is recorded) under the chat's new settings, not the old ones.
+    expect(takeQueue(id)).toMatchObject({ approvalPolicy: 'plan', reasoningEffort: 'high', model: 'm' })
   })
 
   it('conversationCreate stores the new chat\'s settings, dropping unknown ones', async () => {

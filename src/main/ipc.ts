@@ -92,7 +92,7 @@ import {
   onChatStatusChanged
 } from './agent/loop'
 import { killShell, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
-import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds } from './agent/queue'
+import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
@@ -967,9 +967,13 @@ export function registerIpc(): void {
       })
     }
   )
-  ipcMain.handle(IPC.conversationSetSettings, (_event, id: string, patch: ConversationSettingsPatch) =>
-    setConversationSettings(id, patch)
-  )
+  ipcMain.handle(IPC.conversationSetSettings, (_event, id: string, patch: ConversationSettingsPatch) => {
+    const meta = setConversationSettings(id, patch)
+    // A message queued behind the live run goes out as this chat's next turn, so it
+    // takes the change too (a mode tightened mid-run must not be undone by it).
+    if (meta) retargetQueue(id, patch)
+    return meta
+  })
   ipcMain.handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
   ipcMain.handle(
     IPC.conversationCompact,
