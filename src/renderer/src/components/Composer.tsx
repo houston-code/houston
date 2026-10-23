@@ -275,6 +275,7 @@ export function Composer({
   const menuId = useId()
   const cmdMenuId = `${menuId}-commands`
   const fileMenuId = `${menuId}-files`
+  const attachMenuId = `${menuId}-attach`
   const fileInputRef = useRef<HTMLInputElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const plusRef = useRef<HTMLButtonElement>(null)
@@ -395,6 +396,7 @@ export function Composer({
         setLinkUrl('')
       } else {
         closeAttach()
+        plusRef.current?.focus()
       }
     }
     document.addEventListener('mousedown', onDown)
@@ -404,6 +406,43 @@ export function Composer({
       document.removeEventListener('keydown', onKey, true)
     }
   }, [attachOpen, linkMode, closeAttach])
+
+  // Keyboard: opening the menu (or backing out of the link form) puts focus on its first
+  // item, so it can be used without the mouse; menuKeyDown moves between items.
+  useEffect(() => {
+    if (!attachOpen || linkMode) return
+    menuRef.current?.querySelector<HTMLElement>('[role="menuitem"]:not(:disabled)')?.focus()
+  }, [attachOpen, linkMode])
+
+  // ↑/↓ (and Home/End) move between the menu's items. Tab leaves the menu for the
+  // message field, closing it, rather than tabbing out of an element about to vanish.
+  const menuKeyDown = (e: KeyboardEvent<HTMLDivElement>): void => {
+    if (linkMode) return
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      closeAttach()
+      ;(e.shiftKey ? plusRef.current : ref.current)?.focus()
+      return
+    }
+    const items = Array.from(
+      menuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]:not(:disabled)') ?? []
+    )
+    if (items.length === 0) return
+    const i = items.indexOf(document.activeElement as HTMLElement)
+    const next =
+      e.key === 'ArrowDown'
+        ? (i + 1) % items.length
+        : e.key === 'ArrowUp'
+          ? (i - 1 + items.length) % items.length
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? items.length - 1
+              : -1
+    if (next < 0) return
+    e.preventDefault()
+    items[next].focus()
+  }
 
   // ---- `+` menu actions ----
 
@@ -1037,7 +1076,14 @@ export function Composer({
           </ul>
         )}
         {attachOpen && (
-          <div className="attach-menu" role="menu" ref={menuRef}>
+          <div
+            className="attach-menu"
+            id={attachMenuId}
+            role="menu"
+            aria-label="Add to message"
+            ref={menuRef}
+            onKeyDown={menuKeyDown}
+          >
             {linkMode ? (
               <form
                 className="attach-menu__link"
@@ -1129,6 +1175,7 @@ export function Composer({
               aria-label="Add attachment"
               aria-haspopup="menu"
               aria-expanded={attachOpen}
+              aria-controls={attachOpen ? attachMenuId : undefined}
               disabled={disabled}
               onClick={() => setAttachOpen((o) => !o)}
             >
