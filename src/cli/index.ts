@@ -35,6 +35,7 @@ import {
 } from './credentials'
 import { runProvidersCommand, type ProvidersDeps } from './providers'
 import { trustSystemCertificates } from '../main/system-ca'
+import { flushRuleUsage, noteRuleUsed } from '../main/ruleUsage'
 
 /**
  * Standalone CLI entry — the interactive TUI (`-i`) and one-shot headless (`-p`)
@@ -185,7 +186,10 @@ export function wireCliHost(): void {
     collectSecrets: () => cliCollectSecrets(),
     getMcpOAuth: (serverId) => cliGetMcpOAuth(serverId),
     setMcpOAuth: (serverId, tokens) => cliSetMcpOAuth(serverId, tokens),
-    setModelUnavailable
+    setModelUnavailable,
+    // When each permission rule last decided a call (rule-usage.json, shared with the
+    // desktop app), so Settings shows rules used from the terminal as used.
+    noteRuleUsed
   })
 }
 
@@ -292,9 +296,14 @@ if (isDirectRun()) {
   })
 
   void main().then(
-    (code) => process.exit(code),
+    (code) => {
+      // Rule-usage writes are debounced; process.exit would drop the last ones.
+      flushRuleUsage()
+      process.exit(code)
+    },
     (e) => {
       process.stderr.write(`Fatal: ${(e as Error).message}\n`)
+      flushRuleUsage()
       process.exit(1)
     }
   )
