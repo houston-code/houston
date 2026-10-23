@@ -253,11 +253,15 @@ describe('approval prompt', () => {
       ...over
     }) as Extract<AgentEvent, { type: 'tool_approval' }>
 
-  it('shows name, kind, and summary', () => {
+  it('shows the call, kind, and summary', () => {
     const p = renderApprovalPrompt(ev(), makePainter(false))
-    expect(p).toContain('run_shell')
-    expect(p).toContain('[shell]')
+    // Named as the call's tool line names it, not by the wire name run_shell.
+    expect(p).toContain('Approve Run [shell]')
+    expect(p).not.toContain('run_shell')
     expect(p).toContain('rm -rf build')
+    expect(
+      renderApprovalPrompt(ev({ name: 'write_file', args: { path: 'a.ts', content: 'x' }, kind: 'write' }), makePainter(false))
+    ).toContain('Approve Write [write]')
   })
 
   it('keeps the typed-answer keys out of the picker prompt', () => {
@@ -5719,5 +5723,41 @@ describe('unansweredNotice', () => {
         { role: 'user', content: 'again' }
       ])
     ).toBeNull()
+  })
+})
+
+describe('tool lines for prompts that print themselves', () => {
+  it('skips the "· ask_user" and "· present_plan" lines', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'q1', name: 'ask_user', args: { question: 'Which?' }, kind: 'read' },
+      { runId: 'x', type: 'tool_result', callId: 'q1', name: 'ask_user', ok: true, output: 'This one' },
+      { runId: 'x', type: 'tool_start', callId: 'p1', name: 'present_plan', args: { title: 'P', plan: 'x' }, kind: 'read' },
+      { runId: 'x', type: 'tool_start', callId: 'r1', name: 'read_file', args: { path: 'a.ts' }, kind: 'read' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).not.toContain('· ask_user')
+    expect(out).not.toContain('· present_plan')
+    // Other tools keep their line.
+    expect(out).toContain('· Read')
+  })
+})
+
+describe('renderPlan readiness at the terminal width', () => {
+  it('continues a long row under its text instead of mid-word at the edge', () => {
+    const detail =
+      'Not installed yet. Installing needs network. Shell commands run offline until you allow network.'
+    const out = renderPlan(
+      { title: 'T', body: 'Do it.', readiness: { items: [{ need: 'npm packages', status: 'needs-network', detail }] } },
+      makePainter(false),
+      { actions: false, width: 60 }
+    )
+    const rows = out.split('\n').slice(out.split('\n').findIndex((l) => l.startsWith('  ! npm packages')))
+    expect(rows[0]).toBe('  ! npm packages: Not installed yet. Installing needs')
+    expect(rows[1]).toBe('    network. Shell commands run offline until you allow')
+    expect(rows[2]).toBe('    network.')
   })
 })
