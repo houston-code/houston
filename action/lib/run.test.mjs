@@ -140,6 +140,21 @@ describe('respond', () => {
     expect(w.outputs()).toMatch(/skipped<<.*\ntrue\n/)
   })
 
+  it("answers an Enterprise Managed User, whose login has a _shortcode suffix", async () => {
+    const w = world({ eventName: 'issue_comment', event: mention({ user: { login: 'mona-cat_octo', type: 'User' } }) })
+    expect(await w.go()).toBe(0)
+    const [check] = w.calls.filter((c) => c.cmd === 'gh' && c.args[0] === 'api')
+    expect(check.args[1]).toBe(`repos/${REPO}/collaborators/mona-cat_octo/permission`)
+    expect(w.cliCall()).toBeDefined()
+    expect(w.gh('issue', 'comment')).toHaveLength(1)
+  })
+
+  it('fails on a login that could change the permission API path, without running', async () => {
+    const w = world({ eventName: 'issue_comment', event: mention({ user: { login: 'a/../../x', type: 'User' } }) })
+    expect(await w.go()).toBe(1)
+    expect(w.calls).toEqual([])
+  })
+
   it('skips an outsider before any gh call', async () => {
     const w = world({ eventName: 'issue_comment', event: mention({ author_association: 'CONTRIBUTOR' }) })
     expect(await w.go()).toBe(0)
