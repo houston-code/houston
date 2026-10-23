@@ -357,7 +357,7 @@ function ConvRow({
             onCancel={onStopRename}
           />
         ) : (
-          <div className="conv__title" onDoubleClick={onStartRename}>
+          <div className="conv__title" title={conv.title} onDoubleClick={onStartRename}>
             {conv.title}
           </div>
         )}

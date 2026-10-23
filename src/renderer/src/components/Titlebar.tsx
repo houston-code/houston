@@ -62,7 +62,10 @@ export function Titlebar({
   const hasChanges = !!changes && changes.fileCount > 0
   return (
     <header className="titlebar">
-      <span className="titlebar__title">{title}</span>
+      {/* Centered between the action strips, a long title is cut short: hover shows it whole. */}
+      <span className="titlebar__title" title={title}>
+        {title}
+      </span>
       <div className="titlebar__actions">
         <TooltipProvider>
           {needsYou && needsYou.count > 0 && (
