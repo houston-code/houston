@@ -151,6 +151,14 @@ describe('Composer', () => {
     )
   })
 
+  it('names the @, /, and + shortcuts in the idle placeholder', () => {
+    render(<Composer {...baseProps()} />)
+    expect(screen.getByRole('textbox')).toHaveAttribute(
+      'placeholder',
+      'Ask Houston anything…  (@ for files, / for commands, + for attachments)'
+    )
+  })
+
   it('queues a message via Mod+Enter while a run is in progress', () => {
     const props = baseProps({ running: true })
     render(<Composer {...props} />)

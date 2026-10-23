@@ -1110,7 +1110,7 @@ export function Composer({
                 ? answering
                   ? answeringPlaceholder(isMacPlatform())
                   : runningPlaceholder(isMacPlatform())
-                : 'Ask Houston…  (@ file, / command, or + to attach)'
+                : 'Ask Houston anything…  (@ for files, / for commands, + for attachments)'
           }
           value={text}
           disabled={disabled}
