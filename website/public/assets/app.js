@@ -184,7 +184,11 @@
     });
   }
 
-  if (window.fetch) {
+  // Only the landing page has links or a version to fill in. Anywhere else the call would
+  // just spend the visitor's unauthenticated GitHub API allowance (60 an hour per IP),
+  // which the landing page then needs for its direct download links.
+  var wantsRelease = !!($("[data-asset-suffix]") || $("#hero-version"));
+  if (window.fetch && wantsRelease) {
     // Abort after 6s so a slow or unreachable GitHub API falls back fast.
     var ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
     var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 6000) : null;

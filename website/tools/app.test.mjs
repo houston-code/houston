@@ -73,6 +73,29 @@ describe("hero download button", () => {
   });
 });
 
+describe("release feed", () => {
+  // Every page loads app.js; only the landing page has anything to fill from the feed.
+  async function fetches(file) {
+    const page = readFileSync(resolve(PUBLIC, file), "utf8");
+    const dom = new JSDOM(page, { url: "https://houstoncode.ai/", runScripts: "outside-only" });
+    const calls = [];
+    dom.window.fetch = (url) => (calls.push(url), Promise.reject(new Error("offline")));
+    dom.window.eval(appJs);
+    await new Promise((r) => setTimeout(r, 20));
+    return calls;
+  }
+
+  it("is read once on the landing page", async () => {
+    expect(await fetches("index.html")).toEqual(["https://api.github.com/repos/houston-code/houston/releases/latest"]);
+  });
+
+  it("is not read on pages without download links", async () => {
+    for (const file of ["contact.html", "404.html", "privacy.html", "docs/index.html", "docs/models.html"]) {
+      expect(await fetches(file), file).toEqual([]);
+    }
+  });
+});
+
 describe("download card buttons", () => {
   it("highlights only the recommended card's button", async () => {
     const r = await run({ platform: { os: "win", card: "win" }, release: RELEASE });
