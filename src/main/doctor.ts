@@ -8,6 +8,7 @@ import { activeBackendId, isSandboxed } from './sandbox'
 import { providerKeyEnvVars } from '@shared/provider-keys'
 import { LspManager } from './agent/lsp/manager'
 import { rootUsesLanguage, serverRegistry } from './agent/lsp/servers'
+import { depCacheReport } from './agent/lsp/depCaches'
 
 /** Language-server facts for `/doctor`: install status, and whether the workspace uses each language. */
 export function languageServerFacts(
@@ -22,13 +23,18 @@ export function languageServerFacts(
   return {
     languageServers: probe.statuses([cwd]).map((st) => {
       const spec = specs.get(st.id)
+      const report = spec && !spec.user && st.path ? depCacheReport(st.id, [cwd]) : null
+      const depCache = report
+        ? { name: report.name, path: report.path, missing: report.missing.length, total: report.total, fix: `run \`${report.command}\` in the project` }
+        : undefined
       return {
         id: st.id,
         name: st.name,
         path: st.path,
         ...(st.source ? { source: st.source } : {}),
         usedByProject: spec ? rootUsesLanguage(spec, cwd) : false,
-        installHint: st.installHint
+        installHint: st.installHint,
+        ...(depCache ? { depCache } : {})
       }
     }),
     ...(blocked ? { languageServersBlocked: blocked } : {})

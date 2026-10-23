@@ -580,7 +580,11 @@ export function spawnWithBackend(
     cwd: opts.cwd,
     // Launch-specific overrides (proxy env vars, forwarder switches) win over the
     // shared sandbox env — the backend knows how its transport must be addressed.
-    env: { ...sandboxEnv(baseEnv, { offline: runsOffline(backend, opts.allowNetwork) }), ...launch.env },
+    env: {
+      ...sandboxEnv(baseEnv, { offline: runsOffline(backend, opts.allowNetwork) }),
+      ...opts.envOverrides,
+      ...launch.env
+    },
     detached: launch.detached,
     windowsHide: launch.windowsHide
   })

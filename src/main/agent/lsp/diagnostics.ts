@@ -200,7 +200,9 @@ export async function lspEditDiagnostics(opts: EditDiagnosticsOptions): Promise<
     const preexisting = compared
       ? post.filter((d) => isError(d) || isWarning(d)).length - fresh.filter((d) => isError(d) || isWarning(d)).length
       : 0
-    const block = formatEditDiagnostics({ server, rel: opts.rel, fresh, compared, preexisting })
+    const listed = formatEditDiagnostics({ server, rel: opts.rel, fresh, compared, preexisting })
+    // New errors may be imports the server can't resolve offline, not the edit's fault.
+    const block = listed && client.missingDepsHint ? `${listed}\n(note: ${client.missingDepsHint})` : listed
     return { ran: true, server, ...(block ? { block } : {}) }
   } catch {
     return { ran: false }

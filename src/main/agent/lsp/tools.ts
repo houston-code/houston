@@ -118,6 +118,9 @@ export function locateSymbol(text: string, line: number, symbol: string, occurre
   return { line: line - 1, character: hits[n - 1] }
 }
 
+/** The client each call's `target` used, keyed by the call's args, for the missing-dependency note. */
+const clientOfCall = new WeakMap<object, LspClient>()
+
 /** The file named by the call, its text, the client covering it (synced), and the position. */
 async function target(
   deps: LspToolDeps,
@@ -133,6 +136,7 @@ async function target(
   if (!client) {
     throw new Error(`No language server is running for ${rel}. Use search_files or ast_grep instead.`)
   }
+  clientOfCall.set(args, client)
   const text = await fs.readFile(abs, 'utf8')
   await client.sync(abs, text)
   const position = needPosition ? locateSymbol(text, int(args, 'line') ?? 0, str(args, 'symbol'), int(args, 'occurrence')) : null
@@ -681,5 +685,21 @@ export function makeLspTools(deps: LspToolDeps): ToolDef[] {
     }
   }
 
-  return [definition, references, hover, documentSymbols, workspaceSymbols, rename]
+  return [...[definition, references, hover, documentSymbols, workspaceSymbols].map(withMissingDepsNote), rename]
+}
+
+/**
+ * A read tool whose result also carries the server's missing-dependency note, so an
+ * empty or partial answer isn't taken as the whole truth about the code.
+ */
+function withMissingDepsNote(tool: ToolDef): ToolDef {
+  const run = tool.execute.bind(tool)
+  return {
+    ...tool,
+    async execute(args, ctx) {
+      const out = await run(args, ctx)
+      const hint = clientOfCall.get(args)?.missingDepsHint
+      return hint ? `${out}\n\n(note: ${hint})` : out
+    }
+  }
 }

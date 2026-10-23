@@ -719,6 +719,38 @@ describe('spawnWithBackend — offline fail-fast env', () => {
   })
 })
 
+describe('spawnWithBackend — env overrides', () => {
+  it("override the sandbox's cache redirects, and the launch's own variables override them", async () => {
+    const backend: SandboxBackend = {
+      id: 'none',
+      sandboxed: false,
+      confinesNetwork: false,
+      supportsSession: true,
+      shellSyntax: 'posix',
+      buildLaunch: () => ({
+        file: process.execPath,
+        args: ['-e', 'process.stdout.write(`${process.env.GOMODCACHE}|${process.env.CARGO_HOME}|${process.env.LAUNCH}`)'],
+        env: { LAUNCH: 'launch' },
+        detached: false,
+        windowsHide: true,
+        supportsSession: true
+      })
+    }
+    const { child } = spawnWithBackend(backend, {
+      command: 'noop',
+      cwd: process.cwd(),
+      workspace: process.cwd(),
+      allowNetwork: false,
+      env: { PATH: process.env.PATH, TMPDIR: '/t' },
+      envOverrides: { GOMODCACHE: '/user/mod', LAUNCH: 'mine' }
+    })
+    let out = ''
+    child.stdout?.on('data', (c: Buffer) => (out += c.toString()))
+    await new Promise<void>((resolve) => child.once('close', () => resolve()))
+    expect(out).toBe(`/user/mod|${join('/t', 'houston-pkg-cache', 'cargo')}|launch`)
+  })
+})
+
 describe('spawnWithBackend — abort listener cleanup', () => {
   it('removes its abort listener once the child exits', async () => {
     const ac = new AbortController()

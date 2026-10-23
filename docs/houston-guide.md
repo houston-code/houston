@@ -750,6 +750,13 @@ show it.
 - They start on demand, one per language and project, are reused across turns, and
   stop after ten idle minutes or when Houston quits.
 - They run in the same sandbox as shell commands, with no network.
+- With no network, a server can't download the project's dependencies, so Go and
+  Rust servers read them from your own caches: your Go module cache (`GOMODCACHE`, or
+  `~/go/pkg/mod`) and your Cargo home (`CARGO_HOME`, or `~/.cargo`), the ones your
+  own builds fill. They can read them but not change them. If a dependency isn't
+  there, the agent is told which, and `/doctor` warns; run `go mod download` or
+  `cargo fetch` in the project yourself, and Houston restarts the server once
+  they're there.
 - A server can run code from the project (a TypeScript plugin named in
   `tsconfig.json`, a Rust build script). So on a host where the sandbox can't confine
   it, servers stay off unless you set **Run language servers** to **Always**.

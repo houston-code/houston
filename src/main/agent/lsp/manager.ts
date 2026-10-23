@@ -15,6 +15,7 @@ import { shellQuote } from '../format'
 import { backendShellSyntax, isSandboxed, spawnSandboxedEx } from '../../sandbox'
 import type { LanguageServerStatus, LspServerConfig } from '@shared/types'
 import { LspClient, type LspSpawn } from './client'
+import { depCacheReport, lspDepCaches, missingDepsHint } from './depCaches'
 import {
   resolveServer,
   rootUsesLanguage,
@@ -37,15 +38,29 @@ export const IDLE_TIMEOUT_MS = 10 * 60_000
 /** A server that crashes this many times inside the window is not restarted again. */
 const MAX_CRASHES = 3
 const CRASH_WINDOW_MS = 5 * 60_000
+/** How often a server missing dependencies looks again for them in the cache. */
+export const DEPS_RECHECK_MS = 15_000
 
-/** Launch a server under the host sandbox with no network. */
+/** The missing-dependency note for a built-in server in this workspace, or null. */
+function defaultDepsHint(spec: LspServerSpec, roots: string[]): string | null {
+  return spec.user ? null : missingDepsHint(depCacheReport(spec.id, roots))
+}
+
+/** Launch a server under the host sandbox with no network, reading the user's dependency caches. */
 export const sandboxedSpawn: LspSpawn = (server: ResolvedServer, roots: string[]): ChildProcess => {
   // Git Bash (the Windows sandbox shell) reads a forward-slash path as a path.
   const exe = process.platform === 'win32' ? server.path.replace(/\\/g, '/') : server.path
   const command = [exe, ...server.args]
     .map(shellQuote)
     .join(' ')
-  return spawnSandboxedEx({ command, cwd: roots[0], workspace: roots[0], roots, allowNetwork: false }).child
+  return spawnSandboxedEx({
+    command,
+    cwd: roots[0],
+    workspace: roots[0],
+    roots,
+    allowNetwork: false,
+    envOverrides: lspDepCaches().env
+  }).child
 }
 
 interface Entry {
@@ -54,6 +69,8 @@ interface Entry {
   idleTimer: ReturnType<typeof setTimeout> | null
   /** A shell command ran since the open documents were last re-read from disk. */
   stale: boolean
+  /** When the missing dependencies were last looked for (only while some are missing). */
+  depsCheckedAt: number
 }
 
 export interface LspManagerDeps {
@@ -69,6 +86,8 @@ export interface LspManagerDeps {
   initTimeoutMs?: number
   requestTimeoutMs?: number
   now?: () => number
+  /** The note for dependencies a server can't see (default: checks the Go and Cargo caches). */
+  depsHint?: (spec: LspServerSpec, roots: string[]) => string | null
 }
 
 /** One server's status for Settings and /doctor. */
@@ -191,6 +210,11 @@ export class LspManager {
       this.entries.delete(key)
       entry = undefined
     }
+    if (entry?.client.missingDepsHint && this.depsArrived(entry, spec, roots)) {
+      // The user fetched them. A server reads the module graph once, so start it afresh.
+      await this.stopEntry(entry)
+      entry = undefined
+    }
     if (!entry) {
       if (this.crashBudgetSpent(key)) return null
       const server = resolveServer(spec, this.resolveOpts(roots))
@@ -202,7 +226,8 @@ export class LspManager {
         initTimeoutMs: this.deps.initTimeoutMs,
         requestTimeoutMs: this.deps.requestTimeoutMs
       })
-      const created: Entry = { client, key, idleTimer: null, stale: false }
+      client.missingDepsHint = (this.deps.depsHint ?? defaultDepsHint)(spec, roots)
+      const created: Entry = { client, key, idleTimer: null, stale: false, depsCheckedAt: (this.deps.now ?? Date.now)() }
       client.onDeath(() => {
         if (created.idleTimer) clearTimeout(created.idleTimer)
         if (this.entries.get(key) === created) this.entries.delete(key)
@@ -231,6 +256,14 @@ export class LspManager {
       await entry.client.refreshAll().catch(() => {})
     }
     return entry.client
+  }
+
+  /** Whether a server that was missing dependencies would now find them all (looked at most every DEPS_RECHECK_MS). */
+  private depsArrived(entry: Entry, spec: LspServerSpec, roots: string[]): boolean {
+    const now = (this.deps.now ?? Date.now)()
+    if (now - entry.depsCheckedAt < DEPS_RECHECK_MS) return false
+    entry.depsCheckedAt = now
+    return (this.deps.depsHint ?? defaultDepsHint)(spec, roots) === null
   }
 
   /** Running clients whose workspace is `roots`. */
