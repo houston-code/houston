@@ -99,6 +99,8 @@ export class LspClient {
   deathReason: string | null = null
   /** Recent stderr, kept for a crash report. */
   stderrTail = ''
+  /** Why the server can't see some of the project's dependencies, when it can't (see depCaches.ts). */
+  missingDepsHint: string | null = null
   private proc: ChildProcess | null = null
   private conn: JsonRpcConnection | null = null
   private starting: Promise<void> | null = null

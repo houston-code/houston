@@ -104,6 +104,15 @@ describe('navigation tools against a fake server', () => {
     expect(out).toContain('function greet(): void')
   })
 
+  it("read tools carry the server's missing-dependency note", async () => {
+    const plain = await tool('lsp_hover').execute({ path: 'a.fk', line: 2, symbol: 'greet' }, ctx())
+    expect(plain).not.toContain('note:')
+    ;(await manager.clientFor(join(root, 'a.fk'), [root]))!.missingDepsHint = 'fetch them'
+    const noted = await tool('lsp_hover').execute({ path: 'a.fk', line: 2, symbol: 'greet' }, ctx())
+    expect(noted).toBe(`${plain}\n\n(note: fetch them)`)
+    expect(await tool('lsp_document_symbols').execute({ path: 'a.fk' }, ctx())).toContain('(note: fetch them)')
+  })
+
   it('lsp_document_symbols and lsp_workspace_symbols outline with line numbers', async () => {
     expect(await tool('lsp_document_symbols').execute({ path: 'a.fk' }, ctx())).toBe('function greet  (line 1)')
     expect(await tool('lsp_workspace_symbols').execute({ path: 'a.fk', query: 'gre' }, ctx())).toBe('function greet  a.fk:1')

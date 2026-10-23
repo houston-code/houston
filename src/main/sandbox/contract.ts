@@ -76,6 +76,12 @@ export interface SandboxSpawnOptions {
   /** Egress-proxy endpoints; with allowNetwork:true, switches capable backends to proxied network. */
   egressProxy?: EgressProxyEndpoints
   env?: NodeJS.ProcessEnv
+  /**
+   * Variables set over the sandbox's own environment (its package-cache redirects
+   * included), for a caller that knows better where one tool should look. The
+   * backend's launch-specific variables still win.
+   */
+  envOverrides?: Record<string, string>
   signal?: AbortSignal
 }
 

@@ -56,6 +56,11 @@ export interface DoctorFacts {
     source?: string
     usedByProject: boolean
     installHint: string
+    /**
+     * The dependency cache an installed server reads (Go module cache, Cargo registry),
+     * for servers that have one: how many of the project's dependencies it lacks.
+     */
+    depCache?: { name: string; path: string; missing: number; total: number; fix: string }
   }[]
   /** Why installed servers won't start here, if they won't (see IntegrationsInfo). */
   languageServersBlocked?: 'disabled' | 'unsandboxed' | 'needs-git-bash'
@@ -78,7 +83,15 @@ function languageServerChecks(f: DoctorFacts): DoctorCheck[] {
   }
   const missing: string[] = []
   for (const s of servers) {
-    if (s.path) {
+    if (s.path && s.usedByProject && s.depCache && s.depCache.missing > 0) {
+      const { name, path, missing, total, fix } = s.depCache
+      checks.push({
+        label: s.id,
+        status: 'warn',
+        detail: `installed, but ${missing} of this project's ${total} dependencies aren't in the ${name} at ${path}, so it can't see them`,
+        fix
+      })
+    } else if (s.path) {
       checks.push({ label: s.id, status: 'ok', detail: s.source === 'workspace' ? `${s.path} (project)` : s.path })
     } else if (s.usedByProject) {
       checks.push({

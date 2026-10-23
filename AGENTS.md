@@ -196,7 +196,9 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   so they launch only through the sandbox (off where it can't confine them unless the user
   opts in), every location a server returns must pass `resolveInRoots`, credential-file
   lines are never quoted, a server's `workspace/applyEdit` is always refused, and
-  `lsp_rename` reaches disk only as an `apply_patch` through the normal write gate.
+  `lsp_rename` reaches disk only as an `apply_patch` through the normal write gate. The
+  user's Go and Cargo caches reach servers as environment only (`envOverrides`), never as
+  writable roots, and servers never get network to fill them.
 
 `SECURITY.md` and `docs/sandboxing.md` describe the guarantees these modules are meant to
 provide. If a change alters one, update them in the same PR.

@@ -14,7 +14,7 @@ import {
 } from './jsonrpc'
 import { LspClient, type LspSpawn } from './client'
 import { canonicalDrive, fromUri, toUri } from './uri'
-import { LspManager } from './manager'
+import { DEPS_RECHECK_MS, LspManager } from './manager'
 import { newDiagnostics, lspEditDiagnostics, formatEditDiagnostics } from './diagnostics'
 import { afterWrite, captureBeforeWrite } from './writeSeam'
 import { resolveServer, serverRegistry, specForFile, rootUsesLanguage, BUILTIN_SERVERS } from './servers'
@@ -411,6 +411,28 @@ describe('LspManager', () => {
     expect(killed.blockedReason()).toBe('disabled')
   })
 
+  it('notes missing dependencies at start, and restarts the server once they arrive', async () => {
+    let missing = true
+    let now = 0
+    const m = makeManager({}, { now: () => now, depsHint: () => (missing ? 'fetch them' : null) })
+    const file = join(root, 'a.fk')
+    writeFileSync(file, 'ok\n')
+    const first = (await m.clientFor(file, [root]))!
+    expect(first.missingDepsHint).toBe('fetch them')
+    // Still missing, or looked again too soon: the same server.
+    now = DEPS_RECHECK_MS
+    expect(await m.clientFor(file, [root])).toBe(first)
+    missing = false
+    now += 1000
+    expect(await m.clientFor(file, [root])).toBe(first)
+    // Due for a look and they're there: a fresh server, with no note.
+    now += DEPS_RECHECK_MS
+    const second = (await m.clientFor(file, [root]))!
+    expect(second).not.toBe(first)
+    expect(first.state).toBe('stopped')
+    expect(second.missingDepsHint).toBeNull()
+  })
+
   it('offers servers only for workspaces that use the language', () => {
     const m = makeManager()
     expect(m.availableFor([root]).map((s) => s.id)).not.toContain('fake')
@@ -554,6 +576,19 @@ describe('post-edit diagnostics', () => {
     const r = await lspEditDiagnostics({ manager: m, abs: file, rel: 'a.fk', roots: [root], before: null, timeoutMs: 60 })
     expect(r).toMatchObject({ ran: false, timedOut: true })
     expect(r.block).toBeUndefined()
+  })
+
+  it("adds the server's missing-dependency note to a report, not to a clean edit", async () => {
+    const m = makeManager()
+    const file = join(root, 'a.fk')
+    writeFileSync(file, 'ok\n')
+    ;(await m.clientFor(file, [root]))!.missingDepsHint = 'fetch them'
+    const clean = await lspEditDiagnostics({ manager: m, abs: file, rel: 'a.fk', roots: [root], before: 'ok\nfine\n', settleMs: 20 })
+    expect(clean.block).toBeUndefined()
+    writeFileSync(file, 'ok\nERROR\n')
+    const r = await lspEditDiagnostics({ manager: m, abs: file, rel: 'a.fk', roots: [root], before: 'ok\n', settleMs: 20 })
+    expect(r.block).toContain('1 new error in a.fk')
+    expect(r.block?.endsWith('(note: fetch them)')).toBe(true)
   })
 
   it('does nothing for a file no server covers', async () => {

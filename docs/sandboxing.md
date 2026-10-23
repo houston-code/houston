@@ -142,6 +142,15 @@ Houston therefore stops servers itself (idle timeout, app quit, terminal-client 
 A server's `workspace/applyEdit` request is always refused: edits reach disk only
 through the agent's write tools and their approval gate.
 
+A server only reads dependencies, and offline it can't fetch any, so the package-cache
+redirects below would leave it Houston's cache, empty unless the agent downloaded into
+it. Servers instead get the user's own Go module cache and Cargo home
+([`depCaches.ts`](../src/main/agent/lsp/depCaches.ts)), which the sandbox lets them
+read (reads are allowed everywhere) but not write (they're outside the roots), plus
+`GOPROXY=off` and `CARGO_NET_OFFLINE=true` so a missing dependency fails at once.
+Houston checks the project's `go.mod` or `Cargo.lock` against that cache to tell the
+agent what's missing, since servers don't report it reliably.
+
 ## Environment sanitization (all backends)
 
 The sandbox is a *filesystem/network* jail, not an environment one: a child can read

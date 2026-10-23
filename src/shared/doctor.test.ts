@@ -63,6 +63,29 @@ describe('buildDoctorReport — language servers', () => {
     ])
   })
 
+  it("warns when an installed server's dependency cache is missing, for a project that uses it", () => {
+    const cache = (missing: number) => ({ name: 'Go module cache', path: '/h/go/pkg/mod', missing, total: 4, fix: 'run `go mod download` in the project' })
+    const g = group(
+      facts({
+        languageServers: [
+          { ...ls('go', '/bin/gopls', true), depCache: cache(3) },
+          { ...ls('rust', '/bin/ra', false), depCache: { ...cache(3), name: 'Cargo registry' } },
+          { ...ls('gofork', '/bin/g2', true), depCache: cache(0) }
+        ]
+      })
+    )!
+    expect(g.checks).toEqual([
+      {
+        label: 'go',
+        status: 'warn',
+        detail: "installed, but 3 of this project's 4 dependencies aren't in the Go module cache at /h/go/pkg/mod, so it can't see them",
+        fix: 'run `go mod download` in the project'
+      },
+      { label: 'rust', status: 'ok', detail: '/bin/ra' },
+      { label: 'gofork', status: 'ok', detail: '/bin/g2' }
+    ])
+  })
+
   it('warns when servers are blocked on this host', () => {
     const g = group(facts({ languageServers: [], languageServersBlocked: 'unsandboxed' }))!
     expect(g.checks[0]).toMatchObject({ label: 'language servers', status: 'warn', detail: expect.stringContaining('no OS sandbox') })
