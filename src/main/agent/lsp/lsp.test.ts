@@ -13,6 +13,7 @@ import {
   ResponseError
 } from './jsonrpc'
 import { LspClient, type LspSpawn } from './client'
+import { canonicalDrive, fromUri, toUri } from './uri'
 import { LspManager } from './manager'
 import { newDiagnostics, lspEditDiagnostics, formatEditDiagnostics } from './diagnostics'
 import { afterWrite, captureBeforeWrite } from './writeSeam'
@@ -124,6 +125,38 @@ describe('JsonRpcConnection', () => {
     toClient.write(Buffer.from('garbage\r\n\r\n'))
     await expect(p).rejects.toBeInstanceOf(ConnectionClosedError)
     expect(conn.isClosed).toBe(true)
+  })
+})
+
+describe('file URIs', () => {
+  it('uppercases a Windows drive letter and leaves other paths alone', () => {
+    expect(canonicalDrive('c:\\w\\a.ts')).toBe('C:\\w\\a.ts')
+    expect(canonicalDrive('C:\\w\\a.ts')).toBe('C:\\w\\a.ts')
+    expect(canonicalDrive('/home/c:/a.ts')).toBe('/home/c:/a.ts')
+    expect(canonicalDrive('/w/a.ts')).toBe('/w/a.ts')
+  })
+
+  // Servers built on the common URI libraries send `file:///c%3A/...`; Houston's own
+  // paths have an uppercase drive. Both must name one document, or diagnostics filed
+  // under the server's spelling are never found under Houston's.
+  it.runIf(process.platform === 'win32')('gives a file one URI whatever case its drive letter is in', () => {
+    expect(toUri('c:\\w\\a.ts')).toBe(toUri('C:\\w\\a.ts'))
+    expect(fromUri('file:///c%3A/w/a.ts')).toBe('C:\\w\\a.ts')
+    expect(toUri(fromUri('file:///c%3A/w/a.ts')!)).toBe(toUri('C:\\w\\a.ts'))
+  })
+
+  it.runIf(process.platform === 'win32')('finds diagnostics a server published under a lowercase drive', () => {
+    const c = new LspClient({
+      server: resolveServer(serverRegistry([FAKE_SERVER])[0])!,
+      roots: ['C:\\w'],
+      spawn: fakeSpawn()
+    })
+    const diag = { range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, message: 'boom' }
+    ;(c as unknown as { onDiagnostics: (p: unknown) => void }).onDiagnostics({
+      uri: 'file:///c%3A/w/a.ts',
+      diagnostics: [diag]
+    })
+    expect(c.diagnostics('C:\\w\\a.ts')).toEqual([diag])
   })
 })
 
