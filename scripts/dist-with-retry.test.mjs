@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawnSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -42,14 +42,19 @@ else echo "$*" >> "$STUB_DIR/hdiutil-calls"; fi
 // fires on macOS, so the Windows leg skips this.
 describe.skipIf(process.platform === 'win32')('dist-with-retry.sh', () => {
   let dir
-  beforeEach(() => {
+  // The stubs are written once, and each is run once here. macOS scans an executable the
+  // first time it runs (about half a second each, and the scans queue under a loaded
+  // machine), so writing fresh stubs for every test put that cost inside every test and
+  // timed some out during a full suite run. Each run() clears what the stubs record.
+  beforeAll(() => {
     dir = mkdtempSync(join(tmpdir(), 'dist-retry-'))
     for (const [name, body] of [['npm', NPM], ['hdiutil', HDIUTIL]]) {
       writeFileSync(join(dir, name), body)
       chmodSync(join(dir, name), 0o755)
+      spawnSync(join(dir, name), ['info'], { env: { STUB_DIR: dir, FAILS: '0', MSG: '', GITHUB_WORKSPACE: '/ws' } })
     }
   })
-  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  afterAll(() => rmSync(dir, { recursive: true, force: true }))
 
   const run = ({ os = 'macOS', fails = 0, msg = FLAKE, args = ['dist:mac:x64'] } = {}) => {
     for (const f of ['npm-calls', 'npm-args', 'hdiutil-calls']) rmSync(join(dir, f), { force: true })
