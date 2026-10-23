@@ -863,7 +863,10 @@ export async function runAcpEntry(host: { version?: string } = {}): Promise<numb
                 workspace: conv.workspace,
                 messages: conv.messages,
                 title: conv.title,
-                updatedAt: conv.updatedAt
+                updatedAt: conv.updatedAt,
+                providerId: conv.providerId,
+                model: conv.model,
+                ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {})
               }
             : null
         },

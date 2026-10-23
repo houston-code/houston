@@ -99,6 +99,8 @@ interface Harness {
   frames: any[]
   stored: Map<string, AcpStoredSession>
   saved: Map<string, ChatMessage[]>
+  /** Every store.setModel call, as [id, providerId, model]. */
+  modelWrites: Array<[string, string, string]>
   /** Send a request and await its response frame. */
   call: (method: string, params?: unknown) => Promise<any>
   notify: (method: string, params?: unknown) => void
@@ -126,6 +128,7 @@ function harness(opts: {
   const pending = new Map<number, (m: any) => void>()
   const stored = new Map((opts.stored ?? []).map((s) => [s.id, s]))
   const saved = new Map<string, ChatMessage[]>()
+  const modelWrites: Array<[string, string, string]> = []
   let ids = 0
   let convIds = 0
   const cwd = mkdtempSync(join(tmpdir(), 'houston-acp-'))
@@ -155,7 +158,7 @@ function harness(opts: {
       get: (id) => stored.get(id) ?? null,
       list: () => [...stored.values()],
       setMessages: (id, m) => void saved.set(id, m),
-      setModel: () => {}
+      setModel: (id, providerId, model) => void modelWrites.push([id, providerId, model])
     },
     write: (line) => {
       expect(line.endsWith('\n')).toBe(true)
@@ -187,6 +190,7 @@ function harness(opts: {
     frames,
     stored,
     saved,
+    modelWrites,
     cwd,
     call: (method, params) => {
       const id = ++ids
@@ -500,6 +504,45 @@ describe('ACP server: protocol flow', () => {
     expect(h.loop.requests[0].extraMcpServers).toEqual([
       expect.objectContaining({ id: 'acp-docs', command: 'docs-mcp', args: ['--stdio'], env: { TOKEN: 't' } })
     ])
+    await h.end()
+  })
+
+  it("continues a loaded session on the chat's own model and reasoning effort", async () => {
+    const h = harness({
+      stored: [
+        {
+          id: 'saved-1',
+          workspace: '/elsewhere',
+          messages: [],
+          providerId: 'anthropic',
+          model: 'claude-opus-4-1',
+          reasoningEffort: 'high'
+        }
+      ],
+      run: async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    await h.call('session/load', { sessionId: 'saved-1', cwd: h.cwd, mcpServers: [] })
+    await h.call('session/prompt', { sessionId: 'saved-1', prompt: text('go on') })
+    expect(h.loop.requests[0]).toEqual(
+      expect.objectContaining({ providerId: 'anthropic', model: 'claude-opus-4-1', reasoningEffort: 'high' })
+    )
+    // Nothing moved, so the chat's stored model is left alone.
+    expect(h.modelWrites).toEqual([])
+    await h.end()
+  })
+
+  it("moves a loaded session to the default model only when the chat's provider is gone, and records it", async () => {
+    const h = harness({
+      stored: [{ id: 'saved-2', workspace: '/x', messages: [], providerId: 'retired', model: 'old-model' }],
+      run: async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    await h.call('session/load', { sessionId: 'saved-2', cwd: h.cwd, mcpServers: [] })
+    await h.call('session/prompt', { sessionId: 'saved-2', prompt: text('go on') })
+    expect(h.loop.requests[0]).toEqual(expect.objectContaining({ providerId: 'anthropic', model: 'claude-sonnet-4-5' }))
+    expect(h.loop.requests[0].reasoningEffort).toBeUndefined()
+    expect(h.modelWrites).toEqual([['saved-2', 'anthropic', 'claude-sonnet-4-5']])
     await h.end()
   })
 
