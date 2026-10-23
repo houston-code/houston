@@ -441,14 +441,40 @@ function titleCase(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1)
 }
 
-/** The finished-row label + status for one dimension, reflecting what it found. */
-function dimensionOutcome(dimension: string, report: string): ReviewSubAgentEvent {
+/**
+ * The finished-row label + status for one dimension, reflecting what it found.
+ * `failedParts` of `parts` chunks didn't complete: a dimension that looked at only
+ * some of the diff is never shown as plainly clean.
+ */
+function dimensionOutcome(dimension: string, report: string, failedParts = 0, parts = 1): ReviewSubAgentEvent {
   const title = titleCase(dimension)
   if (isErrorReport(report)) return { id: dimension, label: `${title}, failed`, status: 'error' }
-  if (isClean(report)) return { id: dimension, label: `${title}, clean`, status: 'done' }
+  const missed = failedParts > 0 ? ` (${failedParts} of ${parts} parts failed)` : ''
+  if (isClean(report)) {
+    return failedParts > 0
+      ? { id: dimension, label: `${title}, incomplete${missed}`, status: 'error' }
+      : { id: dimension, label: `${title}, clean`, status: 'done' }
+  }
   const n = parseFindings(report).length
   const found = n > 0 ? `${n} issue${n === 1 ? '' : 's'}` : 'findings'
-  return { id: dimension, label: `${title}, ${found}`, status: 'done' }
+  return { id: dimension, label: `${title}, ${found}${missed}`, status: 'done' }
+}
+
+/**
+ * Notes for the chunks of one dimension's review that didn't complete, when others
+ * did. mergeChunkReports keeps only what the completed chunks found (or calls them
+ * clean), so without these a failed part's files would read as reviewed and clean.
+ * A dimension where every part failed already gets its own note.
+ */
+function failedPartNotes(dimension: string, chunkReports: string[]): string[] {
+  if (chunkReports.length < 2 || chunkReports.every(isErrorReport)) return []
+  return chunkReports.flatMap((r, i) =>
+    isErrorReport(r)
+      ? [
+          `⚠ Part ${i + 1} of ${chunkReports.length} of the ${dimension} review could not complete: ${r || 'no output'}. The files in that part were not reviewed for ${dimension}.`
+        ]
+      : []
+  )
 }
 
 export interface RunReviewOptions {
@@ -623,22 +649,26 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
         )
       )
       const report = mergeChunkReports(chunkReports)
-      sub(dimensionOutcome(dimension, report))
+      const partNotes = failedPartNotes(dimension, chunkReports)
+      sub(dimensionOutcome(dimension, report, partNotes.length, chunkReports.length))
       // Show this dimension's findings now, before the other reviewers finish.
       const parsed: IdentifiedFinding[] =
         isErrorReport(report) || isClean(report)
           ? []
           : parseFindings(report).map((f, i) => ({ ...f, dimension, id: `${dimension}:${i}` }))
       for (const p of parsed) finding(toReviewFinding(p.id, p, 'candidate', redact))
-      return { dimension, report, parsed }
+      return { dimension, report, parsed, partNotes }
     })
   )
 
   if (signal.aborted) return '[review aborted]'
 
-  const notes = reports
-    .filter((r) => isErrorReport(r.report))
-    .map((r) => `⚠ The ${r.dimension} review could not complete: ${r.report || 'no output'}.`)
+  const notes = [
+    ...reports
+      .filter((r) => isErrorReport(r.report))
+      .map((r) => `⚠ The ${r.dimension} review could not complete: ${r.report || 'no output'}.`),
+    ...reports.flatMap((r) => r.partNotes)
+  ]
   const candidates = reports.filter((r) => !isErrorReport(r.report) && !isClean(r.report))
 
   if (candidates.length === 0) {
@@ -674,14 +704,20 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
           const row = toReviewFinding(f.id, f, 'verifying', redact)
           let cast = 0
           let confirms = 0
+          // Skeptics that failed (provider error, step limit) cast no vote either way: a
+          // finding is rejected only by verifiers that actually looked and disagreed.
+          let failed = 0
           const tally = (): void => {
             // Settle as soon as the vote is decided, so faster findings resolve first.
+            const rejects = cast - confirms - failed
             const status =
               confirms >= VOTES_TO_CONFIRM
                 ? 'confirmed'
-                : cast - confirms > VOTES_PER_FINDING - VOTES_TO_CONFIRM
+                : rejects > VOTES_PER_FINDING - VOTES_TO_CONFIRM
                   ? 'rejected'
-                  : 'verifying'
+                  : cast === VOTES_PER_FINDING
+                    ? 'candidate' // undecided because verifiers failed: left unverified
+                    : 'verifying'
             finding({ ...row, status, votes: { confirmed: confirms, cast, total: VOTES_PER_FINDING } })
           }
           tally()
@@ -700,20 +736,38 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
               ).then((v) => {
                 cast++
                 if (isConfirmed(v)) confirms++
+                else if (isErrorReport(v)) failed++
                 if (!signal.aborted) tally()
                 return v
               })
             )
           )
-          return { finding: f, confirms: votes.filter(isConfirmed).length }
+          return {
+            finding: f,
+            confirms: votes.filter(isConfirmed).length,
+            failed: votes.filter((v) => !isConfirmed(v) && isErrorReport(v)).length
+          }
         })
       )
       if (signal.aborted) return '[review aborted]'
 
+      const bySeverity = (a: ParsedFinding, b: ParsedFinding): number =>
+        (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9)
       const confirmed = verdicts
         .filter((v) => v.confirms >= VOTES_TO_CONFIRM)
         .map((v) => v.finding)
-        .sort((a, b) => (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9))
+        .sort(bySeverity)
+      // Not confirmed, but only because verifiers failed: the votes that would have
+      // decided it were never cast, so it is reported as unverified, not as rejected.
+      const unverified = verdicts
+        .filter((v) => v.confirms < VOTES_TO_CONFIRM && v.confirms + v.failed >= VOTES_TO_CONFIRM)
+        .map((v) => v.finding)
+        .sort(bySeverity)
+      if (unverified.length) {
+        notes.push(
+          `⚠ ${unverified.length} candidate finding${unverified.length === 1 ? '' : 's'} could not be verified because ${unverified.length === 1 ? 'its' : 'their'} verifiers failed; check ${unverified.length === 1 ? 'it' : 'them'} directly:\n\n${unverified.map((f) => f.text).join('\n\n')}`
+        )
+      }
       sub({
         id: 'verify',
         label: `Verified ${toVerify.length} findings, ${confirmed.length} confirmed`,
@@ -722,7 +776,9 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
       const tally = `Confirmed ${confirmed.length} of ${toVerify.length} candidate findings (each checked by ${VOTES_PER_FINDING} independent verifiers).`
 
       if (confirmed.length === 0) {
-        const clean = `Adversarial review (${dimsLabel}): no findings survived independent verification. ${tally}`
+        const clean = unverified.length
+          ? `Adversarial review (${dimsLabel}): no findings confirmed. ${tally}`
+          : `Adversarial review (${dimsLabel}): no findings survived independent verification. ${tally}`
         return assemble(clean, notes.length ? notes.join('\n') : null, costLine())
       }
       const header = `Adversarial review of the current changes (${dimsLabel}), each finding independently verified by ${VOTES_PER_FINDING} skeptics:`
@@ -752,9 +808,14 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
     for (const f of settleVerified(pending, verified, redact)) finding(f)
   }
 
+  // A verifier that failed checked nothing: hand back the reviewers' findings as
+  // unverified rather than a report that is only the verifier's error.
+  if (isErrorReport(verified)) {
+    const header = `Review of the current changes (${dimsLabel}): the verifier could not complete (${verified || 'no output'}), so these candidate findings are unverified; check each one directly:`
+    return assemble(header, candidateText, ...notes, footer, costLine())
+  }
   const header = `Adversarial review of the current changes (${dimsLabel}), each candidate finding verified in a separate context:`
-  const body = verified.trim() || '[verifier returned no output]'
-  return assemble(header, body, ...notes, footer, costLine())
+  return assemble(header, verified.trim(), ...notes, footer, costLine())
 }
 
 export interface ReviewWorkspaceOptions {

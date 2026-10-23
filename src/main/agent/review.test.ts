@@ -184,6 +184,69 @@ describe('runReview', () => {
     expect(out).toContain('confirmed')
   })
 
+  it('says which part of a chunked review failed instead of calling it clean', async () => {
+    const { fn } = fakeAgent((o) =>
+      dimensionOf(o) === 'SECURITY' && o.prompt.includes('CHUNK_B') ? '[subagent error: overloaded]' : 'No issues found.'
+    )
+    const rows: { id: string; label: string; status: string }[] = []
+    const out = await runReview(
+      base({ runAgent: fn, chunks: ['CHUNK_A diff', 'CHUNK_B diff'], onSubAgent: (e) => rows.push(e) })
+    )
+    expect(out).toContain('Part 2 of 2 of the security review could not complete')
+    expect(out).toContain('overloaded')
+    expect(rows.find((r) => r.id === 'security' && r.status !== 'running')).toEqual({
+      id: 'security',
+      label: 'Security, incomplete (1 of 2 parts failed)',
+      status: 'error'
+    })
+  })
+
+  it('keeps the findings of the parts that completed and notes the one that failed', async () => {
+    const { fn } = fakeAgent((o) => {
+      if (isVerifier(o)) return '- [high] a.ts:1 — confirmed\nConfirmed 1 of 1 candidate findings.'
+      if (dimensionOf(o) !== 'CORRECTNESS') return 'No issues found.'
+      return o.prompt.includes('CHUNK_A') ? '- [SEVERITY: high] a.ts:1 — bug' : '[subagent reached its step limit]'
+    })
+    const out = await runReview(base({ runAgent: fn, chunks: ['CHUNK_A diff', 'CHUNK_B diff'] }))
+    expect(out).toContain('confirmed')
+    expect(out).toContain('Part 2 of 2 of the correctness review could not complete')
+  })
+
+  it('reports a finding its skeptics failed to check as unverified, not rejected', async () => {
+    const { fn } = fakeAgent((o) => {
+      if (isSkeptic(o)) return '[subagent error: overloaded]'
+      return dimensionOf(o) === 'CORRECTNESS' ? '- [SEVERITY: high] a.ts:1 — real bug' : 'No issues found.'
+    })
+    const rows: { id: string; status: string }[] = []
+    const out = await runReview(base({ runAgent: fn, effort: 'high', onFinding: (f) => rows.push(f) }))
+    expect(out).not.toContain('no findings survived')
+    expect(out).toContain('could not be verified')
+    expect(out).toContain('real bug')
+    expect(rows.at(-1)?.status).toBe('candidate')
+  })
+
+  it('still rejects a finding the skeptics that ran voted down', async () => {
+    let n = 0
+    const { fn } = fakeAgent((o) => {
+      if (isSkeptic(o)) return n++ === 0 ? '[subagent error: overloaded]' : 'REJECTED not real'
+      return dimensionOf(o) === 'CORRECTNESS' ? '- [SEVERITY: high] a.ts:1 — false alarm' : 'No issues found.'
+    })
+    const out = await runReview(base({ runAgent: fn, effort: 'high' }))
+    expect(out).toContain('no findings survived')
+    expect(out).not.toContain('could not be verified')
+  })
+
+  it("returns the reviewers' findings as unverified when the verifier fails", async () => {
+    const { fn } = fakeAgent((o) => {
+      if (isVerifier(o)) return '[subagent error: overloaded]'
+      return dimensionOf(o) === 'CORRECTNESS' ? '- [SEVERITY: high] a.ts:1 — real bug' : 'No issues found.'
+    })
+    const out = await runReview(base({ runAgent: fn }))
+    expect(out).toContain('verifier could not complete')
+    expect(out).toContain('overloaded')
+    expect(out).toContain('real bug')
+  })
+
   it('honours a custom dimension list', async () => {
     const { fn, calls } = fakeAgent(() => 'No issues found.')
     await runReview(base({ runAgent: fn, dimensions: ['correctness'] }))
