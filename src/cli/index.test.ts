@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { nodeVersionError, selectRunMode } from './index'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { permissionRuleKey, type PermissionRule } from '@shared/types'
+import { nodeVersionError, selectRunMode, wireCliHost } from './index'
+import { noteRuleUsed } from '../main/agentHost'
+import { flushRuleUsage, resetRuleUsageForTests } from '../main/ruleUsage'
 
 describe('nodeVersionError', () => {
   it('returns null when the runtime is new enough', () => {
@@ -92,5 +98,27 @@ describe('selectRunMode', () => {
       kind: 'tui',
       options: { cwd: '/proj' }
     })
+  })
+})
+
+describe('wireCliHost', () => {
+  const saved = process.env.HOUSTON_DATA_DIR
+  let dir = ''
+  afterEach(() => {
+    resetRuleUsageForTests()
+    if (saved === undefined) delete process.env.HOUSTON_DATA_DIR
+    else process.env.HOUSTON_DATA_DIR = saved
+    if (dir) rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('records when a permission rule decides a call, in the profile the desktop app reads', () => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-cli-host-'))
+    process.env.HOUSTON_DATA_DIR = dir
+    wireCliHost()
+    const rule: PermissionRule = { action: 'allow', tool: 'run_shell', match: 'npm test' }
+    noteRuleUsed(rule)
+    flushRuleUsage()
+    const usage = JSON.parse(readFileSync(join(dir, 'rule-usage.json'), 'utf8')) as Record<string, number>
+    expect(typeof usage[permissionRuleKey(rule)]).toBe('number')
   })
 })
