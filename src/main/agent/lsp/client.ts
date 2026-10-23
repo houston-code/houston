@@ -60,6 +60,8 @@ export interface LspClientOptions {
    * sandbox shell would leave the server running).
    */
   killTree?: (proc: ChildProcess) => void
+  /** How long a server whose connection broke may take to exit before it is killed. */
+  exitGraceMs?: number
 }
 
 interface OpenDoc {
@@ -83,6 +85,7 @@ type Waiter = () => void
 const DEFAULT_INIT_TIMEOUT_MS = 60_000
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000
 const DEFAULT_MAX_OPEN = 50
+const DEFAULT_EXIT_GRACE_MS = 2000
 /**
  * The settle window for a publish that carries no document version. Such a publish
  * could be the server's verdict on the text from before the change, already in flight
@@ -109,6 +112,7 @@ export class LspClient {
   private readonly waiters = new Map<string, Set<Waiter>>()
   private capabilities: Record<string, unknown> = {}
   private readonly deathListeners: ((reason: string) => void)[] = []
+  private exitGrace: ReturnType<typeof setTimeout> | null = null
 
   constructor(private readonly opts: LspClientOptions) {}
 
@@ -156,7 +160,7 @@ export class LspClient {
     proc.on('exit', (code, signal) => this.die(`exited (${signal ?? `code ${code}`})`))
     const conn = new JsonRpcConnection(proc.stdout, proc.stdin)
     this.conn = conn
-    conn.onClose((reason) => this.die(reason))
+    conn.onClose((reason) => this.connectionLost(reason))
     conn.onNotification('textDocument/publishDiagnostics', (p) => this.onDiagnostics(p))
     // Servers report their own failures here rather than on stderr; keep them for a crash report.
     const keepLog = (p: unknown): void => {
@@ -229,7 +233,27 @@ export class LspClient {
     return cur
   }
 
+  /**
+   * The connection broke. A crashed server breaks it too: its output ends, or the next
+   * write to it fails with EPIPE, and whether Node reports that or the exit first is
+   * timing. So while the process is still up, give it a moment to exit and report that,
+   * with its code or signal. One that stays up on a broken connection is of no use: it
+   * is killed, and the connection's reason is what it died of.
+   */
+  private connectionLost(reason: string): void {
+    if (this.state === 'dead' || this.state === 'stopped' || this.exitGrace) return
+    const p = this.proc
+    if (!p || p.exitCode !== null || p.signalCode !== null) return this.die(reason)
+    this.exitGrace = setTimeout(() => {
+      this.die(reason)
+      this.killProcess()
+    }, this.opts.exitGraceMs ?? DEFAULT_EXIT_GRACE_MS)
+    this.exitGrace.unref?.()
+  }
+
   private die(reason: string): void {
+    if (this.exitGrace) clearTimeout(this.exitGrace)
+    this.exitGrace = null
     if (this.state === 'dead' || this.state === 'stopped') return
     this.state = 'dead'
     this.deathReason = reason
