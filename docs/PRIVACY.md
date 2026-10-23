@@ -9,7 +9,7 @@
 
 **Last updated: October 23, 2026**
 
-Houston is a locally-installed coding agent. You bring your own model and
+Houston is a locally installed coding agent. You bring your own model and
 credentials, so almost every privacy question comes down to one thing: which
 providers you choose to connect. This document explains what Houston stores, what
 it sends, and where.
