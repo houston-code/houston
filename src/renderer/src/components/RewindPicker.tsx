@@ -21,16 +21,25 @@ export function RewindPicker<T extends RewindTarget>({
   useFocusTrap(ref, onClose)
   const newestFirst = [...targets].reverse()
   const [active, setActive] = useState(0)
+  const items = useRef<(HTMLButtonElement | null)[]>([])
+
+  // Focus follows the highlighted message, so the focus ring, Enter, and the
+  // highlight always mean the same row (the dialog opens on the newest one).
+  const move = (to: number): void => {
+    setActive(to)
+    items.current[to]?.focus()
+  }
 
   const onKeyDown = (e: KeyboardEvent): void => {
     if (newestFirst.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setActive((i) => (i + 1) % newestFirst.length)
+      move((active + 1) % newestFirst.length)
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setActive((i) => (i - 1 + newestFirst.length) % newestFirst.length)
-    } else if (e.key === 'Enter') {
+      move((active - 1 + newestFirst.length) % newestFirst.length)
+    } else if (e.key === 'Enter' && !(e.target as HTMLElement).closest('.modal__close')) {
+      // Enter on the close button closes; anywhere else it picks the highlighted row.
       e.preventDefault()
       onPick(newestFirst[active])
     }
@@ -62,7 +71,11 @@ export function RewindPicker<T extends RewindTarget>({
               {newestFirst.map((t, i) => (
                 <li key={t.turn} role="option" aria-selected={i === active}>
                   <button
+                    ref={(el) => {
+                      items.current[i] = el
+                    }}
                     type="button"
+                    {...(i === 0 ? { 'data-autofocus': true } : {})}
                     className={`rewind-picker__item${i === active ? ' rewind-picker__item--active' : ''}`}
                     onMouseEnter={() => setActive(i)}
                     onFocus={() => setActive(i)}
