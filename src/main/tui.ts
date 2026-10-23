@@ -3432,6 +3432,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             continue
           }
           messages = res.messages
+          // The meter measured the log before the undo; the next turn reports the real size.
+          contextTokens = 0
           const left = res.conflicts.length ? `; left ${res.conflicts.length} file(s) that changed since: ${res.conflicts.join(', ')}` : ''
           deps.io.out(paint(`· undid the rewind (${res.reapplied} file(s) put back${left})\n`, 'dim'))
           continue
@@ -3485,6 +3487,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         messages = res.messages
+        // The meter measured the log before the cut; the next turn reports the real size.
+        if (rewindsConversation(mode)) contextTokens = 0
         // The last turn's run may be gone from the chat, or reverted already: /undo
         // must not fall back to it.
         lastRunId = null
