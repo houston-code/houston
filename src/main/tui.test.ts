@@ -4658,6 +4658,41 @@ describe('--continue / --resume at launch', () => {
     expect(t2.text()).toContain('starting fresh')
   })
 
+  it("lets --approval and --model given at launch win over the continued chat's own", async () => {
+    const { d, rec } = deps(done)
+    const fp = fakePersist([
+      {
+        id: 'saved',
+        title: 'Old',
+        updatedAt: 5,
+        messages: [{ role: 'user', content: 'earlier' }],
+        providerId: 'ollama',
+        model: 'llama',
+        reasoningEffort: 'low',
+        approvalPolicy: 'full-auto'
+      }
+    ])
+    d.persist = fp.persist
+    const t = fakeIo(['go on', null])
+    d.io = t.io
+    await runTui({ ...opts, approvalPolicy: 'plan', providerId: 'anthropic', model: 'claude', continueSession: true }, d)
+    // The flags hold; what no flag set (the effort) is still the chat's.
+    expect(rec.runs[0]).toMatchObject({ policy: 'plan', providerId: 'anthropic', model: 'claude', reasoningEffort: 'low' })
+  })
+
+  it("--continue without flags takes the chat's own approval mode and model", async () => {
+    const { d, rec } = deps(done)
+    const fp = fakePersist([
+      { id: 'saved', title: 'Old', updatedAt: 5, messages: [], providerId: 'ollama', model: 'llama', approvalPolicy: 'plan' }
+    ])
+    d.persist = fp.persist
+    const t = fakeIo(['go on', null])
+    d.io = t.io
+    const { approvalPolicy: _flag, ...noFlags } = opts
+    await runTui({ ...noFlags, continueSession: true }, d)
+    expect(rec.runs[0]).toMatchObject({ policy: 'plan', providerId: 'ollama', model: 'llama' })
+  })
+
   it('starts fresh with neither flag', async () => {
     const { d, rec } = deps(done)
     const t = fakeIo(['hi', null])
