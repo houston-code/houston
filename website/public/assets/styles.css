@@ -279,6 +279,9 @@ section { padding: 96px 0; }
   background: color-mix(in srgb, var(--a1) 50%, var(--n2));
   border-color: color-mix(in srgb, var(--a2) 40%, var(--n3));
 }
+/* A package name or URL never breaks at its own hyphen, which would read as a word
+   split; the command wraps at its spaces (and after https://) instead. */
+.cli-cmds code span { white-space: nowrap; }
 /* Room for the copy button, which app.js reveals only where the clipboard API works. */
 .cli-cmds dd:has(.copy-btn:not([hidden])) code { padding-right: 76px; }
 .copy-btn {
@@ -479,11 +482,16 @@ section { padding: 96px 0; }
   .why-grid { grid-template-columns: 1fr; }
   .footer-grid { grid-template-columns: repeat(2, 1fr); }
   .highlights { gap: 10px 20px; }
+  /* Each command under its channel name, at full width. The copy button moves up beside
+     the name, so it no longer takes room from the command. */
+  .cli-cmds > div { grid-template-columns: 1fr; gap: 4px; position: relative; }
+  .cli-cmds dd { position: static; }
+  .cli-cmds dd:has(.copy-btn:not([hidden])) code { padding-right: 12px; }
+  .copy-btn { top: 4px; right: 0; }
 }
 @media (max-width: 560px) {
   .docs-toc ul { columns: 1; }
   .download-grid { grid-template-columns: 1fr; }
-  .cli-cmds > div { grid-template-columns: 1fr; gap: 4px; }
   /* One column: put the visitor's build first instead of making them scroll for it. */
   .dl-card.is-recommended { order: -1; }
   .btn-lg { flex: 1 1 100%; }
