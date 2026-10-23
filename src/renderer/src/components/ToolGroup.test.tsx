@@ -771,3 +771,21 @@ describe('ToolGroup', () => {
     )
   })
 })
+
+describe('ToolGroup: a denied call', () => {
+  it('says it was denied, with the reason, rather than the text sent to the model', () => {
+    const items: ToolItem[] = [
+      tool({
+        id: 'd',
+        name: 'run_shell',
+        status: 'denied',
+        args: { command: 'rm -rf build' },
+        output: 'Denied by the user. They said: use npm run clean instead'
+      })
+    ]
+    const { container } = render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    fireEvent.click(container.querySelector('.tool-row__head')!)
+    expect(screen.getByText('Denied: use npm run clean instead')).toBeInTheDocument()
+    expect(screen.queryByText(/They said/)).not.toBeInTheDocument()
+  })
+})

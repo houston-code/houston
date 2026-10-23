@@ -161,3 +161,20 @@ describe('subagent rows', () => {
     expect(within(dialog).getByRole('heading', { name: 'Verifier' })).toBeInTheDocument()
   })
 })
+
+describe('subagent steps: a denied call', () => {
+  it('shows a step the user denied in their terms, not the instruction to the subagent', () => {
+    const denied = step(0, {
+      tool: 'run_shell',
+      summary: 'Run rm -rf build',
+      ok: false,
+      output:
+        'Denied by the user. Do not retry this command; work around it or note it in your report. They said: not here'
+    })
+    const { container } = render(<ToolGroup items={[row({ records: [record({ steps: [denied] })] })]} onApprove={vi.fn()} />)
+    fireEvent.click(head(container))
+    fireEvent.click(screen.getByRole('tab', { name: /Steps/ }))
+    fireEvent.click(screen.getByText('Run rm -rf build'))
+    expect((container.querySelector('.sa-out') as HTMLElement).textContent).toBe('Denied: not here')
+  })
+})

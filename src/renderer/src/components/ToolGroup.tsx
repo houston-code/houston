@@ -7,7 +7,7 @@ import { parseTodosSafe, type Todo } from '@shared/todos'
 import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shared/sweep'
 import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
 import { droppedSummary, findingTally, isDropped, sortFindings } from '@shared/reviewFindings'
-import { stoppedPromptText } from '@shared/promptOutcome'
+import { deniedPromptText, stoppedPromptText } from '@shared/promptOutcome'
 import { isSubagentTool } from '@shared/subagents'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
@@ -261,9 +261,10 @@ function ToolRow({
   const awaiting = item.status === 'awaiting-approval'
   const running = item.status === 'running'
   const tally = reviewTally(item.findings, running)
-  // An approval the user stopped the run in front of comes back as a denial "they
-  // said" was an interruption, which is the model's wording, not the user's.
-  const output = stoppedPromptText(item.output) ?? item.output
+  // A denial comes back in the model's wording ("Denied by the user. They said: …"),
+  // which read as someone else talking about the user. Say what happened instead,
+  // and for an approval the run was stopped in front of, that it was stopped.
+  const output = stoppedPromptText(item.output) ?? deniedPromptText(item.output) ?? item.output
 
   // A dispatched subagent's row: its steps stream in while it runs, and it collapses to
   // its summary chips once it finishes.

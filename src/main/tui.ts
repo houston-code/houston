@@ -73,7 +73,7 @@ import { PROPOSE_SESSION_TOOL } from '@shared/constants'
 import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { PRESENT_PLAN_TOOL } from '@shared/constants'
-import { PLAN_OUTCOME_LABEL, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
+import { PLAN_OUTCOME_LABEL, deniedPromptText, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
 import { truncateVisible, stripControlChars, osc52Copy, osc8Link } from './tui-wrap'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -588,6 +588,9 @@ export function renderToolResult(
   // this plan. Do not make any changes…"). Say what happened instead.
   const stopped = stoppedPromptText(output)
   if (stopped) return paint(`  ⊘ ${stopped}`, 'dim')
+  // A call the user denied: the prompt already printed "↳ Denied" (with their reason)
+  // for it, so a "✗ Run failed" line over the model-facing text would only repeat it.
+  if (!ok && deniedPromptText(output) !== null) return ''
   if (ok && name === PRESENT_PLAN_TOOL) return paint(`  ↳ ${PLAN_OUTCOME_LABEL[planOutcome(output)]}`, 'dim')
   const lines = output.split('\n')
   if (!ok) {

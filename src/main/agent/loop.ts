@@ -43,7 +43,7 @@ import {
   type SelectedModel
 } from '@shared/types'
 import { modelDisplayName } from '@shared/models'
-import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
+import { APPROVAL_DENIED, APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER, denialText } from '@shared/promptOutcome'
 import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
@@ -883,14 +883,6 @@ export function setRunEffort(runId: string, effort: ReasoningEffort): void {
 
 function waitForApproval(run: RunState, callId: string): Promise<ApprovalResolution> {
   return new Promise((resolve) => run.approvals.set(callId, resolve))
-}
-
-/**
- * The refusal text handed to the model, carrying the user's guidance when they
- * gave any. `base` keeps each call site's existing do-not-retry framing.
- */
-function denialText(base: string, note?: string): string {
-  return note ? `${base} They said: ${note}` : base
 }
 
 /**
@@ -1965,7 +1957,7 @@ export async function startRun(
             callId: subCallId,
             name,
             ok: false,
-            output: denialText('Denied by the user.', note)
+            output: denialText(APPROVAL_DENIED, note)
           })
           return denialText(denyNote, note)
         }
@@ -2054,7 +2046,7 @@ export async function startRun(
           sensitiveRead,
           sensitiveWrite,
           preview: kind === 'write' ? await previewWrite(name, gateArgs, roots) : null,
-          denyNote: 'Denied by the user. Do not retry this call; work around it or note it in your report.',
+          denyNote: `${APPROVAL_DENIED} Do not retry this call; work around it or note it in your report.`,
           runCall
         })
       }
@@ -2131,7 +2123,7 @@ export async function startRun(
           mustApprove: ruleAction === 'ask' || !run.shellUnsandboxedOverride,
           unsandboxedShell: true,
           denyNote:
-            'Denied by the user. Do not retry this command; work around it or note it in your report.',
+            `${APPROVAL_DENIED} Do not retry this command; work around it or note it in your report.`,
           runCall: runCommand
         })
       }
@@ -2162,7 +2154,7 @@ export async function startRun(
           unsandboxedShell: false,
           networkDest,
           denyNote:
-            'Denied by the user. Do not retry this request; work without it or note it in your report.',
+            `${APPROVAL_DENIED} Do not retry this request; work without it or note it in your report.`,
           runCall
         })
       }
@@ -4220,7 +4212,7 @@ export async function startRun(
             }
 
             if (!approved) {
-              output = denialText('Denied by the user.', approvalNote)
+              output = denialText(APPROVAL_DENIED, approvalNote)
               ok = false
             } else {
               // Snapshot each target's prior content so this turn's file changes can
