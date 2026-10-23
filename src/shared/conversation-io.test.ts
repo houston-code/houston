@@ -278,6 +278,15 @@ describe('forkConversationData', () => {
     expect(fork.lastError).toBeUndefined()
   })
 
+  it("starts the fork's spend at zero, keeping only the context size, and records what it copied", () => {
+    const fork = forkConversationData(src, 'new-id', 99)
+    expect(fork.usage).toEqual({ inputTokens: 10, outputTokens: 0, cost: 0 })
+    expect(src.usage).toEqual({ inputTokens: 10, outputTokens: 20, cost: 0.01 })
+    expect(fork.forkedFrom).toEqual({ conversationId: 'src-id', historyLength: 1 })
+    const { usage: _u, ...unused } = src
+    expect(forkConversationData(unused, 'other', 99).usage).toBeUndefined()
+  })
+
   it('copies messages into an independent array', () => {
     const fork = forkConversationData(src, 'new-id', 99)
     expect(fork.messages).toEqual(src.messages)

@@ -175,5 +175,11 @@ export function forkConversationData(src: Conversation, id: string, now: number)
   delete fork.rewindBackup
   // Unsent input was typed into the source chat; it goes out there, not twice.
   delete fork.queuedInput
+  // The fork's spend starts now: the source's totals stay with the source, so the
+  // usage scorecard (and the fork's own cost) never count them twice. The current
+  // context size carries over, since the fork's next request sends the same history.
+  if (src.usage) fork.usage = { inputTokens: src.usage.inputTokens, outputTokens: 0, cost: 0 }
+  else delete fork.usage
+  fork.forkedFrom = { conversationId: src.id, historyLength: src.messages.length }
   return fork
 }

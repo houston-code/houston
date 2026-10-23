@@ -330,6 +330,8 @@ export function computeScorecard(): Scorecard {
     inputs.push({
       model: conv.model,
       messages: conv.messages,
+      // A fork's (or a forked-context spawn's) copied history is its source's work.
+      inherited: inheritedMessages(conv),
       usage: conv.usage,
       // A stored `lastError` means the most recent run failed — the same signal
       // toMeta() folds into the lightweight `errored` flag.
@@ -337,6 +339,12 @@ export function computeScorecard(): Scorecard {
     })
   }
   return buildScorecard(inputs)
+}
+
+/** How many messages at the start of `conv`'s log were copied from another chat. */
+function inheritedMessages(conv: Conversation): number {
+  const n = (v: unknown): number => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : 0)
+  return Math.max(n(conv.forkedFrom?.historyLength), n(conv.spawnedFrom?.historyLength))
 }
 
 /**
@@ -360,6 +368,7 @@ function toMeta(conv: Conversation): ConversationMeta {
     sideChat: _sideChat,
     rewindBackup: _rewindBackup,
     queuedInput: _queuedInput,
+    forkedFrom: _forkedFrom,
     ...rest
   } = conv
   return { ...rest, errored: !!lastError }
@@ -736,12 +745,23 @@ export function writeRewind(
 ): void {
   const conv = read(id)
   if (!conv) return
+  const backup = next.backup ? { ...next.backup } : null
+  if (conv.forkedFrom) {
+    if (backup && next.messages.length < conv.forkedFrom.historyLength) {
+      // A fork rewound into the history it copied: what it says next is its own, so
+      // the copied part now ends where the log does (put back by an undo).
+      backup.forkedHistoryLength = conv.forkedFrom.historyLength
+      conv.forkedFrom = { ...conv.forkedFrom, historyLength: next.messages.length }
+    } else if (!backup && conv.rewindBackup?.forkedHistoryLength !== undefined) {
+      conv.forkedFrom = { ...conv.forkedFrom, historyLength: conv.rewindBackup.forkedHistoryLength }
+    }
+  }
   conv.messages = next.messages
   if (next.compaction) conv.compaction = next.compaction
   else delete conv.compaction
   if (next.lastError) conv.lastError = next.lastError
   else delete conv.lastError
-  if (next.backup) conv.rewindBackup = next.backup
+  if (backup) conv.rewindBackup = backup
   else delete conv.rewindBackup
   conv.updatedAt = Date.now()
   write(conv)

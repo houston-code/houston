@@ -7,6 +7,8 @@ import {
   MAX_PENDING_CHILD_REPORTS,
   addUsage,
   childReportFrom,
+  computeScorecard,
+  writeRewind,
   conversationMatches,
   createConversation,
   forkConversation,
@@ -333,6 +335,56 @@ describe('proposals and child reports (persisted)', () => {
     const fork = forkConversation(parent.id)!
     expect(fork.childReports).toBeUndefined()
     expect(fork.proposals).toEqual({ 'call-1': { status: 'dismissed', at: 1 } })
+  })
+})
+
+describe('forks and the usage scorecard', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const ran = (): string => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [
+      { role: 'user', content: 'do it' },
+      { role: 'assistant', content: 'done' }
+    ])
+    addUsage(c.id, { inputTokens: 1000, outputTokens: 200, cost: 0.5 })
+    return c.id
+  }
+  const backup = (n: number) => ({ mode: 'conversation' as const, at: 1, afterLength: n, code: [], detached: [] })
+
+  it("doesn't count a fork's copied history or spend a second time", () => {
+    const id = ran()
+    const before = computeScorecard()
+    const fork = forkConversation(id)!
+    expect(fork.usage).toEqual({ inputTokens: 1000, outputTokens: 0, cost: 0 })
+    expect(fork.forkedFrom).toEqual({ conversationId: id, historyLength: 2 })
+    const after = computeScorecard()
+    expect(after.totalRuns).toBe(before.totalRuns)
+    expect(after.totalCost).toBeCloseTo(before.totalCost, 6)
+
+    // What the fork does next is its own.
+    setMessages(fork.id, [...fork.messages, { role: 'user', content: 'now this' }, { role: 'assistant', content: 'ok' }])
+    addUsage(fork.id, { inputTokens: 1100, outputTokens: 50, cost: 0.1 })
+    const later = computeScorecard()
+    expect(later.totalRuns).toBe(before.totalRuns + 1)
+    expect(later.totalCost).toBeCloseTo(before.totalCost + 0.1, 6)
+    expect(later.models[0].totalSteps).toBe(2) // one reply each, the copied one not twice
+  })
+
+  it("moves a fork's copied history back when a rewind cuts into it, and restores it on undo", () => {
+    const fork = forkConversation(ran())!
+    writeRewind(fork.id, { messages: fork.messages.slice(0, 1), compaction: null, lastError: null, backup: backup(1) })
+    expect(getConversation(fork.id)!.forkedFrom?.historyLength).toBe(1)
+    writeRewind(fork.id, { messages: fork.messages, compaction: null, lastError: null, backup: null })
+    expect(getConversation(fork.id)!.forkedFrom?.historyLength).toBe(2)
   })
 })
 

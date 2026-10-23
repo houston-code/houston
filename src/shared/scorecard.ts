@@ -32,6 +32,12 @@ export interface ScorecardConversationInput {
   model: string
   /** The full message log — scanned for step/tool counts and outcome inference. */
   messages: ChatMessage[]
+  /**
+   * How many messages at the start of `messages` were copied from another chat (a
+   * fork, or a session spawned with a forked context). They're that chat's work, so
+   * only what follows counts here. Default 0.
+   */
+  inherited?: number
   /** Persisted cumulative usage, when present. `inputTokens` is the LATEST turn's
    *  context size (NOT a running sum); only `outputTokens` and `cost` accumulate. */
   usage?: { inputTokens: number; outputTokens: number; cost: number }
@@ -164,6 +170,9 @@ function conversationCost(input: ScorecardConversationInput): number {
   const u = input.usage
   if (!u) return 0
   if (u.cost > 0) return u.cost
+  // Nothing was ever answered here (a fork that hasn't run yet carries only its
+  // context size): there is no spend to estimate.
+  if (u.outputTokens <= 0) return 0
   // No recorded cost — recompute from tokens with today's price table. inputTokens
   // is only the latest turn's context, but it's the best available proxy when no
   // cost was persisted; outputTokens is the true cumulative output.
@@ -213,17 +222,20 @@ export function buildScorecard(conversations: ScorecardConversationInput[]): Sco
     return a
   }
 
-  for (const conv of conversations) {
+  for (const input of conversations) {
+    // Only this chat's own messages: a copied history is counted with its source.
+    const own = input.inherited ? input.messages.slice(input.inherited) : input.messages
+    const conv: ScorecardConversationInput = { ...input, messages: own }
     const hasUsage = !!conv.usage && (conv.usage.outputTokens > 0 || conv.usage.cost > 0)
-    if (conv.messages.length === 0 && !hasUsage) continue // never-ran placeholder
+    if (own.length === 0 && !hasUsage) continue // never-ran placeholder (or an unused fork)
     const model = conv.model || 'unknown'
     const a = accFor(model)
     a.runs++
-    a.steps += countSteps(conv.messages)
+    a.steps += countSteps(own)
     let toolTurns = 0
-    for (const m of conv.messages) if (m.role === 'tool') toolTurns++
+    for (const m of own) if (m.role === 'tool') toolTurns++
     a.toolCalls += toolTurns
-    tallyTools(conv.messages, a.tools)
+    tallyTools(own, a.tools)
     if (conv.usage) {
       a.outputTokens += conv.usage.outputTokens > 0 ? conv.usage.outputTokens : 0
     }
