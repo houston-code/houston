@@ -1,5 +1,109 @@
 # Changelog
 
+## v0.10.0 - 2026-10-23
+
+<!-- Replace this line with ONE sentence (at most 120 characters) summarizing the whole release. More context can follow as a second paragraph. -->
+
+### Breaking changes
+_None._
+
+### Required steps
+_None._ <!-- Edit if this release needs a migration or manual step. -->
+
+### Added
+- Cancel the background download from the update banner (#292)
+- Close a single dev-server preview pane (#293)
+- Render GFM task lists as checkboxes (#325)
+- One slash-command set across the desktop app and the terminal (#344)
+- Pick a model from a list with /model (#355)
+- Global rules live in ~/.houston/AGENTS.md (#357)
+- Agent Client Protocol server (houston --acp) (#364)
+- Show a chat's own background tasks and previews only (#365)
+- Language-server client with post-edit diagnostics (#367)
+- Automation flags and a versioned --json contract (#368)
+- Run Houston in GitHub Actions to respond, review, and fix CI (#370)
+- Lsp_* navigation tools and a semantic rename (#378)
+- Say where a CI run stands now in gh_run_view (#401)
+- Ship the standalone CLI through npm, Homebrew, the AUR and an install script (#422)
+- Name the upgrade command for how Houston was installed (#424)
+- Publish the product guide at houstoncode.ai/docs from the latest release (#437)
+- Spell out the @, /, and + shortcuts in the idle placeholder (#450)
+- Catch git hooks and settings a shell command plants for the user's git (#473)
+
+### Fixed
+- Log the notes model and the release PR link in Release - prepare (#284)
+- Retry stapler validate on a dropped connection (#285)
+- Retry the build legs' late network steps (#286)
+- Retry packaging when stapling loses its connection to Apple (#287)
+- Document RELEASE_PR_TOKEN and surface a sync PR that wasn't queued (#289)
+- Keep the update banner dismissed while the download runs (#290)
+- Drop prices from the model picker (#291)
+- Retitle the turn receipt "What ran" and tighten its rows (#294)
+- Line up chat titles across sections (#295)
+- Keep a long branch name on one line (#296)
+- Size dropdowns to the chosen option (#299)
+- Ask for full-auto shell network only when a command needs it (#300)
+- Move credential storage to the async safeStorage API (#305)
+- Open the OAuth sign-in URL on Windows without cmd.exe (#309)
+- Refuse to edit a file that isn't UTF-8 instead of corrupting it (#310)
+- Bring code highlighting and the titlebar badge up to AA contrast (#311)
+- Show the change in diff previews of large files, notebooks and moves (#312)
+- Run no repo-defined hooks, filters, or gpg from host-side git (#313)
+- Recover when the session's working directory was deleted (#314)
+- Draw folder, branch, settings and refresh as icons instead of text glyphs (#315)
+- Apply permission rules to the side chat's reads (#316)
+- Read a stdio server's stderr so a chatty one can't deadlock (#317)
+- Keep keyboard focus in the Connect a model panel (#318)
+- Harden the git that gh runs in the workspace (#319)
+- Name tool calls in the status bar the way the transcript does (#321)
+- Keep a worktree another chat still uses when deleting a chat (#322)
+- Settle the retry notice when a turn gives up (#326)
+- Share the schedule store safely between the app and the terminal (#327)
+- Name the message field, expose its suggestion menus, mark the open settings section (#330)
+- Stop retrying an exhausted OpenAI quota (#335)
+- Strip markdown links from generated chat titles (#336)
+- Negotiate the protocol version and gate elicitation on it (#338)
+- Clear the SSE endpoint-handshake timer once it settles (#339)
+- Honor .gitignore and never hide tracked files in file discovery (#340)
+- Accept the "*** End of File" line in an update chunk (#341)
+- Refuse notebook_edit on a notebook changed since it was read (#342)
+- Pick up credentials another Houston process saves (#343)
+- Keep blank lines between markdown blocks (#345)
+- Name tool calls the way the desktop's tool rows do (#346)
+- Show costs the way the desktop app does (#347)
+- Show approval choices once and record the answer (#348)
+- Reopen a streamable-HTTP server's notification stream when it drops (#349)
+- Keep a run of retries to one line and settle it on failure (#350)
+- Share one checkpoint between snapshots started together (#351)
+- List the real themes in /help (#352)
+- Measure and wrap terminal text by grapheme cluster (#354)
+- Keep # notes inert and stop global rules crowding out project rules (#358)
+- Lock the rules file while saving a # note (#359)
+- Write the banner's working folder from ~ (#361)
+- Drop the "Steered" label on steered messages (#362)
+- Put the model search box at the bottom of the picker (#363)
+- Register approval resolvers before emitting the prompt (#376)
+- Windows process tree and shims, stale publishes, rename hooks (#381)
+- Flag unrelated or stale history and keep the agent in its worktree (#382)
+- Warn when the shell is in another checkout of the same repository (#384)
+- Describe /model as the picker it opens in /help (#389)
+- Cancel file pickers a step opens in the hidden capture window (#397)
+- Dismiss JS dialogs the page raises outside a step (#398)
+- Read a macOS sandbox EPERM on a write as a denied write (#400)
+- Scope network approvals to what each call does (#402)
+- Pin every gh call to the repository its grant names (#403)
+- Wait out Windows busy-file errors on the rules-file lock (#404)
+- Stream text files instead of loading them whole (#405)
+- Wait between stale-lock takeover attempts (#406)
+- Answer read_file on a directory with its listing (#407)
+- Tell the model when Plan mode switches on or off (#408)
+- Log every unfinished run and record unanswered turns (#409)
+- Keep the last known update through a failed check, and retry within the hour (#429)
+- Ship only the target platform's node-pty prebuilds (#430)
+
+### Changed
+- Make onSteer required, drop the no-steer fallbacks (#443)
+
 ## v0.9.0 - 2026-10-21
 
 Guided setup, side chat, turn receipts, inline visuals, new models, and many safety and reliability fixes.
