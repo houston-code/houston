@@ -475,7 +475,11 @@ export function Composer({
       added++
     }
     const binary = files.filter((f) => f.binary).length
-    if (binary) flashNotice(`Attached ${added} file${added === 1 ? '' : 's'} (${binary} binary, contents omitted)`)
+    if (binary) {
+      flashNotice(
+        `Attached ${added} file${added === 1 ? '' : 's'}; left out the contents of ${binary} binary file${binary === 1 ? '' : 's'}.`
+      )
+    }
   }
 
   const addFolder = async (): Promise<void> => {
@@ -491,11 +495,11 @@ export function Composer({
     if (!workspace) return
     const changes = await window.api.getWorkingTreeChanges(workspace)
     if (!changes.isRepo) {
-      flashNotice('Not a git repository')
+      flashNotice("This folder isn't a git repository, so there are no changes to add.")
       return
     }
     if (changes.files.length === 0) {
-      flashNotice('No uncommitted changes')
+      flashNotice('No uncommitted changes to add.')
       return
     }
     addContext(diffToContext(changes))
@@ -518,7 +522,7 @@ export function Composer({
       focusEnd(start + clip.length)
       added = true
     }
-    if (!added) flashNotice(image ? 'Image copied. Switch to a vision model to attach it.' : 'Clipboard is empty')
+    if (!added) flashNotice(image ? 'Image copied. Switch to a vision model to attach it.' : 'The clipboard is empty.')
   }
 
   const confirmLink = (): void => {

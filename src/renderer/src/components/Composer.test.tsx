@@ -653,7 +653,7 @@ describe('Composer + attachment menu', () => {
     render(<Composer {...baseProps({ workspace: '/repo' })} />)
     openMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: /Add current changes/ }))
-    expect(await screen.findByText('No uncommitted changes')).toBeInTheDocument()
+    expect(await screen.findByText('No uncommitted changes to add.')).toBeInTheDocument()
   })
 
   it('uploads an image through the file input and sends it', async () => {
@@ -891,5 +891,44 @@ describe('Composer + attachment menu from the keyboard', () => {
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Tab' })
     expect(screen.queryByRole('menu')).not.toBeInTheDocument()
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message' }))
+  })
+})
+
+describe('Composer + attachment menu notices', () => {
+  const openMenu = (): void => {
+    fireEvent.click(screen.getByRole('button', { name: 'Add attachment' }))
+  }
+
+  it('says why there are no changes to add outside a git repository', async () => {
+    stubApi({ getWorkingTreeChanges: vi.fn().mockResolvedValue({ isRepo: false, files: [], added: 0, removed: 0 }) })
+    render(<Composer {...baseProps({ workspace: '/plain' })} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Add current changes/ }))
+    expect(
+      await screen.findByText("This folder isn't a git repository, so there are no changes to add.")
+    ).toBeInTheDocument()
+  })
+
+  it('says so when the clipboard is empty', async () => {
+    stubApi()
+    render(<Composer {...baseProps()} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Paste from clipboard/ }))
+    expect(await screen.findByText('The clipboard is empty.')).toBeInTheDocument()
+  })
+
+  it('names how many binary files went without their contents', async () => {
+    stubApi({
+      pickAttachmentFiles: vi.fn().mockResolvedValue([
+        { name: 'logo.png', content: '', bytes: 10, binary: true },
+        { name: 'a.ts', content: 'x', bytes: 1 }
+      ])
+    })
+    render(<Composer {...baseProps()} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Attach files/ }))
+    expect(
+      await screen.findByText('Attached 2 files; left out the contents of 1 binary file.')
+    ).toBeInTheDocument()
   })
 })
