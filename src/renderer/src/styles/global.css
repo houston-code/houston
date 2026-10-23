@@ -136,6 +136,7 @@
 .tasks__clear:focus-visible,
 .tasks__output:focus-visible,
 .dock-tabs__tab:focus-visible,
+.statusbar__terminal:focus-visible,
 .jump-bottom:focus-visible,
 .msg__copy:focus-visible,
 .question__option:focus-visible,
@@ -1848,6 +1849,27 @@ body.is-resizing {
   font-family: var(--mono);
   opacity: 0.8;
   white-space: nowrap;
+}
+/* Brings a minimized terminal panel back; shown only while it's hidden with tabs open. */
+.statusbar__terminal {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.statusbar__terminal:hover {
+  background: var(--bg-hover);
+}
+.statusbar__terminal-chevron {
+  transform: rotate(-90deg);
 }
 
 /* ---- Welcome ---- */

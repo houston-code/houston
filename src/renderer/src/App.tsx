@@ -93,6 +93,7 @@ import {
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
 import { activeTaskCount } from './components/BackgroundTasks'
+import { TerminalChip } from './components/TerminalChip'
 import { TasksPanel } from './components/TasksPanel'
 import type { DockTab } from './components/PreviewDock'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
@@ -2730,6 +2731,12 @@ export default function App(): JSX.Element {
         <footer className="statusbar">
           <span className={`statusbar__dot${chat.running ? ' statusbar__dot--busy' : ''}`} />
           <span className="statusbar__state">{statusText(chat.items, chat.running)}</span>
+          <TerminalChip
+            tabCount={terminals.tabs.length}
+            open={terminalOpen}
+            shortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
+            onShow={toggleTerminal}
+          />
           {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
         </footer>
       </div>
