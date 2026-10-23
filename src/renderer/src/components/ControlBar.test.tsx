@@ -364,3 +364,21 @@ describe('ControlBar reasoning control', () => {
     )
   })
 })
+
+describe('ControlBar rows', () => {
+  it('ends the first row after the worktree setup on a new chat in a repo', () => {
+    const { container } = render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={true} />)
+    const bar = container.querySelector('.control-bar') as HTMLElement
+    const kids = [...bar.children]
+    const brk = bar.querySelector('.control-bar__break') as HTMLElement
+    expect(brk).not.toBeNull()
+    // Right after the worktree group, before the model picker.
+    expect(kids.indexOf(brk)).toBe(kids.indexOf(bar.querySelector('.control-bar__wt') as HTMLElement) + 1)
+    expect(kids.indexOf(brk)).toBeLessThan(kids.indexOf(bar.querySelector('.model-control') as HTMLElement))
+  })
+
+  it('keeps one row for an open chat', () => {
+    const { container } = render(<ControlBar {...baseProps()} newChat={false} repoInfo={repo} />)
+    expect(container.querySelector('.control-bar__break')).toBeNull()
+  })
+})

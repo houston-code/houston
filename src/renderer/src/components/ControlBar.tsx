@@ -209,6 +209,11 @@ export function ControlBar({
         </div>
       )}
 
+      {/* Where the chat runs on one row, how it runs (model, thinking, approval) on the
+          next. Left to wrap freely, the row broke wherever the width ran out, often
+          leaving the approval mode alone on a second line. */}
+      {showWorktreeEditor && <div className="control-bar__break" aria-hidden="true" />}
+
       {!newChat && currentWorktree && (
         <span
           className="control control--branch"
