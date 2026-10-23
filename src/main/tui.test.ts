@@ -5037,6 +5037,25 @@ describe('/rewind', () => {
     return { rewind, calls }
   }
 
+  it('clears the context meter after a rewind cuts the chat, and keeps it for a code-only one', async () => {
+    const usage: AgentEvent[] = [
+      { runId: 'x', type: 'usage', inputTokens: 150_000, outputTokens: 10, cost: 0 },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ]
+    const lastStatus = async (mode: string): Promise<string> => {
+      const { d } = deps(usage)
+      d.persist = fakePersist().persist
+      d.rewind = rewindDeps().rewind
+      const t = fakeIo(['first', `/rewind 1 ${mode}`, 'y', null])
+      d.io = t.io
+      await runTui(opts, d)
+      const lines = t.text().split('\n').filter((l) => l.includes('anthropic/claude'))
+      return lines.at(-1) ?? ''
+    }
+    expect(await lastStatus('conversation')).not.toMatch(/[▓░]/)
+    expect(await lastStatus('code')).toMatch(/[▓░]/)
+  })
+
   it('lists the messages, asks for a mode, confirms, and rewinds the chat it continues with', async () => {
     const { d, rec } = deps(done)
     const fp = fakePersist()
