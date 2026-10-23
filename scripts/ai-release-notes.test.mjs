@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildPrompt, buildRequest, extractText, sectionBody, summaryFixPrompt, SYSTEM_PROMPT } from './ai-release-notes.mjs'
+import { buildPrompt, buildRequest, extractText, MAX_TOKENS, noTextReason, sectionBody, summaryFixPrompt, SYSTEM_PROMPT } from './ai-release-notes.mjs'
 import { summaryProblems } from './check-changelog-summary.mjs'
 
 describe('buildPrompt', () => {
@@ -58,11 +58,27 @@ describe('buildRequest', () => {
     expect(req.fallbacks).toBe('default')
     expect(req.system).toBe(SYSTEM_PROMPT)
     expect(req.messages).toBe(messages)
+    // Thinking counts toward max_tokens; 8000 left no room for text on a large release.
+    expect(req.max_tokens).toBe(MAX_TOKENS)
+    expect(MAX_TOKENS).toBeGreaterThanOrEqual(64000)
     // Opus 5.5 rejects a thinking budget, a disabled-thinking config, and sampling params.
     const json = JSON.stringify(req)
     for (const banned of ['budget_tokens', 'disabled', 'temperature', 'tool_choice']) {
       expect(json).not.toContain(banned)
     }
+  })
+})
+
+describe('noTextReason', () => {
+  it('names a max_tokens stop as thinking using the budget', () => {
+    expect(noTextReason({ stop_reason: 'max_tokens', usage: { output_tokens: 8000 } })).toBe(
+      'stop_reason max_tokens, 8000 output tokens; thinking used the whole max_tokens budget'
+    )
+  })
+
+  it('reports other stop reasons and a missing response plainly', () => {
+    expect(noTextReason({ stop_reason: 'end_turn', usage: { output_tokens: 12 } })).toBe('stop_reason end_turn, 12 output tokens')
+    expect(noTextReason(undefined)).toBe('stop_reason unknown')
   })
 })
 
