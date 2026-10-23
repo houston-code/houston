@@ -24,6 +24,11 @@ import { summaryProblems, SUMMARY_MAX } from './check-changelog-summary.mjs'
 
 const MODEL = 'claude-opus-5-5'
 
+// Thinking counts toward max_tokens. At high effort over a release's worth of PR bodies the
+// model can think past a small cap and stop with `max_tokens` before writing any text (v0.10.0
+// did this at 8000), so give it room and stream, which a cap this size requires.
+export const MAX_TOKENS = 64000
+
 /**
  * The Messages request for one turn. Opus 5.5 always thinks (adaptive is the only mode) and
  * defaults to medium effort, so effort is set explicitly. Its safety classifiers can decline
@@ -33,7 +38,7 @@ const MODEL = 'claude-opus-5-5'
 export function buildRequest(messages) {
   return {
     model: MODEL,
-    max_tokens: 8000,
+    max_tokens: MAX_TOKENS,
     thinking: { type: 'adaptive' },
     output_config: { effort: 'high' },
     betas: ['server-side-fallback-2026-07-01'],
@@ -96,6 +101,14 @@ export function extractText(content) {
   return text
 }
 
+/** Why a response produced no text, for the log: its stop reason and output token count. */
+export function noTextReason(res) {
+  const reason = res?.stop_reason ?? 'unknown'
+  const out = res?.usage?.output_tokens
+  const hint = reason === 'max_tokens' ? '; thinking used the whole max_tokens budget' : ''
+  return `stop_reason ${reason}${out == null ? '' : `, ${out} output tokens`}${hint}`
+}
+
 /** The section text below its `## v<version>` heading line. */
 export function sectionBody(text) {
   const nl = text.indexOf('\n')
@@ -126,12 +139,14 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
   console.error(`Generating AI release notes (${MODEL})…`)
   const client = new Anthropic()
   const ask = async (messages) => {
-    const res = await client.beta.messages.create(buildRequest(messages))
+    const res = await client.beta.messages.stream(buildRequest(messages)).finalMessage()
     if (res.stop_reason === 'refusal') {
       console.error(`ai-release-notes: the model declined (${res.stop_details?.category ?? 'no category'})`)
       return ''
     }
-    return extractText(res.content)
+    const text = extractText(res.content)
+    if (!text) console.error(`ai-release-notes: no text in the response (${noTextReason(res)})`)
+    return text
   }
 
   const prompt = { role: 'user', content: buildPrompt({ version, date, prs }) }
