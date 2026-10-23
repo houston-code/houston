@@ -20,12 +20,38 @@ export const QUESTION_EMPTY_ANSWER = '[The user did not provide an answer.]'
 /** The denial note on an approval that was still open when the user stopped the run. */
 export const APPROVAL_INTERRUPTED_NOTE = 'The user interrupted the run before answering this prompt.'
 
+/** How the loop answers the model for a call the user denied at its approval prompt. */
+export const APPROVAL_DENIED = 'Denied by the user.'
+
+/** What joins the user's guidance onto a denial: "Denied by the user. They said: …". */
+const DENIAL_NOTE_LEAD = 'They said:'
+
+/**
+ * The refusal text handed to the model, carrying the user's guidance when they
+ * gave any. `base` keeps each call site's existing do-not-retry framing.
+ */
+export function denialText(base: string, note?: string): string {
+  return note ? `${base} ${DENIAL_NOTE_LEAD} ${note}` : base
+}
+
 /** A short user-facing line for a prompt the run was stopped in front of, or null. */
 export function stoppedPromptText(output: string | undefined): string | null {
   if (!output) return null
   if (output === QUESTION_STOPPED_ANSWER) return 'Not answered: the run was stopped.'
   if (output.endsWith(APPROVAL_INTERRUPTED_NOTE)) return 'Not run: the run was stopped before it was approved.'
   return null
+}
+
+/**
+ * A short user-facing line for a call the user denied: "Denied", or "Denied: use
+ * staging" when they said why. Null when `output` isn't such a denial, and for one
+ * the run was stopped in front of, which {@link stoppedPromptText} describes.
+ */
+export function deniedPromptText(output: string | undefined): string | null {
+  if (!output?.startsWith(APPROVAL_DENIED) || stoppedPromptText(output)) return null
+  const lead = output.indexOf(DENIAL_NOTE_LEAD, APPROVAL_DENIED.length)
+  const note = lead < 0 ? '' : output.slice(lead + DENIAL_NOTE_LEAD.length).trim()
+  return note ? `Denied: ${note}` : 'Denied'
 }
 
 /** Whether an `ask_user` result means the question went unanswered. */

@@ -14,10 +14,19 @@ import {
   type SubagentRecord,
   type SubagentStep
 } from '@shared/subagents'
+import { deniedPromptText, stoppedPromptText } from '@shared/promptOutcome'
 import { copyText } from '../lib/clipboard'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { DiffView } from './DiffView'
 import { Markdown } from './Markdown'
+
+/**
+ * A step's result as shown: a call the user denied, or the run was stopped in front of,
+ * says so in the user's terms rather than in the loop's instructions to the subagent.
+ */
+function stepOutput(s: SubagentStep): string | undefined {
+  return stoppedPromptText(s.output) ?? deniedPromptText(s.output) ?? s.output
+}
 
 /**
  * How a subagent's work shows on its tool row: header chips (model, steps, time,
@@ -365,7 +374,7 @@ function StepRow({
       )}
       {open && !s.preview?.length && s.output && (
         <pre className="sa-out">
-          {s.output}
+          {stepOutput(s)}
           {s.outputTruncated ? '\n…' : ''}
         </pre>
       )}
@@ -664,7 +673,7 @@ function TranscriptStep({
       ))}
       {!s.preview?.length && s.output && (
         <pre className="tr__res">
-          {s.output}
+          {stepOutput(s)}
           {s.outputTruncated ? '\n…' : ''}
         </pre>
       )}

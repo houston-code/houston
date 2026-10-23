@@ -814,6 +814,15 @@ describe('renderToolResult', () => {
     )
   })
 
+  // The approval prompt already printed "↳ Denied: <reason>" for the call, so its
+  // result adds nothing; it used to print "✗ Run failed" over the model-facing text.
+  it('prints nothing more for a call the user denied', () => {
+    expect(renderToolResult('run_shell', false, 'Denied by the user.', paint)).toBe('')
+    expect(renderToolResult('write_file', false, 'Denied by the user. They said: use lib/', paint)).toBe('')
+    // A failure that merely starts the same way is still a failure.
+    expect(renderToolResult('run_shell', false, 'Denied: permission error', paint)).toContain('failed')
+  })
+
   it('prints a plan review as its decision, not the instructions sent to the model', () => {
     const rejected = 'The user REJECTED this plan. Do not make any changes. Briefly acknowledge and wait.'
     expect(renderToolResult('present_plan', true, rejected, paint)).toBe('  ↳ Plan rejected')
