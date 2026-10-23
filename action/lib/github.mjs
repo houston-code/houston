@@ -16,9 +16,16 @@ async function gh(exec, args, opts = {}) {
   return r.stdout
 }
 
+/**
+ * A GitHub login: letters, digits, and hyphens, plus the `_shortcode` suffix an
+ * Enterprise Managed User's login carries (`mona-cat_octo`). Nothing that could change
+ * the API path it is put into.
+ */
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:_[A-Za-z0-9]{1,39})?$/
+
 /** The commenter's actual permission on the repository, from the API. */
 export async function collaboratorPermission(exec, repository, login) {
-  if (!/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(login)) throw new Error(`not a GitHub login: ${JSON.stringify(login)}`)
+  if (!LOGIN.test(login)) throw new Error(`not a GitHub login: ${JSON.stringify(login)}`)
   const out = await gh(exec, ['api', `repos/${repository}/collaborators/${login}/permission`, '--jq', '.permission'])
   return out.trim()
 }
