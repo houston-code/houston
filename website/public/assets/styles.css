@@ -145,6 +145,9 @@ code { font-family: var(--mono); font-size: 0.9em; }
   padding: 6px 10px; border-radius: var(--r-1);
 }
 .nav-link:hover { color: var(--n5); text-decoration: none; }
+/* The section you are in (Docs, on the docs pages), in the same blue as the current
+   topic in the docs sidebar. */
+.nav-link[aria-current="page"] { color: var(--a5); }
 .nav .btn { margin-left: 8px; }
 
 .theme-toggle {
