@@ -843,3 +843,53 @@ describe('Composer + attachment menu', () => {
     })
   })
 })
+
+describe('Composer + attachment menu from the keyboard', () => {
+  const open = (): HTMLElement => {
+    const plus = screen.getByRole('button', { name: 'Add attachment' })
+    plus.focus()
+    fireEvent.click(plus)
+    return plus
+  }
+  const focusedText = (): string => (document.activeElement as HTMLElement).textContent ?? ''
+
+  it('moves focus into the menu and between its items', () => {
+    render(<Composer {...baseProps({ workspace: '/ws' })} />)
+    const plus = open()
+    expect(plus).toHaveAttribute('aria-controls', screen.getByRole('menu', { name: 'Add to message' }).id)
+    expect(focusedText()).toContain('Upload images')
+    const menu = screen.getByRole('menu')
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(focusedText()).toContain('Attach files')
+    fireEvent.keyDown(menu, { key: 'End' })
+    expect(focusedText()).toContain('Add a link')
+    // Wraps from the last item to the first.
+    fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(focusedText()).toContain('Upload images')
+    fireEvent.keyDown(menu, { key: 'ArrowUp' })
+    expect(focusedText()).toContain('Add a link')
+  })
+
+  it('skips a disabled item', () => {
+    // No workspace: "Add current changes" is disabled.
+    render(<Composer {...baseProps()} />)
+    open()
+    const menu = screen.getByRole('menu')
+    fireEvent.keyDown(menu, { key: 'Home' })
+    for (let i = 0; i < 4; i++) fireEvent.keyDown(menu, { key: 'ArrowDown' })
+    expect(focusedText()).toContain('Paste from clipboard')
+  })
+
+  it('returns focus to + on Escape, and to the message field on Tab', () => {
+    render(<Composer {...baseProps()} />)
+    const plus = open()
+    fireEvent.keyDown(document.activeElement as HTMLElement, { key: 'Escape' })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(plus)
+
+    open()
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Tab' })
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Message' }))
+  })
+})
