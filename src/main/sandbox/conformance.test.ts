@@ -11,6 +11,7 @@ import { runWithBackend } from './shared'
 import { startEgressProxy } from './egress-proxy'
 import type { EgressProxyHandle } from './egress-proxy'
 import type { SandboxRunOptions } from './contract'
+import { GitGuard, reviewGitChanges } from '../agent/gitGuard'
 
 /**
  * Behavioral sandbox conformance — the SAME assertions run against whatever backend
@@ -161,6 +162,57 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
     // Loopback is reachable whenever the net stack is shared; the closed port refuses.
     const r = await run('exec 3<>/dev/tcp/127.0.0.1/1', { allowNetwork: true })
     expect(r.stderr).toMatch(/connection refused/i)
+  })
+
+  // ---- Git persistence (see agent/gitGuard.ts) -----------------------------------
+  // The sandbox leaves `.git` writable so ordinary git keeps working; what a command
+  // plants there for the user's own git to run later is caught after the command
+  // instead. Runs on every backend: the guard is host-side, and the sandboxed commit
+  // must work wherever confinement is real.
+  describe('git persistence (C9)', () => {
+    let repo: string
+    const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' }
+    const hostGit = (...args: string[]): string =>
+      execFileSync('git', args, { cwd: repo, encoding: 'utf8', env: gitEnv, stdio: ['ignore', 'pipe', 'pipe'] })
+    const inRepo = (command: string) => run(command, { cwd: repo, workspace: repo, roots: [repo] })
+
+    beforeAll(() => {
+      repo = mkdtempSync(join(tmpdir(), 'houston-conf-git-'))
+      hostGit('init', '-q')
+      hostGit('config', 'user.name', 't')
+      hostGit('config', 'user.email', 't@t')
+    })
+
+    afterAll(() => {
+      rmSync(repo, { recursive: true, force: true })
+    })
+
+    it('C9a a sandboxed git commit, config write, and upstream setup all work', async () => {
+      const r = await inRepo(
+        'printf a > a.txt && git add a.txt && git commit -qm one && ' +
+          'git config user.email sandboxed@x && git remote add origin ../nowhere.git && echo DONE'
+      )
+      expect(r.stdout).toContain('DONE')
+      expect(r.exitCode).toBe(0)
+      expect(hostGit('log', '--oneline')).toMatch(/one/)
+    })
+
+    it('C9b a hook and an fsmonitor planted by a sandboxed command are caught and undone', async () => {
+      const guard = new GitGuard([repo])
+      await guard.ensureBaseline()
+      const r = await inRepo(
+        "printf '#!/bin/sh\necho planted\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && " +
+          "git config core.fsmonitor 'sh -c planted' && git commit -q --allow-empty -m two && echo DONE"
+      )
+      expect(r.stdout).toContain('DONE')
+      const note = await reviewGitChanges(guard, { workspace: repo })
+      expect(note).toContain('core.fsmonitor')
+      expect(note).toContain('pre-commit')
+      expect(existsSync(join(repo, '.git/hooks/pre-commit'))).toBe(false)
+      expect(() => hostGit('config', '--get', 'core.fsmonitor')).toThrow()
+      // Only the planted items went: the earlier, harmless config change survives.
+      expect(hostGit('config', '--get', 'user.email').trim()).toBe('sandboxed@x')
+    })
   })
 
   // ---- Proxied egress (the per-domain allowlist) ---------------------------------

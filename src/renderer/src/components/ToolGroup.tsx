@@ -485,8 +485,9 @@ function ToolRow({
           )}
           {item.sensitiveWrite && (
             <p className="tool-row__approval-note">
-              This changes a credential or secret file, such as .env. Only you can restore one
-              if it is overwritten, so Houston is checking first even in full auto.
+              This changes a sensitive file: a credential or secret such as .env, or a git hook
+              or setting that git can run outside the sandbox later. Houston checks first even
+              in full auto.
             </p>
           )}
           {item.shellOffline && (

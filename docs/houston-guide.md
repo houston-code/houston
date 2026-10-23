@@ -1099,6 +1099,37 @@ The sandbox can read your whole filesystem, so a few controls hold even in full 
   command that redirects into, copies over, edits in place, or removes one
   (`> .env`, `cp .env.example .env`, `sed -i … .env`, `rm .env`). Templates such as
   `.env.example` don't count.
+- **Git hooks and settings that run programs.** See "Git hooks and settings" below.
+
+### Git hooks and settings
+
+Shell commands can write anywhere in the project, `.git` included, so everyday git
+keeps working in full auto: commits, `git config`, `git push -u`, hook installers,
+submodules. A few things in `.git` are programs that git runs by itself, though: hooks,
+and settings such as `core.fsmonitor` or a filter driver. Your own terminal's git (or a
+shell prompt that runs `git status`) would run them outside the sandbox, and neither
+`git status` nor a diff shows them.
+
+So after each shell command Houston checks for those and nothing else:
+
+- **Nothing to see for ordinary git.** Your name and email, remotes, and upstream
+  branches never count, and a command that doesn't touch `.git` costs a few file checks.
+- **Husky's setup is noted, not asked about.** Its hooks folder (`.husky`) is checked
+  in, so you can read what it runs.
+- **Anything else pauses once** and lists what changed: a new or changed hook, a
+  setting that names a program, a nested repository registered as a submodule that
+  carries one, or a file that points git at another folder's settings. **Undo** puts
+  back only those items (other changes the same command made stay), and **Keep** leaves
+  them, for example a hook tool you meant to install. If you keep something, the reply
+  says how to remove it by hand later.
+- **Headless runs and runs nobody is watching** undo the change and say so, since
+  nobody can approve it.
+- **File edits** to `.git/hooks/…`, `.git/config`, or similar ask first, like
+  credential files do.
+
+The check runs after the command, so a program that a shell prompt ran in the moment
+between the command finishing and the question appearing has already run. A background
+command is checked when its output is read or it is stopped.
 
 ### Network calls in full auto
 

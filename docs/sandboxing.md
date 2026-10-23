@@ -52,6 +52,79 @@ broadly-available primitive with the same shape, which is why its backend runs
 unconfined. The rest of this document records *why* the obvious Windows candidates were
 rejected, so the decision isn't re-litigated from scratch.
 
+## Git hooks and settings (all backends)
+
+Each workspace root is writable, `.git` included, and that is deliberate: `git commit`,
+`git config`, `git push -u`, `git remote add`, husky's `prepare` script, `pre-commit
+install`, and submodule setup all write there. But a few things in a repository's git
+data are commands git runs on its own: hooks, `core.fsmonitor` (run by every
+`git status`), filter, diff, and merge drivers, `core.sshCommand`, aliases, includes,
+and the `commondir` file that points git at another directory's config. A confined
+command can write those, and the user's own git, or a shell prompt that calls
+`git status` on every `cd`, later runs them **outside** the sandbox. None of it shows in
+`git status` or a diff, and none of it is checkpointed. (Houston's own host-side git is
+hardened against every one of these; see `hardenedGitArgs` in
+[`src/main/agent/gitRead.ts`](../src/main/agent/gitRead.ts).)
+
+### What Houston does
+
+**Detect after each command, ask, and undo on request**
+([`src/main/agent/gitGuard.ts`](../src/main/agent/gitGuard.ts)). Before the run's first
+shell command Houston snapshots, for each root: the hooks directory (by content hash
+and mode, ignoring `*.sample`), the exec-capable keys in the repository's own config
+files (`config`, every `config.worktree`, one level of `include.path`), every
+`commondir`, the `.git` pointer file, and the same for each nested repository the index
+records as a submodule, since the root's `git status` recurses into those and runs
+their fsmonitor. For a linked worktree that covers the shared common dir, the other
+worktrees' redirects, and the main checkout's index too, because the sandbox makes the
+common dir writable (see `gitWritableRoots`). After each foreground `run_shell` (and
+when a background shell's output is read or it is stopped), it compares again:
+
+- Settings that run nothing (`user.*`, remotes, upstreams, `core.fsmonitor=true`, which
+  selects git's built-in daemon) are never reported.
+- `core.hooksPath` set to husky's folder is noted in the result, not asked about: those
+  hooks are checked in and visible.
+- Anything else exec-capable pauses the run with a question listing each change. Undo
+  restores exactly those items (a key's previous values, a hook's previous bytes and
+  mode, or no file at all) and leaves unrelated changes from the same command alone;
+  Keep makes the new state the baseline and the result names the commands to remove it
+  by hand. With nobody to ask (headless) it undoes.
+
+Cost: a snapshot of an unchanged repository is a handful of `stat`s and small reads.
+git runs only to parse a config file whose bytes changed (`git config --file`, outside
+any repository, which runs nothing) or to list submodule entries when the index changed
+(through the hardened runner).
+
+Separately, the file tools treat `.git/hooks/…`, `.git/config`, `config.worktree`,
+`commondir`, and a `.git` pointer file as sensitive writes (`isGitExecPath` in
+[`src/main/agent/sensitive-paths.ts`](../src/main/agent/sensitive-paths.ts)), so they ask
+even in full auto.
+
+### Options weighed
+
+| | Stops it beforehand | Breaks ordinary git | Covers |
+|---|---|---|---|
+| **A.** Sandbox deny on `.git/config`, `hooks/`, `commondir`, `.git` itself | Yes | Yes: `git config`, `remote add`, `branch --set-upstream-to`, husky `prepare`, `pre-commit install`, submodule init fail; `push -u` silently drops the upstream | Not a nested repository registered as a submodule (verified bypass); on Linux, bubblewrap can only make existing files read-only, so a new `commondir` can't be blocked |
+| **B.** Detect after each command (chosen) | No: reports right after | No | Everything above, the same on every platform |
+| **C.** File tools ask for git exec paths (chosen, alongside B) | Yes, for file tools only | No | Not shell commands |
+
+A was measured on macOS (commit, checkout, push, fetch, tag, stash, gc, and
+`worktree add` kept working; everything that writes config failed) and rejected for
+breaking routine setup. It could come back as an opt-in strict mode.
+
+### What remains
+
+- **The window.** Detection happens when the command finishes. Something else that
+  runs git in the repository in between (a shell prompt in another terminal) runs what
+  was planted before the question appears.
+- **Background shells** are checked when their output is read or they are stopped, so
+  a change one makes after the run's last such call isn't reported.
+- **Untracked nested repositories** aren't inspected: git doesn't enter them on its own,
+  only when the user `cd`s into one, which is the same trust as running any other code
+  the agent wrote.
+- **Hooks outside `.git`** (a `core.hooksPath` folder in the project) are project
+  files: they show up in `git status` unless ignored, and run only on commit or push.
+
 ## Language servers
 
 Language servers (see the guide's *Code intelligence* section) are long-running

@@ -70,6 +70,7 @@ import {
   type EgressProxyEndpoints
 } from '../sandbox'
 import { backgroundShellGroups, killShell, readShellOutput, registerShell } from './shells'
+import { reviewGitChanges, type GitGuard } from './gitGuard'
 import { foreignListenerNote, urlPort, type PortListener } from './portOwner'
 import { runInSession, type ShellSession } from './shell-session'
 import {
@@ -231,6 +232,18 @@ export interface ToolContext {
   shellSession?: ShellSession
   /** Max bytes of a single shell command's output kept in a tool result (context guard). */
   shellOutputMaxBytes?: number
+  /**
+   * The run's watch over exec-capable git state (hooks, fsmonitor, filter drivers, …)
+   * that a shell command could plant for git to run outside the sandbox later (injected
+   * by the loop, shared with writable subagents; see gitGuard.ts). run_shell and the
+   * background-shell tools check it after the command and report what changed.
+   */
+  gitGuard?: GitGuard
+  /**
+   * Ask the user whether to keep or undo such a change (injected by the loop for an
+   * attended run). Absent, a change is undone and the result says so.
+   */
+  askGitGuard?: (q: AgentQuestion) => Promise<string>
   /**
    * Report what a tool executed (a shell command's exit code, from the runner itself)
    * to the run's evidence ledger, which the turn's receipt is built from (injected by
@@ -1731,6 +1744,28 @@ export const BACKGROUND_AMPERSAND_ERROR =
   'its output go to stdout (no `> file` redirect) so read_shell_output and the Preview pane ' +
   'can see it. Drop any trailing `sleep`/`cat log`; poll with read_shell_output instead.'
 
+/** Take the run's git baseline before a shell command, if it hasn't one yet. Never throws. */
+async function gitGuardBefore(ctx: ToolContext): Promise<void> {
+  try {
+    await ctx.gitGuard?.ensureBaseline()
+  } catch {
+    // A failed snapshot only means this command goes unchecked.
+  }
+}
+
+/** Check the run's git state after a shell command (see gitGuard.ts); '' when nothing to say. */
+async function gitGuardAfter(ctx: ToolContext): Promise<string> {
+  if (!ctx.gitGuard) return ''
+  try {
+    return await reviewGitChanges(ctx.gitGuard, {
+      workspace: ctx.workspace,
+      ...(ctx.askGitGuard ? { ask: ctx.askGitGuard } : {})
+    })
+  } catch {
+    return ''
+  }
+}
+
 const runShell: ToolDef = {
   kind: 'shell',
   summarize: (a) => (a.background === true ? `${str(a, 'command')} (background)` : str(a, 'command')),
@@ -1758,6 +1793,7 @@ const runShell: ToolDef = {
     const command = str(args, 'command')
     if (!command) throw new Error('command is required.')
 
+    await gitGuardBefore(ctx)
     if (args.background === true) {
       if (backgroundsItself(command)) throw new Error(BACKGROUND_AMPERSAND_ERROR)
       const child = spawnSandboxed({
@@ -1871,6 +1907,8 @@ const runShell: ToolDef = {
     // Honest signal: if the command ran unconfined, say so — run_shell's contract
     // promises a sandbox, and approval auto-approves shell on that premise.
     if (!result.sandboxed) parts.push(UNSANDBOXED_SHELL_NOTE)
+    const gitNote = await gitGuardAfter(ctx)
+    if (gitNote) parts.push(gitNote)
     return parts.join('\n')
   }
 }
@@ -1913,6 +1951,9 @@ const readShellOutputTool: ToolDef = {
       )
     }
     parts.push(r.running ? '[still running]' : `[exited with code ${r.exitCode ?? 'killed'}]`)
+    // A background command can change git state at any point while it runs.
+    const gitNote = await gitGuardAfter(ctx)
+    if (gitNote) parts.push(gitNote)
     return parts.join('\n')
   }
 }
@@ -1929,19 +1970,23 @@ const killShellTool: ToolDef = {
       ['shell_id']
     )
   },
-  async execute(args) {
+  async execute(args, ctx) {
     const id = str(args, 'shell_id')
     if (!id) throw new Error('shell_id is required.')
-    switch (killShell(id)) {
-      case 'killed':
-        return `Killed background shell ${id}.`
-      case 'killed-leftovers':
-        return `Background shell ${id} had already exited, but processes it started were still running; stopped them.`
-      case 'already-exited':
-        return `Background shell ${id} had already exited; nothing it started is still running.`
-      case 'not-found':
-        return `No background shell with id ${id}.`
-    }
+    const text = ((): string => {
+      switch (killShell(id)) {
+        case 'killed':
+          return `Killed background shell ${id}.`
+        case 'killed-leftovers':
+          return `Background shell ${id} had already exited, but processes it started were still running; stopped them.`
+        case 'already-exited':
+          return `Background shell ${id} had already exited; nothing it started is still running.`
+        case 'not-found':
+          return `No background shell with id ${id}.`
+      }
+    })()
+    const gitNote = await gitGuardAfter(ctx)
+    return gitNote ? `${text}\n${gitNote}` : text
   }
 }
 

@@ -12,6 +12,7 @@ import type {
   PlanPayload,
   Provider,
   QuestionOption,
+  AgentQuestion,
   ReasoningBlock,
   ReasoningEffort,
   StopReason,
@@ -201,6 +202,7 @@ import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
 import { formatPromptSnapshot, localDateStamp, resolvePromptSnapshot } from './promptSnapshot'
 import { gitWritableRoots } from './gitDirs'
+import { GitGuard } from './gitGuard'
 import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
 import {
   COMPACTION_TAIL_FRACTION,
@@ -1686,6 +1688,9 @@ export async function startRun(
     // denied the writes it makes to FETCH_HEAD/index/objects/refs. Widen the writable
     // roots to cover those git dirs — for the workspace and every added root alike.
     // Plain checkouts add nothing. Snapshot first so we don't rescan the git dirs.
+    // The working trees themselves, before the git dirs widen the list: the guard
+    // finds each one's git dirs on its own.
+    const gitGuardRoots = [...roots]
     for (const base of [...roots]) {
       for (const dir of gitWritableRoots(base)) {
         if (!roots.includes(dir)) roots.push(dir)
@@ -1695,6 +1700,9 @@ export async function startRun(
     // Persistent shell state for this run: `cd` and exported env carry between
     // foreground run_shell calls so the agent gets "same terminal" behavior.
     const shellSession = createShellSession(workspace)
+    // Watches the roots' exec-capable git state across this run's shell commands,
+    // its writable subagents' included (see gitGuard.ts).
+    const gitGuard = new GitGuard(gitGuardRoots)
 
     // Egress allowlist: resolve the shared proxy's endpoints once per run.
     // Present → any granted shell network is PROXIED and per-domain filtered
@@ -1842,6 +1850,26 @@ export async function startRun(
       subCallSeq.set(key, n)
       return `${key}.${n}`
     }
+
+    // Ask the user a structured question under `callId` and block until they answer.
+    // The resolver is registered before the event is emitted so a fast reply can't
+    // race ahead of it; cancelRun resolves any still-pending question.
+    const askRunUser = (callId: string, q: AgentQuestion): Promise<string> =>
+      new Promise<string>((resolve) => {
+        run.questions.set(callId, resolve)
+        run.pendingQuestions.set(callId, {
+          question: q.question,
+          options: q.options,
+          ...(q.multiSelect ? { multiSelect: true } : {})
+        })
+        emit({
+          type: 'tool_question',
+          callId,
+          question: q.question,
+          options: q.options,
+          ...(q.multiSelect ? { multiSelect: true } : {})
+        })
+      })
 
     // The refusal for a call a permission rule denies. Attributed to the managed tier
     // when it originates there: the admin block is checked first, so if it matches at
@@ -2200,6 +2228,12 @@ export async function startRun(
               checkpointRunId: runId,
               shellSession: createShellSession(workspace),
               shellOutputMaxBytes: resolveShellOutputBudget(settings),
+              // The run's guard, so a change a delegated command makes to git state is
+              // caught like the parent's own; asked under a row of its own.
+              gitGuard,
+              ...(req.unattended === true
+                ? {}
+                : { askGitGuard: (q: AgentQuestion) => askRunUser(mintSubCallId(callId, 'git'), q) }),
               gateUnconfinedShell,
               // Delegated commands and edits belong on this turn's receipt, credited
               // to the agent that ran them.
@@ -2415,6 +2449,9 @@ export async function startRun(
       ...(req.unattended === true ? { unattended: true } : {}),
       shellSession,
       shellOutputMaxBytes: resolveShellOutputBudget(settings),
+      gitGuard,
+      // Nobody can answer a headless run, so the guard undoes a change instead of asking.
+      ...(req.unattended === true ? {} : { askGitGuard: (q: AgentQuestion) => askRunUser(callId, q) }),
       recordEvidence: (e) => recordEvidence(e),
       checkTodos,
       fileTracker,
@@ -2435,25 +2472,7 @@ export async function startRun(
           query,
           signal: abort.signal
         }),
-      // Ask the user a structured question and block until they answer. The
-      // resolver is registered before the event is emitted so a fast reply can't
-      // race ahead of it; cancelRun resolves any still-pending question.
-      askUser: (q) =>
-        new Promise<string>((resolve) => {
-          run.questions.set(callId, resolve)
-          run.pendingQuestions.set(callId, {
-            question: q.question,
-            options: q.options,
-            ...(q.multiSelect ? { multiSelect: true } : {})
-          })
-          emit({
-            type: 'tool_question',
-            callId,
-            question: q.question,
-            options: q.options,
-            ...(q.multiSelect ? { multiSelect: true } : {})
-          })
-        }),
+      askUser: (q) => askRunUser(callId, q),
       // Route an MCP server's mid-call elicitation to this run's user and block
       // until they answer. Keyed by a fresh elicitId (one call can elicit
       // repeatedly); registered before emitting, like askUser; cancelRun resolves

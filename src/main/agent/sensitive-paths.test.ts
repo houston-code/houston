@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isSensitivePath, isSensitiveRead, writesSensitivePath } from './sensitive-paths'
+import { isGitExecPath, isSensitivePath, isSensitiveRead, writesSensitivePath } from './sensitive-paths'
 
 describe('isSensitivePath', () => {
   it('flags dotenv files', () => {
@@ -109,5 +109,52 @@ describe('writesSensitivePath', () => {
     expect(writesSensitivePath('apply_patch', { patch: del })).toBe(true)
     expect(writesSensitivePath('apply_patch', { patch: plain })).toBe(false)
     expect(writesSensitivePath('apply_patch', { patch: 'not a patch' })).toBe(false)
+  })
+})
+
+describe('isGitExecPath', () => {
+  it('flags hooks, config, commondir, and the .git pointer file', () => {
+    expect(isGitExecPath('.git/hooks/pre-commit')).toBe(true)
+    expect(isGitExecPath('./.git/hooks/post-checkout')).toBe(true)
+    expect(isGitExecPath('/repo/.git/config')).toBe(true)
+    expect(isGitExecPath('.git/config.worktree')).toBe(true)
+    expect(isGitExecPath('.git/commondir')).toBe(true)
+    expect(isGitExecPath('sub/.git')).toBe(true)
+    expect(isGitExecPath('.GIT/Hooks/pre-push')).toBe(true)
+    expect(isGitExecPath('C:\\repo\\.git\\hooks\\pre-commit')).toBe(true)
+  })
+
+  it('flags submodule and linked-worktree git dirs', () => {
+    expect(isGitExecPath('.git/modules/lib/config')).toBe(true)
+    expect(isGitExecPath('.git/modules/lib/hooks/pre-commit')).toBe(true)
+    expect(isGitExecPath('.git/worktrees/feat/commondir')).toBe(true)
+    expect(isGitExecPath('.git/worktrees/feat/config.worktree')).toBe(true)
+  })
+
+  it('leaves ordinary files alone, inside and outside .git', () => {
+    expect(isGitExecPath('config')).toBe(false)
+    expect(isGitExecPath('src/hooks/useThing.ts')).toBe(false)
+    expect(isGitExecPath('.husky/pre-commit')).toBe(false)
+    expect(isGitExecPath('.gitignore')).toBe(false)
+    expect(isGitExecPath('.github/workflows/ci.yml')).toBe(false)
+    expect(isGitExecPath('.git/info/exclude')).toBe(false)
+    expect(isGitExecPath('.git/COMMIT_EDITMSG')).toBe(false)
+    expect(isGitExecPath('')).toBe(false)
+  })
+})
+
+describe('writesSensitivePath on git exec paths', () => {
+  it('prompts for a file-tool write to a hook or the repo config', () => {
+    expect(writesSensitivePath('write_file', { path: '.git/hooks/pre-commit' })).toBe(true)
+    expect(writesSensitivePath('edit_file', { path: '.git/config' })).toBe(true)
+    expect(writesSensitivePath('write_file', { path: 'src/config.ts' })).toBe(false)
+  })
+
+  it('checks every apply_patch target, a move destination included', () => {
+    const add = '*** Begin Patch\n*** Add File: .git/hooks/post-merge\n+#!/bin/sh\n*** End Patch'
+    expect(writesSensitivePath('apply_patch', { patch: add })).toBe(true)
+    const move =
+      '*** Begin Patch\n*** Update File: notes.txt\n*** Move to: .git/commondir\n@@\n-a\n+b\n*** End Patch'
+    expect(writesSensitivePath('apply_patch', { patch: move })).toBe(true)
   })
 })

@@ -1,5 +1,6 @@
 import {
   systemNoteMessage,
+  type AgentQuestion,
   type ChatMessage,
   type Provider,
   type ReasoningBlock,
@@ -20,6 +21,7 @@ import { runQuarantineExtraction } from './untrusted'
 import { providerStreamError, withProviderRetry } from './retry'
 import { recordOriginal, recordResult, writeTargets } from './checkpoints'
 import type { ShellSession } from './shell-session'
+import type { GitGuard } from './gitGuard'
 import type { EvidenceDraft } from './evidence'
 import { isSandboxed } from '../sandbox'
 import { isSensitiveRead } from './sensitive-paths'
@@ -278,6 +280,9 @@ export interface SubAgentOptions {
   recordFiles?: (paths: string[]) => void
   /** Persistent shell state for run_shell (writable tier). */
   shellSession?: ShellSession
+  /** The parent run's git guard and its question seam (writable tier; see gitGuard.ts). */
+  gitGuard?: GitGuard
+  askGitGuard?: (q: AgentQuestion) => Promise<string>
   /** Cap on a single shell command's output kept in a tool result. */
   shellOutputMaxBytes?: number
   /**
@@ -425,6 +430,8 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     // changing it, like the main agent, and what the parent read doesn't count.
     fileTracker: new FileReadTracker(),
     ...(opts.shellSession ? { shellSession: opts.shellSession } : {}),
+    ...(opts.gitGuard ? { gitGuard: opts.gitGuard } : {}),
+    ...(opts.askGitGuard ? { askGitGuard: opts.askGitGuard } : {}),
     ...(opts.shellOutputMaxBytes ? { shellOutputMaxBytes: opts.shellOutputMaxBytes } : {}),
     ...(opts.recordEvidence ? { recordEvidence: opts.recordEvidence } : {}),
     // Network-tool plumbing (web_search key lookup, egress credential masking) —
@@ -824,7 +831,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
               'your report that the main agent can read it with approval if it is needed.'
           } else if (isSensitiveWrite(tool.kind, call.name, call.arguments)) {
             output =
-              "This call changes a credential or secret file (such as .env), which needs the user's " +
+              "This call changes a credential or secret file (such as .env) or a git hook or config file, which needs the user's " +
               'approval, and this subagent cannot ask for it. Do not retry; note in your report what ' +
               'should change so the main agent can make the change with approval.'
           } else {

@@ -179,6 +179,11 @@ for the *denied* path, not only the allowed one, and a security pass before the 
 - `src/main/sandbox/`: the per-OS sandbox backends and their conformance suite. The
   `linux-sandbox` CI job is the only one that exercises the real bubblewrap backend; the
   `test` job can only skip it.
+- `src/main/agent/gitGuard.ts`: catches what a sandboxed command plants in a repository's
+  git data (hooks, command-valued config, `commondir`, a submodule's config) for the
+  user's own git to run outside the sandbox. Every git call it makes must run nothing
+  (`config --file` outside a repository, or the hardened runner), and an undo touches only
+  the reported items.
 - `src/main/agent/egress.ts`, `redact.ts`, and `src/main/secrets.ts`: per-destination
   network consent, and the scrub that keeps credentials out of transcripts, logs, and
   subagent output.
