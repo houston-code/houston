@@ -1,6 +1,7 @@
 // The header and footer every generated page shares (build-legal.mjs, build-docs.mjs).
 // The hand-written pages (index.html, 404.html, contact.html) repeat the same markup;
-// change them together.
+// change them together. site-chrome.test.mjs fails when their header drifts from this
+// one (the landing page links its own sections as "#why" rather than "/#why").
 
 export const escapeHtml = (s) =>
   s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
@@ -16,15 +17,22 @@ export function siteHeader({ current } = {}) {
         <span class="beta-badge">Beta</span>
       </a>
       <nav class="nav" aria-label="Primary">
-        <a class="nav-link" href="/#why">Security</a>
-        <a class="nav-link" href="/#features">Features</a>
-        <a class="nav-link" href="/docs/"${docsCurrent}>Docs</a>
-        <a class="nav-link" href="/#faq">FAQ</a>
-        <a class="nav-link" href="https://github.com/houston-code/houston" rel="noopener">GitHub</a>
-        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Dark theme" aria-pressed="false" hidden>
-          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
-          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        <button class="nav-menu-button" id="nav-menu-button" type="button" aria-label="Menu" aria-expanded="false" aria-controls="nav-menu" hidden>
+          <svg class="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+          <svg class="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
         </button>
+        <div class="nav-menu" id="nav-menu">
+          <a class="nav-link" href="/#why">Security</a>
+          <a class="nav-link" href="/#features">Features</a>
+          <a class="nav-link" href="/docs/"${docsCurrent}>Docs</a>
+          <a class="nav-link" href="/#faq">FAQ</a>
+          <a class="nav-link" href="https://github.com/houston-code/houston" rel="noopener">GitHub</a>
+          <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Dark theme" aria-pressed="false" hidden>
+            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+            <span class="theme-toggle-label">Dark theme</span>
+          </button>
+        </div>
         <a class="btn btn-primary btn-sm" href="/#download">Download</a>
       </nav>
     </div>

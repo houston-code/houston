@@ -153,6 +153,11 @@ code { font-family: var(--mono); font-size: 0.9em; }
    topic in the docs sidebar. */
 .nav-link[aria-current="page"] { color: var(--a5); }
 .nav .btn { margin-left: 8px; }
+/* The links and theme switch. Inline here; below 720px they fold into a panel that the
+   menu button opens (app.js reveals the button, so with no JavaScript there is none). */
+.nav-menu { display: flex; align-items: center; gap: 4px; }
+.nav-menu-button { display: none; }
+.theme-toggle-label { display: none; }
 
 .theme-toggle {
   display: inline-flex; align-items: center; justify-content: center;
@@ -482,7 +487,42 @@ section { padding: 96px 0; }
   section { padding: 64px 0; }
   .hero { padding-top: 56px; }
   .shot { margin-top: 48px; }
-  .nav-link { display: none; }
+  .nav-menu-button:not([hidden]) {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0; border-radius: var(--r-1);
+    border: 0; background: transparent; color: var(--n4); cursor: pointer;
+  }
+  .nav-menu-button:hover { color: var(--n5); background: var(--n2); }
+  .nav-menu-button svg { width: 20px; height: 20px; }
+  .nav-menu-button .icon-close, .nav-menu-button[aria-expanded="true"] .icon-menu { display: none; }
+  .nav-menu-button[aria-expanded="true"] .icon-close { display: block; }
+  .nav-menu {
+    display: none; position: absolute; top: 100%; left: 0; right: 0;
+    flex-direction: column; align-items: stretch; gap: 0;
+    padding: 4px 24px 12px; background: var(--n1);
+    border-bottom: 1px solid var(--n3); box-shadow: var(--shadow);
+  }
+  .nav-menu.is-open { display: flex; }
+  .nav-menu .nav-link {
+    padding: 12px 0; border-radius: 0; border-bottom: 1px solid var(--n3);
+    font-size: var(--fs-3); color: var(--n5);
+  }
+  .nav-menu .nav-link[aria-current="page"] { color: var(--a5); }
+  /* In the panel the theme button is a labeled row with a switch, not an icon. */
+  .nav-menu .theme-toggle {
+    width: 100%; height: auto; padding: 12px 0; border-radius: 0; justify-content: space-between;
+    font: 500 var(--fs-3) / 1.6 var(--font); color: var(--n5);
+  }
+  .nav-menu .theme-toggle:hover { background: transparent; }
+  .nav-menu .theme-toggle svg { display: none !important; }
+  .nav-menu .theme-toggle-label { display: inline; }
+  .nav-menu .theme-toggle::after {
+    content: ""; flex-shrink: 0; width: 36px; height: 20px; border-radius: 999px;
+    background: radial-gradient(circle at 10px 50%, var(--n1) 6px, transparent 6.5px), var(--n4);
+  }
+  .nav-menu .theme-toggle[aria-pressed="true"]::after {
+    background: radial-gradient(circle at 26px 50%, var(--n1) 6px, transparent 6.5px), var(--a3);
+  }
   .feature-grid, .steps, .dl-extra, .contact-grid { grid-template-columns: 1fr; gap: 24px; }
   .docs-topics { grid-template-columns: 1fr; }
   .docs { padding-top: 32px; }
