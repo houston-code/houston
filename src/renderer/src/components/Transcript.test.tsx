@@ -625,3 +625,65 @@ describe('Transcript: unread from a reply', () => {
     expect(screen.queryByRole('button', { name: /Jump to first unread/ })).not.toBeInTheDocument()
   })
 })
+
+describe('Transcript: staying at the latest message', () => {
+  const noop = (): void => {}
+
+  /** Give the scroller a fixed size (jsdom lays nothing out) and park it at `top`. */
+  function sizeScroller(el: HTMLElement, m: { scrollHeight: number; clientHeight: number; top: number }): void {
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, value: m.scrollHeight })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, value: m.clientHeight })
+    el.scrollTop = m.top
+    fireEvent.scroll(el)
+  }
+
+  it('follows a message the user sends, even after they scrolled up to read', () => {
+    const view = (items: DisplayItem[]): JSX.Element => (
+      <Transcript items={items} onApprove={noop} onAnswer={noop} onElicit={noop} />
+    )
+    const first = [userItem({ id: 'u1' }), assistantItem({ id: 'a1', text: 'a long reply' })]
+    const { container, rerender } = render(view(first))
+    const scroller = container.querySelector('.transcript') as HTMLElement
+    sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 0 })
+    expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
+
+    // More of the reply streaming in leaves the reader where they are.
+    rerender(view([userItem({ id: 'u1' }), assistantItem({ id: 'a1', text: 'a long reply, longer' })]))
+    expect(scroller.scrollTop).toBe(0)
+
+    // Their next message brings them to the bottom and clears the jump button.
+    rerender(view([...first, userItem({ id: 'u2', text: 'next question' })]))
+    expect(scroller.scrollTop).toBe(1000)
+    expect(screen.queryByRole('button', { name: '↓' })).not.toBeInTheDocument()
+  })
+
+  it('stays at the bottom when a bar opens beneath it, but not once scrolled up', () => {
+    let onResize: (() => void) | undefined
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(cb: () => void) {
+          onResize = cb
+        }
+        observe(): void {}
+        disconnect(): void {}
+      }
+    )
+    try {
+      const { container } = renderTranscript([userItem(), assistantItem()])
+      const scroller = container.querySelector('.transcript') as HTMLElement
+      // At the bottom, then the view shrinks (a Revert bar appeared below it).
+      sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 700 })
+      Object.defineProperty(scroller, 'clientHeight', { configurable: true, value: 240 })
+      onResize?.()
+      expect(scroller.scrollTop).toBe(1000)
+
+      // Scrolled up to read: a resize leaves the position alone.
+      sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 240, top: 100 })
+      onResize?.()
+      expect(scroller.scrollTop).toBe(100)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+})

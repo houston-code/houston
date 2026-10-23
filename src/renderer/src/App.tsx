@@ -2547,6 +2547,9 @@ export default function App(): JSX.Element {
           </div>
         ) : (
           <Transcript
+            // One per chat: a new chat opens at its latest message (or its "New"
+            // divider), not at the scroll position the last chat was left at.
+            key={currentId ?? 'new'}
             items={chat.items}
             onApprove={chat.approve}
             onAnswer={chat.answerQuestion}

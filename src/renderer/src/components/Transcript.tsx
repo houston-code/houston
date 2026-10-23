@@ -417,13 +417,42 @@ export function Transcript({
     setShowJump(!isNearBottom(el))
   }, [newFromId])
 
+  // The user's latest message. When a new one lands (they sent or steered it), follow
+  // it to the bottom even if they had scrolled up to read: their message and the reply
+  // to it are what they are looking for next.
+  const lastUserId = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'user') return items[i].id
+    return undefined
+  }, [items])
+  const lastUserRef = useRef(lastUserId)
+
   // Keep the latest output in view only while pinned. Using an instant jump
   // (not smooth) avoids restarting an animation on every streaming delta, which
   // is what made the view flicker and fight the user's own scrolling.
   useEffect(() => {
     const el = containerRef.current
+    if (lastUserId !== lastUserRef.current) {
+      lastUserRef.current = lastUserId
+      if (lastUserId !== undefined) {
+        pinnedRef.current = true
+        setShowJump(false)
+      }
+    }
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-  }, [items])
+  }, [items, lastUserId])
+
+  // The view shrinks when a bar opens under it (the turn's file changes, a failed
+  // turn's Retry, the queue, a banner) and grows when one closes. Stay at the bottom
+  // through either while pinned; otherwise the last row ends up behind the new bar.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(() => {
+      if (pinnedRef.current) el.scrollTop = el.scrollHeight
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
 
   function jumpToNew(): void {
     const el = containerRef.current
