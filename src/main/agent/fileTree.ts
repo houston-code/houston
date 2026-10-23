@@ -18,11 +18,16 @@ import { resolveInWorkspace } from './tools'
  * committed symlink from listing anything outside the project.
  */
 
+/** Git's store, as a folder or as a linked worktree's / submodule's pointer file. */
+const GIT_DIR = '.git'
+
 /**
  * The immediate children of `relPath` (relative to the workspace root; '' is the
  * root itself), folders first then files, each group case-insensitively sorted.
  * Returns [] for a missing workspace, an unreadable directory, or a path that
  * escapes the workspace. Symlinks are followed only to classify dir-vs-file.
+ * `.git` is left out: git's own store (a folder, or in a linked worktree or a
+ * submodule a one-line pointer file) isn't a project file to browse or preview.
  */
 export async function listDirectory(workspace: string, relPath = ''): Promise<FileEntry[]> {
   if (!workspace) return []
@@ -46,6 +51,7 @@ export async function listDirectory(workspace: string, relPath = ''): Promise<Fi
   }
   const out: FileEntry[] = []
   for (const e of entries) {
+    if (e.name === GIT_DIR) continue
     let isDirectory = e.isDirectory()
     // A Dirent reports the *link* type, so resolve symlinks to know whether the
     // target is a directory (and thus expandable). Best-effort: a dangling or
