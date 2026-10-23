@@ -488,6 +488,9 @@ section { padding: 96px 0; }
   .docs { padding-top: 32px; }
   .why-grid { grid-template-columns: 1fr; }
   .footer-grid { grid-template-columns: repeat(2, 1fr); }
+  /* Legal is left alone on the last row; it gets the whole row, so "License (Apache-2.0)"
+     doesn't break at its hyphen. */
+  .footer-grid > :last-child { grid-column: 1 / -1; }
   .highlights { gap: 10px 20px; }
   /* Each command under its channel name, at full width. The copy button moves up beside
      the name, so it no longer takes room from the command. */
