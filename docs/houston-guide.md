@@ -270,7 +270,8 @@ A chat's model, reasoning effort, and approval mode belong to that chat.
 - Changing one in a chat changes that chat only. Other chats, including ones running
   at the same time, keep theirs.
 - Reopening a chat (or resuming it with `/resume`) brings back the settings it was
-  using.
+  using. In the terminal, a `--provider`, `--model`, `--approval`, or `--full-auto`
+  flag given with `--continue` or `--resume` wins over the chat's own for that session.
 - New chats start from the defaults, and sessions a chat starts begin with its
   settings.
 - If a chat's model is no longer set up, the chat moves to another model of the same

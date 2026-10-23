@@ -2954,7 +2954,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       )
       const unanswered = unansweredNotice(messages)
       if (unanswered) deps.io.out(paint(`${unanswered}\n`, 'yellow'))
-      adoptChatSettings(conv)
+      // What the launch flags set wins over the chat's own for this session, as it
+      // does for a headless --resume: `--approval plan` on a chat saved in full-auto
+      // must not quietly run it in full-auto.
+      const { providerId: _p, model: _m, approvalPolicy: _a, ...rest } = conv
+      adoptChatSettings({
+        ...rest,
+        ...(opts.providerId || opts.model ? {} : { providerId: conv.providerId, model: conv.model }),
+        ...(opts.approvalPolicy ? {} : { approvalPolicy: conv.approvalPolicy })
+      })
     } else if (wanted) {
       deps.io.out(paint(`· no saved session "${wanted}" in this folder; starting fresh\n`, 'yellow'))
     } else {
