@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { COMPACTION_SUMMARY_PREFIX, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import {
   CHILD_REPORT_SUMMARY_CHARS,
   MAX_PENDING_CHILD_REPORTS,
@@ -10,6 +11,7 @@ import {
   computeScorecard,
   writeRewind,
   conversationMatches,
+  searchableText,
   createConversation,
   forkConversation,
   importConversation,
@@ -73,6 +75,21 @@ describe('conversationMatches', () => {
     expect(conversationMatches(c, 'houston')).toBe(true)
     expect(conversationMatches(c, 'bold-harbor')).toBe(true)
     expect(conversationMatches(c, 'worktrees')).toBe(false)
+  })
+
+  it('ignores words that only appear in tool output or tool-call arguments', () => {
+    const c = conv({
+      messages: [
+        { role: 'user', content: 'start the app' },
+        {
+          role: 'assistant',
+          content: '',
+          toolCalls: [{ id: 't1', name: 'search_files', arguments: { pattern: 'randomUUID' } }]
+        },
+        { role: 'tool', content: 'conformance.test.ts:78: randomUUID()', toolCallId: 't1', toolName: 'search_files' }
+      ]
+    })
+    expect(conversationMatches(c, 'random')).toBe(false)
   })
 
   it('returns false when nothing matches', () => {
@@ -609,5 +626,44 @@ describe('otherConversationsInWorktree', () => {
       worktree: { ...worktree, path: '/repo/.houston/worktrees/other', branch: 'other' }
     })
     expect(otherConversationsInWorktree(fork.id, worktree.path)).toBe(1)
+  })
+})
+
+describe('searchableText', () => {
+  it('keeps what the user and the assistant wrote', () => {
+    expect(searchableText({ role: 'user', content: 'parse YAML' })).toBe('parse YAML')
+    expect(searchableText({ role: 'assistant', content: 'Done.' })).toBe('Done.')
+  })
+
+  it("keeps the user's answer to an ask_user question but no other tool output", () => {
+    expect(searchableText({ role: 'tool', content: 'Postgres', toolCallId: 'q', toolName: 'ask_user' })).toBe(
+      'Postgres'
+    )
+    expect(searchableText({ role: 'tool', content: 'ls output', toolCallId: 'x', toolName: 'run_shell' })).toBe('')
+  })
+
+  it('drops reasoning, automated notes, and compaction summaries', () => {
+    expect(
+      searchableText({ role: 'assistant', content: 'Hi', reasoning: [{ text: 'secret plan' }] })
+    ).toBe('Hi')
+    expect(searchableText({ role: 'user', content: `${SYSTEM_NOTE_PREFIX} keep going` })).toBe('')
+    expect(searchableText({ role: 'user', content: `${COMPACTION_SUMMARY_PREFIX} earlier work` })).toBe('')
+  })
+
+  it('uses what the user did for a prompt Houston wrote, but the brief for a spawned session', () => {
+    expect(
+      searchableText({
+        role: 'user',
+        content: 'Review the diff for bugs and regressions…',
+        invokedAs: { kind: 'command', label: '/review', typed: '/review auth' }
+      })
+    ).toBe('/review auth')
+    expect(
+      searchableText({
+        role: 'user',
+        content: 'Fix the flaky login test',
+        invokedAs: { kind: 'spawned', label: 'Spawned session' }
+      })
+    ).toBe('Fix the flaky login test')
   })
 })

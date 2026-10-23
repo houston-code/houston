@@ -3,7 +3,13 @@ import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync } 
 import { basename, join } from 'node:path'
 import { writeFileAtomicSync } from './atomic-write'
 import { externalizeMedia, hydrateMedia, pruneMedia } from './conversationMedia'
-import { CONVERSATION_SCHEMA_VERSION, isReasoningEffort } from '@shared/agent'
+import {
+  COMPACTION_SUMMARY_PREFIX,
+  CONVERSATION_SCHEMA_VERSION,
+  SYSTEM_NOTE_PREFIX,
+  isReasoningEffort
+} from '@shared/agent'
+import { ASK_USER_TOOL } from '@shared/constants'
 import { isApprovalPolicy, type ApprovalPolicy } from '@shared/types'
 import type {
   AgentEvent,
@@ -404,7 +410,22 @@ export function conversationMatches(conv: Conversation, queryLower: string): boo
     conv.worktree?.branch ?? ''
   ]
   if (labels.some((l) => l.toLowerCase().includes(queryLower))) return true
-  return conv.messages.some((m) => m.content.toLowerCase().includes(queryLower))
+  return conv.messages.some((m) => searchableText(m).toLowerCase().includes(queryLower))
+}
+
+/**
+ * The text of a message that search looks at: what the transcript shows as written
+ * by the user or the assistant. Tool output, tool-call arguments, reasoning, and the
+ * notes and summaries Houston injects are left out, so a chat doesn't match on a
+ * word that only appeared in a file listing or a grep result. Pure.
+ */
+export function searchableText(m: ChatMessage): string {
+  if (m.role === 'tool') return m.toolName === ASK_USER_TOOL ? m.content : ''
+  if (m.role === 'assistant') return m.content
+  if (m.content.startsWith(SYSTEM_NOTE_PREFIX) || m.content.startsWith(COMPACTION_SUMMARY_PREFIX)) return ''
+  // A prompt Houston wrote for the user (`/review`, a ship button) shows as what they
+  // did; a spawned session's brief is the task itself, as with titles (deriveTitle).
+  return m.invokedAs && m.invokedAs.kind !== 'spawned' ? invocationText(m.invokedAs) : m.content
 }
 
 /** Find conversations whose title or message content matches the query (newest first). */
