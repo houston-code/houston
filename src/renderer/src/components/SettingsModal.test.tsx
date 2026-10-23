@@ -308,9 +308,9 @@ describe('SettingsModal', () => {
     renderModal()
 
     // Nothing from Permissions is present until the page is selected.
-    expect(screen.queryByRole('heading', { level: 3, name: 'Permissions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 3, name: 'Permission rules' })).not.toBeInTheDocument()
     fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
-    for (const h of ['Approval mode', 'Web reads in full auto', 'Permissions', 'Trusted folders', 'Sandbox egress']) {
+    for (const h of ['Approval mode', 'Web reads in full auto', 'Permission rules', 'Trusted folders', 'Sandbox egress']) {
       expect(screen.getByRole('heading', { level: 3, name: h })).toBeInTheDocument()
     }
     expect(screen.getByRole('button', { name: '+ Add rule' })).toBeInTheDocument()
@@ -318,7 +318,7 @@ describe('SettingsModal', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
     expect(screen.getByRole('heading', { name: 'Web search' })).toBeInTheDocument()
-    expect(screen.queryByRole('heading', { level: 3, name: 'Permissions' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { level: 3, name: 'Permission rules' })).not.toBeInTheDocument()
 
     fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
     expect(screen.getByRole('heading', { name: 'MCP servers' })).toBeInTheDocument()
@@ -495,7 +495,7 @@ describe('SettingsModal', () => {
         mcpServers: [{ id: 'linearbot', command: 'npx', args: [], enabled: true }]
       })
       type('deploy-prod')
-      expect(visibleHeadings()).toEqual(['Permissions'])
+      expect(visibleHeadings()).toEqual(['Permission rules'])
       type('claude-sonnet')
       expect(visibleHeadings()).toEqual(['Providers & models'])
       type('linearbot')
@@ -1622,5 +1622,41 @@ describe('SettingsModal', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
       expect(screen.queryByRole('button', { name: 'Check for updates' })).toBeNull()
     })
+  })
+})
+
+describe('SettingsModal: a section named like its page', () => {
+  /** The section headings a sighted user sees (not visually hidden). */
+  const shownHeadings = (): string[] =>
+    [...document.querySelectorAll<HTMLElement>('.set-section h3')]
+      .filter((h) => !h.closest('[hidden]') && !h.classList.contains('sr-only'))
+      .map((h) => h.textContent ?? '')
+
+  it("doesn't repeat the page title as its first section's heading", () => {
+    installApi()
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Hooks' }))
+    expect(screen.getByRole('heading', { level: 1, name: 'Hooks' })).toBeInTheDocument()
+    // Still a heading for screen readers (and settings search), just not shown twice.
+    expect(screen.getByRole('heading', { level: 3, name: 'Hooks' })).toHaveClass('sr-only')
+    expect(shownHeadings()).not.toContain('Hooks')
+
+    // Case and spacing don't matter: "MCP servers" under "MCP Servers".
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
+    expect(screen.getByRole('heading', { level: 3, name: 'MCP servers' })).toHaveClass('sr-only')
+  })
+
+  it('keeps a first heading that says something the page title does not', () => {
+    installApi()
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Agent Behavior' }))
+    expect(shownHeadings()[0]).toBe('System prompt addition')
+  })
+
+  it('does the same under a page title in search results', () => {
+    installApi()
+    renderModal({ mcpServers: [{ id: 'linearbot', command: 'npx', args: [], enabled: true }] })
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search settings' }), { target: { value: 'linearbot' } })
+    expect(screen.getByRole('heading', { level: 3, name: 'MCP servers' })).toHaveClass('sr-only')
   })
 })

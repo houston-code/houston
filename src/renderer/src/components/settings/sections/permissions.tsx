@@ -313,7 +313,7 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
 
   if (editingText) {
     return (
-      <SettingsSection title="Permissions" desc={desc}>
+      <SettingsSection title="Permission rules" desc={desc}>
         <RulesTextEditor
           rules={rules}
           onApply={(next) => {
@@ -327,7 +327,7 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
   }
 
   return (
-    <SettingsSection title="Permissions" desc={desc}>
+    <SettingsSection title="Permission rules" desc={desc}>
       {(rules.length > 0 || hasOtherSources) && (
         <div className="rule-toolbar">
           {view !== 'sources' ? (
@@ -671,7 +671,7 @@ function RuleTester({
 
 /** What each approval mode lets the agent do without asking. */
 const APPROVAL_POLICY_HINT: Record<ApprovalPolicy, string> = {
-  plan: 'Read-only: the agent researches and proposes a plan; nothing is written or run.',
+  plan: 'The agent researches and proposes a plan; nothing is written or run.',
   ask: 'Asks before every shell command and file write.',
   'auto-edit': 'Reads and edits files in the workspace without asking; asks before shell commands.',
   'full-auto': 'Runs everything without asking, still confined to the workspace sandbox.'
