@@ -14,6 +14,7 @@ import {
 import {
   COMPACTION_SUMMARY_PREFIX,
   SYSTEM_NOTE_PREFIX,
+  isReasoningEffort,
   sanitizeElicitationResult,
   type AgentEvent,
   type AgentRunRequest,
@@ -22,6 +23,7 @@ import {
   type ElicitationResult,
   type PlanDecision,
   type PlanPayload,
+  type ReasoningEffort,
   type ToolApprovalDecision
 } from '@shared/agent'
 import type { FileDiffPreview } from '@shared/diff'
@@ -147,6 +149,10 @@ export interface AcpStoredSession {
   messages: ChatMessage[]
   title?: string
   updatedAt?: number
+  /** The chat's own model and reasoning effort, which a loaded session keeps. */
+  providerId?: string
+  model?: string
+  reasoningEffort?: ReasoningEffort
 }
 
 export interface AcpDeps {
@@ -188,6 +194,8 @@ interface Session {
   providerId: string
   model: string
   mode: ApprovalPolicy
+  /** The chat's own reasoning effort, when it has one; otherwise runs use the default. */
+  effort?: ReasoningEffort
   messages: ChatMessage[]
   mcpServers: McpServerConfig[]
   runId: string | null
@@ -628,8 +636,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     return cwd
   }
 
-  const resolveModel = (): { providerId: string; model: string } => {
-    const r = resolveHeadlessModel(deps.getSettings(), {})
+  /** The model a session runs on: a loaded chat's own (`resumed`) while its provider is set up, else the default. */
+  const resolveModel = (resumed?: { providerId?: string; model?: string }): { providerId: string; model: string } => {
+    const r = resolveHeadlessModel(deps.getSettings(), {}, resumed)
     if ('error' in r) throw new AcpError(r.recoverable ? ACP_ERROR.authRequired : ACP_ERROR.internal, r.error)
     return r
   }
@@ -707,14 +716,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     const stored = deps.store.get(p.sessionId)
     if (!stored) throw new AcpError(ACP_ERROR.notFound, `No saved session ${p.sessionId}`)
     const mcpServers = clientServers(params)
-    const { providerId, model } = resolveModel()
-    // The session continues under the model this process resolves, so keep the
-    // stored meta in step (as a headless --resume does). Best-effort.
-    try {
-      deps.store.setModel(stored.id, providerId, model)
-    } catch {
-      // persistence is best-effort
+    // The chat keeps its own model and effort, as a headless --resume and the other
+    // clients do. Only when its provider is gone does it move, and then the stored meta
+    // follows what will actually run. Best-effort.
+    const { providerId, model } = resolveModel(stored)
+    if (providerId !== stored.providerId || model !== stored.model) {
+      try {
+        deps.store.setModel(stored.id, providerId, model)
+      } catch {
+        // persistence is best-effort
+      }
     }
+    const effort = isReasoningEffort(stored.reasoningEffort) ? stored.reasoningEffort : undefined
     if (stored.workspace !== cwd) {
       log(`acp: session ${stored.id} was saved for ${stored.workspace}; continuing it in ${cwd}`)
     }
@@ -725,6 +738,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       providerId,
       model,
       mode,
+      ...(effort ? { effort } : {}),
       messages: [...stored.messages],
       mcpServers,
       runId: null,
@@ -794,6 +808,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       providerId: s.providerId,
       model: s.model,
       approvalPolicy: s.mode,
+      ...(s.effort ? { reasoningEffort: s.effort } : {}),
       messages,
       // Per-run servers, like the headless --mcp-config: merged as `run-<id>`, values
       // used as given, never saved to settings.
