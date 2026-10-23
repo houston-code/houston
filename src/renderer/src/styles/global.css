@@ -5314,14 +5314,6 @@ body:has(.coachmark) .get-started {
 .composer__input:focus {
   outline: none;
 }
-/* The field auto-grows from its content, which a placeholder isn't; a long hint in a
-   narrow composer (e.g. beside the plan panel) would wrap onto a second line and be
-   cut in half. Keep it to one line and ellipsize instead. */
-.composer__input::placeholder {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
 .composer__input:disabled {
   color: var(--text-dim);
 }
