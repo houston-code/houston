@@ -319,6 +319,18 @@ describe('Sidebar — expanded rendering', () => {
     expect(props.onSelect).toHaveBeenCalledWith('b')
   })
 
+  it('moves focus into the search field each time the focus signal is bumped', () => {
+    const props = baseProps()
+    const { rerender } = render(<Sidebar {...props} />)
+    const search = screen.getByLabelText('Search chats')
+    expect(search).not.toHaveFocus()
+    rerender(<Sidebar {...props} focusSearchSignal={1} />)
+    expect(search).toHaveFocus()
+    search.blur()
+    rerender(<Sidebar {...props} focusSearchSignal={2} />)
+    expect(search).toHaveFocus()
+  })
+
   it('the new-chat button fires onNew, and search edits fire onSearch', () => {
     const props = baseProps()
     render(<Sidebar {...props} />)

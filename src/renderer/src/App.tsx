@@ -270,6 +270,8 @@ export default function App(): JSX.Element {
   const [whatsNew, setWhatsNew] = useState<WhatsNew | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  // Bumped by Go → Search Chats… to move focus into the sidebar's search field.
+  const [searchFocusSignal, setSearchFocusSignal] = useState(0)
   const [terminalOpen, setTerminalOpen] = useState(false)
   // Latches true on first open and stays mounted thereafter (hidden via CSS when
   // closed) so terminal sessions and scrollback survive hide/show.
@@ -2221,9 +2223,9 @@ export default function App(): JSX.Element {
   }
   const overlaysRef = useRef(overlays)
   overlaysRef.current = overlays
-  // The native File menu (main/menu.ts) sends its commands here so they run through
-  // the same handlers as the palette and sidebar, and it greys out Export when no
-  // chat is open, so report that as it changes.
+  // The native menus (main/menu.ts) send their commands here so they run through
+  // the same handlers as the palette, sidebar, and shortcuts, and they grey out or
+  // relabel items by what's open, so report that as it changes.
   useEffect(
     () =>
       window.api.onMenuCommand((cmd) => {
@@ -2235,7 +2237,29 @@ export default function App(): JSX.Element {
         else if (cmd.type === 'export-chat' && currentId) {
           if (cmd.format === 'html') void onExportConversationHtml(currentId)
           else void onExportConversation(currentId)
-        }
+        } else if (cmd.type === 'new-side-chat' && currentId) {
+          setSideChatOpen(true)
+          void window.api.clearSideChat(currentId)
+        } else if (cmd.type === 'toggle-panel') {
+          if (cmd.panel === 'sidebar') toggleSidebar()
+          else if (cmd.panel === 'terminal') toggleTerminal()
+          else if (cmd.panel === 'tasks') toggleTasks()
+          else if (cmd.panel === 'preview') togglePreview()
+          else if (cmd.panel === 'side-chat' && currentId) setSideChatOpen((o) => !o)
+        } else if (cmd.type === 'show-changes' && workspace) setChangesOpen(true)
+        else if (cmd.type === 'show-files' && workspace) setFilesOpen(true)
+        else if (cmd.type === 'command-palette') {
+          setPaletteSeed('')
+          setPaletteOpen(true)
+        } else if (cmd.type === 'switch-model') {
+          setPaletteSeed('model')
+          setPaletteOpen(true)
+        } else if (cmd.type === 'find-in-chat') openFind()
+        else if (cmd.type === 'cycle-chat') cycleChat(cmd.delta)
+        else if (cmd.type === 'search-chats') {
+          if (sidebarCollapsed) setSidebarCollapsedPersisted(false)
+          setSearchFocusSignal((n) => n + 1)
+        } else if (cmd.type === 'show-shortcuts') setHelpOpen(true)
       }),
     [
       onNewChat,
@@ -2245,10 +2269,34 @@ export default function App(): JSX.Element {
       onExportConversation,
       onExportConversationHtml,
       currentId,
-      startTour
+      workspace,
+      startTour,
+      toggleSidebar,
+      toggleTerminal,
+      toggleTasks,
+      togglePreview,
+      openFind,
+      cycleChat,
+      sidebarCollapsed,
+      setSidebarCollapsedPersisted
     ]
   )
-  useEffect(() => window.api.setMenuState({ hasConversation: currentId !== null }), [currentId])
+  const sideChatShown = sideChatOpen && currentId !== null
+  useEffect(
+    () =>
+      window.api.setMenuState({
+        hasConversation: currentId !== null,
+        hasWorkspace: workspace !== null,
+        open: {
+          sidebar: !sidebarCollapsed,
+          terminal: terminalOpen,
+          tasks: previewOpen && dockTab === 'tasks',
+          preview: previewOpen && dockTab === 'preview',
+          'side-chat': sideChatShown
+        }
+      }),
+    [currentId, workspace, sidebarCollapsed, terminalOpen, previewOpen, dockTab, sideChatShown]
+  )
 
   // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): ⌘N new chat,
   // ⇧⌘N new chat in another folder, ⌘K palette, ⌘1–9 / ⌃Tab switch chats, Shift+Tab
@@ -2430,6 +2478,7 @@ export default function App(): JSX.Element {
         groups={search ? [] : settings.chatGroups ?? []}
         search={search}
         onSearch={setSearch}
+        focusSearchSignal={searchFocusSignal}
         currentId={currentId}
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}

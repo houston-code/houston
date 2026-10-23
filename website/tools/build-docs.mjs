@@ -370,7 +370,7 @@ export const GROUPS = [
   },
   {
     title: "Reference",
-    slugs: ["what-a-session-cost", "checking-your-setup", "version-and-updates", "help-menu", "sharing-houston", "license-and-legal"],
+    slugs: ["what-a-session-cost", "checking-your-setup", "version-and-updates", "edit-view-and-go-menus", "help-menu", "sharing-houston", "license-and-legal"],
   },
 ];
 
