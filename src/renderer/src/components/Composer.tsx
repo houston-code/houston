@@ -216,10 +216,9 @@ export function Composer({
   onInvoke: (turn: InvokedTurn) => void
   /**
    * Steer the running turn with the composer text, injected before the agent's next
-   * step (distinct from onSend, which queues for after the run). Absent → no steer
-   * affordance; the queue is the only mid-run path.
+   * step (distinct from onSend, which queues for after the run).
    */
-  onSteer?: (text: string) => void
+  onSteer: (text: string) => void
   /**
    * The agent is waiting on an `ask_user` question, so onSteer answers it. Only
    * changes the wording: the placeholder and the Enter button say "answer".
@@ -774,10 +773,10 @@ export function Composer({
 
   // Steer the running turn with the composer text. A course correction is text only
   // (steerRun carries no images), so staged images stay for the next full turn; the
-  // text is cleared. No-op without text or a steer handler.
+  // text is cleared. No-op without text.
   const steer = (): void => {
     const trimmed = text.trim()
-    if (!trimmed || !onSteer || disabled) return
+    if (!trimmed || disabled) return
     // A command is run, and a `#` line is saved as a rule, not steered: as steering
     // either would reach the model as plain text.
     const parsed = parseSlashCommand(trimmed)
@@ -906,7 +905,7 @@ export function Composer({
       // Mid-run, Enter steers the running turn and Mod+Enter queues for after it.
       // Steering carries text only, so a message with no text (images alone) queues.
       const mod = isMacPlatform() ? e.metaKey : e.ctrlKey
-      if (running && onSteer && !mod && text.trim()) steer()
+      if (running && !mod && text.trim()) steer()
       else submit()
     }
   }
@@ -1108,11 +1107,9 @@ export function Composer({
             disabled
               ? disabledReason ?? 'Pick a model and project folder to start…'
               : running
-                ? onSteer
-                  ? answering
-                    ? answeringPlaceholder(isMacPlatform())
-                    : runningPlaceholder(isMacPlatform())
-                  : 'Queue a follow-up…  (sent when the current run finishes)'
+                ? answering
+                  ? answeringPlaceholder(isMacPlatform())
+                  : runningPlaceholder(isMacPlatform())
                 : 'Ask Houston…  (@ file, / command, or + to attach)'
           }
           value={text}
@@ -1174,22 +1171,20 @@ export function Composer({
                 >
                   <Icon name="send" size={16} />
                 </button>
-                {onSteer && (
-                  <button
-                    type="button"
-                    className="composer__send composer__steer"
-                    aria-label={answering ? 'Answer' : 'Steer'}
-                    title={
-                      answering
-                        ? "Answer (↵): sends this as your answer to the agent's question"
-                        : 'Steer (↵): the agent reads this before its next step'
-                    }
-                    onClick={() => (text.trim() ? steer() : ref.current?.focus())}
-                    disabled={disabled}
-                  >
-                    <Icon name="steer" size={16} />
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="composer__send composer__steer"
+                  aria-label={answering ? 'Answer' : 'Steer'}
+                  title={
+                    answering
+                      ? "Answer (↵): sends this as your answer to the agent's question"
+                      : 'Steer (↵): the agent reads this before its next step'
+                  }
+                  onClick={() => (text.trim() ? steer() : ref.current?.focus())}
+                  disabled={disabled}
+                >
+                  <Icon name="steer" size={16} />
+                </button>
                 <button
                   type="button"
                   className="composer__stop"
