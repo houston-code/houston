@@ -28,6 +28,8 @@ export interface ChatAttentionDeps {
   activeRun: (conversationId: string) => string | null
   /** How many messages a conversation's log holds now, or undefined if it's gone. */
   messageCount: (conversationId: string) => number | undefined
+  /** The log index of each saved message that shows as a reply (see replyMessageIndexes). */
+  replyIndexes: (conversationId: string) => number[]
   /** Whether a conversation exists (manual marks on unknown ids are ignored). */
   exists: (conversationId: string) => boolean
   /** Hand a fresh snapshot to every window. */
@@ -53,6 +55,11 @@ export interface ChatAttention {
   dropViewer(viewerId: number): void
   /** Mark a chat unread by hand (from `anchor`, a message index, when given) or read. */
   setUnread(conversationId: string, unread: boolean, anchor?: number): void
+  /**
+   * Mark a chat unread from one of its replies, named by its position among the
+   * transcript's replies (0-based), which the renderer counts and main resolves.
+   */
+  setUnreadFromReply(conversationId: string, reply: number): void
   markAllRead(): void
   /** A chat was deleted. */
   forget(conversationId: string): void
@@ -106,6 +113,12 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
       ...(note ? { note } : {}),
       ...(anchor !== undefined ? { anchor } : {})
     })
+    publish()
+  }
+
+  const markUnreadByHand = (id: string, anchor: number | undefined): void => {
+    if (!deps.exists(id)) return
+    deps.store.markUnread(id, { since: now(), outcome: 'manual', ...(anchor !== undefined ? { anchor } : {}) })
     publish()
   }
 
@@ -178,13 +191,15 @@ export function createChatAttention(deps: ChatAttentionDeps): ChatAttention {
         if (deps.store.markRead(conversationId)) publish()
         return
       }
-      if (!deps.exists(conversationId)) return
-      deps.store.markUnread(conversationId, {
-        since: now(),
-        outcome: 'manual',
-        ...(anchor !== undefined ? { anchor } : {})
-      })
-      publish()
+      markUnreadByHand(conversationId, anchor)
+    },
+
+    setUnreadFromReply(conversationId, reply) {
+      // A reply of the turn still running isn't saved yet, so the saved log has no
+      // index for it. The unseen part then starts no later than where that run began.
+      const saved = deps.replyIndexes(conversationId)[reply]
+      const anchor = saved ?? (deps.activeRun(conversationId) !== null ? runStart.get(conversationId) : undefined)
+      markUnreadByHand(conversationId, anchor)
     },
 
     markAllRead() {

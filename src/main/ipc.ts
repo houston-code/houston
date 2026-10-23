@@ -1537,6 +1537,7 @@ export function registerIpc(): void {
     liveStatus: chatStatusSnapshot,
     activeRun: activeRunForConversation,
     messageCount: (id) => peekConversation(id)?.messages.length,
+    replyIndexes: (id) => replyMessageIndexes(peekConversation(id)?.messages ?? []),
     exists: conversationExists,
     // Broadcast (not sender-scoped): a run can block or finish while a different
     // window is focused, and every window's sidebar shows every chat.
@@ -1576,11 +1577,11 @@ export function registerIpc(): void {
   // replies (the renderer has no message log); it's resolved to a log index here.
   ipcMain.handle(IPC.chatSetUnread, (_event, conversationId: unknown, unread: unknown, fromReply: unknown) => {
     if (typeof conversationId !== 'string') return
-    const anchor =
-      typeof fromReply === 'number' && Number.isInteger(fromReply) && fromReply >= 0
-        ? replyMessageIndexes(peekConversation(conversationId)?.messages ?? [])[fromReply]
-        : undefined
-    chat.setUnread(conversationId, unread === true, anchor)
+    if (unread === true && typeof fromReply === 'number' && Number.isInteger(fromReply) && fromReply >= 0) {
+      chat.setUnreadFromReply(conversationId, fromReply)
+    } else {
+      chat.setUnread(conversationId, unread === true)
+    }
   })
   ipcMain.handle(IPC.chatMarkAllRead, () => chat.markAllRead())
 
