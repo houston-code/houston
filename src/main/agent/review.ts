@@ -704,14 +704,20 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
           const row = toReviewFinding(f.id, f, 'verifying', redact)
           let cast = 0
           let confirms = 0
+          // Skeptics that failed (provider error, step limit) cast no vote either way: a
+          // finding is rejected only by verifiers that actually looked and disagreed.
+          let failed = 0
           const tally = (): void => {
             // Settle as soon as the vote is decided, so faster findings resolve first.
+            const rejects = cast - confirms - failed
             const status =
               confirms >= VOTES_TO_CONFIRM
                 ? 'confirmed'
-                : cast - confirms > VOTES_PER_FINDING - VOTES_TO_CONFIRM
+                : rejects > VOTES_PER_FINDING - VOTES_TO_CONFIRM
                   ? 'rejected'
-                  : 'verifying'
+                  : cast === VOTES_PER_FINDING
+                    ? 'candidate' // undecided because verifiers failed: left unverified
+                    : 'verifying'
             finding({ ...row, status, votes: { confirmed: confirms, cast, total: VOTES_PER_FINDING } })
           }
           tally()
@@ -730,20 +736,38 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
               ).then((v) => {
                 cast++
                 if (isConfirmed(v)) confirms++
+                else if (isErrorReport(v)) failed++
                 if (!signal.aborted) tally()
                 return v
               })
             )
           )
-          return { finding: f, confirms: votes.filter(isConfirmed).length }
+          return {
+            finding: f,
+            confirms: votes.filter(isConfirmed).length,
+            failed: votes.filter((v) => !isConfirmed(v) && isErrorReport(v)).length
+          }
         })
       )
       if (signal.aborted) return '[review aborted]'
 
+      const bySeverity = (a: ParsedFinding, b: ParsedFinding): number =>
+        (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9)
       const confirmed = verdicts
         .filter((v) => v.confirms >= VOTES_TO_CONFIRM)
         .map((v) => v.finding)
-        .sort((a, b) => (SEVERITY_RANK[a.severity] ?? 9) - (SEVERITY_RANK[b.severity] ?? 9))
+        .sort(bySeverity)
+      // Not confirmed, but only because verifiers failed: the votes that would have
+      // decided it were never cast, so it is reported as unverified, not as rejected.
+      const unverified = verdicts
+        .filter((v) => v.confirms < VOTES_TO_CONFIRM && v.confirms + v.failed >= VOTES_TO_CONFIRM)
+        .map((v) => v.finding)
+        .sort(bySeverity)
+      if (unverified.length) {
+        notes.push(
+          `⚠ ${unverified.length} candidate finding${unverified.length === 1 ? '' : 's'} could not be verified because ${unverified.length === 1 ? 'its' : 'their'} verifiers failed; check ${unverified.length === 1 ? 'it' : 'them'} directly:\n\n${unverified.map((f) => f.text).join('\n\n')}`
+        )
+      }
       sub({
         id: 'verify',
         label: `Verified ${toVerify.length} findings, ${confirmed.length} confirmed`,
@@ -752,7 +776,9 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
       const tally = `Confirmed ${confirmed.length} of ${toVerify.length} candidate findings (each checked by ${VOTES_PER_FINDING} independent verifiers).`
 
       if (confirmed.length === 0) {
-        const clean = `Adversarial review (${dimsLabel}): no findings survived independent verification. ${tally}`
+        const clean = unverified.length
+          ? `Adversarial review (${dimsLabel}): no findings confirmed. ${tally}`
+          : `Adversarial review (${dimsLabel}): no findings survived independent verification. ${tally}`
         return assemble(clean, notes.length ? notes.join('\n') : null, costLine())
       }
       const header = `Adversarial review of the current changes (${dimsLabel}), each finding independently verified by ${VOTES_PER_FINDING} skeptics:`

@@ -212,6 +212,30 @@ describe('runReview', () => {
     expect(out).toContain('Part 2 of 2 of the correctness review could not complete')
   })
 
+  it('reports a finding its skeptics failed to check as unverified, not rejected', async () => {
+    const { fn } = fakeAgent((o) => {
+      if (isSkeptic(o)) return '[subagent error: overloaded]'
+      return dimensionOf(o) === 'CORRECTNESS' ? '- [SEVERITY: high] a.ts:1 — real bug' : 'No issues found.'
+    })
+    const rows: { id: string; status: string }[] = []
+    const out = await runReview(base({ runAgent: fn, effort: 'high', onFinding: (f) => rows.push(f) }))
+    expect(out).not.toContain('no findings survived')
+    expect(out).toContain('could not be verified')
+    expect(out).toContain('real bug')
+    expect(rows.at(-1)?.status).toBe('candidate')
+  })
+
+  it('still rejects a finding the skeptics that ran voted down', async () => {
+    let n = 0
+    const { fn } = fakeAgent((o) => {
+      if (isSkeptic(o)) return n++ === 0 ? '[subagent error: overloaded]' : 'REJECTED not real'
+      return dimensionOf(o) === 'CORRECTNESS' ? '- [SEVERITY: high] a.ts:1 — false alarm' : 'No issues found.'
+    })
+    const out = await runReview(base({ runAgent: fn, effort: 'high' }))
+    expect(out).toContain('no findings survived')
+    expect(out).not.toContain('could not be verified')
+  })
+
   it('honours a custom dimension list', async () => {
     const { fn, calls } = fakeAgent(() => 'No issues found.')
     await runReview(base({ runAgent: fn, dimensions: ['correctness'] }))
