@@ -186,6 +186,10 @@ export class JsonRpcConnection {
   }
 
   private dispatch(msg: JsonRpcMessage): void {
+    // A body that parses to something other than an object (`null`, a number, a batch
+    // array, which LSP never uses) is no message: reading its fields would throw out of
+    // the stream's data handler, which takes down the whole process.
+    if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return
     if (msg.method !== undefined) {
       if (msg.id !== undefined && msg.id !== null) {
         void this.answer(msg.id, msg.method, msg.params)
