@@ -38,8 +38,9 @@ export type PendingKind = 'approval' | 'question' | 'plan' | 'elicitation'
 export interface PendingPrompt {
   kind: PendingKind
   /**
-   * A short subject: the tool name for an approval, the plan's title, the MCP server
-   * asking. Absent for a question (the question text is too long for a row).
+   * A short subject: the call for an approval as its tool row names it ("Run npm
+   * test"), the plan's title, the MCP server asking. Absent for a question (the
+   * question text is too long for a row).
    */
   label?: string
 }
@@ -122,7 +123,7 @@ export function strongestSignal(signals: Iterable<ChatSignal>): ChatSignal {
 
 /**
  * The reason a blocked chat shows in its row's meta line, e.g. "Needs approval:
- * run_shell". Several prompts of one kind collapse to a count; a mix to a total.
+ * Run npm test". Several prompts of one kind collapse to a count; a mix to a total.
  * Undefined when nothing is pending.
  */
 export function pendingReason(pending: readonly PendingPrompt[]): string | undefined {
