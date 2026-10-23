@@ -124,156 +124,159 @@ export function ControlBar({
 
   return (
     <div className="control-bar">
-      <button
-        className="control control--ws"
-        onClick={onChangeWorkspace}
-        title="Change project folder"
-        aria-label={folderLabel ? `Project folder: ${folderLabel}. Change` : 'Choose project folder'}
-      >
-        <Icon name="folder" className="control__icon" />
-        <span className="control__text">{folderLabel ?? 'Choose folder…'}</span>
-      </button>
-
-      {showWorktreeEditor && (
-        <div className="control-bar__wt">
-          {worktreeOn ? (
-            <select
-              className="control control--select"
-              value={baseBranch}
-              title="Base the new branch on"
-              aria-label="Base branch"
-              onChange={(e) => onChangeBaseBranch(e.target.value)}
-            >
-              {/* Detached HEAD: '' means "branch from HEAD", so list it rather than
-                  letting the select display a branch it won't send. */}
-              {!repoInfo.currentBranch && <option value="">HEAD (detached)</option>}
-              {repoInfo.currentBranch &&
-                !repoInfo.unborn &&
-                !repoInfo.branches.includes(repoInfo.currentBranch) && (
-                  <option value={repoInfo.currentBranch}>{repoInfo.currentBranch} (current)</option>
-                )}
-              {repoInfo.branches.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                  {b === repoInfo.currentBranch ? ' (current)' : ''}
-                </option>
-              ))}
-            </select>
-          ) : (
-            // Worktree off → the chat works in the repo on its current branch.
-            // Show it (read-only) so it's clear which branch will be touched.
-            <span
-              className="control control--branch"
-              title={`No worktree: this chat works directly on the repo's current branch, ${
-                repoInfo.currentBranch ?? 'detached HEAD'
-              }`}
-            >
-              <Icon name="gitBranch" size={13} className="control__icon" />
-              <span className="control__text">
-                {repoInfo.currentBranch ?? 'detached HEAD'}
-                {repoInfo.unborn ? ' (no commits yet)' : ''}
-              </span>
-            </span>
-          )}
-
-          {canWorktree && (
-            // The toggle and the name it creates share one box: the name exists only
-            // while the toggle is on, so it reads as part of it, not a separate setting.
-            <span className="control-group" role="group" aria-label="New worktree">
-              <label
-                className="control control--check"
-                data-tour="worktree"
-                title="Run this chat in a new git worktree on its own branch (isolated from your current checkout)"
-              >
-                <input
-                  type="checkbox"
-                  checked={worktreeMode}
-                  onChange={(e) => onToggleWorktree(e.target.checked)}
-                />
-                <Icon name="gitBranch" size={13} className="control__icon" />
-                <span>New worktree</span>
-              </label>
-              {worktreeOn && (
-                <input
-                  className="control control--input"
-                  value={branchName}
-                  spellCheck={false}
-                  autoCapitalize="off"
-                  autoCorrect="off"
-                  placeholder="new-branch-name"
-                  title={branchError ?? 'New branch / worktree name'}
-                  aria-label="New branch name"
-                  aria-invalid={branchError !== null}
-                  onChange={(e) => onChangeBranchName(e.target.value)}
-                />
-              )}
-            </span>
-          )}
-        </div>
-      )}
-
-      {/* Where the chat runs on one row, how it runs (model, thinking, approval) on the
-          next. Left to wrap freely, the row broke wherever the width ran out, often
-          leaving the approval mode alone on a second line. */}
-      {showWorktreeEditor && <div className="control-bar__break" aria-hidden="true" />}
-
-      {!newChat && currentWorktree && (
-        <span
-          className="control control--branch"
-          title={`This chat runs in a worktree on branch ${currentWorktree.branch}`}
-        >
-          <Icon name="gitBranch" size={13} className="control__icon" />
-          <span className="control__text">{currentWorktree.branch}</span>
-        </span>
-      )}
-
-      <ModelPicker settings={settings} selected={selected} onSelect={onSelectModel} />
-
-      <select
-        className="control control--select"
-        value={settings.reasoningEffort ?? DEFAULT_REASONING_EFFORT}
-        disabled={!hasReasoning}
-        aria-label="Reasoning effort"
-        onChange={(e) => onChangeReasoning(e.target.value as ReasoningEffort)}
-        title={
-          !hasReasoning
-            ? 'The selected model has no reasoning mode'
-            : alwaysThinks
-              ? `This model always reasons. Minimal runs it at the lowest effort with its reasoning hidden${scope}.`
-              : `How hard the model should think before answering${scope}`
-        }
-      >
-        {(Object.keys(REASONING_LABEL) as ReasoningEffort[]).map((r) => (
-          <option key={r} value={r}>
-            {r === 'off' && alwaysThinks ? 'Think: minimal' : REASONING_LABEL[r]}
-          </option>
-        ))}
-      </select>
-
-      <select
-        className="control control--select"
-        value={settings.approvalPolicy}
-        aria-label="Approval mode"
-        data-tour="approval"
-        onChange={(e) => onChangePolicy(e.target.value as ApprovalPolicy)}
-        title={`How much the agent may do without asking${scope}`}
-      >
-        {(Object.keys(POLICY_LABEL) as ApprovalPolicy[]).map((p) => (
-          <option key={p} value={p}>
-            {POLICY_LABEL[p]}
-          </option>
-        ))}
-      </select>
-
-      {onMakeDefault && (
+      {/* Where the chat runs (folder, worktree, branch) and how it runs (model,
+          thinking, approval) are two groups that each wrap as a unit. With room they
+          share one row; without, the "how" group moves down whole instead of leaving
+          the approval mode alone on a second line. */}
+      <div className="control-bar__group">
         <button
-          className="control"
-          onClick={onMakeDefault}
-          title="Start new chats with this chat's model, reasoning and approval mode. Other chats keep their own."
+          className="control control--ws"
+          onClick={onChangeWorkspace}
+          title="Change project folder"
+          aria-label={folderLabel ? `Project folder: ${folderLabel}. Change` : 'Choose project folder'}
         >
-          <span className="control__text">Use for new chats</span>
+          <Icon name="folder" className="control__icon" />
+          <span className="control__text">{folderLabel ?? 'Choose folder…'}</span>
         </button>
-      )}
+
+        {showWorktreeEditor && (
+          <div className="control-bar__wt">
+            {worktreeOn ? (
+              <select
+                className="control control--select"
+                value={baseBranch}
+                title="Base the new branch on"
+                aria-label="Base branch"
+                onChange={(e) => onChangeBaseBranch(e.target.value)}
+              >
+                {/* Detached HEAD: '' means "branch from HEAD", so list it rather than
+                    letting the select display a branch it won't send. */}
+                {!repoInfo.currentBranch && <option value="">HEAD (detached)</option>}
+                {repoInfo.currentBranch &&
+                  !repoInfo.unborn &&
+                  !repoInfo.branches.includes(repoInfo.currentBranch) && (
+                    <option value={repoInfo.currentBranch}>{repoInfo.currentBranch} (current)</option>
+                  )}
+                {repoInfo.branches.map((b) => (
+                  <option key={b} value={b}>
+                    {b}
+                    {b === repoInfo.currentBranch ? ' (current)' : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              // Worktree off → the chat works in the repo on its current branch.
+              // Show it (read-only) so it's clear which branch will be touched.
+              <span
+                className="control control--branch"
+                title={`No worktree: this chat works directly on the repo's current branch, ${
+                  repoInfo.currentBranch ?? 'detached HEAD'
+                }`}
+              >
+                <Icon name="gitBranch" size={13} className="control__icon" />
+                <span className="control__text">
+                  {repoInfo.currentBranch ?? 'detached HEAD'}
+                  {repoInfo.unborn ? ' (no commits yet)' : ''}
+                </span>
+              </span>
+            )}
+
+            {canWorktree && (
+              // The toggle and the name it creates share one box: the name exists only
+              // while the toggle is on, so it reads as part of it, not a separate setting.
+              <span className="control-group" role="group" aria-label="New worktree">
+                <label
+                  className="control control--check"
+                  data-tour="worktree"
+                  title="Run this chat in a new git worktree on its own branch (isolated from your current checkout)"
+                >
+                  <input
+                    type="checkbox"
+                    checked={worktreeMode}
+                    onChange={(e) => onToggleWorktree(e.target.checked)}
+                  />
+                  <Icon name="gitBranch" size={13} className="control__icon" />
+                  <span>New worktree</span>
+                </label>
+                {worktreeOn && (
+                  <input
+                    className="control control--input"
+                    value={branchName}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    placeholder="new-branch-name"
+                    title={branchError ?? 'New branch / worktree name'}
+                    aria-label="New branch name"
+                    aria-invalid={branchError !== null}
+                    onChange={(e) => onChangeBranchName(e.target.value)}
+                  />
+                )}
+              </span>
+            )}
+          </div>
+        )}
+
+        {!newChat && currentWorktree && (
+          <span
+            className="control control--branch"
+            title={`This chat runs in a worktree on branch ${currentWorktree.branch}`}
+          >
+            <Icon name="gitBranch" size={13} className="control__icon" />
+            <span className="control__text">{currentWorktree.branch}</span>
+          </span>
+        )}
+      </div>
+
+      <div className="control-bar__group">
+        <ModelPicker settings={settings} selected={selected} onSelect={onSelectModel} />
+
+        <select
+          className="control control--select"
+          value={settings.reasoningEffort ?? DEFAULT_REASONING_EFFORT}
+          disabled={!hasReasoning}
+          aria-label="Reasoning effort"
+          onChange={(e) => onChangeReasoning(e.target.value as ReasoningEffort)}
+          title={
+            !hasReasoning
+              ? 'The selected model has no reasoning mode'
+              : alwaysThinks
+                ? `This model always reasons. Minimal runs it at the lowest effort with its reasoning hidden${scope}.`
+                : `How hard the model should think before answering${scope}`
+          }
+        >
+          {(Object.keys(REASONING_LABEL) as ReasoningEffort[]).map((r) => (
+            <option key={r} value={r}>
+              {r === 'off' && alwaysThinks ? 'Think: minimal' : REASONING_LABEL[r]}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className="control control--select"
+          value={settings.approvalPolicy}
+          aria-label="Approval mode"
+          data-tour="approval"
+          onChange={(e) => onChangePolicy(e.target.value as ApprovalPolicy)}
+          title={`How much the agent may do without asking${scope}`}
+        >
+          {(Object.keys(POLICY_LABEL) as ApprovalPolicy[]).map((p) => (
+            <option key={p} value={p}>
+              {POLICY_LABEL[p]}
+            </option>
+          ))}
+        </select>
+
+        {onMakeDefault && (
+          <button
+            className="control"
+            onClick={onMakeDefault}
+            title="Start new chats with this chat's model, reasoning and approval mode. Other chats keep their own."
+          >
+            <span className="control__text">Use for new chats</span>
+          </button>
+        )}
+      </div>
 
       <div className="control-bar__spacer" />
 
