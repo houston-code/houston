@@ -2363,13 +2363,15 @@ export default function App(): JSX.Element {
     creatingWorktree && branchNameError(branchName, repoInfo?.branches ?? []) !== null
   const canChat = Boolean(settings.selected && workspace && selectionReady && !worktreeBlocked)
   // The specific reason the composer is disabled, so its placeholder names the real
-  // blocker instead of always saying "pick a model and folder".
-  const disabledReason = !workspace
-    ? 'Choose a project folder to start…'
-    : !settings.selected
-      ? 'Pick a model to start…'
-      : !selectionReady
-        ? 'Set an API key for this model in Settings…'
+  // blocker instead of always saying "pick a model and folder". The model comes
+  // before the folder, in the same order as the setup checklist. The key can be set
+  // in Settings or the connect card, so its wording names neither.
+  const disabledReason = !settings.selected
+    ? 'Pick a model to start…'
+    : !selectionReady
+      ? 'Set an API key for this model to start…'
+      : !workspace
+        ? 'Choose a project folder to start…'
         : worktreeBlocked
           ? 'Enter a valid worktree branch name to start…'
           : undefined

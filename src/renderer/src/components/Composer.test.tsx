@@ -142,12 +142,12 @@ describe('Composer', () => {
   it('shows the disabled reason as the placeholder', () => {
     render(
       <Composer
-        {...baseProps({ disabled: true, disabledReason: 'Set an API key for this model in Settings…' })}
+        {...baseProps({ disabled: true, disabledReason: 'Set an API key for this model to start…' })}
       />
     )
     expect(screen.getByRole('textbox')).toHaveAttribute(
       'placeholder',
-      'Set an API key for this model in Settings…'
+      'Set an API key for this model to start…'
     )
   })
 
