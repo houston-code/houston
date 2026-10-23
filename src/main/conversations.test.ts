@@ -55,6 +55,26 @@ describe('conversationMatches', () => {
     expect(conversationMatches(c, 'yaml')).toBe(true)
   })
 
+  it('matches the folder name shown in the sidebar, not the rest of its path', () => {
+    const c = conv({ workspace: '/home/me/projects/houston' })
+    expect(conversationMatches(c, 'houston')).toBe(true)
+    expect(conversationMatches(c, 'projects')).toBe(false)
+  })
+
+  it('matches a worktree chat by its repo name and branch', () => {
+    const c = conv({
+      workspace: '/home/me/projects/houston/.houston/worktrees/bold-harbor-a6uvmm',
+      worktree: {
+        path: '/home/me/projects/houston/.houston/worktrees/bold-harbor-a6uvmm',
+        branch: 'feat/Bold-Harbor',
+        repoRoot: '/home/me/projects/houston'
+      }
+    })
+    expect(conversationMatches(c, 'houston')).toBe(true)
+    expect(conversationMatches(c, 'bold-harbor')).toBe(true)
+    expect(conversationMatches(c, 'worktrees')).toBe(false)
+  })
+
   it('returns false when nothing matches', () => {
     const c = conv({ title: 'hello', messages: [{ role: 'assistant', content: 'world' }] })
     expect(conversationMatches(c, 'zzz')).toBe(false)

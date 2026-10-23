@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { writeFileAtomicSync } from './atomic-write'
 import { externalizeMedia, hydrateMedia, pruneMedia } from './conversationMedia'
 import { CONVERSATION_SCHEMA_VERSION, isReasoningEffort } from '@shared/agent'
@@ -392,9 +392,18 @@ export function deleteConversation(id: string): void {
   clearConversationOverride(id)
 }
 
-/** Whether a conversation matches a (lowercased) query in its title or any message text. Pure. */
+/**
+ * Whether a conversation matches a (lowercased) query in its title, the folder and
+ * branch the sidebar shows under it, or any message text. Pure.
+ */
 export function conversationMatches(conv: Conversation, queryLower: string): boolean {
-  if (conv.title.toLowerCase().includes(queryLower)) return true
+  const labels = [
+    conv.title,
+    // The sidebar labels a worktree chat by its repo and branch, any other by its folder.
+    conv.worktree ? basename(conv.worktree.repoRoot) : basename(conv.workspace),
+    conv.worktree?.branch ?? ''
+  ]
+  if (labels.some((l) => l.toLowerCase().includes(queryLower))) return true
   return conv.messages.some((m) => m.content.toLowerCase().includes(queryLower))
 }
 
