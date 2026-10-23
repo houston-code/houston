@@ -711,7 +711,12 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   </button>
                 )}
               </div>
-              <p className="set-section__desc">Get a key at {selected.keyUrl}</p>
+              <p className="set-section__desc">
+                Get a key at{' '}
+                <a href={selected.keyUrl} target="_blank" rel="noreferrer">
+                  {selected.keyUrl.replace(/^https:\/\//, '')}
+                </a>
+              </p>
             </label>
           </>
         )

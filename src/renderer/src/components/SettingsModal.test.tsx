@@ -1660,3 +1660,14 @@ describe('SettingsModal: a section named like its page', () => {
     expect(screen.getByRole('heading', { level: 3, name: 'MCP servers' })).toHaveClass('sr-only')
   })
 })
+
+describe('SettingsModal: web search key', () => {
+  it("links to the selected provider's key page", () => {
+    installApi()
+    renderModal({ searchProvider: 'brave' })
+    fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+    const link = screen.getByRole('link', { name: 'api-dashboard.search.brave.com' })
+    expect(link).toHaveAttribute('href', 'https://api-dashboard.search.brave.com')
+    expect(link).toHaveAttribute('target', '_blank')
+  })
+})
