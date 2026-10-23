@@ -41,6 +41,15 @@ describe('listDirectory', () => {
     })
   })
 
+  it("leaves out git's own .git, as a folder or a worktree's pointer file", async () => {
+    mkdirSync(join(root, '.git'))
+    writeFileSync(join(root, 'src', '.git'), 'gitdir: ../.git/modules/src\n')
+    expect((await listDirectory(root, '')).map((e) => e.name)).not.toContain('.git')
+    expect((await listDirectory(root, 'src')).map((e) => e.name)).toEqual(['index.ts'])
+    // Other dotfiles still show.
+    expect((await listDirectory(root, '')).map((e) => e.name)).toContain('.gitignore')
+  })
+
   it('lists a subdirectory by its workspace-relative path', async () => {
     const entries = await listDirectory(root, 'src')
     expect(entries).toEqual([{ name: 'index.ts', path: 'src/index.ts', isDirectory: false }])
