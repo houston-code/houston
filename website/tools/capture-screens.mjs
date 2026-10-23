@@ -6,10 +6,11 @@
 //   DEMO_DIR=/path/to/demo SHOT_DIR=/path/to/out \
 //   node website/tools/capture-screens.mjs
 //
-// Three phases: launch once to let the app write a full settings.json, patch it
-// (dark theme, demo workspace, local model, read-only plan mode), then relaunch
-// and drive a real read-only task. Finally relaunch in the light theme for the
-// light copy of the model picker, since the site shows the one matching its theme.
+// Launch once to let the app write a full settings.json, patch it (dark theme, demo
+// workspace, local model, read-only plan mode, onboarding finished), then relaunch for
+// the model picker in each theme (the site shows the one matching its theme), both
+// before any chat exists so they show the same screen. Last, drive a real read-only
+// task for the transcript shot.
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname, resolve } from "node:path";
@@ -46,38 +47,58 @@ async function boot() {
   await app.close();
 }
 
-// Patch settings: dark theme, demo workspace, local model selected, plan mode.
+// Patch settings: dark theme, demo workspace, local model selected, plan mode, and
+// onboarding marked done so no get-started checklist or tip sits behind the picker.
 const settingsPath = join(userDataDir, "settings.json");
 const s = JSON.parse(readFileSync(settingsPath, "utf8"));
 s.theme = "dark";
 s.recentWorkspaces = [DEMO];
 s.approvalPolicy = "plan";
+// TIP_IDS in src/shared/onboarding.ts; unknown ids are ignored.
+s.onboarding = { checklistDone: true, seenTips: ["approval", "worktree", "context", "steer", "changes", "revert"] };
 const ollama = (s.providers || []).find((p) => p.id === "ollama");
 if (!ollama) throw new Error("no ollama provider in settings");
 ollama.models = [{ id: MODEL, label: MODEL.replace(":latest", "") }];
 s.selected = { providerId: "ollama", model: MODEL };
 writeFileSync(settingsPath, JSON.stringify(s, null, 2));
 
-// Phase B — relaunch with the seeded profile and drive a real task.
-const { app, win } = await boot();
-await app.evaluate(({ BrowserWindow }) =>
-  BrowserWindow.getAllWindows()[0].setContentSize(1360, 880)
-);
-await win.waitForTimeout(1000);
-await win.screenshot({ path: join(OUT, "shot-empty-dark.png") });
+function setTheme(theme) {
+  const next = JSON.parse(readFileSync(settingsPath, "utf8"));
+  next.theme = theme;
+  writeFileSync(settingsPath, JSON.stringify(next, null, 2));
+}
 
-// Model picker open — showcases multi-provider + capability badges.
-try {
+async function bootSized() {
+  const booted = await boot();
+  await booted.app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(1360, 880)
+  );
+  await booted.win.waitForTimeout(1000);
+  return booted;
+}
+
+// Model picker open: showcases multi-provider + capability badges.
+async function pickerShot(win, theme) {
   await win.locator(".model-control").first().click();
   await win.locator(".model-menu").first().waitFor({ state: "visible", timeout: 5000 });
   await win.waitForTimeout(400);
-  await win.screenshot({ path: join(OUT, "shot-modelpicker-dark.png") });
+  await win.screenshot({ path: join(OUT, `shot-modelpicker-${theme}.png`) });
   await win.keyboard.press("Escape");
   await win.waitForTimeout(300);
-} catch (e) {
-  console.log("model-picker capture skipped:", e.message);
 }
 
+// Phase B: the empty window and the model picker, in each theme.
+for (const theme of ["dark", "light"]) {
+  setTheme(theme);
+  const { app, win } = await bootSized();
+  if (theme === "dark") await win.screenshot({ path: join(OUT, "shot-empty-dark.png") });
+  await pickerShot(win, theme);
+  await app.close();
+}
+
+// Phase C: relaunch in the dark theme and drive a real task.
+setTheme("dark");
+const { app, win } = await bootSized();
 const prompt =
   "Read the code in this project and explain how theming works — which files are involved and what each does.";
 const box = win.locator(".composer textarea").first();
@@ -104,22 +125,5 @@ await win.evaluate(() => window.scrollTo(0, 0));
 await win.screenshot({ path: join(OUT, "shot-transcript.png") });
 
 await app.close();
-
-// Phase C: the same model-picker shot in the light theme.
-{
-  const light = JSON.parse(readFileSync(settingsPath, "utf8"));
-  light.theme = "light";
-  writeFileSync(settingsPath, JSON.stringify(light, null, 2));
-  const { app, win } = await boot();
-  await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].setContentSize(1360, 880)
-  );
-  await win.waitForTimeout(1000);
-  await win.locator(".model-control").first().click();
-  await win.locator(".model-menu").first().waitFor({ state: "visible", timeout: 5000 });
-  await win.waitForTimeout(400);
-  await win.screenshot({ path: join(OUT, "shot-modelpicker-light.png") });
-  await app.close();
-}
 
 console.log("done ->", OUT);
