@@ -14,10 +14,16 @@ import {
  */
 export function FindBar({
   getRoots,
-  onClose
+  onClose,
+  focusRequest = 0
 }: {
   getRoots: () => HTMLElement[]
   onClose: () => void
+  /**
+   * Bumped each time find is asked for again (⌘F) while the bar is open: focus the
+   * field and select its query, ready to type a new one.
+   */
+  focusRequest?: number
 }): JSX.Element {
   const [query, setQuery] = useState('')
   const [count, setCount] = useState(0)
@@ -25,9 +31,22 @@ export function FindBar({
   const rangesRef = useRef<Range[]>([])
   const inputRef = useRef<HTMLInputElement>(null)
 
+  // Hand focus back to where it was (usually the message box) when the bar closes,
+  // instead of dropping it on the page. Not if the user has since clicked elsewhere.
+  // Before the focus effect below, so it records what had focus before the bar did.
+  useEffect(() => {
+    const returnTo = document.activeElement as HTMLElement | null
+    const bar = inputRef.current?.closest('.find-bar')
+    return () => {
+      const now = document.activeElement
+      if (!now || now === document.body || bar?.contains(now)) returnTo?.focus?.()
+    }
+  }, [])
+
   useEffect(() => {
     inputRef.current?.focus()
-  }, [])
+    inputRef.current?.select()
+  }, [focusRequest])
 
   // Recompute and repaint matches whenever the query changes.
   useEffect(() => {
