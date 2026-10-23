@@ -105,6 +105,10 @@ h1 { font-size: var(--fs-5); letter-spacing: -0.03em; line-height: 1.08; }
 h2 { font-size: var(--fs-4); letter-spacing: -0.02em; }
 h3 { font-size: var(--fs-3); }
 p { margin: 0; }
+/* Headings and FAQ questions split into even lines, and paragraphs don't end on one
+   stranded word. Browsers without text-wrap ignore both and wrap as before. */
+h1, h2, h3, summary { text-wrap: balance; }
+p, li { text-wrap: pretty; }
 
 code { font-family: var(--mono); font-size: 0.9em; }
 
