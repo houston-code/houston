@@ -1316,6 +1316,52 @@ body.is-resizing {
 .control--input[aria-invalid='true'] {
   border-color: var(--danger);
 }
+/* One box for the New worktree toggle and its branch-name field: the group draws the
+   border, and the parts inside split it with a divider instead of their own boxes. */
+.control-group {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  transition: border-color 0.12s;
+}
+.control-group:hover {
+  border-color: var(--accent);
+}
+.control-group:has(.control--input[aria-invalid='true']) {
+  border-color: var(--danger);
+}
+.control-group > .control {
+  border: none;
+  border-radius: 0;
+  background: none;
+}
+.control-group > .control:first-child {
+  border-radius: 7px 0 0 7px;
+}
+.control-group > .control:last-child {
+  border-radius: 0 7px 7px 0;
+}
+.control-group > .control:only-child {
+  border-radius: 7px;
+}
+.control-group > .control + .control,
+.control-group > .control--input[aria-invalid='true'] {
+  border-left: 1px solid var(--border);
+}
+/* The group's border is the edge, so keyboard focus rings sit inside it. */
+.control-group > .control:focus-visible {
+  outline-offset: -2px;
+}
+.control-group > .control:hover {
+  background: var(--bg-hover);
+}
+.control-group > .control--input {
+  font-family: var(--mono);
+  cursor: text;
+}
 .control--branch {
   /* Capped by .control's max-width; its .control__text truncates a long branch name
      (full name in the title) rather than wrapping the chip onto two lines. */

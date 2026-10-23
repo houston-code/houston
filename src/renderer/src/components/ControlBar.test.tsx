@@ -229,6 +229,21 @@ describe('ControlBar', () => {
     expect(screen.getByText('New worktree')).toBeInTheDocument()
   })
 
+  it('groups the New worktree toggle and its branch name in one box', () => {
+    const { rerender } = render(
+      <ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={true} />
+    )
+    const group = screen.getByRole('group', { name: 'New worktree' })
+    expect(within(group).getByRole('checkbox')).toBeChecked()
+    expect(within(group).getByLabelText('New branch name')).toBeInTheDocument()
+    // The base picker stays outside: it applies with or without a worktree.
+    expect(within(group).queryByLabelText('Base branch')).not.toBeInTheDocument()
+    rerender(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} worktreeMode={false} />)
+    const off = screen.getByRole('group', { name: 'New worktree' })
+    expect(within(off).getByRole('checkbox')).not.toBeChecked()
+    expect(within(off).queryByLabelText('New branch name')).not.toBeInTheDocument()
+  })
+
   it('shows the current branch (read-only) when the worktree toggle is off', () => {
     // Without a worktree the chat works on the repo's current branch — make that
     // obvious so the user knows which branch will be touched.

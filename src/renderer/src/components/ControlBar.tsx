@@ -177,34 +177,37 @@ export function ControlBar({
           )}
 
           {canWorktree && (
-            <label
-              className="control control--check"
-              data-tour="worktree"
-              title="Run this chat in a new git worktree on its own branch (isolated from your current checkout)"
-            >
-              <input
-                type="checkbox"
-                checked={worktreeMode}
-                onChange={(e) => onToggleWorktree(e.target.checked)}
-              />
-              <Icon name="gitBranch" size={13} className="control__icon" />
-              <span>New worktree</span>
-            </label>
-          )}
-
-          {worktreeOn && (
-            <input
-              className="control control--input"
-              value={branchName}
-              spellCheck={false}
-              autoCapitalize="off"
-              autoCorrect="off"
-              placeholder="new-branch-name"
-              title={branchError ?? 'New branch / worktree name'}
-              aria-label="New branch name"
-              aria-invalid={branchError !== null}
-              onChange={(e) => onChangeBranchName(e.target.value)}
-            />
+            // The toggle and the name it creates share one box: the name exists only
+            // while the toggle is on, so it reads as part of it, not a separate setting.
+            <span className="control-group" role="group" aria-label="New worktree">
+              <label
+                className="control control--check"
+                data-tour="worktree"
+                title="Run this chat in a new git worktree on its own branch (isolated from your current checkout)"
+              >
+                <input
+                  type="checkbox"
+                  checked={worktreeMode}
+                  onChange={(e) => onToggleWorktree(e.target.checked)}
+                />
+                <Icon name="gitBranch" size={13} className="control__icon" />
+                <span>New worktree</span>
+              </label>
+              {worktreeOn && (
+                <input
+                  className="control control--input"
+                  value={branchName}
+                  spellCheck={false}
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  placeholder="new-branch-name"
+                  title={branchError ?? 'New branch / worktree name'}
+                  aria-label="New branch name"
+                  aria-invalid={branchError !== null}
+                  onChange={(e) => onChangeBranchName(e.target.value)}
+                />
+              )}
+            </span>
           )}
         </div>
       )}
