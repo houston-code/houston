@@ -268,7 +268,7 @@ section { padding: 96px 0; }
 .cli-install > .dl-note { margin-top: 12px; }
 .cli-cmds { display: grid; gap: 8px; margin: 16px 0 0; }
 .cli-cmds > div { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 12px; align-items: center; }
-.cli-cmds dt { font-size: var(--fs-2); font-weight: 500; color: var(--a5); }
+.cli-cmds dt { font-size: var(--fs-2); font-weight: 500; }
 .cli-cmds dt span { display: block; font-size: var(--fs-1); font-weight: 400; color: var(--n4); }
 .cli-cmds dd { position: relative; margin: 0; min-width: 0; }
 .cli-cmds code {
