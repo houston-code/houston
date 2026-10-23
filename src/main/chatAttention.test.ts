@@ -21,12 +21,15 @@ function setup() {
   let live: ChatStatusMap = {}
   const active = new Map<string, string>()
   const counts = new Map<string, number>([['c', 4]])
+  // The saved log of 'c' holds two replies, at indexes 1 and 3.
+  const replies = new Map<string, number[]>([['c', [1, 3]]])
   const sent: ChatStatusMap[] = []
   const attn = createChatAttention({
     store,
     liveStatus: () => live,
     activeRun: (id) => active.get(id) ?? null,
     messageCount: (id) => counts.get(id),
+    replyIndexes: (id) => replies.get(id) ?? [],
     exists: (id) => id === 'c' || id === 'd',
     broadcast: (s) => sent.push(s),
     now: () => 1000
@@ -187,6 +190,30 @@ describe('chat attention', () => {
     expect(t.store.get('nope')).toBeUndefined()
     t.attn.setUnread('c', false)
     expect(t.store.get('c')).toBeUndefined()
+  })
+
+  it('marks unread from a saved reply at that reply', () => {
+    const t = setup()
+    t.attn.setUnreadFromReply('c', 1)
+    expect(t.store.get('c')).toEqual({ since: 1000, outcome: 'manual', anchor: 3 })
+  })
+
+  it('marks unread from a reply of the running turn at where that run began', () => {
+    const t = setup()
+    t.start('c') // the run starts with the log at 4 messages
+    // Reply 2 is the running turn's own: not in the saved log yet.
+    t.attn.setUnreadFromReply('c', 2)
+    expect(t.store.get('c')).toEqual({ since: 1000, outcome: 'manual', anchor: 4 })
+    // The run's end keeps the mark's anchor (the unseen part starts there).
+    t.attn.noteEvent('c', done())
+    t.end('c')
+    expect(t.store.get('c')?.anchor).toBe(4)
+  })
+
+  it('marks unread with no anchor for a reply it can\'t place and no run going', () => {
+    const t = setup()
+    t.attn.setUnreadFromReply('c', 9)
+    expect(t.store.get('c')).toEqual({ since: 1000, outcome: 'manual' })
   })
 
   it('a manual mark on the viewed chat survives until the view changes', () => {
