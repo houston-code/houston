@@ -3081,7 +3081,8 @@ describe('one run per conversation', () => {
     // While the approval was open, the chat read as running AND blocked on it.
     expect(atPrompt?.['conv-status-A']).toEqual({
       running: true,
-      pending: [{ kind: 'approval', label: 'write_file' }]
+      // Named as its tool row names it, not by the wire name write_file.
+      pending: [{ kind: 'approval', label: 'Write s.txt' }]
     })
     // Listeners saw the blocked state, then the answered one, then the run ending.
     expect(seen.some((s) => s['conv-status-A']?.pending.length === 1)).toBe(true)

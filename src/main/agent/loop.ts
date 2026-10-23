@@ -44,6 +44,7 @@ import {
 } from '@shared/types'
 import { modelDisplayName } from '@shared/models'
 import { APPROVAL_DENIED, APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER, denialText } from '@shared/promptOutcome'
+import { describeToolCall } from '@shared/toolLabel'
 import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
@@ -556,10 +557,18 @@ export function chatStatusSnapshot(): ChatStatusMap {
   return out
 }
 
+/** An approval as its tool row names the call ("Run npm test"), not by its wire name. */
+function approvalLabel(name: string, args: Record<string, unknown>): string {
+  const { verb, target } = describeToolCall(name, args)
+  return target ? `${verb} ${target}` : verb
+}
+
 /** The prompts blocking a run, oldest first within each kind, reduced for display. */
 function pendingPromptSummary(run: RunState): PendingPrompt[] {
   return [
-    ...[...run.pendingApprovals.values()].map((a): PendingPrompt => ({ kind: 'approval', label: a.name })),
+    ...[...run.pendingApprovals.values()].map(
+      (a): PendingPrompt => ({ kind: 'approval', label: approvalLabel(a.name, a.args) })
+    ),
     ...[...run.pendingQuestions.values()].map((): PendingPrompt => ({ kind: 'question' })),
     ...[...run.pendingPlans.values()].map((p): PendingPrompt => ({ kind: 'plan', label: p.title })),
     ...[...run.pendingElicitations.values()].map(
