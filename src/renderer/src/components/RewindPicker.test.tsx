@@ -43,4 +43,18 @@ describe('RewindPicker', () => {
     render(<RewindPicker targets={[]} onPick={vi.fn()} onClose={vi.fn()} />)
     expect(screen.getByText('No earlier messages to rewind to yet.')).toBeTruthy()
   })
+
+  it('opens with focus on the newest message, and focus follows the arrow keys', () => {
+    render(<RewindPicker targets={targets} onPick={vi.fn()} onClose={vi.fn()} />)
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /third/ }))
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'ArrowDown' })
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: /second/ }))
+  })
+
+  it('leaves Enter on the close button to close, not pick', () => {
+    const onPick = vi.fn()
+    render(<RewindPicker targets={targets} onPick={onPick} onClose={vi.fn()} />)
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Close' }), { key: 'Enter' })
+    expect(onPick).not.toHaveBeenCalled()
+  })
 })
