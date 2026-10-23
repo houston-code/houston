@@ -45,6 +45,7 @@ import {
   getSettings,
   saveSettings,
   rememberWorkspace,
+  workspacePickerStartDir,
   getProvider,
   isGitInitDismissed,
   dismissGitInit,
@@ -538,6 +539,7 @@ export function registerIpc(): void {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
     const result = await dialog.showOpenDialog(win!, {
       title: 'Choose a project folder',
+      defaultPath: workspacePickerStartDir(),
       properties: ['openDirectory', 'createDirectory']
     })
     if (result.canceled || result.filePaths.length === 0) return null

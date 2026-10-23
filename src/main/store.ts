@@ -1,4 +1,5 @@
 import { readFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { writeFileAtomicSync } from './atomic-write'
 import { getUserDataDir } from './userData'
@@ -633,6 +634,21 @@ export function rememberWorkspace(path: string): AppSettings {
     ...current.recentWorkspaces.filter((p) => p !== path && workspaceExists(p))
   ].slice(0, 10)
   return updateSettings({ recentWorkspaces: recents })
+}
+
+/**
+ * Where the "Choose a project folder" dialog opens: the parent of the most recent
+ * live workspace, since the next project is usually a sibling of the last one.
+ * Falls back to the home folder rather than leaving it to the OS, which reuses
+ * whatever folder any of the app's file dialogs last visited (e.g. an attachment's).
+ */
+export function workspacePickerStartDir(): string {
+  const recent = getSettings().recentWorkspaces.find(workspaceExists)
+  if (recent) {
+    const parent = dirname(recent)
+    if (workspaceExists(parent)) return parent
+  }
+  return homedir()
 }
 
 /**
