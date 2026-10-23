@@ -118,3 +118,11 @@ describe('Titlebar needs-you pill', () => {
     expect(screen.queryByRole('button', { name: /need/ })).not.toBeInTheDocument()
   })
 })
+
+describe('Titlebar title', () => {
+  it('shows the whole title on hover, since a long one is cut short', () => {
+    const long = 'Investigate why the background dev server keeps restarting after every save'
+    render(<Titlebar title={long} />)
+    expect(screen.getByText(long)).toHaveAttribute('title', long)
+  })
+})

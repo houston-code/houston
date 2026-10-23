@@ -1381,3 +1381,11 @@ describe('Sidebar: the ⋯ menus', () => {
     ])
   })
 })
+
+describe('Sidebar: a long chat title', () => {
+  it('shows the whole title on hover, since the row cuts it short', () => {
+    const long = 'Investigate why the background dev server keeps restarting after every save'
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: long })] })} />)
+    expect(screen.getByText(long)).toHaveAttribute('title', long)
+  })
+})
