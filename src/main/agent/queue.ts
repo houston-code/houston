@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { isApprovalPolicy } from '@shared/types'
-import { isReasoningEffort } from '@shared/agent'
+import { isReasoningEffort, type ConversationSettingsPatch } from '@shared/agent'
 import {
   toQueuedMeta,
   type QueueAddRequest,
@@ -96,6 +96,29 @@ export function addToQueue(
   }
   save(req.conversationId, next)
   return toQueuedMeta(next.items)
+}
+
+/**
+ * Carry a change to the chat's own settings over to what is queued for it. The queue
+ * keeps the settings the messages were sent under, and its turn runs (and is recorded
+ * on the chat) under them, so without this a change made while the current run went on
+ * was undone by the follow-up: tightening the chat to plan mid-run still sent the queued
+ * message in full-auto, and the chat was set back to full-auto. Validated like
+ * {@link addToQueue}: a field off its list, or a model without its provider, is ignored.
+ */
+export function retargetQueue(conversationId: string, patch: ConversationSettingsPatch): void {
+  const state = load(conversationId)
+  if (!state || typeof patch !== 'object' || patch === null) return
+  const { providerId, model, reasoningEffort, approvalPolicy } = patch as Record<string, unknown>
+  const next: StoredQueue = { ...state }
+  // Provider and model move together: a model id only means something under its provider.
+  if (typeof providerId === 'string' && providerId && typeof model === 'string' && model) {
+    next.providerId = providerId
+    next.model = model
+  }
+  if (isReasoningEffort(reasoningEffort)) next.reasoningEffort = reasoningEffort
+  if (isApprovalPolicy(approvalPolicy)) next.approvalPolicy = approvalPolicy
+  save(conversationId, next)
 }
 
 /** Drop one queued message by id; returns the updated display list. */

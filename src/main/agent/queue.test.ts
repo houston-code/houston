@@ -10,6 +10,7 @@ import {
   queuedSteerIds,
   removeFromQueue,
   resetQueueCache,
+  retargetQueue,
   settleSteers,
   takeQueue
 } from './queue'
@@ -44,6 +45,24 @@ describe('main queue manager', () => {
     const taken = takeQueue(cid)
     expect(taken?.approvalPolicy).toBe('plan')
     expect(taken).not.toHaveProperty('reasoningEffort')
+  })
+
+  it("retargets a queued follow-up to the chat's changed settings, ignoring invalid fields", () => {
+    const cid = 'conv-retarget'
+    add(cid, 'one', { approvalPolicy: 'full-auto', reasoningEffort: 'low' })
+    retargetQueue(cid, { approvalPolicy: 'plan', reasoningEffort: 'high', providerId: 'openai', model: 'gpt' })
+    expect(takeQueue(cid)).toMatchObject({ approvalPolicy: 'plan', reasoningEffort: 'high', providerId: 'openai', model: 'gpt' })
+
+    add(cid, 'two')
+    // Unknown values, and a model without its provider, change nothing.
+    retargetQueue(cid, { approvalPolicy: 'yolo' as never, reasoningEffort: 'max' as never, model: 'other' })
+    expect(takeQueue(cid)).toMatchObject({ approvalPolicy: 'ask', providerId: 'anthropic', model: 'claude' })
+  })
+
+  it('does nothing when nothing is queued', () => {
+    retargetQueue('conv-empty-retarget', { approvalPolicy: 'plan' })
+    expect(listQueue('conv-empty-retarget')).toEqual([])
+    expect(takeQueue('conv-empty-retarget')).toBeNull()
   })
 
   it('appends messages and returns the display list', () => {
