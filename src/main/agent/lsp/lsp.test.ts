@@ -118,6 +118,17 @@ describe('JsonRpcConnection', () => {
     expect(sent()).toContainEqual(expect.objectContaining({ id: 'x', error: expect.objectContaining({ code: -32601 }) }))
   })
 
+  it('skips a frame whose body is not a JSON object instead of throwing', async () => {
+    const { conn, toClient } = pair()
+    const p = conn.request('a', {})
+    for (const body of ['null', '42', '"text"', '[]']) {
+      toClient.write(Buffer.from(`Content-Length: ${body.length}\r\n\r\n${body}`, 'utf8'))
+    }
+    toClient.write(encodeMessage({ jsonrpc: '2.0', id: 1, result: 'ok' }))
+    await expect(p).resolves.toBe('ok')
+    expect(conn.isClosed).toBe(false)
+  })
+
   it('fails open requests when the stream ends or desynchronizes', async () => {
     const { conn, toClient } = pair()
     const p = conn.request('a', {})
