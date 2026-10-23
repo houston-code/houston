@@ -81,3 +81,29 @@ describe('FindBar', () => {
     expect(onClose).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('FindBar focus', () => {
+  it('re-focuses and selects its query when find is asked for again', () => {
+    const root = transcript('<p>alpha</p>')
+    const { rerender } = render(<FindBar getRoots={() => [root]} onClose={() => {}} focusRequest={1} />)
+    const input = screen.getByLabelText('Find in conversation') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'alpha' } })
+    // The user clicked back into the transcript, then pressed ⌘F again.
+    input.blur()
+    expect(document.activeElement).not.toBe(input)
+    rerender(<FindBar getRoots={() => [root]} onClose={() => {}} focusRequest={2} />)
+    expect(document.activeElement).toBe(input)
+    expect([input.selectionStart, input.selectionEnd]).toEqual([0, 'alpha'.length])
+  })
+
+  it('hands focus back to where it was when it closes', () => {
+    const root = transcript('<p>alpha</p>')
+    const composer = document.createElement('textarea')
+    document.body.appendChild(composer)
+    composer.focus()
+    const { unmount } = render(<FindBar getRoots={() => [root]} onClose={() => {}} />)
+    expect(document.activeElement).toBe(screen.getByLabelText('Find in conversation'))
+    unmount()
+    expect(document.activeElement).toBe(composer)
+  })
+})

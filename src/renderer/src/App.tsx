@@ -245,6 +245,12 @@ export default function App(): JSX.Element {
   const [paletteOpen, setPaletteOpen] = useState(false)
   const [paletteSeed, setPaletteSeed] = useState('')
   const [findOpen, setFindOpen] = useState(false)
+  // Each ask for find (⌘F, the palette) while the bar is already open re-focuses it.
+  const [findRequest, setFindRequest] = useState(0)
+  const openFind = useCallback(() => {
+    setFindOpen(true)
+    setFindRequest((n) => n + 1)
+  }, [])
   // Worktree setup for a not-yet-started chat (shown inline in the control bar).
   const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null)
   const [worktreeMode, setWorktreeMode] = useState(true)
@@ -2047,7 +2053,7 @@ export default function App(): JSX.Element {
         section: 'Actions',
         hint: shortcutHint('find-in-chat', mac, shortcuts),
         keywords: 'search',
-        run: () => setFindOpen(true)
+        run: openFind
       },
       {
         id: 'act-scorecard',
@@ -2195,7 +2201,8 @@ export default function App(): JSX.Element {
     onboarding.startTour,
     chatStatus,
     onSetUnread,
-    onMarkAllRead
+    onMarkAllRead,
+    openFind
   ])
 
   // Every overlay's open state in one place (see lib/overlays.ts), read live by the
@@ -2283,7 +2290,7 @@ export default function App(): JSX.Element {
         setPaletteOpen(true)
       } else if (action === 'find-in-chat') {
         e.preventDefault()
-        setFindOpen(true)
+        openFind()
       } else if (action === 'open-settings') {
         e.preventDefault()
         setSettingsOpen(true)
@@ -2345,6 +2352,7 @@ export default function App(): JSX.Element {
     cycleChat,
     cyclePolicy,
     shortcuts,
+    openFind,
     chat.running,
     chat.cancel
   ])
@@ -2505,7 +2513,7 @@ export default function App(): JSX.Element {
 
         {findOpen && (
           <Suspense fallback={null}>
-            <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} />
+            <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} focusRequest={findRequest} />
           </Suspense>
         )}
 
