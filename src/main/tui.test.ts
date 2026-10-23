@@ -28,6 +28,7 @@ import {
   parseApprovalAnswer,
   renderQuestion,
   HELP_TEXT,
+  wrapHelp,
   resolveQuestionAnswer,
   parseSlashCommand,
   splitDefaultFlag,
@@ -2547,6 +2548,26 @@ describe('runTui', () => {
   it('lists every built-in terminal command in /help', () => {
     const missing = COMMANDS.filter((c) => !new RegExp(`/${c.name}\\b`).test(HELP_TEXT)).map((c) => c.name)
     expect(missing).toEqual([])
+  })
+
+  // At 80 columns ten /help rows ran past the edge and the terminal broke them
+  // mid-word at the left margin ("…(--default: new ch" / "ats too)").
+  it('wraps /help descriptions under their column instead of mid-word at the edge', () => {
+    const out = wrapHelp(HELP_TEXT, 80)
+    const lines = out.split('\n')
+    for (const l of lines) expect(l.length).toBeLessThanOrEqual(80)
+    const i = lines.findIndex((l) => l.startsWith('  /approval'))
+    expect(lines[i]).toBe("  /approval [policy]    show or set this chat's approval mode (--default: new")
+    expect(lines[i + 1]).toBe(`${' '.repeat(24)}chats too)`)
+    // Nothing is lost or reordered: unwrapping gives the original rows back.
+    expect(out.replace(/\n {24}/g, ' ')).toBe(HELP_TEXT)
+    // Wide enough for every row: unchanged.
+    expect(wrapHelp(HELP_TEXT, 200)).toBe(HELP_TEXT)
+  })
+
+  it('leaves a custom command whose name runs into the column to plain wrapping', () => {
+    const row = `  /${'x'.repeat(30)} does a thing that takes many words to describe properly here`
+    expect(wrapHelp(row, 60, 22).split('\n')[1].startsWith(' ')).toBe(false)
   })
 
   it('describes bare /model as the picker it opens', () => {
