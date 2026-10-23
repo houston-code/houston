@@ -224,6 +224,35 @@ describe("page metadata", () => {
     expect(describePage("<p>Short <code>x</code> &amp; sweet.</p>")).toBe("Short x & sweet.");
   });
 
+  it("ends a long description at the last sentence that fits", () => {
+    const one = "Houston reads, edits, and runs code in your project folder.";
+    const two = "It works with your own model keys or a local model runtime.";
+    const three = "Every action that matters waits for your approval, and shell commands run sandboxed.";
+    expect(describePage(`<p>${one} ${two} ${three}</p>`)).toBe(`${one} ${two}`);
+    // "e.g." followed by a capital is not a sentence end.
+    const eg = "It also runs on Linux, e.g. Ubuntu 22.04 or newer.";
+    expect(describePage(`<p>${eg} ${three} ${two}</p>`)).toBe(`${eg} ${three}`);
+  });
+
+  it("does not let a short lead-in or a list intro stand as the description", () => {
+    const rest = "When a conversation grows too large, Houston trims old tool output ".repeat(3);
+    const lead = describePage(`<p><strong>Compaction.</strong> ${rest}</p>`);
+    expect(lead.startsWith("Compaction. When a conversation")).toBe(true);
+    expect(lead.endsWith("...")).toBe(true);
+    const intro = "A long run can block on an approval, a question, or a plan. So the terminal tells you:";
+    expect(describePage(`<p>${intro}</p>`)).toBe("A long run can block on an approval, a question, or a plan.");
+    expect(describePage("<p>Approval is layered. From most to least restrictive:</p>")).toBe(
+      "Approval is layered. From most to least restrictive:"
+    );
+  });
+
+  it("cuts without a dangling comma or an unclosed parenthesis", () => {
+    const comma = describePage(`<p>${"alpha, ".repeat(30)}</p>`);
+    expect(comma).toMatch(/ alpha\.\.\.$/);
+    const paren = describePage(`<p>${"word ".repeat(25)}(the preview panel, spawning sessions, and more) ${"word ".repeat(10)}</p>`);
+    expect(paren).toBe(`${"word ".repeat(25).trim()}...`);
+  });
+
   it("escapes the version and description into attributes and JSON-LD safely", () => {
     const [index, page] = buildDocs('## A "quoted" </script> topic\n\nBody with "quotes" </script>.\n', "v1.2.3");
     expect(index.output).toContain('<meta name="houston-docs-version" content="v1.2.3" />');
