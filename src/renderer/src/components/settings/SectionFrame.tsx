@@ -16,12 +16,35 @@ export function useSectionMeta(): SectionMeta | null {
   return useContext(SectionMetaContext)
 }
 
+/** The title of the page the current section opens, when it is the page's first. */
+const OpeningPageContext = createContext<string | null>(null)
+
+/**
+ * Whether a section's title only repeats the page title right above it ("Hooks" under
+ * "Hooks"). SettingsSection then keeps its heading for screen readers and settings
+ * search but doesn't show it a second time.
+ */
+export function useRepeatsPageTitle(title: string): boolean {
+  const page = useContext(OpeningPageContext)
+  const norm = (t: string): string => t.toLowerCase().replace(/\s+/g, ' ').trim()
+  return page !== null && norm(page) === norm(title)
+}
+
 /**
  * Renders one section and tells its header whether the preferences it sets differ
  * from Houston's defaults, with a Reset that restores them (saved like any change,
- * so it can be undone).
+ * so it can be undone), and whether its title just repeats the page's.
  */
-export function SectionFrame({ entry, ctx }: { entry: SectionEntry; ctx: SettingsCtx }): JSX.Element {
+export function SectionFrame({
+  entry,
+  ctx,
+  openingPage = null
+}: {
+  entry: SectionEntry
+  ctx: SettingsCtx
+  /** The page's title when this section is the first under it. */
+  openingPage?: string | null
+}): JSX.Element {
   const { Component, keys } = entry
   const meta: SectionMeta | null = keys
     ? {
@@ -31,7 +54,9 @@ export function SectionFrame({ entry, ctx }: { entry: SectionEntry; ctx: Setting
     : null
   return (
     <SectionMetaContext.Provider value={meta}>
-      <Component ctx={ctx} />
+      <OpeningPageContext.Provider value={openingPage}>
+        <Component ctx={ctx} />
+      </OpeningPageContext.Provider>
     </SectionMetaContext.Provider>
   )
 }

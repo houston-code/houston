@@ -13,12 +13,15 @@ import { matchesTerms, normalizeForSearch, searchHaystack } from './search'
 export function SearchableSection({
   entry,
   pageLabel,
+  opensPage = false,
   terms,
   ctx,
   onResult
 }: {
   entry: SectionEntry
   pageLabel: string
+  /** The page's first section, listed right under the page's title in the results. */
+  opensPage?: boolean
   terms: string[]
   ctx: SettingsCtx
   onResult: (id: string, matched: boolean) => void
@@ -50,7 +53,7 @@ export function SearchableSection({
 
   return (
     <div ref={ref} className="set-result" data-section={entry.id} hidden={!matched}>
-      <SectionFrame entry={entry} ctx={ctx} />
+      <SectionFrame entry={entry} ctx={ctx} openingPage={opensPage ? pageLabel : null} />
     </div>
   )
 }

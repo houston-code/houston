@@ -321,11 +321,12 @@ export function SettingsModal({
                         {p.label}
                       </button>
                     </h2>
-                    {p.sections.map((entry) => (
+                    {p.sections.map((entry, i) => (
                       <SearchableSection
                         key={entry.id}
                         entry={entry}
                         pageLabel={p.label}
+                        opensPage={i === 0}
                         terms={terms}
                         ctx={ctx}
                         onResult={onResult}
@@ -343,8 +344,13 @@ export function SettingsModal({
             ) : (
               <>
                 <h1 className="set-page__title">{page.label}</h1>
-                {page.sections.map((entry) => (
-                  <SectionFrame key={`${page.id}-${entry.id}`} entry={entry} ctx={ctx} />
+                {page.sections.map((entry, i) => (
+                  <SectionFrame
+                    key={`${page.id}-${entry.id}`}
+                    entry={entry}
+                    ctx={ctx}
+                    openingPage={i === 0 ? page.label : null}
+                  />
                 ))}
               </>
             )}
