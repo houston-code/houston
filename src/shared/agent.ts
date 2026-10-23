@@ -610,6 +610,12 @@ export interface Conversation extends ConversationMeta {
    * the removed messages stay referenced, and never sent to a provider.
    */
   rewindBackup?: RewindBackup
+  /**
+   * Present on a fork (see forkConversationData): the chat it was copied from and how
+   * many messages at the start of its log came from there. The usage scorecard counts
+   * only what follows, so a fork doesn't count its source's work a second time.
+   */
+  forkedFrom?: { conversationId: string; historyLength: number }
 }
 
 /** See {@link Conversation.rewindBackup}. */
@@ -627,6 +633,11 @@ export interface RewindBackup {
   code: { runId: string; files: string[] }[]
   /** Runs whose turns the rewind cut from the chat. */
   detached: string[]
+  /**
+   * A fork's {@link Conversation.forkedFrom} history length before a rewind cut into
+   * the copied history, so an undo can put it back.
+   */
+  forkedHistoryLength?: number
 }
 
 /** One side-chat exchange. `error` instead of `answer` when it failed or was stopped. */

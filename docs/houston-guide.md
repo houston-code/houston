@@ -2175,7 +2175,8 @@ checkout.
 ### Conversations
 
 - Saved per project folder.
-- Searchable, and you can fork them.
+- Searchable, and you can fork them. A fork starts its own cost at zero: what the
+  original spent stays with the original, so usage totals don't count it twice.
 - **Export** as JSON or self-contained HTML, and **import** from either. An HTML export
   from an older version brings back only the chat text.
 - **The File menu** starts a new chat (⌘N), a new chat in another folder (⇧⌘N), or one

@@ -26,7 +26,8 @@ function conv(partial: Partial<ScorecardConversationInput>): ScorecardConversati
     model: partial.model ?? 'claude-test',
     messages: partial.messages ?? [],
     usage: partial.usage,
-    errored: partial.errored
+    errored: partial.errored,
+    ...(partial.inherited !== undefined ? { inherited: partial.inherited } : {})
   }
 }
 
@@ -65,6 +66,29 @@ describe('buildScorecard', () => {
     const s = buildScorecard([])
     expect(s.models).toEqual([])
     expect(s.totalRuns).toBe(0)
+    expect(s.totalCost).toBe(0)
+  })
+
+  it("counts only a chat's own messages after the history it copied", () => {
+    const copied = [user(), assistant('', [{ id: 'a', name: 'read_file', arguments: {} }]), toolTurn('read_file'), assistant('done')]
+    const unusedFork = conv({ model: 'm', messages: copied, inherited: 4, usage: { inputTokens: 900, outputTokens: 0, cost: 0 } })
+    expect(buildScorecard([unusedFork]).totalRuns).toBe(0)
+
+    const usedFork = conv({
+      model: 'm',
+      messages: [...copied, user(), assistant('more')],
+      inherited: 4,
+      usage: { inputTokens: 950, outputTokens: 20, cost: 0.002 }
+    })
+    const row = buildScorecard([usedFork]).models[0]
+    expect(row.totalSteps).toBe(1)
+    expect(row.totalToolCalls).toBe(0)
+    expect(row.totalCost).toBeCloseTo(0.002, 6)
+  })
+
+  it('estimates no cost for a chat that never got an answer', () => {
+    // Only a context size carried over, no output: nothing was spent here.
+    const s = buildScorecard([conv({ model: 'claude-opus-4-1', messages: [user()], usage: { inputTokens: 50000, outputTokens: 0, cost: 0 } })])
     expect(s.totalCost).toBe(0)
   })
 
