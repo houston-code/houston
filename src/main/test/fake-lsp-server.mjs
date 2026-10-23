@@ -6,6 +6,7 @@
 //   FAKE_LSP_DIAG_DELAY_MS   delay before publishing diagnostics (default 20)
 //   FAKE_LSP_SILENT=1        never publish diagnostics
 //   FAKE_LSP_CRASH_ON=<m>    exit(3) when a message with method <m> arrives
+//   FAKE_LSP_GARBAGE_ON=<m>  answer a message with method <m> with a malformed frame, and stay up
 //   FAKE_LSP_OUTSIDE=<abs>   definition/references/rename also point at this path
 //   FAKE_LSP_LOG=<abs>       append every received method to this file
 //   FAKE_LSP_NO_VERSION=1    publish diagnostics without a version
@@ -128,6 +129,7 @@ function symbolsIn(uri) {
 function handle(msg) {
   if (env.FAKE_LSP_LOG && msg.method) appendFileSync(env.FAKE_LSP_LOG, `${msg.method}\n`)
   if (env.FAKE_LSP_CRASH_ON && msg.method === env.FAKE_LSP_CRASH_ON) process.exit(3)
+  if (env.FAKE_LSP_GARBAGE_ON && msg.method === env.FAKE_LSP_GARBAGE_ON) return process.stdout.write('garbage\r\n\r\n')
   const p = msg.params ?? {}
   switch (msg.method) {
     case 'initialize':

@@ -282,8 +282,43 @@ describe('LspClient against a fake server', () => {
     const res = await c.waitForDiagnostics(file, { mark, version: v, timeoutMs: 5000 })
     expect(res).toBeNull()
     expect(c.state).toBe('dead')
-    expect(c.deathReason).toMatch(/exited|closed|ended/)
+    expect(c.deathReason).toBe('exited (code 3)')
     await expect(c.request('textDocument/hover', {})).rejects.toThrow(/not running/)
+  })
+
+  it('reports a crash as the exit even when a write hits the broken pipe first', async () => {
+    const c = client({ FAKE_LSP_CRASH_ON: 'textDocument/didChange' })
+    await c.start()
+    // In one tick: `initialized` (the server answers it with a workspace/configuration
+    // request), then the change that crashes it. Holding the event loop until the server
+    // is gone means the client reads that request only after the exit, and its answer
+    // fails with EPIPE before the exit or the end of the server's output is seen.
+    const file = join(root, 'a.fk')
+    await c.sync(file, 'one\n')
+    const mark = c.diagnosticsMark(file)
+    const v = await c.sync(file, 'two\n')
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 300)
+    expect(await c.waitForDiagnostics(file, { mark, version: v, timeoutMs: 5000 })).toBeNull()
+    expect(c.state).toBe('dead')
+    expect(c.deathReason).toBe('exited (code 3)')
+  })
+
+  it('kills a server that stays up on a broken connection, and reports the break', async () => {
+    const spec = serverRegistry([FAKE_SERVER])[0]
+    const killTree = vi.fn((p: ChildProcess) => {
+      p.kill('SIGKILL')
+    })
+    const spawnFn = fakeSpawn({ FAKE_LSP_GARBAGE_ON: 'textDocument/didOpen' })
+    const c = new LspClient({ server: resolveServer(spec)!, roots: [root], spawn: spawnFn, killTree, exitGraceMs: 50 })
+    clients.push(c)
+    await c.start()
+    const file = join(root, 'a.fk')
+    const mark = c.diagnosticsMark(file)
+    const v = await c.sync(file, 'one\n')
+    expect(await c.waitForDiagnostics(file, { mark, version: v, timeoutMs: 5000 })).toBeNull()
+    expect(c.state).toBe('dead')
+    expect(c.deathReason).toMatch(/^protocol error: /)
+    expect(killTree).toHaveBeenCalledTimes(1)
   })
 
   it('kills the whole process tree, not just the sandbox shell', async () => {
