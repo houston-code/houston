@@ -316,12 +316,37 @@ export function Composer({
 
   // Auto-grow the textarea to fit its content (up to a cap, then it scrolls), so
   // multi-line drafts, recalled history, and pastes aren't crammed into one line.
-  useEffect(() => {
+  // An empty field fits its placeholder instead: a hint that wraps where the box is
+  // narrow (a side panel open, a small window) shows whole rather than cut off after
+  // its first line. Re-fit when the placeholder changes and when the box resizes.
+  const fitHeight = useCallback((): void => {
     const el = ref.current
     if (!el) return
     el.style.height = 'auto'
-    el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_PX)}px`
-  }, [text])
+    let height = el.scrollHeight
+    if (el.value === '' && el.placeholder) {
+      // A placeholder adds nothing to scrollHeight; measure it as the value for a
+      // moment (same task, so it is never painted), then put the empty value back.
+      el.value = el.placeholder
+      height = el.scrollHeight
+      el.value = ''
+    }
+    el.style.height = `${Math.min(height, MAX_TEXTAREA_PX)}px`
+  }, [])
+  useEffect(fitHeight, [text, disabled, disabledReason, running, answering, fitHeight])
+  useEffect(() => {
+    const el = ref.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    let width = el.clientWidth
+    const observer = new ResizeObserver(() => {
+      // Only a width change can rewrap the text; ignore the height changes fitting makes.
+      if (el.clientWidth === width) return
+      width = el.clientWidth
+      fitHeight()
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [fitHeight])
 
   // Focus the field when the open chat changes (App.tsx keys the Composer by the
   // conversation, so this is a fresh mount per switch), so keyboard-driven chat

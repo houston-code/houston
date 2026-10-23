@@ -497,6 +497,24 @@ function stubApi(overrides: ApiStub = {}): void {
   }
 }
 
+describe('Composer height', () => {
+  it('fits an empty field to its placeholder, and a typed one to its text', () => {
+    const { rerender } = render(<Composer {...baseProps()} />)
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+    // jsdom lays nothing out: report two lines for the (wrapping) placeholder, one for short text.
+    Object.defineProperty(input, 'scrollHeight', {
+      configurable: true,
+      get: () => (input.value === input.placeholder ? 48 : 24)
+    })
+    rerender(<Composer {...baseProps({ running: true })} />)
+    expect(input.style.height).toBe('48px')
+    // Measuring leaves the field empty.
+    expect(input.value).toBe('')
+    fireEvent.change(input, { target: { value: 'hi' } })
+    expect(input.style.height).toBe('24px')
+  })
+})
+
 describe('Composer + attachment menu', () => {
   beforeEach(() => {
     localStorage.clear()
