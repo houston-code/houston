@@ -8,7 +8,7 @@
  * helper module imports would bind to the UNMOCKED loop and silently drive a
  * real provider. Everything here is mock-agnostic, so it stays importable.
  */
-import { cpSync, mkdirSync, readdirSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
@@ -36,9 +36,19 @@ export function taskDirNames(): string[] {
  * The fixture is copied, never used in place: the agent mutates the workspace,
  * and a run that wrote into `evals/tasks/*_/repo` would corrupt the fixture for
  * every later run and show up as a dirty git tree.
+ *
+ * FRESH PER CALL, not per task. Every attempt at a task used to reuse one
+ * `<tmpRoot>/<task id>` folder, and copying over it resets the files the fixture
+ * has but leaves any the agent created. So attempt 2 of `new-module-write` started
+ * with attempt 1's `slug.mjs` already in place and passed without doing anything.
+ * Attempts have to be independent for a pass rate (or pass^k) to mean anything.
+ *
+ * NAMED `repo`, not after the task. The prompt names the workspace folder as the
+ * project, so a folder called `fix-null-deref` told a live model what to fix, and
+ * made the prompt (and its hash, stamp.ts) differ from task to task.
  */
 export function materializeTask(task: EvalTask, tmpRoot: string): string {
-  const ws = join(tmpRoot, task.id)
+  const ws = join(mkdtempSync(join(tmpRoot, 'attempt-')), 'repo')
   mkdirSync(ws, { recursive: true })
   cpSync(repoDirFor(task.id), ws, { recursive: true })
   return ws

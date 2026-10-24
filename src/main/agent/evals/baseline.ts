@@ -30,6 +30,11 @@ export interface EvalBaseline {
   attempts: number
   /** ISO date the baseline was recorded, so a stale one is obvious in review. */
   recordedAt: string
+  /**
+   * The prompt hash it was recorded on (see stamp.ts), so a later run can say the
+   * prompt has changed since. Absent on baselines recorded before the stamp existed.
+   */
+  promptHash?: string
   /** taskId -> observed pass rate in [0,1]. */
   tasks: Record<string, number>
 }
@@ -132,13 +137,15 @@ export function recordBaseline(
   model: string,
   attempts: number,
   scores: TaskScore[],
-  now: Date
+  now: Date,
+  promptHash?: string
 ): EvalBaseline {
   return {
     provider,
     model,
     attempts,
     recordedAt: now.toISOString().slice(0, 10),
+    ...(promptHash ? { promptHash } : {}),
     // Sorted so re-recording an unchanged score produces no diff noise.
     tasks: Object.fromEntries(
       [...scores].sort((a, b) => (a.taskId < b.taskId ? -1 : 1)).map((s) => [s.taskId, s.passRate])
@@ -172,6 +179,7 @@ export function isEvalBaseline(v: unknown): v is EvalBaseline {
   const b = v as Record<string, unknown>
   if (typeof b.provider !== 'string' || typeof b.model !== 'string') return false
   if (typeof b.attempts !== 'number' || typeof b.recordedAt !== 'string') return false
+  if (b.promptHash !== undefined && typeof b.promptHash !== 'string') return false
   if (!b.tasks || typeof b.tasks !== 'object') return false
   return Object.values(b.tasks as Record<string, unknown>).every(
     (n) => typeof n === 'number' && n >= 0 && n <= 1

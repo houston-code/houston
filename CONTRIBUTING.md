@@ -192,6 +192,45 @@ zero, so the scheduled run would report green forever while guarding nothing. If
 that refusal, read the per-task run errors in the scorecard, fix the cause, and
 re-record.
 
+#### Reading the scorecard, and comparing two runs
+
+With repeat attempts, the live scorecard adds a reliability line:
+
+```
+  pass@3 8/8  pass^3 6/8  attempts 21/24 = 88% (95% CI 69%–96%)
+```
+
+`pass@3` counts the tasks solved at least once and `pass^3` the tasks solved every
+time, which is what someone who runs a task once can count on. A wide gap between
+them is flakiness that the average hides. The interval is a 95% Wilson interval over
+attempts. It treats attempts as independent, which they only partly are (a hard task
+tends to fail every time), so read it as the narrowest the truth could be.
+
+The title line also carries the run's **prompt hash**: a short hash of the system
+prompt and tool schemas the model actually received, with the workspace path and
+dates scrubbed out. Baselines record it too, and the scorecard says when the prompt
+has changed since the baseline was recorded. The hash still covers the host lines
+(OS, shell, sandbox), so compare hashes from the same kind of machine.
+
+A baseline tells you whether a change broke something. To measure whether a change
+**helped**, run the same tasks on both sides and compare them:
+
+```bash
+HOUSTON_EVAL_LIVE=1 HOUSTON_EVAL_OUT=a.json npm run eval     # on main
+HOUSTON_EVAL_LIVE=1 HOUSTON_EVAL_OUT=b.json npm run eval     # with your change
+HOUSTON_EVAL_A=a.json HOUSTON_EVAL_B=b.json npm run eval:compare
+```
+
+Each side is an ordinary live run, so its model needs a recorded baseline. The run
+record names the model, prompt hash, commit (with `-dirty` for uncommitted edits) and
+host, and the comparison lists whichever of those differ. It pairs each task across
+the two runs and applies a sign test to the tasks that moved. With nine tasks only a
+near-sweep counts as significant. That is the real resolving power of a small suite,
+so "no significant difference" is an honest answer rather than a bug. Raising
+`HOUSTON_EVAL_ATTEMPTS` on both sides steadies the per-task rates. A cheap model such
+as `claude-haiku-5-5` makes this close to free, and it leaves more room to see a
+change than a model that already solves every task.
+
 #### Writing a task
 
 To add a task, create `src/main/agent/evals/tasks/<id>/` with a `repo/` fixture

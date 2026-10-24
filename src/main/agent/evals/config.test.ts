@@ -119,4 +119,14 @@ describe('resolveEvalConfig', () => {
     expect(resolveEvalConfig(live({ HOUSTON_EVAL_RECORD: '1' }), providers).record).toBe(true)
     expect(resolveEvalConfig(live(), providers).record).toBe(false)
   })
+
+  it('reads the run-record path in either driver', () => {
+    expect(resolveEvalConfig({ HOUSTON_EVAL_OUT: 'a.json' }, providers).out).toBe('a.json')
+    expect(resolveEvalConfig(live({ HOUSTON_EVAL_OUT: ' b.json ' }), providers).out).toBe('b.json')
+  })
+
+  // The scheduled workflow passes empty inputs through; '' must not become a file named ''.
+  it('leaves the run-record path unset when it is empty', () => {
+    expect('out' in resolveEvalConfig(live({ HOUSTON_EVAL_OUT: '' }), providers)).toBe(false)
+  })
 })

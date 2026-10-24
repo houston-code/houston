@@ -8,6 +8,7 @@
  * in @shared/scorecard.
  */
 import type { BaselineVerdict } from './baseline'
+import { pct, suiteStats } from './stats'
 import type { EvalResult } from './types'
 
 export interface ReportHeader {
@@ -16,6 +17,10 @@ export interface ReportHeader {
   model: string
   /** Attempts per task. >1 in live mode, to average out model noise. */
   attempts: number
+  /** The run's prompt hash (see stamp.ts), when every attempt saw the same prompt. */
+  promptHash?: string
+  /** The prompt hash the graded baseline was recorded on, when it stamped one. */
+  baselinePromptHash?: string
 }
 
 /** One task's aggregate across its attempts. */
@@ -141,18 +146,45 @@ export function formatReport(header: ReportHeader, reports: TaskReport[]): strin
     const claims = dishonesty(r.sample)
     return `  ${mark}${rate}  ${pad(r.taskId, width)}  ${pad(secs, 6)}  ${tools}${honesty}${fmtVerdict(r.verdict)}${why}${claims}`
   })
-  const pct = total ? Math.round((solved / total) * 100) : 0
+  const solvedPct = total ? pct(solved / total) : '0%'
   const graded = reports.filter((r) => r.honestyRate !== undefined)
   const honest = graded.reduce((n, r) => n + (r.honestyRate ?? 0) * r.attempts, 0)
   const gradedAttempts = graded.reduce((n, r) => n + r.attempts, 0)
   const honestyLine = gradedAttempts ? `  honest reports: ${Math.round(honest)}/${gradedAttempts} attempts` : ''
+  const prompt = header.promptHash ? ` — prompt ${header.promptHash}` : ''
   return [
     '',
-    `Task evals — ${header.driver} driver — ${header.model}${header.attempts > 1 ? ` — ${header.attempts} attempts/task` : ''}`,
+    `Task evals — ${header.driver} driver — ${header.model}${header.attempts > 1 ? ` — ${header.attempts} attempts/task` : ''}${prompt}`,
+    ...promptDrift(header),
     ...rows,
     '',
-    `  ${solved}/${total} solved (${pct}%)  ${(durationMs / 1000).toFixed(1)}s  $${costUsd.toFixed(4)}`,
+    `  ${solved}/${total} solved (${solvedPct})  ${(durationMs / 1000).toFixed(1)}s  $${costUsd.toFixed(4)}`,
+    ...(header.attempts > 1 ? [statsLine(header.attempts, reports)] : []),
     ...(honestyLine ? [honestyLine] : []),
     ''
   ].join('\n')
+}
+
+/**
+ * Reliability next to the headline: pass@k (solved at least once), pass^k (solved
+ * every time), and the per-attempt rate with its 95% interval. Only printed when
+ * there are repeat attempts, since with one attempt all three equal "solved".
+ */
+function statsLine(k: number, reports: TaskReport[]): string {
+  const s = suiteStats(reports.map((r) => ({ passes: Math.round(r.passRate * r.attempts), attempts: r.attempts })))
+  return (
+    `  pass@${k} ${s.passAtK}/${s.tasks}  pass^${k} ${s.passHatK}/${s.tasks}  ` +
+    `attempts ${s.passes}/${s.attempts} = ${pct(s.rate)} (95% CI ${pct(s.interval.low)}–${pct(s.interval.high)})`
+  )
+}
+
+/**
+ * A baseline recorded on a different prompt is still the right yardstick (that is
+ * how a prompt change gets graded), but the reader should know the two differ
+ * before blaming a regression on the model.
+ */
+function promptDrift(header: ReportHeader): string[] {
+  const { promptHash, baselinePromptHash } = header
+  if (!promptHash || !baselinePromptHash || promptHash === baselinePromptHash) return []
+  return [`  prompt changed since the baseline (recorded on ${baselinePromptHash})`]
 }

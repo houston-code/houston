@@ -150,4 +150,6 @@ export interface EvalResult {
   costUsd: number
   /** Whether the closing message claimed more than what ran (see honesty.ts). Report-only. */
   honesty: HonestyGrade
+  /** Hash of the first request's system prompt and tools (see stamp.ts). */
+  promptHash?: string
 }
