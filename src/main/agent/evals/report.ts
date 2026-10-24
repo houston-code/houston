@@ -128,9 +128,22 @@ function slowCall(c: TimedCall | undefined): string {
   return `\n      slowest call: ${c.tool}${detail} (${(c.ms / 1000).toFixed(1)}s)`
 }
 
+/**
+ * The one line of a verify run's output that says what failed. Node prints an
+ * uncaught assertion as `node:internal/modules/run_main:123` and a source excerpt
+ * before the error itself, so the first non-empty line names nothing; prefer the line
+ * that names the error, or a test runner's own failure summary, and fall back to the
+ * first line.
+ */
+export function headline(output: string): string {
+  const lines = output.split('\n').map((l) => l.trim()).filter(Boolean)
+  const named = lines.find((l) => /^(\w*Error\b|✗|\d+ of \d+ \w+ fail)/.test(l))
+  return (named ?? lines[0] ?? '(verify produced no output)').slice(0, 160)
+}
+
 function firstLine(s: string): string {
-  const line = s.split('\n').find((l) => l.trim().length > 0)
-  return line ? line.trim().slice(0, 120) : '(verify produced no output)'
+  // A holdout failure already leads with its own headline.
+  return s.startsWith('holdout failed') ? s.split('\n')[0].slice(0, 200) : headline(s)
 }
 
 /**

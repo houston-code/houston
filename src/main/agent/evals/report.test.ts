@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { failureCauses, formatReport, pickSample, SLOW_CALL_MS, slowestOf, summarize, type TaskReport } from './report'
+import {
+  failureCauses,
+  formatReport,
+  headline,
+  pickSample,
+  SLOW_CALL_MS,
+  slowestOf,
+  summarize,
+  type TaskReport
+} from './report'
 import type { EvalResult } from './types'
 
 const result = (over: Partial<EvalResult> = {}): EvalResult => ({
@@ -232,5 +241,29 @@ describe('slow calls', () => {
       ])
     expect(row(300_000)).toContain('slowest call: run_shell npm init (300.0s)')
     expect(row(SLOW_CALL_MS - 1)).not.toContain('slowest call')
+  })
+})
+
+describe('headline', () => {
+  it('names the assertion, not the internal frame Node prints first', () => {
+    const out = [
+      'node:internal/modules/run_main:123',
+      '    triggerUncaughtException(',
+      '    ^',
+      '',
+      "AssertionError [ERR_ASSERTION]: a 404 will never succeed, so it must not be retried",
+      '    at file:///tmp/x/hidden.test.mjs:12:3'
+    ].join('\n')
+    expect(headline(out)).toBe('AssertionError [ERR_ASSERTION]: a 404 will never succeed, so it must not be retried')
+  })
+
+  it('takes a test runner summary or a failed check line', () => {
+    expect(headline('3 of 50 cases fail:\n  satisfies("0.3.0", "^0.2.3") should be false')).toBe('3 of 50 cases fail:')
+    expect(headline('ok one\n✗ pins an End of File hunk')).toBe('✗ pins an End of File hunk')
+  })
+
+  it('falls back to the first line, then to saying there was none', () => {
+    expect(headline('\n  something odd\nmore')).toBe('something odd')
+    expect(headline('')).toBe('(verify produced no output)')
   })
 })

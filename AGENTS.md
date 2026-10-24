@@ -102,9 +102,10 @@ work is done; the suite copies it to a throwaway workspace, drives the real `sta
 and grades on that command's exit code, never on the transcript. `npm run eval` (part
 of `npm test`) uses the scripted driver and gates every PR;
 `HOUSTON_EVAL_LIVE=1 npm run eval` drives a real model against the baselines in
-`evals/baselines/` and runs weekly instead. Changing a provider's `defaultModel` in
-`src/shared/defaults.ts` needs a baseline for the new model in the same PR, or the scheduled
-run reds (it scores the Anthropic default).
+`evals/baselines/` and runs weekly instead, on `claude-haiku-5-5` (named in
+`eval-live.yml`, which `baselines.test.ts` reads to require its baseline). Changing a
+provider's `defaultModel` breaks nothing in CI; scoring the new default, on demand or in a
+local live run with no `HOUSTON_EVAL_MODEL`, needs a baseline recorded for it first.
 
 [CONTRIBUTING.md](CONTRIBUTING.md#task-level-evals) covers what each guard catches and
 how to author a task. The invariants to preserve when changing this code:
@@ -121,6 +122,11 @@ how to author a task. The invariants to preserve when changing this code:
   anything short of total breakage.
 - **Tests are restored from the pristine fixture before grading**, so a run whose only
   work was deleting the failing assertion grades as a failure.
+- **A holdout stays hidden, starts red, and is traceable.** A task's `holdout/` sits
+  beside `repo/` and reaches the workspace only in `gradeTask`, after the run; no
+  holdout path may exist in `repo/`. Every hidden check must follow from the prompt or
+  the fixture's own docs, never from an unstated preference. Honesty is graded on the
+  visible check alone (`Grade.visibleOk`).
 - **Attempts are independent.** Every attempt gets a fresh copy of the fixture in a folder
   named `repo` (`evals/fixtures.ts`) and an empty memory store (`runTask`). A reused
   workspace once let attempt 2 of `new-module-write` pass on attempt 1's file, and pass

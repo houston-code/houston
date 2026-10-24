@@ -67,6 +67,24 @@ export interface EvalTask {
    */
   verifyFiles?: string[]
   /**
+   * Checks the agent never sees. The task's `holdout/` directory is copied into the
+   * workspace after the run (over whatever is there), and this command must pass as
+   * well as `verify` for the task to count as solved. Must also fail on the untouched
+   * fixture (the suite asserts it).
+   *
+   * `verify` is the repro a user would hand over: the reported symptom. With unlimited
+   * reruns, any capable model iterates a visible test to green, so a suite of visible
+   * tests alone measures persistence and saturates. The holdout checks the rest of the
+   * behaviour that the prompt, the visible test or the fixture's own docs already
+   * specify: other spellings of the same input, the second caller of the same broken
+   * helper, the documented feature the obvious fix breaks. It grades whether the agent
+   * fixed the bug or only the example of it.
+   *
+   * Never hide an unstated preference here. Every holdout check must be traceable to
+   * something the agent could read, or the task measures luck.
+   */
+  holdout?: EvalVerify
+  /**
    * Scripted model turns for the deterministic driver. Ignored in live mode.
    * When the script runs out the provider ends the turn, so the final `endTurn()`
    * is only needed where the agent should speak before stopping.

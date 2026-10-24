@@ -27,7 +27,9 @@ export default tseslint.config(
       // deliberately seeded defect for the agent to fix, and they run as plain
       // Node scripts in a throwaway workspace, never in this project's runtime.
       // Linting them enforces this repo's rules on code that exists to be broken.
-      'src/main/agent/evals/tasks/*/repo/**'
+      // Holdout checks are the same kind of plain Node script, copied in at grading.
+      'src/main/agent/evals/tasks/*/repo/**',
+      'src/main/agent/evals/tasks/*/holdout/**'
     ]
   },
   js.configs.recommended,

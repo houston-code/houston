@@ -8,7 +8,7 @@ name: Task evals (live)
 #     tell you the change made the agent WORSE — that judgement is a human reading the diff, and
 #     `npm run goldens:update` accepts it in one command.
 #   - The scripted eval driver on every PR hands the agent a correct plan, so it grades EXECUTION.
-#     Gut the entire system prompt and the scripted suite still passes all eight tasks, because the
+#     Gut the entire system prompt and the scripted suite still passes every task, because the
 #     answer was in the script.
 #
 # Only a real model solving a real task measures quality. This job runs the identical fixtures with
@@ -16,6 +16,14 @@ name: Task evals (live)
 # checked in under src/main/agent/evals/baselines/. A task that drops materially below its baseline
 # reds this job. A live score with nothing to compare it against would just be a log line, so a
 # missing baseline reds the job too, with the command to record one.
+#
+# WHICH MODEL. The schedule scores claude-haiku-5-5, not the provider's default model. The question
+# this job answers is "did a Houston change make the agent worse", and a model that sometimes fails
+# answers it: Haiku solves about 87% of the harder tasks' attempts, so there is room to regress into,
+# where the larger models solve nearly everything. It is also cheap (about $1-2 a run against roughly
+# fourteen times that for Opus). Dispatch the workflow with a `model` input to score another model on
+# demand, e.g. the default model before a release; that model needs its own baseline, and a task its
+# baseline predates is reported as unrecorded rather than failed.
 #
 # WHY IT STILL NEVER GATES A PR. The result is non-deterministic (a model can fail a task it passed
 # yesterday) and metered. A flaky, billed gate on every PR would train everyone to re-run it until
@@ -40,16 +48,15 @@ on:
     # Mondays 09:00 UTC, an hour after provider-canary.yml (08:00), so the two don't contend.
     # Cron has no timezone; this is fixed UTC.
     #
-    # WEEKLY, NOT NIGHTLY. Every task in the recorded baselines scores 1.0, so this run only reds when
-    # a task fails 2 of 3 attempts: a smoke test for a badly broken agent, not a drift detector. That
-    # signal doesn't change day to day, and each run is billed. Move back to daily once the task set
-    # is hard enough that baselines sit below 1.0 and there is real headroom to regress into.
+    # WEEKLY, NOT NIGHTLY. A full run takes about an hour and a half (29 tasks, three attempts each,
+    # one at a time), and a prompt or harness change that lowers task quality rarely needs catching
+    # within a day. The gate reds when a task falls more than one flaked attempt below its baseline.
     - cron: '0 9 * * 1'
   # On-demand run, e.g. to score a new model the day it ships without waiting for the weekly slot.
   workflow_dispatch:
     inputs:
       model:
-        description: 'Model id to score (default: the provider default model)'
+        description: 'Model id to score (default: claude-haiku-5-5 on anthropic, else the provider default model)'
         required: false
         type: string
       provider:
@@ -78,9 +85,11 @@ env:
 
 jobs:
   evals:
-    # Eight tasks of real model latency over several turns each, plus install. The suite's own
-    # per-task cap is 5 min, so this bounds a pathological run rather than a normal one.
-    timeout-minutes: 45
+    # 29 tasks of real model latency over several turns each, plus install: about 90 minutes on
+    # Haiku when its baseline was recorded. A larger model dispatched by hand is slower, and the
+    # suite's own budget per attempt is generous, so this bounds a pathological run rather than a
+    # normal one.
+    timeout-minutes: 180
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -88,7 +97,7 @@ jobs:
           persist-credentials: false
       # The suite itself throws on a missing key rather than skipping, so this can't go green
       # empty-handed. Assert it here, before the install, so a misconfigured secret reds the job at an obvious
-      # step instead of surfacing as eight identical provider errors that read like a regression.
+      # step instead of surfacing as a column of identical provider errors that read like a regression.
       - name: Require the model API key
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -110,11 +119,13 @@ jobs:
       # exactly how a nightly once resolved an empty model id and recorded a baseline of all zeros.
       # The suite now treats an empty env var as unset (evals/config.ts) and validates the result,
       # so passing them through unconditionally is safe and keeps the dispatch inputs meaningful.
+      # The model is the one exception: with no `model` input it is claude-haiku-5-5 on anthropic
+      # (see WHICH MODEL above), and empty, so the provider's default, on any other provider.
       - name: Score the task evals against the baseline
         env:
           HOUSTON_EVAL_LIVE: '1'
           HOUSTON_EVAL_PROVIDER: ${{ inputs.provider }}
-          HOUSTON_EVAL_MODEL: ${{ inputs.model }}
+          HOUSTON_EVAL_MODEL: ${{ inputs.model || ((inputs.provider || 'anthropic') == 'anthropic' && 'claude-haiku-5-5' || '') }}
           HOUSTON_EVAL_ATTEMPTS: ${{ inputs.attempts }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: npm run eval

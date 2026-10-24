@@ -1,34 +1,36 @@
 /**
  * The checked-in baselines under `baselines/`, checked on every PR.
  *
- * The live driver only runs on a schedule, so without this a PR that changes the
- * Anthropic `defaultModel` merges green and the next scheduled `eval-live.yml` run
- * reds with "No quality baseline recorded" — days later, on nobody's PR. Resolving
- * the model through the same `resolveEvalConfig` the scheduled run uses keeps this
- * pinned to what that run will actually score.
+ * The live driver only runs on a schedule, so without this a PR that points the
+ * schedule at a model with no baseline merges green and the next scheduled
+ * `eval-live.yml` run reds with "No quality baseline recorded": days later, on nobody's
+ * PR. The model is read from the workflow itself, so this stays pinned to what that
+ * run will actually score.
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { defaultProviders } from '@shared/defaults'
 import { baselineFileName, isDeadBaseline, isEvalBaseline } from './baseline'
-import { resolveEvalConfig } from './config'
 
 const BASELINES_DIR = fileURLToPath(new URL('./baselines', import.meta.url))
+const WORKFLOW = fileURLToPath(new URL('../../../../.github/workflows/eval-live.yml', import.meta.url))
 
 const load = (file: string): unknown => JSON.parse(readFileSync(join(BASELINES_DIR, file), 'utf8'))
 
 describe('live eval baselines', () => {
   it('has a baseline for the model the scheduled run scores', () => {
-    // A scheduled run has no dispatch inputs, so it resolves the provider default.
-    const { providerId, model } = resolveEvalConfig({ HOUSTON_EVAL_LIVE: '1' }, defaultProviders())
-    const file = baselineFileName(providerId, model)
+    // With no `model` input (every scheduled run), eval-live.yml picks the Anthropic
+    // model it names in its HOUSTON_EVAL_MODEL expression.
+    const scheduled = /HOUSTON_EVAL_MODEL: \$\{\{ inputs\.model \|\|.*&& '([^']+)' \|\|/.exec(readFileSync(WORKFLOW, 'utf8'))
+    expect(scheduled, 'eval-live.yml no longer names its scheduled model the way this test reads it').not.toBeNull()
+    const model = scheduled![1]
+    const file = baselineFileName('anthropic', model)
     expect(
       existsSync(join(BASELINES_DIR, file)),
-      `No live eval baseline for the default model "${providerId}/${model}". ` +
-        `Changing defaultModel needs one in the same PR, or the scheduled eval-live.yml run fails. Record it with:\n` +
-        `  HOUSTON_EVAL_PROVIDER=${providerId} HOUSTON_EVAL_MODEL=${model} npm run eval:baseline`
+      `No live eval baseline for "anthropic/${model}", the model eval-live.yml schedules. ` +
+        `Record it in the same PR, or the next scheduled run fails:\n` +
+        `  HOUSTON_EVAL_MODEL=${model} npm run eval:baseline`
     ).toBe(true)
   })
 

@@ -174,10 +174,17 @@ the file the same way you'd commit a golden:
 HOUSTON_EVAL_MODEL=claude-opus-4-8 npm run eval:baseline
 ```
 
-The scheduled run scores the provider's `defaultModel`, so **changing a default
-model in `src/shared/defaults.ts` means recording a baseline for the new model in
-the same PR.** Otherwise the next scheduled run reds with "No quality baseline
-recorded".
+The scheduled run scores `claude-haiku-5-5`, not the provider's `defaultModel`. A
+model that sometimes fails is what makes a regression visible, and Haiku solves most
+but not all of the harder tasks, at a small fraction of a larger model's cost.
+Dispatch the workflow with a `model` input to score another model on demand, for
+example the default model before a release. That model needs a recorded baseline,
+and any task its baseline predates is reported as `unrecorded` rather than failed.
+So changing a default model in `src/shared/defaults.ts` breaks nothing in CI, but to
+score the new default (on demand, or in a local live run with no
+`HOUSTON_EVAL_MODEL`), record a baseline for it first. Moving the schedule to another
+model needs that model's baseline in the same PR; `baselines.test.ts` reads the model
+from `eval-live.yml` and fails without one.
 
 The gate has a tolerance sized to absorb exactly one flaked attempt out of the
 default three, because a live model that reds the scheduled run on noise is a job
@@ -233,13 +240,14 @@ HOUSTON_EVAL_A=a.json HOUSTON_EVAL_B=b.json npm run eval:compare
 Each side is an ordinary live run, so its model needs a recorded baseline. The run
 record names the model, prompt hash, commit (with `-dirty` for uncommitted edits) and
 host, and the comparison lists whichever of those differ. It pairs each task across
-the two runs and applies a sign test to the tasks that moved. With nine tasks only a
-near-sweep counts as significant. That is the real resolving power of a small suite,
-so "no significant difference" is an honest answer rather than a bug. Raising
-`HOUSTON_EVAL_ATTEMPTS` on both sides steadies the per-task rates. A cheap model such
-as `claude-haiku-5-5` makes this close to free (a full three-attempt run cost about six
-cents when its baseline was recorded). It solves every current task too, though, so a
-comparison can only show a change once the suite has tasks a model sometimes fails.
+the two runs and applies a sign test to the tasks that moved. Only tasks that moved
+count, so even across 29 tasks a significant result needs several of them to move the
+same way. That is the real resolving power of a suite this size, so "no significant
+difference" is an honest answer rather than a bug. Raising `HOUSTON_EVAL_ATTEMPTS` on
+both sides steadies the per-task rates. A cheap model such as `claude-haiku-5-5` keeps
+this affordable: a full three-attempt run of all 29 tasks cost about $0.66 and took 92
+minutes when its baseline was recorded. It solved 87% of the attempts at the 20 harder
+tasks, and the tasks it sometimes fails are where a comparison can show a change.
 
 #### Writing a task
 
@@ -263,7 +271,33 @@ This is also why the tests are restored from the pristine fixture before grading
 once the prompt no longer says what to fix, the shortest path to a green
 `node test.mjs` is to delete the failing assertion. Restoring makes that pointless
 rather than merely forbidden. Set `verifyFiles` if a task's spec is spread over
-more than the default `test.mjs`.
+more than the default `test.mjs` (a directory such as `test` is restored whole).
+
+**Hold back the part of the spec a visible test would give away.** A capable model
+reruns a visible test until it goes green, so a task whose whole spec is visible
+mostly measures persistence. Claude Haiku 5.5 solved all 27 attempts at nine such
+tasks, including bugs whose cause sat three files from the symptom and a misleading
+first failure. Set `holdout` and put the hidden checks in `tasks/<id>/holdout/`, beside
+`repo/`. They are copied into the workspace only at grading, after the run, and the
+task counts as solved only when both `verify` and the holdout pass. Keep the visible
+test to the reported symptom, the repro a user would hand over. Use the holdout for
+the rest of the behavior that the prompt or the fixture's own docs already specify:
+other inputs of the same kind, the second caller of the same broken helper, the
+documented feature the obvious fix breaks. That grades whether the agent fixed the bug
+or only the example of it.
+
+Every hidden check must trace back to something the agent can read: a sentence in the
+prompt, a comment, a schema, a changelog. A holdout that tests an unstated preference
+(an exact error message nothing specifies, a function signature the agent had no
+reason to choose) measures luck, not care. The suite asserts that a holdout starts red
+and that none of its files exists in `repo/`. The scorecard reports a holdout failure as
+`holdout failed (the visible check passed)`, which is a narrow fix rather than a
+broken one. Honesty is graded against the visible check alone, since a report can't be
+wrong about a check its author never saw.
+
+A fixture whose bytes matter, such as a CRLF export with a byte order mark, needs a
+`-text` line in `.gitattributes`. Otherwise checkout normalizes it to LF and the task
+may pass before the agent touches it.
 
 There's also an end-to-end suite in [`e2e/`](e2e/) that launches the real
 Electron app with Playwright. `npm run test:e2e` builds first, then prefers the
