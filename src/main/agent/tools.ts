@@ -81,6 +81,7 @@ import {
 } from './untrusted'
 import type { FetchedDocument } from './webfetch'
 import { fetchUrlAsDocument } from './webfetch'
+import { stripAnsi } from './loopback'
 import { assertNoRedactedValues, findSecret } from './redact'
 import {
   describeStep,
@@ -4572,6 +4573,63 @@ export function formatRunView(json: string): string {
   })
 }
 
+/** One `--log-failed` line: job, step, and a timestamp (the first one after a BOM) before the text. */
+const RUN_LOG_LINE = /^([^\t]*)\t([^\t]*)\t\uFEFF?\d{4}-\d\d-\d\dT[\d:.]+Z ?(.*)$/
+/** An SGR escape as GitHub stores it in a log, with ESC written out as the two characters `^[`. */
+const CARET_SGR = /\^\[\[[0-9;]*m/g
+
+/**
+ * `gh run view --log-failed` prefixes every line with the job name, the step name (for a
+ * run step, the whole command), and a timestamp, and keeps the colour codes. On a test
+ * step that is most of the bytes. Print the job and step once per change instead, and
+ * drop the timestamps and colours.
+ */
+export function cleanRunLog(log: string): string {
+  const out: string[] = []
+  let section = ''
+  for (const raw of log.split(/\r?\n/)) {
+    const line = stripAnsi(raw).replace(CARET_SGR, '')
+    const m = RUN_LOG_LINE.exec(line)
+    if (!m) {
+      out.push(line)
+      continue
+    }
+    const here = `${m[1]} / ${m[2]}`
+    if (here !== section) {
+      section = here
+      out.push(`== ${here} ==`)
+    }
+    out.push(m[3])
+  }
+  return out.join('\n')
+}
+
+/**
+ * Cap a log to `max` characters on whole lines, keeping its start and, with most of the
+ * room, its end, where a failing step prints its error and summary. Says how many lines
+ * were left out in between.
+ */
+export function capLogMiddle(text: string, max = MAX_GH_OUTPUT_CHARS): string {
+  if (text.length <= max) return text
+  const lines = text.split('\n')
+  const headRoom = Math.floor(max / 4)
+  let tailRoom = max - headRoom
+  let start = 0
+  for (let used = 0; start < lines.length && used + lines[start].length + 1 <= headRoom; start++) {
+    used += lines[start].length + 1
+  }
+  let end = lines.length
+  while (end > start && lines[end - 1].length + 1 <= tailRoom) {
+    tailRoom -= lines[--end].length + 1
+  }
+  const tail = lines.slice(end)
+  // A last line longer than the room left still shows its end.
+  if (!tail.length && end > start) tail.push(`[…]${lines[--end].slice(-tailRoom)}`)
+  const omitted = end - start
+  const marker = omitted ? [`[${omitted} line${omitted === 1 ? '' : 's'} omitted]`] : []
+  return [...lines.slice(0, start), ...marker, ...tail].join('\n')
+}
+
 /**
  * Render `gh run view --log-failed` output, fenced whole. A fork PR's run executes the
  * fork's code and workflow steps, so every log line can be the PR author's text.
@@ -4583,11 +4641,11 @@ export function formatRunView(json: string): string {
  * gh_run_view's summary.
  */
 export function formatRunLog(runId: string, log: string): string {
-  const text = log.trim()
+  const text = cleanRunLog(log).trim()
   if (!text) return '[no output]'
   return presentUntrustedInline({
     envelope: `Logs of the failed steps of run ${runId}.`,
-    parts: [{ text: capGh(text), source: `workflow run ${runId} (failed-step logs)`, score: false }],
+    parts: [{ text: capLogMiddle(text), source: `workflow run ${runId} (failed-step logs)`, score: false }],
     preamble: untrustedPreamble('CI log output', CI_ORIGIN),
     subject: 'CI log',
     toolNames: builtinToolNames()
