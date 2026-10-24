@@ -6,10 +6,12 @@ import type { Hook } from '@shared/types'
 import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../sandbox'
 
 /**
- * Lifecycle hooks: user-configured shell commands that run at points in the agent
- * loop. Every hook is user-authored (configured in Settings, not by the project)
- * and runs inside the same Seatbelt sandbox as run_shell — confined to the
- * workspace, no network — so a buggy hook can't escape the project. Context is
+ * Lifecycle hooks: shell commands that run at points in the agent loop. They come
+ * from the user's Settings and, once the user trusts the folder, from the project's
+ * `.houston/settings.json` (see projectConfig.ts; the loop runs those after the
+ * user's). Every hook runs through the same sandbox backend as run_shell (confined
+ * to the workspace, no network, where the host's backend confines at all), so a
+ * buggy hook can't escape the project there. Context is
  * passed via HOUSTON_* environment variables (never interpolated into the command,
  * so there's no injection). A payload too large for an environment variable is
  * written to a private temp file instead, named by the matching `*_FILE` variable
