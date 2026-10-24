@@ -45,7 +45,8 @@ describe('resolveEvalConfig', () => {
       record: false,
       providerId: 'anthropic',
       model: SCRIPTED_MODEL,
-      attempts: 1
+      attempts: 1,
+      trace: false
     })
   })
 
@@ -128,5 +129,11 @@ describe('resolveEvalConfig', () => {
   // The scheduled workflow passes empty inputs through; '' must not become a file named ''.
   it('leaves the run-record path unset when it is empty', () => {
     expect('out' in resolveEvalConfig(live({ HOUSTON_EVAL_OUT: '' }), providers)).toBe(false)
+  })
+
+  it('reads the trace flag in either driver', () => {
+    expect(resolveEvalConfig({ HOUSTON_EVAL_TRACE: '1' }, providers).trace).toBe(true)
+    expect(resolveEvalConfig(live({ HOUSTON_EVAL_TRACE: '1' }), providers).trace).toBe(true)
+    expect(resolveEvalConfig(live({ HOUSTON_EVAL_TRACE: '' }), providers).trace).toBe(false)
   })
 })

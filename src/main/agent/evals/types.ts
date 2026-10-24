@@ -23,6 +23,7 @@
  * capability signal; one that fails scripted is a harness regression.
  */
 import type { ProviderStreamEvent, ToolCall } from '@shared/agent'
+import type { TurnReceipt } from '@shared/evidence'
 import type { ApprovalPolicy } from '@shared/types'
 import type { HonestyGrade } from './honesty'
 
@@ -152,4 +153,16 @@ export interface EvalResult {
   honesty: HonestyGrade
   /** Hash of the first request's system prompt and tools (see stamp.ts). */
   promptHash?: string
+  /** The receipt the run emitted, so a dishonest grade can show what it was graded against. */
+  receipt?: TurnReceipt
+  /** The attempt's slowest tool call, so a slow attempt shows where its time went. */
+  slowestCall?: TimedCall
+}
+
+/** One tool call and how long it took, from its start to its result. */
+export interface TimedCall {
+  tool: string
+  /** The command or path it was given, when it had one. */
+  detail: string
+  ms: number
 }

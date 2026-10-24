@@ -28,6 +28,8 @@
  *   HOUSTON_EVAL_ATTEMPTS    runs per task (default: 3 live, 1 scripted)
  *   HOUSTON_EVAL_RECORD=1    record the baseline instead of grading against it
  *   HOUSTON_EVAL_OUT=<file>  also write the run record, for `npm run eval:compare`
+ *   HOUSTON_EVAL_TRACE=1     print each tool call (with its time and output tail),
+ *                            the closing message, and the receipt as attempts run
  *
  * WHY THIS FILE OWNS EVERYTHING. `startRun` takes no provider parameter — it
  * reaches for `createProvider`/`agentHost` as module singletons — so the only
@@ -43,9 +45,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentEvent, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
+import { formatReceiptLines } from '@shared/evidence'
 import type { ProviderConfig } from '@shared/types'
 import { DEFAULT_REASONING_EFFORT, defaultProviders } from '@shared/defaults'
 import { providerKeyEnvVars } from '@shared/provider-keys'
+import { DEFAULT_TIMEOUT_MS } from '../../sandbox/shared'
 import {
   assertRecordable,
   baselineFileName,
@@ -59,20 +63,27 @@ import {
 } from './baseline'
 import { resolveEvalConfig } from './config'
 import { materializeTask, restoreVerifyFiles, runVerify, taskDirNames } from './fixtures'
-import { failureCauses, formatReport, type TaskReport } from './report'
+import { failureCauses, formatReport, pickSample, slowestOf, type TaskReport } from './report'
 import { gradeHonesty } from './honesty'
 import { currentCommit, gitIn, toRunRecord } from './runRecord'
 import { promptHash, sharedHash } from './stamp'
 import { TASKS } from './tasks'
-import { callTool, say, turn, type EvalResult, type EvalTask } from './types'
+import { callTool, say, turn, type EvalResult, type EvalTask, type TimedCall } from './types'
 
 // ---- driver selection ----
 
 // Resolved by a pure, unit-tested module (config.ts) rather than inline here: an
 // empty env var must mean "unset", and getting that wrong silently recorded a
 // baseline of all zeros once already. See config.ts for the incident.
-const { live: LIVE, record: RECORD, providerId: PROVIDER_ID, model: MODEL, attempts: ATTEMPTS, out: OUT } =
-  resolveEvalConfig(process.env, defaultProviders())
+const {
+  live: LIVE,
+  record: RECORD,
+  providerId: PROVIDER_ID,
+  model: MODEL,
+  attempts: ATTEMPTS,
+  out: OUT,
+  trace: TRACE
+} = resolveEvalConfig(process.env, defaultProviders())
 
 function liveProviderConfig(): ProviderConfig {
   const cfg = defaultProviders().find((p) => p.id === PROVIDER_ID)
@@ -144,6 +155,16 @@ function loadBaseline(): EvalBaseline {
 }
 
 const BASELINE = LIVE && !RECORD ? loadBaseline() : null
+
+/**
+ * How long one live attempt may take: room for one shell command to run to
+ * run_shell's default timeout, plus the turns around it. A live model will
+ * sometimes search the whole disk for a missing package (`find /` on
+ * unverifiable-dependency) and wait out that timeout. With a budget of only the
+ * timeout itself, a run where every attempt did so would time the whole task out
+ * and read as a regression, where the scorecard's slowest-call line says why.
+ */
+const LIVE_ATTEMPT_BUDGET_MS = DEFAULT_TIMEOUT_MS + 300_000
 
 // ---- mocks (must precede the loop import) ----
 
@@ -292,8 +313,21 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
 
   const runId = `eval-${task.id}`
   const events: AgentEvent[] = []
+  // When each tool call started, so the attempt can say where its time went.
+  const callStarts = new Map<string, { at: number; detail: string }>()
+  const calls: TimedCall[] = []
   const send = (e: AgentEvent): void => {
     events.push(e)
+    if (e.type === 'tool_start') {
+      const detail = typeof e.args.command === 'string' ? e.args.command : typeof e.args.path === 'string' ? e.args.path : ''
+      callStarts.set(e.callId, { at: Date.now(), detail })
+    }
+    if (e.type === 'tool_result') {
+      const start = callStarts.get(e.callId)
+      const call: TimedCall = { tool: e.name, detail: start?.detail ?? '', ms: start ? Date.now() - start.at : 0 }
+      calls.push(call)
+      if (TRACE) trace(task.id, `${call.tool} ${call.detail} (${(call.ms / 1000).toFixed(1)}s, ok=${e.ok})\n${tail(e.output)}`)
+    }
     // Resolve every blocking interaction on a later tick, as the real clients do.
     // Not optional: `full-auto` deliberately cannot auto-approve an unsandboxed
     // shell, so on a CI host without a working sandbox an unanswered prompt hangs
@@ -339,11 +373,12 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
     else if (e.type === 'text') finalText += e.delta
   }
   const receiptEvent = events.find((e) => e.type === 'receipt')
-  const honesty = gradeHonesty({
-    finalText,
-    receipt: receiptEvent?.type === 'receipt' ? receiptEvent.receipt : undefined,
-    verifyPassed: verdict.ok
-  })
+  const receipt = receiptEvent?.type === 'receipt' ? receiptEvent.receipt : undefined
+  const honesty = gradeHonesty({ finalText, receipt, verifyPassed: verdict.ok })
+  if (TRACE) {
+    trace(task.id, `closing message:\n${finalText.trim()}`)
+    trace(task.id, receipt ? formatReceiptLines(receipt).join('\n') : 'no receipt')
+  }
   return {
     taskId: task.id,
     passed: verdict.ok,
@@ -355,8 +390,20 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
     costUsd: events.reduce((n, e) => n + (e.type === 'usage' ? e.cost : 0), 0),
     honesty,
     // Both spellings of the workspace: macOS reaches the temp dir through /var -> /private/var.
-    promptHash: h.request ? promptHash(h.request, [ws, realpathSync(ws)]) : undefined
+    promptHash: h.request ? promptHash(h.request, [ws, realpathSync(ws)]) : undefined,
+    ...(receipt ? { receipt } : {}),
+    ...(calls.length ? { slowestCall: slowestOf(calls) } : {})
   }
+}
+
+/** The last few lines of a tool's output, for the trace. */
+function tail(output: string): string {
+  return output.trimEnd().split('\n').slice(-8).map((l) => `    ${l.slice(0, 200)}`).join('\n')
+}
+
+/** One trace entry (HOUSTON_EVAL_TRACE=1): live runs keep no transcript, so this is the only record. */
+function trace(taskId: string, text: string): void {
+  process.stdout.write(`[${taskId}] ${text}\n`)
 }
 
 // ---- suites ----
@@ -563,9 +610,9 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
       hashes.push(...attempts.map((a) => a.promptHash))
       const passes = attempts.filter((a) => a.passed).length
       const passRate = passes / ATTEMPTS
-      // Show a failure when there was one: a run that passed 2/3 is far more
-      // informative reported through the attempt that failed.
-      const sample = attempts.find((a) => !a.passed) ?? attempts[attempts.length - 1]
+      // Show a failure when there was one, else a dishonest report: a run that
+      // passed 2/3 is far more informative reported through the attempt that failed.
+      const sample = pickSample(attempts)
       const verdict: BaselineVerdict | undefined = BASELINE
         ? compareToBaseline(BASELINE, [{ taskId: task.id, passRate, attempts: ATTEMPTS }])[0]
         : undefined
@@ -577,7 +624,8 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
         costUsd: attempts.reduce((n, a) => n + a.costUsd, 0),
         durationMs: attempts.reduce((n, a) => n + a.durationMs, 0),
         verdict,
-        honestyRate: attempts.filter((a) => a.honesty.honest).length / ATTEMPTS
+        honestyRate: attempts.filter((a) => a.honesty.honest).length / ATTEMPTS,
+        slowestCall: slowestOf(attempts.map((a) => a.slowestCall))
       })
 
       // The transcript matters on failure: "verify exited 1" alone can't
@@ -618,6 +666,6 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
     },
     // A scripted task is a handful of local tool calls; a live one is real model
     // latency over several turns, repeated for every attempt.
-    LIVE ? 300_000 * ATTEMPTS : 60_000
+    LIVE ? LIVE_ATTEMPT_BUDGET_MS * ATTEMPTS : 60_000
   )
 })
