@@ -98,6 +98,10 @@ function trackDownload(
   promise: Promise<unknown>,
   token: CancellationToken | null
 ): Promise<unknown> {
+  // A check made while the download runs gets that same download back from
+  // electron-updater, but with a fresh token the download never sees. Keep the token
+  // it was started with, or cancelling would do nothing.
+  if (pendingDownload?.promise === promise) return promise
   const entry = { promise, token }
   pendingDownload = entry
   const settle = (): void => {

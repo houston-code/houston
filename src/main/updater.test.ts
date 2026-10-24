@@ -687,6 +687,21 @@ describe('cancelDownload (the banner close button)', () => {
     expect(second.token.cancelled).toBe(true)
   })
 
+  it('still cancels the download after another check while it runs', async () => {
+    const download = availableWithDownload()
+    const { cancelDownload, checkForUpdates } = await load()
+    await checkForUpdates()
+
+    // electron-updater returns the running download again, with a new token it never uses.
+    const unused = new FakeToken()
+    h.checkResult = { ...(h.checkResult as object), cancellationToken: unused }
+    await checkForUpdates()
+
+    expect(cancelDownload()).toBe(true)
+    expect(download.token.cancelled).toBe(true)
+    await expect(download.promise).rejects.toThrow('cancelled')
+  })
+
   it('stops a menu Update that is waiting on the download, without an error dialog', async () => {
     availableWithDownload()
     h.dialogResponses = [0] // Update
