@@ -245,4 +245,39 @@ describe('coerceToolArgs', () => {
     const out = coerceToolArgs({ cfg: '{"a":1}' }, schema)
     expect(out.cfg).toEqual({ a: 1 })
   })
+
+  // A quoted number or boolean, as a smaller model sent gh_run_view in a real session
+  // ("run_id": "18573452", "log_failed": "true"), which validation used to refuse.
+  const scalarSchema = {
+    type: 'object',
+    properties: { run_id: { type: 'number' }, count: { type: 'integer' }, log_failed: { type: 'boolean' } },
+    required: ['run_id']
+  }
+
+  it('reads a quoted number or boolean as the value it spells', () => {
+    const out = coerceToolArgs({ run_id: '18573452', count: ' 3 ', log_failed: 'true' }, scalarSchema)
+    expect(out).toEqual({ run_id: 18573452, count: 3, log_failed: true })
+    expect(validateToolArgs(out, scalarSchema)).toEqual([])
+    expect(coerceToolArgs({ run_id: '-2.5e1', log_failed: 'False' }, scalarSchema)).toEqual({
+      run_id: -25,
+      log_failed: false
+    })
+  })
+
+  it('fixes the same slip on a real tool schema', () => {
+    const out = coerceToolArgs({ path: 'a.txt', offset: '40', limit: '20' }, readFileSchema)
+    expect(out).toMatchObject({ offset: 40, limit: 20 })
+    expect(validateToolArgs(out, readFileSchema)).toEqual([])
+  })
+
+  it('leaves a string that does not spell the declared type for validation to report', () => {
+    for (const run_id of ['', 'abc', '0x10', '12 runs', 'Infinity', 'NaN', '1e999']) {
+      const args = { run_id }
+      expect(coerceToolArgs(args, scalarSchema)).toBe(args)
+      expect(validateToolArgs(args, scalarSchema)[0]?.message).toContain('should be number')
+    }
+    for (const args of [{ run_id: 1, count: '2.5' }, { run_id: 1, log_failed: 'yes' }, { run_id: 1, log_failed: '1' }]) {
+      expect(coerceToolArgs(args, scalarSchema)).toBe(args)
+    }
+  })
 })
