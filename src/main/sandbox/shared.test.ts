@@ -542,6 +542,16 @@ describe('runWithBackend — honest sandboxed flag', () => {
     expect((await p).sandboxed).toBe(false)
   })
 
+  // Every backend, Windows included: an open stdin pipe made any prompt wait out the timeout.
+  it('gives the command no stdin to wait on, and captures its output', async () => {
+    const child = makeFakeChild()
+    const spawn = fakeSpawn(child)
+    const p = runWithBackend(fakeBackend(true), baseOpts(), { spawn, signalTree: vi.fn(), drainMs: 20 })
+    child.emit('close', 0)
+    await p
+    expect(spawn.calls[0].options.stdio).toEqual(['ignore', 'pipe', 'pipe'])
+  })
+
   it('adds the offline fail-fast env only when a confining backend blocks the network', () => {
     const envFor = (sandboxed: boolean, allowNetwork: boolean): NodeJS.ProcessEnv => {
       const spawn = fakeSpawn(makeFakeChild())

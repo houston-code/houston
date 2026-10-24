@@ -116,6 +116,16 @@ describe.skipIf(process.platform === 'win32')(`sandbox conformance [backend=${ba
     expect(r.exitCode).toBe(0)
   })
 
+  // Nothing writes to a command's stdin, so a read must see end-of-input at once.
+  // With an open pipe, `npm init` or any prompt sat there until the timeout.
+  it('C5c a command that reads stdin gets end-of-input instead of waiting', async () => {
+    const started = Date.now()
+    const r = await run('cat; read -r line || echo EOF', { timeoutMs: 5_000 })
+    expect(r.timedOut).toBe(false)
+    expect(r.stdout).toContain('EOF')
+    expect(Date.now() - started).toBeLessThan(4_000)
+  })
+
   it('C6 a timeout kills the command and settles', async () => {
     const r = await run('sleep 30', { timeoutMs: 400 })
     expect(r.timedOut).toBe(true)
