@@ -120,6 +120,8 @@ describe('respond', () => {
     expect(cli.opts.env.HOUSTON_API_KEY_ANTHROPIC).toBe(API_KEY)
     expect(cli.opts.env.HOUSTON_ACTION_API_KEY).toBeUndefined()
     expect(Object.keys(cli.opts.env).some((k) => k.startsWith('HOUSTON_INPUT_'))).toBe(false)
+    // The CLI's gh tools act only on a repository they can pin to; this is the event's.
+    expect(cli.opts.env.GH_REPO).toBe(REPO)
     const settings = JSON.parse(readFileSync(join(cli.opts.env.HOUSTON_DATA_DIR, 'settings.json'), 'utf8'))
     expect(settings.permissionRules.find((r) => r.tool === 'web_fetch')).toEqual({ action: 'deny', tool: 'web_fetch', match: '*' })
     expect(w.logs).toContain(`::add-mask::${API_KEY}`)
