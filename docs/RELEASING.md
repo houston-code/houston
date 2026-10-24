@@ -97,7 +97,13 @@ on to build and sign everything without publishing (it still asks for approval).
    For a release marked **latest**, the same PR rebuilds the site's docs
    (houstoncode.ai/docs) from the release commit's `docs/houston-guide.md` with
    `website/tools/build-docs.mjs`, so the site describes what people can install. They go
-   live when Cloudflare Pages deploys the merged `main`.
+   live when Cloudflare Pages deploys the merged `main`. It also points the GitHub Action at
+   the new CLI (`scripts/pin-action-cli.mjs`): `action/cli-release.json` gets the release's
+   version and `houston-cli.cjs` hash, and the release's `SHA256SUMS` and `SHA256SUMS.asc`
+   go under `action/test/fixtures/v<version>/`, after their GPG signature checks out
+   against the committed key. CI then runs the action end to end on that CLI, and `build`
+   requires it, so a CLI that breaks the action holds the PR. If the pin fails, the run
+   still passes and its summary says to run the script yourself.
 9. **distribute**: for a release marked **latest** only, sends the standalone CLI to npm
    (`@houston-code/cli`), the Homebrew tap and the AUR. Each channel stays off until its
    repository variable is `true`; [packaging/README.md](../packaging/README.md) has the
@@ -131,11 +137,12 @@ auto-merge** on in the repository settings.
    characters (the `release-notes` check on the PR says when it passes).
 3. Merge it with **Create a merge commit**.
 4. Release - publish: `0.10.0`.
-5. Point the GitHub Action at the new CLI in a PR to `main`: set `action/cli-release.json`
-   to the version and the `houston-cli.cjs` hash from the release's `SHA256SUMS`, and add
-   that `SHA256SUMS` and `SHA256SUMS.asc` under `action/test/fixtures/v<version>/` (its
-   unit tests check the pinned hash against the signed list). Until then the action keeps
-   running the CLI it pinned before.
+5. Merge the sync PR it opens. Along with the notes, it points the GitHub Action at the
+   new CLI. If its action end-to-end test fails, the new CLI changed something the action
+   relies on: fix the action in that PR. Until it merges, the action keeps running the CLI
+   it pinned before. To pin by hand (when the run's summary says the pin failed), download
+   the release's `houston-cli.cjs`, `SHA256SUMS` and `SHA256SUMS.asc` into a folder and
+   run `node scripts/pin-action-cli.mjs --version 0.10.0 --dir <folder>`.
 
 ### Fix something before it ships
 
