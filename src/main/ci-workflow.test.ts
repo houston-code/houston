@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
@@ -172,8 +173,47 @@ describe('CI never scopes away a required check', () => {
 })
 
 describe('CI gates merge on the whole matrix', () => {
-  it('makes the required `build` check depend on the plan, every platform leg, the SBOM gate, and workflow-lint', () => {
-    expect(job('build')).toContain('needs: [plan, package, sbom-conformance, workflow-lint]')
+  it('makes the required `build` check depend on the plan, every platform leg, the action test, the SBOM gate, and workflow-lint', () => {
+    expect(job('build')).toContain('needs: [plan, package, sbom-conformance, workflow-lint, action-e2e]')
+  })
+
+  it('runs the action end-to-end test when the plan says so, on the commit under test', () => {
+    const e2e = job('action-e2e')
+    expect(e2e).toContain("if: needs.plan.outputs.action-e2e == 'true'")
+    expect(e2e).toContain('uses: ./.github/workflows/action-test.yml')
+    expect(e2e).toContain('ref: ${{ inputs.ref }}')
+    expect(job('plan')).toContain('action-e2e: ${{ steps.plan.outputs.action-e2e }}')
+  })
+
+  it('requires the action test when planned, and a skip only when it was not', () => {
+    // The `build` step's script, run with each combination of plan and result.
+    const build = job('build')
+    const body = build.slice(build.indexOf('        run: |\n') + '        run: |\n'.length).split('\n')
+    const end = body.findIndex((l) => l.trim() !== '' && !l.startsWith(' '.repeat(10)))
+    const script = body
+      .slice(0, end === -1 ? undefined : end)
+      .map((l) => l.slice(10))
+      .join('\n')
+    const run = (planned: string, result: string) =>
+      spawnSync('bash', ['-e', '-c', script], {
+        encoding: 'utf8',
+        env: {
+          PATH: '/usr/bin:/bin',
+          PLAN: 'success',
+          SBOM: 'success',
+          LINT: 'success',
+          PACKAGE_PLANNED: 'false',
+          PACKAGE: 'skipped',
+          ACTION_E2E_PLANNED: planned,
+          ACTION_E2E: result
+        }
+      })
+    expect(run('true', 'success').status).toBe(0)
+    expect(run('false', 'skipped').status).toBe(0)
+    for (const result of ['failure', 'skipped', 'cancelled']) {
+      expect(run('true', result).stdout).toContain("::error::the action's end-to-end test did not succeed")
+    }
+    expect(run('false', 'success').status).toBe(1)
   })
 
   it('fails `build` when a dependency fails, instead of skipping it to a pass', () => {
