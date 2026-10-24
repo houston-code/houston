@@ -709,6 +709,11 @@ export interface AppSettings {
    * either way, but running model-written HTML is opt-in.
    */
   htmlVisuals?: boolean
+  /**
+   * Cross-session memory: the agent sees the memories saved in earlier sessions and
+   * can read them (docs/memory-design.md). On unless set to false.
+   */
+  memoryEnabled?: boolean
   /** Stall detection: same (tool,args) repeated this many times → stall (min 2). */
   stallRepeatCallLimit?: number
   /** Stall detection: same error signature this many times → stall (min 2). */

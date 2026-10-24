@@ -561,6 +561,8 @@ export interface PromptSnapshot {
   date: string
   /** The git + GitHub context section as captured then ('' outside a repo). */
   gitStatus: string
+  /** The saved-memory index as captured then (memoryIndex.ts); absent when there was none or memory was off. */
+  memory?: string
 }
 
 export interface Conversation extends ConversationMeta {
@@ -791,6 +793,8 @@ export interface RunSettingsOverrides {
   costCeilingUsd?: number
   /** Turns the end-of-run verification gate on with this command (`verifyOnStop` + `verifyCommand`). */
   verifyCommand?: string
+  /** `memoryEnabled`: false runs without saved memories (the headless `--no-memory` flag). */
+  memoryEnabled?: boolean
 }
 
 /** What the renderer sends to start a turn in a conversation. */

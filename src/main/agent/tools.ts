@@ -120,6 +120,8 @@ import { SCHEDULE_TOOL_NAMES, type ScheduledRunInfo } from './scheduler'
 import type { RenderMockup } from './mockupRender'
 import { LSP_TOOL_NAMES, makeLspTools, type LspToolAccess } from './lsp/tools'
 import { objectSchema, rootsOf, str } from './toolHelpers'
+import type { MemoryStore } from './memoryStore'
+import { RECALL_MEMORY_NAME, recallMemoryTool } from './memoryTools'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -164,6 +166,8 @@ export interface ToolContext {
    * a network-blocked failure points at `--allow-shell-network` instead.
    */
   unattended?: boolean
+  /** The cross-session memory store (injected by the loop when memory is on); backs recall_memory. */
+  memory?: MemoryStore
   /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
   getSecret?: (id: string) => string | null
   /**
@@ -5143,6 +5147,7 @@ export const TOOLS: ToolDef[] = [
   askUser,
   presentPlan,
   recallHistory,
+  recallMemoryTool,
   dispatchAgent,
   dispatchWritableAgent,
   spawnSessionTool,
@@ -5213,6 +5218,11 @@ export interface BuiltinToolsetOptions {
    * tools. Absent counts as false, so a run with no server pays nothing for them.
    */
   lsp?: boolean
+  /**
+   * Saved memories exist and memory is on; backs recall_memory. Absent counts as false,
+   * so a run with nothing remembered pays nothing for it.
+   */
+  memory?: boolean
 }
 
 /**
@@ -5233,6 +5243,7 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
     if (name === PRESENT_PLAN_NAME) return opts.planMode
     if (name === ASK_USER_NAME) return opts.askUser !== false
     if ((LSP_TOOL_NAMES as readonly string[]).includes(name)) return opts.lsp === true
+    if (name === RECALL_MEMORY_NAME) return opts.memory === true
     return true
   })
 }

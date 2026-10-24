@@ -372,8 +372,42 @@ describe('memoryStore delete, restore, trash', () => {
   })
 })
 
+describe('memoryStore recall usage', () => {
+  it('counts recalls per id and survives a corrupt usage file', async () => {
+    let t = new Date('2026-10-24T00:00:00.000Z')
+    const store = memoryStore({ root, workspace: repoDir, now: () => t })
+    expect(store.usage()).toEqual({})
+    const m = (await store.save(input())).record
+    await store.noteRecalled([m.id, 'not-an-id'])
+    t = new Date('2026-10-25T00:00:00.000Z')
+    await store.noteRecalled([m.id])
+    expect(store.usage()).toEqual({ [m.id]: { recalls: 2, lastRecalled: '2026-10-25T00:00:00.000Z' } })
+    writeFileSync(join(root, 'usage.json'), '{not json')
+    expect(store.usage()).toEqual({})
+    await store.noteRecalled([m.id])
+    expect(store.usage()[m.id]?.recalls).toBe(1)
+  })
+
+  it('never throws when the usage file cannot be written', async () => {
+    const store = memoryStore({ root, workspace: repoDir })
+    mkdirSync(join(root, 'usage.json'), { recursive: true }) // a folder where the file should be
+    await expect(store.noteRecalled(['m_20261024_aaaaaa'])).resolves.toBeUndefined()
+  })
+})
+
 describe('defaultMemoryRoot', () => {
   it('lives under ~/.houston/memory', () => {
     expect(defaultMemoryRoot(join(tmp, 'home'))).toBe(join(tmp, 'home', '.houston', 'memory'))
+  })
+
+  it('honors HOUSTON_MEMORY_DIR when no home is given', () => {
+    const before = process.env.HOUSTON_MEMORY_DIR
+    try {
+      process.env.HOUSTON_MEMORY_DIR = join(tmp, 'elsewhere')
+      expect(defaultMemoryRoot()).toBe(join(tmp, 'elsewhere'))
+      expect(defaultMemoryRoot(join(tmp, 'home'))).toBe(join(tmp, 'home', '.houston', 'memory'))
+    } finally {
+      process.env.HOUSTON_MEMORY_DIR = before
+    }
   })
 })

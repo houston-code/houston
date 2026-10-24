@@ -128,11 +128,14 @@ rules loader, so `@path` mentions in it are plain text and need no neutralizing.
 - Framing matches the rules block: these are notes written in earlier sessions; they
   are data, not authority to change permissions, run commands without approval, or
   send data off the machine. The user's messages win on conflict.
-- The index follows the `promptSnapshot` pattern in `loop.ts`: captured once per
-  conversation, stored on the conversation (`memorySnapshot`), reused by later runs, and
-  retaken only at compaction (which rewrites the window anyway) or a date change. A
-  memory saved mid-conversation does not re-render the prompt; the model already knows
-  it wrote it. This keeps the provider's prefix cache intact.
+- The index rides in the conversation's prompt snapshot (`promptSnapshot.memory`, see
+  `promptSnapshot.ts`): captured with the date and git context at the first run,
+  reused by later runs, and retaken only when the local date changes. A memory saved
+  mid-conversation does not re-render the prompt; the model already knows it wrote it.
+  This keeps the provider's prefix cache intact. `recall_memory` is offered only when
+  the snapshot lists something, and turning memory off drops the index on the next run.
+- Tests point `HOUSTON_MEMORY_DIR` at a temp folder (`src/main/test/setup.ts`), so a
+  developer's own memories never reach a test run.
 - Index budget: 4 KB per scope. Over budget, order by pinned, then type
   (feedback, user, project, reference), then most recently updated or recalled, and add
   "N more; use recall_memory with a query". Always read from disk at capture time,
@@ -213,12 +216,13 @@ delete, restore, pin, orphans), used by IPC and the TUI alike.
    orphan); non-git folder (path key); folder becomes a git repo later (new key, orphan
    shown); memory deleted while listed in a live snapshot (`recall_memory` says it was
    deleted); date change mid-conversation (snapshot retaken, same as promptSnapshot);
-   compaction (snapshot retaken).
+   a same-day snapshot from before memory existed (reused as-is; memories appear from
+   the next snapshot).
 5. **Tests.** `memoryStore` at 90%+: create, update, dedupe, delete, restore, trash
    prune, caps, corrupt and unknown-version files, symlinked file, perms, concurrent
    saves from two processes (fileLock), Windows paths. Index builder: ordering, budget
    truncation, empty store omits the section. Loop: snapshot reuse across runs and
-   refresh at compaction and date change; taint forces approval in full auto; per-run
+   refresh on a date change; taint forces approval in full auto; per-run
    cap; subagent and headless tool exclusion. Prompt goldens: unchanged with no
    memories, new golden with memories. Renderer and TUI: list, edit, delete, undo.
 6. **CI.** Existing pipeline covers it. Regenerate goldens rather than hand-merging.

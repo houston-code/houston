@@ -2,7 +2,8 @@ import type { PromptSnapshot } from '@shared/agent'
 
 /**
  * The per-conversation slice of the system prompt that depends on the outside
- * world: today's date and the git/GitHub context. It is captured once and reused
+ * world: today's date, the git/GitHub context, and the index of saved memories
+ * (memoryIndex.ts). It is captured once and reused
  * on every later run of the conversation so the system prompt stays
  * byte-identical between user turns.
  *
@@ -28,28 +29,46 @@ export function localDateStamp(now: Date): string {
 /**
  * The snapshot to build this run's prompt from: the stored one when it is still
  * from `today`, otherwise a fresh capture (`fresh: true` tells the caller to
- * persist it). `captureGit` runs only when a fresh snapshot is needed.
+ * persist it). `captureGit` and `captureMemory` run only when a fresh snapshot is
+ * needed; without `captureMemory` (memory is off) a fresh snapshot holds no index.
+ *
+ * A stored snapshot from today is reused as-is even when it predates memory and
+ * holds no index: the memories then appear from the next snapshot on, rather than
+ * rewriting this conversation's prompt mid-day.
  */
 export async function resolvePromptSnapshot(
   stored: PromptSnapshot | undefined,
   today: string,
-  captureGit: () => Promise<string>
+  captureGit: () => Promise<string>,
+  captureMemory?: () => string
 ): Promise<{ snapshot: PromptSnapshot; fresh: boolean }> {
   // The stored value comes from the conversation file on disk, which the load-time
   // shape check doesn't cover; a malformed one is retaken rather than trusted.
   if (isPromptSnapshot(stored) && stored.date === today) return { snapshot: stored, fresh: false }
-  return { snapshot: { date: today, gitStatus: await captureGit() }, fresh: true }
+  const gitStatus = await captureGit()
+  const memory = captureMemory?.() ?? ''
+  return { snapshot: { date: today, gitStatus, ...(memory ? { memory } : {}) }, fresh: true }
 }
 
 function isPromptSnapshot(v: unknown): v is PromptSnapshot {
   if (typeof v !== 'object' || v === null) return false
   const o = v as Record<string, unknown>
-  return typeof o.date === 'string' && typeof o.gitStatus === 'string'
+  return (
+    typeof o.date === 'string' &&
+    typeof o.gitStatus === 'string' &&
+    (o.memory === undefined || typeof o.memory === 'string')
+  )
 }
 
-/** Render the snapshot as the system-prompt section. Pure. */
-export function formatPromptSnapshot(snapshot: PromptSnapshot): string {
-  const sections = [`Today's date: ${snapshot.date}.`]
+/**
+ * Render the snapshot as the system-prompt section. Pure. The memory index is left
+ * out when `memory` is false, so turning memory off takes effect on the next run.
+ */
+export function formatPromptSnapshot(snapshot: PromptSnapshot, opts: { memory?: boolean } = {}): string {
+  const sections: string[] = []
+  const memory = opts.memory === false ? '' : (snapshot.memory?.trim() ?? '')
+  if (memory) sections.push(memory)
+  sections.push(`Today's date: ${snapshot.date}.`)
   const git = snapshot.gitStatus.trim()
   if (git) {
     sections.push(

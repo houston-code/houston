@@ -42,6 +42,7 @@ import { log } from '../logger'
  *   ~/.houston/memory/global/<id>.md          facts that apply to every project
  *   ~/.houston/memory/repos/<key>/<id>.md     one repository, keyed by repoIdentity
  *   ~/.houston/memory/.trash/<scope>/<id>.md  deletions, kept for undo
+ *   ~/.houston/memory/usage.json              recall counts, for ordering the prompt index
  *
  * The store lives in the user's home, never the repository, so a cloned repo can't
  * seed it. The repo key is the git common dir's hash, so the main checkout and all
@@ -67,6 +68,12 @@ const CONVERSATION_RE = /^[A-Za-z0-9_-]{1,128}$/
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567'
 // Held as `<dir>/.store.lock` across every read-modify-write of one scope folder.
 const LOCK_NAME = '.store'
+const USAGE_FILE = 'usage.json'
+
+export interface MemoryUsage {
+  recalls: number
+  lastRecalled: string
+}
 
 export type MemoryErrorCode = 'invalid' | 'secret' | 'cap' | 'not-found' | 'stale' | 'symlink'
 
@@ -112,8 +119,13 @@ export interface SaveMemoryResult {
   created: boolean
 }
 
-export function defaultMemoryRoot(home: string = homedir()): string {
-  return join(home, GLOBAL_RULES_DIRNAME, 'memory')
+/**
+ * ~/.houston/memory, or `HOUSTON_MEMORY_DIR` when set (the tests point it at a temp
+ * folder so a developer's own memories never reach a test run).
+ */
+export function defaultMemoryRoot(home?: string): string {
+  if (home === undefined && process.env.HOUSTON_MEMORY_DIR) return process.env.HOUSTON_MEMORY_DIR
+  return join(home ?? homedir(), GLOBAL_RULES_DIRNAME, 'memory')
 }
 
 export function memoryStore(opts: MemoryStoreOptions = {}) {
@@ -272,9 +284,55 @@ export function memoryStore(opts: MemoryStoreOptions = {}) {
     return out.sort((a, b) => a.label.localeCompare(b.label))
   }
 
+  /** When each memory was last recalled, by id. Best effort: a missing or corrupt file reads as none. */
+  function usage(): Record<string, MemoryUsage> {
+    const file = join(root, USAGE_FILE)
+    if (!isPlainFile(file)) return {}
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown
+      const items = (parsed as { items?: unknown } | null)?.items
+      if (!items || typeof items !== 'object') return {}
+      const out: Record<string, MemoryUsage> = {}
+      for (const [id, v] of Object.entries(items as Record<string, unknown>)) {
+        const u = v as Partial<MemoryUsage> | null
+        if (ID_RE.test(id) && typeof u?.recalls === 'number' && typeof u.lastRecalled === 'string') {
+          out[id] = { recalls: u.recalls, lastRecalled: u.lastRecalled }
+        }
+      }
+      return out
+    } catch {
+      return {}
+    }
+  }
+
+  /**
+   * Count a recall of each id, so the prompt index can keep memories that keep
+   * being used. Never throws: losing a count is harmless, failing a recall is not.
+   */
+  async function noteRecalled(ids: readonly string[]): Promise<void> {
+    const valid = ids.filter((id) => ID_RE.test(id))
+    if (!valid.length) return
+    try {
+      ensureDir(root)
+      const file = join(root, USAGE_FILE)
+      await withFileLock(file, () => {
+        const items = usage()
+        const stamp = now().toISOString()
+        for (const id of valid) items[id] = { recalls: (items[id]?.recalls ?? 0) + 1, lastRecalled: stamp }
+        refuseSymlink(file)
+        writeFileAtomicSync(file, `${JSON.stringify({ v: MEMORY_FORMAT_VERSION, items })}\n`, 0o600)
+      })
+    } catch (err) {
+      log.warn(`memory: could not record a recall: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
   return {
     root,
     currentRepoKey: repo?.key,
+    currentRepoLabel: repo ? basename(repo.root) : undefined,
+    usage,
+    noteRecalled,
     list,
     get,
     save,

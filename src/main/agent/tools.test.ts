@@ -130,6 +130,7 @@ describe('tool registry', () => {
       'read_file',
       'read_shell_output',
       'recall_history',
+      'recall_memory',
       'render_mockup',
       'review_changes',
       'run_shell',
