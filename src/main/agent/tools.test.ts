@@ -1830,6 +1830,13 @@ describe('web_search', () => {
     await expect(run('web_search', { query: 'anything' })).rejects.toThrow(/No Tavily API key/)
   })
 
+  it('tells the model not to fetch guessed URLs in place of a search', async () => {
+    const err = await run('web_search', { query: 'dating app churn 2026' }).catch((e: Error) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/don't guess page URLs/)
+    expect((err as Error).message).toMatch(/which sources you actually read/)
+  })
+
   it('names the selected provider in the missing-key error', async () => {
     const brave: ToolContext = { ...ctx, searchProvider: 'brave' }
     await expect(getTool('web_search')!.execute({ query: 'x' }, brave)).rejects.toThrow(

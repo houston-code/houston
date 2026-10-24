@@ -2690,8 +2690,12 @@ const webSearch: ToolDef = {
     const provider = getSearchProviderInfo(ctx.searchProvider)
     const key = ctx.getSecret?.(provider.keyId)
     if (!key) {
+      // Without search a model tends to fetch article URLs it made up (several 404s in
+      // a row), so the error says what to do instead, where the model reads it.
       throw new Error(
-        `No ${provider.label} API key set. Add a ${provider.label} API key in Settings to enable web_search.`
+        `No ${provider.label} API key set. Add a ${provider.label} API key in Settings to enable web_search. ` +
+          "Until then, don't guess page URLs to fetch in its place: use web_fetch only on URLs the user gave you " +
+          'or that appear in the project or in a page you already fetched, and tell the user which sources you actually read.'
       )
     }
     const results = await getSearchAdapter(provider.id)(query, key, {
