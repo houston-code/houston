@@ -315,6 +315,7 @@ PR runs for most of an hour. A `plan` job decides the legs (the policy is
 | Pull request labelled `full-ci` | Linux x64, macOS arm64, macOS x64, Windows x64 |
 | Merge-queue candidate | Linux x64, macOS arm64, Windows x64 |
 | Nightly on `main` | Linux x64, macOS arm64, macOS x64, Windows x64 |
+| Manual run (`gh workflow run ci.yml`, or **Run workflow** on the Actions tab) | Linux x64, macOS arm64, macOS x64, Windows x64 |
 | Prose-only change (contributor docs, `docs/*.md` except the in-app guide, `website/`) | none |
 
 So nothing reaches `main` without the macOS and Windows legs, but a PR finds out about a

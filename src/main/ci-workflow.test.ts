@@ -163,6 +163,13 @@ describe('CI never scopes away a required check', () => {
     expect(e2e.split('\n      - ')[0]).not.toContain('if:')
   })
 
+  it('can run the nightly matrix by hand, without filing an alert', () => {
+    expect(workflow).toMatch(/^ {2}workflow_dispatch:\n/m)
+    // No inputs: a manual run is the nightly run, and the plan gives it every leg.
+    expect(workflow).not.toMatch(/^ {2}workflow_dispatch:\n {4}inputs:/m)
+    expect(job('alert')).not.toContain('workflow_dispatch')
+  })
+
   it('runs the Windows unit suite with its temp dirs on D:, off the OS disk', () => {
     // %TEMP% on a Windows runner is under the user profile on C:, the OS disk, which is
     // slower than D: and has stalled long enough to time tests out. RUNNER_TEMP is on D:.
