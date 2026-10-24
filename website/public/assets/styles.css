@@ -410,9 +410,11 @@ section { padding: 96px 0; }
 .docs-content h1 { font-size: var(--fs-4); }
 .docs-lede { margin-top: 12px; color: var(--n4); }
 .prose { line-height: 1.7; }
-.prose h2 { font-size: var(--fs-3); margin-top: 48px; padding-top: 28px; border-top: 1px solid var(--n3); }
+/* Section headings sit a step above body text (and below the 22px+ page title) so they
+   outrank the bold run-in labels in the prose; subsections stay body-sized but bold. */
+.prose h2 { font-size: 1.25rem; margin-top: 48px; padding-top: 28px; border-top: 1px solid var(--n3); }
 .prose > h2:first-child { margin-top: 32px; }
-.prose h3 { font-size: var(--fs-3); font-weight: 500; margin-top: 28px; }
+.prose h3 { font-size: var(--fs-3); margin-top: 32px; }
 .prose p { margin-top: 16px; }
 .prose > p:first-child { margin-top: 20px; }
 .prose ul, .prose ol { margin: 16px 0 0; padding-left: 22px; }
