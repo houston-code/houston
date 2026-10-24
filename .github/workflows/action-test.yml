@@ -6,20 +6,21 @@ name: Action test
 # and a fake gh (action/test/fake-gh.mjs). No secret, no model key, and nothing is posted to
 # GitHub. The pure logic has its own unit tests in action/lib/*.test.mjs, which `npm test`
 # runs in ci.yml.
+#
+# ci.yml calls it (`action-e2e`) whenever a change can affect the action and nightly, and its
+# required `build` check fails unless it passed, so it gates the merge queue like the other
+# checks. scripts/ci-plan.mjs decides when it runs.
 on:
-  pull_request:
-    paths:
-      - action/**
-      - houston-signing-key.asc
-      - .github/workflows/action-test.yml
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to test (defaults to the run's own commit).
+        type: string
+        default: ''
   workflow_dispatch:
 
 permissions:
   contents: read
-
-concurrency:
-  group: action-test-${{ github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: true
 
 jobs:
   e2e:
@@ -29,6 +30,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
 
       - name: Build the fixture repository and start the mock model
         run: |

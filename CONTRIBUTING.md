@@ -275,8 +275,11 @@ platform-sensitive (the sandbox backends, paths, packaging, native modules), add
 
 `build` is a single required check that passes only when `plan` succeeded, every planned
 `package` leg succeeded (a skipped `package` counts only when `plan` planned none), and
-the SBOM conformance gate and `workflow-lint` succeeded. `workflow-lint` runs actionlint
-and zizmor over `.github/workflows`; zizmor's suppressions live in `.github/zizmor.yml`.
+the SBOM conformance gate and `workflow-lint` succeeded. When a change touches the GitHub
+Action (`action/`, `houston-signing-key.asc`, or `.github/workflows/action-test.yml`), and
+nightly, `plan` also runs the action's end-to-end test (`action-e2e`), and `build` requires
+it. `workflow-lint` runs actionlint and zizmor over `.github/workflows`; zizmor's
+suppressions live in `.github/zizmor.yml`.
 Each `package` leg builds the app on its own runner and runs the full unit suite there:
 macOS against the real Seatbelt sandbox, Windows against its own backend (Git Bash) and
 its path semantics. Every leg also runs the packaged-app Playwright e2e against the app it

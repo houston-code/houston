@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { plan, outputs, isProseOnly, touchesCacheInputs, LEGS, FULL_CI_LABEL } from './ci-plan.mjs'
+import { plan, outputs, isProseOnly, touchesAction, touchesCacheInputs, LEGS, FULL_CI_LABEL } from './ci-plan.mjs'
 
 const code = ['src/main/loop.ts']
 const prose = ['README.md', 'docs/SANDBOXING.md', 'website/index.html']
@@ -101,17 +101,51 @@ describe('ci-plan cache warming', () => {
   })
 })
 
+describe('ci-plan action e2e', () => {
+  const action = ['action/cli-release.json']
+
+  it('runs on a PR or queue candidate that touches the action, even with no packaging', () => {
+    expect(plan({ event: 'pull_request', files: [...code, ...action] }).actionE2e).toBe(true)
+    expect(plan({ event: 'merge_group', files: action }).actionE2e).toBe(true)
+    expect(plan({ event: 'pull_request', files: [...prose, ...action] })).toMatchObject({ legs: ['linux-x64'], actionE2e: true })
+  })
+
+  it('skips a change that cannot affect the action', () => {
+    expect(plan({ event: 'pull_request', files: code }).actionE2e).toBe(false)
+    expect(plan({ event: 'merge_group', files: prose }).actionE2e).toBe(false)
+  })
+
+  it('runs nightly and whenever the diff is unknown, never on push', () => {
+    expect(plan({ event: 'schedule' }).actionE2e).toBe(true)
+    expect(plan({ event: 'pull_request', files: null }).actionE2e).toBe(true)
+    expect(plan({ event: 'workflow_dispatch' }).actionE2e).toBe(true)
+    expect(plan({ event: 'push', files: action }).actionE2e).toBe(false)
+  })
+
+  it('counts the action, its signing key, and its test workflow', () => {
+    for (const f of ['action/lib/run.mjs', 'action/test/fixtures/v0.10.0/SHA256SUMS', 'houston-signing-key.asc', '.github/workflows/action-test.yml']) {
+      expect(touchesAction([f]), f).toBe(true)
+    }
+    for (const f of ['actions.md', 'src/main/action.ts', '.github/actions/setup-node/action.yml', 'scripts/pin-action.mjs']) {
+      expect(touchesAction([f]), f).toBe(false)
+    }
+  })
+})
+
 describe('ci-plan output', () => {
   it('emits GITHUB_OUTPUT lines with a matrix of the legs', () => {
-    const out = outputs({ legs: ['linux-x64', 'mac-arm64'], warmCaches: false })
+    const out = outputs({ legs: ['linux-x64', 'mac-arm64'], actionE2e: true, warmCaches: false })
     const lines = Object.fromEntries(out.split('\n').map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1)]))
     expect(lines.package).toBe('true')
     expect(lines['warm-caches']).toBe('false')
+    expect(lines['action-e2e']).toBe('true')
     expect(JSON.parse(lines['package-matrix'])).toEqual({ include: [LEGS['linux-x64'], LEGS['mac-arm64']] })
   })
 
   it('reports no packaging with an empty matrix', () => {
-    expect(outputs({ legs: [], warmCaches: true })).toBe('package=false\npackage-matrix={"include":[]}\nwarm-caches=true')
+    expect(outputs({ legs: [], actionE2e: false, warmCaches: true })).toBe(
+      'package=false\npackage-matrix={"include":[]}\naction-e2e=false\nwarm-caches=true'
+    )
   })
 
   it('keeps the runner labels the release workflows build on', () => {
@@ -125,6 +159,8 @@ describe('ci-plan output', () => {
     const run = (env) =>
       execFileSync(process.execPath, ['scripts/ci-plan.mjs'], { env: { PATH: process.env.PATH, ...env }, encoding: 'utf8' })
     expect(run({ EVENT: 'merge_group', FILES_FROM: list })).toContain('package=false')
+    expect(run({ EVENT: 'merge_group', FILES_FROM: list })).toContain('action-e2e=false')
+    expect(run({ EVENT: 'merge_group', FILES_FROM: join(dir, 'missing') })).toContain('action-e2e=true')
     expect(run({ EVENT: 'merge_group', FILES_FROM: join(dir, 'missing') })).toContain('package=true')
     expect(run({ EVENT: 'pull_request', LABELS: 'not json', FILES_FROM: '' })).toContain('"target":"linux-x64"')
     expect(run({ EVENT: 'merge_group', LABELS: 'null' })).toContain('"target":"win-x64"')

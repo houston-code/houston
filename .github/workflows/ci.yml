@@ -193,6 +193,7 @@ jobs:
     outputs:
       package: ${{ steps.plan.outputs.package }}
       package-matrix: ${{ steps.plan.outputs.package-matrix }}
+      action-e2e: ${{ steps.plan.outputs.action-e2e }}
       warm-caches: ${{ steps.plan.outputs.warm-caches }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -406,6 +407,15 @@ jobs:
     if: github.event_name != 'push' && !inputs.release
     uses: ./.github/workflows/sbom-conformance.yml
 
+  # The GitHub Action's end-to-end test, when `plan` says the change can affect the action
+  # (action/, the signing key, or the test workflow) and nightly. Gated through `build`.
+  action-e2e:
+    needs: plan
+    if: needs.plan.outputs.action-e2e == 'true'
+    uses: ./.github/workflows/action-test.yml
+    with:
+      ref: ${{ inputs.ref }}
+
   # Lints the workflows themselves: actionlint (syntax, expressions, and shellcheck over every
   # `run:` script) and zizmor (Actions security: template injection, credential persistence,
   # over-broad permissions, impostor or known-vulnerable action commits). Both are pinned and
@@ -448,8 +458,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: zizmor --format github --min-severity low --config .github/zizmor.yml .github/workflows .github/actions action action/examples/*.yml
 
-  # The required `build` check: one stable name over the whole platform matrix, the SBOM
-  # gate, and workflow-lint, so adding or renaming a matrix leg never needs a ruleset change.
+  # The required `build` check: one stable name over the whole platform matrix, the action
+  # test, the SBOM gate, and workflow-lint, so adding or renaming a matrix leg never needs a
+  # ruleset change.
   #
   # `!cancelled()` is load-bearing. A job whose dependency failed is SKIPPED by default, and
   # a skipped required check reports a PASS, so without it a red macOS leg would let the PR
@@ -461,20 +472,22 @@ jobs:
   # opens and labels a PR in the same second), `always()` ran this job anyway and posted a
   # red `build` that kept the PR blocked after the newer run went green.
   build:
-    needs: [plan, package, sbom-conformance, workflow-lint]
+    needs: [plan, package, sbom-conformance, workflow-lint, action-e2e]
     if: ${{ !cancelled() && github.event_name != 'push' && !inputs.release }}
     timeout-minutes: 5
     runs-on: ubuntu-24.04
     steps:
-      - name: Require the planned platform legs, the SBOM gate, and workflow-lint to pass
+      - name: Require the planned platform legs and action test, the SBOM gate, and workflow-lint to pass
         env:
           PLAN: ${{ needs.plan.result }}
           PACKAGE_PLANNED: ${{ needs.plan.outputs.package }}
           PACKAGE: ${{ needs.package.result }}
           SBOM: ${{ needs.sbom-conformance.result }}
           LINT: ${{ needs.workflow-lint.result }}
+          ACTION_E2E_PLANNED: ${{ needs.plan.outputs.action-e2e }}
+          ACTION_E2E: ${{ needs.action-e2e.result }}
         run: |
-          echo "plan=$PLAN (package planned: $PACKAGE_PLANNED) package=$PACKAGE sbom-conformance=$SBOM workflow-lint=$LINT"
+          echo "plan=$PLAN (package planned: $PACKAGE_PLANNED, action-e2e planned: $ACTION_E2E_PLANNED) package=$PACKAGE action-e2e=$ACTION_E2E sbom-conformance=$SBOM workflow-lint=$LINT"
           for r in "$PLAN" "$SBOM" "$LINT"; do
             [ "$r" = success ] || { echo "::error::plan, the SBOM gate, or workflow-lint did not succeed ($r)"; exit 1; }
           done
@@ -483,6 +496,11 @@ jobs:
             echo "No package legs planned: the change touches only prose that never ships."
           else
             [ "$PACKAGE" = success ] || { echo "::error::a package leg did not succeed ($PACKAGE)"; exit 1; }
+          fi
+          if [ "$ACTION_E2E_PLANNED" = true ]; then
+            [ "$ACTION_E2E" = success ] || { echo "::error::the action's end-to-end test did not succeed ($ACTION_E2E)"; exit 1; }
+          else
+            [ "$ACTION_E2E" = skipped ] || { echo "::error::the action's end-to-end test was not planned, but reported $ACTION_E2E"; exit 1; }
           fi
 
   # Post-merge and nightly alert. Queue merges are pushed by github-merge-queue[bot] and a

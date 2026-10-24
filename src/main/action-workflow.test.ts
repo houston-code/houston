@@ -144,8 +144,12 @@ describe('the example workflows', () => {
 })
 
 describe('the action end-to-end workflow', () => {
-  it('runs on pull requests that touch the action, with a read-only token and no secrets', () => {
-    expect(e2e).toMatch(/pull_request:\n {4}paths:\n {6}- action\/\*\*/)
+  it('runs from CI (which gates it through `build`), with a read-only token and no secrets', () => {
+    // ci.yml decides when it runs (scripts/ci-plan.mjs) and requires it; a pull_request
+    // trigger of its own would report a check that gates nothing.
+    expect(e2e).toMatch(/^on:\n {2}workflow_call:\n/m)
+    expect(e2e).not.toMatch(/^ {2}pull_request:/m)
+    expect(e2e).toContain('ref: ${{ inputs.ref || github.sha }}')
     expect(e2e).toMatch(/^permissions:\n {2}contents: read$/m)
     expect(e2e).not.toContain('secrets.')
     expect(e2e).not.toContain('pull_request_target')

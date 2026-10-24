@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Decide which `package` legs a CI run needs, and whether a push to main must refresh the
-// package caches. ci.yml's `plan` job runs this and feeds its output to `package`,
-// `warm-caches` and the required `build` gate.
+// Decide which `package` legs a CI run needs, whether the GitHub Action's end-to-end test
+// runs, and whether a push to main must refresh the package caches. ci.yml's `plan` job runs
+// this and feeds its output to `package`, `action-e2e`, `warm-caches` and the required
+// `build` gate.
 //
 // Why it exists: the macOS runner pool is the scarce resource. With the full four-leg matrix
 // on every PR and every merge-queue candidate, a burst of PRs queued ~80 macOS jobs; queue
@@ -19,8 +20,12 @@
 //     all. `test`, `linux-sandbox` and `revert-guard` still run on it, and `build` still
 //     reports: it accepts a skipped `package` only when this plan said to skip it.
 //
-// Anything unrecognised (an unknown event, a missing diff) gets the full matrix: the safe
-// failure is more CI, never less.
+// The action's end-to-end test (action-test.yml, about 20 seconds) runs when a change can
+// affect the action (ACTION_INPUTS), and nightly. `build` requires it then, so a change
+// that breaks the action can't merge on the strength of the other checks.
+//
+// Anything unrecognised (an unknown event, a missing diff) gets the full matrix and the
+// action test: the safe failure is more CI, never less.
 //
 // Usage (in CI): EVENT=<github.event_name> LABELS=<json array> FILES_FROM=<path|""> \
 //   node scripts/ci-plan.mjs >> "$GITHUB_OUTPUT"
@@ -84,33 +89,44 @@ export function touchesCacheInputs(files) {
   return files.some((f) => CACHE_INPUTS.includes(f) || CACHE_INPUT_DIRS.some((d) => f.startsWith(d)))
 }
 
+// What the action's end-to-end test exercises: the action itself, the key it verifies the
+// CLI with, and the workflow that runs it.
+const ACTION_INPUTS = ['houston-signing-key.asc', '.github/workflows/action-test.yml']
+
+/** True when one of `files` can change how the GitHub Action behaves. */
+export function touchesAction(files) {
+  return files.some((f) => f.startsWith('action/') || ACTION_INPUTS.includes(f))
+}
+
 /**
  * @param {{ event: string, labels?: string[], files?: string[] | null }} input
  *   files: the changed paths, or null when the diff could not be computed.
- * @returns {{ legs: string[], warmCaches: boolean }}
+ * @returns {{ legs: string[], actionE2e: boolean, warmCaches: boolean }}
  */
 export function plan({ event, labels = [], files = null }) {
   const proseOnly = Array.isArray(files) && files.length > 0 && files.every(isProseOnly)
 
   if (event === 'push') {
     // `package` never runs on push (the queue candidate already packaged the tree that
-    // landed); a push only decides whether to refresh the caches.
-    return { legs: [], warmCaches: !Array.isArray(files) || touchesCacheInputs(files) }
+    // landed), nor does the action test; a push only decides whether to refresh the caches.
+    return { legs: [], actionE2e: false, warmCaches: !Array.isArray(files) || touchesCacheInputs(files) }
   }
-  if (event === 'schedule') return { legs: ALL, warmCaches: false }
-  if (proseOnly) return { legs: [], warmCaches: false }
+  const actionE2e = event === 'schedule' || !Array.isArray(files) || touchesAction(files)
+  if (event === 'schedule') return { legs: ALL, actionE2e, warmCaches: false }
+  if (proseOnly) return { legs: [], actionE2e, warmCaches: false }
   if (event === 'pull_request') {
-    return { legs: labels.includes(FULL_CI_LABEL) ? ALL : PR, warmCaches: false }
+    return { legs: labels.includes(FULL_CI_LABEL) ? ALL : PR, actionE2e, warmCaches: false }
   }
-  if (event === 'merge_group') return { legs: QUEUE, warmCaches: false }
-  return { legs: ALL, warmCaches: false }
+  if (event === 'merge_group') return { legs: QUEUE, actionE2e, warmCaches: false }
+  return { legs: ALL, actionE2e, warmCaches: false }
 }
 
 /** The plan as GITHUB_OUTPUT lines. */
-export function outputs({ legs, warmCaches }) {
+export function outputs({ legs, actionE2e, warmCaches }) {
   return [
     `package=${legs.length > 0}`,
     `package-matrix=${JSON.stringify({ include: legs.map((l) => LEGS[l]) })}`,
+    `action-e2e=${actionE2e}`,
     `warm-caches=${warmCaches}`
   ].join('\n')
 }
@@ -134,7 +150,7 @@ function main() {
     }
   }
   const result = plan({ event, labels, files })
-  console.error(`event=${event} labels=${JSON.stringify(labels)} files=${files ? files.length : 'unknown'} -> legs=[${result.legs}] warm-caches=${result.warmCaches}`)
+  console.error(`event=${event} labels=${JSON.stringify(labels)} files=${files ? files.length : 'unknown'} -> legs=[${result.legs}] action-e2e=${result.actionE2e} warm-caches=${result.warmCaches}`)
   console.log(outputs(result))
 }
 
