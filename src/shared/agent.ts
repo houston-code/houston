@@ -126,6 +126,13 @@ export interface ChatMessage {
    */
   receipt?: TurnReceipt
   /**
+   * Present on assistant turns: which version of Houston's own instructions (system
+   * prompt and built-in tool schemas) produced the reply, as a short hash (see
+   * `promptId` in src/main/agent/prompt.ts), so saved chats can be compared across
+   * prompt changes. Display-only; providers never see it.
+   */
+  promptId?: string
+  /**
    * Present on the tool-result turn of a call that ran subagents (dispatch_agent,
    * dispatch_writable_agent, review_changes): what each one did, for the clients to
    * show (see SubagentRecord). Display-only; providers never see it.
