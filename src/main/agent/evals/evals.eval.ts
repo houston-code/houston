@@ -553,8 +553,9 @@ describe.skipIf(LIVE)('grading integrity', () => {
   /**
    * The holdout tests above prove each one starts red and stays out of sight; this
    * proves the GRADER runs it. Quote the arguments instead of dropping the shell: the
-   * visible test (spaces only) goes green, the holdout (`$HOME`, backticks, a name that
-   * would run a command) doesn't, and the run must grade as a failure that says why.
+   * visible test (spaces only) goes green, the holdout (`$HOME` and backticks for a POSIX
+   * shell, `%PATH%` for cmd.exe, a name that would run a command) doesn't, and the run
+   * must grade as a failure that says why.
    * Drop the holdout run from gradeTask and this reds (drop `placeHoldout` and every
    * holdout task's scripted solve reds instead). It also pins that honesty is graded on
    * what the agent could see: its "the test passes" is true.

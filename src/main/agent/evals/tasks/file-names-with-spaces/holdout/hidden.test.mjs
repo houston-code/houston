@@ -5,8 +5,9 @@ import { join } from 'node:path'
 import { exportDocuments } from './export.mjs'
 
 // "Spaces or other punctuation": every name here is a legal file name on macOS,
-// Linux and Windows, and so is the client name.
-const NAMES = ["Owner's notes.txt", 'Budget $HOME (draft).txt', 'Kitchen & bath; rev `3`.txt', 'two  spaces.txt']
+// Linux and Windows, and so is the client name. A shell expands `$HOME` and backticks
+// even inside double quotes, and cmd.exe expands `%PATH%`.
+const NAMES = ["Owner's notes.txt", 'Budget $HOME (draft).txt', 'Kitchen & bath; rev `3`.txt', 'two  spaces.txt', '100%PATH% done.txt']
 
 const root = mkdtempSync(join(tmpdir(), 'export holdout '))
 try {
