@@ -196,6 +196,15 @@ describe('parseHeadlessArgs', () => {
     })
   })
 
+  it('turns memory off for the run with --no-memory, which takes no value', () => {
+    const o = parseHeadlessArgs(['-p', 'x', '--no-memory'], '/d')!
+    expect(o.noMemory).toBe(true)
+    expect(headlessOverrides(o)).toEqual({ memoryEnabled: false })
+    expect(parseHeadlessArgs(['-p', 'x'], '/d')!.noMemory).toBeUndefined()
+    expect(parseHeadlessArgs(['-p', 'x', '--no-memory=false'], '/d')!.usageError).toMatch(/^--no-memory takes no value/)
+    expect(parseHeadlessArgs(['--no-memory', '-p', 'x'], '/d')!.noMemory).toBe(true)
+  })
+
   describe('prompt from stdin', () => {
     it('reads stdin for `-p -`, piped or not', () => {
       for (const stdinPiped of [true, false]) {

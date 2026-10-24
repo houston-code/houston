@@ -38,6 +38,7 @@ import {
 import { checkEgressHost, type EgressRunScope } from './egress'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
+import { memoryStore } from './memoryStore'
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
 import {
   restoreCheckpoint,
@@ -2322,6 +2323,62 @@ describe('system prompt stability across runs', () => {
     expect(systems).toHaveLength(2)
     expect(systems[1]).toBe(systems[0])
     expect(getConversation(conv.id)!.promptSnapshot!.gitStatus).toContain('working tree clean')
+  })
+
+  it('lists saved memories in a fresh snapshot and offers recall_memory only then', async () => {
+    const memRoot = mkdtempSync(join(tmpdir(), 'houston-loop-memory-'))
+    const before = process.env.HOUSTON_MEMORY_DIR
+    process.env.HOUSTON_MEMORY_DIR = memRoot
+    try {
+      const tools: string[][] = []
+      const systems: string[] = []
+      const provider: Provider = {
+        async *streamChat(req) {
+          systems.push(req.system ?? '')
+          tools.push((req.tools ?? []).map((t) => t.name))
+          yield { type: 'text', text: 'ok' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      // Nothing saved: no memory section, no recall tool.
+      await run({ provider })
+      expect(systems[0]).not.toContain('Memory: notes saved')
+      expect(tools[0]).not.toContain('recall_memory')
+
+      const { record } = await memoryStore({ root: memRoot, workspace: ws }).save({
+        scope: 'repo',
+        type: 'project',
+        name: 'tests-need-rg',
+        description: 'Set HOUSTON_RG',
+        body: 'Body.',
+        origin: 'user'
+      })
+      const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+      await run({ provider, conversationId: conv.id })
+      expect(systems[1]).toContain(`- ${record.id} (project) tests-need-rg: Set HOUSTON_RG`)
+      expect(tools[1]).toContain('recall_memory')
+      expect(getConversation(conv.id)!.promptSnapshot!.memory).toContain(record.id)
+
+      // A memory saved later in the conversation leaves this conversation's prompt alone.
+      await memoryStore({ root: memRoot, workspace: ws }).save({
+        scope: 'global',
+        type: 'user',
+        name: 'later',
+        description: 'Saved mid-conversation',
+        body: 'Body.',
+        origin: 'user'
+      })
+      await run({ provider, conversationId: conv.id })
+      expect(systems[2]).toBe(systems[1])
+
+      // Turned off: the index is left out of the prompt and the tool isn't offered.
+      await run({ provider, conversationId: conv.id, overrides: { memoryEnabled: false } })
+      expect(systems[3]).not.toContain('tests-need-rg')
+      expect(tools[3]).not.toContain('recall_memory')
+    } finally {
+      process.env.HOUSTON_MEMORY_DIR = before
+      rmSync(memRoot, { recursive: true, force: true })
+    }
   })
 
   it('retakes the snapshot when the stored one is from an earlier day', async () => {

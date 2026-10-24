@@ -1,3 +1,4 @@
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 /**
@@ -27,3 +28,10 @@ process.env.ELECTRON_OVERRIDE_DIST_PATH ||= join(process.cwd(), 'node_modules', 
  * tests and change what their runs report. The LSP tests drive their own managers.
  */
 process.env.HOUSTON_LSP ||= 'off'
+
+/**
+ * Cross-session memory reads ~/.houston/memory on every run, so a developer's own
+ * saved memories would change what the loop tests send. Each test process gets an
+ * empty folder of its own instead; tests that need memories write them there.
+ */
+process.env.HOUSTON_MEMORY_DIR ||= join(tmpdir(), `houston-test-memory-${process.pid}`)

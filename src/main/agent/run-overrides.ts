@@ -3,7 +3,7 @@ import type { AppSettings } from '@shared/types'
 
 /**
  * The settings a run executes under: the saved settings with the run's own
- * overrides (the headless `--effort`/`--max-turns`/`--max-cost`/`--verify` flags)
+ * overrides (the headless `--effort`/`--max-turns`/`--max-cost`/`--verify`/`--no-memory` flags)
  * laid over them. Pure, and returns a copy, so an override never reaches the
  * saved settings or outlives the run.
  */
@@ -20,6 +20,7 @@ export function applyRunOverrides(
     // saved "auto-extend" preference from stretching it past what the caller asked.
     ...(o.maxIterations !== undefined ? { maxIterations: o.maxIterations, autoExtendTurns: false } : {}),
     ...(o.costCeilingUsd !== undefined ? { costCeilingUsd: o.costCeilingUsd } : {}),
-    ...(o.verifyCommand !== undefined ? { verifyOnStop: true, verifyCommand: o.verifyCommand } : {})
+    ...(o.verifyCommand !== undefined ? { verifyOnStop: true, verifyCommand: o.verifyCommand } : {}),
+    ...(o.memoryEnabled !== undefined ? { memoryEnabled: o.memoryEnabled } : {})
   }
 }

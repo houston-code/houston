@@ -53,7 +53,47 @@ describe('resolvePromptSnapshot', () => {
   })
 })
 
+describe('resolvePromptSnapshot memory index', () => {
+  it('captures the memory index with a fresh snapshot', async () => {
+    const r = await resolvePromptSnapshot(undefined, '2026-10-15', async () => 'G', () => 'Memory: ...')
+    expect(r.snapshot).toEqual({ date: '2026-10-15', gitStatus: 'G', memory: 'Memory: ...' })
+  })
+
+  it('stores no memory key when the index is empty or memory is off', async () => {
+    expect((await resolvePromptSnapshot(undefined, '2026-10-15', async () => 'G', () => '')).snapshot).toEqual({
+      date: '2026-10-15',
+      gitStatus: 'G'
+    })
+    expect((await resolvePromptSnapshot(undefined, '2026-10-15', async () => 'G')).snapshot).toEqual({
+      date: '2026-10-15',
+      gitStatus: 'G'
+    })
+  })
+
+  it('reuses a same-day snapshot without re-reading memories, even one that predates memory', async () => {
+    const capture = vi.fn(() => 'NEW INDEX')
+    const stored = { date: '2026-10-15', gitStatus: 'G' }
+    expect(await resolvePromptSnapshot(stored, '2026-10-15', async () => 'X', capture)).toEqual({
+      snapshot: stored,
+      fresh: false
+    })
+    expect(capture).not.toHaveBeenCalled()
+  })
+
+  it('retakes a snapshot whose memory field is malformed', async () => {
+    const stored = { date: '2026-10-15', gitStatus: 'G', memory: 7 }
+    const r = await resolvePromptSnapshot(stored as never, '2026-10-15', async () => 'G2', () => 'M')
+    expect(r).toEqual({ snapshot: { date: '2026-10-15', gitStatus: 'G2', memory: 'M' }, fresh: true })
+  })
+})
+
 describe('formatPromptSnapshot', () => {
+  it('puts the memory index first, and leaves it out when memory is off', () => {
+    const snap = { date: '2026-10-15', gitStatus: '', memory: 'Memory: notes\n- m_1' }
+    expect(formatPromptSnapshot(snap)).toBe("Memory: notes\n- m_1\n\nToday's date: 2026-10-15.")
+    expect(formatPromptSnapshot(snap, { memory: false })).toBe("Today's date: 2026-10-15.")
+  })
+
   it('always states the date, and labels git context as a snapshot', () => {
     const out = formatPromptSnapshot({ date: '2026-10-15', gitStatus: 'Git: on branch "main".\n' })
     expect(out).toBe(

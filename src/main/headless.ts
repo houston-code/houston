@@ -238,6 +238,8 @@ export interface HeadlessOptions {
   maxCostUsd?: number
   /** `--verify`: run this command at a natural stop after edits (verifyOnStop + verifyCommand). */
   verifyCommand?: string
+  /** `--no-memory`: run without saved memories (memoryEnabled false). */
+  noMemory?: boolean
   /** `--input-format`: where prompts come from (default 'text'). */
   inputFormat?: HeadlessInputFormat
   /**
@@ -296,6 +298,7 @@ const HEADLESS_FLAGS = new Set([
   '--max-turns',
   '--max-cost',
   '--verify',
+  '--no-memory',
   '--input-format',
   '--output-schema',
   '--allowed-tools',
@@ -346,6 +349,7 @@ export function parseHeadlessArgs(
   let maxTurns: number | undefined
   let maxCostUsd: number | undefined
   let verifyCommand: string | undefined
+  let noMemory = false
   let inputFormat: HeadlessInputFormat | undefined
   let outputSchema: string | undefined
   let allowedTools: ToolScopeEntry[] | undefined
@@ -461,6 +465,9 @@ export function parseHeadlessArgs(
       else allowShellNetwork = true
     } else if (name === '--json') {
       json = true
+    } else if (name === '--no-memory') {
+      if (argv[i].includes('=')) bad('--no-memory takes no value; pass it on its own')
+      else noMemory = true
     }
   }
 
@@ -499,6 +506,7 @@ export function parseHeadlessArgs(
     ...(maxTurns !== undefined ? { maxTurns } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(verifyCommand !== undefined ? { verifyCommand } : {}),
+    ...(noMemory ? { noMemory } : {}),
     ...(inputFormat !== undefined ? { inputFormat } : {}),
     ...(outputSchema !== undefined ? { outputSchema } : {}),
     ...(allowedTools !== undefined ? { allowedTools } : {}),
@@ -525,7 +533,8 @@ export function headlessOverrides(opts: HeadlessOptions): RunSettingsOverrides |
     ...(opts.effort !== undefined ? { reasoningEffort: opts.effort } : {}),
     ...(opts.maxTurns !== undefined ? { maxIterations: opts.maxTurns } : {}),
     ...(opts.maxCostUsd !== undefined ? { costCeilingUsd: opts.maxCostUsd } : {}),
-    ...(opts.verifyCommand !== undefined ? { verifyCommand: opts.verifyCommand } : {})
+    ...(opts.verifyCommand !== undefined ? { verifyCommand: opts.verifyCommand } : {}),
+    ...(opts.noMemory ? { memoryEnabled: false } : {})
   }
   return Object.keys(o).length ? o : undefined
 }

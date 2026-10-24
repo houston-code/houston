@@ -206,6 +206,8 @@ import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
 import { formatPromptSnapshot, localDateStamp, resolvePromptSnapshot } from './promptSnapshot'
+import { memoryStore, type MemoryStore } from './memoryStore'
+import { buildMemoryIndex } from './memoryIndex'
 import { gitWritableRoots } from './gitDirs'
 import { GitGuard } from './gitGuard'
 import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
@@ -994,6 +996,19 @@ export function childReportsNote(reports: ChildReport[]): ChatMessage {
  * for the conversation's checkpoint chain. Undefined for a run that continues
  * without one.
  */
+/**
+ * The saved-memory index for the prompt snapshot, or '' when it can't be read. A
+ * damaged memory folder costs the run its memories, never the run itself.
+ */
+export function memoryIndexOrEmpty(store: MemoryStore): string {
+  try {
+    return buildMemoryIndex(store)
+  } catch (err) {
+    log.warn(`memory: could not build the index: ${err instanceof Error ? err.message : String(err)}`)
+    return ''
+  }
+}
+
 function startingTurn(messages: ChatMessage[]): { index: number; fp: string } | undefined {
   const index = messages.length - 1
   const last = messages[index]
@@ -1389,6 +1404,24 @@ export async function startRun(
     // gates tool calls live — only the prose the model already saw is fixed.
     const planMode = req.approvalPolicy === 'plan'
     const agents = await loadAgents(workspace)
+    // Cross-session memory (memoryStore.ts), unless turned off in Settings or for this run.
+    const memoryOn = settings.memoryEnabled !== false
+    const memory = memoryOn ? memoryStore({ workspace }) : undefined
+    // Date + git/GitHub awareness and the saved-memory index folded into the prompt,
+    // captured once per conversation and reused on later runs so the system prompt
+    // (and with it the provider's cached history) survives the agent's own edits
+    // between turns; it is retaken only when the local date changes. githubContext is
+    // a pure PATH probe (no network), so the run start never triggers unapproved
+    // egress. Resolved before the toolset, which offers recall_memory only when the
+    // index lists something.
+    const { snapshot: promptSnapshot, fresh: freshSnapshot } = await resolvePromptSnapshot(
+      conversationId ? peekConversation(conversationId)?.promptSnapshot : undefined,
+      localDateStamp(new Date()),
+      async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n'),
+      memory ? () => memoryIndexOrEmpty(memory) : undefined
+    )
+    if (freshSnapshot && conversationId) setPromptSnapshot(conversationId, promptSnapshot)
+    const memoryOffered = memory !== undefined && !!promptSnapshot.memory?.trim()
     // Backend-dependent tools appear only when the host wired their backend at
     // startup: view_localhost screenshots via an offscreen browser only the Electron
     // shell wires, and spawn_session and the schedule tools need the spawn and
@@ -1416,7 +1449,8 @@ export async function startRun(
       // this list then says so instead of naming ask_user.
       askUser: req.unattended !== true,
       // The lsp_* tools, only when a server is installed for a language the project uses.
-      lsp: lspManager.availableFor([workspace]).length > 0
+      lsp: lspManager.availableFor([workspace]).length > 0,
+      memory: memoryOffered
     })
       // The run's tool scope (headless --allowed-tools/--disallowed-tools) leaves out
       // what it refuses outright, so the prompt never names a tool the model can't use
@@ -1490,24 +1524,13 @@ export async function startRun(
       setAnnouncedPolicy(conversationId, run.announcedPolicy)
     }
     storedAnnounced = run.announcedPolicy
-    // Date + git/GitHub awareness folded into the prompt, captured once per
-    // conversation and reused on later runs so the system prompt (and with it the
-    // provider's cached history) survives the agent's own edits between turns; it is
-    // retaken only when the local date changes. githubContext is a pure PATH probe
-    // (no network), so the run start never triggers unapproved egress.
-    const { snapshot: promptSnapshot, fresh: freshSnapshot } = await resolvePromptSnapshot(
-      conversationId ? peekConversation(conversationId)?.promptSnapshot : undefined,
-      localDateStamp(new Date()),
-      async () => [await gitContext(workspace), githubContext()].filter((s) => s.trim()).join('\n')
-    )
-    if (freshSnapshot && conversationId) setPromptSnapshot(conversationId, promptSnapshot)
     let system = buildSystemPrompt(
       workspace,
       settings.systemPromptExtra,
       rules.text,
       planMode,
       capabilities,
-      formatPromptSnapshot(promptSnapshot),
+      formatPromptSnapshot(promptSnapshot, { memory: memoryOn }),
       req.providerId,
       req.model,
       builtinNames,
@@ -2756,6 +2779,7 @@ export async function startRun(
       // reorder). The ChatMessage objects are shared by reference, so callers must treat
       // them as read-only; recall_history only reads, so no deep clone is warranted.
       getHistory: () => [...messages],
+      ...(memoryOffered ? { memory } : {}),
       // Back the `skill` tool: resolve a skill name to its full instructions (or a
       // note listing what's available) from the skills loaded for this run.
       useSkill: (name) => resolveSkillInstructions(workspace, skills, name),

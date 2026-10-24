@@ -42,6 +42,12 @@ describe('applyRunOverrides', () => {
     expect(s).toMatchObject({ reasoningEffort: 'low', maxIterations: 40, costCeilingUsd: 9, verifyOnStop: false })
   })
 
+  it('turns memory off for the run without touching the saved setting', () => {
+    const s = saved({ memoryEnabled: true })
+    expect(applyRunOverrides(s, { memoryEnabled: false }).memoryEnabled).toBe(false)
+    expect(s.memoryEnabled).toBe(true)
+  })
+
   it('leaves the fields it does not override alone', () => {
     const run = applyRunOverrides(saved({ maxIterations: 12, verifyCommand: 'make' }), { reasoningEffort: 'high' })
     expect(run.maxIterations).toBe(12)
