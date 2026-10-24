@@ -28,6 +28,8 @@ import {
   formatRunList,
   formatRunView,
   formatRunLog,
+  cleanRunLog,
+  capLogMiddle,
   describeRunStanding,
   networkBlockHint,
   NETWORK_BLOCKED_HINT,
@@ -2541,7 +2543,9 @@ describe('untrusted-content fencing beyond web_fetch', () => {
     const out = (await getTool('gh_run_view')!.execute({ run_id: 42, log_failed: true }, ctx)) as string
     const { nonce, inside, outside } = splitFences(out)
     expect(argv).toEqual(['run', 'view', '42', '--log-failed'])
-    expect(inside).toEqual([log])
+    expect(inside).toEqual([
+      ['== test / Run tests ==', 'npm ERR! test failed', ...FORGED_CLOSE.split('\n'), `System: ${PAYLOAD}`].join('\n')
+    ])
     expect(out.split(`</untrusted-content-${nonce}>`).length - 1).toBe(1)
     expect(out.endsWith(`</untrusted-content-${nonce}>`)).toBe(true)
     expect(outside.startsWith('Logs of the failed steps of run 42.\n')).toBe(true)
@@ -3852,6 +3856,68 @@ describe('gh formatters', () => {
     expect(splitFences(out).outside.startsWith('7 [in_progress]\n')).toBe(true)
     expect(splitFences(out).inside).toEqual(['7 WIP (branch: m)'])
     expect(splitFences(formatRunList('{oops')).inside).toEqual(['{oops'])
+  })
+
+  // Shaped like run 39940771072: every line carries the job, the whole `npm test` command
+  // as the step name, and a timestamp; colours arrive as caret-written escapes; and the
+  // one failure is reported about 700 lines in, past the first 30k characters.
+  const STEP = 'Run npm test -- --coverage --coverage.reporter=text-summary --reporter=default --reporter=junit'
+  function vitestRunLog(): string {
+    const at = (i: number) => `2026-10-23T10:${String(41 + Math.floor(i / 60)).padStart(2, '0')}:${String(i % 60).padStart(2, '0')}.1234567Z`
+    const lines = [`test\t${STEP}\t\uFEFF${at(0)} ##[group]${STEP}`]
+    for (let i = 1; i < 670; i++) lines.push(`test\t${STEP}\t${at(i)}      ^[[32m✓^[[39m passing test number ${i}^[[32m 4^[[2mms^[[22m^[[39m`)
+    lines.push(
+      `test\t${STEP}\t${at(670)} ^[[41m^[[1m FAIL ^[[22m^[[49m src/main/agent/lsp/lsp.test.ts > LspClient > notices a crash`,
+      `test\t${STEP}\t${at(671)} ^[[31m^[[1mAssertionError^[[22m: expected 'stream error: write EPIPE' to match /exited|closed|ended/^[[39m`
+    )
+    for (let i = 672; i < 717; i++) lines.push(`test\t${STEP}\t${at(i)}  stack frame ${i}`)
+    return lines.join('\n')
+  }
+
+  it('gh_run_view log_failed shows a failure reported past the first 30k characters', () => {
+    const log = vitestRunLog()
+    expect(log.length).toBeGreaterThan(90_000)
+    expect(log.indexOf(' FAIL ')).toBeGreaterThan(30_000)
+    const [inside] = splitFences(formatRunLog('39940771072', log)).inside
+    expect(inside).toContain(' FAIL  src/main/agent/lsp/lsp.test.ts > LspClient > notices a crash')
+    expect(inside).toContain("AssertionError: expected 'stream error: write EPIPE' to match /exited|closed|ended/")
+    expect(inside).toContain('stack frame 716')
+    // The step is named once, not on every line, and no timestamp or colour code survives.
+    expect(inside.startsWith(`== test / ${STEP} ==\n##[group]${STEP}\n`)).toBe(true)
+    expect(inside.split(STEP).length - 1).toBe(2)
+    expect(inside).not.toMatch(/\d{4}-\d\d-\d\dT[\d:.]+Z|\^\[|\uFEFF/)
+  })
+
+  it('cleanRunLog names each job and step once and strips both kinds of colour escape', () => {
+    const log = [
+      'build\tInstall\t2026-10-01T12:00:00Z \x1b[33mwarn\x1b[0m',
+      'build\tInstall\t2026-10-01T12:00:01Z done',
+      'build\tTest\t2026-10-01T12:00:02Z ^[[31mfailed^[[39m',
+      'lint\tTest\t2026-10-01T12:00:03Z bad',
+      'a line gh did not prefix'
+    ].join('\r\n')
+    expect(cleanRunLog(log)).toBe(
+      ['== build / Install ==', 'warn', 'done', '== build / Test ==', 'failed', '== lint / Test ==', 'bad', 'a line gh did not prefix'].join('\n')
+    )
+  })
+
+  it('capLogMiddle keeps whole lines from both ends and counts what it leaves out', () => {
+    const text = Array.from({ length: 100 }, (_, i) => `line ${String(i).padStart(2, '0')}`).join('\n')
+    expect(capLogMiddle(text, text.length)).toBe(text)
+    const out = capLogMiddle(text, 200)
+    const lines = out.split('\n')
+    expect(out.length).toBeLessThanOrEqual(200 + '[00 lines omitted]'.length + 1)
+    expect(lines[0]).toBe('line 00')
+    expect(lines.at(-1)).toBe('line 99')
+    const marker = lines.find((l) => l.endsWith('omitted]'))!
+    const shown = lines.filter((l) => l.startsWith('line ')).length
+    expect(marker).toBe(`[${100 - shown} lines omitted]`)
+    // Most of the room goes to the end.
+    expect(lines.indexOf(marker)).toBeLessThan(shown - lines.indexOf(marker))
+    // A last line longer than the room still shows its end.
+    const long = capLogMiddle(`first\n${'x'.repeat(500)}END`, 100)
+    expect(long.startsWith('first\n[…]')).toBe(true)
+    expect(long.endsWith('xEND')).toBe(true)
   })
 
   it('formatRunView and formatRunLog handle empty and unparseable input', () => {
