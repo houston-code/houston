@@ -1,0 +1,18 @@
+{
+  "provider": "anthropic",
+  "model": "claude-haiku-5-5",
+  "attempts": 3,
+  "recordedAt": "2026-10-24",
+  "promptHash": "ac74b7ae9dfa",
+  "tasks": {
+    "apply-patch-multi-file": 1,
+    "fix-null-deref": 1,
+    "multi-edit-rename": 1,
+    "new-module-write": 1,
+    "replace-all-constant": 1,
+    "run-tests-then-fix": 1,
+    "search-then-fix": 1,
+    "todo-driven-refactor": 1,
+    "unverifiable-dependency": 1
+  }
+}

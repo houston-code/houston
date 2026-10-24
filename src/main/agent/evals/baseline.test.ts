@@ -161,6 +161,14 @@ describe('recordBaseline', () => {
     const b = recordBaseline('p', 'm', 3, [score('a', 2 / 3)], new Date('2026-07-16T00:00:00Z'))
     expect(isEvalBaseline(JSON.parse(JSON.stringify(b)))).toBe(true)
   })
+
+  it('stamps the prompt hash it was recorded on, when there is one', () => {
+    const now = new Date('2026-10-24T00:00:00Z')
+    const stamped = recordBaseline('p', 'm', 3, [score('a', 1)], now, '0123456789ab')
+    expect(stamped.promptHash).toBe('0123456789ab')
+    expect(isEvalBaseline(JSON.parse(JSON.stringify(stamped)))).toBe(true)
+    expect('promptHash' in recordBaseline('p', 'm', 3, [score('a', 1)], now)).toBe(false)
+  })
 })
 
 describe('baselineFileName', () => {
@@ -183,7 +191,8 @@ describe('isEvalBaseline', () => {
     ['a missing tasks map', { provider: 'p', model: 'm', attempts: 1, recordedAt: 'x' }],
     ['a non-numeric pass rate', { provider: 'p', model: 'm', attempts: 1, recordedAt: 'x', tasks: { a: 'yes' } }],
     ['a pass rate above 1', { provider: 'p', model: 'm', attempts: 1, recordedAt: 'x', tasks: { a: 1.5 } }],
-    ['a negative pass rate', { provider: 'p', model: 'm', attempts: 1, recordedAt: 'x', tasks: { a: -1 } }]
+    ['a negative pass rate', { provider: 'p', model: 'm', attempts: 1, recordedAt: 'x', tasks: { a: -1 } }],
+    ['a non-string prompt hash', { provider: 'p', model: 'm', attempts: 1, recordedAt: 'x', promptHash: 1, tasks: {} }]
   ])('rejects %s', (_label, v) => {
     expect(isEvalBaseline(v)).toBe(false)
   })

@@ -93,6 +93,46 @@ describe('summarize', () => {
   })
 })
 
+describe('reliability in the scorecard', () => {
+  const run = [report('a', 1, result({ passed: true })), report('b', 2 / 3), report('c', 0)]
+
+  it('prints pass@k, pass^k and the attempt rate with its interval', () => {
+    const out = formatReport({ driver: 'live', model: 'm', attempts: 3 }, run)
+    expect(out).toContain('pass@3 2/3  pass^3 1/3  attempts 5/9 = 56% (95% CI 27%–81%)')
+  })
+
+  // One attempt per task makes all three the same number as "solved".
+  it('leaves the line out of a single-attempt run', () => {
+    const out = formatReport({ driver: 'scripted', model: 'm', attempts: 1 }, [{ ...run[0], attempts: 1 }])
+    expect(out).not.toContain('pass@')
+  })
+})
+
+describe('prompt stamp in the scorecard', () => {
+  const run = [report('a', 1, result({ passed: true }))]
+
+  it('names the prompt hash in the title line', () => {
+    const out = formatReport({ driver: 'live', model: 'm', attempts: 3, promptHash: 'aaaaaaaaaaaa' }, run)
+    expect(out).toContain('— prompt aaaaaaaaaaaa')
+    expect(out).not.toContain('prompt changed')
+  })
+
+  it('says when the baseline was recorded on a different prompt', () => {
+    const header = { driver: 'live' as const, model: 'm', attempts: 3, promptHash: 'aaaaaaaaaaaa' }
+    expect(formatReport({ ...header, baselinePromptHash: 'bbbbbbbbbbbb' }, run)).toContain(
+      'prompt changed since the baseline (recorded on bbbbbbbbbbbb)'
+    )
+    expect(formatReport({ ...header, baselinePromptHash: 'aaaaaaaaaaaa' }, run)).not.toContain('prompt changed')
+  })
+
+  // A baseline from before the stamp existed has nothing to compare against.
+  it('says nothing about drift when either side has no hash', () => {
+    expect(formatReport({ driver: 'live', model: 'm', attempts: 3, baselinePromptHash: 'b' }, run)).not.toContain(
+      'prompt'
+    )
+  })
+})
+
 describe('honesty in the scorecard', () => {
   it('shows how many attempts reported honestly, and what the sample got wrong', () => {
     const dishonest = result({

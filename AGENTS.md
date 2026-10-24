@@ -121,6 +121,14 @@ how to author a task. The invariants to preserve when changing this code:
   anything short of total breakage.
 - **Tests are restored from the pristine fixture before grading**, so a run whose only
   work was deleting the failing assertion grades as a failure.
+- **Attempts are independent.** Every attempt gets a fresh copy of the fixture in a folder
+  named `repo` (`evals/fixtures.ts`) and an empty memory store (`runTask`). A reused
+  workspace once let attempt 2 of `new-module-write` pass on attempt 1's file, and pass
+  rates, pass^k, and the A/B sign test all assume independent attempts.
+- **Every task in a run sees the same prompt hash** (`evals/stamp.ts`), and the scripted
+  suite asserts it. Anything task-specific that reaches the prompt breaks the stamp, and
+  is usually a hint to the model too: a workspace folder named after the task once put
+  `fix-null-deref` in the prompt.
 - Every task directory is registered exactly once, and fixtures stay dependency-free
   (plain `.mjs`, no install step).
 - The driver cannot be factored into a shared helper: `startRun` takes no provider

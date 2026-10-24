@@ -33,6 +33,8 @@ export interface EvalConfig {
   providerId: string
   model: string
   attempts: number
+  /** Where to write the run record (HOUSTON_EVAL_OUT), for `npm run eval:compare`. */
+  out?: string
 }
 
 export type Env = Record<string, string | undefined>
@@ -72,9 +74,10 @@ export function resolveEvalConfig(env: Env, providers: ProviderConfig[]): EvalCo
   const record = env.HOUSTON_EVAL_RECORD === '1'
   const providerId = envOr(env, 'HOUSTON_EVAL_PROVIDER', DEFAULT_PROVIDER_ID)
   const attempts = resolveAttempts(env, live)
+  const out = envOr(env, 'HOUSTON_EVAL_OUT', '') || undefined
 
   if (!live) {
-    return { live, record, providerId, model: SCRIPTED_MODEL, attempts }
+    return { live, record, providerId, model: SCRIPTED_MODEL, attempts, ...(out ? { out } : {}) }
   }
 
   const provider = providers.find((p) => p.id === providerId)
@@ -89,5 +92,5 @@ export function resolveEvalConfig(env: Env, providers: ProviderConfig[]): EvalCo
         'Set HOUSTON_EVAL_MODEL explicitly.'
     )
   }
-  return { live, record, providerId, model, attempts }
+  return { live, record, providerId, model, attempts, ...(out ? { out } : {}) }
 }

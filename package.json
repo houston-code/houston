@@ -46,6 +46,7 @@
     "goldens:update": "vitest run src/main/agent/golden.test.ts -u",
     "eval": "vitest run --project evals",
     "eval:baseline": "HOUSTON_EVAL_LIVE=1 HOUSTON_EVAL_RECORD=1 vitest run --project evals",
+    "eval:compare": "vitest run --project evals src/main/agent/evals/compare.eval.ts",
     "notices": "node scripts/generate-notices.mjs",
     "notices:check": "node scripts/generate-notices.mjs --check",
     "license-gate": "node scripts/license-gate.mjs",

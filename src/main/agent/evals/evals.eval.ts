@@ -27,6 +27,7 @@
  *   HOUSTON_EVAL_MODEL       model id      (default: that provider's default model)
  *   HOUSTON_EVAL_ATTEMPTS    runs per task (default: 3 live, 1 scripted)
  *   HOUSTON_EVAL_RECORD=1    record the baseline instead of grading against it
+ *   HOUSTON_EVAL_OUT=<file>  also write the run record, for `npm run eval:compare`
  *
  * WHY THIS FILE OWNS EVERYTHING. `startRun` takes no provider parameter — it
  * reaches for `createProvider`/`agentHost` as module singletons — so the only
@@ -37,9 +38,9 @@
  * `fixtures.ts`; everything mock-bound stays here.
  */
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { AgentEvent, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import type { ProviderConfig } from '@shared/types'
@@ -60,6 +61,8 @@ import { resolveEvalConfig } from './config'
 import { materializeTask, restoreVerifyFiles, runVerify, taskDirNames } from './fixtures'
 import { failureCauses, formatReport, type TaskReport } from './report'
 import { gradeHonesty } from './honesty'
+import { currentCommit, gitIn, toRunRecord } from './runRecord'
+import { promptHash, sharedHash } from './stamp'
 import { TASKS } from './tasks'
 import { callTool, say, turn, type EvalResult, type EvalTask } from './types'
 
@@ -68,7 +71,7 @@ import { callTool, say, turn, type EvalResult, type EvalTask } from './types'
 // Resolved by a pure, unit-tested module (config.ts) rather than inline here: an
 // empty env var must mean "unset", and getting that wrong silently recorded a
 // baseline of all zeros once already. See config.ts for the incident.
-const { live: LIVE, record: RECORD, providerId: PROVIDER_ID, model: MODEL, attempts: ATTEMPTS } =
+const { live: LIVE, record: RECORD, providerId: PROVIDER_ID, model: MODEL, attempts: ATTEMPTS, out: OUT } =
   resolveEvalConfig(process.env, defaultProviders())
 
 function liveProviderConfig(): ProviderConfig {
@@ -150,6 +153,8 @@ const h = vi.hoisted(() => {
     live,
     /** The scripted fake, swapped in per task. Unused in live mode. */
     provider: null as Provider | null,
+    /** The run's first model request, kept for its prompt hash. Reset per run. */
+    request: null as ChatRequest | null,
     kind: 'anthropic' as string,
     key: null as string | null,
     models: [] as unknown[],
@@ -192,12 +197,22 @@ vi.mock('../../agentHost', () => ({
   collectSecrets: () => []
 }))
 // The one seam that differs by driver: scripted gets the fake, live gets the real
-// adapter. Everything downstream of this line is identical between the two.
+// adapter. Everything downstream of this line is identical between the two. Both
+// are wrapped to keep the run's first request, which the prompt hash is taken from
+// (stamp.ts): it is exactly what the provider received, in either driver.
 vi.mock('../../providers', async (importActual) => {
   const actual = await importActual<typeof import('../../providers')>()
   return {
     ...actual,
-    createProvider: (cfg: ProviderConfig): Provider => (h.live ? actual.createProvider(cfg) : h.provider!)
+    createProvider: (cfg: ProviderConfig): Provider => {
+      const provider = h.live ? actual.createProvider(cfg) : h.provider!
+      return {
+        streamChat(req) {
+          h.request ??= req
+          return provider.streamChat(req)
+        }
+      }
+    }
   }
 })
 vi.mock('../../mcp/manager', () => ({ getMcpToolDefs: async () => [] }))
@@ -269,6 +284,11 @@ afterEach(() => {
 async function runTask(task: EvalTask): Promise<EvalResult> {
   const ws = materializeTask(task, tmpRoot)
   h.provider = scriptedProvider(task.script)
+  h.request = null
+  // An empty memory store per attempt, beside the workspace. The test setup gives
+  // the whole process one store, so a memory a live model saved in one attempt
+  // reached the next attempt's prompt: the same leak as a reused workspace.
+  process.env.HOUSTON_MEMORY_DIR = join(dirname(ws), 'memory')
 
   const runId = `eval-${task.id}`
   const events: AgentEvent[] = []
@@ -333,7 +353,9 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
     durationMs,
     error: errored?.message ?? (limited ? `run hit a limit: ${limited.reason}` : undefined),
     costUsd: events.reduce((n, e) => n + (e.type === 'usage' ? e.cost : 0), 0),
-    honesty
+    honesty,
+    // Both spellings of the workspace: macOS reaches the temp dir through /var -> /private/var.
+    promptHash: h.request ? promptHash(h.request, [ws, realpathSync(ws)]) : undefined
   }
 }
 
@@ -361,6 +383,23 @@ describe('eval fixtures', () => {
     for (const cfg of defaultProviders().filter((p) => p.kind === 'anthropic' || p.kind === 'openai')) {
       expect(() => actual.createProvider(cfg), `createProvider failed for "${cfg.id}"`).not.toThrow()
     }
+  })
+
+  /**
+   * REGRESSION: every attempt at a task once reused one workspace folder, so a
+   * file one attempt created was already there for the next, and attempt 2 of
+   * new-module-write passed without doing anything. Each materialization must be
+   * a fresh copy of the fixture alone, in a folder whose name says nothing about
+   * the task (the prompt names the folder as the project).
+   */
+  it('gives every attempt a fresh, neutrally named copy of the fixture', () => {
+    const task = TASKS.find((t) => t.id === 'new-module-write')!
+    const first = materializeTask(task, tmpRoot)
+    writeFileSync(join(first, 'slug.mjs'), 'export const slugify = (s) => s\n')
+    const second = materializeTask(task, tmpRoot)
+    expect(second).not.toBe(first)
+    expect(existsSync(join(second, 'slug.mjs')), 'an earlier attempt’s file leaked in').toBe(false)
+    expect(second).not.toContain(task.id)
   })
 
   // A verify command that is already green grades every future regression as a
@@ -440,14 +479,55 @@ describe.skipIf(LIVE)('grading integrity', () => {
     }
     // Same budget as a scripted task below: real local tool calls, slow to spawn on Windows.
   }, 60_000)
+
+  /**
+   * The prompt hash labels a run only if every task in it gets the same one. Each
+   * task runs in its own throwaway workspace and the prompt names that path, so
+   * this is what proves stamp.ts scrubs it: miss a spelling of the path and the
+   * two hashes differ, and a run whose tasks disagree is stamped with nothing.
+   */
+  it('stamps every task with the same prompt hash', async () => {
+    const a = await runTask(TASKS[0])
+    const b = await runTask(TASKS[1])
+    expect(a.promptHash).toMatch(/^[0-9a-f]{12}$/)
+    expect(b.promptHash).toBe(a.promptHash)
+  }, 60_000)
 })
 
 describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
   const reports: TaskReport[] = []
+  /** Every attempt's prompt hash; the run is stamped only when they all agree. */
+  const hashes: (string | undefined)[] = []
 
   afterAll(() => {
     if (!reports.length) return
-    console.log(formatReport({ driver: LIVE ? 'live' : 'scripted', model: MODEL, attempts: ATTEMPTS }, reports))
+    const driver = LIVE ? 'live' : 'scripted'
+    const runHash = sharedHash(hashes)
+    console.log(
+      formatReport(
+        { driver, model: MODEL, attempts: ATTEMPTS, promptHash: runHash, baselinePromptHash: BASELINE?.promptHash },
+        reports
+      )
+    )
+    if (OUT) {
+      // Written before the baseline step, which can throw: a run that recorded no
+      // baseline is still a valid side of an A/B comparison.
+      const record = toRunRecord(
+        {
+          driver,
+          provider: PROVIDER_ID,
+          model: MODEL,
+          attempts: ATTEMPTS,
+          promptHash: runHash,
+          commit: currentCommit(gitIn(process.cwd())),
+          host: process.platform
+        },
+        reports,
+        new Date()
+      )
+      writeFileSync(resolve(OUT), `${JSON.stringify(record, null, 2)}\n`)
+      console.log(`Wrote run record → ${resolve(OUT)}`)
+    }
     if (!RECORD) return
     // Recording writes the scorecard as the model's new baseline. Reviewed and
     // committed like a golden: the diff is what documents the behavior change.
@@ -470,7 +550,7 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
       )
     }
     mkdirSync(BASELINES_DIR, { recursive: true })
-    const baseline = recordBaseline(PROVIDER_ID, MODEL, ATTEMPTS, scores, new Date())
+    const baseline = recordBaseline(PROVIDER_ID, MODEL, ATTEMPTS, scores, new Date(), runHash)
     writeFileSync(baselineFile, `${JSON.stringify(baseline, null, 2)}\n`)
     console.log(`Recorded baseline → ${baselineFile}\nReview the scores and commit it.`)
   })
@@ -480,6 +560,7 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
     async (_id, task) => {
       const attempts: EvalResult[] = []
       for (let i = 0; i < ATTEMPTS; i++) attempts.push(await runTask(task))
+      hashes.push(...attempts.map((a) => a.promptHash))
       const passes = attempts.filter((a) => a.passed).length
       const passRate = passes / ATTEMPTS
       // Show a failure when there was one: a run that passed 2/3 is far more
