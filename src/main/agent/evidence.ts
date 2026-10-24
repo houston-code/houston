@@ -40,7 +40,10 @@ export interface ShellEvidence {
   /** Null when the process was killed (or, for a background start, not yet known). */
   exitCode: number | null
   timedOut: boolean
-  /** The command's output as returned to the model (already clamped), scanned for test counts. */
+  /**
+   * The command's output as returned to the model (already clamped), scanned for test
+   * counts and for a status an `echo $?` printed.
+   */
   output: string
   /** Set when run_shell attributed a failure to the sandbox or host. */
   blocked?: BlockedReason
@@ -403,6 +406,62 @@ export interface CommandClass {
   exitAttributable: boolean
   /** For an HTTP request: a non-2xx/3xx response would have failed the command. */
   httpStatusChecked: boolean
+  /** For `pytest; echo "exit=$?"`: where in the output the classified part's own status is. */
+  statusEcho?: StatusEcho
+}
+
+/**
+ * The line an `echo $?` prints, and which of the lines like it in the output is the
+ * classified part's: every echo of the same line in the command prints one, in order.
+ */
+export interface StatusEcho {
+  /** The echoed line, with the status as its one capture group. */
+  line: RegExp
+  /** How many lines like it the command's echoes print. */
+  count: number
+  /** Which of them (from 0) follows the classified part. */
+  nth: number
+}
+
+const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/g
+
+/**
+ * The text a segment prints when it is a plain `echo` whose only expansion is `$?`
+ * (`echo "exit=$?"` prints `exit=$?` with the status in place of `$?`), else
+ * undefined: single quotes keep `$?` literal, and flags, a backslash, a backtick, or
+ * a redirection make the printed line something this can't predict.
+ */
+function echoedText(segment: string): string | undefined {
+  if (/['\\`<>]/.test(segment)) return undefined
+  const w = words(segment)
+  if (w[0] !== 'echo' || w.length < 2 || w[1].startsWith('-')) return undefined
+  const text = w.slice(1).join(' ')
+  const parts = text.split('$?')
+  return parts.length === 2 && !parts.some((p) => /["$]/.test(p)) ? text : undefined
+}
+
+/**
+ * Models check a command's status by echoing it (`pytest; echo "exit=$?"`), which
+ * makes the command's own status the echo's. The line the echo prints still carries
+ * the status of the part before it, so this says where that line is when the segment
+ * right after `index` is such an echo: after a `;`, so it runs whatever that part did,
+ * a part no `||` could have skipped, and an echo whose line isn't piped away or
+ * backgrounded (another line like it could then pass for it).
+ */
+function statusEcho(segments: Segment[], index: number): StatusEcho | undefined {
+  const seg = segments[index]
+  const next = segments[index + 1]
+  if (!next || seg.after !== ';' || seg.before === '||') return undefined
+  if (next.after === '|' || next.after === '&') return undefined
+  const text = echoedText(next.text)
+  if (!text) return undefined
+  const same = segments.flatMap((s, i) => (echoedText(s.text) === text ? [i] : []))
+  const [before, after] = text.split('$?').map((p) => p.replace(REGEX_SPECIAL, '\\$&'))
+  return {
+    line: new RegExp(`^${before}(\\d{1,3})${after}\\r?$`, 'gm'),
+    count: same.length,
+    nth: same.indexOf(index + 1)
+  }
 }
 
 /** Classify a command line by what it does, for the receipt. */
@@ -437,7 +496,9 @@ export function classifyCommand(command: string, background = false): CommandCla
       httpStatusChecked = w.some((x) => x === '--fail' || x === '--fail-with-body' || /^-[a-zA-Z]*f[a-zA-Z]*$/.test(x))
     } else httpStatusChecked = w.includes('--check-status')
   }
-  return { kind, exitAttributable: zeroExitProves(segments, index, pipefail), httpStatusChecked }
+  const exitAttributable = zeroExitProves(segments, index, pipefail)
+  const echo = exitAttributable ? undefined : statusEcho(segments, index)
+  return { kind, exitAttributable, httpStatusChecked, ...(echo ? { statusEcho: echo } : {}) }
 }
 
 // ---------------------------------------------------------------------------
@@ -570,23 +631,41 @@ function pageLabel(url: string): string {
   }
 }
 
-/** Whether a shell run passed, failed, or can't be told, and why. */
+/**
+ * The status an `echo $?` printed for the classified part. Only when the output has
+ * exactly as many lines like it as the command's echoes print: one more (a program
+ * printed a look-alike) or one fewer (an echo didn't run) leaves it unknown.
+ */
+function echoedStatus(output: string, echo: StatusEcho): number | undefined {
+  const hits = [...output.matchAll(echo.line)]
+  if (hits.length !== echo.count) return undefined
+  const n = Number(hits[echo.nth][1])
+  return n <= 255 ? n : undefined
+}
+
+/**
+ * Whether a shell run passed, failed, or can't be told, and why, with the exit code
+ * that speaks for its check: the command's own, or the one an `echo $?` printed.
+ */
 function outcome(
-  e: Pick<ShellEvidence, 'exitCode' | 'timedOut'>,
+  e: Pick<ShellEvidence, 'exitCode' | 'timedOut' | 'output'>,
   cls: CommandClass,
   counts: TestCounts | undefined
-): { ok: boolean | null; unknown?: UnknownReason } {
-  if (e.timedOut || e.exitCode === null) return { ok: false }
+): { ok: boolean | null; unknown?: UnknownReason; exitCode: number | null } {
+  if (e.timedOut || e.exitCode === null) return { ok: false, exitCode: e.exitCode }
+  const echoed = cls.statusEcho ? echoedStatus(e.output, cls.statusEcho) : undefined
+  const exitCode = echoed ?? e.exitCode
   if (counts) {
     // The runner's summary is the stronger signal: `pytest; echo done` exits 0 with
     // failures in its summary, and a run that found no tests didn't pass anything.
-    if (counts.failed > 0 || counts.passed === 0) return { ok: false }
-    return { ok: e.exitCode === 0 }
+    if (counts.failed > 0 || counts.passed === 0) return { ok: false, exitCode }
+    return { ok: exitCode === 0, exitCode }
   }
-  if (e.exitCode !== 0) return { ok: false }
-  if (cls.kind === 'http' && !cls.httpStatusChecked) return { ok: null, unknown: 'http-status-unchecked' }
-  if (!cls.exitAttributable) return { ok: null, unknown: 'exit-not-attributable' }
-  return { ok: true }
+  if (exitCode !== 0) return { ok: false, exitCode }
+  if (echoed !== undefined) return { ok: true, exitCode }
+  if (cls.kind === 'http' && !cls.httpStatusChecked) return { ok: null, unknown: 'http-status-unchecked', exitCode }
+  if (!cls.exitAttributable) return { ok: null, unknown: 'exit-not-attributable', exitCode }
+  return { ok: true, exitCode }
 }
 
 const ACTIONS: ReadonlySet<BrowserAction> = new Set(['fill', 'click', 'dblclick', 'press'])
@@ -674,12 +753,12 @@ export class EvidenceLedger {
       return
     }
     const counts = cls.kind === 'test' ? parseTestCounts(e.output) : undefined
-    const { ok, unknown } = outcome(e, cls, counts)
+    const { ok, unknown, exitCode } = outcome(e, cls, counts)
     this.put({
       ...base,
       ok,
       ...(unknown ? { unknown } : {}),
-      exitCode: e.exitCode,
+      exitCode,
       ...(e.timedOut ? { timedOut: true } : {}),
       ...(counts ? { counts } : {}),
       ...(e.blocked && ok !== true ? { blocked: e.blocked } : {}),
@@ -806,12 +885,16 @@ export class EvidenceLedger {
     if (state.running) return { ...record, unknown: 'still-running' }
     const { unknown: _unknown, ...rest } = record
     const counts = record.kind === 'test' ? parseTestCounts(state.output) : undefined
-    const settled = outcome({ exitCode: state.exitCode, timedOut: false }, record.pending.cls, counts)
+    const settled = outcome(
+      { exitCode: state.exitCode, timedOut: false, output: state.output },
+      record.pending.cls,
+      counts
+    )
     return {
       ...rest,
       ok: settled.ok,
       ...(settled.unknown ? { unknown: settled.unknown } : {}),
-      exitCode: state.exitCode,
+      exitCode: settled.exitCode,
       ...(counts ? { counts } : {})
     }
   }

@@ -122,6 +122,32 @@ describe('classifyCommand', () => {
     expect(classifyCommand('set -euo pipefail; pytest | tail -5').exitAttributable).toBe(true)
   })
 
+  it('finds the line an echo of `$?` prints for the part before it', () => {
+    expect(classifyCommand('node test.mjs; echo "exit=$?"').statusEcho).toMatchObject({ count: 1, nth: 0 })
+    expect(classifyCommand('pytest -q; echo Exit code: $?; ls -la').statusEcho).toMatchObject({ count: 1, nth: 0 })
+    // Every echo of the same line prints one; the test's is the one right after it.
+    expect(
+      classifyCommand('npm ci; echo "exit $?"; npm test; echo "exit $?"; npm view x; echo "exit $?"').statusEcho
+    ).toMatchObject({ count: 3, nth: 1 })
+    // A status the exit code already proves needs no echo.
+    expect(classifyCommand('pytest && echo "exit=$?"').statusEcho).toBeUndefined()
+  })
+
+  it.each([
+    ["pytest; echo 'exit=$?'", 'single quotes keep $? literal'],
+    ['pytest; echo -n $?', 'a flag'],
+    ['pytest; echo "$? in $PWD"', 'another expansion'],
+    ['pytest; echo "exit=$?" > status.txt', 'a redirection'],
+    ['pytest; echo "exit=$?" | true', 'its line is piped away'],
+    ['pytest; echo "exit=$?" &', 'it runs in the background'],
+    ['pytest; ls; echo $?', 'the echo is not right after the test'],
+    ['pytest | tail -3; echo $?', "the status is tail's"],
+    ['false || pytest; echo $?', 'the test may not have run'],
+    ['pytest; echo done', 'no $?']
+  ])('reads no echoed status from `%s` (%s)', (command) => {
+    expect(classifyCommand(command).statusEcho).toBeUndefined()
+  })
+
   it('does not split inside quotes, substitutions, or redirections', () => {
     expect(classifyCommand('echo "a && pytest"').kind).toBeNull()
     expect(classifyCommand('echo $(pytest --version)').kind).toBeNull()
@@ -242,6 +268,55 @@ describe('EvidenceLedger', () => {
       [null, 'background']
     ])
     expect(checks[2]).not.toHaveProperty('exitCode')
+  })
+
+  describe('reads the status an `echo $?` printed for the test', () => {
+    const run = (command: string, output: string, exitCode = 0) => {
+      const l = new EvidenceLedger()
+      l.recordShell(shell(command, { output, exitCode }))
+      return l.receipt()!.checks[0]
+    }
+
+    it('passes a test that echoed 0 and fails one that echoed 1', () => {
+      expect(run('node test.mjs; echo "exit=$?"', 'ok\nexit=0')).toEqual({
+        kind: 'test',
+        label: 'node test.mjs; echo "exit=$?"',
+        ok: true,
+        exitCode: 0,
+        runs: 1
+      })
+      expect(run('node test.mjs; echo "exit=$?"', 'exit=1\nAssertionError [ERR_ASSERTION]')).toMatchObject({
+        ok: false,
+        exitCode: 1
+      })
+    })
+
+    // The command's status is the last part's: git's 128 outside a repo is not the test's.
+    it('reports the test by its own status, not a later command\'s', () => {
+      const failed = run('node test.mjs; echo "exit=$?"; git status --short', 'exit=1\nfatal: not a git repository', 128)
+      expect(failed).toMatchObject({ ok: false, exitCode: 1 })
+      expect(run('node test.mjs; echo "exit=$?"; git status --short', 'ok\nexit=0\nfatal: not a git repository', 128)).toMatchObject({
+        ok: true,
+        exitCode: 0
+      })
+    })
+
+    it('picks the test\'s line out of the echoes of the same line', () => {
+      const cmd = 'node test.mjs; echo "exit $?"; npm view slug-suite-helpers; echo "exit $?"'
+      expect(run(cmd, 'ok\nexit 0\nnpm error 404\nexit 1')).toMatchObject({ ok: true, exitCode: 0 })
+      expect(run(cmd, 'exit 1\nexit 0')).toMatchObject({ ok: false, exitCode: 1 })
+    })
+
+    // A look-alike line the program printed, or an echo line missing from clamped
+    // output, makes the position unknowable: unknown, never a guess.
+    it('leaves it unknown when the lines do not add up', () => {
+      expect(run('node test.mjs; echo "exit=$?"', 'exit=0\nexit=1')).toMatchObject({ ok: null, unknown: 'exit-not-attributable' })
+      expect(run('node test.mjs; echo "exit=$?"', '... 2048 bytes truncated ...')).toMatchObject({ ok: null })
+    })
+
+    it('still trusts the runner summary first', () => {
+      expect(run('pytest; echo "exit=$?"', '1 failed, 3 passed in 0.1s\nexit=0')).toMatchObject({ ok: false })
+    })
   })
 
   it('records a failed install with the cause run_shell named', () => {
@@ -413,6 +488,13 @@ describe('EvidenceLedger background shells', () => {
       background: true,
       runs: 1
     })
+  })
+
+  it('reads an echoed status from a backgrounded test run that finished', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(started('node test.mjs; echo "exit=$?"'))
+    const r = l.receipt(() => ({ running: false, exitCode: 0, output: 'exit=1' }))!
+    expect(r.checks[0]).toMatchObject({ kind: 'test', ok: false, exitCode: 1 })
   })
 
   it('leaves a start unknown when the registry no longer knows the shell', () => {
