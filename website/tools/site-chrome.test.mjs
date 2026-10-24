@@ -36,9 +36,13 @@ describe("hand-written pages share the site chrome", () => {
 });
 
 describe("phone menu markup", () => {
-  it("covers every page", () => {
+  it("finds every page", () => {
     expect(ALL_PAGES.length).toBeGreaterThan(40);
-    for (const file of ALL_PAGES) {
+  });
+
+  // One test per page: parsing all of them in one test overran the 5s timeout on slow CI runners.
+  for (const file of ALL_PAGES) {
+    it(`${file} has the phone menu`, () => {
       const doc = new JSDOM(read(file)).window.document;
       const button = doc.getElementById("nav-menu-button");
       expect(button, file).not.toBeNull();
@@ -56,6 +60,6 @@ describe("phone menu markup", () => {
       ]);
       expect(menu.querySelector("#theme-toggle .theme-toggle-label")?.textContent, file).toBe("Dark theme");
       expect(doc.querySelectorAll("script[src='/assets/app.js']").length, file).toBe(1);
-    }
-  });
+    });
+  }
 });
