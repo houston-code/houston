@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { APP_NAME } from '@shared/constants'
 
 /**
@@ -33,10 +33,18 @@ vi.mock('electron', () => ({
 vi.mock('./ipc', () => ({ registerIpc: vi.fn() }))
 
 describe('main entry app identity', () => {
-  // Vitest clears mock call history between tests, so each test must evaluate
-  // the entry module afresh rather than reading calls from a cached import.
+  // The first import transforms the entry's whole import graph, which on a cold
+  // module cache can take longer than a test's 5s timeout. Pay for it once here.
+  beforeAll(async () => {
+    await import('./index')
+  }, 60_000)
+
+  // Each test evaluates the entry module afresh and reads only its own calls. The
+  // clear is explicit so the counts don't depend on the clearMocks default (on
+  // since Vitest 5, off before).
   beforeEach(() => {
     vi.resetModules()
+    vi.clearAllMocks()
   })
 
   it('sets the app name before whenReady so userData/Keychain stay stable', async () => {
