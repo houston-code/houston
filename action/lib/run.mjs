@@ -190,7 +190,9 @@ export async function run({ env, exec, log = (s) => process.stdout.write(`${s}\n
     return fail(e.message)
   }
   writeFileSync(join(profile, 'settings.json'), `${JSON.stringify({ permissionRules: rules }, null, 2)}\n`, { mode: 0o600 })
-  const cliEnv = { ...env, HOUSTON_DATA_DIR: profile, GH_TOKEN: ghToken, NO_COLOR: '1' }
+  // GH_REPO pins Houston's gh tools to the repository the event came from. The CLI refuses
+  // a gh call it can't pin, which a working directory with no GitHub remote would cause.
+  const cliEnv = { ...env, HOUSTON_DATA_DIR: profile, GH_TOKEN: ghToken, GH_REPO: repository, NO_COLOR: '1' }
   for (const k of Object.keys(cliEnv)) if (k.startsWith('HOUSTON_INPUT_') || k === 'HOUSTON_ACTION_API_KEY') delete cliEnv[k]
   if (apiKey) cliEnv[keyEnvName(provider)] = apiKey
 
