@@ -255,6 +255,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['gui', 'tui']
   },
   { name: 'hooks', description: 'List configured hooks', clients: ['gui', 'tui'] },
+  { name: 'memory', description: 'Review saved memories (show, edit, pin, forget, on, off)', clients: ['tui'] },
   { name: 'theme', description: 'List or switch the color theme', clients: ['gui', 'tui'] },
   { name: 'image', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
   { name: 'cwd', description: 'Show the working directory', clients: ['gui', 'tui'] },
@@ -297,6 +298,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   output: 'in the app, open a tool row to see its full output',
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
   proposals: 'in the app, proposed sessions appear as cards in the chat, with Start and Dismiss',
+  memory: 'in the app, review memories in Settings > Memory',
   image: 'in the app, attach an image with the + button, or paste or drop it into the message box',
   exit: 'close the window to leave',
   quit: 'close the window to leave'
