@@ -203,6 +203,10 @@ export function permissionSubject(toolName: string, args: Record<string, unknown
       return s('url')
     case 'web_search':
       return s('query')
+    case 'memory_save':
+    case 'memory_delete':
+      // Rules target a scope: `memory_save(global)`, `memory_delete(repo)`.
+      return s('scope')
     case 'apply_patch':
       // The files live inside the patch text, not in a `path` argument, so reading
       // `path` left a patch with no subject: no file rule, not even `*` over a path,

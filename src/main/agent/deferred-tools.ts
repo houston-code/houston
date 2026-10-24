@@ -46,6 +46,9 @@ export const DEFERRED_TOOL_CATALOG: Readonly<Record<string, string>> = {
   show_images: 'Show image files (screenshots, renders) to the user as a gallery or file links.',
   render_mockup:
     "Render a self-contained HTML mockup from the project into screenshots, to show a UI that doesn't exist yet.",
+  // Memory writes: the prompt says when to save; the schemas load on first use.
+  memory_save: 'Save or update a memory: a fact a later session should know (see the memory guidance).',
+  memory_delete: 'Delete a saved memory that proved wrong or no longer applies.',
   // Scheduling: only when the user asks for something later or on a schedule.
   schedule_run:
     'Schedule a recurring or one-time background agent run ("every morning...", "tomorrow at 9...") with a self-contained prompt.',

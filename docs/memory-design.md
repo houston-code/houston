@@ -143,36 +143,49 @@ rules loader, so `@path` mentions in it are plain text and need no neutralizing.
 
 ## Tools
 
-All three live in `src/main/agent/tools.ts` and are built-in in the main loop only.
+Defined in `src/main/agent/memoryTools.ts`, registered in `tools.ts`, main loop only.
 
 | Tool | Kind | Args | Behavior |
 | --- | --- | --- | --- |
-| `recall_memory` | read | `id?`, `query?`, `scope?` | id: full body. query: case-insensitive match over name, description, body; top 5. Bumps `usage.json`. |
-| `memory_save` | write | `id?`, `scope`, `type`, `name`, `description`, `body` | No id: create. With id: update. Same scope + name as an existing memory: update it (dedupe on retries). Returns the id. |
-| `memory_delete` | write | `id` | Moves the file to `.trash/`. Idempotent. |
+| `recall_memory` | read | `id?`, `query?`, `scope?` | id: full body. query: term match over name, description, body (name and description hits rank higher); top 5. Bumps `usage.json`. Offered only when the index lists something. |
+| `memory_save` | write | `id?`, `scope`, `type`, `name`, `description`, `body` | No id: create, or update the memory already holding that name (dedupes retries). With id: update. Returns the id. |
+| `memory_delete` | write | `scope`, `id` | Moves the file to `.trash/`. Idempotent. |
+
+`memory_save` and `memory_delete` are deferred (listed in the `find_tools` catalog,
+schema loaded on first use) to keep the fixed per-request overhead inside its budget;
+the prompt carries one guidance line naming them. A save does not count as a file
+change, so it never arms the verification gate, and rewinding a turn does not undo it
+(the trash does).
 
 ### Write approval
 
-- A run-scoped flag `untrustedIngested` is set whenever a tool result passes through
-  `presentUntrusted` / `presentUntrustedInline` (web fetch, web search, GitHub bodies,
-  MCP text). Once set, memory writes always ask for approval, in every approval mode
-  including full auto.
-- Otherwise writes follow a new permission subject `memory:<scope>` so users can write
-  allow/ask rules. Default: ask in the default approval mode, allow in full auto.
-- Secret check: `findSecret` on every field. A hit refuses the write and tells the
-  model why (no silent redaction, since a half-redacted fact is misleading).
+- Memory writes are `write`-kind: they ask in the default ("ask") mode and run without
+  asking in auto-edit and full auto. Plan mode refuses them like any write.
+- Taint: when the conversation log holds any call whose output may carry someone
+  else's text (a `network` or MCP tool, `dispatch_agent` / `dispatch_writable_agent`,
+  or a `run_shell` command that fetches: curl, wget, gh, git pull, and similar), every
+  memory write asks, in every mode. Neither an `allow` rule, "Allow for run", nor full
+  auto skips it (`memoryTainted` in `approval.ts`, `memoryTaintSource` in
+  `memoryTools.ts`). The whole log counts, not just the current turn, because text
+  fetched earlier is still in the model's context.
+- Permission rules target a scope: `memory_save(global)`, `memory_delete(repo)`.
+- Secret check: `findSecret` on every field, with this install's stored secrets. A hit
+  refuses the write and tells the model why (no silent redaction, since a
+  half-redacted fact is misleading).
 - Per-run cap of 10 writes, so a confused loop cannot churn the store.
-- Every write emits a transcript event, drawn as a chip ("Remembered: <name>",
-  "Forgot: <name>") with Open and Undo, in both front ends.
+- Every call shows in the transcript as a tool row with a plain label ("Remember
+  tests-need-rg", "Update memory", "Forget memory"), the same in both front ends
+  (`src/shared/toolLabel.ts`). Undo lives in the review surfaces (restore from trash).
 
 ### Who gets memory
 
 | Context | Index in prompt | recall_memory | Writes |
 | --- | --- | --- | --- |
-| Main conversation (app, TUI) | yes | yes | yes |
+| Main conversation (app, TUI, ACP) | yes | yes | yes |
+| Background sessions and scheduled runs | yes | yes | yes, under the session's approval policy (the user can open the chat) |
 | Subagents, side chat | no | no (phase 2: read) | no |
-| Headless, ACP, scheduled runs | yes | yes | no (phase 2: pending list) |
-| `memory.enabled = false` or `--no-memory` | no | not offered | not offered |
+| Headless `-p` (unattended) | yes | yes | no (phase 2: pending list) |
+| `memoryEnabled: false` or `--no-memory` | no | not offered | not offered |
 
 ## Review surfaces
 
@@ -183,7 +196,7 @@ delete, restore, pin, orphans), used by IPC and the TUI alike.
   tabs, each memory with type badge, description, updated date, edit (markdown body),
   pin, delete (destructive styling, undo toast), "Reveal folder", and an "Other repos"
   list for orphaned keys (repo moved or re-cloned) with delete or "attach to this repo".
-  Toggle for `memory.enabled` and per-project off.
+  A toggle for the `memoryEnabled` setting.
 - TUI: `/memory` lists both scopes in the existing picker (`tui-picker.ts`);
   `/memory rm <n>`, `/memory edit <n>` (opens `$EDITOR` through `tui-editor.ts`),
   `/memory pin <n>`, `/memory off|on`. Listed in the TUI help next to `/hooks` and `/mcp`.
@@ -244,10 +257,10 @@ Native stack, bottom to top; 4 and 5 are independent of each other.
 1. **Store.** `src/main/agent/memoryStore.ts` + `src/shared/memoryTypes.ts`: format,
    parse, list, save, delete, trash, caps, perms, repo key. Pure, fully tested. No
    behavior change.
-2. **Recall.** Index builder, `memorySnapshot` on the conversation, `# Memory` prompt
-   section, `recall_memory` tool, `memory.enabled` setting, `--no-memory` flag. Goldens.
-3. **Save.** `memory_save` / `memory_delete`, taint flag, `memory:<scope>` permission
-   subject, secret refusal, per-run cap, transcript event + chips in renderer and TUI.
+2. **Recall.** Index builder, `promptSnapshot.memory`, the index prompt
+   section, `recall_memory` tool, `memoryEnabled` setting, `--no-memory` flag.
+3. **Save.** `memory_save` / `memory_delete`, taint rule, per-scope permission
+   subject, secret refusal, per-run cap, transcript labels shared by both front ends.
 4. **Desktop review.** IPC + preload + Settings "Memory" page.
 5. **TUI review.** `/memory` command family + help text.
 6. **Docs.** Guide, privacy, ROADMAP, AGENTS.md.

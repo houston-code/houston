@@ -102,6 +102,11 @@ export interface ApprovalInputs {
    * full auto runs it without the per-destination prompt. Defaults to false.
    */
   networkRead?: boolean
+  /**
+   * Whether this is a memory save or delete in a conversation that has taken in text
+   * from outside (see memoryTaintSource). Defaults to false.
+   */
+  memoryTainted?: boolean
 }
 
 /**
@@ -146,6 +151,13 @@ export interface ApprovalInputs {
  * Only an explicit `allow` rule skips it: "Allow for run" and full-auto don't, and on a
  * host without a sandbox neither does the unconfined-shell consent.
  *
+ * A memory write in a conversation that has read text from outside (`memoryTainted`:
+ * a web page, a GitHub body, an MCP result, a subagent's report) asks in every mode,
+ * and nothing skips it: not an `allow` rule, not "Allow for run", not full auto. A
+ * memory outlives the conversation and rides every later prompt, so it is where an
+ * injected instruction would go to persist, and the user seeing the save is the
+ * check that stops it.
+ *
  * A network call that only reads (`networkRead`) runs without asking in full auto: the
  * per-destination prompt exists to stop data leaving or something being published, and
  * a GitHub list or view does neither. A permission
@@ -165,6 +177,7 @@ export function decideApproval(inputs: ApprovalInputs): {
     if (ruleAction === 'ask' || inputs.shellDiscardsWork) return { mustApprove: true, unsandboxedShell: true }
     return { mustApprove: !shellUnsandboxedOverride, unsandboxedShell: true }
   }
+  if (inputs.memoryTainted) return { mustApprove: true, unsandboxedShell: false }
   if (ruleAction === 'allow') return { mustApprove: false, unsandboxedShell: false }
   if (ruleAction === 'ask') return { mustApprove: true, unsandboxedShell: false }
   // A workspace-escaping shell command always prompts (a generic override or

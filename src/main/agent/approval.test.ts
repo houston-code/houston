@@ -106,6 +106,24 @@ describe('decideApproval', () => {
     ...over
   })
 
+  describe('tainted memory writes (memoryTainted)', () => {
+    it('asks in every mode, past an allow rule and "Allow for run"', () => {
+      for (const policy of ['ask', 'auto-edit', 'full-auto'] as const) {
+        expect(decideApproval(base({ policy, kind: 'write', memoryTainted: true })).mustApprove).toBe(true)
+      }
+      expect(
+        decideApproval(base({ policy: 'full-auto', kind: 'write', memoryTainted: true, ruleAction: 'allow', override: true }))
+          .mustApprove
+      ).toBe(true)
+    })
+
+    it('leaves an untainted memory write to the usual write rules', () => {
+      expect(decideApproval(base({ policy: 'full-auto', kind: 'write' })).mustApprove).toBe(false)
+      expect(decideApproval(base({ policy: 'auto-edit', kind: 'write' })).mustApprove).toBe(false)
+      expect(decideApproval(base({ policy: 'ask', kind: 'write' })).mustApprove).toBe(true)
+    })
+  })
+
   describe('network reads (networkRead)', () => {
     it('full auto runs a network read without asking', () => {
       expect(decideApproval(base({ policy: 'full-auto', kind: 'network', networkRead: true })).mustApprove).toBe(false)

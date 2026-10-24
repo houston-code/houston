@@ -236,6 +236,16 @@ describe('buildSystemPrompt', () => {
     expect(prompt).not.toContain('It reports back here')
   })
 
+  it('offers the memory tools and their guidance only when asked to', () => {
+    expect(toolNames()).not.toContain('memory_save')
+    const withMemory = toolNames({ memoryWrite: true })
+    expect(withMemory).toEqual(expect.arrayContaining(['memory_save', 'memory_delete']))
+    expect(promptFor(toolNames())).not.toContain('memory_save')
+    const prompt = promptFor(withMemory)
+    expect(prompt).toContain('Save what a later session would need with memory_save')
+    expect(prompt).toContain('Never save what the repo records')
+  })
+
   it('offers ask_user by default but withholds it from an unattended run', () => {
     expect(toolNames()).toContain('ask_user')
     expect(toolNames({ askUser: true })).toContain('ask_user')

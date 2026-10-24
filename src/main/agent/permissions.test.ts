@@ -45,6 +45,14 @@ describe('permissionSubject', () => {
     expect(permissionSubject('read_file', { path: 'src/a.ts' })).toBe('src/a.ts')
     expect(permissionSubject('glob', { pattern: '**/*.ts' })).toBe('**/*.ts')
     expect(permissionSubject('read_file', {})).toBe('')
+    expect(permissionSubject('memory_save', { scope: 'global', name: 'x', path: 'p' })).toBe('global')
+    expect(permissionSubject('memory_delete', { scope: 'repo', id: 'm_1' })).toBe('repo')
+  })
+
+  it('lets a rule target one memory scope', () => {
+    const rules: PermissionRule[] = [{ tool: 'memory_save', match: 'global', action: 'deny' }]
+    expect(matchRule(rules, 'memory_save', permissionSubject('memory_save', { scope: 'global' }), ['/w'])).toBe('deny')
+    expect(matchRule(rules, 'memory_save', permissionSubject('memory_save', { scope: 'repo' }), ['/w'])).toBeNull()
   })
 
   it('lists every file an apply_patch touches, including a move target', () => {
