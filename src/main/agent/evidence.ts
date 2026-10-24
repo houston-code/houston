@@ -646,26 +646,32 @@ function echoedStatus(output: string, echo: StatusEcho): number | undefined {
 /**
  * Whether a shell run passed, failed, or can't be told, and why, with the exit code
  * that speaks for its check: the command's own, or the one an `echo $?` printed.
+ * `timedOut` says whether the timeout (or kill) is the check's: once its echo has
+ * printed, the checked part had finished, and a later part that ran out the clock
+ * (`node test.mjs; echo "exit=$?"; find / -name x`) says nothing about it.
  */
 function outcome(
   e: Pick<ShellEvidence, 'exitCode' | 'timedOut' | 'output'>,
   cls: CommandClass,
   counts: TestCounts | undefined
-): { ok: boolean | null; unknown?: UnknownReason; exitCode: number | null } {
-  if (e.timedOut || e.exitCode === null) return { ok: false, exitCode: e.exitCode }
+): { ok: boolean | null; unknown?: UnknownReason; exitCode: number | null; timedOut: boolean } {
   const echoed = cls.statusEcho ? echoedStatus(e.output, cls.statusEcho) : undefined
+  if (echoed === undefined && (e.timedOut || e.exitCode === null)) {
+    return { ok: false, exitCode: e.exitCode, timedOut: e.timedOut }
+  }
   const exitCode = echoed ?? e.exitCode
+  const done = { exitCode, timedOut: false }
   if (counts) {
     // The runner's summary is the stronger signal: `pytest; echo done` exits 0 with
     // failures in its summary, and a run that found no tests didn't pass anything.
-    if (counts.failed > 0 || counts.passed === 0) return { ok: false, exitCode }
-    return { ok: exitCode === 0, exitCode }
+    if (counts.failed > 0 || counts.passed === 0) return { ok: false, ...done }
+    return { ok: exitCode === 0, ...done }
   }
-  if (exitCode !== 0) return { ok: false, exitCode }
-  if (echoed !== undefined) return { ok: true, exitCode }
-  if (cls.kind === 'http' && !cls.httpStatusChecked) return { ok: null, unknown: 'http-status-unchecked', exitCode }
-  if (!cls.exitAttributable) return { ok: null, unknown: 'exit-not-attributable', exitCode }
-  return { ok: true, exitCode }
+  if (exitCode !== 0) return { ok: false, ...done }
+  if (echoed !== undefined) return { ok: true, ...done }
+  if (cls.kind === 'http' && !cls.httpStatusChecked) return { ok: null, unknown: 'http-status-unchecked', ...done }
+  if (!cls.exitAttributable) return { ok: null, unknown: 'exit-not-attributable', ...done }
+  return { ok: true, ...done }
 }
 
 const ACTIONS: ReadonlySet<BrowserAction> = new Set(['fill', 'click', 'dblclick', 'press'])
@@ -753,13 +759,13 @@ export class EvidenceLedger {
       return
     }
     const counts = cls.kind === 'test' ? parseTestCounts(e.output) : undefined
-    const { ok, unknown, exitCode } = outcome(e, cls, counts)
+    const { ok, unknown, exitCode, timedOut } = outcome(e, cls, counts)
     this.put({
       ...base,
       ok,
       ...(unknown ? { unknown } : {}),
       exitCode,
-      ...(e.timedOut ? { timedOut: true } : {}),
+      ...(timedOut ? { timedOut: true } : {}),
       ...(counts ? { counts } : {}),
       ...(e.blocked && ok !== true ? { blocked: e.blocked } : {}),
       seq: this.seq++
