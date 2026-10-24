@@ -633,9 +633,14 @@ export function runWithBackend(
     // `detached` (POSIX) puts the command in its own process group so `killTree`
     // can reap the whole tree on timeout/abort. Without it, a kill hits only the
     // wrapper and leaves orphaned grandchildren alive.
+    //
+    // stdin is /dev/null: nothing ever writes to it, and an open pipe makes anything
+    // that reads input (`npm init`, `cat`, a REPL, a y/n prompt) wait out the whole
+    // timeout instead of seeing end-of-input and exiting at once.
     const child = spawnFn(launch.file, launch.args, {
       cwd: opts.cwd,
       env: { ...sandboxEnv(baseEnv, { offline: runsOffline(backend, opts.allowNetwork) }), ...launch.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
       detached: launch.detached,
       windowsHide: launch.windowsHide
     })
