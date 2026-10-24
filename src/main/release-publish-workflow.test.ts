@@ -352,6 +352,24 @@ describe('release-publish sync to main', () => {
     // Only an X.Y.0 release moves main's version, and never backwards.
     expect(sync).toContain('if [ "${VERSION##*.}" = 0 ]; then')
   })
+
+  it("moves the GitHub Action's CLI pin to the latest release, from its signed SHA256SUMS", () => {
+    const sync = job('sync-main')
+    const pin = sync.indexOf('node scripts/pin-action-cli.mjs --version "$VERSION" --dir "$cli_dir"')
+    expect(pin).toBeGreaterThan(-1)
+    // Only for the latest release, from main's copy of the script (after the switch to main),
+    // and before the "nothing to sync" check and the commit.
+    expect(sync.lastIndexOf('if [ "$LATEST" = true ]; then', pin)).toBeGreaterThan(sync.indexOf('git switch --quiet -c'))
+    expect(pin).toBeLessThan(sync.indexOf('nothing to sync'))
+    expect(sync).toContain('-p houston-cli.cjs -p SHA256SUMS -p SHA256SUMS.asc')
+    expect(sync).toContain('git add -A action/cli-release.json action/test/fixtures')
+    expect(sync).toContain('git ls-files --others --exclude-standard website/public/docs action/test/fixtures')
+    // A failure warns and leaves the action as it was, so the notes still reach main.
+    expect(sync).toContain('git checkout -- action\n')
+    expect(sync).toContain('git clean -fdq action/test/fixtures')
+    // The only token the step needs is the workflow's own, to read the release.
+    expect(sync).toContain('GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}')
+  })
 })
 
 describe('committed signing public key', () => {

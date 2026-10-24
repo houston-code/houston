@@ -520,6 +520,9 @@ jobs:
           cache: 'false'
       - name: Bring the notes and version to main
         id: sync
+        env:
+          # Reads this release's SHA256SUMS for the action's CLI pin (below).
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           git fetch --quiet --no-tags origin '+refs/heads/main:refs/remotes/origin/main' \
@@ -550,8 +553,25 @@ jobs:
             git checkout -- website/public
             git clean -fdq website/public/docs
           fi
-          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard website/public/docs)" ]; then
-            echo "main already has the v$VERSION notes, version, and docs; nothing to sync."
+          # The GitHub Action runs the CLI action/cli-release.json pins, so the latest release
+          # moves the pin to itself. pin-action-cli.mjs checks the release's GPG signature
+          # against the committed key before it writes anything, and the sync PR then runs the
+          # action end to end on the new CLI (ci.yml's action-e2e, required through `build`).
+          # A failure here only warns, like the docs.
+          if [ "$LATEST" = true ]; then
+            cli_dir="$RUNNER_TEMP/action-cli"
+            mkdir -p "$cli_dir"
+            if ! { gh release download "v$VERSION" -R "$GITHUB_REPOSITORY" --clobber -D "$cli_dir" \
+                -p houston-cli.cjs -p SHA256SUMS -p SHA256SUMS.asc &&
+              node scripts/pin-action-cli.mjs --version "$VERSION" --dir "$cli_dir"; }; then
+              echo "::warning::Couldn't pin the GitHub Action to the v$VERSION CLI; it stays on the previous one. Run scripts/pin-action-cli.mjs by hand."
+              echo "**The GitHub Action wasn't moved to the v$VERSION CLI:** scripts/pin-action-cli.mjs failed (see the log). Run it by hand and open a PR." >> "$GITHUB_STEP_SUMMARY"
+              git checkout -- action
+              git clean -fdq action/test/fixtures
+            fi
+          fi
+          if git diff --quiet && [ -z "$(git ls-files --others --exclude-standard website/public/docs action/test/fixtures)" ]; then
+            echo "main already has the v$VERSION notes, version, docs, and action pin; nothing to sync."
             echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -559,6 +579,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add CHANGELOG.md package.json package-lock.json
           git add -A website/public/docs website/public/sitemap.xml
+          git add -A action/cli-release.json action/test/fixtures
           git commit -qm "chore(release): sync v$VERSION notes to main"
           echo "changed=true" >> "$GITHUB_OUTPUT"
       # Neither token is persisted to .git/config or in the environment of the step above. A push
@@ -584,7 +605,7 @@ jobs:
           else
             url=$(gh pr create -R "$GITHUB_REPOSITORY" --base main --head "$branch" \
               --title "chore(release): sync v$VERSION notes to main" \
-              --body "Brings the published v$VERSION release notes to main's CHANGELOG.md (for an X.Y.0 release, the version too, and for the latest release, the houstoncode.ai/docs pages built from its guide). Opened by Release - publish.")
+              --body "Brings the published v$VERSION release notes to main's CHANGELOG.md (for an X.Y.0 release, the version too, and for the latest release, the houstoncode.ai/docs pages built from its guide and the GitHub Action's pinned CLI). Opened by Release - publish.")
           fi
           echo "Sync PR: $url"
           # Queue it. Turning on auto-merge needs RELEASE_PR_TOKEN to have Contents: read and

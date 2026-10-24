@@ -188,7 +188,8 @@ npx vitest run action/                 # unit tests for every script
 node action/test/fixture.mjs /tmp/e2e  # the end-to-end fixture, as action-test.yml builds it
 ```
 
-After a release, bump [cli-release.json](cli-release.json) to the new version and the
-`houston-cli.cjs` hash from its `SHA256SUMS`, and add that release's `SHA256SUMS` and
-`SHA256SUMS.asc` under `test/fixtures/v<version>/`; the unit tests check the pinned hash
-against the signed list.
+Release - publish moves [cli-release.json](cli-release.json) to each new latest release
+in its sync PR (`scripts/pin-action-cli.mjs`): the new version, the `houston-cli.cjs` hash
+from its `SHA256SUMS`, and that `SHA256SUMS` and `SHA256SUMS.asc` under
+`test/fixtures/v<version>/`, where the unit tests check the pinned hash against the
+signed list.
