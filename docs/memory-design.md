@@ -1,7 +1,7 @@
 # Cross-session memory: design and implementation plan
 
-Status: proposed. Tracks the ROADMAP item "Cross-session memory the agent maintains
-itself" and TODO MEM-1.
+Status: phase 1 shipped. The user-facing description is "Memory across sessions" in
+`docs/houston-guide.md`; what is left is in ROADMAP.md ("Memory beyond the main chat").
 
 ## Problem
 

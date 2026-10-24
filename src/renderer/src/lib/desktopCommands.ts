@@ -47,6 +47,8 @@ export function desktopCommandAction(name: string, args: string): DesktopCommand
       return { kind: 'settings', section: 'mcp' }
     case 'hooks':
       return { kind: 'settings', section: 'hooks' }
+    case 'memory':
+      return { kind: 'settings', section: 'memory' }
     case 'trust':
       return { kind: 'settings', section: 'permissions' }
     case 'theme':

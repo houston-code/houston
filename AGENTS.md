@@ -192,6 +192,13 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   in a context holding file, shell, and network tools. The nonce fence and the classifier
   around it are not advisory; keep them non-optional, and route any new tool that returns
   such text through `presentUntrusted` / `presentUntrustedInline`.
+- `src/main/agent/memoryStore.ts`, `memoryTools.ts`, and the `memoryTainted` rule in
+  `approval.ts`: a saved memory rides every later prompt, so it is where an injected
+  instruction would try to persist. Once a conversation has taken in outside text (a
+  network or MCP tool, a subagent, a fetching shell command), a memory write must ask
+  in every mode, past allow rules and "Allow for run"; keep `memoryTaintSource` in step
+  with any new tool that returns such text. The store refuses credentials, never takes a
+  file name from the caller, and never reads or writes through a symlink.
 - `src/main/agent/lsp/`: language servers run project code without an approval prompt,
   so they launch only through the sandbox (off where it can't confine them unless the user
   opts in), every location a server returns must pass `resolveInRoots`, credential-file

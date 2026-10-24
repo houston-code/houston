@@ -121,6 +121,7 @@ with code 2 before anything runs.
 | `--max-turns <n>` | caps the model steps (a hard cap that never auto-extends) |
 | `--max-cost <usd>` | the agent wraps up once the run's estimated cost reaches this (a soft ceiling: the step in flight still finishes) |
 | `--verify <command>` | runs this command when the agent stops after editing files, and sends a failure back for a bounded fix-up pass (needs a policy that can edit, such as `--full-auto`) |
+| `--no-memory` | runs without the memories saved in earlier sessions (a headless run reads memories but never saves them) |
 
 #### Resuming a chat
 
@@ -420,7 +421,7 @@ Both clients accept the same names, so a command learned in one works in the oth
 Also: `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`, `/cost`, `/cwd`, `/share`,
 and `/doctor`. The exact set depends on the client.
 
-**Settings commands.** `/settings`, `/login`, `/mcp`, `/hooks`, `/trust`, and
+**Settings commands.** `/settings`, `/login`, `/mcp`, `/hooks`, `/memory`, `/trust`, and
 `/theme` open the matching page of Settings in the desktop app. The terminal edits a
 safe subset in place. In the desktop app:
 
@@ -2140,6 +2141,75 @@ stop and open an editor.
   it points to and the link stays. A project's `AGENTS.md` that points outside the
   project is refused, since Houston doesn't read it as the project's rules either.
 
+## Memory across sessions
+
+Houston remembers what a later session should know, so you don't have to explain the
+same thing twice. Where `#` and the rules files hold instructions you write, memory
+holds facts the agent learns as it works:
+
+- **About you:** how you like to work, and corrections you gave it (with the reason).
+- **About the project:** decisions, constraints, and gotchas the code and git history
+  don't show.
+- **Where things are:** pointers to outside resources.
+
+It never saves what the repository already records, short-lived task state, secrets,
+or text copied from web pages or tool output.
+
+### How it saves and recalls
+
+- **Saving.** The agent saves on its own when it learns one of these, and when you ask
+  it to remember something. It updates a memory rather than adding a near-duplicate,
+  and deletes one that proved wrong. Each save shows in the chat as a tool row
+  ("Remember tests-need-rg", "Update memory", "Forget memory").
+- **Recalling.** Each conversation starts with a one-line list of saved memories (name
+  and description). The agent reads a memory in full with `recall_memory` when one
+  looks relevant, and checks it still holds before relying on it.
+- **Scopes.** A memory belongs to this repository (every checkout and worktree of it)
+  or to all projects (facts about you).
+- **Cost.** The list is captured when a conversation starts and kept until the next
+  day, so it doesn't change the prompt mid-chat and the model's cache keeps working. A
+  memory saved during a chat shows up in the list from the next conversation on. With
+  nothing saved, there's no list at all.
+
+### Approval and safety
+
+- **Approval.** A save follows your approval mode like a file edit: it asks in the
+  "ask every time" mode, and runs on its own in auto-edit and full auto. Plan mode
+  refuses it.
+- **Untrusted content.** Once a conversation has read anything from outside (a web
+  page, a GitHub body, an MCP result, a subagent's report, or a shell command that
+  fetches, like `curl` or `git pull`), every memory save asks you first, in every mode.
+  Neither an allow rule, "Allow for run", nor full auto skips it: a memory rides along
+  in every later conversation, which is exactly where an injected instruction would
+  try to persist.
+- **Permission rules** can target a scope: `memory_save(global)`, `memory_delete(repo)`.
+- **Limits.** A memory that contains a credential is refused. A turn makes at most 10
+  saves and deletes. A headless run reads memories but never saves them.
+
+### Reviewing what it remembers
+
+- **Desktop app:** Settings > Memory lists this repository's and the all-projects
+  memories. Read one in full, edit, pin (pinned memories stay at the top of the
+  agent's list), or delete with Undo. **Other repositories** shows the memories of a
+  repository that moved or was cloned again; **Move here** brings them into the open
+  one.
+- **Terminal:** `/memory` lists them, numbered. `/memory show|edit|pin|unpin|forget
+  <n>` acts on one, `/memory undo` restores the last one you forgot, and `/memory
+  folder` prints where they live.
+- **Turning it off:** the switch in Settings > Memory, `/memory off` in the terminal,
+  or `--no-memory` for one headless run. Turning it off keeps what was saved.
+
+### Where memories live
+
+Each memory is a small markdown file in `~/.houston/memory`, never in the project:
+
+- `global/` for all-projects memories, and `repos/<key>/` per repository (the key is
+  the same for every checkout and worktree of it).
+- Files are readable only by you. Deleted memories go to `.trash/` and are removed
+  after 30 days.
+- You can read and edit the files yourself; Houston skips any it can't parse rather
+  than failing.
+
 ## Project rules
 
 Houston folds a small hierarchy of rules files into the system prompt on each run, in
@@ -2210,7 +2280,8 @@ preloads only the tools a coding task uses all the time:
 The rest are listed with a one-line summary in a `find_tools` catalog, and the agent
 loads one when it needs it: the GitHub tools, scheduled runs, spawned and proposed
 sessions, the localhost preview, images and mockups, notebook editing, `ast_grep`,
-`review_changes`, `recall_history`, `pr_sweep`, and writable subagents.
+`review_changes`, `recall_history`, `pr_sweep`, saving and deleting memories, and
+writable subagents.
 
 - A loaded tool stays loaded for the rest of the conversation.
 - Loading changes only what the model sees. Approval modes, plan mode, permission
@@ -2311,7 +2382,7 @@ sidebar) or `Esc` returns to the chat.
 
 | Group | Pages |
 | --- | --- |
-| **AI** | Providers & Models, Agent Behavior, Tools, MCP Servers, Hooks |
+| **AI** | Providers & Models, Agent Behavior, Tools, MCP Servers, Hooks, Memory |
 | **App** | General, Appearance, Keyboard |
 | **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |
@@ -2441,8 +2512,8 @@ no CLA to sign. See `CONTRIBUTING.md`.
 
 ### Your data
 
-- Houston stores conversations, settings, and project data on your machine and sends
-  no telemetry anywhere.
+- Houston stores conversations, settings, memories, and project data on your machine
+  and sends no telemetry anywhere.
 - Prompts, code, and files go only to the model and other providers you configure,
   under those providers' own terms and model-training policies.
 - Third-party components bundled into the app are listed with their license texts in

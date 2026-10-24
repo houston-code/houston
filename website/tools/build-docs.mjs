@@ -349,6 +349,7 @@ export const GROUPS = [
       "being-told-when-it-needs-you",
       "running-your-own-commands",
       "remembering-an-instruction",
+      "memory-across-sessions",
       "side-chat",
     ],
   },
