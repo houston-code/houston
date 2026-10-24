@@ -8,6 +8,10 @@ body:
         Check [ROADMAP.md](https://github.com/houston-code/houston/blob/main/ROADMAP.md)
         first, since the idea may already be planned.
 
+        Then search [open issues](https://github.com/houston-code/houston/issues). If one
+        already covers this, add a 👍 reaction to it instead of opening a new one. 👍
+        counts help maintainers see what matters most.
+
   - type: textarea
     id: problem
     attributes:

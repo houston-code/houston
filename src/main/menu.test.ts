@@ -21,7 +21,8 @@ import {
   setTerminalFocused,
   isTerminalFocused,
   GUIDE_URL,
-  ISSUES_URL
+  ISSUES_URL,
+  REPO_URL
 } from './menu'
 import { isSafeExternalUrl } from './safeExternal'
 
@@ -77,18 +78,19 @@ describe('Help menu', () => {
   const itemLabels = (menu: { submenu?: unknown }): string[] =>
     ((menu.submenu ?? []) as { label?: string }[]).map((i) => i.label ?? '')
 
-  it.each([true, false])('is the last menu: shortcuts and the tour, then the guide and issue links (isMac=%s)', (isMac) => {
+  it.each([true, false])('is the last menu: shortcuts and the tour, then the guide, issue and repository links (isMac=%s)', (isMac) => {
     const template = appMenuTemplate(isMac)
     const help = template[template.length - 1]
     // role 'help' is what gives macOS its native menu search field.
     expect(help.role).toBe('help')
     expect(template.filter((m) => m.role === 'help')).toHaveLength(1)
-    expect(itemLabels(help).slice(0, 5)).toEqual([
+    expect(itemLabels(help).slice(0, 6)).toEqual([
       'Keyboard Shortcuts',
       'Take the Tour…',
       '',
       'Houston Guide',
-      'Report an Issue'
+      'Report an Issue',
+      'Houston on GitHub'
     ])
   })
 
@@ -99,7 +101,8 @@ describe('Help menu', () => {
       'Take the Tour…',
       '',
       'Houston Guide',
-      'Report an Issue'
+      'Report an Issue',
+      'Houston on GitHub'
     ])
   })
 
@@ -113,7 +116,7 @@ describe('Help menu', () => {
   })
 
   it('links to https URLs that pass the external-open allowlist', () => {
-    for (const url of [GUIDE_URL, ISSUES_URL]) {
+    for (const url of [GUIDE_URL, ISSUES_URL, REPO_URL]) {
       expect(url.startsWith('https://')).toBe(true)
       expect(isSafeExternalUrl(url)).toBe(true)
     }

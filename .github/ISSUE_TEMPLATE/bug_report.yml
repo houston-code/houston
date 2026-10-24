@@ -12,6 +12,10 @@ body:
         before pasting. If the issue is a security vulnerability, stop here and follow
         [SECURITY.md](https://github.com/houston-code/houston/blob/main/SECURITY.md) instead.
 
+        Search [open issues](https://github.com/houston-code/houston/issues) first. If one
+        already covers this, add a 👍 reaction to it instead of opening a new one. 👍
+        counts help maintainers see what matters most.
+
   - type: input
     id: version
     attributes:
