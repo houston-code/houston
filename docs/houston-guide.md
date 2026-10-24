@@ -2346,6 +2346,9 @@ The desktop app's **Help** menu is last in the menu bar on every platform.
 - **Keyboard Shortcuts** (⌘/) lists every shortcut.
 - **Houston Guide** opens this guide on houstoncode.ai/docs, written for the latest
   release.
+- **Houston Website** opens houstoncode.ai.
+- **Houston on GitHub** opens the repository, where you can browse open issues and add a
+  👍 to the ones you want fixed first.
 - **Report an Issue** opens a new GitHub issue.
 - **Take the Tour…** plays the getting-started tips again.
 - **On macOS** it also has the system search field: type part of a command's name (for
