@@ -425,9 +425,10 @@ function macAppMenu(): MenuItemConstructorOptions {
 export const GUIDE_URL = 'https://houstoncode.ai/docs/'
 export const ISSUES_URL = 'https://github.com/houston-code/houston/issues/new'
 export const REPO_URL = 'https://github.com/houston-code/houston'
+export const WEBSITE_URL = 'https://houstoncode.ai/'
 
 /** Help menu: the shortcut list and the tour (same as the command palette's), then the
- * guide, issue and repository links. On Windows/Linux it also carries the manual update check
+ * guide, website and repository links, then issue reporting. On Windows/Linux it also carries the manual update check
  * and sharing, which live in the app menu on macOS. */
 function helpMenu(isMac: boolean, ctx: MenuContext): MenuItemConstructorOptions {
   return {
@@ -437,8 +438,10 @@ function helpMenu(isMac: boolean, ctx: MenuContext): MenuItemConstructorOptions 
       { label: 'Take the Tour…', click: () => sendMenuCommand({ type: 'take-tour' }) },
       { type: 'separator' },
       { label: 'Houston Guide', click: () => openExternalSafely(GUIDE_URL) },
-      { label: 'Report an Issue', click: () => openExternalSafely(ISSUES_URL) },
+      { label: 'Houston Website', click: () => openExternalSafely(WEBSITE_URL) },
       { label: 'Houston on GitHub', click: () => openExternalSafely(REPO_URL) },
+      { type: 'separator' },
+      { label: 'Report an Issue', click: () => openExternalSafely(ISSUES_URL) },
       ...(isMac
         ? []
         : [
