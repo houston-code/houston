@@ -31,6 +31,11 @@ on:
   # main-scoped package caches, which those legs save on a miss.
   schedule:
     - cron: '17 7 * * *'
+  # A manual run of the nightly matrix (`gh workflow run ci.yml`), to check a fix for a
+  # nightly-only failure such as the Intel leg without waiting for the schedule. It has no
+  # diff to plan from, so scripts/ci-plan.mjs gives it every leg and the action test. It
+  # files no alert: whoever started it is watching it.
+  workflow_dispatch:
   # Release - prepare calls this workflow as its verification gate, so a release is cut only
   # from a tree that passes exactly what a PR must pass. It passes the exact commit the
   # release is cut from (`ref`: for a patch, a release line's commit, not main's), and
