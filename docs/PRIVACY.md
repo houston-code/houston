@@ -42,6 +42,12 @@ directory and sends none of it anywhere:
   or from plain-text credential files in Houston's application-data directory, which
   it writes readable only by your user account.
 - **Window and interface state**: window size, panel layout, and the like.
+- **Memories**: facts the agent saves between conversations (your preferences and
+  corrections, and things about a project the code doesn't show), one file each in
+  `~/.houston/memory` in your home folder, readable only by your user account. You
+  can review, edit, or delete them in Settings > Memory or with `/memory`, or turn
+  memory off. Like the rest of a conversation's context, the list of memories and any
+  memory the agent reads are part of what goes to your model provider.
 
 You can delete any of it by removing the conversation or setting in the app, or
 by deleting Houston's application-data directory.

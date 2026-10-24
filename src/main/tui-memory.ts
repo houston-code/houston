@@ -8,7 +8,7 @@ import { stripControlChars } from './tui-wrap'
  * /memory in the terminal: the same review surface as the desktop's Settings >
  * Memory page (list, read, edit, pin, forget with undo, on/off), over the same
  * store. Memories are numbered as /memory lists them: this repository's first, then
- * the all-projects ones.
+ * the all-projects ones. In the desktop app, /memory opens that page instead.
  */
 
 export type MemoryAction =

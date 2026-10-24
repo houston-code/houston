@@ -7,6 +7,7 @@ describe('desktopCommandAction', () => {
     expect(desktopCommandAction('theme', '')).toEqual({ kind: 'settings', section: 'appearance' })
     expect(desktopCommandAction('mcp', 'add')).toEqual({ kind: 'settings', section: 'mcp' })
     expect(desktopCommandAction('hooks', '')).toEqual({ kind: 'settings', section: 'hooks' })
+    expect(desktopCommandAction('memory', 'show 1')).toEqual({ kind: 'settings', section: 'memory' })
     expect(desktopCommandAction('settings', '')).toEqual({ kind: 'settings', section: 'models' })
     expect(desktopCommandAction('settings', 'Permissions')).toEqual({ kind: 'settings', section: 'permissions' })
     expect(desktopCommandAction('settings', 'agent behavior')).toEqual({ kind: 'settings', section: 'agent' })

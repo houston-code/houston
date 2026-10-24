@@ -150,6 +150,11 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Remember an instruction.** Start a message with `#` (`# always run the linter
   before committing`) and Houston appends it to the rules file it already reads,
   `AGENTS.md` in the project or `~/.houston/AGENTS.md` for everywhere.
+- **Memory across sessions.** The agent saves what a later session should know (your
+  preferences and corrections, project facts the code doesn't show) and recalls it in
+  later conversations. Memories live in `~/.houston/memory`, never in the project.
+  Review, edit, or delete them in Settings → Memory or with `/memory`; once a chat has
+  read web or GitHub content, every save asks first.
 - **Steer or queue while it works.** Keep typing while a run is in progress. **Enter**
   steers the running turn: the agent reads your message before its next step, and
   the message is labelled **Steered**. **⌘+Enter** (Ctrl+Enter on Windows and Linux)

@@ -183,16 +183,13 @@ dropped.
   that Node does not expose, so it needs a small native helper and real testing across
   kernel versions; the approval prompt is a working stopgap in the meantime.
 
-- **Cross-session memory the agent maintains itself.** The agent's durable knowledge
-  of a project today is what the user writes in `AGENTS.md` / `CLAUDE.md` (by hand, or
-  with a `#` line in the composer, which appends a standing instruction there); within a
-  run it also keeps a working-memory block, but nothing it learns in one session is carried,
-  on its own, into the next. A self-maintained memory (a per-project store the agent
-  writes to and that is recalled automatically) would close that. *Why deferred:* it
-  needs a stable per-repo identity key (the groundwork exists in
-  [`repoIdentity.ts`](src/main/agent/repoIdentity.ts) but is unused), a storage format,
-  a review surface so the user can see and prune what was remembered, and a stance on
-  what is allowed to persist. A real feature with a UX, not a flag.
+- **Memory beyond the main chat.** The agent saves and recalls memories across sessions
+  (see "Memory across sessions" in the guide), but only in an attended conversation.
+  Still to come: an extraction pass at the end of a conversation that proposes memories
+  for the user to approve, which would also give headless and scheduled runs a way to
+  save (into a pending list rather than straight to the store), and read-only recall for
+  subagents and the side chat. *Why deferred:* each needs a review surface for proposed
+  memories, and the attended path had to prove what is worth keeping first.
 
 - **More lifecycle hook events.** Hooks fire at six points today (`PreToolUse`,
   `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop`, `PreCompact`). Natural
