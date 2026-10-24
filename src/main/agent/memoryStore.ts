@@ -7,6 +7,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   rmSync,
   utimesSync
 } from 'node:fs'
@@ -63,6 +64,7 @@ import { log } from '../logger'
 export const MEMORY_TRASH_TTL_MS = 30 * 24 * 60 * 60 * 1000
 
 const ID_RE = /^m_\d{8}_[a-z2-7]{6}$/
+const REPO_KEY_RE = /^[0-9a-f]{16}$/
 const NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const CONVERSATION_RE = /^[A-Za-z0-9_-]{1,128}$/
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567'
@@ -275,13 +277,90 @@ export function memoryStore(opts: MemoryStoreOptions = {}) {
     const base = join(root, 'repos')
     const out: MemoryRepoInfo[] = []
     for (const key of safeReaddir(base)) {
-      if (!/^[0-9a-f]{16}$/.test(key)) continue
+      if (!REPO_KEY_RE.test(key)) continue
       const dir = join(base, key)
       const meta = readRepoMeta(dir)
       const count = safeReaddir(dir).filter((n) => ID_RE.test(n.replace(/\.md$/, '')) && n.endsWith('.md')).length
       out.push({ key, label: meta?.label ?? key, root: meta?.root ?? '', count })
     }
     return out.sort((a, b) => a.label.localeCompare(b.label))
+  }
+
+  function repoDirFor(key: string): string {
+    if (!REPO_KEY_RE.test(key)) throw new MemoryError('invalid', `"${key}" is not a repository key.`)
+    return join(root, 'repos', key)
+  }
+
+  /** Another repository's memories, by its key (see listRepos). */
+  function listRepo(key: string): MemoryRecord[] {
+    return readScope(repoDirFor(key), 'repo').sort((a, b) => b.updated.localeCompare(a.updated))
+  }
+
+  /**
+   * Move every memory of another repository to the trash, then drop its folder when
+   * nothing else is left in it. For a repository that is gone for good. Returns how
+   * many memories were moved.
+   */
+  async function removeRepo(key: string): Promise<number> {
+    const dir = repoDirFor(key)
+    if (!existsSync(dir)) return 0
+    const trash = join(root, '.trash', `repo-${key}`)
+    const moved = await withFileLock(join(dir, LOCK_NAME), () => {
+      let n = 0
+      for (const m of readScope(dir, 'repo')) {
+        ensureDir(trash)
+        const dest = join(trash, `${m.id}.md`)
+        renameSync(join(dir, `${m.id}.md`), dest)
+        const t = now()
+        utimesSync(dest, t, t)
+        n++
+      }
+      rmSync(join(dir, 'meta.json'), { force: true })
+      return n
+    })
+    try {
+      rmdirSync(dir)
+    } catch {
+      // Not empty (a file the store doesn't own) or already gone: leave it.
+    }
+    log.info(`memory: deleted ${moved} memories of repository ${key}`)
+    return moved
+  }
+
+  /**
+   * Bring another repository's memories into this one, for a repository that moved or
+   * was cloned again (its key changed with its location). A memory whose name this
+   * repository already uses stays behind, as do any past the scope cap.
+   */
+  async function adoptRepo(key: string): Promise<{ moved: number; skipped: number }> {
+    if (!repo) throw new MemoryError('invalid', 'Open a project to bring memories into it.')
+    if (key === repo.key) return { moved: 0, skipped: 0 }
+    const from = repoDirFor(key)
+    const to = scopeDir('repo')
+    ensureDir(to)
+    const result = await withFileLock(join(to, LOCK_NAME), () =>
+      withFileLock(join(from, LOCK_NAME), () => {
+        const here = readScope(to, 'repo')
+        const names = new Set(here.map((m) => m.name))
+        let count = here.length
+        let moved = 0
+        let skipped = 0
+        for (const m of readScope(from, 'repo')) {
+          if (names.has(m.name) || count >= MAX_MEMORIES_PER_SCOPE || existsSync(join(to, `${m.id}.md`))) {
+            skipped++
+            continue
+          }
+          renameSync(join(from, `${m.id}.md`), join(to, `${m.id}.md`))
+          names.add(m.name)
+          count++
+          moved++
+        }
+        if (moved) writeRepoMeta(to, repo.root)
+        return { moved, skipped }
+      })
+    )
+    log.info(`memory: adopted ${result.moved} memories from repository ${key} (${result.skipped} left)`)
+    return result
   }
 
   /** When each memory was last recalled, by id. Best effort: a missing or corrupt file reads as none. */
@@ -333,6 +412,9 @@ export function memoryStore(opts: MemoryStoreOptions = {}) {
     currentRepoLabel: repo ? basename(repo.root) : undefined,
     usage,
     noteRecalled,
+    listRepo,
+    removeRepo,
+    adoptRepo,
     list,
     get,
     save,

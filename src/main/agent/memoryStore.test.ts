@@ -372,6 +372,33 @@ describe('memoryStore delete, restore, trash', () => {
   })
 })
 
+describe('memoryStore other repositories', () => {
+  it('lists, adopts, and removes another repository by key', async () => {
+    const other = join(tmp, 'old')
+    mkdirSync(join(other, '.git'), { recursive: true })
+    const old = memoryStore({ root, workspace: other })
+    await old.save(input({ name: 'carried' }))
+    await old.save(input({ name: 'clash' }))
+    const here = memoryStore({ root, workspace: repoDir })
+    await here.save(input({ name: 'clash' }))
+    expect(here.listRepo(old.currentRepoKey!).map((m) => m.name).sort()).toEqual(['carried', 'clash'])
+    expect(await here.adoptRepo(old.currentRepoKey!)).toEqual({ moved: 1, skipped: 1 })
+    expect(here.list('repo').map((m) => m.name).sort()).toEqual(['carried', 'clash'])
+    expect(await here.adoptRepo(here.currentRepoKey!)).toEqual({ moved: 0, skipped: 0 })
+    expect(await here.removeRepo(old.currentRepoKey!)).toBe(1)
+    expect(existsSync(join(root, 'repos', old.currentRepoKey!))).toBe(false)
+    expect(here.listRepos().map((r) => r.key)).toEqual([here.currentRepoKey])
+    expect(await here.removeRepo(old.currentRepoKey!)).toBe(0)
+  })
+
+  it('refuses a malformed key and adopting with no repository open', async () => {
+    const store = memoryStore({ root, workspace: repoDir })
+    expect(() => store.listRepo('../global')).toThrow(MemoryError)
+    await expect(code(store.removeRepo('../../x'))).resolves.toBe('invalid')
+    await expect(code(memoryStore({ root }).adoptRepo('0123456789abcdef'))).resolves.toBe('invalid')
+  })
+})
+
 describe('memoryStore recall usage', () => {
   it('counts recalls per id and survives a corrupt usage file', async () => {
     let t = new Date('2026-10-24T00:00:00.000Z')

@@ -46,6 +46,7 @@ export const PREFERENCE_DEFAULTS = {
   appBadge: true,
   theme: 'system',
   htmlVisuals: false,
+  memoryEnabled: true,
   keybindings: {},
   sandboxEgress: undefined
 } satisfies Partial<AppSettings>
@@ -138,6 +139,7 @@ const CHECKS: Record<Exclude<PreferenceKey, 'permissionRules' | 'hooks'>, (v: un
   appBadge: (v) => typeof v === 'boolean',
   theme: (v) => v === 'system' || v === 'dark' || v === 'light',
   htmlVisuals: (v) => typeof v === 'boolean',
+  memoryEnabled: (v) => typeof v === 'boolean',
   keybindings: (v) => isObject(v) && Object.values(v).every((b) => b === null || typeof b === 'string'),
   sandboxEgress: (v) =>
     isObject(v) &&

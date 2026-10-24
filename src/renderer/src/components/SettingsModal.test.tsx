@@ -227,6 +227,7 @@ describe('SettingsModal', () => {
       'Tools',
       'MCP Servers',
       'Hooks',
+      'Memory',
       'General',
       'Appearance',
       'Keyboard',

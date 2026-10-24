@@ -27,6 +27,10 @@ export const IPC = {
   doctorFacts: 'app:doctorFacts',
   /** Save a `#`-captured standing instruction to AGENTS.md (project or global). */
   memorySave: 'app:memorySave',
+  /** A Memory settings page action (list, edit, delete, restore, pin, other repositories). */
+  memoryRequest: 'memory:request',
+  /** Open the memory folder in the OS file manager. */
+  memoryReveal: 'memory:reveal',
   /** Whether to show the one-time "global rules moved to ~/.houston/AGENTS.md" notice. */
   legacyRulesNoticeStatus: 'app:legacyRulesNoticeStatus',
   /** Answer that notice: import ~/.claude/CLAUDE.md, or keep the rules separate. */
