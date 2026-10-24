@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Spawn separate sessions | Houston docs</title>
-  <meta name="description" content="Where a subagent reports back into the current turn, spawn_session spins off a separate chat: the agent hands it a task, optionally on its own git branch..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="A subagent reports back into the current turn. spawn_session instead spins off a separate chat that runs in the background." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/spawn-separate-sessions" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Spawn separate sessions | Houston docs" />
-  <meta property="og:description" content="Where a subagent reports back into the current turn, spawn_session spins off a separate chat: the agent hands it a task, optionally on its own git branch..." />
+  <meta property="og:description" content="A subagent reports back into the current turn. spawn_session instead spins off a separate chat that runs in the background." />
   <meta property="og:url" content="https://houstoncode.ai/docs/spawn-separate-sessions" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Spawn separate sessions | Houston docs" />
-  <meta name="twitter:description" content="Where a subagent reports back into the current turn, spawn_session spins off a separate chat: the agent hands it a task, optionally on its own git branch..." />
+  <meta name="twitter:description" content="A subagent reports back into the current turn. spawn_session instead spins off a separate chat that runs in the background." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Spawn separate sessions",
-  "description": "Where a subagent reports back into the current turn, spawn_session spins off a separate chat: the agent hands it a task, optionally on its own git branch...",
+  "description": "A subagent reports back into the current turn. spawn_session instead spins off a separate chat that runs in the background.",
   "url": "https://houstoncode.ai/docs/spawn-separate-sessions",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,16 +86,40 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Spawn separate sessions</h1>
+        <nav class="docs-toc" aria-labelledby="toc-spawn-separate-sessions">
+          <h2 id="toc-spawn-separate-sessions">On this page</h2>
+          <ul>
+            <li><a href="#in-the-desktop-app">In the desktop app</a></li>
+            <li><a href="#in-the-terminal-and-headless">In the terminal and headless</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>Where a subagent reports back into the current turn, <code>spawn_session</code> spins off a <em>separate</em> chat: the agent hands it a task, optionally on its own git branch and worktree, and sets it running in the background. It appears in the sidebar with a live indicator, seeded with the handed-off context. A spawned session inherits the current approval policy, so it is never more permissive than the chat that spawned it. In the TUI and headless CLI, spawned sessions run too: they execute non-interactively (anything needing an approval is declined automatically) and persist as ordinary conversations you can open later with <code>/resume</code> or <code>--resume &lt;id&gt;</code>; a one-shot headless run waits for its spawned sessions before exiting.</p>
-<p>In the sidebar, a spawned session sits under the chat that started it (the arrow beside the parent folds them away, a folded parent says how many are still running, and Houston remembers what you folded across restarts). A session you pin or move into a group stays where you put it. Its &quot;Handoff from …&quot; banner links back to the parent chat.</p>
-<p>A spawned session starts fresh with its prompt, or, with context &quot;fork&quot;, with a copy of the spawning chat so far. When it finishes, the chat that started it gets a short report (title, whether it worked, the start of its answer) as a Houston note at the start of its next turn, and you see a notice in the transcript.</p>
+<p>A subagent reports back into the current turn. <code>spawn_session</code> instead spins off a <em>separate</em> chat that runs in the background.</p>
+<ul>
+<li><strong>What it gets:</strong> the agent hands it a task, optionally on its own git branch and worktree. It starts fresh with its prompt or, with context &quot;fork&quot;, with a copy of the spawning chat so far.</li>
+<li><strong>Never more permissive.</strong> It inherits the current approval policy.</li>
+<li><strong>When it finishes,</strong> the chat that started it gets a short report (title, whether it worked, the start of its answer) as a Houston note at the start of its next turn, and you see a notice in the transcript.</li>
+</ul>
+<h2 id="in-the-desktop-app">In the desktop app</h2>
+<ul>
+<li>It appears in the sidebar with a live indicator, under the chat that started it, seeded with the handed-off context.</li>
+<li>The arrow beside the parent folds them away. A folded parent shows the most urgent state among them, such as &quot;1 needs input&quot; or &quot;2 running&quot;, and Houston remembers what you folded across restarts.</li>
+<li>A session you pin or move into a group stays where you put it.</li>
+<li>Its &quot;Handoff from …&quot; banner links back to the parent chat.</li>
+</ul>
+<h2 id="in-the-terminal-and-headless">In the terminal and headless</h2>
+<p>Spawned sessions run here too:</p>
+<ul>
+<li>they run non-interactively, and anything needing an approval is declined automatically</li>
+<li>they're saved as ordinary conversations you can open later with <code>/resume</code> or <code>--resume &lt;id&gt;</code></li>
+<li>a one-shot headless run waits for its spawned sessions before exiting</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/context-worktrees-and-history"><span>Previous</span>Context, worktrees, and history</a><a class="docs-next" href="/docs/proposed-sessions"><span>Next</span>Proposed sessions</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -122,8 +146,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -153,6 +179,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

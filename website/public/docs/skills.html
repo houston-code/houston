@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Skills | Houston docs</title>
-  <meta name="description" content="A skill is a reusable instruction bundle at .houston/skills/&lt;name&gt;/SKILL.md, with front-matter name and description and a body of instructions." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="A skill is a reusable bundle of instructions the agent loads only when a task needs it." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/skills" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Skills | Houston docs" />
-  <meta property="og:description" content="A skill is a reusable instruction bundle at .houston/skills/&lt;name&gt;/SKILL.md, with front-matter name and description and a body of instructions." />
+  <meta property="og:description" content="A skill is a reusable bundle of instructions the agent loads only when a task needs it." />
   <meta property="og:url" content="https://houstoncode.ai/docs/skills" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Skills | Houston docs" />
-  <meta name="twitter:description" content="A skill is a reusable instruction bundle at .houston/skills/&lt;name&gt;/SKILL.md, with front-matter name and description and a body of instructions." />
+  <meta name="twitter:description" content="A skill is a reusable bundle of instructions the agent loads only when a task needs it." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Skills",
-  "description": "A skill is a reusable instruction bundle at .houston/skills/\u003cname>/SKILL.md, with front-matter name and description and a body of instructions.",
+  "description": "A skill is a reusable bundle of instructions the agent loads only when a task needs it.",
   "url": "https://houstoncode.ai/docs/skills",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,14 +87,25 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Skills</h1>
         <div class="prose">
-<p>A skill is a reusable instruction bundle at <code>.houston/skills/&lt;name&gt;/SKILL.md</code>, with front-matter <code>name</code> and <code>description</code> and a body of instructions. Only the name and description are shown to the agent up front (cheap); the agent loads the full body on demand by calling the <code>skill</code> tool when a task matches. This is progressive disclosure: skills stay out of the way until they are needed. Houston also ships two built-in skills: this guide as <code>houston-guide</code>, and, in the desktop app, <code>render-ui</code>, which the agent follows when you ask to see how something looks or will look (screenshots of the running app, or a mockup, shown with <code>show_images</code>).</p>
-<p>A skill can bundle more than its SKILL.md. Any other files in the skill directory (a <code>references/</code> folder, a template, a helper script) are listed at the end of the <code>skill</code> response, so the agent knows they are there and can read or run them with the file tools as the instructions direct. The SKILL.md body stays the first level of disclosure; the bundled files are the second, pulled in only when a task needs them.</p>
+<p>A skill is a reusable bundle of instructions the agent loads only when a task needs it.</p>
+<p><strong>Create one</strong> at <code>.houston/skills/&lt;name&gt;/SKILL.md</code>, with frontmatter <code>name</code> and <code>description</code>, and a body of instructions.</p>
+<p><strong>How it's loaded (progressive disclosure):</strong></p>
+<ol>
+<li>The agent sees only each skill's name and description up front, which is cheap.</li>
+<li>When a task matches, it loads the full body by calling the <code>skill</code> tool.</li>
+<li>Any other files in the skill's folder (a <code>references/</code> folder, a template, a helper script) are listed at the end of the <code>skill</code> response. The agent reads or runs them with the file tools when the instructions say to, and only when a task needs them.</li>
+</ol>
+<p><strong>Built-in skills:</strong></p>
+<ul>
+<li><code>houston-guide</code>: this guide.</li>
+<li><code>render-ui</code> (desktop app): what the agent follows when you ask to see how something looks or will look, using screenshots of the running app or a mockup, shown with <code>show_images</code>.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/scheduled-runs"><span>Previous</span>Scheduled runs</a><a class="docs-next" href="/docs/custom-subagents"><span>Next</span>Custom subagents</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -121,8 +132,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -152,6 +165,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

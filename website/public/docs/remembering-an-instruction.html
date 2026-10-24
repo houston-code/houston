@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Remembering an instruction (#) | Houston docs</title>
-  <meta name="description" content="Start a line with # to turn it into a standing instruction: # always run the linter before committing." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Start a line with # to turn it into a standing instruction:" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/remembering-an-instruction" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Remembering an instruction (#) | Houston docs" />
-  <meta property="og:description" content="Start a line with # to turn it into a standing instruction: # always run the linter before committing." />
+  <meta property="og:description" content="Start a line with # to turn it into a standing instruction:" />
   <meta property="og:url" content="https://houstoncode.ai/docs/remembering-an-instruction" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Remembering an instruction (#) | Houston docs" />
-  <meta name="twitter:description" content="Start a line with # to turn it into a standing instruction: # always run the linter before committing." />
+  <meta name="twitter:description" content="Start a line with # to turn it into a standing instruction:" />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Remembering an instruction (#)",
-  "description": "Start a line with # to turn it into a standing instruction: # always run the linter before committing.",
+  "description": "Start a line with # to turn it into a standing instruction:",
   "url": "https://houstoncode.ai/docs/remembering-an-instruction",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,14 +87,25 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Remembering an instruction (#)</h1>
         <div class="prose">
-<p>Start a line with <code>#</code> to turn it into a standing instruction: <code># always run the linter before committing</code>. Houston asks whether it applies to this project or to you everywhere, appends it to the rules file it already reads on every run (<code>AGENTS.md</code> in the project, or in <code>~/.claude</code>), and tells you which file it wrote.</p>
-<p>This is for the moment you notice &quot;it should always do X&quot;, the moment you are least likely to stop and open an editor. <code>#</code> alone is not a note, and a <code>#</code> in the middle of a line is ordinary text.</p>
+<p>Start a line with <code>#</code> to turn it into a standing instruction:</p>
+<p><code># always run the linter before committing</code></p>
+<ol>
+<li>Houston asks whether it applies to this project or to you everywhere.</li>
+<li>It appends the note to the rules file it already reads on every run: <code>AGENTS.md</code> in the project, or <code>~/.houston/AGENTS.md</code> for everywhere.</li>
+<li>It tells you which file it wrote.</li>
+</ol>
+<p>It's for the moment you notice &quot;it should always do X&quot;, when you're least likely to stop and open an editor.</p>
+<ul>
+<li>A path written with <code>@</code> in a note (<code>@~/notes.md</code>) is kept as text, shown in backticks, and never loaded as an import. To import a file, edit the rules file yourself.</li>
+<li><code>#</code> alone isn't a note, and a <code>#</code> in the middle of a line is ordinary text.</li>
+<li>When the rules file is a symlink (<code>AGENTS.md</code> pointing at <code>CLAUDE.md</code>, or <code>~/.houston/AGENTS.md</code> pointing into a dotfiles folder), the note goes into the file it points to and the link stays. A project's <code>AGENTS.md</code> that points outside the project is refused, since Houston doesn't read it as the project's rules either.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/running-your-own-commands"><span>Previous</span>Running your own commands (!)</a><a class="docs-next" href="/docs/side-chat"><span>Next</span>Side chat (/btw)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -121,8 +132,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -152,6 +165,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

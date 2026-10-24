@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Undoing a turn, and seeing what changed | Houston docs</title>
-  <meta name="description" content="/undo covers the last turn's file writes only. It does not undo shell commands, and it does not touch git history." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="When the working tree has changes, the bar above the composer and the Changes panel offer one button that fits the repository:" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/undoing-a-turn-and-seeing-what-changed" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Undoing a turn, and seeing what changed | Houston docs" />
-  <meta property="og:description" content="/undo covers the last turn's file writes only. It does not undo shell commands, and it does not touch git history." />
+  <meta property="og:description" content="When the working tree has changes, the bar above the composer and the Changes panel offer one button that fits the repository:" />
   <meta property="og:url" content="https://houstoncode.ai/docs/undoing-a-turn-and-seeing-what-changed" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Undoing a turn, and seeing what changed | Houston docs" />
-  <meta name="twitter:description" content="/undo covers the last turn's file writes only. It does not undo shell commands, and it does not touch git history." />
+  <meta name="twitter:description" content="When the working tree has changes, the bar above the composer and the Changes panel offer one button that fits the repository:" />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Undoing a turn, and seeing what changed",
-  "description": "/undo covers the last turn's file writes only. It does not undo shell commands, and it does not touch git history.",
+  "description": "When the working tree has changes, the bar above the composer and the Changes panel offer one button that fits the repository:",
   "url": "https://houstoncode.ai/docs/undoing-a-turn-and-seeing-what-changed",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,20 +86,48 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Undoing a turn, and seeing what changed</h1>
+        <nav class="docs-toc" aria-labelledby="toc-undoing-a-turn-and-seeing-what-changed">
+          <h2 id="toc-undoing-a-turn-and-seeing-what-changed">On this page</h2>
+          <ul>
+            <li><a href="#shipping-changes">Shipping changes (desktop app)</a></li>
+            <li><a href="#prompts-houston-writes-for-you">Prompts Houston writes for you</a></li>
+          </ul>
+        </nav>
         <div class="prose">
+<div class="table-wrap"><table>
+<thead><tr><th>Command</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code>/undo</code></td><td>puts back the files the last turn changed</td></tr>
+<tr><td><code>/redo</code></td><td>re-applies them</td></tr>
+<tr><td><code>/changes</code> (or <code>/diff</code>)</td><td>summarizes everything different in the working tree: each file with its status and lines gained and lost, plus a total</td></tr>
+</tbody>
+</table></div>
 <ul>
-<li><strong><code>/undo</code></strong> puts back the files the last turn changed; <strong><code>/redo</code></strong> re-applies them. Houston snapshots every write before it happens, so this needs nothing set up. It is most useful under auto-approve modes, where edits land without a prompt: &quot;that was wrong, put it back&quot; is one word rather than a hand revert.</li>
-<li><strong><code>/changes</code></strong> (also <code>/diff</code>) summarizes everything different in the working tree: each file with its status and how many lines it gained and lost, plus a total. The natural question after a long autonomous run.</li>
-<li><strong>Shipping changes (desktop app).</strong> When the working tree has changes, the bar above the composer and the Changes panel offer one button that fits the repository: <strong>Create PR</strong> when it has commits and a GitHub remote (github.com, or a GitHub Enterprise host your <code>gh</code> is signed in to), <strong>Publish to GitHub</strong> when it has no remote yet (commit, create the repository, push), <strong>Push first commit</strong> when a remote exists but nothing is committed, and <strong>Commit &amp; push</strong> for a remote that isn't on GitHub. Each hands the work to the agent as a normal turn, so every git and network step goes through your approvals.</li>
-<li><strong>Prompts Houston writes for you.</strong> <code>/review</code>, <code>/agent</code>, the shipping buttons, and a session another chat handed off each send the agent a detailed prompt. The chat shows what you did (for example &quot;/review&quot; or &quot;Create PR&quot;) instead of that prompt; open <strong>Instructions sent to the agent</strong> under it to read the exact text. The terminal prints a one-line summary in its place.</li>
+<li><strong>Nothing to set up.</strong> Houston snapshots every write before it happens.</li>
+<li><strong>Best with auto-approve modes</strong>, where edits land without a prompt: &quot;that was wrong, put it back&quot; is one word rather than a hand revert.</li>
+<li><strong>Limits.</strong> <code>/undo</code> covers the last turn's file writes only. It doesn't undo shell commands, and it doesn't touch git history.</li>
+<li><code>/changes</code> is the natural question after a long autonomous run.</li>
 </ul>
-<p><code>/undo</code> covers the last turn's file writes only. It does not undo shell commands, and it does not touch git history.</p>
+<h2 id="shipping-changes">Shipping changes (desktop app)</h2>
+<p>When the working tree has changes, the bar above the composer and the Changes panel offer one button that fits the repository:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Button</th><th>When</th></tr></thead>
+<tbody>
+<tr><td><strong>Create PR</strong></td><td>it has commits and a GitHub remote (github.com, or a GitHub Enterprise host your <code>gh</code> is signed in to)</td></tr>
+<tr><td><strong>Publish to GitHub</strong></td><td>it has no remote yet (commit, create the repository, push)</td></tr>
+<tr><td><strong>Push first commit</strong></td><td>a remote exists but nothing is committed</td></tr>
+<tr><td><strong>Commit &amp; push</strong></td><td>the remote isn't on GitHub</td></tr>
+</tbody>
+</table></div>
+<p>Each one hands the work to the agent as a normal turn, so every git and network step goes through your approvals.</p>
+<h2 id="prompts-houston-writes-for-you">Prompts Houston writes for you</h2>
+<p><code>/review</code>, <code>/agent</code>, the shipping buttons, and a session another chat handed off each send the agent a detailed prompt. The chat shows what you did (for example &quot;/review&quot; or &quot;Create PR&quot;) instead of that prompt. Open <strong>Instructions sent to the agent</strong> under it to read the exact text. The terminal prints a one-line summary in its place.</p>
         </div>
-        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/editing-files-while-it-works"><span>Previous</span>Editing files while it works</a><a class="docs-next" href="/docs/review-and-multi-step-tools"><span>Next</span>Review and multi-step tools</a></nav>
+        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/editing-files-while-it-works"><span>Previous</span>Editing files while it works</a><a class="docs-next" href="/docs/rewinding-to-an-earlier-message"><span>Next</span>Rewinding to an earlier message</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -126,8 +154,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed" aria-current="page">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -157,6 +187,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

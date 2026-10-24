@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Side chat (/btw) | Houston docs</title>
   <meta name="description" content="The side chat answers a quick question about the open chat without adding anything to it." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/side-chat" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "The side chat answers a quick question about the open chat without adding anything to it.",
   "url": "https://houstoncode.ai/docs/side-chat",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,15 +87,25 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Side chat (/btw)</h1>
         <div class="prose">
-<p>The side chat answers a quick question about the open chat without adding anything to it. Open it from the titlebar (or the command palette); it sees the chat so far and can read the project, but it cannot edit files, run commands, or reach the network, and it works while the main chat's turn is still running. <strong>Send to main</strong> puts an exchange into the main chat as a message (queued if a turn is running), and <strong>Continue in new chat</strong> forks the chat with the exchange as a draft. Its tokens count toward the chat's cost.</p>
-<p>Each chat has one side chat, kept with the chat: closing the panel, switching to another chat, a plan review taking over the panel, or restarting Houston never loses it, and an answer still coming in keeps going and shows up when you come back. Before each follow-up it catches up on what the main chat said since the last answer. <strong>New side chat</strong> (the + in its header) clears it and starts over.</p>
-<p>In the terminal, <code>/btw &lt;question&gt;</code> asks the same chat's side chat (shared with the desktop app's panel), and <code>/btw clear</code> starts it over.</p>
+<p>The side chat answers a quick question about the open chat without adding anything to it.</p>
+<ul>
+<li><strong>Open it</strong> from the titlebar (or the command palette). In the terminal, <code>/btw &lt;question&gt;</code> asks the same side chat (shared with the desktop panel), and <code>/btw clear</code> starts it over.</li>
+<li><strong>What it can do:</strong> it sees the chat so far and can read the project, but it can't edit files, run commands, or reach the network.</li>
+<li><strong>Works mid-turn.</strong> You can use it while the main chat's turn is still running.</li>
+<li><strong>Cost:</strong> its tokens count toward the chat's cost.</li>
+</ul>
+<p><strong>Moving an answer over:</strong></p>
+<ul>
+<li><strong>Send to main</strong> puts an exchange into the main chat as a message (queued if a turn is running).</li>
+<li><strong>Continue in new chat</strong> forks the chat with the exchange as a draft.</li>
+</ul>
+<p><strong>It keeps its place.</strong> Each chat has one side chat, kept with the chat. Closing the panel, switching chats, a plan review taking over the panel, or restarting Houston never loses it, and an answer still coming in keeps going and shows up when you come back. Before each follow-up it catches up on what the main chat said since its last answer. <strong>New side chat</strong> (the + in its header) clears it and starts over.</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/remembering-an-instruction"><span>Previous</span>Remembering an instruction (#)</a><a class="docs-next" href="/docs/seeing-what-the-tools-did"><span>Next</span>Seeing what the tools did</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -122,8 +132,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -153,6 +165,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

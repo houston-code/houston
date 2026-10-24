@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Running your own commands (!) | Houston docs</title>
-  <meta name="description" content="Type ! followed by a command to run it in your own shell, without leaving the session: !git status, !npm test. Output streams as it happens." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Type ! and a command to run it in your own shell without leaving the session: !git status, !npm test. Output streams as it happens." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/running-your-own-commands" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Running your own commands (!) | Houston docs" />
-  <meta property="og:description" content="Type ! followed by a command to run it in your own shell, without leaving the session: !git status, !npm test. Output streams as it happens." />
+  <meta property="og:description" content="Type ! and a command to run it in your own shell without leaving the session: !git status, !npm test. Output streams as it happens." />
   <meta property="og:url" content="https://houstoncode.ai/docs/running-your-own-commands" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Running your own commands (!) | Houston docs" />
-  <meta name="twitter:description" content="Type ! followed by a command to run it in your own shell, without leaving the session: !git status, !npm test. Output streams as it happens." />
+  <meta name="twitter:description" content="Type ! and a command to run it in your own shell without leaving the session: !git status, !npm test. Output streams as it happens." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Running your own commands (!)",
-  "description": "Type ! followed by a command to run it in your own shell, without leaving the session: !git status, !npm test. Output streams as it happens.",
+  "description": "Type ! and a command to run it in your own shell without leaving the session: !git status, !npm test. Output streams as it happens.",
   "url": "https://houstoncode.ai/docs/running-your-own-commands",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,15 +87,18 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Running your own commands (!)</h1>
         <div class="prose">
-<p>Type <code>!</code> followed by a command to run it in your own shell, without leaving the session: <code>!git status</code>, <code>!npm test</code>. Output streams as it happens.</p>
-<p>What you ran and what it printed is also added to the conversation, so you can follow it with &quot;now fix those failures&quot; and the agent knows what you saw, with nothing to paste back. Long output is trimmed to its last lines (where errors usually are).</p>
-<p>This is <strong>your</strong> shell, not the agent's: it runs unsandboxed, in your project folder, with your environment, exactly as if you had typed it in another window. The sandbox exists to confine the agent, which can be steered by instructions hidden in the content it reads; a command you typed yourself is your own decision. <code>!</code> alone, or <code>!</code> in the middle of a line, is ordinary text.</p>
+<p>Type <code>!</code> and a command to run it in your own shell without leaving the session: <code>!git status</code>, <code>!npm test</code>. Output streams as it happens.</p>
+<ul>
+<li><strong>The agent sees it too.</strong> What you ran and what it printed is added to the conversation, so you can follow up with &quot;now fix those failures&quot; with nothing to paste back. Long output is trimmed to its last lines, where errors usually are.</li>
+<li><strong>It's your shell, not the agent's.</strong> It runs unsandboxed, in your project folder, with your environment, exactly as if you'd typed it in another window. The sandbox exists to confine the agent, which can be steered by instructions hidden in what it reads; a command you typed yourself is your own decision.</li>
+<li><code>!</code> alone, or <code>!</code> in the middle of a line, is ordinary text.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/being-told-when-it-needs-you"><span>Previous</span>Being told when it needs you</a><a class="docs-next" href="/docs/remembering-an-instruction"><span>Next</span>Remembering an instruction (#)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -122,8 +125,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -153,6 +158,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

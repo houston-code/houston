@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Review and multi-step tools | Houston docs</title>
   <meta name="description" content="review_changes (or /review) reviews uncommitted changes for correctness, security, and quality." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/review-and-multi-step-tools" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "review_changes (or /review) reviews uncommitted changes for correctness, security, and quality.",
   "url": "https://houstoncode.ai/docs/review-and-multi-step-tools",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,21 +86,74 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Review and multi-step tools</h1>
+        <nav class="docs-toc" aria-labelledby="toc-review-and-multi-step-tools">
+          <h2 id="toc-review-and-multi-step-tools">On this page</h2>
+          <ul>
+            <li><a href="#reviewing-changes">Reviewing changes</a></li>
+            <li><a href="#showing-images">Showing images</a></li>
+            <li><a href="#rendering-a-mockup">Rendering a mockup</a></li>
+            <li><a href="#viewing-your-running-app">Viewing your running app</a></li>
+          </ul>
+        </nav>
         <div class="prose">
+<div class="table-wrap"><table>
+<thead><tr><th>Tool</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code>review_changes</code> (or <code>/review</code>)</td><td>an adversarial review of uncommitted changes</td></tr>
+<tr><td><code>todo_write</code></td><td>keeps a task list for multi-step work, rendered live in the transcript</td></tr>
+<tr><td><code>pr_sweep</code></td><td>tracks batch pull-request work (author new PRs from a task list, or process a batch of existing open PRs)</td></tr>
+<tr><td><code>show_images</code></td><td>shows you image files the agent produced</td></tr>
+<tr><td><code>render_mockup</code></td><td>screenshots an HTML mockup without a dev server (desktop app)</td></tr>
+<tr><td><code>view_localhost</code></td><td>loads and tests a page from your local dev server (desktop app)</td></tr>
+</tbody>
+</table></div>
+<h2 id="reviewing-changes">Reviewing changes</h2>
+<p><code>review_changes</code> (or <code>/review</code>) reviews uncommitted changes for correctness, security, and quality.</p>
+<ol>
+<li><p>An independent read-only reviewer runs per dimension, each in a fresh context.</p></li>
+<li><p>A skeptical verifier re-checks every candidate against the real code and drops false positives.</p></li>
+<li><p>You get the confirmed findings.</p></li>
+</ol>
 <ul>
-<li><strong><code>review_changes</code> (or <code>/review</code>)</strong> reviews uncommitted changes for correctness, security, and quality. It runs an independent read-only reviewer per dimension, each in a fresh context, then a skeptical verifier that re-checks every candidate against the real code and drops false positives, and reports the confirmed findings. Findings show up under the review as soon as each reviewer reports them, marked unverified, and update in place as the verifier confirms or rejects them; once the review ends, rejected findings fold into a &quot;dropped as false positives&quot; line you can expand. Click a finding to see why it matters and the suggested fix. Scope it to a <code>base</code> branch or specific <code>paths</code>, raise <code>effort</code> to <code>high</code> to verify each finding with several independent skeptics, or pass <code>model</code> to run the reviewers and verifiers on a cheaper sibling model.</li>
-<li><strong><code>todo_write</code></strong> keeps a task list for multi-step work, rendered live in the transcript.</li>
-<li><strong><code>pr_sweep</code></strong> tracks batch pull-request work (author new PRs from a task list, or process a batch of existing open PRs).</li>
-<li><strong><code>show_images</code></strong> shows you image files the agent produced, such as screenshots of an app or rendered mockups. In the desktop app they appear as a captioned gallery: click any image to open it full size, step through the set with the arrow keys, compare it with a &quot;before&quot; image using a slider when the agent paired one, copy it, save it, show it in the Files panel, or open the file in its default app. In the terminal each image is a clickable link to its file. It only reads image files (PNG, JPEG, GIF, or WebP, up to 5 MB each, 12 per gallery) inside the project, so it never asks for approval. Images go to the model scaled down to at most 1568 pixels on their long side; the chat keeps the full-size originals.</li>
-<li><strong><code>render_mockup</code></strong> (desktop app) turns an HTML mockup file in the project into screenshots without a dev server, in the sizes and themes asked for (desktop, tablet, or mobile, light or dark, or a custom size), and shows them as a gallery marked &quot;Mockup from code&quot;. The page runs in a hidden, locked-down browser: it can load its own files from the project folder, but nothing from the network or from elsewhere on your computer. It writes nothing, so it never asks for approval.</li>
-<li><strong><code>view_localhost</code></strong> (desktop app) loads a page from a dev server running on your computer in a hidden browser and shows the agent a screenshot plus the page's visible text and console output. It can also run steps first (fill a field, click or double-click, press a key such as Enter or Escape, wait for an element, check that some text is or isn't shown), so the agent can try a flow such as logging in or submitting a form and get a pass or fail for each step. It can also capture the page in several viewports or color schemes in one call (desktop, tablet, or mobile, light or dark, or the full page height), shown as a gallery marked &quot;Running app&quot;; steps then run with only one of them. Each call starts from a fresh page load, so a flow runs within one call. Text typed into a password field is never shown back to the agent. Every call asks for approval. A call with steps is approved separately from plain views, and the approval lists each step (never the text being typed). Steps can't download files, upload files, or use your camera, microphone, or location, and the page can't leave localhost.</li>
+<li><strong>Live.</strong> Findings appear under the review as each reviewer reports them, marked unverified, and update in place as the verifier confirms or rejects them. Once the review ends, rejected findings fold into a &quot;dropped as false positives&quot; line you can expand.</li>
+<li><strong>Click a finding</strong> to see why it matters and the suggested fix.</li>
+<li><strong>Options:</strong> scope it to a <code>base</code> branch or specific <code>paths</code>; raise <code>effort</code> to <code>high</code> to verify each finding with several independent skeptics; pass <code>model</code> to run the reviewers and verifiers on a cheaper sibling model.</li>
+</ul>
+<h2 id="showing-images">Showing images</h2>
+<p><code>show_images</code> shows image files the agent produced, such as screenshots of an app or rendered mockups.</p>
+<ul>
+<li><strong>Desktop app:</strong> a captioned gallery. Click any image to open it full size, step through the set with the arrow keys, compare it with a &quot;before&quot; image using a slider when the agent paired one, copy it, save it, show it in the Files panel, or open it in its default app.</li>
+<li><strong>Terminal:</strong> each image is a clickable link to its file.</li>
+<li><strong>No approval needed.</strong> It only reads image files (PNG, JPEG, GIF, or WebP, up to 5 MB each, 12 per gallery) inside the project.</li>
+<li>Images go to the model scaled down to at most 1568 pixels on their long side; the chat keeps the full-size originals.</li>
+</ul>
+<h2 id="rendering-a-mockup">Rendering a mockup</h2>
+<p><code>render_mockup</code> (desktop app) turns an HTML mockup file in the project into screenshots without a dev server, shown as a gallery marked &quot;Mockup from code&quot;.</p>
+<ul>
+<li><strong>Sizes and themes:</strong> desktop, tablet, or mobile; light or dark; or a custom size.</li>
+<li><strong>Locked down.</strong> The page runs in a hidden browser that can load its own files from the project folder, but nothing from the network or elsewhere on your computer.</li>
+<li><strong>No approval needed.</strong> It writes nothing.</li>
+</ul>
+<h2 id="viewing-your-running-app">Viewing your running app</h2>
+<p><code>view_localhost</code> (desktop app) loads a page from a dev server on your computer in a hidden browser, and shows the agent a screenshot plus the page's visible text and console output.</p>
+<ul>
+<li><strong>Steps.</strong> It can run steps first: fill a field, click or double-click, press a key such as Enter or Escape, wait for an element, check that some text is or isn't shown. So the agent can try a flow such as logging in or submitting a form, and get a pass or fail for each step.</li>
+<li><strong>Several views at once.</strong> It can capture the page in several viewports or color schemes in one call (desktop, tablet, or mobile; light or dark; or the full page height), shown as a gallery marked &quot;Running app&quot;. Steps then run with only one of them.</li>
+<li><strong>One call, one flow.</strong> Each call starts from a fresh page load, so a flow runs within one call.</li>
+</ul>
+<p><strong>Safety:</strong></p>
+<ul>
+<li>Every call asks for approval. A call with steps is approved separately from plain views, and the approval lists each step (never the text being typed).</li>
+<li>Text typed into a password field is never shown back to the agent.</li>
+<li>Steps can't download or upload files, or use your camera, microphone, or location.</li>
+<li>The page can't leave localhost.</li>
 </ul>
         </div>
-        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/undoing-a-turn-and-seeing-what-changed"><span>Previous</span>Undoing a turn, and seeing what changed</a><a class="docs-next" href="/docs/diagrams-and-visuals-in-replies"><span>Next</span>Diagrams and visuals in replies</a></nav>
+        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/rewinding-to-an-earlier-message"><span>Previous</span>Rewinding to an earlier message</a><a class="docs-next" href="/docs/diagrams-and-visuals-in-replies"><span>Next</span>Diagrams and visuals in replies</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -127,8 +180,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools" aria-current="page">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -158,6 +213,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

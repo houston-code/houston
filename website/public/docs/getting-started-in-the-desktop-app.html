@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Getting started in the desktop app | Houston docs</title>
-  <meta name="description" content="On a first launch the welcome screen shows a three-step Get started checklist: connect a model..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="On first launch, the welcome screen shows a three-step Get started checklist:" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/getting-started-in-the-desktop-app" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Getting started in the desktop app | Houston docs" />
-  <meta property="og:description" content="On a first launch the welcome screen shows a three-step Get started checklist: connect a model..." />
+  <meta property="og:description" content="On first launch, the welcome screen shows a three-step Get started checklist:" />
   <meta property="og:url" content="https://houstoncode.ai/docs/getting-started-in-the-desktop-app" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Getting started in the desktop app | Houston docs" />
-  <meta name="twitter:description" content="On a first launch the welcome screen shows a three-step Get started checklist: connect a model..." />
+  <meta name="twitter:description" content="On first launch, the welcome screen shows a three-step Get started checklist:" />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Getting started in the desktop app",
-  "description": "On a first launch the welcome screen shows a three-step Get started checklist: connect a model...",
+  "description": "On first launch, the welcome screen shows a three-step Get started checklist:",
   "url": "https://houstoncode.ai/docs/getting-started-in-the-desktop-app",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,14 +87,32 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Getting started in the desktop app</h1>
         <div class="prose">
-<p>On a first launch the welcome screen shows a three-step <strong>Get started</strong> checklist: connect a model (paste an API key for Anthropic, OpenAI, or Gemini, which is checked with a live model listing before it is saved, or point at a local Ollama or LM Studio server), open a project folder, and send a first task. Each step ticks itself off from the app's real state, and the checklist goes away for good once the first task is sent. When only that step is left, the cursor moves into the message box (which glows) and the step suggests a first task: &quot;Explain how this project is organized.&quot; for a folder with files, or &quot;Build a simple to-do list web page in this folder.&quot; for an empty one. While the checklist is open, each finished step shows what it set and has a <strong>Change</strong> button. On &quot;Connect a model&quot; it reopens the panel with the saved key (<strong>Replace key</strong> to swap it) and a model picker; on &quot;Open a project folder&quot; it reopens the folder picker. So you can switch model, provider, or folder before your first task.</p>
-<p>A few one-time tips then point at controls the first time they matter: the approval mode, the <strong>New worktree</strong> toggle, and the message box (<code>@</code> files, <code>/</code> commands, <code>#</code> rules) a couple of seconds before the first message (you can keep typing meanwhile), and <strong>Revert</strong> and <strong>Changes</strong> after the first turn that edits files. <strong>Skip tips</strong> or Esc dismisses them. <strong>Take the tour</strong> also covers steering (see <a href="/docs/typing-while-it-works">&quot;Typing while it works&quot;</a>). If you used Houston before this feature, nothing appears on its own. Anyone can play the tips any time with <strong>Take the tour</strong> in the command palette (⌘K), or <strong>Help → Take the Tour…</strong> in the menu bar.</p>
+<p>On first launch, the welcome screen shows a three-step <strong>Get started</strong> checklist:</p>
+<ol>
+<li><strong>Connect a model.</strong> Paste an API key for Anthropic, OpenAI, or Gemini (it's checked with a live model listing before it's saved), or point at a local Ollama or LM Studio server.</li>
+<li><strong>Open a project folder.</strong></li>
+<li><strong>Send a first task.</strong> When only this step is left, the cursor moves into the message box (which glows) and the step suggests a task: &quot;Explain how this project is organized.&quot; for a folder with files, or &quot;Build a simple to-do list web page in this folder.&quot; for an empty one.</li>
+</ol>
+<p>Each step ticks itself off from the app's real state, and the checklist goes away for good once the first task is sent.</p>
+<p><strong>Changing your mind.</strong> While the checklist is open, each finished step shows what it set and has a <strong>Change</strong> button, so you can switch model, provider, or folder before your first task:</p>
+<ul>
+<li>on &quot;Connect a model&quot; it reopens the panel with the saved key (<strong>Replace key</strong> swaps it) and a model picker</li>
+<li>on &quot;Open a project folder&quot; it reopens the folder picker</li>
+</ul>
+<h2 id="tips-along-the-way">Tips along the way</h2>
+<p>A few one-time tips point at controls the first time they matter:</p>
+<ul>
+<li>the approval mode, the <strong>New worktree</strong> toggle, and the message box (<code>@</code> files, <code>/</code> commands, <code>#</code> rules), a couple of seconds before your first message (you can keep typing meanwhile)</li>
+<li><strong>Revert</strong> and <strong>Changes</strong>, after the first turn that edits files</li>
+</ul>
+<p><strong>Skip tips</strong> or <code>Esc</code> dismisses them.</p>
+<p><strong>Take the tour</strong> plays the tips any time, and also covers steering (see <a href="/docs/typing-while-it-works">&quot;Typing while it works&quot;</a>). Find it in the command palette (⌘K) or under <strong>Help → Take the Tour…</strong>. If you used Houston before this feature, nothing appears on its own.</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-next" href="/docs/what-houston-is"><span>Next</span>What Houston is</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app" aria-current="page">Getting started in the desktop app</a></li>
@@ -121,8 +139,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -152,6 +172,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

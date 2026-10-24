@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Shell sandbox and network | Houston docs</title>
-  <meta name="description" content="Shell commands run under the host OS sandbox where one exists, confined to the project directory: writes outside the project are blocked, and network access..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Shell commands run under the host OS sandbox where one exists, confined to the project folder: writes outside the project are blocked, and network access is..." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/shell-sandbox-and-network" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Shell sandbox and network | Houston docs" />
-  <meta property="og:description" content="Shell commands run under the host OS sandbox where one exists, confined to the project directory: writes outside the project are blocked, and network access..." />
+  <meta property="og:description" content="Shell commands run under the host OS sandbox where one exists, confined to the project folder: writes outside the project are blocked, and network access is..." />
   <meta property="og:url" content="https://houstoncode.ai/docs/shell-sandbox-and-network" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Shell sandbox and network | Houston docs" />
-  <meta name="twitter:description" content="Shell commands run under the host OS sandbox where one exists, confined to the project directory: writes outside the project are blocked, and network access..." />
+  <meta name="twitter:description" content="Shell commands run under the host OS sandbox where one exists, confined to the project folder: writes outside the project are blocked, and network access is..." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Shell sandbox and network",
-  "description": "Shell commands run under the host OS sandbox where one exists, confined to the project directory: writes outside the project are blocked, and network access...",
+  "description": "Shell commands run under the host OS sandbox where one exists, confined to the project folder: writes outside the project are blocked, and network access is...",
   "url": "https://houstoncode.ai/docs/shell-sandbox-and-network",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,33 +86,134 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Shell sandbox and network</h1>
+        <nav class="docs-toc" aria-labelledby="toc-shell-sandbox-and-network">
+          <h2 id="toc-shell-sandbox-and-network">On this page</h2>
+          <ul>
+            <li><a href="#network-for-shell-commands">Network for shell commands</a></li>
+            <li><a href="#finding-your-toolchain">Finding your toolchain</a></li>
+            <li><a href="#when-a-runtime-is-missing">When a runtime is missing</a></li>
+            <li><a href="#egress-allowlist">Egress allowlist</a></li>
+            <li><a href="#secret-redaction">Secret redaction</a></li>
+            <li><a href="#credential-masking-on-egress">Credential masking on egress</a></li>
+            <li><a href="#untrusted-content">Untrusted content</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>Shell commands run under the host OS sandbox where one exists, confined to the project directory: writes outside the project are blocked, and network access is off by default.</p>
+<p>Shell commands run under the host OS sandbox where one exists, confined to the project folder: writes outside the project are blocked, and network access is off by default.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Platform</th><th>Sandbox</th></tr></thead>
+<tbody>
+<tr><td>macOS</td><td>Seatbelt (<code>sandbox-exec</code>)</td></tr>
+<tr><td>Linux</td><td>bubblewrap (an unprivileged user namespace), when available</td></tr>
+<tr><td>Windows</td><td>none broadly available, so shell commands run unconfined. Houston reports them as not sandboxed and never silently auto-approves one.</td></tr>
+</tbody>
+</table></div>
+<p>The structured file tools stay confined to the project on every platform.</p>
+<p><strong>Working across repos.</strong> <strong>Additional folders</strong> (Settings) adds folders to the file tools' allowed roots and to the shell sandbox.</p>
+<h2 id="network-for-shell-commands">Network for shell commands</h2>
+<p>Network from <code>run_shell</code> always goes through the egress allowlist (see &quot;Egress allowlist&quot; below), never straight out. The sandbox can read your whole filesystem, so blanket outbound access plus full auto would be a one-command read-and-exfiltrate; the allowlist bounds where a command can send anything.</p>
+<p><strong>When shell commands have network:</strong></p>
 <ul>
-<li><strong>macOS:</strong> Seatbelt (<code>sandbox-exec</code>).</li>
-<li><strong>Linux:</strong> bubblewrap (an unprivileged user namespace), when available.</li>
-<li><strong>Windows:</strong> no broadly-available equivalent, so shell commands run unconfined; Houston reports them as not sandboxed and never silently auto-approves one.</li>
+<li><strong>Full auto:</strong> from the start, through the allowlist. Installing dependencies, cloning, and fetching toolchains just work.</li>
+<li><strong>Ask / auto-edit:</strong> after &quot;Allow for run&quot; on a shell command. Plain &quot;Allow&quot; and &quot;Always allow&quot; run that one command offline, and until the run has the grant, each shell approval prompt says so.</li>
+<li><strong>Egress set to &quot;All domains&quot;:</strong> there is no allowlist to bound it, so even full auto starts offline and asks once, the first time a command fails for lack of network (the <strong>shell-network consent</strong>). Declining runs commands offline instead of blocking them.</li>
 </ul>
-<p>The structured file tools stay confined to the project on every platform. Network from <code>run_shell</code> is <em>gated</em>, not permanently off, and it is no longer implied by full auto: the sandbox can read your whole filesystem, so blanket outbound access plus full auto would be a one-command read-and-exfiltrate. Shell reaches the network only after a conscious per-run grant, either the one-time <strong>shell-network consent</strong> (full auto) or &quot;Allow for run&quot; on a shell command (ask / auto-edit). Plain &quot;Allow&quot; and &quot;Always allow&quot; run that one command offline, and until the run has the grant, each shell approval prompt says so. A command that needs the network (cloning, installing dependencies, <code>gh</code>, <code>curl</code>) is not impossible, it just needs that grant; declining runs the command offline instead of blocking it. A headless run (<code>-p</code>) has no prompt to grant it from, so the grant is a flag: <code>--allow-shell-network</code> lets shell commands reach the network for that run under any policy, and is not remembered for the next one. Without it, shell runs offline, except under <code>--full-auto</code>, where <code>--on-approval allow</code> (its default) also answers the shell-network consent. <code>--on-approval allow</code> alone never grants it under ask or auto-edit, since it approves each command the way plain &quot;Allow&quot; does. Offline, npm, pip, and cargo skip their usual retries, so an install that needs the network fails in about a second instead of a minute or more. Package-manager caches (npm, pip, yarn) are auto-redirected to a writable temp dir, so dependency installs need no cache workaround once network is on. On macOS, Python's bytecode cache goes there too, since the system <code>python3</code> keeps it under <code>~/Library/Caches</code>, which the sandbox can't write. <strong>Additional folders</strong> (Settings) can be added to the file tools' allowed roots and the shell sandbox to work across more than one repo.</p>
-<p><strong>Finding your toolchain.</strong> An app opened from the Dock doesn't read your shell startup files, so Houston adds the usual places runtimes live to the shell's PATH: Homebrew, nvm's default Node, fnm, Volta, mise, asdf, pyenv, rbenv, and the per-user bin dirs of Rust, Go, Bun, and Deno. A sandboxed command may stop the processes it started (build tools do this with their workers), but nothing outside its own sandbox.</p>
-<p><strong>When a runtime is missing.</strong> If a command fails because Node.js, Python, Go, Rust, Deno, or Bun isn't installed, the transcript says so and offers <strong>Install</strong>, which runs the install command (for example <code>brew install node</code>) in a new tab of the built-in terminal, outside the sandbox, so you can watch it and answer any prompt; there's also a link to the official download page. The agent is told not to attempt system installs itself and to wait for you rather than write code it can't run. The terminal clients print the same install command.</p>
-<p><strong>Egress allowlist.</strong> Granted shell network is not unrestricted: on macOS and Linux it is routed through a local proxy Houston controls, and the OS sandbox blocks any direct connection, so the proxy is the only road out. The proxy allows a destination only if its domain is on the egress allowlist: a built-in set of development infrastructure (package registries such as npm, PyPI, crates.io, RubyGems, Maven, Go; VCS hosts such as GitHub, GitLab, Bitbucket) plus any domains added in Settings under <strong>Sandbox egress</strong>. Each entry also covers its subdomains, a deny list wins over every allow, and edits apply immediately, mid run. A refused destination fails with an <code>EGRESS_BLOCKED</code> message naming the domain: that is policy, not an outage. Only HTTP(S) flows through the proxy, so other protocols (for example SSH) are blocked under the allowlist; use HTTPS remotes inside the sandbox, or switch the egress mode to &quot;All domains&quot; (Settings) to restore unrestricted granted network. On Windows, where no OS sandbox exists, the allowlist cannot be enforced. One Linux note: each command runs in its own network namespace whenever shell network isn't granted, and also under the allowlist, so a dev server started inside the sandbox is reachable only from that same command: not from the Preview panel, <code>view_localhost</code>, or later commands. Granting shell network with &quot;All domains&quot; restores the shared network there. The agent is told this on Linux and checks web apps with requests from the command that starts the server.</p>
-<p><strong>Secret redaction.</strong> Tool results, the transcript, and logs are scrubbed before the model or the UI sees them: well-known token formats and this install's stored secrets become <code>[redacted:…]</code>. A <code>NAME=value</code> line whose name marks it as a secret (<code>SESSION_SECRET</code>, <code>ADMIN_PASSWORD</code>, <code>GITHUB_TOKEN</code>, <code>STRIPE_API_KEY</code>, and the like), as <code>cat .env</code>, <code>env</code>, or <code>grep</code> prints it, keeps its name but shows the value as <code>[redacted:env-secret]</code>. The agent therefore refers to such a value by variable and file rather than repeating it, and a file write that would put a <code>[redacted:…]</code> placeholder where a value goes is refused, so writing back a file it read cannot replace the real secret with the placeholder.</p>
-<p><strong>Credential masking on egress.</strong> Houston's own network tools refuse to <em>send</em> a credential: before a <code>web_fetch</code> or <code>web_search</code> leaves the machine, its URL or query is scanned for a well-known token format or one of this install's stored secret values, and the call is refused if one is present. This is the outbound counterpart to the tool-result redactor (which scrubs secrets on the way back in), so a prompt-injected agent cannot exfiltrate a key by pasting it into a request. Note this covers Houston-mediated egress; a raw <code>curl</code> inside <code>run_shell</code> is bounded by the shell-network consent above, not by masking.</p>
-<p><strong>Untrusted content.</strong> A fetched page is written by whoever runs the site, an issue comment by whoever posted it, and an MCP result by whoever wrote what the server relays. So Houston treats the text these tools return as data rather than instructions, and it does not rely on the agent simply choosing to see it that way. The tools covered are <code>web_fetch</code>, <code>web_search</code>, the GitHub tools that read issue and pull request text (<code>gh_issue_view</code>, <code>gh_issue_list</code>, <code>gh_pr_view</code>, <code>gh_pr_list</code>), the GitHub tools that read CI (<code>gh_run_view</code>, <code>gh_run_list</code>, <code>gh_pr_checks</code>), and MCP tool results and resources. A pull request from a fork runs the fork's own workflow files, so its author writes the job and step names and everything its steps print to the log:</p>
+<p>A command that needs the network and doesn't have it (cloning, installing dependencies, <code>gh</code>, <code>curl</code>) isn't impossible; it just needs that grant.</p>
+<p><strong>Headless runs</strong> (<code>-p</code>) have no prompt to grant it from:</p>
 <ul>
-<li><strong>Fencing.</strong> That text is wrapped in an <code>&lt;untrusted-content-NONCE&gt;</code> fence with a fresh random nonce per call, and the system prompt tells the agent that anything inside it is attacker-controlled. The nonce is what makes the fence hold: with a fixed tag, the text could close the fence itself and carry on as if it were trusted. Fields GitHub guarantees (an issue's number, state, author, and URL, or a CI run's id, outcome, and URL) stay outside the fence so the agent can rely on them, while titles, bodies, labels, branch names, diffs, workflow, job, step, and check names, and CI logs go inside. Each comment gets its own fence with its author shown outside it, so one comment cannot pass itself off as a maintainer's reply. The GitHub tools that write (opening, commenting, reviewing, merging, checking out, closing, reopening) report the outcome in a line Houston writes, plus the new item's URL, and fence everything <code>gh</code> printed, because its messages quote titles and branch names.</li>
-<li><strong>Isolation.</strong> Content is scored for injection signals: text telling the reader to ignore prior instructions, a new persona, an instruction to send data to a URL, references to key material, text telling the reader to call Houston's own tools, characters hidden from a human reader. A web page or MCP result that looks like an attempt is not inlined at all. Instead a separate model call with no tools and no conversation history reads it and reports what it says, and only that report reaches the agent. The isolation is structural: there is nothing for the content to act through, and no earlier instructions to talk it out of. If that call fails, the content is withheld rather than passed through.</li>
-<li><strong>Warning.</strong> GitHub text and web search results that look like an attempt stay inline and fenced, with a warning naming the signals. The agent needs an issue's exact repro steps or a pull request's exact diff to do its job, and a summary would not do. Search results are short snippets, and any page the agent then opens goes through <code>web_fetch</code> and its isolation. Diffs and CI logs are fenced but not scored, because code and build output routinely contain the phrases the scoring looks for.</li>
-<li><strong>Cost.</strong> Ordinary content is unaffected and arrives verbatim, so documentation and code samples stay byte-exact. Only flagged content pays for the extra call. The score is deliberately loose, because a false positive costs one model call and some fidelity rather than a failed call.</li>
+<li>Under <code>--full-auto</code>, shell commands have network through the allowlist from the start.</li>
+<li><code>--allow-shell-network</code> lets shell commands reach the network for that run under any policy. It isn't remembered for the next run.</li>
+<li><code>--on-approval allow</code> alone never grants it under ask or auto-edit, since it approves each command the way plain &quot;Allow&quot; does.</li>
 </ul>
-<p>Bidirectional text controls, which can make text render in a different order than it reads, are stripped from all fenced content. This is defense in depth behind the approval gate (you still approve network and MCP calls), not a replacement for it: the classifier is a heuristic, and anyone who knows it is there can word around it.</p>
+<p><strong>Installs behave well offline and online:</strong></p>
+<ul>
+<li>Offline, npm, pip, and cargo skip their usual retries, so an install that needs the network fails in about a second instead of a minute or more.</li>
+<li>Package-manager caches (npm, pip, yarn) are redirected to a writable temp folder, so installs need no cache workaround once network is on.</li>
+<li>On macOS, Python's bytecode cache goes there too, since the system <code>python3</code> keeps it under <code>~/Library/Caches</code>, which the sandbox can't write.</li>
+</ul>
+<h2 id="finding-your-toolchain">Finding your toolchain</h2>
+<p>An app opened from the Dock doesn't read your shell startup files, so Houston adds the usual places runtimes live to the shell's <code>PATH</code>: Homebrew, nvm's default Node, fnm, Volta, mise, asdf, pyenv, rbenv, and the per-user bin folders of Rust, Go, Bun, and Deno.</p>
+<p>A sandboxed command may stop processes it started (build tools do this with their workers), but nothing outside its own sandbox.</p>
+<h2 id="when-a-runtime-is-missing">When a runtime is missing</h2>
+<p>If a command fails because Node.js, Python, Go, Rust, Deno, or Bun isn't installed:</p>
+<ul>
+<li>the transcript says so and offers <strong>Install</strong>, which runs the install command (for example <code>brew install node</code>) in a new tab of the built-in terminal, outside the sandbox, so you can watch it and answer any prompt</li>
+<li>there's also a link to the official download page</li>
+<li>the agent is told not to attempt system installs itself, and to wait for you rather than write code it can't run</li>
+</ul>
+<p>The terminal clients print the same install command.</p>
+<h2 id="egress-allowlist">Egress allowlist</h2>
+<p>Granted shell network isn't unrestricted. On macOS and Linux it's routed through a local proxy Houston controls, and the OS sandbox blocks any direct connection, so the proxy is the only road out.</p>
+<p><strong>The proxy allows a destination only if its domain is on the allowlist:</strong></p>
+<ul>
+<li>a built-in set of development infrastructure: package registries such as npm, PyPI, crates.io, RubyGems, Maven, and Go, and code hosts such as GitHub, GitLab, and Bitbucket</li>
+<li>plus any domains you add in Settings under <strong>Sandbox egress</strong></li>
+</ul>
+<p><strong>How it behaves:</strong></p>
+<ul>
+<li>Each entry also covers its subdomains.</li>
+<li>A deny list wins over every allow.</li>
+<li>Edits apply immediately, mid-run.</li>
+<li>A refused destination fails with an <code>EGRESS_BLOCKED</code> message naming the domain. That's policy, not an outage.</li>
+<li>In a chat, Houston then asks whether to allow that host for the chat: <strong>Allow for this chat</strong> or <strong>Keep blocked</strong>. It asks even when the command hid the error (piped its output away, or ran in the background), because the proxy reports the refusal itself. An allowed host is that exact name, not its subdomains, for this chat's shell commands only, and the answer holds until Houston quits. A deny-list entry or a private address is never offered. Headless runs keep the host blocked and tell the agent so.</li>
+<li>Only HTTP(S) flows through the proxy, so other protocols (SSH, for example) are blocked under the allowlist. Use HTTPS remotes inside the sandbox, or switch the egress mode to &quot;All domains&quot; (Settings) to restore unrestricted granted network.</li>
+<li>On Windows, where no OS sandbox exists, the allowlist can't be enforced.</li>
+</ul>
+<p><strong>Linux and dev servers.</strong> Each command runs in its own network namespace whenever shell network isn't granted, and also under the allowlist. So a dev server started inside the sandbox is reachable only from that same command: not from the Preview panel, <code>view_localhost</code>, or later commands. Granting shell network with &quot;All domains&quot; restores the shared network. The agent is told this on Linux, and checks web apps with requests from the command that starts the server.</p>
+<h2 id="secret-redaction">Secret redaction</h2>
+<p>Tool results, the transcript, and logs are scrubbed before the model or the interface sees them:</p>
+<ul>
+<li>well-known token formats, and this install's stored secrets, become <code>[redacted:…]</code></li>
+<li>a <code>NAME=value</code> line whose name marks it as a secret (<code>SESSION_SECRET</code>, <code>ADMIN_PASSWORD</code>, <code>GITHUB_TOKEN</code>, <code>STRIPE_API_KEY</code>, and the like), as <code>cat .env</code>, <code>env</code>, or <code>grep</code> prints it, keeps its name but shows the value as <code>[redacted:env-secret]</code></li>
+</ul>
+<p>So the agent refers to such a value by variable and file rather than repeating it. A file write that would put a <code>[redacted:…]</code> placeholder where a value goes is refused, so writing back a file it read can't replace the real secret with the placeholder.</p>
+<h2 id="credential-masking-on-egress">Credential masking on egress</h2>
+<p>Houston's own network tools refuse to <em>send</em> a credential:</p>
+<ul>
+<li>Before a <code>web_fetch</code> or <code>web_search</code> leaves the machine, its URL or query is scanned for a well-known token format or one of this install's stored secret values. The call is refused if one is present.</li>
+<li>The GitHub tools scan everything they send the same way (titles, bodies, comments, reviews).</li>
+</ul>
+<p>This is the outbound counterpart to secret redaction (which scrubs secrets on the way back in), so a prompt-injected agent can't leak a key by pasting it into a request. It covers Houston's own tools; a raw <code>curl</code> inside <code>run_shell</code> is bounded by the egress allowlist instead.</p>
+<h2 id="untrusted-content">Untrusted content</h2>
+<p>A fetched page is written by whoever runs the site, an issue comment by whoever posted it, and an MCP result by whoever wrote what the server relays. So Houston treats the text these tools return as data, not instructions, without relying on the agent choosing to see it that way.</p>
+<p><strong>Covered tools:</strong></p>
+<ul>
+<li><code>web_fetch</code> and <code>web_search</code></li>
+<li>GitHub tools that read issue and pull request text: <code>gh_issue_view</code>, <code>gh_issue_list</code>, <code>gh_pr_view</code>, <code>gh_pr_list</code></li>
+<li>GitHub tools that read CI: <code>gh_run_view</code>, <code>gh_run_list</code>, <code>gh_pr_checks</code>. A pull request from a fork runs the fork's own workflow files, so its author writes the job and step names and everything its steps print to the log.</li>
+<li>MCP tool results and resources</li>
+</ul>
+<h3 id="fencing">Fencing</h3>
+<p>That text is wrapped in an <code>&lt;untrusted-content-NONCE&gt;</code> fence with a fresh random nonce per call, and the system prompt tells the agent that anything inside is attacker-controlled. The nonce is what makes the fence hold: with a fixed tag, the text could close the fence itself and carry on as if it were trusted.</p>
+<ul>
+<li><strong>Outside the fence:</strong> fields GitHub guarantees, such as an issue's number, state, author, and URL, or a CI run's id, outcome, and URL, so the agent can rely on them.</li>
+<li><strong>Inside the fence:</strong> titles, bodies, labels, branch names, diffs, workflow, job, step, and check names, and CI logs.</li>
+<li><strong>One fence per comment,</strong> with its author shown outside it, so one comment can't pass itself off as a maintainer's reply.</li>
+<li><strong>GitHub writes</strong> (opening, commenting, reviewing, merging, checking out, closing, reopening) report the outcome in a line Houston writes, plus the new item's URL, and fence everything <code>gh</code> printed, since its messages quote titles and branch names.</li>
+</ul>
+<h3 id="isolation">Isolation</h3>
+<p>Content is scored for injection signals: text telling the reader to ignore prior instructions, a new persona, an instruction to send data to a URL, references to key material, text telling the reader to call Houston's own tools, and characters hidden from a human reader.</p>
+<p>A web page or MCP result that looks like an attempt isn't inlined at all. A separate model call, with no tools and no conversation history, reads it and reports what it says, and only that report reaches the agent. The isolation is structural: there's nothing for the content to act through, and no earlier instructions to talk it out of. If that call fails, the content is withheld rather than passed through.</p>
+<h3 id="warning">Warning</h3>
+<p>GitHub text and web search results that look like an attempt stay inline and fenced, with a warning naming the signals:</p>
+<ul>
+<li>the agent needs an issue's exact repro steps or a pull request's exact diff to do its job, and a summary wouldn't do</li>
+<li>search results are short snippets, and any page the agent then opens goes through <code>web_fetch</code> and its isolation</li>
+<li>diffs and CI logs are fenced but not scored, because code and build output routinely contain the phrases the scoring looks for</li>
+</ul>
+<h3 id="cost-and-limits">Cost and limits</h3>
+<ul>
+<li>Ordinary content is unaffected and arrives verbatim, so documentation and code samples stay byte-exact. Only flagged content pays for the extra call.</li>
+<li>The score is deliberately loose, because a false positive costs one model call and some fidelity rather than a failed call.</li>
+<li>Bidirectional text controls, which can make text display in a different order than it reads, are stripped from all fenced content.</li>
+<li>This is defense in depth behind the approval gate (you still approve network and MCP calls), not a replacement for it. The classifier is a heuristic, and anyone who knows it's there can word around it.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/approval-modes-and-permissions"><span>Previous</span>Approval modes and permissions</a><a class="docs-next" href="/docs/project-rules"><span>Next</span>Project rules</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -139,8 +240,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -170,6 +273,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

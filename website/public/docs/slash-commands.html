@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Slash commands | Houston docs</title>
   <meta name="description" content="Type / in the composer for the command menu." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/slash-commands" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "Type / in the composer for the command menu.",
   "url": "https://houstoncode.ai/docs/slash-commands",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,21 +86,61 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Slash commands</h1>
+        <nav class="docs-toc" aria-labelledby="toc-slash-commands">
+          <h2 id="toc-slash-commands">On this page</h2>
+          <ul>
+            <li><a href="#built-in-commands">Built-in commands</a></li>
+            <li><a href="#terminal-themes">Terminal themes</a></li>
+            <li><a href="#custom-commands">Custom commands</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>Type <code>/</code> in the composer for the command menu. In the terminal it appears under what you are typing and filters as you go, listing each command with what it does, including any this project defines in <code>.houston/commands</code>. The exact set depends on the client, but the common built-ins are:</p>
+<p>Type <code>/</code> in the composer for the command menu. In the terminal it appears under what you're typing, filters as you go, and lists what each command does, including any this project defines in <code>.houston/commands</code>.</p>
+<p>Both clients accept the same names, so a command learned in one works in the other.</p>
+<h2 id="built-in-commands">Built-in commands</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Command</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code>/new</code> (or <code>/clear</code>)</td><td>start a fresh conversation</td></tr>
+<tr><td><code>/compact</code></td><td>summarize older turns now to free up context</td></tr>
+<tr><td><code>/retry</code></td><td>run your last message again after a turn that failed</td></tr>
+<tr><td><code>/plan</code>, <code>/ask</code>, <code>/auto</code>, <code>/full</code></td><td>switch the approval mode: plan, ask every time, auto-approve edits, full auto</td></tr>
+<tr><td><code>/approval</code></td><td>show the current approval mode</td></tr>
+<tr><td><code>/review</code></td><td>run an adversarial review of your uncommitted changes and fix what it confirms</td></tr>
+<tr><td><code>/undo</code>, <code>/redo</code></td><td>revert the files the last turn changed, or put them back</td></tr>
+<tr><td><code>/rewind</code></td><td>go back to an earlier message: the conversation, the code, or both</td></tr>
+<tr><td><code>/changes</code> (or <code>/diff</code>)</td><td>what's different in the working tree</td></tr>
+<tr><td><code>/skills</code>, <code>/agents</code></td><td>list the workspace's skills and custom agents</td></tr>
+<tr><td><code>/help</code></td><td>list the available commands</td></tr>
+</tbody>
+</table></div>
+<p>Also: <code>/model</code>, <code>/reasoning</code>, <code>/fork</code>, <code>/btw</code>, <code>/resume</code>, <code>/cost</code>, <code>/cwd</code>, <code>/share</code>, and <code>/doctor</code>. The exact set depends on the client.</p>
+<p><strong>Settings commands.</strong> <code>/settings</code>, <code>/login</code>, <code>/mcp</code>, <code>/hooks</code>, <code>/trust</code>, and <code>/theme</code> open the matching page of Settings in the desktop app. The terminal edits a safe subset in place. In the desktop app:</p>
 <ul>
-<li><code>/new</code> (alias <code>/clear</code>): start a fresh conversation.</li>
-<li><code>/compact</code>: summarize older turns now to free up context.</li>
-<li><code>/plan</code>: switch to plan mode (read-only). In the desktop app <code>/ask</code>, <code>/auto</code>, and <code>/full</code> switch the other approval modes; the terminal uses <code>/approval &lt;policy&gt;</code>.</li>
-<li><code>/review</code>: run an adversarial review of your uncommitted changes and fix what it confirms.</li>
-<li><code>/skills</code>, <code>/agents</code>: list the workspace's skills and custom agents.</li>
-<li><code>/help</code>: list the available commands.</li>
+<li><code>/settings &lt;page&gt;</code> opens that page (<code>/settings permissions</code>)</li>
+<li><code>/settings &lt;words&gt;</code> opens Settings searching for them (<code>/settings proxy</code>)</li>
 </ul>
-<p>The interactive terminal adds terminal-specific commands such as <code>/model</code> (list or switch model), <code>/login</code> (set an API key, also <code>/providers</code>), <code>/approval</code>, <code>/settings</code>, <code>/doctor</code>, <code>/verbose</code>, <code>/output</code>, <code>/resume</code>, <code>/spawned</code>, <code>/proposals</code>, <code>/btw</code>, <code>/fork</code>, <code>/cost</code>, <code>/mcp</code>, <code>/trust</code>, <code>/hooks</code>, <code>/theme</code>, <code>/image</code>, <code>/cwd</code>, <code>/share</code>, and <code>/exit</code>.</p>
-<p><strong>Themes.</strong> <code>/theme</code> lists the terminal's palettes and <code>/theme &lt;name&gt;</code> switches: <code>dark</code> (bright foregrounds for a dark background), <code>light</code> (readable on white, which the bright yellow a dark theme uses is not), <code>colorblind</code> (red and green carry most of a diff's meaning, and that is the most common form of color blindness, so this maps them to orange and blue instead), <code>mono</code> (no color at all), and <code>default</code>. Your choice is remembered.</p>
-<p><strong>Custom commands.</strong> Any Markdown file in <code>.houston/commands/&lt;name&gt;.md</code> becomes a <code>/name</code> command, in the project or in <code>~/.houston/commands</code> for one you want everywhere. A project's command wins if both define the same name.</p>
-<p>The file body is a prompt template. <code>$ARGUMENTS</code> is replaced with everything typed after the command name, and <code>$1</code>, <code>$2</code>, … with the individual words, so <code>/deploy staging v2</code> can fill a template that says <code>deploy $1 at version $2</code>. With no placeholder at all, the args are appended.</p>
-<p>Optional frontmatter sets the description; without it, the first line is used (so existing commands keep working):</p>
+<p><strong>Desktop panels.</strong> In the desktop app each command opens its own panel for the job: <code>/changes</code> the Changes panel, <code>/model</code> the model picker, <code>/btw</code> the side chat.</p>
+<p><strong>Terminal-only commands.</strong> <code>/vim</code>, <code>/verbose</code>, <code>/output</code>, <code>/spawned</code>, <code>/proposals</code>, <code>/image</code>, and <code>/exit</code>. Typed in the desktop app, they tell you where the app does the same thing instead of being sent to the model.</p>
+<h2 id="terminal-themes">Terminal themes</h2>
+<p><code>/theme</code> lists the terminal's palettes, and <code>/theme &lt;name&gt;</code> switches. Your choice is remembered.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Theme</th><th>For</th></tr></thead>
+<tbody>
+<tr><td><code>dark</code></td><td>bright foregrounds for a dark background</td></tr>
+<tr><td><code>light</code></td><td>readable on white (which a dark theme's bright yellow isn't)</td></tr>
+<tr><td><code>colorblind</code></td><td>maps a diff's red and green to orange and blue, for the most common form of color blindness</td></tr>
+<tr><td><code>mono</code></td><td>no color at all</td></tr>
+<tr><td><code>default</code></td><td>the default palette</td></tr>
+</tbody>
+</table></div>
+<h2 id="custom-commands">Custom commands</h2>
+<p>Any Markdown file at <code>.houston/commands/&lt;name&gt;.md</code> becomes a <code>/name</code> command.</p>
+<ul>
+<li><strong>Where:</strong> in the project, or in <code>~/.houston/commands</code> for a command you want everywhere. A project's command wins if both define the same name.</li>
+<li><strong>Arguments:</strong> the file body is a prompt template. <code>$ARGUMENTS</code> is replaced with everything typed after the command name, and <code>$1</code>, <code>$2</code>, … with the individual words. So <code>/deploy staging v2</code> can fill a template that says <code>deploy $1 at version $2</code>. With no placeholder at all, the arguments are appended.</li>
+<li><strong>Description:</strong> optional frontmatter sets it. Without it, the first line is used (so existing commands keep working).</li>
+</ul>
 <pre><code class="language-markdown">---
 description: Ship the branch to staging
 ---
@@ -110,7 +150,7 @@ Deploy the current branch and report what happened.</code></pre>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -137,8 +177,10 @@ Deploy the current branch and report what happened.</code></pre>
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -168,6 +210,7 @@ Deploy the current branch and report what happened.</code></pre>
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

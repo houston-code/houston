@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Diagrams and visuals in replies | Houston docs</title>
-  <meta name="description" content="In the desktop app, the agent can answer with pictures as well as text." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="In the desktop app, the agent can answer with pictures as well as text. In the terminal these blocks stay code, with a line pointing at the desktop app." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/diagrams-and-visuals-in-replies" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Diagrams and visuals in replies | Houston docs" />
-  <meta property="og:description" content="In the desktop app, the agent can answer with pictures as well as text." />
+  <meta property="og:description" content="In the desktop app, the agent can answer with pictures as well as text. In the terminal these blocks stay code, with a line pointing at the desktop app." />
   <meta property="og:url" content="https://houstoncode.ai/docs/diagrams-and-visuals-in-replies" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Diagrams and visuals in replies | Houston docs" />
-  <meta name="twitter:description" content="In the desktop app, the agent can answer with pictures as well as text." />
+  <meta name="twitter:description" content="In the desktop app, the agent can answer with pictures as well as text. In the terminal these blocks stay code, with a line pointing at the desktop app." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Diagrams and visuals in replies",
-  "description": "In the desktop app, the agent can answer with pictures as well as text.",
+  "description": "In the desktop app, the agent can answer with pictures as well as text. In the terminal these blocks stay code, with a line pointing at the desktop app.",
   "url": "https://houstoncode.ai/docs/diagrams-and-visuals-in-replies",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,16 +86,37 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Diagrams and visuals in replies</h1>
+        <nav class="docs-toc" aria-labelledby="toc-diagrams-and-visuals-in-replies">
+          <h2 id="toc-diagrams-and-visuals-in-replies">On this page</h2>
+          <ul>
+            <li><a href="#diagrams-and-images">Diagrams and images</a></li>
+            <li><a href="#interactive-visuals">Interactive visuals</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>In the desktop app, the agent can answer with pictures as well as text. A <code>```mermaid</code> block in a reply (a flowchart, sequence, state, or entity diagram) is drawn as a diagram, and an <code>```svg</code> block as an image; each has a Rendered/Code switch, so the source is always one click away. Diagrams follow the app's light or dark theme, and one that doesn't parse shows the error above its source. Mermaid runs in a separate hidden window that can't reach the network, never in the app itself, and the result is shown as an image, so nothing in it can run.</p>
-<p>Interactive visuals are off by default. Turn on &quot;Run interactive visuals in the chat&quot; in Settings (Appearance) to let an <code>```html visual</code> block run: a small chart with controls or a widget to try, in a sandboxed frame with no access to the app, no network, no forms, popups, or navigation, and its own process, so a misbehaving one can't freeze the chat. With it on, plain <code>```html</code> blocks also get a Preview button. At most three run at once; the rest wait behind a Run button.</p>
-<p>In the terminal these blocks stay code, with a line pointing at the desktop app.</p>
+<p>In the desktop app, the agent can answer with pictures as well as text. In the terminal these blocks stay code, with a line pointing at the desktop app.</p>
+<h2 id="diagrams-and-images">Diagrams and images</h2>
+<ul>
+<li>A <code>```mermaid</code> block (a flowchart, sequence, state, or entity diagram) is drawn as a diagram.</li>
+<li>An <code>```svg</code> block is drawn as an image.</li>
+<li>Each has a Rendered/Code switch, so the source is always one click away.</li>
+<li>Diagrams follow the app's light or dark theme. One that doesn't parse shows the error above its source.</li>
+<li><strong>Safe by design:</strong> Mermaid runs in a separate hidden window that can't reach the network, never in the app itself, and the result is shown as an image, so nothing in it can run.</li>
+</ul>
+<h2 id="interactive-visuals">Interactive visuals</h2>
+<p>Off by default. Turn on <strong>Run interactive visuals in the chat</strong> in Settings (Appearance) to let an <code>```html visual</code> block run, such as a small chart with controls or a widget to try.</p>
+<ul>
+<li>It runs in a sandboxed frame with no access to the app, no network, and no forms, popups, or navigation.</li>
+<li>It has its own process, so a misbehaving one can't freeze the chat.</li>
+<li>With the setting on, plain <code>```html</code> blocks also get a Preview button.</li>
+<li>At most three run at once; the rest wait behind a Run button.</li>
+</ul>
         </div>
-        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/review-and-multi-step-tools"><span>Previous</span>Review and multi-step tools</a><a class="docs-next" href="/docs/approval-modes-and-permissions"><span>Next</span>Approval modes and permissions</a></nav>
+        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/review-and-multi-step-tools"><span>Previous</span>Review and multi-step tools</a><a class="docs-next" href="/docs/code-intelligence"><span>Next</span>Code intelligence (language servers)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -122,8 +143,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies" aria-current="page">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -153,6 +176,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

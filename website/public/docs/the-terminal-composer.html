@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>The terminal composer | Houston docs</title>
   <meta name="description" content="The interactive terminal's composer is a full line editor, so a message can be as long as it needs to be." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/the-terminal-composer" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "The interactive terminal's composer is a full line editor, so a message can be as long as it needs to be.",
   "url": "https://houstoncode.ai/docs/the-terminal-composer",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,11 +86,23 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>The terminal composer</h1>
+        <nav class="docs-toc" aria-labelledby="toc-the-terminal-composer">
+          <h2 id="toc-the-terminal-composer">On this page</h2>
+          <ul>
+            <li><a href="#keys">Keys</a></li>
+            <li><a href="#vim-keys">Vim keys</a></li>
+          </ul>
+        </nav>
         <div class="prose">
 <p>The interactive terminal's composer is a full line editor, so a message can be as long as it needs to be.</p>
-<p><strong>Pasting.</strong> Paste anything, including many lines: the whole block lands in the composer as one editable message and is never sent line by line. A large paste collapses to a short placeholder like <code>[#1 pasted 120 lines]</code> so it does not bury the screen; the real text is what gets sent. This works even in terminals without bracketed-paste support.</p>
-<p><strong>Multi-line messages.</strong> <code>Enter</code> sends. To add a line break instead, press <code>Ctrl-J</code> or <code>Alt-Enter</code>, or just paste one.</p>
-<p><strong>Keys.</strong></p>
+<ul>
+<li><strong>Send:</strong> <code>Enter</code> sends.</li>
+<li><strong>New line:</strong> <code>Ctrl-J</code> or <code>Alt-Enter</code> adds a line break (or just paste one).</li>
+<li><strong>Pasting:</strong> paste anything, including many lines. The whole block lands in the composer as one editable message and is never sent line by line. A large paste collapses to a short placeholder like <code>[#1 pasted 120 lines]</code> so it doesn't bury the screen; the real text is what gets sent. This works even in terminals without bracketed-paste support.</li>
+<li><strong>History:</strong> messages are remembered per project folder and survive restarts, multi-line ones included.</li>
+<li><strong>Shell commands:</strong> a line starting with <code>!</code> runs in your own shell. See <a href="/docs/running-your-own-commands">&quot;Running your own commands&quot;</a>.</li>
+</ul>
+<h2 id="keys">Keys</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Key</th><th>Does</th></tr></thead>
 <tbody>
@@ -113,16 +125,29 @@
 <tr><td><code>Shift-Tab</code></td><td>switch approval mode (plan → ask → auto-edit → full auto → plan)</td></tr>
 </tbody>
 </table></div>
-<p><strong>History.</strong> Messages are remembered per project folder and survive restarts, including multi-line ones.</p>
-<p><strong>Vim keys.</strong> <code>/vim</code> turns on modal editing in the composer and remembers it; <code>/vim off</code> goes back. Each prompt starts in insert mode (so typing a message never needs a mode change), <code>Esc</code> goes to normal mode, and the marker in front of the prompt says which mode you are in: <code>I</code> or <code>N</code>. Terminals that support it also show a bar cursor for insert and a block for normal.</p>
-<p>Normal mode covers the muscle-memory core: motions <code>h j k l w W b B e E 0 ^ $ gg G</code> with counts (<code>3w</code>, <code>d2j</code>), insert with <code>i a I A o O s</code>, edits <code>x X D C r</code>, the operators <code>d c y</code> over any motion plus <code>dd cc yy</code>, <code>p</code>/<code>P</code>, and <code>u</code> to undo. What is not there: visual mode, text objects (<code>ciw</code>), registers beyond the unnamed one, marks, macros, and <code>.</code> repeat. Everything else in the composer (Enter to send, <code>Ctrl-R</code> history search, <code>Ctrl-X Ctrl-E</code>, pasting) works the same in both modes.</p>
-<p><strong>Running a shell command.</strong> A line starting with <code>!</code> runs in your own shell. See <a href="/docs/running-your-own-commands">&quot;Running your own commands&quot;</a> below.</p>
+<h2 id="vim-keys">Vim keys</h2>
+<p><code>/vim</code> turns on modal editing in the composer and remembers it; <code>/vim off</code> goes back.</p>
+<ul>
+<li>Each prompt starts in insert mode, so typing a message never needs a mode change.</li>
+<li><code>Esc</code> goes to normal mode.</li>
+<li>The marker in front of the prompt shows the mode: <code>I</code> or <code>N</code>. Terminals that support it also show a bar cursor for insert and a block for normal.</li>
+</ul>
+<p><strong>Supported in normal mode:</strong></p>
+<ul>
+<li><strong>Motions:</strong> <code>h j k l w W b B e E 0 ^ $ gg G</code>, with counts (<code>3w</code>, <code>d2j</code>)</li>
+<li><strong>Insert:</strong> <code>i a I A o O s</code></li>
+<li><strong>Edits:</strong> <code>x X D C r</code></li>
+<li><strong>Operators:</strong> <code>d c y</code> over any motion, plus <code>dd cc yy</code></li>
+<li><strong>Paste and undo:</strong> <code>p</code>/<code>P</code>, <code>u</code></li>
+</ul>
+<p><strong>Not supported:</strong> visual mode, text objects (<code>ciw</code>), registers beyond the unnamed one, marks, macros, and <code>.</code> repeat.</p>
+<p>Everything else in the composer (Enter to send, <code>Ctrl-R</code> history search, <code>Ctrl-X Ctrl-E</code>, pasting) works the same in both modes.</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/settings-and-keys"><span>Previous</span>Settings and keys</a><a class="docs-next" href="/docs/slash-commands"><span>Next</span>Slash commands</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -149,8 +174,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -180,6 +207,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

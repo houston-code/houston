@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Checking your setup (/doctor) | Houston docs</title>
-  <meta name="description" content="/doctor reports what Houston can see: the version (and whether a newer one is out), Node and platform, the active model and every provider's key status..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="/doctor reports what Houston can see, in both the desktop app and the terminal:" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/checking-your-setup" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Checking your setup (/doctor) | Houston docs" />
-  <meta property="og:description" content="/doctor reports what Houston can see: the version (and whether a newer one is out), Node and platform, the active model and every provider's key status..." />
+  <meta property="og:description" content="/doctor reports what Houston can see, in both the desktop app and the terminal:" />
   <meta property="og:url" content="https://houstoncode.ai/docs/checking-your-setup" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Checking your setup (/doctor) | Houston docs" />
-  <meta name="twitter:description" content="/doctor reports what Houston can see: the version (and whether a newer one is out), Node and platform, the active model and every provider's key status..." />
+  <meta name="twitter:description" content="/doctor reports what Houston can see, in both the desktop app and the terminal:" />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Checking your setup (/doctor)",
-  "description": "/doctor reports what Houston can see: the version (and whether a newer one is out), Node and platform, the active model and every provider's key status...",
+  "description": "/doctor reports what Houston can see, in both the desktop app and the terminal:",
   "url": "https://houstoncode.ai/docs/checking-your-setup",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,14 +87,25 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Checking your setup (/doctor)</h1>
         <div class="prose">
-<p><code>/doctor</code> reports what Houston can see: the version (and whether a newer one is out), Node and platform, the active model and every provider's key status, whether the shell sandbox is actually enforced on this host, which external tools (<code>git</code>, <code>gh</code>, <code>rg</code>) are on PATH, and each MCP server's connection state. In the terminal it also reports the terminal's size and color support. Each row is marked healthy, worth knowing, or broken, and anything not healthy comes with what to do about it. It runs in both the desktop app and the terminal.</p>
-<p>It answers the questions that used to need source-reading or guesswork, notably &quot;is my shell really sandboxed here?&quot; and &quot;why did setting my API key change nothing?&quot; (an environment variable silently outranks a stored key; <code>/doctor</code> names it).</p>
+<p><code>/doctor</code> reports what Houston can see, in both the desktop app and the terminal:</p>
+<ul>
+<li>the version, and whether a newer one is out</li>
+<li>Node and the platform</li>
+<li>the active model and every provider's key status</li>
+<li>whether the shell sandbox is actually enforced on this host</li>
+<li>which external tools (<code>git</code>, <code>gh</code>, <code>rg</code>) are on <code>PATH</code></li>
+<li>which language servers are installed, and whether servers are off on this host</li>
+<li>each MCP server's connection state</li>
+<li>in the terminal, the terminal's size and color support</li>
+</ul>
+<p>Each row is marked healthy, worth knowing, or broken, and anything not healthy comes with what to do about it.</p>
+<p><strong>Questions it answers:</strong> &quot;is my shell really sandboxed here?&quot; and &quot;why did setting my API key change nothing?&quot; (an environment variable silently outranks a stored key, and <code>/doctor</code> names it).</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/what-a-session-cost"><span>Previous</span>What a session cost (/cost)</a><a class="docs-next" href="/docs/version-and-updates"><span>Next</span>Version and updates</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -121,8 +132,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -152,6 +165,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup" aria-current="page">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

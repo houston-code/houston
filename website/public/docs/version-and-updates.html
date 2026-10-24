@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Version and updates | Houston docs</title>
-  <meta name="description" content="The interactive terminal shows its version in the banner at startup, and houston -v prints it." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="The desktop app updates itself separately." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/version-and-updates" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Version and updates | Houston docs" />
-  <meta property="og:description" content="The interactive terminal shows its version in the banner at startup, and houston -v prints it." />
+  <meta property="og:description" content="The desktop app updates itself separately." />
   <meta property="og:url" content="https://houstoncode.ai/docs/version-and-updates" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Version and updates | Houston docs" />
-  <meta name="twitter:description" content="The interactive terminal shows its version in the banner at startup, and houston -v prints it." />
+  <meta name="twitter:description" content="The desktop app updates itself separately." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Version and updates",
-  "description": "The interactive terminal shows its version in the banner at startup, and houston -v prints it.",
+  "description": "The desktop app updates itself separately.",
   "url": "https://houstoncode.ai/docs/version-and-updates",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,13 +87,20 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Version and updates</h1>
         <div class="prose">
-<p>The interactive terminal shows its version in the banner at startup, and <code>houston -v</code> prints it. Once a day it quietly checks whether a newer release exists and, if so, prints one line with the link the next time it draws a prompt. It never blocks startup, and a failed check is silent. To turn the check off, set <code>HOUSTON_NO_UPDATE_CHECK=1</code> (or <code>NO_UPDATE_NOTIFIER</code>). The desktop app updates itself separately.</p>
+<ul>
+<li><strong>See your version:</strong> the interactive terminal shows it in the startup banner, and <code>houston -v</code> prints it.</li>
+<li><strong>Update notices:</strong> once a day, Houston quietly checks for a newer release. If there is one, it prints a short notice the next time it draws a prompt, with the command that upgrades this copy, such as <code>brew update &amp;&amp; brew upgrade houston</code>, <code>npm i -g @houston-code/cli@latest</code>, or re-running the install script (or the download link when it can't tell how Houston was installed).</li>
+<li><strong>One-shot runs:</strong> a <code>-p</code> run prints the same notice on stderr after its answer, only when stderr is a terminal, and never in CI or with <code>--json</code>.</li>
+<li><strong>Never in the way:</strong> the check never blocks startup or delays a run. A failed check (offline, timed out, rate limited) is silent, keeps the last known result, and is retried after an hour.</li>
+<li><strong>Turn it off:</strong> set <code>HOUSTON_NO_UPDATE_CHECK=1</code> (or <code>NO_UPDATE_NOTIFIER</code>).</li>
+</ul>
+<p>The desktop app updates itself separately.</p>
         </div>
-        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/checking-your-setup"><span>Previous</span>Checking your setup (/doctor)</a><a class="docs-next" href="/docs/help-menu"><span>Next</span>Help menu</a></nav>
+        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/checking-your-setup"><span>Previous</span>Checking your setup (/doctor)</a><a class="docs-next" href="/docs/edit-view-and-go-menus"><span>Next</span>Edit, View, and Go menus</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -120,8 +127,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -151,6 +160,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates" aria-current="page">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

@@ -1,5 +1,89 @@
 # Changelog
 
+## v0.10.0 - 2026-10-23
+
+Rewind to any message, per-chat model settings, unread chats, language servers, a GitHub Action, and a new Settings.
+
+This release also changes some defaults: each chat now keeps its own model, reasoning and approval mode, full-auto shell commands get allowlisted network from the start, and global rules move to `~/.houston/AGENTS.md`.
+
+### Breaking changes
+- **Model, reasoning effort and approval mode now belong to each chat.** Changing one in an open chat changes only that chat, and reopening a chat runs it on what it last used. Your saved settings are now the defaults new chats start from; **Use for new chats** copies a chat's settings to the defaults. (#369, #394, #395, #444, #447, #448)
+- **Global rules moved to `~/.houston/AGENTS.md`.** Global `#` notes saved with "Everywhere" now actually load. `~/.claude/CLAUDE.md` is no longer loaded on its own, only when the global file imports it. A one-time banner (a startup line in the terminal) offers to add the import. (#357, #358)
+- **Full-auto shell commands now have network from the first command**, through the egress proxy and limited to its allowlist (package registries, code hosts, and the domains under Sandbox egress). When a command reaches a host the allowlist doesn't list, Houston asks whether to allow that host for this chat. With "All domains" egress, shell still starts offline and asks once. (#300, #504)
+- **GitHub tool approvals are scoped by repository and action.** Allowing a read no longer covers merges, reviews or new repositories, so you may be asked again for write actions. In full auto, reads run without asking; writes ask once per repository. (#402, #403)
+- Headless runs (`-p`) now exit with code **5** when the last `--verify` check still fails, instead of 0. (#472)
+- Esc Esc on an empty composer now opens the rewind picker instead of putting the last prompt back. (#353)
+
+### Required steps
+- If you kept global instructions in `~/.claude/CLAUDE.md`, choose **Import it** on the banner, or add `@~/.claude/CLAUDE.md` to `~/.houston/AGENTS.md`. (#357)
+- If you script headless runs with `--verify`, handle the new exit code 5. (#472)
+
+### Added
+- **Rewind** from any earlier message: the conversation, the code, or both, with a preview of what changes and an **Undo rewind** until you send again. **Edit and resend** reruns from an edited message. Use the Rewind button on a message, Esc Esc, or `/rewind`. (#353, #476, #485)
+- **Unread and waiting chats:** the sidebar marks chats that finished, failed, or need your input. Collapsed headers, a title-bar "N need you" pill, and the app icon count them, and **Mark as unread** works from any reply. (#432, #433, #434, #435, #455, #484)
+- **Language servers:** after an edit, the agent sees the compile errors and warnings a language server reports, and it can jump to definitions, find references, and rename symbols across files. (#367, #378, #381, #442, #452, #498, #501)
+- **A new Settings:** a full page with grouped sections, search, and a Permissions page that brings together rules, trusted folders, sandbox egress and the approval mode new chats start in. Changes save as you make them, with Undo. Modified settings are marked, and you can export, import and reset them. Rules can be edited as text, tested against a call, and show when each was last used. Admin and project permission config is shown too. (#411, #412, #413, #414, #415, #416, #417, #418, #419, #441, #456, #466, #469)
+- **Subagent records:** each subagent's steps, report, and setup stream live in the chat and are saved with it. Subagents share the main agent's step budget. (#392)
+- **GitHub Action:** run Houston in your own workflows to answer `@houston` mentions, review pull requests, or fix failed CI runs, with your own model API key. (#370, #446)
+- **Agent Client Protocol:** `houston --acp` lets editors that support ACP agents run Houston as their agent. (#364)
+- **Standalone CLI install channels:** npm and bun (`@houston-code/cli`), Homebrew, the AUR, and an install script. The update notice names the right upgrade command for how you installed. (#422, #424, #427, #428)
+- **Headless automation flags:** allowed and disallowed tools, extra instructions, an output schema, MCP config, and a versioned `--json` result for CI. (#368)
+- One set of slash commands in the desktop app and the terminal. In the desktop app, `/model`, `/undo`, `/redo`, `/changes`, `/cost` and others now run instead of being sent to the model. (#344)
+- Pick a model from a list with `/model` in the terminal. (#355, #389)
+- Search chats by folder and branch, as well as by what the user and the assistant wrote, with results that stay live. (#483)
+- Cancel the update download from the update banner. (#292)
+- Close a single dev-server preview pane. (#293)
+- GFM task lists render as checkboxes. (#325, #451)
+- View, Go and Help menu items for the app's panels and shortcuts. (#488)
+- A status-bar chip brings back a minimized terminal. (#464)
+- `gh_run_view` says where a CI run stands now. (#401)
+- The product guide is published at houstoncode.ai/docs. (#437)
+
+### Fixed
+- **Never lose a message typed during a run**, including while the agent waits on a question or approval, during retries, or when the run stops. (#393)
+- The desktop app reopens the chat that was open when it quit. (#505)
+- New chat no longer opens a folder picker when no project is set, and the project folder picker opens next to your last project. (#477, #503)
+- Refuse to edit a file that isn't UTF-8 instead of corrupting it. (#310)
+- Honor `.gitignore` and never hide tracked files in file search. (#340)
+- Stream large text files instead of loading them whole; `read_file` on a folder returns its listing. (#405, #407)
+- Refuse `notebook_edit` on a notebook changed since it was read. (#342)
+- Accept the "*** End of File" line in patches. (#341)
+- Recover when the session's working folder was deleted, and warn when the shell is in another checkout of the same repository. (#314, #384)
+- Flag unrelated or stale chat history and keep the agent in its worktree. (#382)
+- Tell the model when Plan mode switches on or off. (#408)
+- Stop retrying an exhausted OpenAI quota. (#335)
+- Don't report a review as clean when some reviewers failed. (#453)
+- Say a denied call was denied, in plain terms, in both clients. (#454, #474)
+- A fork's spend starts at zero, so usage totals don't count it twice. (#475)
+- Settings, credentials and schedules saved by another Houston process (the desktop app or the terminal) are picked up instead of overwritten. (#327, #343, #457)
+- Saving a `#` note locks the rules file, keeps a symlinked `AGENTS.md` intact, and works around Windows busy-file errors. (#359, #404, #406, #445)
+- Keep a worktree another chat still uses when deleting a chat. (#322)
+- Share one checkpoint between snapshots started together. (#351)
+- Approval prompts no longer race their answer, and show the full change for large files, notebooks and moves. (#312, #376)
+- MCP: negotiate the protocol version, read a stdio server's stderr so it can't deadlock, reconnect a dropped notification stream, clear the SSE handshake timer, and open OAuth sign-in on Windows without `cmd.exe`. (#309, #317, #338, #339, #349)
+- `view_localhost` cancels file pickers and dismisses page dialogs that would otherwise hang a step. (#397, #398)
+- A macOS sandbox write denial is reported as a denied write. (#400)
+- The update notice keeps the last known update through a failed check. (#429)
+- Every unfinished run is logged and unanswered turns are recorded. (#409)
+- Strip markdown links from generated chat titles. (#336)
+- The transcript stays at the latest message when you send, switch chats, or a bar opens below it. (#449)
+- The command palette and find bar get your first keystrokes, and the find bar refocuses on ⌘F. (#465, #479)
+- Mermaid diagrams show at their natural size, and very wide ones scroll sideways. (#387, #390)
+- Keyboard and screen reader fixes: focus stays in Connect a model, the composer's + menu works from the keyboard, the message field and its menus are named, and the sidebar's ⋯ menus have proper roles. (#318, #330, #460, #462)
+- Code highlighting and the titlebar badge meet AA contrast. (#311)
+- Terminal: blank lines between markdown blocks, grapheme-aware wrapping, approval choices shown once, retries kept to one line, costs and tool names matching the desktop app, the real themes in `/help`, and `/help` wrapping. (#345, #346, #347, #348, #350, #352, #354, #361, #471)
+- Many layout fixes: the control bar, dropdown sizes, long branch names, chat titles, side-panel empty states, slash-command fonts, attachment notices, and the message-box hint. (#294, #295, #296, #299, #315, #321, #326, #362, #363, #450, #459, #463, #467, #470, #480, #481, #482, #502)
+- The Files panel leaves out `.git`. (#461)
+- The command palette lists only models you can use, under the picker's names, and the picker no longer shows prices. (#291, #458)
+- The update banner stays dismissed while the download runs. (#290)
+
+### Changed
+- **Safer git:** Houston's own git runs no repository-defined hooks, filters or signing, and a shell command that plants git hooks or settings for your own git is caught. The side chat's reads follow your permission rules. (#313, #316, #319, #473)
+- Situational built-in tools load on demand, cutting per-request overhead by about 45%. (#356)
+- Credentials are stored with the async secure-storage API. (#305)
+- Built on Electron 45 (Chromium 156), which fixes many Chromium security issues. (#302)
+- Packages ship only the target platform's terminal binaries. (#430)
+
 ## v0.9.0 - 2026-10-21
 
 Guided setup, side chat, turn receipts, inline visuals, new models, and many safety and reliability fixes.

@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Plugins | Houston docs</title>
-  <meta name="description" content="Drop a JS file in .houston/plugins/ to register observational lifecycle hooks: houston.on('onToolStart' | 'onToolResult' | 'onUserMessage', fn), for..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Drop a JS file in .houston/plugins/ to register observational lifecycle hooks for logging, metrics, or notifications:" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/plugins" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Plugins | Houston docs" />
-  <meta property="og:description" content="Drop a JS file in .houston/plugins/ to register observational lifecycle hooks: houston.on('onToolStart' | 'onToolResult' | 'onUserMessage', fn), for..." />
+  <meta property="og:description" content="Drop a JS file in .houston/plugins/ to register observational lifecycle hooks for logging, metrics, or notifications:" />
   <meta property="og:url" content="https://houstoncode.ai/docs/plugins" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Plugins | Houston docs" />
-  <meta name="twitter:description" content="Drop a JS file in .houston/plugins/ to register observational lifecycle hooks: houston.on('onToolStart' | 'onToolResult' | 'onUserMessage', fn), for..." />
+  <meta name="twitter:description" content="Drop a JS file in .houston/plugins/ to register observational lifecycle hooks for logging, metrics, or notifications:" />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Plugins",
-  "description": "Drop a JS file in .houston/plugins/ to register observational lifecycle hooks: houston.on('onToolStart' | 'onToolResult' | 'onUserMessage', fn), for...",
+  "description": "Drop a JS file in .houston/plugins/ to register observational lifecycle hooks for logging, metrics, or notifications:",
   "url": "https://houstoncode.ai/docs/plugins",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,13 +87,20 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Plugins</h1>
         <div class="prose">
-<p>Drop a JS file in <code>.houston/plugins/</code> to register <em>observational</em> lifecycle hooks: <code>houston.on('onToolStart' | 'onToolResult' | 'onUserMessage', fn)</code>, for logging, metrics, or notifications. Plugins are local trusted files (the same trust model as hooks, agents, and skills) and only run when the user has opted into project plugins for that project. Each runs in an isolated context with no <code>require</code>, <code>process</code>, or network; a plugin cannot block or alter a call (use a PreToolUse shell hook for that), and a throwing or slow plugin is caught and ignored.</p>
+<p>Drop a JS file in <code>.houston/plugins/</code> to register <em>observational</em> lifecycle hooks for logging, metrics, or notifications:</p>
+<p><code>houston.on('onToolStart' | 'onToolResult' | 'onUserMessage', fn)</code></p>
+<ul>
+<li><strong>Opt-in.</strong> Plugins are local trusted files (the same trust model as hooks, agents, and skills) and run only when you've opted into project plugins for that project.</li>
+<li><strong>Isolated.</strong> Each runs in its own context with no <code>require</code>, <code>process</code>, or network.</li>
+<li><strong>Observe only.</strong> A plugin can't block or change a call; use a PreToolUse shell hook for that.</li>
+<li><strong>Can't break a run.</strong> A plugin that throws or runs slowly is caught and ignored.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/hooks"><span>Previous</span>Hooks</a><a class="docs-next" href="/docs/mcp-servers"><span>Next</span>MCP servers</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -120,8 +127,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -151,6 +160,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

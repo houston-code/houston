@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>How long a turn runs | Houston docs</title>
-  <meta name="description" content="A turn has a step budget (40 by default; each model reply is one step)." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="A turn has a step budget: 40 by default, where each model reply is one step. Near the end, the agent is told to wrap up." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/how-long-a-turn-runs" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="How long a turn runs | Houston docs" />
-  <meta property="og:description" content="A turn has a step budget (40 by default; each model reply is one step)." />
+  <meta property="og:description" content="A turn has a step budget: 40 by default, where each model reply is one step. Near the end, the agent is told to wrap up." />
   <meta property="og:url" content="https://houstoncode.ai/docs/how-long-a-turn-runs" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="How long a turn runs | Houston docs" />
-  <meta name="twitter:description" content="A turn has a step budget (40 by default; each model reply is one step)." />
+  <meta name="twitter:description" content="A turn has a step budget: 40 by default, where each model reply is one step. Near the end, the agent is told to wrap up." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "How long a turn runs",
-  "description": "A turn has a step budget (40 by default; each model reply is one step).",
+  "description": "A turn has a step budget: 40 by default, where each model reply is one step. Near the end, the agent is told to wrap up.",
   "url": "https://houstoncode.ai/docs/how-long-a-turn-runs",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,16 +86,37 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>How long a turn runs</h1>
+        <nav class="docs-toc" aria-labelledby="toc-how-long-a-turn-runs">
+          <h2 id="toc-how-long-a-turn-runs">On this page</h2>
+          <ul>
+            <li><a href="#productive-turns-keep-going">Productive turns keep going</a></li>
+            <li><a href="#long-replies">Long replies</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>A turn has a step budget (40 by default; each model reply is one step). Near the end the agent is told to wrap up, so it finishes the edit in hand or summarizes what is left instead of being cut off, and you say &quot;continue&quot; to pick it up.</p>
-<p>A turn that is plainly making progress doesn't have to stop there. If several of its recent steps edited files successfully, or most of them turned up something new (a file it hadn't read, a search or command it hadn't run), and it hasn't been caught looping, it gets another round of steps instead of the wrap-up, and the transcript says so. Going back over calls it already made doesn't count. This keeps going up to a hard limit (200 steps by default), so a big job such as scaffolding a new project, or a long debugging session, finishes in one go. Stopping the run works as usual at any point. Settings &gt; Loop control has the per-turn step count, the keep-going-while-productive switch, and the hard limit. If you had already set your own step count, it stays a hard stop until you turn the switch on.</p>
-<p>A single reply also has an output limit. When a reply is cut off there, the agent picks it up exactly where it stopped (up to three times in a row) instead of leaving a half-finished answer, and the transcript notes each time. A tool call the limit cut off is never run on partial input: it is answered as &quot;not run&quot; and the agent redoes the work in smaller pieces. Either way, later replies in the turn ask for the model's full output allowance where Houston knows it.</p>
+<p>A turn has a <strong>step budget</strong>: 40 by default, where each model reply is one step. Near the end, the agent is told to wrap up. It finishes the edit in hand or summarizes what's left instead of being cut off, and you say &quot;continue&quot; to pick it up.</p>
+<h2 id="productive-turns-keep-going">Productive turns keep going</h2>
+<p>A turn that's plainly making progress gets another round of steps instead of the wrap-up, and the transcript says so. It counts as productive when, among its recent steps, either:</p>
+<ul>
+<li>several edited files successfully, or</li>
+<li>most turned up something new (a file it hadn't read, a search or command it hadn't run)</li>
+</ul>
+<p>and it hasn't been caught looping. Going back over calls it already made doesn't count.</p>
+<p>This continues up to a <strong>hard limit</strong> (200 steps by default), so a big job such as scaffolding a new project, or a long debugging session, finishes in one go. Stopping the run works as usual at any point.</p>
+<p><strong>Settings:</strong> Settings &gt; Agent Behavior &gt; Loop control has the per-turn step count, the keep-going-while-productive switch, and the hard limit. If you had already set your own step count, it stays a hard stop until you turn the switch on.</p>
+<h2 id="long-replies">Long replies</h2>
+<p>A single reply also has an output limit.</p>
+<ul>
+<li>When a reply is cut off there, the agent picks it up exactly where it stopped (up to three times in a row) instead of leaving a half-finished answer. The transcript notes each time.</li>
+<li>A tool call the limit cut off is never run on partial input. It's answered as &quot;not run&quot;, and the agent redoes the work in smaller pieces.</li>
+<li>Either way, later replies in the turn ask for the model's full output allowance where Houston knows it.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/typing-while-it-works"><span>Previous</span>Typing while it works (steering)</a><a class="docs-next" href="/docs/how-hard-the-model-thinks"><span>Next</span>How hard the model thinks (/reasoning)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -122,8 +143,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -153,6 +176,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

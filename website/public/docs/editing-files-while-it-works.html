@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Editing files while it works | Houston docs</title>
-  <meta name="description" content="You can keep working in your own editor while a turn runs." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="You can keep working in your own editor while a turn runs. Your changes are never overwritten by an older copy." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/editing-files-while-it-works" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Editing files while it works | Houston docs" />
-  <meta property="og:description" content="You can keep working in your own editor while a turn runs." />
+  <meta property="og:description" content="You can keep working in your own editor while a turn runs. Your changes are never overwritten by an older copy." />
   <meta property="og:url" content="https://houstoncode.ai/docs/editing-files-while-it-works" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Editing files while it works | Houston docs" />
-  <meta name="twitter:description" content="You can keep working in your own editor while a turn runs." />
+  <meta name="twitter:description" content="You can keep working in your own editor while a turn runs. Your changes are never overwritten by an older copy." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Editing files while it works",
-  "description": "You can keep working in your own editor while a turn runs.",
+  "description": "You can keep working in your own editor while a turn runs. Your changes are never overwritten by an older copy.",
   "url": "https://houstoncode.ai/docs/editing-files-while-it-works",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,14 +87,29 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Editing files while it works</h1>
         <div class="prose">
-<p>You can keep working in your own editor while a turn runs. Before the agent overwrites or edits a file, Houston checks two things: that the agent has read the file in this conversation, and that the file still says what the agent last saw. If you changed it in the meantime (or a shell command, a formatter, or a subagent did), the write is refused and the agent reads the file again first, so your change is never replaced by an older copy. Creating a new file needs no read. Reads carry over between messages of one conversation for files nobody has changed since; after the app restarts, or once a read has been compacted out of the conversation, the agent reads a file again before changing it. Changes Houston makes on the agent's behalf right after a write (format-on-save, a PostToolUse hook) don't count as yours.</p>
-<p>The agent sees files with line numbers, so it can cite exact lines and page through a large file by them. When an edit lands somewhere the agent didn't spell out exactly (its snippet had drifted from the file, or carried copied line numbers), the result shows the edited lines so it can check them. An edit whose snippet matches nothing points the agent at the closest part of the file instead of only failing.</p>
+<p>You can keep working in your own editor while a turn runs. Your changes are never overwritten by an older copy.</p>
+<p><strong>Before the agent overwrites or edits a file, Houston checks two things:</strong></p>
+<ol>
+<li>the agent has read the file in this conversation</li>
+<li>the file still says what the agent last saw</li>
+</ol>
+<p>If you changed it in the meantime (or a shell command, a formatter, or a subagent did), the write is refused and the agent reads the file again first.</p>
+<ul>
+<li>Creating a new file needs no read.</li>
+<li>Reads carry over between messages of one conversation for files nobody has changed since. After the app restarts, or once a read has been compacted out of the conversation, the agent reads a file again before changing it.</li>
+<li>Changes Houston makes on the agent's behalf right after a write (format-on-save, a PostToolUse hook) don't count as yours.</li>
+</ul>
+<p><strong>Precise edits.</strong> The agent sees files with line numbers, so it can cite exact lines and page through a large file by them.</p>
+<ul>
+<li>When an edit lands somewhere the agent didn't spell out exactly (its snippet had drifted from the file, or carried copied line numbers), the result shows the edited lines so it can check them.</li>
+<li>An edit whose snippet matches nothing points the agent at the closest part of the file instead of only failing.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/what-actually-ran"><span>Previous</span>What actually ran (the receipt)</a><a class="docs-next" href="/docs/undoing-a-turn-and-seeing-what-changed"><span>Next</span>Undoing a turn, and seeing what changed</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -121,8 +136,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works" aria-current="page">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -152,6 +169,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

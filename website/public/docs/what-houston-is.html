@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>What Houston is | Houston docs</title>
-  <meta name="description" content="Houston is a coding agent that runs on the user's own machine and works inside a single project directory." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Houston is a coding agent that runs on your own machine and works inside a single project folder." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/what-houston-is" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="What Houston is | Houston docs" />
-  <meta property="og:description" content="Houston is a coding agent that runs on the user's own machine and works inside a single project directory." />
+  <meta property="og:description" content="Houston is a coding agent that runs on your own machine and works inside a single project folder." />
   <meta property="og:url" content="https://houstoncode.ai/docs/what-houston-is" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="What Houston is | Houston docs" />
-  <meta name="twitter:description" content="Houston is a coding agent that runs on the user's own machine and works inside a single project directory." />
+  <meta name="twitter:description" content="Houston is a coding agent that runs on your own machine and works inside a single project folder." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "What Houston is",
-  "description": "Houston is a coding agent that runs on the user's own machine and works inside a single project directory.",
+  "description": "Houston is a coding agent that runs on your own machine and works inside a single project folder.",
   "url": "https://houstoncode.ai/docs/what-houston-is",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,13 +87,19 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>What Houston is</h1>
         <div class="prose">
-<p>Houston is a coding agent that runs on the user's own machine and works inside a single project directory. It brings its own model connections (the user supplies API keys, or runs a local model), a set of file, shell, search, web, and GitHub tools, and a permission system that decides how much runs without asking. It ships as a desktop app and as terminal clients.</p>
+<p>Houston is a coding agent that runs on your own machine and works inside a single project folder.</p>
+<ul>
+<li><strong>Your models.</strong> You bring the model connection: your own API keys, or a model running locally.</li>
+<li><strong>Real tools.</strong> It reads and edits files, runs shell commands, searches code and the web, and works with GitHub.</li>
+<li><strong>You decide what runs.</strong> A permission system sets how much happens without asking you first.</li>
+<li><strong>Desktop or terminal.</strong> It ships as a desktop app and as terminal clients.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/getting-started-in-the-desktop-app"><span>Previous</span>Getting started in the desktop app</a><a class="docs-next" href="/docs/clients"><span>Next</span>Clients (where Houston runs)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -120,8 +126,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -151,6 +159,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>
