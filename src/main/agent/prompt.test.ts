@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { buildSystemPrompt, type PromptHost } from './prompt'
+import { buildSystemPrompt, promptId, type PromptHost } from './prompt'
 import { builtinToolset, type BuiltinToolsetOptions } from './tools'
 
 /** The built-in tool names a run offers: the desktop set, with any overrides applied. */
@@ -457,5 +457,70 @@ describe('inline visuals line', () => {
 
   it('says nothing about visuals to a terminal client', () => {
     expect(desktop(undefined)).not.toContain('```mermaid')
+  })
+})
+
+describe('promptId', () => {
+  type Inputs = Parameters<typeof buildSystemPrompt>
+  const schemas = builtinToolset({ localhostCapture: true, imageGallery: true, mockupRender: true, spawn: true, scheduler: true, planMode: false }).map((t) => t.schema)
+  const names = schemas.map((s) => s.name)
+  const host: PromptHost = { platform: 'darwin', sandboxBackend: 'seatbelt' }
+  const inputs = (over: Partial<Record<number, unknown>> = {}): Inputs => {
+    const base: unknown[] = [
+      '/home/dev/code/shop',
+      undefined,
+      'Use two-space indentation.',
+      false,
+      'Skills available for this project: deploy',
+      "Today's date: 2026-10-24.",
+      'anthropic',
+      'claude-sonnet-5',
+      names,
+      host,
+      { html: false },
+      undefined
+    ]
+    for (const [i, v] of Object.entries(over)) base[Number(i)] = v
+    return base as Inputs
+  }
+
+  it('is a short hex id', () => {
+    expect(promptId(inputs(), schemas)).toMatch(/^[0-9a-f]{12}$/)
+  })
+
+  it('ignores what the project and the user supplied', () => {
+    const id = promptId(inputs(), schemas)
+    // Another folder, other rules, other user instructions, skills, date and git state.
+    expect(
+      promptId(
+        inputs({
+          0: '/tmp/elsewhere',
+          1: 'Answer in French.',
+          2: 'Tabs, always.',
+          4: 'Skills available for this project: release',
+          5: "Today's date: 2027-01-01.\n\nGit: on branch main."
+        }),
+        schemas
+      )
+    ).toBe(promptId(inputs({ 1: 'Be brief.' }), schemas))
+    expect(promptId(inputs({ 0: '/tmp/elsewhere', 4: undefined, 5: undefined }), schemas)).toBe(id)
+    // The caller's appended text and schema, by their presence only.
+    const run = (append: string, field: string): unknown => ({ append, outputSchema: { type: 'object', required: [field] } })
+    expect(promptId(inputs({ 11: run('Review only.', 'a') }), schemas)).toBe(promptId(inputs({ 11: run('Fix it.', 'b') }), schemas))
+  })
+
+  it('changes when the text Houston sends changes', () => {
+    const id = promptId(inputs(), schemas)
+    const differs = (over: Partial<Record<number, unknown>>, tools = schemas): void =>
+      expect(promptId(inputs(over), tools)).not.toBe(id)
+    differs({ 3: true }) // plan mode
+    differs({ 6: 'openai', 7: 'gpt-5.5' }) // another family's addendum
+    differs({ 9: { platform: 'linux', sandboxBackend: 'bubblewrap' } }) // another host
+    differs({ 10: undefined }) // a terminal client: no visuals line
+    differs({ 2: undefined }) // no rules file, so no rules framing
+    differs({ 11: { append: 'x' } }) // the run-instructions section
+    differs({ 8: names.filter((n) => n !== 'spawn_session') }) // a tool not offered
+    // A reworded tool description, with the prompt itself unchanged.
+    differs({}, schemas.map((s) => (s.name === 'read_file' ? { ...s, description: `${s.description} More.` } : s)))
   })
 })

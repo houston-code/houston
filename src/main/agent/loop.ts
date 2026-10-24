@@ -65,7 +65,7 @@ import { log } from '../logger'
 import { runQuarantineExtraction } from './untrusted'
 import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
-import { buildSystemPrompt } from './prompt'
+import { buildSystemPrompt, promptId } from './prompt'
 import { applyRunOverrides } from './run-overrides'
 import { loadProjectRules } from './rules'
 import { loadProjectConfig, mergeProjectMcpServers, mergeRunMcpServers } from './projectConfig'
@@ -1047,7 +1047,7 @@ const RUN_END_DETAIL_MAX = 300
  * routine, so it logs at INFO; every failure at WARN.
  */
 function logRunEnd(
-  where: { runId: string; conversationId?: string; providerId: string; model: string },
+  where: { runId: string; conversationId?: string; providerId: string; model: string; promptId?: string },
   cls: RunEndClass,
   detail?: string
 ): void {
@@ -1059,7 +1059,8 @@ function logRunEnd(
     `conversation=${id(where.conversationId)}`,
     `run=${id(where.runId)}`,
     `provider=${id(where.providerId)}`,
-    `model=${id(where.model)}`
+    `model=${id(where.model)}`,
+    `prompt=${id(where.promptId)}`
   ]
   if (detail) {
     const clipped = detail.length > RUN_END_DETAIL_MAX ? `${detail.slice(0, RUN_END_DETAIL_MAX - 1)}\u2026` : detail
@@ -1196,6 +1197,8 @@ export async function startRun(
   let failing: { cls: RunEndClass; detail?: string } | undefined
   // The model serving the run, for the log line; moves with a fallback hop.
   let serving = { providerId: req.providerId, model: req.model }
+  // The run's promptId, once its prompt is built: stamped on each reply and logged.
+  let runPromptId: string | undefined
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void => {
     if ((e.type === 'done' || e.type === 'error') && beforeEnd) {
@@ -1527,7 +1530,7 @@ export async function startRun(
       setAnnouncedPolicy(conversationId, run.announcedPolicy)
     }
     storedAnnounced = run.announcedPolicy
-    let system = buildSystemPrompt(
+    const promptInputs: Parameters<typeof buildSystemPrompt> = [
       workspace,
       settings.systemPromptExtra,
       rules.text,
@@ -1545,7 +1548,11 @@ export async function startRun(
       req.appendSystemPrompt !== undefined || req.outputSchema !== undefined
         ? { append: req.appendSystemPrompt, outputSchema: req.outputSchema }
         : undefined
-    )
+    ]
+    let system = buildSystemPrompt(...promptInputs)
+    // Which version of Houston's own instructions this run's replies came from, kept on
+    // each one so saved chats can be compared across prompt changes (see promptId).
+    runPromptId = promptId(promptInputs, builtinDefs.map((t) => t.schema))
     // Built-in tools plus any tools from connected MCP servers (best effort).
     // A trusted folder's project MCP servers join the user's own under a `proj-`
     // id prefix (user servers win collisions); untrusted folders contribute none.
@@ -3669,7 +3676,8 @@ export async function startRun(
           role: 'assistant',
           content: assistantText,
           ...(toolCalls.length ? { toolCalls } : {}),
-          ...(turnReasoning.length ? { reasoning: turnReasoning } : {})
+          ...(turnReasoning.length ? { reasoning: turnReasoning } : {}),
+          ...(runPromptId ? { promptId: runPromptId } : {})
         })
         persist(messages)
       }
@@ -4627,7 +4635,7 @@ export async function startRun(
     // one, a message that got no answer looks the same after a reload whether the
     // provider failed, the model couldn't call tools, or the user hit Stop.
     if (ended) {
-      logRunEnd({ runId, conversationId, ...serving }, ended.cls, ended.detail)
+      logRunEnd({ runId, conversationId, ...serving, promptId: runPromptId }, ended.cls, ended.detail)
       const replies = messages.filter((m) => m.role === 'assistant').length
       if (replies === repliesAtStart && messages.length) {
         const recorded = withUnansweredRecord(

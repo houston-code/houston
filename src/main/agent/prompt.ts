@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto'
 import { basename } from 'node:path'
-import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import { SYSTEM_NOTE_PREFIX, type ToolSchema } from '@shared/agent'
 import { isBlockedByPlan } from './approval'
 import { builtinToolset, getTool } from './tools'
 import { isDeferredBuiltin } from './deferred-tools'
@@ -324,4 +325,47 @@ ${environmentSection(host, attended)}
   }
 
   return sections.join('\n\n')
+}
+
+/** The workspace {@link promptId} builds the prompt with, so the id never depends on the folder. */
+const PROMPT_ID_WORKSPACE = '/workspace'
+
+const supplied = (s: string | undefined): boolean => !!s && s.trim() !== ''
+
+/**
+ * A short id for the instructions Houston itself wrote for a run: the system prompt
+ * as the run's configuration shapes it (plan mode, model family, tools on offer, host,
+ * client, the headless additions), rebuilt with everything the project or the user
+ * supplied left out, plus the built-in tool schemas the run offers. Two runs share an
+ * id exactly when Houston told the model the same thing, so saved conversations can be
+ * grouped by it to see whether a change to the prompt or a tool description moved the
+ * model's behavior, from ordinary use and at no cost.
+ *
+ * A supplied input is replaced by a fixed stand-in rather than dropped, so the text
+ * Houston wraps it in still counts. Its contents never do: rules files, the user's own
+ * instructions, skills and agents, the date and git snapshot, and the caller's
+ * appended text and output schema. MCP tools are not built-ins and never count.
+ * Not a security value: it only has to tell prompt versions apart.
+ */
+export function promptId(inputs: Parameters<typeof buildSystemPrompt>, tools: readonly ToolSchema[]): string {
+  const [, extra, rules, planMode, , , providerId, model, offered, host, visuals, run] = inputs
+  const houston = buildSystemPrompt(
+    PROMPT_ID_WORKSPACE,
+    supplied(extra) ? '<user instructions>' : undefined,
+    supplied(rules) ? '<project rules>' : undefined,
+    planMode,
+    undefined,
+    undefined,
+    providerId,
+    model,
+    offered,
+    host,
+    visuals,
+    run && {
+      append: supplied(run.append) ? '<run instructions>' : undefined,
+      outputSchema: run.outputSchema ? {} : undefined
+    }
+  )
+  const schemas = tools.map((t) => [t.name, t.description, t.parameters])
+  return createHash('sha256').update(houston).update('\0').update(JSON.stringify(schemas)).digest('hex').slice(0, 12)
 }

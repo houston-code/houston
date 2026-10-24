@@ -70,6 +70,13 @@ feature.
 See [CONTRIBUTING.md](CONTRIBUTING.md#agent-behavior-goldens) for what this guard does
 and does not catch.
 
+Every reply the loop saves carries a `promptId` (`promptId` in `src/main/agent/prompt.ts`):
+a short hash of the system prompt Houston wrote for that run's configuration and the
+built-in tool schemas it offered, with the project's and user's own inputs left out. Group
+saved conversations by it to compare behavior before and after a prompt change. Anything
+that changes what the model is told should flow through `buildSystemPrompt` or a tool
+schema so the id moves with it.
+
 ## Model knowledge
 
 Everything Houston infers from a model id (price, context window, vision and

@@ -475,6 +475,27 @@ describe('startRun', () => {
     expect((result as { output: string }).output).toContain('the secret')
   })
 
+  it("stamps every reply with the version of Houston's instructions the run was given", async () => {
+    writeFileSync(join(ws, 'note.txt'), 'hello')
+    const turns = (): ProviderStreamEvent[][] => [
+      [
+        { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'done reading' }, { type: 'done', stopReason: 'end_turn' }]
+    ]
+    const ids = (r: RunResult): (string | undefined)[] =>
+      r.messages.filter((m) => m.role === 'assistant').map((m) => m.promptId)
+
+    const first = ids(await run({ turns: turns() }))
+    expect(first).toHaveLength(2)
+    expect(first[0]).toMatch(/^[0-9a-f]{12}$/)
+    expect(first[1]).toBe(first[0])
+    // The same configuration gives the same id; Plan mode is a different prompt.
+    expect(ids(await run({ turns: turns() }))).toEqual(first)
+    expect(ids(await run({ turns: [[{ type: 'text', text: 'a plan' }, { type: 'done', stopReason: 'end_turn' }]], policy: 'plan' }))[0]).not.toBe(first[0])
+  })
+
   it('redacts stored secrets from a tool result before the model, UI, and transcript see it', async () => {
     h.secrets = ['stored-opaque-credential-value-xyz']
     // A file the agent reads that happens to contain this install's own credential (an
@@ -1084,7 +1105,7 @@ describe('startRun', () => {
         expect(r.events.find((e) => e.type === 'retry')).toMatchObject({ attempt: 1 })
         // Nothing of the dead attempt was persisted, and its tool call never ran.
         expect(r.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
-        expect(r.messages[1]).toEqual({ role: 'assistant', content: 'the whole answer' })
+        expect(r.messages[1]).toEqual({ role: 'assistant', content: 'the whole answer', promptId: expect.any(String) })
         expect(existsSync(join(ws, 'x.txt'))).toBe(false)
       }
     )
@@ -9322,6 +9343,7 @@ describe('a run that ends without a reply', () => {
     expect(line).toContain('conversation=conv-runend-provider')
     expect(line).toContain('provider=anthropic')
     expect(line).toContain('model=claude-test')
+    expect(line).toMatch(/ prompt=[0-9a-f]{12} /) // which prompt version the run was given
     expect(line).toContain('status=400')
     expect(line).not.toContain('sk-live-runend-secret-value') // redacted
     expect(line).not.toContain(prompt) // never the conversation's content
