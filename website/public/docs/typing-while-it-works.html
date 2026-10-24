@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Typing while it works (steering) | Houston docs</title>
-  <meta name="description" content="You do not have to wait for a turn to finish before saying the next thing." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="You don't have to wait for a turn to finish before saying the next thing." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/typing-while-it-works" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Typing while it works (steering) | Houston docs" />
-  <meta property="og:description" content="You do not have to wait for a turn to finish before saying the next thing." />
+  <meta property="og:description" content="You don't have to wait for a turn to finish before saying the next thing." />
   <meta property="og:url" content="https://houstoncode.ai/docs/typing-while-it-works" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Typing while it works (steering) | Houston docs" />
-  <meta name="twitter:description" content="You do not have to wait for a turn to finish before saying the next thing." />
+  <meta name="twitter:description" content="You don't have to wait for a turn to finish before saying the next thing." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Typing while it works (steering)",
-  "description": "You do not have to wait for a turn to finish before saying the next thing.",
+  "description": "You don't have to wait for a turn to finish before saying the next thing.",
   "url": "https://houstoncode.ai/docs/typing-while-it-works",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,23 +86,54 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Typing while it works (steering)</h1>
+        <nav class="docs-toc" aria-labelledby="toc-typing-while-it-works">
+          <h2 id="toc-typing-while-it-works">On this page</h2>
+          <ul>
+            <li><a href="#in-the-desktop-app">In the desktop app</a></li>
+            <li><a href="#special-cases">Special cases</a></li>
+            <li><a href="#your-message-is-never-dropped">Your message is never dropped</a></li>
+            <li><a href="#stopping">Stopping</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>You do not have to wait for a turn to finish before saying the next thing. Type while the agent works: what you type appears on the status line, and <code>Enter</code> sends it.</p>
-<p>It goes to the turn that is running. The agent reads it before its next step, so &quot;no, use YAML instead&quot; changes what happens next rather than arriving after the work is done. Houston prints <code>· steering: …</code> at the moment the message actually reaches the model, not when you pressed <code>Enter</code>. Until then it has changed nothing, and saying otherwise would be a lie. The message is an ordinary part of the conversation, so it appears in the transcript and is remembered like anything else you said.</p>
-<p>This is the middle ground between the two bad options. Interrupting throws away the turn's work and its context; waiting lets the agent keep building on the wrong thing for however many steps are left.</p>
-<p>In the desktop app, <code>Enter</code> steers the running turn the same way, and <code>⌘+Enter</code> (<code>Ctrl+Enter</code> on Windows and Linux) queues the message instead, to be sent as the next turn when this one finishes. The message box says so while a run is going, the Steer button sits where Send normally is with Queue beside it, and a steered message is labelled <strong>Steered</strong> in the transcript. A <code>/command</code> or a <code># rule</code> typed mid-run is run or saved, never steered.</p>
-<p>If the turn finishes before your message lands (you typed it as the agent was wrapping up), nothing is lost: it is sent as the next message automatically, with no second <code>Enter</code>. Several such messages go together as one.</p>
+<p>You don't have to wait for a turn to finish before saying the next thing. Type while the agent works, press <code>Enter</code>, and your message goes to the turn that's running.</p>
+<p><strong>Why it helps.</strong> The agent reads your message before its next step, so &quot;no, use YAML instead&quot; changes what happens next rather than arriving after the work is done. It's the middle ground between two bad options: interrupting throws away the turn's work and its context, and waiting lets the agent keep building on the wrong thing.</p>
 <ul>
-<li><code>Esc</code> clears what you have typed. On an empty line, <code>Esc</code> stops the run (so does <code>Ctrl-C</code>).</li>
-<li>Stopping a run also drops anything still waiting: those messages were follow-ups to work you just threw away.</li>
-<li>A slash command typed while the agent works is run as a command, never sent to the model as text. In the terminal it runs once the turn ends. In the desktop app it runs right away (switching the approval mode applies to the running turn), except <code>/compact</code>, which waits until the turn ends.</li>
+<li><strong>Honest timing.</strong> Houston prints <code>· steering: …</code> at the moment the message actually reaches the model, not when you pressed <code>Enter</code>. Until then it has changed nothing.</li>
+<li><strong>Part of the conversation.</strong> A steered message appears in the transcript and is remembered like anything else you said.</li>
+</ul>
+<h2 id="in-the-desktop-app">In the desktop app</h2>
+<ul>
+<li><code>Enter</code> steers the running turn.</li>
+<li><code>⌘+Enter</code> (<code>Ctrl+Enter</code> on Windows and Linux) <strong>queues</strong> the message instead, to be sent as the next turn when this one finishes.</li>
+<li>While a run is going, the message box says so, and the <strong>Steer</strong> button sits where Send normally is, with <strong>Queue</strong> beside it.</li>
+<li>A steered message is labelled <strong>Steered</strong> in the transcript.</li>
+<li>Until it reaches the model, it waits as a chip above the message box, marked with the steer icon. Its × takes it back.</li>
+</ul>
+<h2 id="special-cases">Special cases</h2>
+<ul>
+<li><strong>The agent asked you something.</strong> While it waits on a question, <code>Enter</code> answers the question instead (the box says so), since the agent can't read anything else until it has your answer.</li>
+<li><strong>Long messages.</strong> A message longer than a steer allows (2,000 characters) is queued for after the run instead of being cut.</li>
+<li><strong>Commands.</strong> A <code>/command</code> or a <code># rule</code> typed mid-run is run or saved, never sent to the model as text. In the terminal it runs once the turn ends. In the desktop app it runs right away (switching the approval mode applies to the running turn), except <code>/compact</code>, which waits until the turn ends.</li>
+</ul>
+<h2 id="your-message-is-never-dropped">Your message is never dropped</h2>
+<ul>
+<li><strong>The turn finished first</strong> (you typed as the agent was wrapping up): the message is sent as the next one automatically, with no second <code>Enter</code>. Several such messages go together as one.</li>
+<li><strong>The turn ended another way</strong> (you pressed Stop, the provider failed after its retries, the turn hit its step limit): the message stays as a queued chip to send or clear.</li>
+<li><strong>Restarts:</strong> queued messages are saved with the chat, so quitting or restarting Houston keeps them.</li>
+<li><strong>Terminal interrupts:</strong> a message typed before you interrupt a turn is put back in the prompt for you to edit or send.</li>
+</ul>
+<h2 id="stopping">Stopping</h2>
+<ul>
+<li><code>Esc</code> clears what you've typed. On an empty line, <code>Esc</code> stops the run (so does <code>Ctrl-C</code>).</li>
+<li>Stopping a run also drops anything still waiting, since those messages were follow-ups to work you just threw away.</li>
 </ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/slash-commands"><span>Previous</span>Slash commands</a><a class="docs-next" href="/docs/how-long-a-turn-runs"><span>Next</span>How long a turn runs</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -129,8 +160,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -160,6 +193,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

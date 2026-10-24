@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Settings and keys | Houston docs</title>
-  <meta name="description" content="Settings covers providers and keys, web search, approval mode and permission rules, hooks, MCP servers, additional folders, context threshold, appearance..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Settings opens as a full page over the window. Back to app (at the top of the sidebar) or Esc returns to the chat." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/settings-and-keys" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Settings and keys | Houston docs" />
-  <meta property="og:description" content="Settings covers providers and keys, web search, approval mode and permission rules, hooks, MCP servers, additional folders, context threshold, appearance..." />
+  <meta property="og:description" content="Settings opens as a full page over the window. Back to app (at the top of the sidebar) or Esc returns to the chat." />
   <meta property="og:url" content="https://houstoncode.ai/docs/settings-and-keys" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Settings and keys | Houston docs" />
-  <meta name="twitter:description" content="Settings covers providers and keys, web search, approval mode and permission rules, hooks, MCP servers, additional folders, context threshold, appearance..." />
+  <meta name="twitter:description" content="Settings opens as a full page over the window. Back to app (at the top of the sidebar) or Esc returns to the chat." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Settings and keys",
-  "description": "Settings covers providers and keys, web search, approval mode and permission rules, hooks, MCP servers, additional folders, context threshold, appearance...",
+  "description": "Settings opens as a full page over the window. Back to app (at the top of the sidebar) or Esc returns to the chat.",
   "url": "https://houstoncode.ai/docs/settings-and-keys",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,15 +86,61 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Settings and keys</h1>
+        <nav class="docs-toc" aria-labelledby="toc-settings-and-keys">
+          <h2 id="toc-settings-and-keys">On this page</h2>
+          <ul>
+            <li><a href="#pages">Pages</a></li>
+            <li><a href="#saving-and-undo">Saving and undo</a></li>
+            <li><a href="#searching-settings">Searching settings</a></li>
+            <li><a href="#when-a-key-won-t-save">When a key won't save</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>Settings covers providers and keys, web search, approval mode and permission rules, hooks, MCP servers, additional folders, context threshold, appearance (theme, notifications), updates (installed version and a manual &quot;Check for updates&quot;; also <strong>Check for Updates…</strong> in the app menu on macOS or the Help menu on Windows and Linux), and optional integrations (<code>gh</code>, formatters). API keys are encrypted with the OS keychain and stay in the main process.</p>
-<p>If a key won't save because the OS keychain is unavailable, Settings (and the Get started checklist's Connect panel) says how to fix it and offers <strong>Restart Houston</strong>. On macOS this usually means the Keychain prompt was denied: macOS only asks again after a restart, so restart and choose <strong>Always Allow</strong>. On Linux, unlock or install a keyring (such as GNOME Keyring or KWallet), then restart.</p>
+<p>Settings opens as a full page over the window. <strong>Back to app</strong> (at the top of the sidebar) or <code>Esc</code> returns to the chat.</p>
+<h2 id="pages">Pages</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Group</th><th>Pages</th></tr></thead>
+<tbody>
+<tr><td><strong>AI</strong></td><td>Providers &amp; Models, Agent Behavior, Tools, MCP Servers, Hooks</td></tr>
+<tr><td><strong>App</strong></td><td>General, Appearance, Keyboard</td></tr>
+<tr><td><strong>Security</strong></td><td>Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (additional folders the agent may use)</td></tr>
+<tr><td><strong>About</strong></td><td>installed version and a manual &quot;Check for updates&quot;, diagnostics, legal</td></tr>
+</tbody>
+</table></div>
+<p><strong>Check for Updates…</strong> is also in the app menu on macOS, and the Help menu on Windows and Linux.</p>
+<p><strong>API keys</strong> are encrypted with the OS keychain and stay in the app's main process.</p>
+<h2 id="saving-and-undo">Saving and undo</h2>
+<ul>
+<li><strong>No Save button.</strong> A switch, a choice, or a reorder saves at once; a text field saves when you leave it (so a half-typed pattern is never saved).</li>
+<li><strong>Undo.</strong> The title bar shows when a change is saved and offers <strong>Undo</strong> for the last one.</li>
+<li><strong>Modified sections.</strong> A section whose preferences differ from the defaults is marked <strong>Modified</strong>, with a <strong>Reset</strong> beside it.</li>
+</ul>
+<p><strong>Your preferences</strong> (General) exports them to a file, imports one, or resets them all:</p>
+<ul>
+<li>Importing first says what it replaces, and calls out any rules that allow calls or hooks that run commands.</li>
+<li>Exports leave out providers, API keys, MCP servers, and folders.</li>
+<li>A reset keeps those, plus your permission rules, hooks, and approval mode (whose fresh-install default depends on whether this machine's sandbox works).</li>
+</ul>
+<h2 id="searching-settings">Searching settings</h2>
+<p>The search box above the pages is focused when Settings opens (<code>Cmd+F</code> or <code>Ctrl+F</code>, or <code>/</code>, jumps back to it). It finds a setting from any page by:</p>
+<ul>
+<li>its name or description</li>
+<li>a common synonym (&quot;proxy&quot; finds Sandbox egress, &quot;dark mode&quot; finds Appearance)</li>
+<li>a value you entered (a model id, an MCP server, a rule pattern)</li>
+</ul>
+<p>Results stay editable in place, the nav shows how many each page has, and <code>Esc</code> clears the search.</p>
+<h2 id="when-a-key-won-t-save">When a key won't save</h2>
+<p>If the OS keychain is unavailable, Settings (and the Get started checklist's Connect panel) says how to fix it and offers <strong>Restart Houston</strong>.</p>
+<ul>
+<li><strong>macOS:</strong> this usually means the Keychain prompt was denied. macOS only asks again after a restart, so restart and choose <strong>Always Allow</strong>.</li>
+<li><strong>Linux:</strong> unlock or install a keyring (such as GNOME Keyring or KWallet), then restart.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/models"><span>Previous</span>Models</a><a class="docs-next" href="/docs/the-terminal-composer"><span>Next</span>The terminal composer</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -121,8 +167,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -152,6 +200,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

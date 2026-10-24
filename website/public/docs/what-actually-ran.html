@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>What actually ran (the receipt) | Houston docs</title>
-  <meta name="description" content="A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message, for example No tests ran · install..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/what-actually-ran" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="What actually ran (the receipt) | Houston docs" />
-  <meta property="og:description" content="A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message, for example No tests ran · install..." />
+  <meta property="og:description" content="A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message." />
   <meta property="og:url" content="https://houstoncode.ai/docs/what-actually-ran" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="What actually ran (the receipt) | Houston docs" />
-  <meta name="twitter:description" content="A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message, for example No tests ran · install..." />
+  <meta name="twitter:description" content="A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "What actually ran (the receipt)",
-  "description": "A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message, for example No tests ran · install...",
+  "description": "A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message.",
   "url": "https://houstoncode.ai/docs/what-actually-ran",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,24 +86,67 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>What actually ran (the receipt)</h1>
+        <nav class="docs-toc" aria-labelledby="toc-what-actually-ran">
+          <h2 id="toc-what-actually-ran">On this page</h2>
+          <ul>
+            <li><a href="#what-it-lists">What it lists</a></li>
+            <li><a href="#todo-items-it-can-t-back">Todo items it can't back</a></li>
+            <li><a href="#an-accepted-plan-s-progress">An accepted plan's progress</a></li>
+            <li><a href="#outcomes-it-can-t-tell">Outcomes it can't tell</a></li>
+            <li><a href="#where-it-lives">Where it lives</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>A turn that ran checks or changed files ends with a line marked <strong>Recorded by Houston</strong> under the agent's last message, for example <code>No tests ran · install failed (no network) · build failed · 14 files changed</code>. Houston builds it from the commands it executed and the files its tools changed. The agent can't write it, so it is the thing to compare the agent's own summary against: if the reply says the tests pass and the receipt says no tests ran, believe the receipt.</p>
+<p>A turn that ran checks or changed files ends with a line marked <strong>Recorded by Houston</strong> under the agent's last message. For example:</p>
+<p><code>No tests ran · install failed (no network) · build failed · 14 files changed</code></p>
+<p>Houston builds it from the commands it executed and the files its tools changed. <strong>The agent can't write it</strong>, so it's what to check the agent's own summary against: if the reply says the tests pass and the receipt says no tests ran, believe the receipt.</p>
+<h2 id="what-it-lists">What it lists</h2>
 <ul>
-<li><strong>What it lists.</strong> Commands that test, typecheck, build, lint, install, start a server, or send an HTTP request to a local server, each with its real exit code and, for most test runners (pytest, vitest, jest, mocha, node:test, cargo, unittest), the passed and failed counts from the runner's own summary. Other commands (<code>ls</code>, <code>git status</code>) are only counted. Click the line to expand it.</li>
-<li><strong>Browser checks.</strong> A page the agent looked at with view_localhost is listed with how its steps went. It counts as passed only when a check of the page (<code>expect_text</code> or <code>wait_for</code>) passed after the last click or keypress: clicking through a flow shows it didn't break, not that it did the right thing.</li>
-<li><strong>Also listed.</strong> Commands a writable subagent ran (marked with who ran them), your verify command when Houston runs it at the end of a turn, and how a command started in the background ended (or that it is still running, for a dev server). A check that ran before the turn's last file change says so, since it may not cover the final code.</li>
-<li><strong>Todo items it can't back.</strong> When the agent marks a todo done that says a check ran (&quot;Backend tests with pytest&quot;, &quot;Verify the build&quot;) and no passing run of that check is recorded this turn, the receipt lists it as marked done with nothing recorded, and the agent is told at the moment it marks it. The list itself is left as the agent wrote it. Items about writing something (&quot;Write tests for the API&quot;) never need a run behind them.</li>
-<li><strong>An accepted plan's progress.</strong> After you accept a plan, each turn that works on it shows how far along it is, counting every turn since you accepted it: &quot;plan: 9 of 11 files, 1 of 3 checks passed&quot;, with the files it named that nothing has changed yet and each of its checks (passed, ran with nothing passing, not run yet). This holds across turns, so &quot;finish the planned implementation&quot; two turns later picks up where it was. It says &quot;plan complete&quot; once, and stops when a newer plan replaces it or the chat moves on to other work. If you ask to skip the checks, they show as skipped.</li>
-<li><strong>Outcomes it can't tell.</strong> An HTTP request made without <code>curl -f</code> (so an error page still exits 0), a test whose exit code is hidden by what follows it (<code>pytest | tail</code>, <code>pytest; echo done</code>), or a page that loaded with nothing on it checked is shown as unknown rather than passed.</li>
-<li><strong>Where it lives.</strong> It is saved with the conversation and shown again when you reopen it. It never goes to the model. Importing a conversation doesn't bring receipts along, since Houston didn't record those runs. The terminal client and headless mode print it too, <code>--json</code> includes it in the result line, and an HTML export shows it under the turn.</li>
-<li><strong>What it costs.</strong> Nothing: no extra model calls and no extra commands. It only reads what already ran.</li>
+<li><strong>Checks.</strong> Commands that test, typecheck, build, lint, install, start a server, or send an HTTP request to a local server, each with its real exit code. For most test runners (pytest, vitest, jest, mocha, node:test, cargo, unittest) it also shows the passed and failed counts from the runner's own summary.</li>
+<li><strong>Other commands</strong> (<code>ls</code>, <code>git status</code>) are only counted. Click the line to expand it.</li>
+<li><strong>Browser checks.</strong> A page the agent looked at with <code>view_localhost</code> is listed with how its steps went. It counts as passed only when a check of the page (<code>expect_text</code> or <code>wait_for</code>) passed after the last click or keypress. Clicking through a flow shows it didn't break, not that it did the right thing.</li>
+<li><strong>Subagents.</strong> Commands a writable subagent ran, each by name with its exit code and which subagent ran it (even an <code>ls</code>, since you didn't watch it happen), and files a subagent changed, marked with who changed them.</li>
+<li><strong>Your verify command</strong>, when Houston runs it at the end of a turn.</li>
+<li><strong>Background commands:</strong> how one ended, or that it's still running (for a dev server).</li>
+<li><strong>Stale checks.</strong> A check that ran before the turn's last file change says so, since it may not cover the final code.</li>
+</ul>
+<h2 id="todo-items-it-can-t-back">Todo items it can't back</h2>
+<p>When the agent marks a todo done that says a check ran (&quot;Backend tests with pytest&quot;, &quot;Verify the build&quot;) and no passing run of that check is recorded this turn:</p>
+<ul>
+<li>the receipt lists it as marked done with nothing recorded</li>
+<li>the agent is told at the moment it marks it</li>
+<li>the todo list itself stays as the agent wrote it</li>
+</ul>
+<p>Items about writing something (&quot;Write tests for the API&quot;) never need a run behind them.</p>
+<h2 id="an-accepted-plan-s-progress">An accepted plan's progress</h2>
+<p>After you accept a plan, each turn that works on it shows how far along it is, counting every turn since you accepted it. For example: &quot;plan: 9 of 11 files, 1 of 3 checks passed&quot;.</p>
+<ul>
+<li>It lists the files the plan named that nothing has changed yet, and each of its checks: passed, ran with nothing passing, or not run yet.</li>
+<li>It holds across turns, so &quot;finish the planned implementation&quot; two turns later picks up where it was.</li>
+<li>It says &quot;plan complete&quot; once, and stops when a newer plan replaces it or the chat moves on to other work.</li>
+<li>If you ask to skip the checks, they show as skipped.</li>
+</ul>
+<h2 id="outcomes-it-can-t-tell">Outcomes it can't tell</h2>
+<p>These show as unknown rather than passed:</p>
+<ul>
+<li>an HTTP request made without <code>curl -f</code> (so an error page still exits 0)</li>
+<li>a test whose exit code is hidden by what follows it (<code>pytest | tail</code>, <code>pytest; echo done</code>)</li>
+<li>a page that loaded with nothing on it checked</li>
+</ul>
+<h2 id="where-it-lives">Where it lives</h2>
+<ul>
+<li>It's saved with the conversation and shown again when you reopen it.</li>
+<li>It never goes to the model.</li>
+<li>Importing a conversation doesn't bring receipts along, since Houston didn't record those runs.</li>
+<li>The terminal client and headless mode print it too, <code>--json</code> includes it in the result line, and an HTML export shows it under the turn.</li>
+<li><strong>It costs nothing:</strong> no extra model calls and no extra commands. It only reads what already ran.</li>
 </ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/seeing-what-the-tools-did"><span>Previous</span>Seeing what the tools did</a><a class="docs-next" href="/docs/editing-files-while-it-works"><span>Next</span>Editing files while it works</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -130,8 +173,10 @@
             <li><a href="/docs/what-actually-ran" aria-current="page">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -161,6 +206,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

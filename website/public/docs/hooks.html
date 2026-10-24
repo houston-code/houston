@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Hooks | Houston docs</title>
   <meta name="description" content="Hooks (Settings, Hooks) run your own shell commands at set points in the agent loop." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/hooks" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "Hooks (Settings, Hooks) run your own shell commands at set points in the agent loop.",
   "url": "https://houstoncode.ai/docs/hooks",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,31 +86,73 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Hooks</h1>
+        <nav class="docs-toc" aria-labelledby="toc-hooks">
+          <h2 id="toc-hooks">On this page</h2>
+          <ul>
+            <li><a href="#events">Events</a></li>
+            <li><a href="#the-exit-code-contract">The exit-code contract</a></li>
+            <li><a href="#json-output">JSON output</a></li>
+            <li><a href="#how-hooks-run">How hooks run</a></li>
+            <li><a href="#environment-variables">Environment variables</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>Hooks (Settings, <em>Hooks</em>) run your own shell commands at set points in the agent loop. Each hook names an event and, for the tool events, a matcher glob on the tool name (the other events match only an empty or <code>*</code> matcher):</p>
+<p>Hooks (Settings, <em>Hooks</em>) run your own shell commands at set points in the agent loop. Each hook names an event and, for tool events, a matcher glob on the tool name. The other events match only an empty or <code>*</code> matcher.</p>
+<h2 id="events">Events</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Event</th><th>When</th><th>What it can do</th></tr></thead>
+<tbody>
+<tr><td><strong>PreToolUse</strong></td><td>before a tool call runs</td><td>block the call, approve it (skipping the approval prompt), or rewrite its arguments</td></tr>
+<tr><td><strong>PostToolUse</strong></td><td>after a tool call</td><td>append output to the tool result so the agent sees it (auto-format after every edit, run tests after a write)</td></tr>
+<tr><td><strong>UserPromptSubmit</strong></td><td>when you submit a message, before the turn runs</td><td>block the prompt or inject extra context</td></tr>
+<tr><td><strong>SessionStart</strong></td><td>once when a run begins</td><td>add context to the system prompt</td></tr>
+<tr><td><strong>Stop</strong></td><td>when the agent would end its turn</td><td>force another turn with the reason fed back (&quot;run the tests before you stop&quot;), bounded so a hook can't keep the agent going forever</td></tr>
+<tr><td><strong>PreCompact</strong></td><td>before the conversation is compacted</td><td>fold context into the material being summarized, so it survives compaction</td></tr>
+</tbody>
+</table></div>
+<h2 id="the-exit-code-contract">The exit-code contract</h2>
+<p>The simplest way to write a hook:</p>
 <ul>
-<li><strong>PreToolUse</strong>: before a tool call runs. Can block the call, approve it (skipping the approval prompt), or rewrite its arguments.</li>
-<li><strong>PostToolUse</strong>: after a tool call. The hook's output is appended to the tool result so the agent sees it (e.g. auto-format after every edit, or run tests after a write).</li>
-<li><strong>UserPromptSubmit</strong>: when you submit a message, before the turn runs. Can block the prompt or inject extra context.</li>
-<li><strong>SessionStart</strong>: once when a run begins. Injected context is appended to the system prompt.</li>
-<li><strong>Stop</strong>: when the agent would end its turn. Blocking forces another turn with the reason fed back (e.g. &quot;run the tests before you stop&quot;), bounded so a hook cannot keep the agent alive forever.</li>
-<li><strong>PreCompact</strong>: before the conversation is compacted. Injected context is folded into the material being summarized, so it survives compaction.</li>
+<li>a non-zero exit blocks the blocking events (PreToolUse, UserPromptSubmit, Stop)</li>
+<li>plain stdout and stderr are fed back to the agent</li>
 </ul>
-<p>The simplest contract is the exit code: a non-zero exit blocks the blocking events (PreToolUse, UserPromptSubmit, Stop), and plain stdout/stderr is fed back to the agent as feedback. For finer control, a hook can print a single JSON object on stdout:</p>
+<h2 id="json-output">JSON output</h2>
+<p>For finer control, a hook prints a single JSON object on stdout:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Field</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>decision</code></td><td><code>&quot;block&quot;</code> vetoes the action even on a zero exit; <code>&quot;approve&quot;</code> (PreToolUse only) skips the approval prompt. A block always wins over an approve.</td></tr>
+<tr><td><code>reason</code></td><td>a human-readable explanation, fed back to the agent (and shown with a block)</td></tr>
+<tr><td><code>additionalContext</code></td><td>extra context added where the event fires: the tool result (PreToolUse), your message (UserPromptSubmit), the system prompt (SessionStart), or the material being summarized (PreCompact)</td></tr>
+<tr><td><code>updatedInput</code></td><td>(PreToolUse only) replacement arguments the tool runs with</td></tr>
+<tr><td><code>systemMessage</code></td><td>a note for you, never added to the model's context</td></tr>
+</tbody>
+</table></div>
+<p><strong>Rewrites are re-checked.</strong> A rewrite that fails the tool's schema fails the call rather than falling back to the original arguments. Rewritten arguments are matched against your permission rules again, so the approval decision is made on what will actually run: a rewrite that lands on a deny rule is refused outright, even if the hook also approved. A hook can tighten policy, but it can never loosen a managed or project deny.</p>
+<h2 id="how-hooks-run">How hooks run</h2>
 <ul>
-<li><code>decision</code>: <code>&quot;block&quot;</code> vetoes the action even on a zero exit; <code>&quot;approve&quot;</code> (PreToolUse only) skips the approval prompt. A block always wins over an approve.</li>
-<li><code>reason</code>: a human-readable explanation, fed back to the agent (and shown with a block).</li>
-<li><code>additionalContext</code>: extra context injected where the event fires: the tool result (PreToolUse), your message (UserPromptSubmit), the system prompt (SessionStart), or the material being summarized (PreCompact).</li>
-<li><code>updatedInput</code> (PreToolUse only): replacement arguments the tool runs with. A rewrite that fails the tool's schema fails the call rather than falling back to the original arguments. Rewritten arguments are re-matched against your permission rules, so the approval decision is made on what will actually run: a rewrite that lands on a deny rule is refused outright, even if the hook also approved. A hook can tighten policy, but it can never loosen a managed or project deny.</li>
-<li><code>systemMessage</code>: a note for you rather than the agent; it is never added to the model's context.</li>
+<li><strong>Several matches</strong> run in order. Any block wins, and the last rewrite wins.</li>
+<li><strong>Sandboxed:</strong> hooks run in the same project sandbox as <code>run_shell</code>, with no network.</li>
+<li><strong>Failing safe:</strong> a hook that can't be started counts as failed, so a PreToolUse or UserPromptSubmit hook that can't run blocks rather than lets the action through.</li>
 </ul>
-<p>When several hooks match, they run in order; any block wins, and the last rewrite wins. Hooks run in the same project sandbox as <code>run_shell</code> (no network). Context arrives in environment variables: <code>$HOUSTON_HOOK_EVENT</code>, <code>$HOUSTON_TOOL_NAME</code>, and <code>$HOUSTON_TOOL_INPUT</code>, plus <code>$HOUSTON_TOOL_RESULT</code> (PostToolUse) and <code>$HOUSTON_USER_PROMPT</code> (UserPromptSubmit). A payload over 16 KB (a large write, a long tool output, a long pasted prompt) is too big for an environment variable, so it is written to a private temp file instead: the variable is left unset and <code>$HOUSTON_TOOL_INPUT_FILE</code>, <code>$HOUSTON_TOOL_RESULT_FILE</code>, or <code>$HOUSTON_USER_PROMPT_FILE</code> holds the file's path. A hook that may see large payloads should read whichever of the two is set. The file is removed once the hooks finish. A hook that can't be started counts as a failed hook, so a PreToolUse or UserPromptSubmit hook that can't run blocks rather than lets the action through.</p>
+<h2 id="environment-variables">Environment variables</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Variable</th><th>Holds</th></tr></thead>
+<tbody>
+<tr><td><code>$HOUSTON_HOOK_EVENT</code></td><td>the event name</td></tr>
+<tr><td><code>$HOUSTON_TOOL_NAME</code></td><td>the tool name</td></tr>
+<tr><td><code>$HOUSTON_TOOL_INPUT</code></td><td>the tool's arguments</td></tr>
+<tr><td><code>$HOUSTON_TOOL_RESULT</code></td><td>the tool result (PostToolUse)</td></tr>
+<tr><td><code>$HOUSTON_USER_PROMPT</code></td><td>your message (UserPromptSubmit)</td></tr>
+</tbody>
+</table></div>
+<p><strong>Large payloads.</strong> A payload over 16 KB (a large write, a long tool output, a long pasted prompt) is too big for an environment variable, so it's written to a private temp file instead. The variable is left unset, and <code>$HOUSTON_TOOL_INPUT_FILE</code>, <code>$HOUSTON_TOOL_RESULT_FILE</code>, or <code>$HOUSTON_USER_PROMPT_FILE</code> holds the file's path. A hook that may see large payloads should read whichever of the two is set. The file is removed once the hooks finish.</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/custom-subagents"><span>Previous</span>Custom subagents</a><a class="docs-next" href="/docs/plugins"><span>Next</span>Plugins</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -137,8 +179,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -168,6 +212,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

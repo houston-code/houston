@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Project rules | Houston docs</title>
-  <meta name="description" content="Houston folds a small rules hierarchy into the system prompt each run: the global ~/.claude/CLAUDE.md first, then the project's own AGENTS.md / CLAUDE.md at..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Houston folds a small hierarchy of rules files into the system prompt on each run, in this order:" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/project-rules" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Project rules | Houston docs" />
-  <meta property="og:description" content="Houston folds a small rules hierarchy into the system prompt each run: the global ~/.claude/CLAUDE.md first, then the project's own AGENTS.md / CLAUDE.md at..." />
+  <meta property="og:description" content="Houston folds a small hierarchy of rules files into the system prompt on each run, in this order:" />
   <meta property="og:url" content="https://houstoncode.ai/docs/project-rules" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Project rules | Houston docs" />
-  <meta name="twitter:description" content="Houston folds a small rules hierarchy into the system prompt each run: the global ~/.claude/CLAUDE.md first, then the project's own AGENTS.md / CLAUDE.md at..." />
+  <meta name="twitter:description" content="Houston folds a small hierarchy of rules files into the system prompt on each run, in this order:" />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Project rules",
-  "description": "Houston folds a small rules hierarchy into the system prompt each run: the global ~/.claude/CLAUDE.md first, then the project's own AGENTS.md / CLAUDE.md at...",
+  "description": "Houston folds a small hierarchy of rules files into the system prompt on each run, in this order:",
   "url": "https://houstoncode.ai/docs/project-rules",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,13 +87,29 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Project rules</h1>
         <div class="prose">
-<p>Houston folds a small rules hierarchy into the system prompt each run: the global <code>~/.claude/CLAUDE.md</code> first, then the project's own <code>AGENTS.md</code> / <code>CLAUDE.md</code> at its root, then any <code>AGENTS.md</code> / <code>CLAUDE.md</code> in subdirectories (shallowest first). Any rules file can pull in others with <code>@path</code> imports. These set coding conventions, build/test commands, and house style; Houston treats them as conventions, not as authority to change tool or permission behavior.</p>
+<p>Houston folds a small hierarchy of rules files into the system prompt on each run, in this order:</p>
+<ol>
+<li>the global <code>~/.houston/AGENTS.md</code></li>
+<li>the project's own <code>AGENTS.md</code> / <code>CLAUDE.md</code> at its root</li>
+<li>any <code>AGENTS.md</code> / <code>CLAUDE.md</code> in subfolders, shallowest first</li>
+</ol>
+<p>Use them for coding conventions, build and test commands, and house style. Houston treats them as conventions, not as authority to change tool or permission behavior.</p>
+<ul>
+<li><strong>Imports.</strong> Any rules file can pull in others with <code>@path</code> imports.</li>
+<li><strong>Skipped folders.</strong> In a git repository, subfolders the project's <code>.gitignore</code> excludes (dependencies, build output) are never searched for rules. Outside git, well-known dependency and build folders are skipped.</li>
+<li><strong>No duplicates.</strong> When two files hold the same rules (a <code>CLAUDE.md</code> that links to <code>AGENTS.md</code>, or an identical copy), Houston loads them once.</li>
+<li><strong>Size cap.</strong> All rules together are capped at 32,000 characters. When they run over, the global file is shortened (or left out) first, so your project's own rules still fit, and Houston tells the model which files were cut.</li>
+</ul>
+<h2 id="using-claude-claude-md">Using <code>~/.claude/CLAUDE.md</code></h2>
+<p>Houston doesn't load <code>~/.claude/CLAUDE.md</code> on its own. To use it everywhere, add this line to <code>~/.houston/AGENTS.md</code>:</p>
+<pre><code>@~/.claude/CLAUDE.md</code></pre>
+<p>When Houston finds that file and your global rules don't import it yet, it offers once to add the line for you (<strong>Import it</strong>) or leave things as they are (<strong>Keep separate</strong>). Rules after the import line win where the two disagree.</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/shell-sandbox-and-network"><span>Previous</span>Shell sandbox and network</a><a class="docs-next" href="/docs/context-worktrees-and-history"><span>Next</span>Context, worktrees, and history</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -120,8 +136,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -151,6 +169,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

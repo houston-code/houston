@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MCP servers | Houston docs</title>
-  <meta name="description" content="Connect Model Context Protocol servers in Settings: a local stdio process or a remote HTTP (streamable) or SSE endpoint." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Connect Model Context Protocol servers in Settings: a local stdio process, or a remote HTTP (streamable) or SSE endpoint." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/mcp-servers" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="MCP servers | Houston docs" />
-  <meta property="og:description" content="Connect Model Context Protocol servers in Settings: a local stdio process or a remote HTTP (streamable) or SSE endpoint." />
+  <meta property="og:description" content="Connect Model Context Protocol servers in Settings: a local stdio process, or a remote HTTP (streamable) or SSE endpoint." />
   <meta property="og:url" content="https://houstoncode.ai/docs/mcp-servers" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="MCP servers | Houston docs" />
-  <meta name="twitter:description" content="Connect Model Context Protocol servers in Settings: a local stdio process or a remote HTTP (streamable) or SSE endpoint." />
+  <meta name="twitter:description" content="Connect Model Context Protocol servers in Settings: a local stdio process, or a remote HTTP (streamable) or SSE endpoint." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "MCP servers",
-  "description": "Connect Model Context Protocol servers in Settings: a local stdio process or a remote HTTP (streamable) or SSE endpoint.",
+  "description": "Connect Model Context Protocol servers in Settings: a local stdio process, or a remote HTTP (streamable) or SSE endpoint.",
   "url": "https://houstoncode.ai/docs/mcp-servers",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,18 +86,71 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>MCP servers</h1>
+        <nav class="docs-toc" aria-labelledby="toc-mcp-servers">
+          <h2 id="toc-mcp-servers">On this page</h2>
+          <ul>
+            <li><a href="#signing-in">Signing in</a></li>
+            <li><a href="#local-servers">Local (stdio) servers</a></li>
+            <li><a href="#resources-and-prompts">Resources and prompts</a></li>
+            <li><a href="#checking-a-server">Checking a server</a></li>
+            <li><a href="#server-questions">Server questions (elicitation)</a></li>
+            <li><a href="#protocol-versions">Protocol versions</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>Connect Model Context Protocol servers in Settings: a local <strong>stdio</strong> process or a remote <strong>HTTP</strong> (streamable) or <strong>SSE</strong> endpoint. Their tools are offered to the agent namespaced as <code>mcp__&lt;id&gt;__&lt;tool&gt;</code> and always require approval. When many MCP tools are connected, Houston loads their schemas lazily: above a threshold the agent gets a compact catalog plus a <code>find_tools</code> meta-tool and pulls in only the tool definitions it needs, instead of sending every schema on every request.</p>
-<p><strong>Authentication.</strong> Remote servers take custom headers (e.g. a static <code>Authorization: Bearer</code> token), or <strong>OAuth</strong> for servers that require a sign-in: click <em>Sign in (OAuth)</em> on the server in Settings (desktop) or run <code>/mcp login &lt;n&gt;</code> (terminal). Houston discovers the server's authorization server, registers itself as an OAuth client automatically, and opens the browser to authorize; tokens are stored encrypted, sent as the bearer on every connection, and refreshed automatically when they expire. <em>Sign out</em> (or <code>/mcp logout &lt;n&gt;</code>) forgets them. An explicit Authorization header, when set, takes precedence over OAuth tokens.</p>
-<p><strong>Local (stdio) servers</strong> can be given a working directory and environment variables (Settings, or the <code>/mcp add</code> prompts). The spawned process gets a credential-stripped base environment, so a token the server needs must be listed explicitly; env values are secrets and are stored encrypted, like header values.</p>
-<p><strong>Resources and prompts.</strong> When a server exposes MCP resources or prompt templates, the agent gets <code>mcp_list_resources</code>/<code>mcp_read_resource</code> and <code>mcp_list_prompts</code>/<code>mcp_get_prompt</code> meta-tools to discover and fetch them. Houston also honors server <code>list_changed</code> notifications (tools, resources, and prompts refresh live), keeps long tool calls alive while the server reports progress, and caps any single MCP result so a runaway server cannot flood the context window. <code>/mcp tools &lt;n&gt;</code> lists exactly which tools a server exposes: a count tells you it works, the names tell you what you just handed the agent. <code>/mcp</code> in the terminal and the Settings panel show each server's live connection status: connected with a tool count, needs sign-in, or the connect error.</p>
-<p><strong>Server questions (elicitation).</strong> A server can ask for input in the middle of a tool call (for example a region, a project name, or a confirmation). Houston shows the request as a small form naming the server, with typed fields and Submit / Decline: your answer goes to that MCP server, not to the model. In the terminal the same request becomes an inline prompt (decline with <code>n</code>); in a headless or background run it is declined automatically so nothing ever hangs waiting for a user who is not there, and the server proceeds along its no-answer path. Stopping the run cancels any open request.</p>
+<p>Connect Model Context Protocol servers in Settings: a local <strong>stdio</strong> process, or a remote <strong>HTTP</strong> (streamable) or <strong>SSE</strong> endpoint.</p>
+<ul>
+<li><strong>Naming.</strong> Their tools are offered to the agent as <code>mcp__&lt;id&gt;__&lt;tool&gt;</code>.</li>
+<li><strong>Approval.</strong> MCP tools always require approval.</li>
+<li><strong>Many tools, loaded lazily.</strong> With more than 15 MCP tools connected, Houston loads their schemas on demand: they join the <code>find_tools</code> catalog (see &quot;Tools loaded on demand&quot; under <a href="/docs/context-worktrees-and-history">&quot;Context, worktrees, and history&quot;</a>), and the agent pulls in only the tool definitions it needs instead of sending every schema on every request.</li>
+</ul>
+<h2 id="signing-in">Signing in</h2>
+<p>Remote servers take custom headers (such as a static <code>Authorization: Bearer</code> token), or <strong>OAuth</strong> for servers that need a sign-in:</p>
+<ul>
+<li><strong>Sign in:</strong> click <em>Sign in (OAuth)</em> on the server in Settings (desktop), or run <code>/mcp login &lt;n&gt;</code> (terminal). Houston discovers the server's authorization server, registers itself as an OAuth client automatically, and opens the browser to authorize.</li>
+<li><strong>Tokens</strong> are stored encrypted, sent as the bearer on every connection, and refreshed automatically when they expire.</li>
+<li><strong>Sign out</strong> (or <code>/mcp logout &lt;n&gt;</code>) forgets them.</li>
+<li>An explicit Authorization header, when set, takes precedence over OAuth tokens.</li>
+</ul>
+<h2 id="local-servers">Local (stdio) servers</h2>
+<ul>
+<li>Give them a working directory and environment variables in Settings, or through the <code>/mcp add</code> prompts.</li>
+<li>The spawned process gets a base environment with credentials stripped, so a token the server needs must be listed explicitly.</li>
+<li>Environment values are treated as secrets and stored encrypted, like header values.</li>
+</ul>
+<h2 id="resources-and-prompts">Resources and prompts</h2>
+<p>When a server exposes MCP resources or prompt templates, the agent gets meta-tools to discover and fetch them: <code>mcp_list_resources</code> / <code>mcp_read_resource</code> and <code>mcp_list_prompts</code> / <code>mcp_get_prompt</code>.</p>
+<p>Houston also:</p>
+<ul>
+<li>honors <code>list_changed</code> notifications, so tools, resources, and prompts refresh live</li>
+<li>keeps long tool calls alive while the server reports progress</li>
+<li>caps any single MCP result, so a runaway server can't flood the context window</li>
+</ul>
+<h2 id="checking-a-server">Checking a server</h2>
+<ul>
+<li><code>/mcp tools &lt;n&gt;</code> lists exactly which tools a server exposes. A count tells you it works; the names tell you what you just handed the agent.</li>
+<li><code>/mcp</code> in the terminal and the Settings panel show each server's live status: connected with a tool count, needs sign-in, or the connection error.</li>
+</ul>
+<h2 id="server-questions">Server questions (elicitation)</h2>
+<p>A server can ask for input in the middle of a tool call, such as a region, a project name, or a confirmation.</p>
+<ul>
+<li><strong>Desktop app:</strong> a small form naming the server, with typed fields and Submit / Decline. Your answer goes to that MCP server, not to the model.</li>
+<li><strong>Terminal:</strong> an inline prompt (decline with <code>n</code>).</li>
+<li><strong>Headless or background runs:</strong> declined automatically, so nothing hangs waiting for a user who isn't there, and the server proceeds along its no-answer path.</li>
+<li>Stopping the run cancels any open request.</li>
+</ul>
+<h2 id="protocol-versions">Protocol versions</h2>
+<p>Houston speaks MCP protocol versions 2025-06-18, 2025-03-26, and 2024-11-05, and asks for the newest when it connects.</p>
+<ul>
+<li>A server that answers with an older supported version still works, but server questions need 2025-06-18: an older server's requests for input are declined.</li>
+<li>A server that only speaks a version outside that list fails to connect, and its status names the version it asked for.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/plugins"><span>Previous</span>Plugins</a><a class="docs-next" href="/docs/github-tools"><span>Next</span>GitHub tools</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -124,8 +177,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -155,6 +210,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

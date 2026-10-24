@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Watching work you sent off (/spawned) | Houston docs</title>
-  <meta name="description" content="When the agent hands a task to a separate session (see &quot;Spawn separate sessions&quot;), that session runs in the background, often on its own branch and..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="When the agent hands a task to a separate session (see &quot;Spawn separate sessions&quot;), it runs in the background, often on its own branch and worktree." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/watching-work-you-sent-off" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Watching work you sent off (/spawned) | Houston docs" />
-  <meta property="og:description" content="When the agent hands a task to a separate session (see &quot;Spawn separate sessions&quot;), that session runs in the background, often on its own branch and..." />
+  <meta property="og:description" content="When the agent hands a task to a separate session (see &quot;Spawn separate sessions&quot;), it runs in the background, often on its own branch and worktree." />
   <meta property="og:url" content="https://houstoncode.ai/docs/watching-work-you-sent-off" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Watching work you sent off (/spawned) | Houston docs" />
-  <meta name="twitter:description" content="When the agent hands a task to a separate session (see &quot;Spawn separate sessions&quot;), that session runs in the background, often on its own branch and..." />
+  <meta name="twitter:description" content="When the agent hands a task to a separate session (see &quot;Spawn separate sessions&quot;), it runs in the background, often on its own branch and worktree." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Watching work you sent off (/spawned)",
-  "description": "When the agent hands a task to a separate session (see \"Spawn separate sessions\"), that session runs in the background, often on its own branch and...",
+  "description": "When the agent hands a task to a separate session (see \"Spawn separate sessions\"), it runs in the background, often on its own branch and worktree.",
   "url": "https://houstoncode.ai/docs/watching-work-you-sent-off",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,15 +87,18 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Watching work you sent off (/spawned)</h1>
         <div class="prose">
-<p>When the agent hands a task to a separate session (see <a href="/docs/spawn-separate-sessions">&quot;Spawn separate sessions&quot;</a>), that session runs in the background, often on its own branch and worktree. <code>/spawned</code> lists what this chat started: which are still running, which finished, and what branch each one is on. Pick a number to open one.</p>
-<p>Opening a session that is still running is fine, and does not stop it: you see its work so far while it keeps going. That is how you check on parallel work without interrupting it.</p>
-<p>(<code>/resume</code> is the different one: it reopens any saved chat in this folder, whether or not this session started it.)</p>
+<p>When the agent hands a task to a separate session (see <a href="/docs/spawn-separate-sessions">&quot;Spawn separate sessions&quot;</a>), it runs in the background, often on its own branch and worktree.</p>
+<p><code>/spawned</code> lists what this chat started: which are still running, which finished, and what branch each one is on. Pick a number to open one.</p>
+<ul>
+<li><strong>Opening doesn't interrupt.</strong> You see a running session's work so far while it keeps going.</li>
+<li><strong>Not the same as <code>/resume</code>,</strong> which reopens any saved chat in this folder, whether or not this session started it.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/proposed-sessions"><span>Previous</span>Proposed sessions</a><a class="docs-next" href="/docs/scheduled-runs"><span>Next</span>Scheduled runs</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -122,8 +125,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -153,6 +158,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

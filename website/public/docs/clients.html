@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Clients (where Houston runs) | Houston docs</title>
-  <meta name="description" content="All clients share one agent core, so tools, permissions, and skills behave the same across them." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Houston runs in six places. All of them share one agent core, so tools, permissions, and skills behave the same everywhere." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/clients" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Clients (where Houston runs) | Houston docs" />
-  <meta property="og:description" content="All clients share one agent core, so tools, permissions, and skills behave the same across them." />
+  <meta property="og:description" content="Houston runs in six places. All of them share one agent core, so tools, permissions, and skills behave the same everywhere." />
   <meta property="og:url" content="https://houstoncode.ai/docs/clients" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Clients (where Houston runs) | Houston docs" />
-  <meta name="twitter:description" content="All clients share one agent core, so tools, permissions, and skills behave the same across them." />
+  <meta name="twitter:description" content="Houston runs in six places. All of them share one agent core, so tools, permissions, and skills behave the same everywhere." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Clients (where Houston runs)",
-  "description": "All clients share one agent core, so tools, permissions, and skills behave the same across them.",
+  "description": "Houston runs in six places. All of them share one agent core, so tools, permissions, and skills behave the same everywhere.",
   "url": "https://houstoncode.ai/docs/clients",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,26 +86,169 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Clients (where Houston runs)</h1>
+        <nav class="docs-toc" aria-labelledby="toc-clients">
+          <h2 id="toc-clients">On this page</h2>
+          <ul>
+            <li><a href="#desktop-app">Desktop app</a></li>
+            <li><a href="#interactive-terminal">Interactive terminal</a></li>
+            <li><a href="#headless">Headless</a></li>
+            <li><a href="#standalone-cli">Standalone CLI</a></li>
+            <li><a href="#github-action">GitHub Action</a></li>
+            <li><a href="#editor-integration">Editor integration</a></li>
+          </ul>
+        </nav>
         <div class="prose">
+<p>Houston runs in six places. All of them share one agent core, so tools, permissions, and skills behave the same everywhere.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Client</th><th>Start it with</th><th>Good for</th></tr></thead>
+<tbody>
+<tr><td>Desktop app</td><td>the app</td><td>everyday work, with diffs, previews, and panels</td></tr>
+<tr><td>Interactive terminal</td><td><code>houston -i</code></td><td>a chat that lives in your terminal</td></tr>
+<tr><td>Headless</td><td><code>houston -p &quot;&lt;prompt&gt;&quot;</code></td><td>scripts and CI</td></tr>
+<tr><td>Standalone CLI</td><td><code>houston</code> (Node script)</td><td>headless Linux servers</td></tr>
+<tr><td>GitHub Action</td><td><code>houston-code/houston/action</code></td><td>answering mentions, reviews, fixing CI</td></tr>
+<tr><td>Editor integration</td><td><code>houston --acp</code></td><td>editors that support ACP agents</td></tr>
+</tbody>
+</table></div>
+<p><strong>Desktop-only surfaces.</strong> The sidebar, the Preview panel, the integrated terminal and Files panel, rendered diagrams, and the tools that need a browser engine (<code>view_localhost</code> and <code>render_mockup</code>). Spawned sessions run in every client, but only the desktop app lists them in a sidebar.</p>
+<h2 id="desktop-app">Desktop app</h2>
+<p>The full GUI:</p>
 <ul>
-<li><strong>Desktop app.</strong> The full GUI: chat sidebar, diffs, a right-hand dock with the live Preview and a Tasks list of background commands (stop them, read their output, see which port each holds), settings.</li>
-<li><strong>Interactive terminal (<code>houston -i</code>).</strong> A stay-resident REPL in the terminal. <code>--continue</code> reopens this folder's most recent chat at launch, <code>--resume &lt;id&gt;</code> a specific one. Conversation streams live, approvals and questions are answered inline, and slash commands switch settings mid-session. See <a href="/docs/the-terminal-composer">&quot;The terminal composer&quot;</a> below for how to type, paste, and edit a message.</li>
-<li><strong>Headless (<code>houston -p &quot;&lt;prompt&gt;&quot;</code>).</strong> Runs one prompt and writes the result to stdout, each model round's text once that round has finished, then exits. Read-only by default; add <code>--full-auto</code> to let it edit and run commands, <code>--json</code> for machine-readable events. Good for scripts and CI. With no human to answer approval prompts, <code>--on-approval &lt;allow|deny|fail&gt;</code> decides what a gated tool call gets: denied by default (allowed under <code>--full-auto</code>), with <code>fail</code> also exiting non-zero so a script can tell the run hit a permission wall. Nobody can answer a question either, so a headless run doesn't offer the agent <code>ask_user</code>: it is told no user is available, makes the call itself, and states its assumptions in the final answer. Approving a shell command with <code>--on-approval allow</code> is plain &quot;Allow&quot;, so it runs without network; pass <code>--allow-shell-network</code> to let shell commands reach the network for the run (see <a href="/docs/shell-sandbox-and-network">&quot;Shell sandbox and network&quot;</a>).
-<ul>
-<li><strong>Prompt from stdin.</strong> <code>-p -</code> reads the prompt from stdin, and so does a <code>-p</code> with no value when input is piped in (<code>cat task.md | houston -p --json</code>). The standalone CLI also reads a piped prompt with no <code>-p</code> at all.</li>
-<li><strong>Per-run settings.</strong> These apply to the one run and never change your saved settings: <code>--effort &lt;off|low|medium|high|xhigh&gt;</code> sets the reasoning effort; <code>--max-turns &lt;n&gt;</code> caps the model steps (a hard cap that never auto-extends); <code>--max-cost &lt;usd&gt;</code> tells the agent to wrap up once the run's estimated cost reaches that amount (a soft ceiling: the step in flight still finishes); <code>--verify &lt;command&gt;</code> runs that command when the agent stops after editing files and sends a failure back for a bounded fix-up pass (it needs a policy that can edit, such as <code>--full-auto</code>). A bad value exits 2 before anything runs.</li>
-<li><strong><code>--json</code> result line.</strong> After one JSON line per agent event, the last line is a summary: <code>{&quot;type&quot;:&quot;result&quot;, &quot;status&quot;, &quot;stopReason&quot;, &quot;limitReason&quot;?, &quot;turns&quot;, &quot;costUsd&quot;, &quot;inputTokens&quot;, &quot;outputTokens&quot;, &quot;durationMs&quot;, &quot;finalText&quot;, &quot;receipt&quot;?}</code>. <code>status</code> is <code>success</code>, <code>limit</code>, <code>stalled</code>, <code>approval_denied</code>, or <code>error</code>; <code>finalText</code> is the agent's closing answer (the text after its last tool call); <code>receipt</code> is Houston's record of what the run actually ran (see <a href="/docs/what-actually-ran">&quot;What actually ran&quot;</a>), present when it ran checks or changed files.</li>
-<li><strong>Exit codes.</strong> 0: the agent finished on its own. 1: an error or aborted run, a stalled agent, or a call refused under <code>--on-approval fail</code>. 2: a usage error (a bad flag value, or an empty prompt on stdin); nothing ran. 3: the run hit a budget before finishing (its step cap or the model's output limit).</li>
-</ul></li>
-<li><strong>Standalone CLI.</strong> The same <code>-p</code> and <code>-i</code> clients as a single self-contained Node script, with no desktop app and no browser engine. Runs on headless Linux servers; API keys come from environment variables.</li>
+<li>a chat sidebar and diffs</li>
+<li>a right-hand dock with a <strong>Background tasks</strong> list of background commands (stop them, read their output, see which port each one holds) and the live <strong>Preview</strong></li>
+<li>Settings</li>
 </ul>
-<p>All clients share one agent core, so tools, permissions, and skills behave the same across them. Some surfaces are desktop-only (the preview panel, spawning separate sidebar sessions, viewing localhost screenshots).</p>
+<p><strong>Chat status.</strong> Each chat in the sidebar has a status dot:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Dot</th><th>Means</th></tr></thead>
+<tbody>
+<tr><td>amber</td><td>it's waiting on you (an approval, a question, a plan to review)</td></tr>
+<tr><td>grey pulse</td><td>it's working</td></tr>
+<tr><td>red</td><td>its last run failed</td></tr>
+<tr><td>blue</td><td>it has a reply you haven't seen</td></tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>Read and unread.</strong> A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read. The filter menu marks every chat read, or sorts the ones that want attention first.</li>
+<li><strong>Picking up where you left off.</strong> A reply's hover actions include <strong>Mark unread from here</strong>, and reopening an unread chat lands on a &quot;New&quot; divider above the first reply you haven't seen.</li>
+<li><strong>Back where you were after a restart.</strong> Houston reopens the chat that was open when you quit. If that chat was deleted, or its folder or worktree is gone, it opens a new chat in your last folder instead.</li>
+<li><strong>Seeing what's waiting at a glance.</strong> A collapsed group's header, the collapsed sidebar, and the app icon count what's waiting (the Dock badge on macOS, a dot on the Windows taskbar button; turn it off under Settings, Notifications). A &quot;N need you&quot; pill in the title bar opens the next chat waiting on you, and clicking a desktop notification opens the chat it's about.</li>
+</ul>
+<h2 id="interactive-terminal">Interactive terminal</h2>
+<p><code>houston -i</code> keeps a chat open in your terminal.</p>
+<ul>
+<li>The conversation streams live, and you answer approvals and questions inline.</li>
+<li>Slash commands switch settings mid-session.</li>
+<li><code>--continue</code> reopens this folder's most recent chat at launch; <code>--resume &lt;id&gt;</code> reopens a specific one.</li>
+</ul>
+<p>See <a href="/docs/the-terminal-composer">&quot;The terminal composer&quot;</a> for how to type, paste, and edit a message.</p>
+<h2 id="headless">Headless</h2>
+<p><code>houston -p &quot;&lt;prompt&gt;&quot;</code> runs one prompt, writes the result to stdout, and exits. Each model round's text is written once that round has finished.</p>
+<ul>
+<li><strong>Read-only by default.</strong> Add <code>--full-auto</code> to let it edit files and run commands.</li>
+<li><strong>Machine-readable output.</strong> Add <code>--json</code> for one JSON line per event.</li>
+</ul>
+<p><strong>Nobody is there to answer</strong>, so a headless run handles prompts itself:</p>
+<ul>
+<li><strong>Approvals.</strong> <code>--on-approval &lt;allow|deny|fail&gt;</code> decides what a gated tool call gets. The default is <code>deny</code> (<code>allow</code> under <code>--full-auto</code>). <code>fail</code> also exits non-zero, so a script can tell the run hit a permission wall.</li>
+<li><strong>Questions.</strong> The agent isn't offered <code>ask_user</code>. It is told no user is available, makes the call itself, and states its assumptions in the final answer.</li>
+<li><strong>Shell network.</strong> Under <code>--full-auto</code>, shell commands reach the network through the egress allowlist from the start. Under ask or auto-edit, approving a shell command with <code>--on-approval allow</code> is a plain &quot;Allow&quot;, so the command runs without network. Pass <code>--allow-shell-network</code> to let shell commands reach the network for the run under any policy (see <a href="/docs/shell-sandbox-and-network">&quot;Shell sandbox and network&quot;</a>).</li>
+</ul>
+<h3 id="prompt-from-stdin">Prompt from stdin</h3>
+<ul>
+<li><code>-p -</code> reads the prompt from stdin.</li>
+<li>So does <code>-p</code> with no value when input is piped in: <code>cat task.md | houston -p --json</code>.</li>
+<li>The standalone CLI also reads a piped prompt with no <code>-p</code> at all.</li>
+</ul>
+<h3 id="per-run-settings">Per-run settings</h3>
+<p>These apply to one run and never change your saved settings. A bad value exits with code 2 before anything runs.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Flag</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>--effort &lt;off|low|medium|high|xhigh&gt;</code></td><td>reasoning effort</td></tr>
+<tr><td><code>--max-turns &lt;n&gt;</code></td><td>caps the model steps (a hard cap that never auto-extends)</td></tr>
+<tr><td><code>--max-cost &lt;usd&gt;</code></td><td>the agent wraps up once the run's estimated cost reaches this (a soft ceiling: the step in flight still finishes)</td></tr>
+<tr><td><code>--verify &lt;command&gt;</code></td><td>runs this command when the agent stops after editing files, and sends a failure back for a bounded fix-up pass (needs a policy that can edit, such as <code>--full-auto</code>)</td></tr>
+</tbody>
+</table></div>
+<h3 id="resuming-a-chat">Resuming a chat</h3>
+<p><code>--continue</code> (this folder's most recent chat) or <code>--resume &lt;id&gt;</code> runs on that chat's own model and reasoning effort, unless <code>--provider</code>, <code>--model</code>, or <code>--effort</code> says otherwise.</p>
+<p>The approval mode always comes from the flags (read-only unless <code>--full-auto</code>), never from the chat. A chat you use in full auto can't loosen an unattended run.</p>
+<h3 id="automation-flags">Automation flags</h3>
+<ul>
+<li><strong><code>--allowed-tools &lt;list&gt;</code> / <code>--disallowed-tools &lt;list&gt;</code></strong> restrict the run's tools. Each entry is a tool name (<code>read_file</code>), a name ending in <code>*</code> (<code>mcp__github__*</code>), or a name with a permission-rule pattern (<code>run_shell(git *)</code>).
+<ul>
+<li>Tools out of scope aren't offered, and a call out of scope is refused under every policy, <code>full-auto</code> included.</li>
+<li>Disallowed wins over allowed.</li>
+<li>The scope only narrows: an allowed call still needs whatever approval the policy and rules require.</li>
+</ul></li>
+<li><strong><code>--append-system-prompt &lt;text|@file&gt;</code></strong> adds instructions for the run in their own marked section of the system prompt.</li>
+<li><strong><code>--output-schema &lt;file|json&gt;</code></strong> makes the final answer a JSON value matching that JSON Schema. Houston checks it and gives the agent one round to correct a miss.</li>
+<li><strong><code>--mcp-config &lt;file&gt;</code></strong> adds MCP servers for this run only: the <code>mcpServers</code> shape of <code>.houston/settings.json</code>, at most 10. Their tools are named <code>mcp__run-&lt;id&gt;__&lt;tool&gt;</code>.</li>
+<li><strong><code>--input-format stream-json</code></strong> (with <code>--json</code>) reads one <code>{&quot;type&quot;:&quot;user&quot;,&quot;content&quot;:&quot;...&quot;}</code> line per turn from stdin. Each turn starts after the previous one finishes, until end of input.</li>
+</ul>
+<h3 id="json-output"><code>--json</code> output</h3>
+<p>Lines arrive in this order:</p>
+<ol>
+<li><strong>Init:</strong> <code>{&quot;type&quot;:&quot;system&quot;,&quot;subtype&quot;:&quot;init&quot;, &quot;schemaVersion&quot;, &quot;houstonVersion&quot;, &quot;cwd&quot;, &quot;providerId&quot;, &quot;model&quot;, &quot;approvalPolicy&quot;, &quot;onApproval&quot;, &quot;inputFormat&quot;, &quot;tools&quot;?, ...}</code></li>
+<li><strong>Session:</strong> a <code>session</code> line, when the run is saved.</li>
+<li><strong>Events:</strong> one JSON line per agent event.</li>
+<li><strong>Result:</strong> a summary (one per turn with stream-json input): <code>{&quot;type&quot;:&quot;result&quot;, &quot;schemaVersion&quot;, &quot;status&quot;, &quot;stopReason&quot;, &quot;limitReason&quot;?, &quot;turns&quot;, &quot;costUsd&quot;, &quot;inputTokens&quot;, &quot;outputTokens&quot;, &quot;durationMs&quot;, &quot;finalText&quot;, &quot;receipt&quot;?, &quot;structured_output&quot;?, &quot;schemaErrors&quot;?, &quot;error&quot;?}</code></li>
+</ol>
+<p>In the result line:</p>
+<ul>
+<li><code>status</code> is <code>success</code>, <code>limit</code>, <code>stalled</code>, <code>approval_denied</code>, <code>error</code>, <code>schema_invalid</code>, <code>input_error</code>, or <code>verify_failed</code>.</li>
+<li><code>finalText</code> is the agent's closing answer (the text after its last tool call).</li>
+<li><code>receipt</code> is Houston's record of what the run actually ran (see <a href="/docs/what-actually-ran">&quot;What actually ran&quot;</a>), present when it ran checks or changed files.</li>
+<li><code>structured_output</code> is the answer parsed against <code>--output-schema</code>.</li>
+</ul>
+<p>Every line is described by <code>docs/schemas/headless-events.schema.json</code> in the repository.</p>
+<h3 id="exit-codes">Exit codes</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Code</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td>0</td><td>the agent finished on its own</td></tr>
+<tr><td>1</td><td>an error or aborted run, a stalled agent, or a call refused under <code>--on-approval fail</code></td></tr>
+<tr><td>2</td><td>a usage error (a bad flag value, an unreadable flag file, or an empty prompt on stdin; nothing ran), or a bad stream-json input line</td></tr>
+<tr><td>3</td><td>the run hit a budget before finishing (its step cap or the model's output limit)</td></tr>
+<tr><td>4</td><td>the final answer still didn't match <code>--output-schema</code> after the corrective round</td></tr>
+<tr><td>5</td><td>the agent finished, but the last <code>--verify</code> check it ran still failed (its fix-up passes ran out)</td></tr>
+</tbody>
+</table></div>
+<h2 id="standalone-cli">Standalone CLI</h2>
+<p>The same <code>-p</code>, <code>-i</code>, and <code>--acp</code> clients as one self-contained Node script, with no desktop app and no browser engine.</p>
+<ul>
+<li>Runs on headless Linux servers.</li>
+<li>API keys come from environment variables.</li>
+</ul>
+<h2 id="github-action">GitHub Action</h2>
+<p><code>houston-code/houston/action</code> runs the standalone CLI in GitHub Actions, on your own runners, with your own model key from a repository secret. There is no Houston service.</p>
+<p>It has three modes:</p>
+<ul>
+<li><strong><code>respond</code></strong> answers an <code>@houston</code> mention from someone with write access, as a reply.</li>
+<li><strong><code>review</code></strong> posts one review comment on a same-repository pull request, from <code>review_changes</code>.</li>
+<li><strong><code>fix-ci</code></strong> fixes a failed workflow run, pushes the fix to a new <code>houston/</code> branch, and opens a pull request.</li>
+</ul>
+<p>For safety, the action verifies the downloaded CLI's signature first, gives the model only read access to GitHub and no web access, and does all posting and pushing itself. Inputs, example workflows, and the security model are in <code>action/README.md</code> in the Houston repository.</p>
+<h2 id="editor-integration">Editor integration</h2>
+<p><code>houston --acp</code> speaks the Agent Client Protocol (ACP) on stdio, so an editor that supports ACP agents can run Houston without a Houston extension.</p>
+<p><strong>Set it up:</strong> point the editor's agent setting at the <code>houston</code> command with the <code>--acp</code> argument (the desktop binary takes the same flag).</p>
+<p>The editor's folder becomes the workspace. Its chat panel shows Houston's replies, reasoning, tool calls (with diffs for edits), the todo list as a plan, and context and cost as usage.</p>
+<ul>
+<li><strong>Modes</strong> are the approval policies: Plan, Ask, Auto-edit, Full auto. A new session starts in your default policy, and the editor's mode picker switches it for the rest of the session, a running prompt included.</li>
+<li><strong>Approvals</strong> appear as the editor's permission prompt: Allow (this call), Always allow (saves a permission rule, as in the app), Deny, or Always deny. Dismissing the prompt denies the call. The sandbox and your permission rules apply exactly as in the other clients, and file reads, writes, and commands go through Houston's own tools, not the editor's.</li>
+<li><strong>Plans</strong> from Plan mode arrive as a permission prompt too: accept with edits applied automatically, accept approving each edit, or keep planning. Accepting moves the session's mode.</li>
+<li><strong>Questions</strong> (<code>ask_user</code>) and an MCP server's input requests show as a form when the editor supports ACP forms. Without forms, a question is answered &quot;use your best judgment&quot; and an MCP request is declined, as in headless mode, so a run never hangs.</li>
+<li><strong>Sessions</strong> are Houston conversations. The editor can list and reopen them, and they also show up in the desktop app and in <code>houston -i --resume &lt;id&gt;</code>. MCP servers the editor passes join your own for that session (as <code>run-acp-&lt;name&gt;</code>) and are never saved to your settings.</li>
+<li><strong>Credentials</strong> resolve as in the CLI: environment variables, then saved keys. With no provider set up, the editor gets an &quot;authentication required&quot; error; an editor that can open a terminal is offered to run <code>houston -i</code>, which walks you through adding one.</li>
+<li><strong>Output and trust.</strong> Stdout carries protocol messages only; diagnostics go to stderr and the log file. A folder that isn't trusted yet gets none of its project's allow rules, hooks, or MCP servers, as in headless mode. Trust it from the desktop app or <code>houston -i</code>.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/what-houston-is"><span>Previous</span>What Houston is</a><a class="docs-next" href="/docs/models"><span>Next</span>Models</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -132,8 +275,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -163,6 +308,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

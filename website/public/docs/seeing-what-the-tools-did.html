@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Seeing what the tools did | Houston docs</title>
   <meta name="description" content="While a turn runs, each tool result collapses to one line: the transcript is a conversation, not a log." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/seeing-what-the-tools-did" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "While a turn runs, each tool result collapses to one line: the transcript is a conversation, not a log.",
   "url": "https://houstoncode.ai/docs/seeing-what-the-tools-did",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,19 +87,19 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Seeing what the tools did</h1>
         <div class="prose">
-<p>While a turn runs, each tool result collapses to one line: the transcript is a conversation, not a log. Two ways to see more:</p>
+<p>While a turn runs, each tool result collapses to one line: the transcript is a conversation, not a log. To see more:</p>
 <ul>
-<li><strong>When something fails</strong>, the error is shown without asking. A failed tool prints its first lines, so you can see why.</li>
-<li><strong><code>/verbose</code></strong> shows each tool's full output as it runs (<code>/verbose off</code> to stop, or just <code>/verbose</code> to toggle).</li>
-<li><strong><code>/output</code></strong> reprints the last tool result in full, after the fact. <code>/output 3</code> goes three results back. Nothing extra is stored for this: the whole output was always kept in the conversation, it just had no way out to the screen.</li>
+<li><strong>Failures show themselves.</strong> A failed tool prints its first lines without you asking, so you can see why.</li>
+<li><strong><code>/verbose</code></strong> shows each tool's full output as it runs. <code>/verbose off</code> stops it, and plain <code>/verbose</code> toggles.</li>
+<li><strong><code>/output</code></strong> reprints the last tool result in full, after the fact. <code>/output 3</code> goes three results back. Nothing extra is stored for this: the whole output was always kept in the conversation.</li>
 </ul>
-<p>Very long output is capped with a note saying how much was left out.</p>
+<p>Very long output is capped, with a note saying how much was left out.</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/side-chat"><span>Previous</span>Side chat (/btw)</a><a class="docs-next" href="/docs/what-actually-ran"><span>Next</span>What actually ran (the receipt)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -126,8 +126,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -157,6 +159,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

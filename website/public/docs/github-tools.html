@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GitHub tools | Houston docs</title>
-  <meta name="description" content="When the gh CLI is installed and authenticated, Houston offers dedicated tools for the GitHub loop: pull requests..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="When the gh CLI is installed and signed in, Houston offers dedicated tools for the GitHub loop." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/github-tools" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="GitHub tools | Houston docs" />
-  <meta property="og:description" content="When the gh CLI is installed and authenticated, Houston offers dedicated tools for the GitHub loop: pull requests..." />
+  <meta property="og:description" content="When the gh CLI is installed and signed in, Houston offers dedicated tools for the GitHub loop." />
   <meta property="og:url" content="https://houstoncode.ai/docs/github-tools" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="GitHub tools | Houston docs" />
-  <meta name="twitter:description" content="When the gh CLI is installed and authenticated, Houston offers dedicated tools for the GitHub loop: pull requests..." />
+  <meta name="twitter:description" content="When the gh CLI is installed and signed in, Houston offers dedicated tools for the GitHub loop." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "GitHub tools",
-  "description": "When the gh CLI is installed and authenticated, Houston offers dedicated tools for the GitHub loop: pull requests...",
+  "description": "When the gh CLI is installed and signed in, Houston offers dedicated tools for the GitHub loop.",
   "url": "https://houstoncode.ai/docs/github-tools",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,13 +87,36 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>GitHub tools</h1>
         <div class="prose">
-<p>When the <code>gh</code> CLI is installed and authenticated, Houston offers dedicated tools for the GitHub loop: pull requests (<code>gh_pr_create</code>, <code>gh_pr_list</code>, <code>gh_pr_view</code>, <code>gh_pr_comment</code>, <code>gh_pr_review</code>, <code>gh_pr_checkout</code>, <code>gh_pr_checks</code>, <code>gh_pr_merge</code>, <code>gh_pr_set_state</code>), issues (<code>gh_issue_list</code>, <code>gh_issue_view</code>, <code>gh_issue_create</code>, <code>gh_issue_comment</code>, <code>gh_issue_set_state</code>), CI runs (<code>gh_run_list</code>, <code>gh_run_view</code>), and repositories (<code>gh_repo_create</code>). <code>gh_pr_review</code> submits an approve / request-changes / comment review, <code>gh_pr_merge</code> lands an open PR (merge commit, squash, or rebase, optionally deleting the branch), and <code>gh_pr_set_state</code> closes or reopens a PR, marks a draft ready for review, or converts it back to a draft. <code>gh_issue_set_state</code> closes an issue (as completed, not planned, or a duplicate of another issue) or reopens it. They drive the user's local <code>gh</code>, so no token is stored in the app. Each call is network-gated (always prompts for approval) and the mutating ones are refused in plan mode. Because these run <code>gh</code> outside the shell sandbox, they reach the network on approval, unlike a raw <code>gh</code> in <code>run_shell</code>. If <code>gh</code> is not installed, these tools simply are not offered and everything else still works.</p>
+<p>When the <code>gh</code> CLI is installed and signed in, Houston offers dedicated tools for the GitHub loop.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Area</th><th>Tools</th></tr></thead>
+<tbody>
+<tr><td>Pull requests</td><td><code>gh_pr_create</code>, <code>gh_pr_list</code>, <code>gh_pr_view</code>, <code>gh_pr_comment</code>, <code>gh_pr_review</code>, <code>gh_pr_checkout</code>, <code>gh_pr_checks</code>, <code>gh_pr_merge</code>, <code>gh_pr_set_state</code></td></tr>
+<tr><td>Issues</td><td><code>gh_issue_list</code>, <code>gh_issue_view</code>, <code>gh_issue_create</code>, <code>gh_issue_comment</code>, <code>gh_issue_set_state</code></td></tr>
+<tr><td>CI runs</td><td><code>gh_run_list</code>, <code>gh_run_view</code></td></tr>
+<tr><td>Repositories</td><td><code>gh_repo_create</code></td></tr>
+</tbody>
+</table></div>
+<p><strong>What the less obvious ones do:</strong></p>
+<ul>
+<li><code>gh_pr_review</code> submits an approve, request-changes, or comment review.</li>
+<li><code>gh_pr_merge</code> lands an open PR (merge commit, squash, or rebase, optionally deleting the branch).</li>
+<li><code>gh_pr_set_state</code> closes or reopens a PR, marks a draft ready for review, or converts it back to a draft.</li>
+<li><code>gh_issue_set_state</code> closes an issue (as completed, not planned, or a duplicate of another issue) or reopens it.</li>
+</ul>
+<p><strong>How they run:</strong></p>
+<ul>
+<li><strong>Your own <code>gh</code>.</strong> They drive your local <code>gh</code>, so no token is stored in the app.</li>
+<li><strong>Approval.</strong> Each call is network-gated (it always asks), and the ones that change something are refused in plan mode.</li>
+<li><strong>Network on approval.</strong> They run <code>gh</code> outside the shell sandbox, so they reach the network once approved, unlike a raw <code>gh</code> in <code>run_shell</code>.</li>
+<li><strong>Optional.</strong> If <code>gh</code> isn't installed, these tools aren't offered, and everything else still works.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/mcp-servers"><span>Previous</span>MCP servers</a><a class="docs-next" href="/docs/what-a-session-cost"><span>Next</span>What a session cost (/cost)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -120,8 +143,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -151,6 +176,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

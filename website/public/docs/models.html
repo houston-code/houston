@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Models | Houston docs</title>
   <meta name="description" content="Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/models" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime.",
   "url": "https://houstoncode.ai/docs/models",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -89,6 +89,8 @@
         <nav class="docs-toc" aria-labelledby="toc-models">
           <h2 id="toc-models">On this page</h2>
           <ul>
+            <li><a href="#each-chat-keeps-its-own-settings">Each chat keeps its own settings</a></li>
+            <li><a href="#when-a-model-isn-t-found">When a model isn't found</a></li>
             <li><a href="#claude-through-your-cloud-account">Claude through your cloud account</a></li>
             <li><a href="#gpt-models-on-azure-openai">GPT models on Azure OpenAI</a></li>
             <li><a href="#dropped-connections">Dropped connections</a></li>
@@ -96,40 +98,95 @@
           </ul>
         </nav>
         <div class="prose">
-<p>Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime. Add a provider and key in Settings, fetch its live model list, and pick a model. The picker shows each model's context window and capability badges (tool calling, vision, reasoning) and warns before you pick one that cannot call tools. Keys are stored encrypted by the OS keychain and never touch the renderer. The selection is shared across clients: picking a model in the desktop app or switching with <code>/model</code> in the terminal saves it as the default for future sessions.</p>
-<p>If a provider answers that it doesn't serve a model (the id is mistyped, the model was retired, or your key can't use it), the turn ends with a message saying so instead of the raw error, and the model is marked &quot;Not found&quot; in the picker (&quot;(not found)&quot; in <code>/model</code>) until it answers a request again. Pick another model and retry.</p>
+<p>Bring any model with your own key: Anthropic, OpenAI, Google, any OpenAI-compatible endpoint, or a local model runtime.</p>
+<p><strong>To add one:</strong> open Settings, add a provider and its key, fetch its live model list, and pick a model.</p>
+<ul>
+<li>The picker shows each model's context window and capability badges (tool calling, vision, reasoning).</li>
+<li>It warns you before you pick a model that can't call tools.</li>
+<li>Keys are stored encrypted by the OS keychain and never reach the app's interface.</li>
+</ul>
+<h2 id="each-chat-keeps-its-own-settings">Each chat keeps its own settings</h2>
+<p>A chat's model, reasoning effort, and approval mode belong to that chat.</p>
+<ul>
+<li>Changing one in a chat changes that chat only. Other chats, including ones running at the same time, keep theirs.</li>
+<li>Reopening a chat (or resuming it with <code>/resume</code>) brings back the settings it was using. In the terminal, a <code>--provider</code>, <code>--model</code>, <code>--approval</code>, or <code>--full-auto</code> flag given with <code>--continue</code> or <code>--resume</code> wins over the chat's own for that session.</li>
+<li>New chats start from the defaults, and sessions a chat starts begin with its settings.</li>
+<li>If a chat's model is no longer set up, the chat moves to another model of the same provider (or the default model) and says so.</li>
+</ul>
+<p><strong>Changing the defaults:</strong></p>
+<ul>
+<li><strong>Desktop app:</strong> the controls on the new-chat screen set the defaults, and <strong>Use for new chats</strong> in an open chat makes its settings the defaults.</li>
+<li><strong>Terminal:</strong> add <code>--default</code> to change the default as well as the current chat: <code>/model &lt;id&gt; --default</code>, <code>/reasoning high --default</code>, <code>/approval ask --default</code>.</li>
+</ul>
+<h2 id="when-a-model-isn-t-found">When a model isn't found</h2>
+<p>If a provider answers that it doesn't serve a model (the id is mistyped, the model was retired, or your key can't use it):</p>
+<ul>
+<li>the turn ends with a message saying so, instead of the raw error</li>
+<li>the model is marked &quot;Not found&quot; in the picker (&quot;(not found)&quot; in <code>/model</code>) until it answers a request again</li>
+</ul>
+<p>Pick another model and retry.</p>
 <h2 id="claude-through-your-cloud-account">Claude through your cloud account</h2>
-<p>If your Claude access runs through a cloud account rather than an Anthropic API key, add &quot;Amazon Bedrock (AWS credentials)&quot;, &quot;Google Vertex AI&quot;, or &quot;Microsoft Foundry&quot; from the provider picker in Settings. All three behave like the Anthropic provider once added: the same streaming, extended thinking, and prompt caching.</p>
-<p>Bedrock and Vertex do not ask you for an API key, because neither uses one. They sign requests with the credentials already on your machine:</p>
+<p>If your Claude access runs through a cloud account rather than an Anthropic API key, add one of these from the provider picker in Settings:</p>
 <ul>
-<li><strong>Bedrock</strong> uses the standard AWS credential chain, so an <code>~/.aws/credentials</code> profile, an SSO login, or an instance role all work as-is. Set the region in Settings (or export <code>AWS_REGION</code>). If you have an Amazon Bedrock API key instead, you can enter it as an optional key, and it takes precedence over your AWS credentials. There is also a separate &quot;Amazon Bedrock (API key)&quot; provider for that case alone.</li>
-<li><strong>Vertex</strong> uses Google Application Default Credentials: run <code>gcloud auth application-default login</code> if you have not already. Set the region in Settings (or export <code>CLOUD_ML_REGION</code>). The project is usually inferred from your credentials, so leave it blank unless you need a specific one.</li>
-<li><strong>Foundry</strong> is the exception: it does take an API key, the one from your Foundry resource. Enter it in Settings along with the resource name, the <code>my-resource</code> part of <code>https://my-resource.services.ai.azure.com</code> (or export <code>ANTHROPIC_FOUNDRY_RESOURCE</code>).</li>
+<li>&quot;Amazon Bedrock (AWS credentials)&quot;</li>
+<li>&quot;Google Vertex AI&quot;</li>
+<li>&quot;Microsoft Foundry&quot;</li>
 </ul>
-<p>Each host addresses models its own way: Bedrock prefixes the vendor (<code>anthropic.claude-opus-4-8</code>), while Vertex and Foundry take the plain id, and Vertex also accepts a dated snapshot (<code>claude-opus-4-5@20251101</code>). The model picker shows them under one name either way. None of the three publishes a model list, so Houston ships a curated one and &quot;Fetch&quot; restores it rather than calling out to the network. If your account has access to a model that is not listed, add its id to the list by hand.</p>
+<p>Once added, all three behave like the Anthropic provider: the same streaming, extended thinking, and prompt caching.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Host</th><th>Signs in with</th><th>Region or resource</th><th>Model ids</th></tr></thead>
+<tbody>
+<tr><td>Bedrock</td><td>your AWS credentials</td><td>region in Settings, or <code>AWS_REGION</code></td><td>vendor prefix: <code>anthropic.claude-opus-4-8</code></td></tr>
+<tr><td>Vertex</td><td>Google Application Default Credentials</td><td>region in Settings, or <code>CLOUD_ML_REGION</code></td><td>plain id, or a dated snapshot: <code>claude-opus-4-5@20251101</code></td></tr>
+<tr><td>Foundry</td><td>an API key from your Foundry resource</td><td>resource name in Settings, or <code>ANTHROPIC_FOUNDRY_RESOURCE</code></td><td>plain id</td></tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>Bedrock</strong> uses the standard AWS credential chain, so an <code>~/.aws/credentials</code> profile, an SSO login, or an instance role all work as-is. No API key needed. If you have an Amazon Bedrock API key instead, enter it as the optional key and it takes precedence over your AWS credentials. There's also a separate &quot;Amazon Bedrock (API key)&quot; provider for that case alone.</li>
+<li><strong>Vertex</strong> needs no API key either. Run <code>gcloud auth application-default login</code> if you haven't already. The project is usually inferred from your credentials, so leave it blank unless you need a specific one.</li>
+<li><strong>Foundry</strong> is the exception: it does take an API key. The resource name is the <code>my-resource</code> part of <code>https://my-resource.services.ai.azure.com</code>.</li>
+</ul>
+<p><strong>Model lists.</strong> The picker shows each model under one name whichever host you use. None of the three publishes a model list, so Houston ships a curated one, and &quot;Fetch&quot; restores it rather than calling out to the network. If your account can use a model that isn't listed, add its id by hand.</p>
 <h2 id="gpt-models-on-azure-openai">GPT models on Azure OpenAI</h2>
-<p>Add &quot;Azure OpenAI&quot; from the provider picker to use GPT models on your own Azure resource. It needs three things from Settings:</p>
+<p>Add &quot;Azure OpenAI&quot; from the provider picker to use GPT models on your own Azure resource. Settings needs three things:</p>
 <ul>
-<li><strong>API key</strong>, from your Azure OpenAI resource.</li>
-<li><strong>Endpoint</strong>, the resource URL, e.g. <code>https://my-resource.openai.azure.com</code> (or export <code>AZURE_OPENAI_ENDPOINT</code>).</li>
-<li><strong>API version</strong>, the <code>api-version</code> Azure serves your deployments at. Houston pre-fills a widely supported one; a newer model may need a newer version, which you can change here without waiting on a Houston update.</li>
+<li><strong>API key</strong> from your Azure OpenAI resource.</li>
+<li><strong>Endpoint</strong>, the resource URL, such as <code>https://my-resource.openai.azure.com</code> (or export <code>AZURE_OPENAI_ENDPOINT</code>).</li>
+<li><strong>API version</strong>, the <code>api-version</code> Azure serves your deployments at. Houston pre-fills a widely supported one. A newer model may need a newer version, which you can change here without waiting for a Houston update.</li>
 </ul>
-<p>Azure serves models as <strong>deployments you name yourself</strong>, so there is no model list to fetch and none to ship. Each model id in the provider's list is a deployment name: add the names you created in the Azure portal, and Houston sends each request to that deployment. One provider covers as many deployments as you have, so a resource with separate GPT deployments needs only one entry here.</p>
+<p><strong>Models are deployments you name yourself.</strong> Azure has no model list to fetch, and Houston ships none. Each model id in the provider's list is a deployment name: add the names you created in the Azure portal, and Houston sends each request to that deployment. One provider entry covers all your deployments.</p>
 <h2 id="dropped-connections">Dropped connections</h2>
-<p>When the provider is overloaded, rate-limiting, or drops the connection, Houston retries the turn with a growing pause between attempts, telling you it is retrying. That holds even when part of the reply had already appeared: the partial reply is discarded and the turn starts over, so you only ever keep one copy of the answer. The desktop app removes the partial text, the terminal marks it as discarded (it can't erase what it printed), and headless mode never writes it to stdout. Any tool calls in a discarded reply never run. A failure that isn't transient (a bad key, a malformed request) ends the turn instead.</p>
+<p>When the provider is overloaded, rate-limiting, or drops the connection, Houston retries the turn with a growing pause between attempts and tells you it's retrying.</p>
+<ul>
+<li><strong>No duplicate answers.</strong> If part of the reply had already appeared, it's discarded and the turn starts over, so you only ever keep one copy. The desktop app removes the partial text, the terminal marks it as discarded (it can't erase what it printed), and headless mode never writes it to stdout.</li>
+<li><strong>Nothing half-runs.</strong> Tool calls in a discarded reply never run.</li>
+<li><strong>Real errors stop.</strong> A failure that isn't transient (a bad key, a malformed request) ends the turn instead.</li>
+</ul>
 <h2 id="fallback-models">Fallback models</h2>
-<p>You can name next-choice models that Houston tries when your selected model cannot serve a turn: the provider is overloaded or rate-limiting after Houston has already retried, or the conversation no longer fits the model's context window even after compacting. Set them as an ordered list in settings.json:</p>
+<p>Name backup models for Houston to try when your selected model can't serve a turn:</p>
+<ul>
+<li>the provider is still overloaded or rate-limiting after Houston's retries</li>
+<li>the conversation no longer fits the model's context window, even after compacting</li>
+<li>the provider doesn't serve the model</li>
+</ul>
+<p>Set them as an ordered list in settings.json:</p>
 <pre><code class="language-json">&quot;fallbackModels&quot;: [
   { &quot;providerId&quot;: &quot;openai&quot;, &quot;model&quot;: &quot;gpt-5&quot; },
   { &quot;providerId&quot;: &quot;ollama&quot;, &quot;model&quot;: &quot;qwen2.5-coder&quot; }
 ]</code></pre>
-<p>Entries are tried in order and may name any provider you have configured. One that no longer resolves (you removed the provider, or its key is missing) is skipped rather than failing the run. Any part of the reply that had already appeared is discarded before Houston switches, so a fallback never splices two models' output together, and it tells you in the transcript when a reply came from a fallback. A request that failed for its own reasons (a bad key, a malformed request) is not retried on another model, since it would fail there too. A model the provider doesn't serve does move on to the next one. Leave the list unset to have a failing model simply end the turn.</p>
+<ul>
+<li>Entries are tried in order and can name any provider you've configured.</li>
+<li>An entry that no longer resolves (you removed the provider, or its key is missing) is skipped rather than failing the run.</li>
+<li>Any part of the reply that had already appeared is discarded before switching, so two models' output is never spliced together. The transcript tells you when a reply came from a fallback.</li>
+<li>A request that failed for its own reasons (a bad key, a malformed request) isn't retried on another model, since it would fail there too.</li>
+</ul>
+<p>Leave the list unset to have a failing model simply end the turn.</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/clients"><span>Previous</span>Clients (where Houston runs)</a><a class="docs-next" href="/docs/settings-and-keys"><span>Next</span>Settings and keys</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -156,8 +213,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -187,6 +246,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

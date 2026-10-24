@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Context, worktrees, and history | Houston docs</title>
-  <meta name="description" content="Compaction. When a conversation grows too large, Houston first trims large tool output the agent has moved past (it can re-read anything it still needs)..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="When a conversation grows too large, Houston keeps it inside the model's context window:" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/context-worktrees-and-history" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Context, worktrees, and history | Houston docs" />
-  <meta property="og:description" content="Compaction. When a conversation grows too large, Houston first trims large tool output the agent has moved past (it can re-read anything it still needs)..." />
+  <meta property="og:description" content="When a conversation grows too large, Houston keeps it inside the model's context window:" />
   <meta property="og:url" content="https://houstoncode.ai/docs/context-worktrees-and-history" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Context, worktrees, and history | Houston docs" />
-  <meta name="twitter:description" content="Compaction. When a conversation grows too large, Houston first trims large tool output the agent has moved past (it can re-read anything it still needs)..." />
+  <meta name="twitter:description" content="When a conversation grows too large, Houston keeps it inside the model's context window:" />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Context, worktrees, and history",
-  "description": "Compaction. When a conversation grows too large, Houston first trims large tool output the agent has moved past (it can re-read anything it still needs)...",
+  "description": "When a conversation grows too large, Houston keeps it inside the model's context window:",
   "url": "https://houstoncode.ai/docs/context-worktrees-and-history",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,20 +86,70 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Context, worktrees, and history</h1>
+        <nav class="docs-toc" aria-labelledby="toc-context-worktrees-and-history">
+          <h2 id="toc-context-worktrees-and-history">On this page</h2>
+          <ul>
+            <li><a href="#compaction">Compaction</a></li>
+            <li><a href="#tools-loaded-on-demand">Tools loaded on demand</a></li>
+            <li><a href="#worktrees">Worktrees</a></li>
+            <li><a href="#conversations">Conversations</a></li>
+            <li><a href="#undoing-a-turn-s-file-changes">Undoing a turn's file changes</a></li>
+          </ul>
+        </nav>
         <div class="prose">
+<h2 id="compaction">Compaction</h2>
+<p>When a conversation grows too large, Houston keeps it inside the model's context window:</p>
+<ol>
+<li><p>it first trims large tool output the agent has moved past (the agent can re-read anything it still needs)</p></li>
+<li><p>then it summarizes the older part of the conversation, including the earlier steps of one long request</p></li>
+</ol>
 <ul>
-<li><strong>Compaction.</strong> When a conversation grows too large, Houston first trims large tool output the agent has moved past (it can re-read anything it still needs), then summarizes the older part of the conversation, including the earlier steps of one long request, so it never overflows the context window. The request being worked on is always kept word for word. The threshold is sized automatically from the selected model's context window (a large-window model compacts later, a small local model sooner), and the summary is saved with the conversation so later turns extend it instead of re-summarizing from scratch. The full transcript stays on screen; only what is sent to the model is compacted. Set a fixed token threshold or disable it in Settings, <em>Context window</em>.</li>
-<li><strong>Worktrees.</strong> In a git repo, a new chat defaults to running in a fresh, isolated worktree on its own branch under <code>.houston/worktrees/</code>, so the agent's edits never touch the current checkout. Untick <em>New worktree</em> to work in the repo directly. In a repo whose current branch has no commits yet (a fresh <code>git init</code>), the toggle starts off; a worktree can only branch from another branch that has commits, and is not offered when no branch has any.</li>
-<li><strong>Conversations</strong> are saved per project folder. Chats can be exported as JSON or self-contained HTML and imported from either (an HTML export from an older version brings back only the chat text), searched, and forked.</li>
-<li><strong>The File menu</strong> starts a new chat (⌘N), a new chat in another folder (⇧⌘N), or one in a recent folder (<strong>Open Recent</strong>), and imports or exports chats.</li>
-<li><strong>Undo a turn's file changes.</strong> Before the agent edits a file, Houston snapshots it, so the latest turn's changes can be reverted with one click (and re-applied after a revert). This covers every file-editing tool, including multi-file patches (adds, updates, deletes, and moves) and edits made by a writable subagent the turn dispatched. Checkpoints persist on disk in your Houston profile, so the revert/redo affordance survives an app restart; the most recent 50 turns' checkpoints are kept. Shell-command side effects are not checkpointed: revert only restores files the editing tools touched.</li>
+<li><strong>Your current request is always kept word for word.</strong></li>
+<li><strong>Sized to the model.</strong> The threshold is set automatically from the selected model's context window: a large-window model compacts later, a small local model sooner.</li>
+<li><strong>Built up, not redone.</strong> The summary is saved with the conversation, so later turns extend it instead of re-summarizing from scratch.</li>
+<li><strong>Nothing disappears on screen.</strong> The full transcript stays visible; only what's sent to the model is compacted.</li>
+<li><strong>Settings:</strong> set a fixed token threshold, or turn compaction off, in Settings, <em>Agent Behavior</em>, <em>Context window</em>.</li>
 </ul>
+<h2 id="tools-loaded-on-demand">Tools loaded on demand</h2>
+<p>Every tool definition sent to the model costs context on every request, so Houston preloads only the tools a coding task uses all the time:</p>
+<ul>
+<li>reading, searching, and editing</li>
+<li>the shell, the todo list, questions, and plans</li>
+<li>research subagents, skills, and the web</li>
+<li>git status and diff</li>
+</ul>
+<p>The rest are listed with a one-line summary in a <code>find_tools</code> catalog, and the agent loads one when it needs it: the GitHub tools, scheduled runs, spawned and proposed sessions, the localhost preview, images and mockups, notebook editing, <code>ast_grep</code>, <code>review_changes</code>, <code>recall_history</code>, <code>pr_sweep</code>, and writable subagents.</p>
+<ul>
+<li>A loaded tool stays loaded for the rest of the conversation.</li>
+<li>Loading changes only what the model sees. Approval modes, plan mode, permission rules, and hooks apply to these tools exactly as to the preloaded ones.</li>
+</ul>
+<h2 id="worktrees">Worktrees</h2>
+<p>In a git repo, a new chat runs in a fresh, isolated worktree on its own branch under <code>.houston/worktrees/</code> by default, so the agent's edits never touch your current checkout.</p>
+<ul>
+<li>Untick <strong>New worktree</strong> to work in the repo directly.</li>
+<li>In a repo whose current branch has no commits yet (a fresh <code>git init</code>), the toggle starts off. A worktree can only branch from a branch that has commits, and isn't offered when no branch has any.</li>
+</ul>
+<h2 id="conversations">Conversations</h2>
+<ul>
+<li>Saved per project folder.</li>
+<li>Searchable, and you can fork them. A fork starts its own cost at zero: what the original spent stays with the original, so usage totals don't count it twice.</li>
+<li><strong>Export</strong> as JSON or self-contained HTML, and <strong>import</strong> from either. An HTML export from an older version brings back only the chat text.</li>
+<li><strong>The File menu</strong> starts a new chat (⌘N), a new chat in another folder (⇧⌘N), or one in a recent folder (<strong>Open Recent</strong>), starts a fresh side chat for the open chat (<strong>New Side Chat</strong>), and imports or exports chats.</li>
+</ul>
+<h2 id="undoing-a-turn-s-file-changes">Undoing a turn's file changes</h2>
+<p>Before the agent edits a file, Houston snapshots it, so the latest turn's changes can be reverted with one click (and re-applied after a revert).</p>
+<ul>
+<li><strong>Covers every file-editing tool,</strong> including multi-file patches (adds, updates, deletes, and moves) and edits made by a writable subagent the turn dispatched.</li>
+<li><strong>Survives restarts.</strong> Checkpoints are kept on disk in your Houston profile, for the most recent 200 turns.</li>
+<li><strong>Shell side effects aren't covered.</strong> Revert only restores files the editing tools touched.</li>
+</ul>
+<p>To go back further than the last turn, see <a href="/docs/rewinding-to-an-earlier-message">&quot;Rewinding to an earlier message&quot;</a>.</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/project-rules"><span>Previous</span>Project rules</a><a class="docs-next" href="/docs/spawn-separate-sessions"><span>Next</span>Spawn separate sessions</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -126,8 +176,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -157,6 +209,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

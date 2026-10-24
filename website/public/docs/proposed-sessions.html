@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Proposed sessions | Houston docs</title>
   <meta name="description" content="When the agent spots parallel work you didn't ask for (a fix noticed in passing, the natural follow-up), it proposes it with propose_session instead of..." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/proposed-sessions" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "When the agent spots parallel work you didn't ask for (a fix noticed in passing, the natural follow-up), it proposes it with propose_session instead of...",
   "url": "https://houstoncode.ai/docs/proposed-sessions",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,14 +87,21 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Proposed sessions</h1>
         <div class="prose">
-<p>When the agent spots parallel work you didn't ask for (a fix noticed in passing, the natural follow-up), it proposes it with <code>propose_session</code> instead of starting it. The desktop app shows a card: <strong>Start session</strong> runs it as its own chat (on its own git worktree when the project is a repository, under your current approval policy), <strong>Do it here</strong> asks for it in this chat instead (queued if a turn is running), and <strong>Dismiss</strong> declines it. Nothing runs until you choose. A turn can propose at most three sessions, and never the same title twice in one chat.</p>
-<p>In the terminal, <code>/proposals</code> lists the chat's proposals; <code>/proposals start &lt;n&gt;</code>, <code>/proposals here &lt;n&gt;</code>, and <code>/proposals dismiss &lt;n&gt;</code> act on one.</p>
+<p>When the agent spots parallel work you didn't ask for (a fix noticed in passing, the natural follow-up), it <em>proposes</em> it with <code>propose_session</code> instead of starting it. Nothing runs until you choose.</p>
+<p><strong>In the desktop app,</strong> a card offers:</p>
+<ul>
+<li><strong>Start session:</strong> runs it as its own chat, on its own git worktree when the project is a repository, under your current approval policy.</li>
+<li><strong>Do it here:</strong> asks for it in this chat instead (queued if a turn is running).</li>
+<li><strong>Dismiss:</strong> declines it.</li>
+</ul>
+<p><strong>In the terminal,</strong> <code>/proposals</code> lists the chat's proposals, and <code>/proposals start &lt;n&gt;</code>, <code>/proposals here &lt;n&gt;</code>, and <code>/proposals dismiss &lt;n&gt;</code> act on one.</p>
+<p><strong>Limits:</strong> a turn can propose at most three sessions, and never the same title twice in one chat.</p>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/spawn-separate-sessions"><span>Previous</span>Spawn separate sessions</a><a class="docs-next" href="/docs/watching-work-you-sent-off"><span>Next</span>Watching work you sent off (/spawned)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -121,8 +128,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -152,6 +161,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

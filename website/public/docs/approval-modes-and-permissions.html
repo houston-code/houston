@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Approval modes and permissions | Houston docs</title>
-  <meta name="description" content="Approval is layered. From most to least restrictive:" />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Approval is layered: a mode for the chat, permission rules that refine it, and guardrails that projects and administrators can add." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/approval-modes-and-permissions" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Approval modes and permissions | Houston docs" />
-  <meta property="og:description" content="Approval is layered. From most to least restrictive:" />
+  <meta property="og:description" content="Approval is layered: a mode for the chat, permission rules that refine it, and guardrails that projects and administrators can add." />
   <meta property="og:url" content="https://houstoncode.ai/docs/approval-modes-and-permissions" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Approval modes and permissions | Houston docs" />
-  <meta name="twitter:description" content="Approval is layered. From most to least restrictive:" />
+  <meta name="twitter:description" content="Approval is layered: a mode for the chat, permission rules that refine it, and guardrails that projects and administrators can add." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Approval modes and permissions",
-  "description": "Approval is layered. From most to least restrictive:",
+  "description": "Approval is layered: a mode for the chat, permission rules that refine it, and guardrails that projects and administrators can add.",
   "url": "https://houstoncode.ai/docs/approval-modes-and-permissions",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -86,33 +86,196 @@
       <main id="main" class="docs-content">
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Approval modes and permissions</h1>
+        <nav class="docs-toc" aria-labelledby="toc-approval-modes-and-permissions">
+          <h2 id="toc-approval-modes-and-permissions">On this page</h2>
+          <ul>
+            <li><a href="#the-four-modes">The four modes</a></li>
+            <li><a href="#plan-mode">Plan mode</a></li>
+            <li><a href="#guardrails-in-full-auto">Guardrails in full auto</a></li>
+            <li><a href="#git-hooks-and-settings">Git hooks and settings</a></li>
+            <li><a href="#network-calls-in-full-auto">Network calls in full auto</a></li>
+            <li><a href="#throwing-away-work-always-asks">Throwing away work always asks</a></li>
+            <li><a href="#which-mode-a-new-install-starts-in">Which mode a new install starts in</a></li>
+            <li><a href="#approving-a-call">Approving a call</a></li>
+            <li><a href="#switching-mode">Switching mode</a></li>
+            <li><a href="#permission-rules">Permission rules</a></li>
+            <li><a href="#project-guardrails">Project guardrails</a></li>
+            <li><a href="#trusted-folders">Trusted folders</a></li>
+            <li><a href="#managed-policy">Managed policy</a></li>
+            <li><a href="#how-the-tiers-stack">How the tiers stack</a></li>
+          </ul>
+        </nav>
         <div class="prose">
-<p>Approval is layered. From most to least restrictive:</p>
+<p>Approval is layered: a mode for the chat, permission rules that refine it, and guardrails that projects and administrators can add.</p>
+<h2 id="the-four-modes">The four modes</h2>
+<p>From most to least restrictive:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Mode</th><th>Edits</th><th>Shell commands</th></tr></thead>
+<tbody>
+<tr><td><strong>Plan mode</strong></td><td>blocked</td><td>blocked (read-only research)</td></tr>
+<tr><td><strong>Ask every time</strong></td><td>ask</td><td>ask</td></tr>
+<tr><td><strong>Auto-approve edits</strong></td><td>automatic</td><td>ask</td></tr>
+<tr><td><strong>Full auto</strong></td><td>automatic</td><td>automatic (sandboxed), with the guardrails below</td></tr>
+</tbody>
+</table></div>
+<h2 id="plan-mode">Plan mode</h2>
+<p>The agent researches and proposes a plan; writes and shell commands are blocked. You accept the plan, request changes, or reject it.</p>
 <ul>
-<li><strong>Plan mode:</strong> read-only. The agent researches and proposes a plan; writes and shell commands are blocked. It presents the plan for the user to accept, request changes, or reject. The plan lists the checks it will run, and under them Houston shows whether those checks can run on this machine: whether the runtimes are installed, whether the dependencies are, and whether shell commands can reach the network to install them (for example, &quot;choose Allow for run on the install command&quot;). Houston works this out from the machine without running anything, and tells the agent about any problem when you accept, so it can say a check couldn't run instead of claiming it.</li>
-<li><strong>Ask every time:</strong> every edit and command needs a click.</li>
-<li><strong>Auto-approve edits:</strong> file edits go through automatically; shell commands still ask.</li>
-<li><strong>Full auto:</strong> edits and (sandboxed) commands run without asking. A few controls still hold even here, because the sandbox can read your whole filesystem: network egress is granted <strong>per destination</strong> (approving a fetch to one host does not open egress to another), the first shell command pauses once for a <strong>shell-network consent</strong> so blanket outbound access is never automatic (declining runs commands offline), a shell command that <strong>names a path outside the project</strong>, quoted or not, asks first (<code>/dev/null</code> and the temp directory the sandbox can already write to don't count), and <strong>reading a credential file</strong> (a <code>.env</code>, a private key, <code>.aws/credentials</code> and the like) prompts even here, since reads otherwise never do. &quot;Allow for run&quot; on that prompt stops it asking about credential reads for the rest of the conversation, and an <code>allow</code> permission rule opts a path in permanently. <strong>Changing a credential file</strong> prompts too: a file edit that writes one, or a shell command that redirects into, copies over, edits in place, or removes one (<code>&gt; .env</code>, <code>cp .env.example .env</code>, <code>sed -i … .env</code>, <code>rm .env</code>). Templates such as <code>.env.example</code> don't count.</li>
+<li><strong>Checks it can run.</strong> The plan lists the checks it will run, and under them Houston shows whether they can run on this machine: whether the runtimes and dependencies are installed, and whether shell commands can reach the network to install them (for example, &quot;choose Allow for run on the install command&quot;).</li>
+<li>Houston works this out from the machine without running anything, and tells the agent about any problem when you accept, so it can say a check couldn't run instead of claiming it did.</li>
+<li><strong>Switching is immediate.</strong> Turning Plan mode on or off takes effect at once, even mid-turn, and Houston tells the agent before its next step.</li>
 </ul>
-<p><strong>Throwing away work</strong> asks in every mode, full auto included. The sandbox keeps commands inside the project, but the project is what these destroy, and undo doesn't cover shell commands: <code>git reset --hard</code>, a forced <code>git clean</code>, <code>git checkout -- .</code> or <code>git restore</code> of your changes, <code>rm -r</code> of anything but build output and dependencies (<code>node_modules</code>, <code>dist</code>, <code>build</code>, <code>target</code>, <code>__pycache__</code> and the like are fine), <code>find … -delete</code>, deleting a branch or a stash, rewriting history, and a forced or deleting <code>git push</code>. Quoting a word, splitting it across lines, or running it through <code>bash -c</code> doesn't hide one. &quot;Allow for run&quot; doesn't stop these asking; an <code>allow</code> permission rule for that exact command does (the &quot;Always allow&quot; choice on the prompt saves one).</p>
-<p><strong>Which mode a new install starts in.</strong> Where the sandbox confines shell commands (macOS, and Linux with bubblewrap), a new install starts in <strong>Full auto</strong>; where it can't (Windows, or Linux without bubblewrap), every command would run unconfined, so it starts in <strong>Ask every time</strong>. An existing install keeps the mode it last used. The desktop app and the terminal start in the same saved mode; <code>--approval</code> or <code>--full-auto</code> overrides it for one terminal session, and a headless run starts in plan unless told otherwise.</p>
-<p><strong>Reading the diff.</strong> A file edit shows a real diff before you approve it: the changed part with a few lines of context (long untouched stretches are folded away with a note saying how many), line numbers in the gutter, the changed words picked out inside a modified line, and the code syntax-coloured.</p>
-<p>On any single tool call the user can approve once, deny, <strong>allow for the run</strong> (auto-approve that kind of tool for the rest of the conversation, or, for a network call, just that one destination), or <strong>always allow / always deny</strong> (saves a permission rule so the choice persists). File edits show an inline red/green diff before approval.</p>
-<p><strong>Denying with a reason.</strong> A refusal can carry guidance, and the agent is told what it says, so &quot;no, and here is what to do instead&quot; lands in the same step instead of needing a follow-up message. In the desktop app, type it in the box under the approval buttons (Enter denies with that reason). In the terminal, pick &quot;Deny with a reason…&quot;, or just type the reason at the approval prompt: anything that is not one of the shortcut keys is read as a denial plus that explanation. The terminal's approval keys are <code>y</code> allow, <code>n</code> deny, <code>a</code> allow for the run, <code>!</code> always allow, <code>x</code> always deny.</p>
-<p>Stopping a run while an approval is waiting is recorded as an interruption, not as a refusal, so the agent is not told the user rejected something they simply never answered.</p>
-<p><strong>Switching mode.</strong> In the terminal, <code>Shift-Tab</code> steps through the modes, from most restrictive to least and back around to plan. It works while the agent is working too, and applies to the run in progress: if a turn stops for an approval you would rather not keep answering, loosen the mode and the same turn carries on under it, rather than having to interrupt the work you were trying to unblock. The mode is shown next to the spinner while a turn runs, and on the status line above the composer the rest of the time. <code>/approval &lt;mode&gt;</code> sets one directly.</p>
-<p><strong>Permission rules</strong> (Settings) are finer-grained than the mode: <code>allow</code>, <code>deny</code>, or <code>ask</code>, matched on the tool plus a glob over its target, e.g. allow <code>run_shell</code> matching <code>git *</code>, deny anything matching <code>*rm -rf*</code>, always ask before <code>write_file</code> under <code>src/secret/**</code>. Rules are checked before the mode and the first match wins. Matching normalizes the target so a rule cannot be dodged by respelling it: a file rule is resolved and anchored to the workspace (so <code>src/*</code> covers the same file written as an absolute path, and a relative climb like <code>src/../../etc/passwd</code> does not slip past it), a URL rule is case-insensitive on scheme and host, and a shell rule sees through quoting, backslash escapes, and bash's <code>$'...'</code> escapes (so <code>deny *rm -rf*</code> still fires on <code>&quot;rm&quot; -rf</code>, <code>r\m -rf</code>, or <code>$'\x72m' -rf</code>). A line that ends in a backslash continues onto the next, as in bash, so a deny also fires on <code>rm</code> split across two lines, and an allow must cover the joined command. An allow rule sees through quoting only where it changes nothing (<code>&quot;git&quot; status</code> is <code>git status</code>): a quoted or escaped <code>*</code>, <code>~</code>, <code>$</code>, space, or <code>&gt;</code> is not the bare one, since the shell treats them differently. Allowing <code>rm '*'</code> (one file named <code>*</code>) never allows <code>rm *</code>, and allowing <code>rm -rf '~'</code> (or <code>rm -rf $'\x7e'</code>) never allows <code>rm -rf ~</code>. An empty quoted argument counts as one: allowing <code>'' rm -rf /</code> (which runs nothing) never allows <code>rm -rf /</code>. Quoted or escaped whitespace is part of an argument, as in bash, so an allow keeps it as written: allowing <code>rm 'my  file'</code> (two spaces) never allows <code>rm 'my file'</code>, and allowing <code>find . -delete \ </code> (find gets a lone space and stops) never allows <code>find . -delete</code>. Spacing outside quotes doesn't matter. A rule an earlier version of Houston saved with that whitespace collapsed allows what its text says; one that ends in a lone backslash matches nothing, and <strong>Clean up rules</strong> removes it. An <code>apply_patch</code> call is checked against every file it adds, changes, deletes, or moves to: one denied file denies the whole patch, one <code>ask</code> file asks, and an <code>allow</code> covers it only when every file is allowed. &quot;Always allow&quot; or &quot;Always deny&quot; on a patch saves one rule per file.</p>
-<p>A rule marked <strong>Exact</strong> matches only its one target: <code>*</code> is an ordinary character and a folder does not cover the files inside it. <strong>Always allow</strong> on a file, URL, or search saves an exact rule, so approving a write to a file named <code>*</code>, or to a folder path, allows that path and nothing else. On a shell command it saves a command prefix instead, such as <code>npm install</code>. A command it can't shorten to a prefix is saved whole, and exact when it holds <code>*</code>, so approving <code>rm *</code> never allows <code>rm -rf ~</code>. A <code>cd</code> into the project needs no rule (an allowed <code>npm install</code> also covers <code>cd src &amp;&amp; npm install</code>), so it is left out. Any other change of directory, such as <code>cd -</code>, <code>popd</code>, <code>cd $DIR</code>, or a <code>cd</code> out of the project, still asks, and is saved whole and exact. A shell rule like <code>rm *</code> saved by an earlier version is still a pattern: tick <strong>Exact</strong> on it to narrow it. <strong>Always deny</strong> saves a regular pattern, which can only be broader than the call it blocked.</p>
-<p><strong>Project guardrails.</strong> A repo can ship a <code>.houston/settings.json</code> with its own <code>deny</code> / <code>ask</code> rules, checked before the user's global rules. Those guardrails always apply and can only <em>tighten</em>, so cloning an untrusted repo can never auto-approve actions.</p>
-<p><strong>Trusted folders.</strong> The same project file may also define <code>allow</code> rules, <code>hooks</code>, and <code>mcpServers</code>. Those ELEVATE (they auto-approve matching actions or run processes as you), so Houston ignores them until you explicitly trust the folder: the desktop app shows a banner above the composer, and the interactive terminal asks at session start (Trust / Not now / Never). Your decision is bound to a fingerprint of that elevating config; if it later changes (say a pull adds a hook), the folder drops back to untrusted and Houston asks again. Headless runs never prompt and simply note when an untrusted folder's extra config is being ignored. Trusted project <code>allow</code> rules sit BELOW your own rules (they fill gaps, never override you), project hooks run after yours, and project MCP servers appear namespaced as <code>mcp__proj-&lt;id&gt;__&lt;tool&gt;</code>.</p>
-<p>Decisions are reviewable: Settings, <em>Workspace</em>, <em>Trusted folders</em> lists every folder you answered for (trusted or never) with a Forget button, and <code>/trust</code> in the terminal shows the current folder's state (<code>/trust forget</code> clears the decision and asks again on the spot). Forgetting is how you reverse a &quot;Never&quot; or retire a stale &quot;Trust&quot;.</p>
-<p><strong>Managed policy.</strong> On a managed device an administrator can ship a machine-wide <code>managed-settings.json</code> with <code>deny</code> / <code>ask</code> rules that outrank both project guardrails and every user's own rules. It too can only tighten, and lives in a root-owned location the user cannot edit.</p>
+<h2 id="guardrails-in-full-auto">Guardrails in full auto</h2>
+<p>The sandbox can read your whole filesystem, so a few controls hold even in full auto:</p>
+<ul>
+<li><strong>Network, per destination.</strong> Approving a fetch to one host doesn't open egress to another. See &quot;Network calls in full auto&quot; below.</li>
+<li><strong>Shell network stays on the allowlist.</strong> Shell commands reach package registries and code hosts (plus any domains you add) through the egress allowlist. When one tries a host that isn't on it, the connection is refused and Houston asks whether to allow that host for this chat. When you allow it, the agent retries the command if that's safe. Blanket outbound access is never automatic: with egress set to &quot;All domains&quot;, shell commands start offline and Houston asks once, the first time one fails for lack of network (the <strong>shell-network consent</strong>).</li>
+<li><strong>Paths outside the project.</strong> A shell command that names one, quoted or not, asks first. <code>/dev/null</code> and the temp directory the sandbox can already write to don't count.</li>
+<li><strong>Reading a credential file</strong> (a <code>.env</code>, a private key, <code>.aws/credentials</code>, and the like) asks, even though reads otherwise never do. &quot;Allow for run&quot; on that prompt stops it asking about credential reads for the rest of the conversation, and an <code>allow</code> permission rule opts a path in permanently.</li>
+<li><strong>Changing a credential file</strong> asks too: a file edit that writes one, or a shell command that redirects into, copies over, edits in place, or removes one (<code>&gt; .env</code>, <code>cp .env.example .env</code>, <code>sed -i … .env</code>, <code>rm .env</code>). Templates such as <code>.env.example</code> don't count.</li>
+<li><strong>Git hooks and settings that run programs.</strong> See &quot;Git hooks and settings&quot; below.</li>
+</ul>
+<h2 id="git-hooks-and-settings">Git hooks and settings</h2>
+<p>Shell commands can write anywhere in the project, <code>.git</code> included, so everyday git keeps working in full auto: commits, <code>git config</code>, <code>git push -u</code>, hook installers, submodules. A few things in <code>.git</code> are programs that git runs by itself, though: hooks, and settings such as <code>core.fsmonitor</code> or a filter driver. Your own terminal's git (or a shell prompt that runs <code>git status</code>) would run them outside the sandbox, and neither <code>git status</code> nor a diff shows them.</p>
+<p>So after each shell command Houston checks for those and nothing else:</p>
+<ul>
+<li><strong>Nothing to see for ordinary git.</strong> Your name and email, remotes, and upstream branches never count, and a command that doesn't touch <code>.git</code> costs a few file checks.</li>
+<li><strong>Husky's setup is noted, not asked about.</strong> Its hooks folder (<code>.husky</code>) is checked in, so you can read what it runs.</li>
+<li><strong>Anything else pauses once</strong> and lists what changed: a new or changed hook, a setting that names a program, a nested repository registered as a submodule that carries one, or a file that points git at another folder's settings. <strong>Undo</strong> puts back only those items (other changes the same command made stay), and <strong>Keep</strong> leaves them, for example a hook tool you meant to install. If you keep something, the reply says how to remove it by hand later.</li>
+<li><strong>Headless runs and runs nobody is watching</strong> undo the change and say so, since nobody can approve it.</li>
+<li><strong>File edits</strong> to <code>.git/hooks/…</code>, <code>.git/config</code>, or similar ask first, like credential files do.</li>
+</ul>
+<p>The check runs after the command, so a program that a shell prompt ran in the moment between the command finishing and the question appearing has already run. A background command is checked when its output is read or it is stopped.</p>
+<h2 id="network-calls-in-full-auto">Network calls in full auto</h2>
+<p>GitHub reads run without asking: <code>gh_pr_list</code>, <code>gh_pr_view</code>, <code>gh_pr_checks</code>, <code>gh_issue_list</code>, <code>gh_issue_view</code>, <code>gh_run_list</code>, <code>gh_run_view</code>.</p>
+<p>Everything else asks once per destination, and &quot;Allow for run&quot; covers only that destination (the prompt says which):</p>
+<ul>
+<li><strong><code>web_fetch</code></strong> asks once per site, and <strong><code>web_search</code></strong> once per chat. Settings → Permissions → <strong>Web reads in full auto</strong> can let these run without asking. Either way, a URL or query carrying a credential is refused.</li>
+<li><strong><code>view_localhost</code></strong> asks once per host, since a page can load from the internet. A call that clicks or types (<code>steps</code>) asks once more per host.</li>
+<li><strong>GitHub writes</strong> (open a PR or issue, comment, review, reopen, mark ready or draft) share one grant per repository, so allowing a comment on one repository never allows anything on another. The repository is the one <code>gh</code> would pick (your <code>gh repo set-default</code> choice included), and every call is told to use exactly that one, so pointing the remotes or the default repository elsewhere asks again.</li>
+<li><strong>Merging a PR, closing a PR or issue, checking out a PR, and creating a repository</strong> each ask on their own: allowing a comment never allows a merge.</li>
+</ul>
+<h2 id="throwing-away-work-always-asks">Throwing away work always asks</h2>
+<p>These ask in every mode, full auto included. The sandbox keeps commands inside the project, but the project is exactly what these destroy, and undo doesn't cover shell commands.</p>
+<ul>
+<li><code>git reset --hard</code>, a forced <code>git clean</code>, <code>git checkout -- .</code>, or <code>git restore</code> of your changes</li>
+<li><code>rm -r</code> of anything but build output and dependencies (<code>node_modules</code>, <code>dist</code>, <code>build</code>, <code>target</code>, <code>__pycache__</code>, and the like are fine)</li>
+<li><code>find … -delete</code></li>
+<li>deleting a branch or a stash, rewriting history</li>
+<li>a forced or deleting <code>git push</code></li>
+</ul>
+<p>Quoting a word, splitting it across lines, or running it through <code>bash -c</code> doesn't hide one. &quot;Allow for run&quot; doesn't stop these asking; an <code>allow</code> permission rule for that exact command does (the &quot;Always allow&quot; choice on the prompt saves one).</p>
+<h2 id="which-mode-a-new-install-starts-in">Which mode a new install starts in</h2>
+<ul>
+<li><strong>Full auto</strong> where the sandbox confines shell commands: macOS, and Linux with bubblewrap.</li>
+<li><strong>Ask every time</strong> where it can't (Windows, or Linux without bubblewrap), since every command would run unconfined.</li>
+</ul>
+<p>An existing install keeps the mode it last used. The desktop app and the terminal start in the same saved mode. <code>--approval</code> or <code>--full-auto</code> overrides it for one terminal session, and a headless run starts in plan unless told otherwise.</p>
+<h2 id="approving-a-call">Approving a call</h2>
+<p>On any single tool call you can:</p>
+<ul>
+<li><strong>approve once</strong></li>
+<li><strong>deny</strong></li>
+<li><strong>allow for the run:</strong> auto-approve that kind of tool for the rest of the conversation (for a network call, just that one destination, which the prompt names)</li>
+<li><strong>always allow / always deny:</strong> save a permission rule so the choice persists</li>
+</ul>
+<p><strong>Reading the diff.</strong> A file edit shows a real diff before you approve it: the changed part with a few lines of context (long untouched stretches are folded away with a note saying how many), line numbers in the gutter, the changed words picked out inside a modified line, and syntax colouring.</p>
+<p><strong>Denying with a reason.</strong> A refusal can carry guidance, and the agent is told what it says, so &quot;no, and here's what to do instead&quot; lands in the same step.</p>
+<ul>
+<li><strong>Desktop app:</strong> type it in the box under the approval buttons. <code>Enter</code> denies with that reason.</li>
+<li><strong>Terminal:</strong> pick &quot;Deny with a reason…&quot;, or just type the reason at the approval prompt. Anything that isn't a shortcut key is read as a denial plus that explanation.</li>
+</ul>
+<p><strong>Terminal approval keys:</strong> <code>y</code> allow, <code>n</code> deny, <code>a</code> allow for the run, <code>!</code> always allow, <code>x</code> always deny.</p>
+<p>Stopping a run while an approval is waiting is recorded as an interruption, not a refusal, so the agent isn't told you rejected something you never answered.</p>
+<h2 id="switching-mode">Switching mode</h2>
+<ul>
+<li><strong>Terminal:</strong> <code>Shift-Tab</code> steps through the modes, from most restrictive to least and back around to plan. <code>/approval &lt;mode&gt;</code> sets one directly.</li>
+<li><strong>Works mid-turn.</strong> It applies to the run in progress: if a turn stops for an approval you'd rather not keep answering, loosen the mode and the same turn carries on under it.</li>
+<li><strong>Where it's shown:</strong> next to the spinner while a turn runs, and on the status line above the composer the rest of the time.</li>
+<li><strong>Per chat.</strong> The mode belongs to the chat, like its model (see &quot;Each chat keeps its own settings&quot;). New chats start in the mode chosen in Settings &gt; <strong>Permissions</strong> &gt; <strong>Approval mode</strong>.</li>
+</ul>
+<h2 id="permission-rules">Permission rules</h2>
+<p>Rules (in Settings) are finer-grained than the mode: <code>allow</code>, <code>deny</code>, or <code>ask</code>, matched on the tool plus a glob over its target. For example:</p>
+<ul>
+<li>allow <code>run_shell</code> matching <code>git *</code></li>
+<li>deny anything matching <code>*rm -rf*</code></li>
+<li>always ask before <code>write_file</code> under <code>src/secret/**</code></li>
+</ul>
+<p><strong>Order matters.</strong> Rules are checked before the mode, and the first match wins. Settings lists them numbered in the order they're checked; drag a rule or use its arrows to move it. <strong>By tool</strong> groups the list per tool instead.</p>
+<p><strong>Settings flags problems:</strong> a rule that can never apply because an earlier one already matches everything it would (a <code>*</code> pattern for the same tool, or the same pattern), an empty pattern (it matches nothing), and an allow of <code>*</code>.</p>
+<p><strong>History.</strong> Each rule notes when it was added (and whether from an approval prompt or by hand) and when it last decided a call, which helps you prune rules you no longer need.</p>
+<p><strong>Test a call</strong> takes a tool and a command, path, URL, or query, and shows what the rules decide and which rule decides it. It uses your unsaved edits and the administrator and project rules. It covers rules only, so a write outside the project or to a sensitive file can still ask.</p>
+<p><strong>Edit as text</strong> shows the rules as JSON, one per line, in the same shape as <code>permissionRules</code> in settings.json, for bulk edits or moving rules between machines. It checks the text as you type (a misspelt field is an error, not ignored), flags rules that could never apply, says what applying would add, remove, or reorder, and keeps each surviving rule's history.</p>
+<h3 id="rules-can-t-be-dodged-by-respelling">Rules can't be dodged by respelling</h3>
+<p>Matching normalizes the target first:</p>
+<ul>
+<li><strong>File rules</strong> are resolved and anchored to the workspace. <code>src/*</code> covers the same file written as an absolute path, and a climb like <code>src/../../etc/passwd</code> doesn't slip past it.</li>
+<li><strong>URL rules</strong> are case-insensitive on scheme and host.</li>
+<li><strong>Shell rules</strong> see through quoting, backslash escapes, and bash's <code>$'...'</code> escapes, so <code>deny *rm -rf*</code> still fires on <code>&quot;rm&quot; -rf</code>, <code>r\m -rf</code>, or <code>$'\x72m' -rf</code>.</li>
+<li><strong>Line continuations.</strong> A line ending in a backslash continues onto the next, as in bash, so a deny fires on <code>rm</code> split across two lines, and an allow must cover the joined command.</li>
+</ul>
+<p><strong>Allow rules only see through quoting where it changes nothing.</strong> <code>&quot;git&quot; status</code> is <code>git status</code>, but a quoted or escaped <code>*</code>, <code>~</code>, <code>$</code>, space, or <code>&gt;</code> isn't the bare one, since the shell treats them differently:</p>
+<ul>
+<li>allowing <code>rm '*'</code> (one file named <code>*</code>) never allows <code>rm *</code></li>
+<li>allowing <code>rm -rf '~'</code> (or <code>rm -rf $'\x7e'</code>) never allows <code>rm -rf ~</code></li>
+<li>an empty quoted argument counts as one: allowing <code>'' rm -rf /</code> (which runs nothing) never allows <code>rm -rf /</code></li>
+<li>quoted or escaped whitespace is part of an argument, as in bash: allowing <code>rm 'my  file'</code> (two spaces) never allows <code>rm 'my file'</code>, and allowing <code>find . -delete \ </code> (find gets a lone space and stops) never allows <code>find . -delete</code></li>
+</ul>
+<p>Spacing outside quotes doesn't matter. A rule an earlier version of Houston saved with that whitespace collapsed allows what its text says. One that ends in a lone backslash matches nothing, and <strong>Clean up rules</strong> removes it.</p>
+<h3 id="patches">Patches</h3>
+<p>An <code>apply_patch</code> call is checked against every file it adds, changes, deletes, or moves to:</p>
+<ul>
+<li>one denied file denies the whole patch</li>
+<li>one <code>ask</code> file asks</li>
+<li>an <code>allow</code> covers it only when every file is allowed</li>
+</ul>
+<p>&quot;Always allow&quot; or &quot;Always deny&quot; on a patch saves one rule per file.</p>
+<h3 id="exact-rules-and-what-always-allow-saves">Exact rules and what &quot;Always allow&quot; saves</h3>
+<p>A rule marked <strong>Exact</strong> matches only its one target: <code>*</code> is an ordinary character, and a folder doesn't cover the files inside it.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>&quot;Always allow&quot; on</th><th>Saves</th></tr></thead>
+<tbody>
+<tr><td>a file</td><td>an exact rule, so approving a write to a file named <code>*</code>, or to a folder path, allows that path and nothing else</td></tr>
+<tr><td>a <code>web_fetch</code></td><td>the site (<code>https://example.com</code>, covering every page there)</td></tr>
+<tr><td>a <code>web_search</code></td><td>every search</td></tr>
+<tr><td>a shell command</td><td>a command prefix, such as <code>npm install</code></td></tr>
+</tbody>
+</table></div>
+<ul>
+<li>A shell command it can't shorten to a prefix is saved whole, and exact when it holds <code>*</code>, so approving <code>rm *</code> never allows <code>rm -rf ~</code>.</li>
+<li>A <code>cd</code> into the project needs no rule (an allowed <code>npm install</code> also covers <code>cd src &amp;&amp; npm install</code>), so it's left out. Any other change of directory, such as <code>cd -</code>, <code>popd</code>, <code>cd $DIR</code>, or a <code>cd</code> out of the project, still asks, and is saved whole and exact.</li>
+<li>A shell rule like <code>rm *</code> saved by an earlier version is still a pattern. Tick <strong>Exact</strong> on it to narrow it.</li>
+<li><strong>Always deny</strong> saves a regular pattern, which can only be broader than the call it blocked.</li>
+</ul>
+<h2 id="project-guardrails">Project guardrails</h2>
+<p>A repo can ship a <code>.houston/settings.json</code> with its own <code>deny</code> / <code>ask</code> rules, checked before your global rules. They always apply and can only <em>tighten</em>, so cloning an untrusted repo can never auto-approve anything.</p>
+<h2 id="trusted-folders">Trusted folders</h2>
+<p>The same project file can also define <code>allow</code> rules, <code>hooks</code>, and <code>mcpServers</code>. Those <em>elevate</em> (they auto-approve matching actions or run processes as you), so Houston ignores them until you explicitly trust the folder.</p>
+<ul>
+<li><strong>How you're asked:</strong> the desktop app shows a banner above the composer, and the interactive terminal asks at session start (Trust / Not now / Never).</li>
+<li><strong>Re-asked on change.</strong> Your decision is bound to a fingerprint of that elevating config. If it changes (say a pull adds a hook), the folder drops back to untrusted and Houston asks again.</li>
+<li><strong>Headless runs</strong> never prompt; they note when an untrusted folder's extra config is being ignored.</li>
+<li><strong>Once trusted:</strong> project <code>allow</code> rules sit <em>below</em> your own rules (they fill gaps, never override you), project hooks run after yours, and project MCP servers appear namespaced as <code>mcp__proj-&lt;id&gt;__&lt;tool&gt;</code>.</li>
+</ul>
+<p><strong>Reviewing decisions.</strong> Settings &gt; <em>Permissions</em> &gt; <em>Trusted folders</em> lists every folder you answered for (trusted or never), with a Forget button. In the terminal, <code>/trust</code> shows the current folder's state, and <code>/trust forget</code> clears the decision and asks again on the spot. Forgetting is how you reverse a &quot;Never&quot; or retire a stale &quot;Trust&quot;.</p>
+<h2 id="managed-policy">Managed policy</h2>
+<p>On a managed device, an administrator can ship a machine-wide <code>managed-settings.json</code> with <code>deny</code> / <code>ask</code> rules that outrank both project guardrails and every user's own rules. It too can only tighten, and it lives in a root-owned location the user can't edit.</p>
+<h2 id="how-the-tiers-stack">How the tiers stack</h2>
+<p>Settings &gt; Permissions &gt; <strong>All sources</strong> lists every tier in the order it's checked:</p>
+<ol>
+<li>the administrator's policy</li>
+<li>the open project's guardrails</li>
+<li>your own rules</li>
+<li>the project's allow rules (with whether they're in effect)</li>
+<li>the chat's approval mode</li>
+</ol>
+<p>The project's hooks and MCP servers show read-only on the Hooks and MCP Servers pages; edit them in <code>.houston/settings.json</code>.</p>
         </div>
-        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/diagrams-and-visuals-in-replies"><span>Previous</span>Diagrams and visuals in replies</a><a class="docs-next" href="/docs/shell-sandbox-and-network"><span>Next</span>Shell sandbox and network</a></nav>
+        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/code-intelligence"><span>Previous</span>Code intelligence (language servers)</a><a class="docs-next" href="/docs/shell-sandbox-and-network"><span>Next</span>Shell sandbox and network</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -139,8 +302,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -170,6 +335,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

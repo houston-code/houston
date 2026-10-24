@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Being told when it needs you | Houston docs</title>
-  <meta name="description" content="A long run can block on an approval, a question, or a plan, and then it is just waiting." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="A long run can stop on an approval, a question, or a plan, and then it's just waiting." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/being-told-when-it-needs-you" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="Being told when it needs you | Houston docs" />
-  <meta property="og:description" content="A long run can block on an approval, a question, or a plan, and then it is just waiting." />
+  <meta property="og:description" content="A long run can stop on an approval, a question, or a plan, and then it's just waiting." />
   <meta property="og:url" content="https://houstoncode.ai/docs/being-told-when-it-needs-you" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="Being told when it needs you | Houston docs" />
-  <meta name="twitter:description" content="A long run can block on an approval, a question, or a plan, and then it is just waiting." />
+  <meta name="twitter:description" content="A long run can stop on an approval, a question, or a plan, and then it's just waiting." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "Being told when it needs you",
-  "description": "A long run can block on an approval, a question, or a plan, and then it is just waiting.",
+  "description": "A long run can stop on an approval, a question, or a plan, and then it's just waiting.",
   "url": "https://houstoncode.ai/docs/being-told-when-it-needs-you",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,19 +87,22 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>Being told when it needs you</h1>
         <div class="prose">
-<p>A long run can block on an approval, a question, or a plan, and then it is just waiting. So the interactive terminal tells you:</p>
+<p>A long run can stop on an approval, a question, or a plan, and then it's just waiting. The interactive terminal tells you, two ways:</p>
 <ul>
-<li><strong>The tab title</strong> always reflects the state: what it is doing, that it needs approval, or that it is idle, with the project name so several sessions are tellable apart. This is ambient, never interruptive.</li>
-<li><strong>A bell and a notification</strong> fire when a run needs you or finishes, but only when you have switched away from the terminal (Houston asks the terminal to report focus, so it can tell). If your terminal does not report focus, they fire either way rather than staying silent.</li>
+<li><strong>The tab title</strong> always shows the state: what it's doing, that it needs approval, or that it's idle, with the project name so you can tell sessions apart. It's ambient, never interruptive.</li>
+<li><strong>A bell and a notification</strong> fire when a run needs you or finishes, but only when you've switched away from the terminal. (Houston asks the terminal to report focus. If your terminal doesn't, they fire either way rather than staying silent.)</li>
 </ul>
-<p>Only the moments that matter ring: needing approval, needing an answer, a plan awaiting a verdict, an error, a finished turn, and a pull request opened or merged. Ordinary progress is quiet. Stopping a run yourself never pings you (you are obviously there). Turning off notifications in Settings turns off the bell and notification here too; the title still updates.</p>
-<p>Notifications use the terminal's own channel, so they need no extra tools. Not every terminal supports them; the bell works everywhere.</p>
+<p><strong>What rings:</strong> needing approval, needing an answer, a plan awaiting a verdict, an error, a finished turn, and a pull request opened or merged. Ordinary progress is quiet, and stopping a run yourself never pings you (you're obviously there).</p>
+<ul>
+<li>Turning off notifications in Settings turns off the bell and notification here too. The title still updates.</li>
+<li>Notifications use the terminal's own channel, so they need no extra tools. Not every terminal supports them; the bell works everywhere.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/how-hard-the-model-thinks"><span>Previous</span>How hard the model thinks (/reasoning)</a><a class="docs-next" href="/docs/running-your-own-commands"><span>Next</span>Running your own commands (!)</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -126,8 +129,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -157,6 +162,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>

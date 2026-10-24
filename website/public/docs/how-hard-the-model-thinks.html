@@ -4,8 +4,8 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>How hard the model thinks (/reasoning) | Houston docs</title>
-  <meta name="description" content="/reasoning shows the current thinking effort; /reasoning high (or off, low, medium, xhigh) sets it." />
-  <meta name="houston-docs-version" content="v0.9.0" />
+  <meta name="description" content="Default: high, since coding and long multi-step work gain the most from deeper thinking." />
+  <meta name="houston-docs-version" content="v0.10.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/how-hard-the-model-thinks" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -13,7 +13,7 @@
   <meta property="og:type" content="article" />
   <meta property="og:site_name" content="Houston" />
   <meta property="og:title" content="How hard the model thinks (/reasoning) | Houston docs" />
-  <meta property="og:description" content="/reasoning shows the current thinking effort; /reasoning high (or off, low, medium, xhigh) sets it." />
+  <meta property="og:description" content="Default: high, since coding and long multi-step work gain the most from deeper thinking." />
   <meta property="og:url" content="https://houstoncode.ai/docs/how-hard-the-model-thinks" />
   <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
   <meta property="og:image:width" content="1200" />
@@ -21,7 +21,7 @@
   <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="How hard the model thinks (/reasoning) | Houston docs" />
-  <meta name="twitter:description" content="/reasoning shows the current thinking effort; /reasoning high (or off, low, medium, xhigh) sets it." />
+  <meta name="twitter:description" content="Default: high, since coding and long multi-step work gain the most from deeper thinking." />
   <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
 
   <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
@@ -33,10 +33,10 @@
   "@context": "https://schema.org",
   "@type": "TechArticle",
   "headline": "How hard the model thinks (/reasoning)",
-  "description": "/reasoning shows the current thinking effort; /reasoning high (or off, low, medium, xhigh) sets it.",
+  "description": "Default: high, since coding and long multi-step work gain the most from deeper thinking.",
   "url": "https://houstoncode.ai/docs/how-hard-the-model-thinks",
   "inLanguage": "en",
-  "version": "v0.9.0",
+  "version": "v0.10.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -87,14 +87,26 @@
         <a class="docs-crumb" href="/docs/">Houston docs</a>
         <h1>How hard the model thinks (/reasoning)</h1>
         <div class="prose">
-<p><code>/reasoning</code> shows the current thinking effort; <code>/reasoning high</code> (or <code>off</code>, <code>low</code>, <code>medium</code>, <code>xhigh</code>) sets it. It applies to every model that supports reasoning, and Houston says so plainly when the model you are on does not, since a setting that silently does nothing looks like a bug rather than a fact about the model.</p>
-<p>It starts at <code>high</code>, since coding and long multi-step work gain the most from deeper thinking. More thinking costs more tokens and takes longer per step, so turn it down (<code>/reasoning medium</code>, <code>low</code>, or <code>off</code>) for quick questions or to save money. The desktop app has the same setting in the reasoning menu next to the model picker.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Command</th><th>Does</th></tr></thead>
+<tbody>
+<tr><td><code>/reasoning</code></td><td>shows the current chat's thinking effort</td></tr>
+<tr><td><code>/reasoning high</code> (or <code>off</code>, <code>low</code>, <code>medium</code>, <code>xhigh</code>)</td><td>sets it for this chat</td></tr>
+<tr><td><code>/reasoning high --default</code></td><td>also makes it the default for new chats</td></tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>Default: <code>high</code></strong>, since coding and long multi-step work gain the most from deeper thinking.</li>
+<li><strong>Turn it down</strong> (<code>medium</code>, <code>low</code>, or <code>off</code>) for quick questions or to save money. More thinking costs more tokens and takes longer per step.</li>
+<li><strong>Every reasoning model.</strong> It applies to every model that supports reasoning. When the model you're on doesn't, Houston says so plainly, since a setting that silently does nothing looks like a bug.</li>
+<li><strong>Desktop app:</strong> the same setting is in the reasoning menu next to the model picker. Changing it while the agent works applies from its next step.</li>
+</ul>
         </div>
         <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/how-long-a-turn-runs"><span>Previous</span>How long a turn runs</a><a class="docs-next" href="/docs/being-told-when-it-needs-you"><span>Next</span>Being told when it needs you</a></nav>
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.9.0</p>
+        <p class="docs-version">For v0.10.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -121,8 +133,10 @@
             <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
             <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
             <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
             <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
             <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
         </ul>
         <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
         <ul aria-labelledby="nav-permissions-and-safety">
@@ -152,6 +166,7 @@
             <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
             <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
             <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
             <li><a href="/docs/help-menu">Help menu</a></li>
             <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
             <li><a href="/docs/license-and-legal">License and legal</a></li>
