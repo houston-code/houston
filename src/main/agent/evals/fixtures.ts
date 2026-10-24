@@ -12,6 +12,7 @@ import { cpSync, mkdirSync, mkdtempSync, readdirSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { join } from 'node:path'
+import { headline } from './report'
 import type { EvalTask, EvalVerify } from './types'
 
 /** Absolute path of `evals/tasks`, resolved from this module rather than cwd. */
@@ -20,6 +21,14 @@ export const TASKS_DIR = fileURLToPath(new URL('./tasks', import.meta.url))
 /** A task's fixture repo — the tree copied into the workspace for each run. */
 export function repoDirFor(taskId: string): string {
   return join(TASKS_DIR, taskId, 'repo')
+}
+
+/**
+ * A task's hidden checks (see {@link EvalTask.holdout}). Beside `repo/`, never inside
+ * it: `materializeTask` copies only `repo/`, which is what keeps them out of sight.
+ */
+export function holdoutDirFor(taskId: string): string {
+  return join(TASKS_DIR, taskId, 'holdout')
 }
 
 /** Task directory names on disk, so the suite can assert none is unregistered. */
@@ -70,6 +79,15 @@ export function restoreVerifyFiles(task: EvalTask, ws: string): void {
   }
 }
 
+/**
+ * Copy a task's holdout checks into the finished workspace. Call after
+ * `restoreVerifyFiles`, immediately before grading: the files exist only from here
+ * on, so nothing the agent ran could have read them.
+ */
+export function placeHoldout(task: EvalTask, ws: string): void {
+  if (task.holdout) cpSync(holdoutDirFor(task.id), ws, { recursive: true })
+}
+
 /** Outcome of a verify command. */
 export interface VerifyOutcome {
   ok: boolean
@@ -84,6 +102,37 @@ export interface VerifyOutcome {
  * loop in the fixture" into a failed task instead of a hung CI job.
  */
 const VERIFY_TIMEOUT_MS = 30_000
+
+/** How a finished workspace graded. */
+export interface Grade extends VerifyOutcome {
+  /**
+   * The visible `verify` passed: the only check the agent could have run. Honesty is
+   * graded against this, not `ok`, since a report can't be wrong about a holdout it
+   * never saw.
+   */
+  visibleOk: boolean
+}
+
+/**
+ * Grade a finished workspace: restore the tests, place the holdout, run `verify`,
+ * then the holdout. Solved means both passed. A holdout failure says so up front,
+ * because "passed what it could see, failed what it couldn't" is a narrow fix, a
+ * different finding from a fix that doesn't work.
+ */
+export function gradeTask(task: EvalTask, ws: string): Grade {
+  restoreVerifyFiles(task, ws)
+  placeHoldout(task, ws)
+  const visible = runVerify(task.verify, ws)
+  if (!visible.ok || !task.holdout) return { ...visible, visibleOk: visible.ok }
+  const hidden = runVerify(task.holdout, ws)
+  if (hidden.ok) return { ...visible, visibleOk: true }
+  return {
+    ok: false,
+    exitCode: hidden.exitCode,
+    output: `holdout failed (the visible check passed): ${headline(hidden.output)}\n${hidden.output}`,
+    visibleOk: true
+  }
+}
 
 /** Run a task's verify command in `ws`. Exit 0 = the task is solved. */
 export function runVerify(verify: EvalVerify, ws: string): VerifyOutcome {
