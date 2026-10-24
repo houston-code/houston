@@ -248,15 +248,37 @@ function coerceStringToObject(value: string): Record<string, unknown> | undefine
 }
 
 /**
+ * Read a string the model passed where a NUMBER (or integer) was declared, or undefined.
+ * Only a plain decimal literal counts ("42", "-3", "2.5", "1e3"); anything else ("",
+ * "0x10", "5 lines", "Infinity") is left for validation to report. An integer must be
+ * written as one, so "2.5" for an integer stays an error.
+ */
+function coerceStringToNumber(value: string, type: 'number' | 'integer'): number | undefined {
+  const trimmed = value.trim()
+  const literal = type === 'integer' ? /^-?\d+$/ : /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?$/
+  if (!literal.test(trimmed)) return undefined
+  const n = Number(trimmed)
+  return Number.isFinite(n) ? n : undefined
+}
+
+/** Read "true" or "false" (any case) passed where a BOOLEAN was declared, or undefined. */
+function coerceStringToBoolean(value: string): boolean | undefined {
+  const t = value.trim().toLowerCase()
+  return t === 'true' ? true : t === 'false' ? false : undefined
+}
+
+/**
  * Best-effort coercion of a tool call's arguments toward its declared schema, run
  * BEFORE {@link validateToolArgs}, so a common model formatting slip — most often a
  * stringified array/object, or a single value where an array is declared — is fixed
  * rather than bounced back as a validation error the model then can't recover from
  * (it was the reason `present_plan` refused a `files: "…"` string and fell back to
- * prose). Only ever WIDENS a string into the declared array/object; it never narrows,
+ * prose). A quoted number or boolean ("run_id": "123", "log_failed": "true", common
+ * from smaller models) is read as the value it spells, since validation would
+ * otherwise refuse it before the tool's own lenient extractor ever saw it. Only a
+ * string that unambiguously spells the declared type is changed; it never narrows,
  * drops, or reshapes a value that already matches, and returns the same object when
- * nothing changed. Deliberately narrow: number/boolean strings are left to the tools'
- * own lenient extractors and to validation.
+ * nothing changed.
  */
 export function coerceToolArgs(
   args: Record<string, unknown>,
@@ -279,6 +301,8 @@ export function coerceToolArgs(
     let coerced: unknown
     if (type === 'array') coerced = coerceStringToArray(v)
     else if (type === 'object') coerced = coerceStringToObject(v)
+    else if (type === 'number' || type === 'integer') coerced = coerceStringToNumber(v, type)
+    else if (type === 'boolean') coerced = coerceStringToBoolean(v)
     else continue
     if (coerced === undefined) continue // couldn't coerce — let validation report it
     if (!out) out = { ...args }
