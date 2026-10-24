@@ -75,7 +75,11 @@ export interface ReceiptCheck {
   ok: boolean | null
   /** Set when `ok` is null. */
   unknown?: UnknownReason
-  /** The process exit code; null when it was killed. Absent for a background start. */
+  /**
+   * The exit code that speaks for the check: the process's, or the one an `echo $?`
+   * right after the checked part printed. Null when it was killed. Absent for a
+   * background start.
+   */
   exitCode?: number | null
   timedOut?: boolean
   counts?: TestCounts
