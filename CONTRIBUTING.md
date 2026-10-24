@@ -228,8 +228,9 @@ the two runs and applies a sign test to the tasks that moved. With nine tasks on
 near-sweep counts as significant. That is the real resolving power of a small suite,
 so "no significant difference" is an honest answer rather than a bug. Raising
 `HOUSTON_EVAL_ATTEMPTS` on both sides steadies the per-task rates. A cheap model such
-as `claude-haiku-5-5` makes this close to free, and it leaves more room to see a
-change than a model that already solves every task.
+as `claude-haiku-5-5` makes this close to free (a full three-attempt run cost about six
+cents when its baseline was recorded). It solves every current task too, though, so a
+comparison can only show a change once the suite has tasks a model sometimes fails.
 
 #### Writing a task
 
