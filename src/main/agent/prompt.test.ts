@@ -299,6 +299,44 @@ describe('buildSystemPrompt', () => {
     expect(promptFor(toolNames({ askUser: false }))).toContain('under full auto it is on, limited to the allowlist below')
   })
 
+  it('names no built-in tool the run does not offer', () => {
+    const all = toolNames({ lsp: true, memory: true, memoryWrite: true })
+    // Scopes a headless --allowed-tools / --disallowed-tools run can produce.
+    const scopes = [
+      ['read_file', 'glob', 'search_files', 'run_shell'],
+      ['read_file', 'list_dir', 'glob', 'search_files'],
+      ['read_file', 'edit_file', 'run_shell'],
+      all.filter((n) => !['run_shell', 'read_shell_output', 'kill_shell'].includes(n)),
+      all.filter((n) => !n.startsWith('gh_') && !['web_search', 'web_fetch', 'skill', 'todo_write', 'apply_patch'].includes(n))
+    ]
+    for (const scope of scopes) {
+      for (const [providerId, model] of [['anthropic', 'claude-sonnet-5'], ['openai', 'gpt-5.5']]) {
+        const p = buildSystemPrompt('/tmp/x', undefined, undefined, false, undefined, undefined, providerId, model, scope)
+        for (const name of all.filter((n) => !scope.includes(n))) {
+          expect(p, `${name} named with only ${scope.join(', ')}`).not.toMatch(new RegExp(`\\b${name}\\b`))
+        }
+        if (!scope.some((n) => n.startsWith('gh_'))) expect(p).not.toContain('gh_*')
+      }
+    }
+    // With no shell there is nothing to say about it.
+    expect(promptFor(scopes[1])).not.toContain('Shell commands')
+  })
+
+  it('names no tool a scoped Plan-mode run leaves out, present_plan included', () => {
+    const all = toolNames({ planMode: true })
+    for (const scope of [['read_file', 'glob'], ['read_file', 'search_files', 'present_plan'], ['run_shell']]) {
+      const p = promptFor(scope, true)
+      expect(p).toContain('PLAN MODE IS ON.')
+      for (const name of all.filter((n) => !scope.includes(n))) {
+        expect(p, `${name} named with only ${scope.join(', ')}`).not.toMatch(new RegExp(`\\b${name}\\b`))
+      }
+    }
+    // Without present_plan the plan goes in the final message instead.
+    expect(promptFor(['read_file', 'glob'], true)).toContain('Investigate with read_file and glob, and list any open questions')
+    expect(promptFor(['read_file', 'glob'], true)).toContain('give the full plan as markdown in your final message')
+    expect(promptFor(['run_shell'], true)).toContain('Houston refuses these tools: run_shell, and any MCP tool. List any open questions')
+  })
+
   it('lists the schedule tools by default but omits them when no scheduler is wired', () => {
     expect(buildSystemPrompt('/tmp/x')).toContain('schedule_run')
     const noScheduler = promptFor(toolNames({ scheduler: false }))

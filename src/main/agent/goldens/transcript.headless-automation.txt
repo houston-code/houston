@@ -4,7 +4,7 @@
 model: claude-sonnet-5
 reasoning: effort=off capable=- summary=- verbosity=-
 explicitCacheControl: false
-system: sha256:e2c0bfc4cd1c (14718 chars)
+system: sha256:0e1748efdccf (12404 chars)
 tools (4): read_file, glob, search_files, run_shell
 messages (1):
 1. user: "Review the branch"

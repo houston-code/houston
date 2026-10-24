@@ -1533,7 +1533,7 @@ export async function startRun(
       rules.text,
       planMode,
       capabilities,
-      formatPromptSnapshot(promptSnapshot, { memory: memoryOn }),
+      formatPromptSnapshot(promptSnapshot, { memory: memoryOn, tools: builtinNames }),
       req.providerId,
       req.model,
       builtinNames,
