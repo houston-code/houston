@@ -49,6 +49,12 @@ the maintainer address. Turn on 2FA everywhere.
 4. In the same settings, set publishing access to require 2FA and disallow tokens.
 5. In the GitHub repo, add the Actions variable `NPM_PUBLISH` = `true`.
 
+Before publishing, `scripts/check-npm-trusted-publishing.mjs` performs the trusted-publishing
+token exchange itself. If npm rejects it, the job fails with the registry's reason and the
+repository, workflow and environment the Trusted Publisher entry has to name. (Without this
+check npm reports only `ENEEDAUTH`.) Fix the entry on npmjs.com, then re-run the failed
+`distribute` job: it skips any channel already at the release's version.
+
 ### Homebrew tap
 
 1. Create the public repo `houston-code/homebrew-tap` (the `homebrew-` prefix is what

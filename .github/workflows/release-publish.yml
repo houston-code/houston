@@ -662,6 +662,7 @@ jobs:
           fi
           echo "sha256=$(sha256sum dl/houston-cli.cjs | awk '{print $1}')" >> "$GITHUB_OUTPUT"
       - name: Render the Homebrew formula and AUR package
+        id: packaging
         env:
           SHA256: ${{ steps.cli.outputs.sha256 }}
         run: node scripts/render-packaging.mjs --version "$VERSION" --sha256 "$SHA256" --out packaging-out
@@ -680,6 +681,8 @@ jobs:
           # installed globally.
           NPM_VERSION: '11.20.0'
           NPM_SHA256: d1a92f40e6c407b84c3a00c3cf978a10b24fd42f153c527e2016cef7bb34a483
+          # Named in the error when the npm Trusted Publisher settings don't match this job.
+          PUBLISH_ENVIRONMENT: release
         run: |
           set -euo pipefail
           if npm view "@houston-code/cli@$VERSION" version >/dev/null 2>&1; then
@@ -700,10 +703,16 @@ jobs:
           fi
           node scripts/stage-npm-cli.mjs --cli dl/houston-cli.cjs --out npm-cli \
             --manifest "$RUNNER_TEMP/release-package.json"
+          # npm publish hides a failed trusted-publishing exchange behind a bare ENEEDAUTH, so
+          # run the exchange first and fail with the registry's reason.
+          node scripts/check-npm-trusted-publishing.mjs
           cd npm-cli
           node "$RUNNER_TEMP/package/bin/npm-cli.js" publish --provenance --access public --registry https://registry.npmjs.org
+      # Each channel publishes on its own: a failed npm publish still fails the job, but it
+      # no longer leaves the tap and the AUR on the previous version. They still need the
+      # verified CLI and the rendered packages, so they run only once those succeeded.
       - name: Update the Homebrew tap
-        if: ${{ vars.HOMEBREW_TAP == 'true' }}
+        if: ${{ !cancelled() && steps.packaging.outcome == 'success' && vars.HOMEBREW_TAP == 'true' }}
         env:
           TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
@@ -720,7 +729,7 @@ jobs:
               commit -qm "houston $VERSION"
           git push --quiet origin HEAD
       - name: Update the AUR package
-        if: ${{ vars.AUR_PUBLISH == 'true' }}
+        if: ${{ !cancelled() && steps.packaging.outcome == 'success' && vars.AUR_PUBLISH == 'true' }}
         env:
           AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
           # The aur.archlinux.org line for known_hosts, checked against the fingerprints
