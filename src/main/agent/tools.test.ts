@@ -122,6 +122,8 @@ describe('tool registry', () => {
       'lsp_references',
       'lsp_rename',
       'lsp_workspace_symbols',
+      'memory_delete',
+      'memory_save',
       'multi_edit',
       'notebook_edit',
       'pr_sweep',

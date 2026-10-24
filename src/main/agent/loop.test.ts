@@ -5663,6 +5663,87 @@ describe('loop control — per-run overrides (headless flags)', () => {
     expect(r.events.some((e) => e.type === 'verification')).toBe(true)
   })
 
+  describe('memory writes', () => {
+    let memRoot: string
+    let before: string | undefined
+    beforeEach(() => {
+      memRoot = mkdtempSync(join(tmpdir(), 'houston-loop-memwrite-'))
+      before = process.env.HOUSTON_MEMORY_DIR
+      process.env.HOUSTON_MEMORY_DIR = memRoot
+    })
+    afterEach(() => {
+      process.env.HOUSTON_MEMORY_DIR = before
+      rmSync(memRoot, { recursive: true, force: true })
+    })
+
+    const saveArgs = {
+      scope: 'repo',
+      type: 'project',
+      name: 'tests-need-rg',
+      description: 'Set HOUSTON_RG',
+      body: 'Body.'
+    }
+    function savingProvider(): Provider {
+      let n = 0
+      return {
+        async *streamChat() {
+          if (n++ === 0) {
+            yield { type: 'tool_call', call: { id: 'm1', name: 'memory_save', arguments: saveArgs } }
+            yield { type: 'done', stopReason: 'tool_use' }
+            return
+          }
+          yield { type: 'text', text: 'done' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+    }
+    const saved = () => memoryStore({ root: memRoot, workspace: ws }).list('repo')
+
+    it('saves without asking in full auto, and a save does not arm the verification gate', async () => {
+      const r = await withSettings({ verifyOnStop: true, verifyCommand: 'make check' }, () =>
+        run({ provider: savingProvider(), policy: 'full-auto' })
+      )
+      expect(types(r)).not.toContain('tool_approval')
+      expect(saved().map((m) => m.name)).toEqual(['tests-need-rg'])
+      expect(h.verifyRuns).toHaveLength(0)
+    })
+
+    it('asks before saving once the conversation has fetched from the web, even in full auto', async () => {
+      const history: ChatMessage[] = [
+        { role: 'user', content: 'read the page' },
+        { role: 'assistant', content: '', toolCalls: [{ id: 'f1', name: 'web_fetch', arguments: { url: 'https://example.com' } }] },
+        { role: 'tool', content: 'page text', toolCallId: 'f1', toolName: 'web_fetch' },
+        { role: 'assistant', content: 'read it' },
+        { role: 'user', content: 'now remember it' }
+      ]
+      const r = await run({
+        provider: savingProvider(),
+        policy: 'full-auto',
+        messages: history,
+        onApproval: (_id, decide) => decide('deny')
+      })
+      expect(types(r)).toContain('tool_approval')
+      expect(saved()).toEqual([])
+    })
+
+    it('offers no memory writes to an unattended run', async () => {
+      const requests: ChatRequest[] = []
+      const provider: Provider = {
+        async *streamChat(req) {
+          requests.push(req)
+          yield { type: 'text', text: 'ok' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      await run({ provider })
+      expect(requests[0].system).toContain('memory_save')
+      expect(JSON.stringify(requests[0].tools)).toContain('memory_save') // in the find_tools catalog
+      await run({ provider, unattended: true })
+      expect(requests[1].system).not.toContain('memory_save')
+      expect(JSON.stringify(requests[1].tools)).not.toContain('memory_save')
+    })
+  })
+
   it('withholds ask_user from an unattended run and tells the model no user is available', async () => {
     const requests: ChatRequest[] = []
     const provider: Provider = {

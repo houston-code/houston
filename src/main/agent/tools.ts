@@ -121,7 +121,13 @@ import type { RenderMockup } from './mockupRender'
 import { LSP_TOOL_NAMES, makeLspTools, type LspToolAccess } from './lsp/tools'
 import { objectSchema, rootsOf, str } from './toolHelpers'
 import type { MemoryStore } from './memoryStore'
-import { RECALL_MEMORY_NAME, recallMemoryTool } from './memoryTools'
+import {
+  MEMORY_WRITE_TOOL_NAMES,
+  RECALL_MEMORY_NAME,
+  memoryDeleteTool,
+  memorySaveTool,
+  recallMemoryTool
+} from './memoryTools'
 
 export type ToolKind = 'read' | 'write' | 'shell' | 'network' | 'mcp'
 
@@ -166,8 +172,10 @@ export interface ToolContext {
    * a network-blocked failure points at `--allow-shell-network` instead.
    */
   unattended?: boolean
-  /** The cross-session memory store (injected by the loop when memory is on); backs recall_memory. */
+  /** The cross-session memory store (injected by the loop when memory is on); backs the memory tools. */
   memory?: MemoryStore
+  /** Memory saves and deletes made this run (injected by the loop), for the per-run cap. */
+  memoryWrites?: { used: number }
   /** Read a secret (e.g. the web-search key) from the main-process secrets store. */
   getSecret?: (id: string) => string | null
   /**
@@ -5148,6 +5156,8 @@ export const TOOLS: ToolDef[] = [
   presentPlan,
   recallHistory,
   recallMemoryTool,
+  memorySaveTool,
+  memoryDeleteTool,
   dispatchAgent,
   dispatchWritableAgent,
   spawnSessionTool,
@@ -5223,6 +5233,12 @@ export interface BuiltinToolsetOptions {
    * so a run with nothing remembered pays nothing for it.
    */
   memory?: boolean
+  /**
+   * Memory is on and someone is attending the run; backs memory_save and memory_delete.
+   * Absent counts as false. Unattended runs never write memories: nobody could see what
+   * was saved, or approve a save once untrusted content is in play.
+   */
+  memoryWrite?: boolean
 }
 
 /**
@@ -5244,6 +5260,7 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
     if (name === ASK_USER_NAME) return opts.askUser !== false
     if ((LSP_TOOL_NAMES as readonly string[]).includes(name)) return opts.lsp === true
     if (name === RECALL_MEMORY_NAME) return opts.memory === true
+    if (MEMORY_WRITE_TOOL_NAMES.includes(name)) return opts.memoryWrite === true
     return true
   })
 }

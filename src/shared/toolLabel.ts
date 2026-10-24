@@ -192,6 +192,12 @@ export function describeToolCall(
       return { verb: 'Skill', target: str(a.name) ?? '', mono: false }
     case 'recall_history':
       return { verb: 'Recall', target: str(a.query) ?? '', mono: false }
+    case 'recall_memory':
+      return { verb: 'Recall memory', target: str(a.id) ?? str(a.query) ?? '', mono: false }
+    case 'memory_save':
+      return { verb: str(a.id) ? 'Update memory' : 'Remember', target: str(a.name) ?? '', mono: false }
+    case 'memory_delete':
+      return { verb: 'Forget memory', target: str(a.id) ?? '', mono: false }
     default: {
       // An MCP tool's wire name is mcp__<server>__<tool>; show it as "<tool>" from
       // "<server>" rather than the mangled identifier.

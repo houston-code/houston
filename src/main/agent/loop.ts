@@ -208,6 +208,7 @@ import { gitContext } from './git'
 import { formatPromptSnapshot, localDateStamp, resolvePromptSnapshot } from './promptSnapshot'
 import { memoryStore, type MemoryStore } from './memoryStore'
 import { buildMemoryIndex } from './memoryIndex'
+import { MEMORY_SAVE_NAME, MEMORY_WRITE_TOOL_NAMES, memoryTaintSource } from './memoryTools'
 import { gitWritableRoots } from './gitDirs'
 import { GitGuard } from './gitGuard'
 import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
@@ -1450,7 +1451,9 @@ export async function startRun(
       askUser: req.unattended !== true,
       // The lsp_* tools, only when a server is installed for a language the project uses.
       lsp: lspManager.availableFor([workspace]).length > 0,
-      memory: memoryOffered
+      memory: memoryOffered,
+      // Saves and deletes only with someone attending (see BuiltinToolsetOptions.memoryWrite).
+      memoryWrite: memoryOn && req.unattended !== true
     })
       // The run's tool scope (headless --allowed-tools/--disallowed-tools) leaves out
       // what it refuses outright, so the prompt never names a tool the model can't use
@@ -2779,7 +2782,10 @@ export async function startRun(
       // reorder). The ChatMessage objects are shared by reference, so callers must treat
       // them as read-only; recall_history only reads, so no deep clone is warranted.
       getHistory: () => [...messages],
-      ...(memoryOffered ? { memory } : {}),
+      // The tools' store refuses credentials this install holds, not just token formats.
+      ...(memory && (memoryOffered || builtinNames.includes(MEMORY_SAVE_NAME))
+        ? { memory: memoryStore({ workspace, knownSecrets }), memoryWrites: { used: 0 } }
+        : {}),
       // Back the `skill` tool: resolve a skill name to its full instructions (or a
       // note listing what's available) from the skills loaded for this run.
       useSkill: (name) => resolveSkillInstructions(workspace, skills, name),
@@ -3911,7 +3917,9 @@ export async function startRun(
         }
         const kind = lookupTool(r.call.name)?.kind
         if (!r.ok) iterErrors.push(r.output)
-        if (r.ok && kind === 'write') filesModified = true
+        // A memory save is a write to Houston's own store, not the project: it doesn't
+        // arm the verification gate.
+        if (r.ok && kind === 'write' && !MEMORY_WRITE_TOOL_NAMES.includes(r.call.name)) filesModified = true
         if (r.ok && PROGRESS_TOOLS.has(r.call.name)) writeIterations.add(iter)
         if (r.ok && isDiscoveryTool(r.call.name, kind)) {
           const sig = callSignature(r.call)
@@ -4277,7 +4285,10 @@ export async function startRun(
               shellDiscardsWork: discardsWork,
               sensitiveRead,
               sensitiveWrite,
-              networkRead: tool.kind === 'network' && fullAutoNetworkRead(call.name, execArgs, settings.webReads)
+              networkRead: tool.kind === 'network' && fullAutoNetworkRead(call.name, execArgs, settings.webReads),
+              memoryTainted:
+                MEMORY_WRITE_TOOL_NAMES.includes(call.name) &&
+                memoryTaintSource(messages, (n) => lookupTool(n)?.kind) !== null
             })
             const networkScope = netDest !== null ? describeNetworkDestination(netDest) : undefined
 

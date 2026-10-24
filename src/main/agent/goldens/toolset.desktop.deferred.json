@@ -404,6 +404,83 @@
     }
   },
   {
+    "name": "memory_save",
+    "description": "Save a fact for later sessions, or update one (pass its `id`). Later conversations see a one-line index of saved memories and can read them with recall_memory. Saving under a name that already exists in the scope updates that memory. Memories are refused when they contain a credential.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "repo",
+            "global"
+          ],
+          "description": "`repo` for this repository (every checkout of it), `global` for facts about the user that hold in every project."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "feedback",
+            "user",
+            "project",
+            "reference"
+          ],
+          "description": "`feedback`: a correction or preference about how you should work. `user`: who the user is. `project`: a fact about this project the code does not show. `reference`: where to find something outside the repo."
+        },
+        "name": {
+          "type": "string",
+          "description": "A short kebab-case handle, unique in the scope (at most 64 characters), e.g. tests-need-houston-rg."
+        },
+        "description": {
+          "type": "string",
+          "description": "One line (at most 200 characters) saying what the memory is, so a later session can tell from the index whether to read it."
+        },
+        "body": {
+          "type": "string",
+          "description": "The memory itself (at most 2000 characters). For feedback and project facts, add why it matters and how to apply it."
+        },
+        "id": {
+          "type": "string",
+          "description": "The id of a memory to update, from the index or an earlier save."
+        }
+      },
+      "required": [
+        "scope",
+        "type",
+        "name",
+        "description",
+        "body"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "memory_delete",
+    "description": "Delete a saved memory that turned out to be wrong or no longer applies. The user can restore it for 30 days.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": [
+            "repo",
+            "global"
+          ],
+          "description": "The scope the memory is in."
+        },
+        "id": {
+          "type": "string",
+          "description": "The memory id."
+        }
+      },
+      "required": [
+        "scope",
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "dispatch_writable_agent",
     "description": "Delegate a self-contained task to a subagent that can edit files and run shell commands in its own fresh context, then returns a written report. Edits and commands are confined to the project, and its shell commands have no network; it can also fetch public URLs and search the web, with each network request asking the user for approval first. Approving this call grants the subagent write access for the whole delegated task (edits and sandboxed commands do not prompt again per action), so scope the task clearly; on a host without an OS sandbox (e.g. Windows), each shell command it runs also asks the user for approval first. Use it to hand off an implementation, refactor, or fix you want done end to end (e.g. \"add pagination to the users endpoint and update its tests\"). For read-only investigation, use dispatch_agent instead.",
     "parameters": {

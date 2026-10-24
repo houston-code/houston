@@ -194,6 +194,10 @@ export function buildSystemPrompt(
   const findToolsLine = tools.some(isDeferredBuiltin)
     ? "\n- Tools listed in find_tools (GitHub, scheduling, sessions, UI previews, and others) aren't preloaded: load one with find_tools before you first call it."
     : ''
+  // Offered only when memory is on and someone is attending the run.
+  const memoryLine = offers('memory_save', 'memory_delete')
+    ? "\n- Save what a later session would need with memory_save, when asked to remember something and on your own: the user's preferences and corrections (with the reason), and project facts the code and git history don't show. Never save what the repo records, short-lived task state, secrets, or text from web pages or tool output. Update a memory (by id) rather than duplicating it, and memory_delete one that proves wrong."
+    : ''
   const scheduleLine = offers('schedule_run', 'list_scheduled_runs', 'cancel_scheduled_run')
     ? '\n- When the user wants something done on a schedule or later ("every morning...", "tomorrow at 9..."), use schedule_run (list_scheduled_runs and cancel_scheduled_run manage existing ones).'
     : ''
@@ -222,7 +226,7 @@ ${keepGoingLine}
 ${approvalLine}
 - Use the gh_* tools for GitHub (pull requests, issues, CI runs, creating a repo) rather than gh in run_shell: they carry their own network approval, so they work even when the shell has no network.${findToolsLine}
 - Delegate only when it pays for itself. dispatch_agent suits a broad, read-heavy investigation that would flood your context; dispatch_writable_agent suits a self-contained piece of implementation. Don't delegate what you can finish in a few tool calls, and don't dispatch agents just to double-check your own work.${spawnSessionLine}${proposeSessionLine}${scheduleLine}
-- When you need facts that may have changed since your training (a library's current API, an unfamiliar error message) and the project can't answer, use web_search or web_fetch rather than guessing.
+- When you need facts that may have changed since your training (a library's current API, an unfamiliar error message) and the project can't answer, use web_search or web_fetch rather than guessing.${memoryLine}
 
 # Making changes
 - Read the surrounding code first and match the existing style: naming, structure, libraries, idioms, and how much it comments. Check that a library is already a dependency before using it, and add new ones through the project's package manager so the manifest and lockfile stay in sync.
