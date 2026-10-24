@@ -35,27 +35,30 @@ describe("hand-written pages share the site chrome", () => {
   }
 });
 
+// One test per page: parsing every page in a single test ran past vitest's 5s limit on
+// the macOS Intel runner.
 describe("phone menu markup", () => {
-  it("covers every page", () => {
+  it("finds every page", () => {
     expect(ALL_PAGES.length).toBeGreaterThan(40);
-    for (const file of ALL_PAGES) {
-      const doc = new JSDOM(read(file)).window.document;
-      const button = doc.getElementById("nav-menu-button");
-      expect(button, file).not.toBeNull();
-      // Hidden until app.js wires it up, so a page without JavaScript shows no dead button.
-      expect(button.hidden, file).toBe(true);
-      expect(button.getAttribute("aria-expanded"), file).toBe("false");
-      const menu = doc.getElementById(button.getAttribute("aria-controls"));
-      expect(menu?.classList.contains("nav-menu"), file).toBe(true);
-      expect([...menu.querySelectorAll(".nav-link")].map((a) => a.textContent), file).toEqual([
-        "Security",
-        "Features",
-        "Docs",
-        "FAQ",
-        "GitHub",
-      ]);
-      expect(menu.querySelector("#theme-toggle .theme-toggle-label")?.textContent, file).toBe("Dark theme");
-      expect(doc.querySelectorAll("script[src='/assets/app.js']").length, file).toBe(1);
-    }
+  });
+
+  it.each(ALL_PAGES)("%s has the phone menu", (file) => {
+    const doc = new JSDOM(read(file)).window.document;
+    const button = doc.getElementById("nav-menu-button");
+    expect(button, file).not.toBeNull();
+    // Hidden until app.js wires it up, so a page without JavaScript shows no dead button.
+    expect(button.hidden, file).toBe(true);
+    expect(button.getAttribute("aria-expanded"), file).toBe("false");
+    const menu = doc.getElementById(button.getAttribute("aria-controls"));
+    expect(menu?.classList.contains("nav-menu"), file).toBe(true);
+    expect([...menu.querySelectorAll(".nav-link")].map((a) => a.textContent), file).toEqual([
+      "Security",
+      "Features",
+      "Docs",
+      "FAQ",
+      "GitHub",
+    ]);
+    expect(menu.querySelector("#theme-toggle .theme-toggle-label")?.textContent, file).toBe("Dark theme");
+    expect(doc.querySelectorAll("script[src='/assets/app.js']").length, file).toBe(1);
   });
 });
