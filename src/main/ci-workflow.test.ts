@@ -185,7 +185,8 @@ describe('CI gates merge on the whole matrix', () => {
     expect(job('plan')).toContain('action-e2e: ${{ steps.plan.outputs.action-e2e }}')
   })
 
-  it('requires the action test when planned, and a skip only when it was not', () => {
+  // `build` runs on Linux; Windows has no bash at /usr/bin to run its script with.
+  it.skipIf(process.platform === 'win32')('requires the action test when planned, and a skip only when it was not', () => {
     // The `build` step's script, run with each combination of plan and result.
     const build = job('build')
     const body = build.slice(build.indexOf('        run: |\n') + '        run: |\n'.length).split('\n')
