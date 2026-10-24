@@ -564,7 +564,8 @@ receipt.
   runners (pytest, vitest, jest, mocha, node:test, cargo, unittest) it also shows the
   passed and failed counts from the runner's own summary. When the agent prints a
   test's status with `echo` (`npm test; echo "exit=$?"`), the exit code shown is the
-  one that echo printed for the test, not the echo's own.
+  one that echo printed for the test, not the echo's own, and a later part of the
+  command that times out doesn't count against the test.
 - **Other commands** (`ls`, `git status`) are only counted. Click the line to expand
   it.
 - **Browser checks.** A page the agent looked at with `view_localhost` is listed with

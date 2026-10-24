@@ -314,6 +314,25 @@ describe('EvidenceLedger', () => {
       expect(run('node test.mjs; echo "exit=$?"', '... 2048 bytes truncated ...')).toMatchObject({ ok: null })
     })
 
+    // A live run's test passed and echoed so, then a whole-disk search after it ran
+    // out the clock. The timeout is the search's, not the test's.
+    it('keeps a test that echoed its status apart from a later part that timed out', () => {
+      const l = new EvidenceLedger()
+      const cmd = 'node test.mjs; echo "exit=$?"; grep -rl slug-suite-helpers / --include=package.json'
+      l.recordShell(shell(cmd, { output: 'ok\nexit=0', exitCode: null, timedOut: true }))
+      l.recordShell(shell('node test.mjs; echo "exit=$?"; find / -name x', { output: 'exit=1', exitCode: null }))
+      const [passed, failed] = l.receipt()!.checks
+      expect(passed).toEqual({ kind: 'test', label: cmd, ok: true, exitCode: 0, runs: 1 })
+      expect(failed).toMatchObject({ ok: false, exitCode: 1 })
+      expect(failed).not.toHaveProperty('timedOut')
+    })
+
+    it('still counts the timeout against a test whose echo never printed', () => {
+      const l = new EvidenceLedger()
+      l.recordShell(shell('node test.mjs; echo "exit=$?"', { output: 'running...', exitCode: null, timedOut: true }))
+      expect(l.receipt()!.checks[0]).toMatchObject({ ok: false, exitCode: null, timedOut: true })
+    })
+
     it('still trusts the runner summary first', () => {
       expect(run('pytest; echo "exit=$?"', '1 failed, 3 passed in 0.1s\nexit=0')).toMatchObject({ ok: false })
     })
