@@ -101,6 +101,16 @@ describe('formatPromptSnapshot', () => {
     )
   })
 
+  it('names only tools the run offers', () => {
+    const snap = { date: '2026-10-15', gitStatus: 'Git: on branch "main".', memory: 'Memory: notes\n- m_1' }
+    const shellOnly = formatPromptSnapshot(snap, { tools: ['read_file', 'run_shell'] })
+    expect(shellOnly).not.toContain('Memory: notes') // the index points at recall_memory
+    expect(shellOnly).toContain('not updated as files change; run `git status` for the current state):')
+    const readOnly = formatPromptSnapshot(snap, { tools: ['read_file'] })
+    expect(readOnly).toContain('(taken earlier in this conversation and not updated as files change):')
+    expect(formatPromptSnapshot(snap, { tools: ['recall_memory', 'git_status'] })).toBe(formatPromptSnapshot(snap))
+  })
+
   it('omits the git section outside a repo', () => {
     expect(formatPromptSnapshot({ date: '2026-10-15', gitStatus: '  ' })).toBe("Today's date: 2026-10-15.")
   })

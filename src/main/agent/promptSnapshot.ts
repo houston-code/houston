@@ -63,16 +63,29 @@ function isPromptSnapshot(v: unknown): v is PromptSnapshot {
 /**
  * Render the snapshot as the system-prompt section. Pure. The memory index is left
  * out when `memory` is false, so turning memory off takes effect on the next run.
+ * `tools` (the built-in tools the run offers; every tool when absent) keeps the
+ * section from naming one the run can't call: the index, which says to read entries
+ * with recall_memory, rides only with that tool, and the pointer to the current git
+ * state names git_status, else the shell, else nothing.
  */
-export function formatPromptSnapshot(snapshot: PromptSnapshot, opts: { memory?: boolean } = {}): string {
+export function formatPromptSnapshot(
+  snapshot: PromptSnapshot,
+  opts: { memory?: boolean; tools?: readonly string[] } = {}
+): string {
+  const offers = (name: string): boolean => !opts.tools || opts.tools.includes(name)
   const sections: string[] = []
-  const memory = opts.memory === false ? '' : (snapshot.memory?.trim() ?? '')
+  const memory = opts.memory === false || !offers('recall_memory') ? '' : (snapshot.memory?.trim() ?? '')
   if (memory) sections.push(memory)
   sections.push(`Today's date: ${snapshot.date}.`)
   const git = snapshot.gitStatus.trim()
   if (git) {
+    const current = offers('git_status')
+      ? '; use git_status for the current state'
+      : offers('run_shell')
+        ? '; run `git status` for the current state'
+        : ''
     sections.push(
-      `Git snapshot (taken earlier in this conversation and not updated as files change; use git_status for the current state):\n${git}`
+      `Git snapshot (taken earlier in this conversation and not updated as files change${current}):\n${git}`
     )
   }
   return sections.join('\n\n')
