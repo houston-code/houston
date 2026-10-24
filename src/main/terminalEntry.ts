@@ -68,6 +68,7 @@ import {
 import type { DoctorFacts } from './tui-doctor'
 import { gatherDoctorFacts } from './doctor'
 import { saveMemory } from './memory'
+import { memoryStore } from './agent/memoryStore'
 import { legacyRulesNoticeApplies } from './globalRules'
 import { takeLegacyRulesTerminalNotice } from './legacyRulesNotice'
 import {
@@ -543,6 +544,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       doctor: async () => probeDoctor(tui.cwd, version, tui.color, latestUpdate),
       runUserShell: (command, onOutput) => runUserShell(tui.cwd, command, onOutput),
       saveMemory: (scope, text) => saveMemory(tui.cwd, scope, text),
+      memoryStore: () => memoryStore({ workspace: tui.cwd }),
       backgroundSessions: () => sessions.backgroundSessions(),
       proposals: {
         list: (conversationId) => {

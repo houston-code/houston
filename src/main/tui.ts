@@ -100,6 +100,8 @@ import {
   type UndoRewindResult
 } from '@shared/rewind'
 import { ComposerBuffer } from './tui-composer'
+import { parseMemoryAction, runMemoryCommand, type MemoryAction, type MemoryCommandState } from './tui-memory'
+import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
@@ -1378,6 +1380,8 @@ export type SlashResult =
   | { kind: 'mcp'; action: SettingsAction }
   /** Show or change this folder's project-config trust (/trust, /trust forget). */
   | { kind: 'trust'; op: 'status' | 'forget' | 'usage' }
+  /** Review saved memories (/memory [show|edit|pin|unpin|forget <n>|undo|on|off|folder]). */
+  | { kind: 'memory'; action: MemoryAction }
   /** Set or replace a provider API key, or add a host (/login, /providers). */
   | { kind: 'login' }
   /**
@@ -1495,6 +1499,8 @@ export function parseSlashCommand(
       return { kind: 'hooks', action: parseSettingsAction(arg) }
     case 'mcp':
       return { kind: 'mcp', action: parseSettingsAction(arg) }
+    case 'memory':
+      return { kind: 'memory', action: parseMemoryAction(arg) }
     case 'trust': {
       const a = arg.trim().toLowerCase()
       if (!a) return { kind: 'trust', op: 'status' }
@@ -1630,6 +1636,7 @@ export const HELP_TEXT = [
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
+  '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
   '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
@@ -2446,6 +2453,8 @@ export interface TuiDeps {
    * a note that vanished into an unnamed file is worse than no note.
    */
   saveMemory?: (scope: MemoryScope, text: string) => Promise<string>
+  /** The cross-session memory store for this folder, for /memory. Absent ⇒ /memory says it's unavailable. */
+  memoryStore?: () => MemoryStore
   /**
    * Roll the last turn's file writes back (or forward again). Houston snapshots
    * every write already; this is the terminal's way in. Absent ⇒ /undo says so.
@@ -2775,6 +2784,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   }
 
   let policy = opts.approvalPolicy ?? deps.getSettings().approvalPolicy ?? 'ask'
+  // /memory's undo target lives for the session.
+  const memoryState: MemoryCommandState = {}
   // This chat's own reasoning effort: starts at the default, changed by /reasoning,
   // restored on /resume. The default changes only with `/reasoning <effort> --default`.
   let effort: ReasoningEffort = deps.getSettings().reasoningEffort ?? DEFAULT_REASONING_EFFORT
@@ -3571,6 +3582,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'trust') {
         await runTrustCommand(result.op, opts.cwd, deps, paint)
+        continue
+      }
+      if (result.kind === 'memory') {
+        await runMemoryCommand(
+          result.action,
+          {
+            ...(deps.memoryStore ? { store: deps.memoryStore } : {}),
+            getSettings: deps.getSettings,
+            ...(deps.updateSettings ? { updateSettings: deps.updateSettings } : {}),
+            ...(deps.editText ? { editText: deps.editText } : {}),
+            out: (t) => deps.io.out(t)
+          },
+          memoryState,
+          paint
+        )
         continue
       }
       if (result.kind === 'login') {
@@ -4524,6 +4550,7 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
     `    ${paint('/hooks', 'cyan')}   list, or  /hooks add  ·  /hooks remove <n>`,
     `    ${paint('/mcp', 'cyan')}     list, or  /mcp add (stdio)  ·  /mcp remove <n>  ·  /mcp login|logout <n>`,
     `    ${paint('/trust', 'cyan')}   this folder's project-config trust  ·  /trust forget re-decides`,
+    `    ${paint('/memory', 'cyan')}  saved memories  ·  /memory show|edit|pin|forget <n>  ·  /memory on|off`,
     '',
     paint('  Changes here apply on your next message, no restart needed.', 'dim')
   ]
