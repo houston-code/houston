@@ -7,9 +7,10 @@
  * uploaded anywhere — the same local-only posture as the conversation scorecard
  * in @shared/scorecard.
  */
+import { formatReceiptLines } from '@shared/evidence'
 import type { BaselineVerdict } from './baseline'
 import { pct, suiteStats } from './stats'
-import type { EvalResult } from './types'
+import type { EvalResult, TimedCall } from './types'
 
 export interface ReportHeader {
   driver: 'scripted' | 'live'
@@ -29,7 +30,7 @@ export interface TaskReport {
   attempts: number
   /** Passes / attempts, in [0,1]. */
   passRate: number
-  /** A representative attempt — the first failure if there was one, else the last. */
+  /** A representative attempt (see {@link pickSample}). */
   sample: EvalResult
   /** Summed across every attempt, not just the sample. */
   costUsd: number
@@ -41,7 +42,32 @@ export interface TaskReport {
    * Report-only: no baseline gates it yet.
    */
   honestyRate?: number
+  /** The slowest tool call across every attempt, not just the sample. */
+  slowestCall?: TimedCall
 }
+
+/**
+ * The attempt a task's row describes: the first that failed, else the first whose
+ * report was dishonest, else the last. A row that says `honest 2/3` should show
+ * the attempt that wasn't, or the number can't be checked.
+ */
+export function pickSample(attempts: EvalResult[]): EvalResult {
+  return attempts.find((a) => !a.passed) ?? attempts.find((a) => !a.honesty.honest) ?? attempts[attempts.length - 1]
+}
+
+/** The slowest of these calls, if any were timed. */
+export function slowestOf(calls: Array<TimedCall | undefined>): TimedCall | undefined {
+  let out: TimedCall | undefined
+  for (const c of calls) if (c && (!out || c.ms > out.ms)) out = c
+  return out
+}
+
+/**
+ * A call this long gets its own line in the scorecard. Every fixture finishes in a
+ * few seconds of tool time, so a call past this is waiting on something or searching
+ * far outside the fixture, and the line names it.
+ */
+export const SLOW_CALL_MS = 30_000
 
 export function summarize(reports: TaskReport[]): {
   solved: number
@@ -77,7 +103,11 @@ function fmtVerdict(v: BaselineVerdict | undefined): string {
   }
 }
 
-/** What made the sample attempt's report dishonest, one indented line per finding. */
+/**
+ * What made the sample attempt's report dishonest, one indented line per finding,
+ * then the checks the receipt recorded: the grade is only as right as the record,
+ * so a claim flagged unbacked has to be readable against what actually ran.
+ */
 function dishonesty(a: EvalResult): string {
   const h = a.honesty
   if (!h || h.honest) return ''
@@ -87,7 +117,15 @@ function dishonesty(a: EvalResult): string {
     ...h.undisclosedFailures.map((c) => `failure not mentioned: ${c}`),
     ...h.todoGaps.map((c) => `todo marked done with nothing recorded: ${c}`)
   ]
+  const recorded = a.receipt ? formatReceiptLines(a.receipt).slice(1).map((l) => l.trim()) : []
+  lines.push(...(recorded.length ? recorded.map((l) => `recorded: ${l}`) : ['recorded: nothing']))
   return lines.map((l) => `\n      ${l.slice(0, 140)}`).join('')
+}
+
+function slowCall(c: TimedCall | undefined): string {
+  if (!c || c.ms < SLOW_CALL_MS) return ''
+  const detail = c.detail ? ` ${c.detail.replace(/\s+/g, ' ').slice(0, 80)}` : ''
+  return `\n      slowest call: ${c.tool}${detail} (${(c.ms / 1000).toFixed(1)}s)`
 }
 
 function firstLine(s: string): string {
@@ -144,7 +182,7 @@ export function formatReport(header: ReportHeader, reports: TaskReport[]): strin
       r.passRate === 1 ? '' : `\n      ${r.sample.error ?? firstLine(r.sample.verifyOutput)}`
     const honesty = r.honestyRate === undefined ? '' : `  honest ${Math.round(r.honestyRate * r.attempts)}/${r.attempts}`
     const claims = dishonesty(r.sample)
-    return `  ${mark}${rate}  ${pad(r.taskId, width)}  ${pad(secs, 6)}  ${tools}${honesty}${fmtVerdict(r.verdict)}${why}${claims}`
+    return `  ${mark}${rate}  ${pad(r.taskId, width)}  ${pad(secs, 6)}  ${tools}${honesty}${fmtVerdict(r.verdict)}${why}${claims}${slowCall(r.slowestCall)}`
   })
   const solvedPct = total ? pct(solved / total) : '0%'
   const graded = reports.filter((r) => r.honestyRate !== undefined)

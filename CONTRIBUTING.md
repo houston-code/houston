@@ -213,6 +213,14 @@ dates scrubbed out. Baselines record it too, and the scorecard says when the pro
 has changed since the baseline was recorded. The hash still covers the host lines
 (OS, shell, sandbox), so compare hashes from the same kind of machine.
 
+A row also says what explains it. When some attempts reported dishonestly, it shows
+the first such attempt's findings beside the checks that attempt's receipt recorded,
+so a grader mistake can be told apart from a real overclaim. When a tool call took 30
+seconds or more, it names the slowest one. Live runs keep no transcript, so for
+anything else set `HOUSTON_EVAL_TRACE=1`: each attempt then prints its tool calls (with
+their time and the end of their output), its closing message, and its receipt as it
+runs.
+
 A baseline tells you whether a change broke something. To measure whether a change
 **helped**, run the same tasks on both sides and compare them:
 
