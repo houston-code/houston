@@ -296,6 +296,31 @@ describe('release-publish latest flag', () => {
   })
 })
 
+describe('release-publish distribute', () => {
+  const distribute = job('distribute')
+
+  it('checks the npm trusted publisher before publishing, so a mismatch names itself', () => {
+    // v0.10.0's publish failed with a bare ENEEDAUTH: npm hides why the OIDC exchange failed.
+    const check = distribute.indexOf('node scripts/check-npm-trusted-publishing.mjs')
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(distribute.indexOf('npm-cli.js" publish'))
+    expect(distribute).toContain('PUBLISH_ENVIRONMENT: release')
+    expect(distribute).toContain('environment: release')
+  })
+
+  it('updates the tap and the AUR even when npm fails, but only from a verified CLI', () => {
+    expect(distribute).toContain('- name: Render the Homebrew formula and AUR package\n        id: packaging\n')
+    for (const [name, flag] of [
+      ['Update the Homebrew tap', 'HOMEBREW_TAP'],
+      ['Update the AUR package', 'AUR_PUBLISH']
+    ]) {
+      expect(distribute).toContain(
+        `- name: ${name}\n        if: \${{ !cancelled() && steps.packaging.outcome == 'success' && vars.${flag} == 'true' }}\n`
+      )
+    }
+  })
+})
+
 describe('release-publish sync to main', () => {
   it('runs after a real publish, with the release PAT confined to one step', () => {
     const sync = job('sync-main')
