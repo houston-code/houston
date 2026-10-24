@@ -53,3 +53,34 @@ export interface MemoryRepoInfo {
   root: string
   count: number
 }
+
+/** Everything the Memory settings page shows. */
+export interface MemoryOverview {
+  /** The open project's repository, or null with no project open. */
+  repo: { key: string; label: string } | null
+  repoMemories: MemoryRecord[]
+  globalMemories: MemoryRecord[]
+  /** Other repositories' memory folders (a repo that moved or was cloned again shows here). */
+  otherRepos: MemoryRepoInfo[]
+}
+
+/** A Memory settings page action. Every one answers with the refreshed overview. */
+export type MemoryRequest =
+  | { op: 'list'; workspace: string }
+  | {
+      op: 'update'
+      workspace: string
+      scope: MemoryStoreScope
+      id: string
+      type: MemoryType
+      name: string
+      description: string
+      body: string
+      /** The `updated` value the page last showed; a newer one on disk refuses the edit. */
+      expectedUpdated: string
+    }
+  | { op: 'remove' | 'restore'; workspace: string; scope: MemoryStoreScope; id: string }
+  | { op: 'pin'; workspace: string; scope: MemoryStoreScope; id: string; pinned: boolean }
+  | { op: 'adoptRepo' | 'removeRepo'; workspace: string; key: string }
+
+export type MemoryResponse = { ok: true; overview: MemoryOverview; note?: string } | { ok: false; error: string; overview: MemoryOverview }

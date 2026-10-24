@@ -22,6 +22,7 @@ import {
   LanguageServersSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
+import { MemoriesSection, MemorySettingsSection } from './sections/memory'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import { AdditionalFoldersSection, SandboxEgressSection, TrustedFoldersSection } from './sections/workspace'
 import {
@@ -193,6 +194,24 @@ export const PAGES: SettingsPage[] = [
         id: 'project-hooks',
         Component: ProjectHooksSection,
         keywords: ['project', 'repository', 'trusted', 'settings.json']
+      }
+    ]
+  },
+  {
+    id: 'memory',
+    label: PAGE_LABELS.memory,
+    group: 'AI',
+    sections: [
+      {
+        id: 'memory',
+        keys: ['memoryEnabled'],
+        Component: MemorySettingsSection,
+        keywords: ['remember', 'memories', 'learn', 'facts', 'preferences', 'recall', 'across sessions']
+      },
+      {
+        id: 'saved-memories',
+        Component: MemoriesSection,
+        keywords: ['remember', 'memories', 'forget', 'delete', 'edit', 'pin', 'restore', 'undo']
       }
     ]
   },

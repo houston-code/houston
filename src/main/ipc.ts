@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { app, ipcMain, dialog, BrowserWindow, clipboard, ClipboardItem, nativeImage, shell } from 'electron'
 import type { WebContents } from 'electron'
 import { readFileSync, writeFileSync, statSync } from 'node:fs'
+import { mkdir } from 'node:fs/promises'
 import { IPC } from '@shared/constants'
 import type {
   AppSettings,
@@ -100,6 +101,9 @@ import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
 import type { DoctorFacts } from '@shared/doctor'
 import { saveMemory } from './memory'
+import { handleMemoryRequest } from './memoryIpc'
+import { defaultMemoryRoot } from './agent/memoryStore'
+import type { MemoryResponse } from '@shared/memoryTypes'
 import { decideLegacyRulesNotice, legacyRulesNoticeApplies } from './globalRules'
 import { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } from './legacyRulesNotice'
 import { MAX_MEMORY_NOTE } from '@shared/memory'
@@ -496,6 +500,18 @@ export function registerIpc(): void {
       return saveMemory(workspace, scope, trimmed)
     }
   )
+
+  // Cross-session memory's review page. Requests are validated in memoryIpc.ts.
+  ipcMain.handle(IPC.memoryRequest, (_event, request: unknown): Promise<MemoryResponse> =>
+    handleMemoryRequest(request)
+  )
+  // A user gesture with no argument: the only folder it can open is the store's own.
+  ipcMain.handle(IPC.memoryReveal, async (): Promise<void> => {
+    const root = defaultMemoryRoot()
+    await mkdir(root, { recursive: true, mode: 0o700 })
+    const err = await shell.openPath(root)
+    if (err) throw new Error(err)
+  })
 
   // One-time "global rules moved" notice: shown while ~/.claude/CLAUDE.md exists,
   // ~/.houston/AGENTS.md doesn't import it, and the user hasn't answered yet.

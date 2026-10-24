@@ -24,6 +24,7 @@ import type { WorkingTreeChanges } from '@shared/workingTree'
 import type { GitInitResult } from '@shared/git'
 import type { DoctorFacts } from '@shared/doctor'
 import type { MemoryScope } from '@shared/memory'
+import type { MemoryRequest, MemoryResponse } from '@shared/memoryTypes'
 import type { ClipboardContent, PickedFile } from '@shared/composerContext'
 import type {
   AgentEvent,
@@ -72,6 +73,10 @@ const api = {
   /** Save a `#`-captured standing instruction; resolves to the file path written, or null. */
   saveMemory: (workspace: string, scope: MemoryScope, text: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.memorySave, workspace, scope, text),
+  /** A Memory settings page action; answers with the refreshed list. */
+  memoryRequest: (request: MemoryRequest): Promise<MemoryResponse> => ipcRenderer.invoke(IPC.memoryRequest, request),
+  /** Open the memory folder in the OS file manager. */
+  revealMemoryFolder: (): Promise<void> => ipcRenderer.invoke(IPC.memoryReveal),
   /** Whether to show the one-time "global rules moved to ~/.houston/AGENTS.md" notice. */
   getLegacyRulesNotice: (): Promise<boolean> => ipcRenderer.invoke(IPC.legacyRulesNoticeStatus),
   /** Answer that notice: import ~/.claude/CLAUDE.md into it, or keep the rules separate. */
