@@ -162,6 +162,21 @@ describe('memoryStore updates', () => {
     expect(store.get('repo', first.id)?.body).toBe('someone else')
   })
 
+  it('refuses a stale edit when both saves share a millisecond, or the clock steps back', async () => {
+    let t = new Date('2026-10-24T00:00:00.000Z')
+    const store = memoryStore({ root, workspace: repoDir, now: () => t })
+    const first = (await store.save(input())).record
+    const second = (await store.save(input({ id: first.id, body: 'same ms', expectedUpdated: first.updated }))).record
+    expect(second.updated).toBe('2026-10-24T00:00:00.001Z')
+    await expect(
+      code(store.save(input({ id: first.id, body: 'mine', expectedUpdated: first.updated })))
+    ).resolves.toBe('stale')
+    t = new Date('2026-10-23T00:00:00.000Z')
+    const third = (await store.save(input({ id: first.id, body: 'earlier clock', expectedUpdated: second.updated }))).record
+    expect(third.updated).toBe('2026-10-24T00:00:00.002Z')
+    expect(third.created).toBe(first.created)
+  })
+
   it('pins and unpins', async () => {
     const store = memoryStore({ root, workspace: repoDir })
     const m = (await store.save(input({ conversation: 'c1' }))).record
