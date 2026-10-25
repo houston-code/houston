@@ -181,7 +181,11 @@ export function memoryStore(opts: MemoryStoreOptions = {}) {
           `The ${input.scope} scope already holds ${MAX_MEMORIES_PER_SCOPE} memories; delete or update one instead.`
         )
       }
-      const stamp = now().toISOString()
+      // `updated` is the stale-edit token, so every save must move it forward, even two
+      // saves in one millisecond or after the clock steps back.
+      const at = now().getTime()
+      const priorAt = prior ? Date.parse(prior.updated) : NaN
+      const stamp = new Date(at > priorAt || Number.isNaN(priorAt) ? at : priorAt + 1).toISOString()
       const record: MemoryRecord = {
         id: prior?.id ?? newId(dir, now()),
         scope: input.scope,
