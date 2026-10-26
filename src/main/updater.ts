@@ -236,6 +236,14 @@ function refuseVerified(err: unknown): void {
  */
 export async function installUpdate(): Promise<boolean> {
   if (!shouldAutoInstallUpdates()) return false
+  // Squirrel.Mac is still checking a download; restarting now relaunches without it.
+  if (verifying) {
+    try {
+      await verifying.verdict
+    } catch {
+      return false // refused: the banner already switched to the manual download
+    }
+  }
   if (!(await installGuard())) return false
   try {
     electronUpdater.autoUpdater.quitAndInstall()
@@ -248,13 +256,14 @@ export async function installUpdate(): Promise<boolean> {
 }
 
 /**
- * The menu dialog's Update action on auto-install builds: finish the background
- * download if it's still running (starting one if none is), wait for Squirrel.Mac to
- * verify it, then install. Throws if the download fails or macOS refuses it, so the
- * caller can offer the manual route instead; resolves false if the user cancels it.
+ * The menu dialog's Update action on auto-install builds: unless `version` is already
+ * staged, finish the background download if it's still running (starting one if none
+ * is), wait for Squirrel.Mac to verify it, then install. Throws if the download fails or
+ * macOS refuses it, so the caller can offer the manual route instead; resolves false if
+ * the user cancels it.
  */
-async function downloadAndInstall(): Promise<boolean> {
-  if (downloadedVersion === null) {
+async function downloadAndInstall(version: string): Promise<boolean> {
+  if (downloadedVersion !== version) {
     let download = pendingDownload?.promise
     if (!download) {
       const token = new electronUpdater.CancellationToken()
@@ -270,7 +279,7 @@ async function downloadAndInstall(): Promise<boolean> {
     // The download settles once Squirrel has fetched the file, before its signature
     // check finishes, so wait for that verdict too.
     if (verifying) await verifying.verdict
-    else if (downloadedVersion === null && refusedVersion !== null) {
+    else if (refusedVersion === version) {
       throw new UpdateRefusedError(`macOS refused to install ${refusedVersion}`)
     }
   }
@@ -318,16 +327,36 @@ async function runCheck(): Promise<UpdateCheckResult> {
   }
   try {
     const autoUpdater = configureUpdater()
-    // Cross-platform note: electron-updater reads the running platform's metadata feed
-    // automatically (latest-mac.yml / latest.yml / latest-linux.yml). On Linux it only
-    // works for the AppImage build (it keys off the APPIMAGE env var); a `.deb` install
-    // throws here and is caught below → "error" (the user updates via their package
-    // manager or a manual re-download). That degradation is expected, not a bug.
-    const result = await autoUpdater.checkForUpdates()
+    const autoInstall = shouldAutoInstallUpdates()
+    // With an update already handed to Squirrel.Mac, an auto-downloading check would
+    // re-hand it the cached copy, restarting Squirrel's fetch + signature check, and a
+    // restart during that relaunches the old version without installing anything. So
+    // check without downloading, and fetch only a release newer than the staged one.
+    const staged = verifying?.version ?? downloadedVersion
+    autoUpdater.autoDownload = autoInstall && staged === null
+    let result: Awaited<ReturnType<typeof autoUpdater.checkForUpdates>>
+    try {
+      // Cross-platform note: electron-updater reads the running platform's metadata feed
+      // automatically (latest-mac.yml / latest.yml / latest-linux.yml). On Linux it only
+      // works for the AppImage build (it keys off the APPIMAGE env var); a `.deb` install
+      // throws here and is caught below → "error" (the user updates via their package
+      // manager or a manual re-download). That degradation is expected, not a bug.
+      result = await autoUpdater.checkForUpdates()
+    } finally {
+      autoUpdater.autoDownload = autoInstall
+    }
     if (result?.downloadPromise) {
       // Keep the background download for the menu's Update button to await and the
       // banner's close button to cancel.
       trackDownload(result.downloadPromise, result.cancellationToken ?? null)
+    } else if (
+      staged !== null &&
+      result?.isUpdateAvailable &&
+      result.updateInfo.version !== staged &&
+      result.updateInfo.version !== refusedVersion
+    ) {
+      const token = new electronUpdater.CancellationToken()
+      trackDownload(autoUpdater.downloadUpdate(token), token)
     }
     if (result?.isUpdateAvailable) {
       const payload = {
@@ -455,7 +484,7 @@ export async function checkForUpdatesFromMenu(): Promise<void> {
     return
   }
   try {
-    await downloadAndInstall()
+    await downloadAndInstall(result.status === 'available' ? result.latestVersion : '')
   } catch (e) {
     const refused = e instanceof UpdateRefusedError
     if (!refused) console.error('[updater] download failed:', (e as Error)?.message ?? e)

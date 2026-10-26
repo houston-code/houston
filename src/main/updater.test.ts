@@ -27,6 +27,8 @@ const h = vi.hoisted(() => {
     autoInstall: true,
     quitAndInstallCalls: 0,
     downloadUpdateCalls: 0,
+    /** `autoDownload` as each feed check saw it (true = electron-updater downloads). */
+    checkAutoDownload: [] as boolean[],
     dialogResponses: [] as number[],
     dialogs: [] as Array<Record<string, unknown>>,
     opened: [] as string[],
@@ -50,6 +52,7 @@ const h = vi.hoisted(() => {
       ;(self.listeners[event] ??= []).push(cb)
     },
     checkForUpdates: async () => {
+      self.checkAutoDownload.push(self.autoUpdater.autoDownload)
       if (self.checkError) throw self.checkError
       return self.checkResult
     },
@@ -181,6 +184,7 @@ beforeEach(() => {
   h.autoInstall = true
   h.quitAndInstallCalls = 0
   h.downloadUpdateCalls = 0
+  h.checkAutoDownload = []
   h.dialogResponses = []
   h.dialogs = []
   h.opened = []
@@ -352,6 +356,28 @@ describe('auto-install (signed macOS)', () => {
     expect(h.autoUpdater.autoInstallOnAppQuit).toBe(true)
   })
 
+  it('auto-downloads on every check until an update is staged', async () => {
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    await checkForUpdates() // e.g. the first download failed: the next check retries it
+    expect(h.checkAutoDownload).toEqual([true, true])
+    expect(h.downloadUpdateCalls).toBe(0) // electron-updater's own download, not a manual one
+  })
+
+  it('keeps auto-downloading after a refusal, so a later check can retry in place', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('error', SIGNATURE_MISMATCH)
+    await checkForUpdates()
+    expect(h.checkAutoDownload).toEqual([true, true])
+    expect(h.downloadUpdateCalls).toBe(0)
+  })
+
   it('broadcasts rounded download progress', async () => {
     const { checkForUpdates } = await load()
     await checkForUpdates() // configures the updater + attaches the event listeners
@@ -442,6 +468,67 @@ describe('auto-install (signed macOS)', () => {
     expect(h.sent.some((s) => s.channel === IPC.updateDownloaded)).toBe(false)
   })
 
+  it('re-checks without re-downloading once an update is staged', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('update-downloaded')
+    expect(await checkForUpdates()).toMatchObject({ status: 'available', autoInstall: true })
+    expect(h.checkAutoDownload).toEqual([true, false])
+    expect(h.downloadUpdateCalls).toBe(0)
+    expect(h.autoUpdater.autoDownload).toBe(true) // restored for the next check
+  })
+
+  it('re-checks without re-downloading while Squirrel.Mac is verifying', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    await checkForUpdates()
+    expect(h.checkAutoDownload).toEqual([true, false])
+    expect(h.downloadUpdateCalls).toBe(0)
+  })
+
+  it('downloads a release newer than the staged one', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('update-downloaded')
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.1' } }
+    await checkForUpdates()
+    expect(h.downloadUpdateCalls).toBe(1)
+  })
+
+  it('installUpdate waits for Squirrel.Mac to finish verifying', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const { checkForUpdates, installUpdate } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    const done = installUpdate()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.quitAndInstallCalls).toBe(0)
+    fireNative('update-downloaded')
+    expect(await done).toBe(true)
+    expect(h.quitAndInstallCalls).toBe(1)
+  })
+
+  it('installUpdate gives up when Squirrel.Mac refuses the download', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { checkForUpdates, installUpdate } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    const done = installUpdate()
+    fireNative('error', SIGNATURE_MISMATCH)
+    expect(await done).toBe(false)
+    expect(h.quitAndInstallCalls).toBe(0)
+  })
+
   it('installUpdate quits and installs', async () => {
     const { installUpdate } = await load()
     expect(await installUpdate()).toBe(true)
@@ -501,6 +588,7 @@ describe('checkForUpdatesFromMenu', () => {
     expect(h.quitAndInstallCalls).toBe(1)
     expect(h.downloadUpdateCalls).toBe(0)
     expect(h.opened).toEqual([])
+    expect(h.checkAutoDownload).toEqual([true])
   })
 
   it('installs right away when the update is already downloaded', async () => {
@@ -514,6 +602,40 @@ describe('checkForUpdatesFromMenu', () => {
     await checkForUpdatesFromMenu()
     expect(h.quitAndInstallCalls).toBe(1)
     expect(h.downloadUpdateCalls).toBe(0)
+    // The menu's own check must not re-hand the staged update to Squirrel.Mac.
+    expect(h.checkAutoDownload).toEqual([true, false])
+  })
+
+  it('waits for a newer release to verify instead of installing the staged one', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates, checkForUpdatesFromMenu } = await load()
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('update-downloaded')
+
+    let finish!: () => void
+    const original = h.autoUpdater.downloadUpdate
+    h.autoUpdater.downloadUpdate = () => {
+      h.downloadUpdateCalls++
+      return new Promise((r) => (finish = () => r([])))
+    }
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.1' } }
+    h.dialogResponses = [0] // Update
+    try {
+      const done = checkForUpdatesFromMenu()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(h.downloadUpdateCalls).toBe(1)
+      fire('update-downloaded', { version: '0.3.1' })
+      finish()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(h.quitAndInstallCalls).toBe(0) // Squirrel is still checking 0.3.1
+      fireNative('update-downloaded')
+      await done
+    } finally {
+      h.autoUpdater.downloadUpdate = original
+    }
+    expect(h.quitAndInstallCalls).toBe(1)
   })
 
   it('waits for Squirrel.Mac to verify the download before installing', async () => {
@@ -591,6 +713,7 @@ describe('checkForUpdatesFromMenu', () => {
     await checkForUpdatesFromMenu()
     expect(h.downloadUpdateCalls).toBe(1)
     expect(h.quitAndInstallCalls).toBe(1)
+    expect(h.checkAutoDownload).toEqual([true])
   })
 
   it('does nothing on Later', async () => {
@@ -826,6 +949,7 @@ describe('without auto-install (unsigned Windows/Linux)', () => {
     const { checkForUpdates } = await load()
     await checkForUpdates()
     expect(h.autoUpdater.autoDownload).toBe(false)
+    expect(h.checkAutoDownload).toEqual([false])
     expect(h.autoUpdater.autoInstallOnAppQuit).toBe(false)
   })
 
