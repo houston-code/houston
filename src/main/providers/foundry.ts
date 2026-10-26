@@ -2,6 +2,7 @@ import type { Provider } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { FOUNDRY_MODELS } from '@shared/provider-catalog'
 import { createMessagesProvider, type MessagesClient } from './anthropic'
+import { idleTimeoutFetch } from './idle-fetch'
 
 /**
  * Claude on Microsoft Foundry.
@@ -66,6 +67,7 @@ export function createFoundryProvider(opts: FoundryOptions = {}): Provider {
     (clientPromise ??= import('@anthropic-ai/foundry-sdk').then(
       (m) =>
         new m.AnthropicFoundry({
+          fetch: idleTimeoutFetch(),
           ...NO_ENV_RESOURCE,
           apiKey: opts.apiKey,
           baseURL: foundryBaseUrl(opts),

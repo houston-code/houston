@@ -12,6 +12,7 @@ import type {
 import { imageDataUrl } from '@shared/images'
 import { openaiResponsesReasoning } from './reasoning'
 import { parseToolArguments } from './tool-args'
+import { idleTimeoutFetch } from './idle-fetch'
 
 /**
  * Adapter for OpenAI's **Responses API** (`client.responses.create`), the path
@@ -209,7 +210,12 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
   let clientPromise: Promise<OpenAI> | undefined
   const getClient = (): Promise<OpenAI> =>
     (clientPromise ??= import('openai').then(
-      (m) => new m.default({ apiKey: apiKey || 'no-key', ...(baseURL ? { baseURL } : {}) })
+      (m) =>
+        new m.default({
+          fetch: idleTimeoutFetch(),
+          apiKey: apiKey || 'no-key',
+          ...(baseURL ? { baseURL } : {})
+        })
     ))
 
   // Sticky for this provider instance once OpenAI tells us this org can't have reasoning

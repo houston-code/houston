@@ -38,6 +38,10 @@ import {
 import { checkEgressHost, type EgressRunScope } from './egress'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
+import Anthropic from '@anthropic-ai/sdk'
+import { createMessagesProvider } from '../providers/anthropic'
+import { idleTimeoutFetch } from '../providers/idle-fetch'
+import { startFlakySseServer, type Hiccup } from '../test/flaky-sse-server'
 import { memoryStore } from './memoryStore'
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
 import {
@@ -1164,6 +1168,26 @@ describe('startRun', () => {
       expect(flow(r).slice(-2)).toEqual(['text', 'error'])
       expect(r.messages.some((m) => m.role === 'assistant')).toBe(false)
     }, 30_000)
+
+    // The real Anthropic adapter and SDK over a real socket, so the failure the loop
+    // sees is the one a network hiccup actually produces, not a scripted stand-in.
+    it.each<[string, Hiccup]>([
+      ['a connection dropped', 'reset'],
+      ['a connection gone silent', 'stall']
+    ])('recovers from %s mid-stream on a fresh connection', async (_kind, hiccup) => {
+      const server = await startFlakySseServer('anthropic', [hiccup, 'ok'])
+      try {
+        const provider = createMessagesProvider(
+          async () => new Anthropic({ apiKey: 'k', baseURL: server.url, maxRetries: 0, fetch: idleTimeoutFetch(150) })
+        )
+        const r = await run({ provider, policy: 'full-auto' })
+        expect(flow(r)).toEqual(['text', 'turn_discarded', 'retry', 'text', 'text', 'done'])
+        expect(server.requests()).toBe(2)
+        expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'the whole answer' })
+      } finally {
+        await server.close()
+      }
+    })
 
     it('aborts during the backoff after a discard without retrying', async () => {
       let calls = 0

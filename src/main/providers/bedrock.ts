@@ -2,6 +2,7 @@ import type { Provider } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { BEDROCK_MODELS } from '@shared/provider-catalog'
 import { createMessagesProvider, type MessagesClient } from './anthropic'
+import { idleTimeoutFetch } from './idle-fetch'
 
 /**
  * Claude on Amazon Bedrock.
@@ -44,6 +45,7 @@ export function createBedrockProvider(opts: BedrockOptions = {}): Provider {
     (clientPromise ??= import('@anthropic-ai/bedrock-sdk').then(
       (m) =>
         new m.AnthropicBedrockMantle({
+          fetch: idleTimeoutFetch(),
           ...(opts.region ? { awsRegion: opts.region } : {}),
           ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
           ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),

@@ -2,6 +2,7 @@ import type { Provider } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { VERTEX_MODELS } from '@shared/provider-catalog'
 import { createMessagesProvider, type MessagesClient } from './anthropic'
+import { idleTimeoutFetch } from './idle-fetch'
 
 /**
  * Claude on Google Vertex AI.
@@ -58,6 +59,7 @@ export function createVertexProvider(opts: VertexOptions = {}): Provider {
     (clientPromise ??= import('@anthropic-ai/vertex-sdk').then(
       (m) =>
         new m.AnthropicVertex({
+          fetch: idleTimeoutFetch(),
           ...NO_ENV_AUTH,
           ...(opts.region ? { region: opts.region } : {}),
           ...(opts.projectId ? { projectId: opts.projectId } : {}),

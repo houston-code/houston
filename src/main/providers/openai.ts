@@ -8,6 +8,7 @@ import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
 import { ControlTagScrubber } from './control-tag-scrubber'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
+import { idleTimeoutFetch } from './idle-fetch'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
 
@@ -330,6 +331,7 @@ export function createOpenAIProvider(
     (clientPromise ??= import('openai').then(
       (m) =>
         new m.default({
+          fetch: idleTimeoutFetch(),
           apiKey: apiKey || 'no-key',
           ...(baseURL ? { baseURL } : {}),
           ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})

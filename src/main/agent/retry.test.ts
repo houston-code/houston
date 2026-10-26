@@ -116,6 +116,40 @@ describe('isRetryableError', () => {
     expect(isRetryableError(new Error('529 overloaded'))).toBe(true)
   })
 
+  it('retries a connection fetch dropped mid-body, judged by its cause', () => {
+    // Exactly what undici throws when the socket closes during a streamed body.
+    const socket = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })
+    const dropped = new TypeError('terminated', { cause: socket })
+    expect(isRetryableError(dropped)).toBe(true)
+    // The Anthropic SDK rewraps it as an AnthropicError of the same message.
+    expect(isRetryableError(Object.assign(new Error('terminated'), { cause: dropped }))).toBe(true)
+    // fetch's own five-minute body timeout, and the providers' idle cutoff.
+    const bodyTimeout = Object.assign(new Error('Body Timeout Error'), { code: 'UND_ERR_BODY_TIMEOUT' })
+    expect(isRetryableError(new TypeError('terminated', { cause: bodyTimeout }))).toBe(true)
+    expect(isRetryableError(Object.assign(new Error('stalled'), { code: 'HOUSTON_STREAM_IDLE' }))).toBe(true)
+    // A bare "terminated" that kept no cause is still the same failure.
+    expect(isRetryableError(new TypeError('terminated'))).toBe(true)
+  })
+
+  it('reads network codes anywhere on the cause chain, and survives a cycle', () => {
+    const root = Object.assign(new Error('read'), { code: 'ECONNRESET' })
+    expect(isRetryableError(new Error('Connection lost', { cause: new Error('wrapped', { cause: root }) }))).toBe(true)
+    const a: { message: string; cause?: unknown } = { message: 'a' }
+    const b = { message: 'b', cause: a }
+    a.cause = b
+    expect(isRetryableError(a)).toBe(false)
+  })
+
+  it('does not retry on a network code when the status says the request itself is wrong', () => {
+    const cause = Object.assign(new Error('x'), { code: 'ECONNRESET' })
+    expect(isRetryableError(Object.assign(new Error('bad request', { cause }), { status: 400 }))).toBe(false)
+  })
+
+  it('does not retry an error that only mentions termination in a sentence', () => {
+    expect(isRetryableError(new Error('Your account has been terminated'))).toBe(false)
+    expect(isRetryableError(Object.assign(new Error('nope'), { code: 'UND_ERR_INVALID_ARG' }))).toBe(false)
+  })
+
   it('does not retry a generic error', () => {
     expect(isRetryableError(new Error('invalid api key'))).toBe(false)
     expect(isRetryableError(new Error('old_string was not found'))).toBe(false)

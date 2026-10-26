@@ -5,6 +5,10 @@ import { join } from 'node:path'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
 import { createSecretRedactor } from './redact'
 import { runSubAgent, SUBAGENT_TOOLS, SUBAGENT_WRITE_TOOLS } from './subagent'
+import Anthropic from '@anthropic-ai/sdk'
+import { createMessagesProvider } from '../providers/anthropic'
+import { idleTimeoutFetch } from '../providers/idle-fetch'
+import { startFlakySseServer, type Hiccup } from '../test/flaky-sse-server'
 import type { EvidenceDraft } from './evidence'
 import { checkpointFileCount, restoreCheckpoint, clearCheckpoints } from './checkpoints'
 
@@ -1189,6 +1193,34 @@ describe('a stream that fails partway through a turn', () => {
     expect(transcript.some((m) => m.toolCalls?.length || m.role === 'tool')).toBe(false)
     expect(progress.some((p) => p.includes('retrying (1)'))).toBe(true)
   }, 10_000)
+
+  // The real Anthropic adapter and SDK over a real socket: what a network hiccup
+  // actually throws has to be retried, not just a scripted overload.
+  it.each<[string, Hiccup]>([
+    ['a connection dropped', 'reset'],
+    ['a connection gone silent', 'stall']
+  ])('recovers from %s mid-stream on a fresh connection', async (_kind, hiccup) => {
+    const server = await startFlakySseServer('anthropic', [hiccup, 'ok'], 'The full report.')
+    try {
+      const provider = createMessagesProvider(
+        async () => new Anthropic({ apiKey: 'k', baseURL: server.url, maxRetries: 0, fetch: idleTimeoutFetch(150) })
+      )
+      const progress: string[] = []
+      const report = await runSubAgent({
+        provider,
+        model: 'claude-test',
+        workspace: ws,
+        prompt: 'report',
+        signal: new AbortController().signal,
+        onProgress: (m) => progress.push(m)
+      })
+      expect(report).toBe('The full report.')
+      expect(server.requests()).toBe(2)
+      expect(progress.some((p) => p.includes('retrying (1)'))).toBe(true)
+    } finally {
+      await server.close()
+    }
+  }, 15_000)
 
   it('ends with the error when the failure after partial output is not transient', async () => {
     const provider = scriptedProvider([

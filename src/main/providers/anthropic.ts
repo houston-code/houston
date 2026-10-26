@@ -13,6 +13,7 @@ import type {
 import { anthropicMaxTokens, anthropicThinking } from './reasoning'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
+import { idleTimeoutFetch } from './idle-fetch'
 
 /**
  * Beta header that turns on interleaved thinking for legacy budget-thinking
@@ -464,6 +465,7 @@ export function createAnthropicProvider(
     (clientPromise ??= import('@anthropic-ai/sdk').then(
       (m) =>
         new m.default({
+          fetch: idleTimeoutFetch(),
           apiKey,
           ...(baseURL ? { baseURL } : {}),
           ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
