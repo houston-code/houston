@@ -89,8 +89,8 @@ jobs:
           git fetch --quiet --tags origin \
             '+refs/heads/release/*:refs/remotes/origin/release/*' \
             '+refs/heads/release-pr/*:refs/remotes/origin/release-pr/*'
+          # Also writes the plan to the job summary, naming and linking each PR it brings.
           node scripts/release-source.mjs plan | tee -a "$GITHUB_OUTPUT"
-          grep '^summary=' "$GITHUB_OUTPUT" | tail -1 | cut -d= -f2- >> "$GITHUB_STEP_SUMMARY"
 
   # "Patch a release" for a release from before release lines existed: create its line at the
   # release's tag and stop, since nothing has been merged to it yet. Merge the fixes into the
