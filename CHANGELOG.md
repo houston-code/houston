@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.11.1 - 2026-10-26
+
+This release fixes updates on macOS so an already-downloaded update installs instead of reopening the old version.
+
+### Breaking changes
+
+- None.
+
+### Fixed
+
+- Check for updates now installs an update that has already been downloaded, instead of restarting Houston into the old version on macOS. (#552)
+
 ## v0.11.0 - 2026-10-26
 
 Houston now remembers your preferences and project facts across sessions, plus several agent reliability fixes.
