@@ -32,6 +32,18 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.ref || github.sha }}
 
+      # The action writes real-looking summaries and notices, which also surface on the runs
+      # that call this one (ci.yml, release-prepare). Say up front that they are test output.
+      - name: Label the output as test output
+        run: |
+          echo "::notice title=Action test::The Houston notices and job summary in this run come from the action's end-to-end test against a scripted mock model and fixture repository. They are not about this commit."
+          {
+            echo "## Action end-to-end test"
+            echo
+            echo "Everything below is the GitHub Action replying to fixture events with a scripted mock model, in a fixture repository. The files, runs, branches, and findings it mentions are test data, and nothing was posted to GitHub."
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build the fixture repository and start the mock model
         run: |
           set -euo pipefail
