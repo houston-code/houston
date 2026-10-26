@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>What actually ran (the receipt) | Houston docs</title>
   <meta name="description" content="A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message." />
-  <meta name="houston-docs-version" content="v0.10.0" />
+  <meta name="houston-docs-version" content="v0.11.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/what-actually-ran" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "A turn that ran checks or changed files ends with a line marked Recorded by Houston under the agent's last message.",
   "url": "https://houstoncode.ai/docs/what-actually-ran",
   "inLanguage": "en",
-  "version": "v0.10.0",
+  "version": "v0.11.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -102,7 +102,7 @@
 <p>Houston builds it from the commands it executed and the files its tools changed. <strong>The agent can't write it</strong>, so it's what to check the agent's own summary against: if the reply says the tests pass and the receipt says no tests ran, believe the receipt.</p>
 <h2 id="what-it-lists">What it lists</h2>
 <ul>
-<li><strong>Checks.</strong> Commands that test, typecheck, build, lint, install, start a server, or send an HTTP request to a local server, each with its real exit code. For most test runners (pytest, vitest, jest, mocha, node:test, cargo, unittest) it also shows the passed and failed counts from the runner's own summary.</li>
+<li><strong>Checks.</strong> Commands that test, typecheck, build, lint, install, start a server, or send an HTTP request to a local server, each with its real exit code. For most test runners (pytest, vitest, jest, mocha, node:test, cargo, unittest) it also shows the passed and failed counts from the runner's own summary. When the agent prints a test's status with <code>echo</code> (<code>npm test; echo &quot;exit=$?&quot;</code>), the exit code shown is the one that echo printed for the test, not the echo's own, and a later part of the command that times out doesn't count against the test.</li>
 <li><strong>Other commands</strong> (<code>ls</code>, <code>git status</code>) are only counted. Click the line to expand it.</li>
 <li><strong>Browser checks.</strong> A page the agent looked at with <code>view_localhost</code> is listed with how its steps went. It counts as passed only when a check of the page (<code>expect_text</code> or <code>wait_for</code>) passed after the last click or keypress. Clicking through a flow shows it didn't break, not that it did the right thing.</li>
 <li><strong>Subagents.</strong> Commands a writable subagent ran, each by name with its exit code and which subagent ran it (even an <code>ls</code>, since you didn't watch it happen), and files a subagent changed, marked with who changed them.</li>
@@ -146,7 +146,7 @@
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.10.0</p>
+        <p class="docs-version">For v0.11.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -165,6 +165,7 @@
             <li><a href="/docs/being-told-when-it-needs-you">Being told when it needs you</a></li>
             <li><a href="/docs/running-your-own-commands">Running your own commands (!)</a></li>
             <li><a href="/docs/remembering-an-instruction">Remembering an instruction (#)</a></li>
+            <li><a href="/docs/memory-across-sessions">Memory across sessions</a></li>
             <li><a href="/docs/side-chat">Side chat (/btw)</a></li>
         </ul>
         <h3 id="nav-reviewing-and-undoing-changes">Reviewing and undoing changes</h3>

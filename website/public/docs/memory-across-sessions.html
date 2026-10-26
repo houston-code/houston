@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Memory across sessions | Houston docs</title>
+  <meta name="description" content="Houston remembers what a later session should know, so you don't have to explain the same thing twice." />
+  <meta name="houston-docs-version" content="v0.11.0" />
+  <link rel="canonical" href="https://houstoncode.ai/docs/memory-across-sessions" />
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
+
+  <meta property="og:type" content="article" />
+  <meta property="og:site_name" content="Houston" />
+  <meta property="og:title" content="Memory across sessions | Houston docs" />
+  <meta property="og:description" content="Houston remembers what a later session should know, so you don't have to explain the same thing twice." />
+  <meta property="og:url" content="https://houstoncode.ai/docs/memory-across-sessions" />
+  <meta property="og:image" content="https://houstoncode.ai/assets/og.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta property="og:image:alt" content="Houston, the open-source AI coding agent: powerful enough to ship, safe enough to trust. Bring your own model." />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Memory across sessions | Houston docs" />
+  <meta name="twitter:description" content="Houston remembers what a later session should know, so you don't have to explain the same thing twice." />
+  <meta name="twitter:image" content="https://houstoncode.ai/assets/og.png" />
+
+  <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+  <link rel="stylesheet" href="/assets/styles.css" />
+  <script src="/assets/theme.js"></script>
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "Memory across sessions",
+  "description": "Houston remembers what a later session should know, so you don't have to explain the same thing twice.",
+  "url": "https://houstoncode.ai/docs/memory-across-sessions",
+  "inLanguage": "en",
+  "version": "v0.11.0",
+  "isPartOf": {
+    "@type": "WebSite",
+    "name": "Houston",
+    "url": "https://houstoncode.ai/"
+  },
+  "about": {
+    "@type": "SoftwareApplication",
+    "@id": "https://houstoncode.ai/#app",
+    "name": "Houston"
+  }
+}
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header">
+    <div class="wrap">
+      <a class="brand" href="/" aria-label="Houston home">
+        <img src="/assets/icon-60.png" alt="" width="30" height="30" />
+        <span>Houston</span>
+        <span class="beta-badge">Beta</span>
+      </a>
+      <nav class="nav" aria-label="Primary">
+        <button class="nav-menu-button" id="nav-menu-button" type="button" aria-label="Menu" aria-expanded="false" aria-controls="nav-menu" hidden>
+          <svg class="icon-menu" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+          <svg class="icon-close" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+        <div class="nav-menu" id="nav-menu">
+          <a class="nav-link" href="/#why">Security</a>
+          <a class="nav-link" href="/#features">Features</a>
+          <a class="nav-link" href="/docs/" aria-current="page">Docs</a>
+          <a class="nav-link" href="/#faq">FAQ</a>
+          <a class="nav-link" href="https://github.com/houston-code/houston" rel="noopener">GitHub</a>
+          <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Dark theme" aria-pressed="false" hidden>
+            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>
+            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+            <span class="theme-toggle-label">Dark theme</span>
+          </button>
+        </div>
+        <a class="btn btn-primary btn-sm" href="/#download">Download</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="docs">
+    <div class="wrap docs-layout">
+      <main id="main" class="docs-content">
+        <a class="docs-crumb" href="/docs/">Houston docs</a>
+        <h1>Memory across sessions</h1>
+        <nav class="docs-toc" aria-labelledby="toc-memory-across-sessions">
+          <h2 id="toc-memory-across-sessions">On this page</h2>
+          <ul>
+            <li><a href="#how-it-saves-and-recalls">How it saves and recalls</a></li>
+            <li><a href="#approval-and-safety">Approval and safety</a></li>
+            <li><a href="#reviewing-what-it-remembers">Reviewing what it remembers</a></li>
+            <li><a href="#where-memories-live">Where memories live</a></li>
+          </ul>
+        </nav>
+        <div class="prose">
+<p>Houston remembers what a later session should know, so you don't have to explain the same thing twice. Where <code>#</code> and the rules files hold instructions you write, memory holds facts the agent learns as it works:</p>
+<ul>
+<li><strong>About you:</strong> how you like to work, and corrections you gave it (with the reason).</li>
+<li><strong>About the project:</strong> decisions, constraints, and gotchas the code and git history don't show.</li>
+<li><strong>Where things are:</strong> pointers to outside resources.</li>
+</ul>
+<p>It never saves what the repository already records, short-lived task state, secrets, or text copied from web pages or tool output.</p>
+<h2 id="how-it-saves-and-recalls">How it saves and recalls</h2>
+<ul>
+<li><strong>Saving.</strong> The agent saves on its own when it learns one of these, and when you ask it to remember something. It updates a memory rather than adding a near-duplicate, and deletes one that proved wrong. Each save shows in the chat as a tool row (&quot;Remember tests-need-rg&quot;, &quot;Update memory&quot;, &quot;Forget memory&quot;).</li>
+<li><strong>Recalling.</strong> Each conversation starts with a one-line list of saved memories (name and description). The agent reads a memory in full with <code>recall_memory</code> when one looks relevant, and checks it still holds before relying on it.</li>
+<li><strong>Scopes.</strong> A memory belongs to this repository (every checkout and worktree of it) or to all projects (facts about you).</li>
+<li><strong>Cost.</strong> The list is captured when a conversation starts and kept until the next day, so it doesn't change the prompt mid-chat and the model's cache keeps working. A memory saved during a chat shows up in the list from the next conversation on. With nothing saved, there's no list at all.</li>
+</ul>
+<h2 id="approval-and-safety">Approval and safety</h2>
+<ul>
+<li><strong>Approval.</strong> A save follows your approval mode like a file edit: it asks in the &quot;ask every time&quot; mode, and runs on its own in auto-edit and full auto. Plan mode refuses it.</li>
+<li><strong>Untrusted content.</strong> Once a conversation has read anything from outside (a web page, a GitHub body, an MCP result, a subagent's report, or a shell command that fetches, like <code>curl</code> or <code>git pull</code>), every memory save asks you first, in every mode. Neither an allow rule, &quot;Allow for run&quot;, nor full auto skips it: a memory rides along in every later conversation, which is exactly where an injected instruction would try to persist.</li>
+<li><strong>Permission rules</strong> can target a scope: <code>memory_save(global)</code>, <code>memory_delete(repo)</code>.</li>
+<li><strong>Limits.</strong> A memory that contains a credential is refused. A turn makes at most 10 saves and deletes. A headless run reads memories but never saves them.</li>
+</ul>
+<h2 id="reviewing-what-it-remembers">Reviewing what it remembers</h2>
+<ul>
+<li><strong>Desktop app:</strong> Settings &gt; Memory lists this repository's and the all-projects memories. Read one in full, edit, pin (pinned memories stay at the top of the agent's list), or delete with Undo. <strong>Other repositories</strong> shows the memories of a repository that moved or was cloned again; <strong>Move here</strong> brings them into the open one.</li>
+<li><strong>Terminal:</strong> <code>/memory</code> lists them, numbered. <code>/memory show|edit|pin|unpin|forget &lt;n&gt;</code> acts on one, <code>/memory undo</code> restores the last one you forgot, and <code>/memory folder</code> prints where they live.</li>
+<li><strong>Turning it off:</strong> the switch in Settings &gt; Memory, <code>/memory off</code> in the terminal, or <code>--no-memory</code> for one headless run. Turning it off keeps what was saved.</li>
+</ul>
+<h2 id="where-memories-live">Where memories live</h2>
+<p>Each memory is a small markdown file in <code>~/.houston/memory</code>, never in the project:</p>
+<ul>
+<li><code>global/</code> for all-projects memories, and <code>repos/&lt;key&gt;/</code> per repository (the key is the same for every checkout and worktree of it).</li>
+<li>Files are readable only by you. Deleted memories go to <code>.trash/</code> and are removed after 30 days.</li>
+<li>You can read and edit the files yourself; Houston skips any it can't parse rather than failing.</li>
+</ul>
+        </div>
+        <nav class="docs-pager" aria-label="Previous and next topics"><a class="docs-prev" href="/docs/remembering-an-instruction"><span>Previous</span>Remembering an instruction (#)</a><a class="docs-next" href="/docs/side-chat"><span>Next</span>Side chat (/btw)</a></nav>
+      </main>
+      <nav class="docs-nav" aria-labelledby="docs-nav-title">
+        <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
+        <p class="docs-version">For v0.11.0</p>
+        <h3 id="nav-getting-started">Getting started</h3>
+        <ul aria-labelledby="nav-getting-started">
+            <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
+            <li><a href="/docs/what-houston-is">What Houston is</a></li>
+            <li><a href="/docs/clients">Clients (where Houston runs)</a></li>
+            <li><a href="/docs/models">Models</a></li>
+            <li><a href="/docs/settings-and-keys">Settings and keys</a></li>
+        </ul>
+        <h3 id="nav-working-with-the-agent">Working with the agent</h3>
+        <ul aria-labelledby="nav-working-with-the-agent">
+            <li><a href="/docs/the-terminal-composer">The terminal composer</a></li>
+            <li><a href="/docs/slash-commands">Slash commands</a></li>
+            <li><a href="/docs/typing-while-it-works">Typing while it works (steering)</a></li>
+            <li><a href="/docs/how-long-a-turn-runs">How long a turn runs</a></li>
+            <li><a href="/docs/how-hard-the-model-thinks">How hard the model thinks (/reasoning)</a></li>
+            <li><a href="/docs/being-told-when-it-needs-you">Being told when it needs you</a></li>
+            <li><a href="/docs/running-your-own-commands">Running your own commands (!)</a></li>
+            <li><a href="/docs/remembering-an-instruction">Remembering an instruction (#)</a></li>
+            <li><a href="/docs/memory-across-sessions" aria-current="page">Memory across sessions</a></li>
+            <li><a href="/docs/side-chat">Side chat (/btw)</a></li>
+        </ul>
+        <h3 id="nav-reviewing-and-undoing-changes">Reviewing and undoing changes</h3>
+        <ul aria-labelledby="nav-reviewing-and-undoing-changes">
+            <li><a href="/docs/seeing-what-the-tools-did">Seeing what the tools did</a></li>
+            <li><a href="/docs/what-actually-ran">What actually ran (the receipt)</a></li>
+            <li><a href="/docs/editing-files-while-it-works">Editing files while it works</a></li>
+            <li><a href="/docs/undoing-a-turn-and-seeing-what-changed">Undoing a turn, and seeing what changed</a></li>
+            <li><a href="/docs/rewinding-to-an-earlier-message">Rewinding to an earlier message</a></li>
+            <li><a href="/docs/review-and-multi-step-tools">Review and multi-step tools</a></li>
+            <li><a href="/docs/diagrams-and-visuals-in-replies">Diagrams and visuals in replies</a></li>
+            <li><a href="/docs/code-intelligence">Code intelligence (language servers)</a></li>
+        </ul>
+        <h3 id="nav-permissions-and-safety">Permissions and safety</h3>
+        <ul aria-labelledby="nav-permissions-and-safety">
+            <li><a href="/docs/approval-modes-and-permissions">Approval modes and permissions</a></li>
+            <li><a href="/docs/shell-sandbox-and-network">Shell sandbox and network</a></li>
+            <li><a href="/docs/project-rules">Project rules</a></li>
+        </ul>
+        <h3 id="nav-sessions-and-automation">Sessions and automation</h3>
+        <ul aria-labelledby="nav-sessions-and-automation">
+            <li><a href="/docs/context-worktrees-and-history">Context, worktrees, and history</a></li>
+            <li><a href="/docs/spawn-separate-sessions">Spawn separate sessions</a></li>
+            <li><a href="/docs/proposed-sessions">Proposed sessions</a></li>
+            <li><a href="/docs/watching-work-you-sent-off">Watching work you sent off (/spawned)</a></li>
+            <li><a href="/docs/scheduled-runs">Scheduled runs</a></li>
+        </ul>
+        <h3 id="nav-extending-houston">Extending Houston</h3>
+        <ul aria-labelledby="nav-extending-houston">
+            <li><a href="/docs/skills">Skills</a></li>
+            <li><a href="/docs/custom-subagents">Custom subagents</a></li>
+            <li><a href="/docs/hooks">Hooks</a></li>
+            <li><a href="/docs/plugins">Plugins</a></li>
+            <li><a href="/docs/mcp-servers">MCP servers</a></li>
+            <li><a href="/docs/github-tools">GitHub tools</a></li>
+        </ul>
+        <h3 id="nav-reference">Reference</h3>
+        <ul aria-labelledby="nav-reference">
+            <li><a href="/docs/what-a-session-cost">What a session cost (/cost)</a></li>
+            <li><a href="/docs/checking-your-setup">Checking your setup (/doctor)</a></li>
+            <li><a href="/docs/version-and-updates">Version and updates</a></li>
+            <li><a href="/docs/edit-view-and-go-menus">Edit, View, and Go menus</a></li>
+            <li><a href="/docs/help-menu">Help menu</a></li>
+            <li><a href="/docs/sharing-houston">Sharing Houston</a></li>
+            <li><a href="/docs/license-and-legal">License and legal</a></li>
+        </ul>
+      </nav>
+    </div>
+  </div>
+
+  <footer class="site-footer">
+    <div class="wrap">
+      <div class="footer-grid">
+        <div class="footer-brand">
+          <a class="brand" href="/" aria-label="Houston home">
+            <img src="/assets/icon-60.png" alt="" width="30" height="30" />
+            <span>Houston</span>
+          </a>
+          <p>A cross-platform coding agent. Bring your own model.</p>
+        </div>
+        <nav class="footer-col" aria-labelledby="footer-product">
+          <h2 id="footer-product">Product</h2>
+          <ul>
+            <li><a href="/#features">Features</a></li>
+            <li><a href="/#download">Download</a></li>
+            <li><a href="/docs/">Docs</a></li>
+            <li><a href="/#faq">FAQ</a></li>
+            <li><a href="https://github.com/houston-code/houston/releases" rel="noopener">Releases</a></li>
+          </ul>
+        </nav>
+        <nav class="footer-col" aria-labelledby="footer-project">
+          <h2 id="footer-project">Project</h2>
+          <ul>
+            <li><a href="https://github.com/houston-code/houston" rel="noopener">GitHub</a></li>
+            <li><a href="https://github.com/houston-code/houston/issues" rel="noopener">Report an issue</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/CONTRIBUTING.md" rel="noopener">Contributing</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/SECURITY.md" rel="noopener">Security policy</a></li>
+            <li><a href="/contact">Contact</a></li>
+          </ul>
+        </nav>
+        <nav class="footer-col" aria-labelledby="footer-legal">
+          <h2 id="footer-legal">Legal</h2>
+          <ul>
+            <li><a href="/privacy">Privacy</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/LICENSE" rel="noopener">License (Apache-2.0)</a></li>
+            <li><a href="https://github.com/houston-code/houston/blob/main/TRADEMARK.md" rel="noopener">Trademark policy</a></li>
+          </ul>
+        </nav>
+      </div>
+      <div class="footer-bottom">
+        <span>© <span id="year">2026</span> The Houston Authors</span>
+      </div>
+    </div>
+  </footer>
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

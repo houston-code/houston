@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Clients (where Houston runs) | Houston docs</title>
   <meta name="description" content="Houston runs in six places. All of them share one agent core, so tools, permissions, and skills behave the same everywhere." />
-  <meta name="houston-docs-version" content="v0.10.0" />
+  <meta name="houston-docs-version" content="v0.11.0" />
   <link rel="canonical" href="https://houstoncode.ai/docs/clients" />
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#ffffff" />
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1116" />
@@ -36,7 +36,7 @@
   "description": "Houston runs in six places. All of them share one agent core, so tools, permissions, and skills behave the same everywhere.",
   "url": "https://houstoncode.ai/docs/clients",
   "inLanguage": "en",
-  "version": "v0.10.0",
+  "version": "v0.11.0",
   "isPartOf": {
     "@type": "WebSite",
     "name": "Houston",
@@ -169,6 +169,7 @@
 <tr><td><code>--max-turns &lt;n&gt;</code></td><td>caps the model steps (a hard cap that never auto-extends)</td></tr>
 <tr><td><code>--max-cost &lt;usd&gt;</code></td><td>the agent wraps up once the run's estimated cost reaches this (a soft ceiling: the step in flight still finishes)</td></tr>
 <tr><td><code>--verify &lt;command&gt;</code></td><td>runs this command when the agent stops after editing files, and sends a failure back for a bounded fix-up pass (needs a policy that can edit, such as <code>--full-auto</code>)</td></tr>
+<tr><td><code>--no-memory</code></td><td>runs without the memories saved in earlier sessions (a headless run reads memories but never saves them)</td></tr>
 </tbody>
 </table></div>
 <h3 id="resuming-a-chat">Resuming a chat</h3>
@@ -248,7 +249,7 @@
       </main>
       <nav class="docs-nav" aria-labelledby="docs-nav-title">
         <h2 id="docs-nav-title"><a href="/docs/">Houston docs</a></h2>
-        <p class="docs-version">For v0.10.0</p>
+        <p class="docs-version">For v0.11.0</p>
         <h3 id="nav-getting-started">Getting started</h3>
         <ul aria-labelledby="nav-getting-started">
             <li><a href="/docs/getting-started-in-the-desktop-app">Getting started in the desktop app</a></li>
@@ -267,6 +268,7 @@
             <li><a href="/docs/being-told-when-it-needs-you">Being told when it needs you</a></li>
             <li><a href="/docs/running-your-own-commands">Running your own commands (!)</a></li>
             <li><a href="/docs/remembering-an-instruction">Remembering an instruction (#)</a></li>
+            <li><a href="/docs/memory-across-sessions">Memory across sessions</a></li>
             <li><a href="/docs/side-chat">Side chat (/btw)</a></li>
         </ul>
         <h3 id="nav-reviewing-and-undoing-changes">Reviewing and undoing changes</h3>
