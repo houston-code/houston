@@ -275,6 +275,13 @@ describe('renderSummary', () => {
     expect(renderSummary({ blocking: [], tracked: [{ ...row, id: 'N', kev: false }] })).not.toMatch(/Known Exploited/)
   })
 
+  it('names the scan in the heading when given a scope', () => {
+    expect(renderSummary({ blocking: [], tracked: [] })).toMatch(/^## Native-layer vulnerability policy\n/)
+    expect(renderSummary({ blocking: [], tracked: [] }, { scope: 'Electron runtime, before the build' })).toMatch(
+      /^## Native-layer vulnerability policy \(Electron runtime, before the build\)\n/
+    )
+  })
+
   it('says zero blocking and omits the tracked table when clean', () => {
     const out = renderSummary({ blocking: [], tracked: [] })
     expect(out).toMatch(/\*\*Blocking: 0\*\*/)

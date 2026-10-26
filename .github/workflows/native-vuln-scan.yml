@@ -126,7 +126,8 @@ jobs:
       - name: Apply release policy (fail only if a stable Electron fixes it)
         run: |
           node scripts/native-vuln-policy.mjs evaluate --report grype.native.json \
-            --releases electron-releases.json --summary "$GITHUB_STEP_SUMMARY"
+            --releases electron-releases.json --summary "$GITHUB_STEP_SUMMARY" \
+            --scope 'Electron runtime, before the build'
 
   # Scheduled runs only: see alert-on-failure.yml. A called or hand-run scan has a human actor.
   alert:
