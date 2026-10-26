@@ -103,6 +103,49 @@ export function isQuotaExhaustedError(err: unknown): boolean {
   return /insufficient_quota|exceeded your current quota/i.test(msg)
 }
 
+/**
+ * Error codes that mean the network let us down, not the request: the connection was
+ * reset or refused, a lookup failed, or a socket went quiet past its timeout. Checked
+ * anywhere on the `cause` chain, because that is where they live. A connection that
+ * drops mid-stream surfaces from fetch as a bare `TypeError: terminated` (which the
+ * Anthropic SDK rewraps as an `AnthropicError` of the same message); only its cause,
+ * an undici `SocketError` with `UND_ERR_SOCKET`, says what happened.
+ */
+const TRANSIENT_NETWORK_CODES = new Set([
+  'UND_ERR_SOCKET',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'ECONNABORTED',
+  'ETIMEDOUT',
+  'EPIPE',
+  'ENETUNREACH',
+  'ENETDOWN',
+  'EHOSTUNREACH',
+  'EHOSTDOWN',
+  'EAI_AGAIN',
+  'ENOTFOUND',
+  // Raised by the providers' idle-timeout fetch (providers/idle-fetch.ts) when a
+  // stream stops delivering bytes: the half-open socket a network switch leaves.
+  'HOUSTON_STREAM_IDLE'
+])
+
+/** Whether the error or anything on its `cause` chain carries a transient network code. */
+function hasTransientNetworkCode(err: unknown): boolean {
+  let e: unknown = err
+  // Bounded walk: a cause chain can be cyclic.
+  for (let i = 0; i < 8 && e !== undefined && e !== null; i++) {
+    const code = (e as { code?: unknown }).code
+    if (typeof code === 'string' && TRANSIENT_NETWORK_CODES.has(code)) return true
+    const next = (e as { cause?: unknown }).cause
+    if (next === e) break
+    e = next
+  }
+  return false
+}
+
 /** Whether an error looks transient and worth retrying. Defaults to NOT retrying. */
 export function isRetryableError(err: unknown): boolean {
   if (isQuotaExhaustedError(err)) return false
@@ -111,7 +154,11 @@ export function isRetryableError(err: unknown): boolean {
     // Retry rate-limits, conflicts, request-timeouts, and any server error.
     return status === 408 || status === 409 || status === 429 || status >= 500
   }
+  if (hasTransientNetworkCode(err)) return true
   const msg = String((err as { message?: unknown })?.message ?? err).toLowerCase()
+  // fetch's own word for a response body cut off mid-read, whatever the cause chain
+  // kept. Matched whole: a permanent error can say "terminated" in a sentence.
+  if (msg.trim() === 'terminated') return true
   // The 5xx alternative is anchored to a status/http/code context so a bare 3-digit
   // number in a *permanent* error's text (e.g. "Requested 550 completions") isn't
   // mistaken for a retryable server error. (5xx status codes still go through the

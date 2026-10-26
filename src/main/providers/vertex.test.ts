@@ -69,8 +69,8 @@ describe('createVertexProvider client options', () => {
   it('omits a blank project so the SDK can infer it from the credentials', async () => {
     const { ctorOpts } = await run({ region: 'us-east5' }, { model: 'claude-opus-4-8' })
     expect('projectId' in ctorOpts).toBe(false)
-    // Nothing beyond the region and the auth suppression below.
-    expect(ctorOpts).toEqual({ region: 'us-east5', apiKey: null, authToken: null })
+    // Nothing beyond the region, the auth suppression below, and the idle-timeout fetch.
+    expect(ctorOpts).toEqual({ region: 'us-east5', apiKey: null, authToken: null, fetch: expect.any(Function) })
   })
 
   it('nulls out the inherited first-party credentials so the env cannot leak to Google', async () => {

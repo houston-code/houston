@@ -63,9 +63,10 @@ describe('createBedrockProvider client options', () => {
   })
 
   it('omits every option the user did not set, so the SDK resolves its own defaults', async () => {
-    // Passing awsRegion: undefined would override the SDK's AWS_REGION fallback.
+    // Passing awsRegion: undefined would override the SDK's AWS_REGION fallback. The
+    // only option always set is the idle-timeout fetch.
     const { ctorOpts } = await run({}, { model: 'anthropic.claude-opus-4-8' })
-    expect(ctorOpts).toEqual({})
+    expect(ctorOpts).toEqual({ fetch: expect.any(Function) })
   })
 
   it('omits an empty apiKey rather than sending one', async () => {

@@ -362,6 +362,9 @@ retries the turn with a growing pause between attempts and tells you it's retryi
   and the turn starts over, so you only ever keep one copy. The desktop app removes
   the partial text, the terminal marks it as discarded (it can't erase what it
   printed), and headless mode never writes it to stdout.
+- **Stalled connections are cut.** A reply that stops arriving for two minutes (a
+  network switch or a laptop waking from sleep can leave the connection open but
+  dead) is treated as dropped and retried on a fresh connection.
 - **Nothing half-runs.** Tool calls in a discarded reply never run.
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.

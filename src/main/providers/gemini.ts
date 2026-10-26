@@ -9,6 +9,7 @@ import type {
 } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { geminiThinkingConfig, geminiUsesThinkingLevel } from './reasoning'
+import { idleTimeoutFetch } from './idle-fetch'
 
 /** Output floor for models that always think (Gemini 4): Google's recommended minimum. */
 const GEMINI_THINKING_MIN_OUTPUT = 32_768
@@ -135,7 +136,9 @@ export function createGeminiProvider(apiKey: string): Provider {
   // turn first runs. Providers the user never selects never pull their SDK in.
   let aiPromise: Promise<GoogleGenAI> | undefined
   const getAi = (): Promise<GoogleGenAI> =>
-    (aiPromise ??= import('@google/genai').then((m) => new m.GoogleGenAI({ apiKey })))
+    (aiPromise ??= import('@google/genai').then(
+      (m) => new m.GoogleGenAI({ apiKey, httpOptions: { fetch: idleTimeoutFetch() } })
+    ))
 
   return {
     async *streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent> {
