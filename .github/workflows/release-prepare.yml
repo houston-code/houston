@@ -340,7 +340,10 @@ jobs:
             created=()
             exit 0
           fi
-          url=$(gh pr create -R "$GITHUB_REPOSITORY" --base "$LINE" --head "$branch" --label release \
+          # No --label: opening a PR with a label fires `opened` and `labeled` together, and
+          # ci.yml's concurrency group then cancels one of the two runs at random, leaving a
+          # cancelled set of checks on the release PR.
+          url=$(gh pr create -R "$GITHUB_REPOSITORY" --base "$LINE" --head "$branch" \
             --title "release: v$VERSION" \
             --body "$(cat <<EOF
           Release PR for **v$VERSION**, cut from \`$SHA\` on \`$LINE\`. Release - prepare already ran the vulnerability and SBOM gates, CI, and every platform's build and checks on that commit.
