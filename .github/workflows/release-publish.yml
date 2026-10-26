@@ -706,8 +706,11 @@ jobs:
           PUBLISH_ENVIRONMENT: release
         run: |
           set -euo pipefail
+          # Linked in the log and the run summary whether this run published it or an earlier one did.
+          link="npm: https://www.npmjs.com/package/@houston-code/cli/v/$VERSION"
           if npm view "@houston-code/cli@$VERSION" version >/dev/null 2>&1; then
             echo "@houston-code/cli@$VERSION is already on npm; skipping."
+            echo "$link"; echo "- $link" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           curl -fsSL --retry 3 -o "$RUNNER_TEMP/npm.tgz" "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"
@@ -729,6 +732,7 @@ jobs:
           node scripts/check-npm-trusted-publishing.mjs
           cd npm-cli
           node "$RUNNER_TEMP/package/bin/npm-cli.js" publish --provenance --access public --registry https://registry.npmjs.org
+          echo "$link"; echo "- $link" >> "$GITHUB_STEP_SUMMARY"
       # Each channel publishes on its own: a failed npm publish still fails the job, but it
       # no longer leaves the tap and the AUR on the previous version. They still need the
       # verified CLI and the rendered packages, so they run only once those succeeded.
@@ -744,11 +748,16 @@ jobs:
           cp packaging-out/homebrew/houston.rb tap/Formula/houston.rb
           cd tap
           git add Formula/houston.rb
-          if git diff --cached --quiet; then echo "Tap already at $VERSION."; exit 0; fi
-          git -c user.name='github-actions[bot]' \
-              -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
-              commit -qm "houston $VERSION"
-          git push --quiet origin HEAD
+          if git diff --cached --quiet; then
+            echo "Tap already at $VERSION."
+          else
+            git -c user.name='github-actions[bot]' \
+                -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+                commit -qm "houston $VERSION"
+            git push --quiet origin HEAD
+          fi
+          link="Homebrew tap: https://github.com/houston-code/homebrew-tap/blob/$(git rev-parse HEAD)/Formula/houston.rb"
+          echo "$link"; echo "- $link" >> "$GITHUB_STEP_SUMMARY"
       - name: Update the AUR package
         if: ${{ !cancelled() && steps.packaging.outcome == 'success' && vars.AUR_PUBLISH == 'true' }}
         env:
@@ -773,7 +782,12 @@ jobs:
           cp packaging-out/aur/PKGBUILD packaging-out/aur/.SRCINFO aur/
           cd aur
           git add PKGBUILD .SRCINFO
-          if git diff --cached --quiet; then echo "AUR already at $VERSION."; exit 0; fi
-          git -c user.name='The Houston Authors' -c user.email='dev@houstoncode.ai' \
-              commit -qm "Update to $VERSION"
-          git push --quiet origin HEAD:master
+          if git diff --cached --quiet; then
+            echo "AUR already at $VERSION."
+          else
+            git -c user.name='The Houston Authors' -c user.email='dev@houstoncode.ai' \
+                commit -qm "Update to $VERSION"
+            git push --quiet origin HEAD:master
+          fi
+          link="AUR: https://aur.archlinux.org/packages/houston-bin (commit https://aur.archlinux.org/cgit/aur.git/commit/?h=houston-bin&id=$(git rev-parse HEAD))"
+          echo "$link"; echo "- $link" >> "$GITHUB_STEP_SUMMARY"
