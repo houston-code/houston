@@ -1,5 +1,41 @@
 # Changelog
 
+## v0.11.0 - 2026-10-26
+
+Houston now remembers your preferences and project facts across sessions, plus several agent reliability fixes.
+
+Memories are stored locally in `~/.houston/memory`. The list of saved memories, and any memory the agent reads, is sent to your model provider along with the rest of the conversation context. You can turn memory off at any time.
+
+### Breaking changes
+
+- None.
+
+### Added
+
+- **Memory across sessions:** the agent can save your preferences, corrections, and project facts that the code and git history don't show. It can also update or delete those memories later. Memories are kept per repository or for all projects. (#513, #519, #542)
+- **Memory in conversations:** each conversation includes a short list of saved memories. The agent can use the new `recall_memory` tool to read a memory in full or search them. Memories are treated as notes and never outrank your instructions, safety rules, or permissions. (#517)
+- **Memory approvals:** saving or deleting a memory asks for approval in the default mode, runs automatically in auto-edit and full auto, and is refused in plan mode. If the conversation has fetched outside content (web, MCP, subagents, or shell commands like `curl` or `git pull`), every memory write asks for approval in every mode, and no allow rule skips it. (#519)
+- **Settings > Memory:** a new page to turn memory on or off, open the memory folder, and view, edit, pin, or delete memories (with Undo). Memories left behind by a repository that moved or was cloned again can be moved into the open repository or deleted. (#520)
+- **`/memory` command:** in the terminal, list, show, edit, pin, unpin, and forget memories, undo the last deletion, and turn memory on or off. In the desktop app, `/memory` opens Settings > Memory. (#521, #522)
+- **Turning memory off:** use the `memoryEnabled` setting, or pass `--no-memory` for a single headless run. (#517)
+- **Help menu links:** new Houston Website and Houston on GitHub items, grouped with the Guide. Report an Issue now sits below a separator. (#525)
+- **Guide:** a new "Memory across sessions" section. (#522)
+
+### Fixed
+
+- Closing the update banner now cancels an in-progress macOS update download, even if another update check ran during the download. Before, the download could finish and install on the next quit. (#512)
+- `run_shell` commands that read input (such as `npm init`, `cat` with no file, or y/n prompts) now exit right away. Before, they hung until the 300-second timeout. (#534)
+- When the agent reads a failed CI log, it now sees the end of the log, where the failure is reported. Long logs are also cleaned of timestamps and color codes. (#510)
+- Tool calls with quoted numbers or booleans (for example `"42"` or `"true"`) are now accepted as their values instead of failing validation. This mostly helps smaller and local models. (#529)
+- Headless runs limited with `--allowed-tools` or `--disallowed-tools` are no longer told to use tools they can't call. In plan mode without `present_plan`, the plan goes in the final message. (#530)
+- Test results in the run receipt are now read correctly when a test is followed by `echo $?`. Before, they showed as unknown, or as failed with another command's exit code. (#533)
+- A test that reported its status before a later part of the same command timed out is no longer marked as timed out. (#536)
+
+### Changed
+
+- When `web_search` has no API key set, the agent is now told not to guess page URLs to fetch instead, and to tell you which sources it actually read. (#528)
+- The GitHub Action now runs the 0.10.0 CLI by default. It also passes the event's repository to the CLI, so GitHub tools work when the working directory has no GitHub remote. (#514)
+
 ## v0.10.0 - 2026-10-23
 
 Rewind to any message, per-chat model settings, unread chats, language servers, a GitHub Action, and a new Settings.
