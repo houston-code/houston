@@ -308,7 +308,8 @@ jobs:
           node scripts/native-vuln-policy.mjs evaluate --report grype.binary.json \
             --releases electron-releases.json --summary "$GITHUB_STEP_SUMMARY" \
             --vex-in .github/vex/houston.openvex.json --vex-out release-vex/houston.openvex.json \
-            --release "$(node -p "require('./package.json').version")"
+            --release "$(node -p "require('./package.json').version")" \
+            --scope 'packaged linux-x64 app, after the build'
       # Upload this leg's installers and update feed, now that every check above passed. The
       # same files electron-builder's own publisher used to upload: installers, their blockmaps
       # (the updaters' differential downloads), and the one latest*.yml feed this platform reads.

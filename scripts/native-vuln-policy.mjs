@@ -24,8 +24,10 @@
 //             Electron's published release metadata. Lets the scan run before anything is built.
 //   evaluate  --report <grype.json> --releases <releases.json>
 //             [--vex-in <doc>] [--vex-out <doc>] [--release <version>] [--summary <file>]
+//             [--scope <text>]
 //             Classify the grype findings, write the Markdown summary and (optionally) the
-//             release VEX document, and exit 1 if anything is BLOCKING.
+//             release VEX document, and exit 1 if anything is BLOCKING. --scope names what was
+//             scanned in the summary heading, so a run with two scans tells them apart.
 //   sarif     --report <grype.json> --in <grype.sarif> --out <out.sarif> [--lockfile <path>]
 //             Reduce grype's SARIF to the High/Critical findings and give each a real file
 //             location, for upload to GitHub code scanning.
@@ -166,8 +168,8 @@ export function buildReleaseVex(baseDoc, tracked, { release, now }) {
   }
 }
 
-export function renderSummary({ blocking, tracked }) {
-  const lines = ['## Native-layer vulnerability policy', '']
+export function renderSummary({ blocking, tracked }, { scope } = {}) {
+  const lines = [`## Native-layer vulnerability policy${scope ? ` (${scope})` : ''}`, '']
   const table = (rows) => [
     '| CVE | Severity | Component | Installed | Fixed in | Why |',
     '| --- | --- | --- | --- | --- | --- |',
@@ -290,7 +292,7 @@ function main(argv) {
   if (o.cmd === 'evaluate') {
     if (!o.report) throw new Error('--report <grype.json> is required')
     const result = classify(readJson(o.report), releases)
-    const summary = renderSummary(result)
+    const summary = renderSummary(result, { scope: o.scope })
     process.stdout.write(summary)
     if (o.summary) appendFileSync(o.summary, summary)
     if (o['vex-out']) {
