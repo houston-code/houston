@@ -485,9 +485,11 @@ jobs:
           # older line never takes the update feed from a newer one.
           # tag_name is resent: a draft edit without it renames the draft's tag to
           # untagged-<hash> (scripts/release-draft.mjs retargetArgs has the history).
-          gh api -X PATCH "repos/houston-code/houston/releases/$id" \
-            -f tag_name="$tag" -F draft=false -f make_latest="$LATEST" -F body=@release-body.md --silent
-          echo "Published $tag (latest: $LATEST)."
+          url="$(gh api -X PATCH "repos/houston-code/houston/releases/$id" \
+            -f tag_name="$tag" -F draft=false -f make_latest="$LATEST" -F body=@release-body.md --jq .html_url)"
+          # Linked in the log and the run summary, like the packages the distribute job publishes.
+          echo "Published $tag (latest: $LATEST): $url"
+          echo "- GitHub Release: $url" >> "$GITHUB_STEP_SUMMARY"
 
   # Brings the release to main: its CHANGELOG section (placed in version order), for an
   # X.Y.0 release the version in package.json and package-lock.json, and for the latest

@@ -294,6 +294,13 @@ describe('release-publish latest flag', () => {
     expect(finalize).toContain('-f tag_name="$tag" -F draft=false')
     expect(finalize).not.toMatch(/--latest\b/)
   })
+
+  it("links the published release in the log and the run summary, from the edit's own response", () => {
+    const finalize = job('finalize')
+    expect(finalize).toContain('-F body=@release-body.md --jq .html_url)"')
+    expect(finalize).toContain('echo "Published $tag (latest: $LATEST): $url"')
+    expect(finalize).toContain('echo "- GitHub Release: $url" >> "$GITHUB_STEP_SUMMARY"')
+  })
 })
 
 describe('release-publish distribute', () => {
