@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -245,11 +245,12 @@ describe('release-source CLI', { timeout: 30_000 }, () => {
   }
   const pkg = (v, deps) => JSON.stringify({ name: 'x', version: v, ...(deps ? { dependencies: deps } : {}) }) + '\n'
   const commit = (msg) => sh('commit', '-qm', msg)
-  const pr = (n, branch, into, change, from = into) => {
+  // `title` becomes the merge commit's body, where GitHub puts the PR title.
+  const pr = (n, branch, into, change, from = into, title) => {
     sh('checkout', '-q', '-B', branch, from)
     change()
     sh('checkout', '-q', into)
-    sh('merge', '--no-ff', '-q', branch, '-m', `Merge pull request #${n} from ${OWNER}/${branch}`)
+    sh('merge', '--no-ff', '-q', branch, '-m', `Merge pull request #${n} from ${OWNER}/${branch}`, ...(title ? ['-m', title] : []))
     return sh('rev-parse', 'HEAD')
   }
   const feature = (n) => () => {
@@ -303,7 +304,7 @@ describe('release-source CLI', { timeout: 30_000 }, () => {
     s.b58 = sh('rev-parse', 'HEAD')
     s.m1 = pr(60, 'release-pr/v0.9.1', 'release/0.9', releaseCommit('0.9.1', s.b58))
     s.r1 = sh('rev-parse', `${s.m1}^2`)
-    s.b59 = pr(59, 'backport/0.9/pr-14', 'release/0.9', feature(59))
+    s.b59 = pr(59, 'backport/0.9/pr-14', 'release/0.9', feature(59), 'release/0.9', 'Backport #14 to 0.9: keep <kbd> focus in *all* panes')
     s.main = pr(15, 'feat/f', 'main', feature(15))
     point('main', s.main)
     point('release/0.9', s.m1)
@@ -313,6 +314,25 @@ describe('release-source CLI', { timeout: 30_000 }, () => {
   afterAll(() => rmSync(repo, { recursive: true, force: true }))
 
   const plan = (choice, version) => run('plan', { CHOICE: choice, VERSION: version, MAIN_SHA: s.main })
+  // A plan run as Actions runs it: the job summary it writes, and the run's own output.
+  const planWithSummary = (choice, version) => {
+    const file = join(repo, '..', `${repo.split(/[\\/]/).pop()}-step-summary.md`)
+    writeFileSync(file, '')
+    try {
+      const r = run('plan', {
+        CHOICE: choice,
+        VERSION: version,
+        MAIN_SHA: s.main,
+        GITHUB_STEP_SUMMARY: file,
+        GITHUB_SERVER_URL: 'https://github.com',
+        GITHUB_REPOSITORY: `${OWNER}/houston`,
+      })
+      return { r, markdown: readFileSync(file, 'utf8') }
+    } finally {
+      rmSync(file, { force: true })
+    }
+  }
+  const link = (n) => `[#${n}](https://github.com/${OWNER}/houston/pull/${n})`
 
   describe('plan', () => {
     it('cuts the next minor from the dispatched main commit, counting the pending 0.9.1', () => {
@@ -351,6 +371,10 @@ describe('release-source CLI', { timeout: 30_000 }, () => {
         expect(r.stderr).toBe('')
         expect(out(r)).toMatchObject({ mode: 'update', sha: s.b59 })
         expect(out(r).summary).toMatch(/#59/)
+        const { markdown } = planWithSummary(UPDATE, '0.9.1')
+        expect(markdown).toContain('### Update pending v0.9.1 from `release/0.9`')
+        expect(markdown).toContain(`1 change was merged to \`release/0.9\` since v0.9.1 was cut and joins it:\n\n- ${link(59)} `)
+        expect(markdown).toContain(`from the tip of \`release/0.9\` (\`${s.b59.slice(0, 9)}\`)`)
       } finally {
         unpoint('release-pr/v0.9.1')
         point('release/0.9', s.m1)
@@ -364,12 +388,34 @@ describe('release-source CLI', { timeout: 30_000 }, () => {
         const r = plan(PATCH, '0.9.2')
         expect(r.stderr).toBe('')
         expect(out(r)).toMatchObject({ mode: 'patch', version: '0.9.2', sha: s.b59, create_line: 'false' })
-        expect(out(r).summary).toMatch(/#59/)
+        expect(out(r).summary).toBe('Starting patch v0.9.2 from release/0.9 with 1 change since v0.9.1: #59.')
+        // The job summary names and links each PR, its title escaped so it reads as text.
+        const { r: withSummary, markdown } = planWithSummary(PATCH, '0.9.2')
+        expect(withSummary.status).toBe(0)
+        expect(markdown).toBe(
+          [
+            '### Patch v0.9.2 from `release/0.9`',
+            '1 change was merged to `release/0.9` since v0.9.1 and goes into this patch:',
+            `- ${link(59)} Backport #14 to 0.9: keep \\<kbd\\> focus in \\*all\\* panes`,
+            `This run opens the v0.9.2 release PR from the tip of \`release/0.9\` (\`${s.b59.slice(0, 9)}\`).`,
+          ].join('\n\n') + '\n',
+        )
         // Nothing new since 0.9.1 means nothing to patch.
         point('release/0.9', s.m1)
         expect(plan(PATCH, '0.9.2').stderr).toMatch(/Nothing merged to release\/0\.9 since v0\.9\.1/)
       } finally {
         sh('tag', '-d', 'v0.9.1')
+        point('release/0.9', s.m1)
+      }
+    })
+
+    it('titles a squash-merged change from its subject in the job summary', () => {
+      point('release/0.9', s.b58)
+      try {
+        const { r, markdown } = planWithSummary(PATCH, '0.9.1')
+        expect(r.stderr).toBe('')
+        expect(markdown).toContain(`- ${link(58)} Fix the crash on launch\n`)
+      } finally {
         point('release/0.9', s.m1)
       }
     })

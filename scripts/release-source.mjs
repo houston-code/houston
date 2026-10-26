@@ -23,6 +23,7 @@
 // Kept as a tested script rather than inline shell because these checks are the boundary
 // between "something on a branch" and "the reviewed release commit".
 
+import { appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { resolve } from 'node:path'
@@ -359,6 +360,43 @@ function recordedBases(from, to) {
   return [...new Set(lines(git('log', '--format=%(trailers:key=Release-Base,valueonly)', `${from}..${to}`)))]
 }
 
+/**
+ * A PR commit's title: the first body line of a merge commit (GitHub puts the PR title there),
+ * or a squash commit's subject without its " (#N)". Empty when a merge has no body.
+ */
+function prTitle(commit) {
+  if (/^Merge pull request #\d+ from /.test(commit.subject)) {
+    return lines(git('log', '-1', '--format=%b', commit.sha))[0] ?? ''
+  }
+  return commit.subject.replace(/\s*\(#\d+\)$/, '')
+}
+
+/** Text with the characters that would turn it into markdown or HTML escaped. */
+function escapeMarkdown(text) {
+  return text.replace(/[\\`*_[\]<>|~]/g, '\\$&')
+}
+
+/** The PR commits among `commits`, as `{ number, title }`, oldest first. */
+function changesIn(commits) {
+  return commits
+    .map((c) => ({ number: prNumberFromSubject(c.subject), commit: c }))
+    .filter((c) => c.number !== null)
+    .map((c) => ({ number: c.number, title: prTitle(c.commit) }))
+}
+
+/** `changes` as a markdown list, each PR linked when the run says which repository it is. */
+function changeList(changes, env) {
+  const base = env.GITHUB_REPOSITORY ? `${env.GITHUB_SERVER_URL || 'https://github.com'}/${env.GITHUB_REPOSITORY}/pull/` : null
+  return changes
+    .map(({ number, title }) => {
+      const ref = base ? `[#${number}](${base}${number})` : `#${number}`
+      return `- ${ref}${title ? ` ${escapeMarkdown(title)}` : ''}`
+    })
+    .join('\n')
+}
+
+const plural = (n) => `${n} change${n === 1 ? '' : 's'}`
+
 function fail(problems) {
   for (const p of problems) console.error(`::error::${p}`)
   process.exit(1)
@@ -371,7 +409,9 @@ function output(pairs) {
 // `plan`: env CHOICE, VERSION, MAIN_SHA (the commit the run was dispatched on),
 // GITHUB_REPOSITORY_OWNER. Needs full history, tags, and origin/release/* and
 // origin/release-pr/* fetched. Prints mode, version, line, create_line, from_tag, sha (the
-// commit every prepare job verifies and the release PR is cut from) and summary.
+// commit every prepare job verifies and the release PR is cut from) and summary (one line).
+// With GITHUB_STEP_SUMMARY set, also writes the plan there as markdown, naming and linking
+// each PR a patch or update brings (GITHUB_SERVER_URL and GITHUB_REPOSITORY build the links).
 function plan(env) {
   const tags = allTags()
   const lineNames = branchesUnder('release/').filter((b) => /^release\/\d+\.\d+$/.test(b))
@@ -386,6 +426,7 @@ function plan(env) {
 
   let sha
   let summary
+  let markdown
   if (p.mode === 'minor' || p.mode === 'major') {
     sha = env.MAIN_SHA
     summary = `Cutting v${p.version} (next ${p.mode}) from main into a new ${p.line} branch.`
@@ -398,9 +439,15 @@ function plan(env) {
     const commits = firstParent(`refs/tags/v${previous}^{commit}..${sha}`)
     const problems = bypassProblems(p.line, commits)
     if (problems.length) fail(problems)
-    const changes = commits.map((c) => prNumberFromSubject(c.subject)).filter((n) => n !== null)
+    const changes = changesIn(commits)
     if (!changes.length) fail([`Nothing merged to ${p.line} since v${previous}, so there's nothing to patch.`])
-    summary = `Starting patch v${p.version} from ${p.line}: ${changes.map((n) => `#${n}`).join(', ')}.`
+    summary = `Starting patch v${p.version} from ${p.line} with ${plural(changes.length)} since v${previous}: ${changes.map((c) => `#${c.number}`).join(', ')}.`
+    markdown = [
+      `### Patch v${p.version} from \`${p.line}\``,
+      `${plural(changes.length)} ${changes.length === 1 ? 'was' : 'were'} merged to \`${p.line}\` since v${previous} and ${changes.length === 1 ? 'goes' : 'go'} into this patch:`,
+      changeList(changes, env),
+      `This run opens the v${p.version} release PR from the tip of \`${p.line}\` (\`${sha.slice(0, 9)}\`).`,
+    ]
   } else {
     sha = git('rev-parse', remote(p.line))
     // The cut being replaced: an open release PR's own commits (everything on its branch that
@@ -416,13 +463,24 @@ function plan(env) {
     const commits = firstParent(`${bases[0]}..${sha}`)
     const problems = bypassProblems(p.line, commits)
     if (problems.length) fail(problems)
-    const changes = commits.map((c) => prNumberFromSubject(c.subject)).filter((n) => n !== null)
+    const changes = changesIn(commits)
     // No new merges is fine: the re-cut still regenerates the notes (for example after publish
     // refused a summary that a merged release PR got wrong).
     summary = changes.length
-      ? `Updating pending v${p.version} from ${p.line}: ${changes.map((n) => `#${n}`).join(', ')} since it was cut.`
+      ? `Updating pending v${p.version} from ${p.line}: ${changes.map((c) => `#${c.number}`).join(', ')} since it was cut.`
       : `Updating pending v${p.version} from ${p.line}: no new merges since it was cut, so only the notes are regenerated.`
+    markdown = [
+      `### Update pending v${p.version} from \`${p.line}\``,
+      ...(changes.length
+        ? [
+            `${plural(changes.length)} ${changes.length === 1 ? 'was' : 'were'} merged to \`${p.line}\` since v${p.version} was cut and ${changes.length === 1 ? 'joins' : 'join'} it:`,
+            changeList(changes, env),
+          ]
+        : ['Nothing new was merged since it was cut, so only the notes are regenerated.']),
+      `This run re-cuts the v${p.version} release PR from the tip of \`${p.line}\` (\`${sha.slice(0, 9)}\`).`,
+    ]
   }
+  if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, (markdown ?? [summary]).join('\n\n') + '\n')
   output({ mode: p.mode, version: p.version, line: p.line, create_line: p.createLine, from_tag: p.fromTag ?? '', sha, summary })
 }
 
