@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import type { Provider, ProviderStreamEvent } from '@shared/agent'
@@ -47,14 +47,20 @@ describe('idleTimeoutFetch', () => {
     expect(res.status).toBe(201)
     expect(res.statusText).toBe('Made')
     expect(res.headers.get('x-a')).toBe('1')
-    const text = readAll(res)
-    // Each gap is under the window; together they're well past it.
-    for (const part of ['a', 'b', 'c', 'd']) {
-      m.push(part)
-      await sleep(60)
+    // Fake timers: a wall-clock sleep overshoots the window on a loaded runner.
+    vi.useFakeTimers()
+    try {
+      const text = readAll(res)
+      // Each gap is under the window; together they're well past it.
+      for (const part of ['a', 'b', 'c', 'd']) {
+        m.push(part)
+        await vi.advanceTimersByTimeAsync(90)
+      }
+      m.end()
+      expect(await text).toBe('abcd')
+    } finally {
+      vi.useRealTimers()
     }
-    m.end()
-    expect(await text).toBe('abcd')
   })
 
   it('fails a body that goes quiet past the window, and releases the upstream body', async () => {
