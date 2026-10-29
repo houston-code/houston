@@ -108,6 +108,15 @@ describe('stableUpgrade', () => {
     expect(stableUpgrade('electron', ['45.0.0-beta.1'], RELEASES)).toBeUndefined()
   })
 
+  it('prefers the oldest fixed release at or above the Electron we ship', () => {
+    expect(stableUpgrade('node', ['24.21.0'], RELEASES, '44.4.4')?.version).toBe('44.4.5')
+    expect(stableUpgrade('node', ['24.21.0'], RELEASES, '44.4.3')?.version).toBe('44.4.3')
+  })
+
+  it('falls back to an older line when nothing at or above the Electron we ship has the fix', () => {
+    expect(stableUpgrade('node', ['24.21.0'], RELEASES, '45.0.0')?.version).toBe('44.4.3')
+  })
+
   it('has no upgrade path for a component Electron does not supply', () => {
     expect(stableUpgrade('ripgrep', ['15.1.0'], RELEASES)).toBeUndefined()
   })
@@ -119,7 +128,31 @@ describe('classify', () => {
     expect(tracked).toEqual([])
     expect(blocking).toHaveLength(1)
     expect(blocking[0]).toMatchObject({ id: 'CVE-1', key: 'chromium', upgrade: '44.4.3' })
-    expect(blocking[0].reason).toMatch(/stable Electron 44\.4\.3 bundles chromium 152\.0\.7977\.130/)
+    expect(blocking[0].reason).toBe('upgrade Electron to 44.4.3, which bundles chromium 152.0.7977.130')
+  })
+
+  it('names an upgrade on our line or newer, not an older-line backport (the 2026-10-29 scan)', () => {
+    const node = { name: 'node', version: '24.22.0', purl: 'pkg:generic/node@24.22.0' }
+    const releases = [
+      { version: '45.1.0', chrome: '156.0.8078.49', node: '24.22.1' },
+      { version: '45.0.0', chrome: '156.0.8078.48', node: '24.22.0' },
+      { version: '43.8.4', chrome: '150.0.7871.320', node: '24.22.1' }
+    ]
+    const { blocking } = classify({ matches: [match('CVE-4', 'High', node, ['22.23.4', '24.22.1'])] }, releases, {
+      electron: '45.0.0'
+    })
+    expect(blocking[0]).toMatchObject({ key: 'node', upgrade: '45.1.0' })
+    expect(blocking[0].reason).toBe('upgrade Electron from 45.0.0 to 45.1.0, which bundles node 24.22.1')
+  })
+
+  it('says so when only an older Electron line has the fix, instead of suggesting a downgrade', () => {
+    const { blocking } = classify({ matches: [match('CVE-5', 'High', CHROMIUM, ['152.0.7977.100'])] }, RELEASES, {
+      electron: '45.0.0'
+    })
+    expect(blocking[0].upgrade).toBe('44.4.3')
+    expect(blocking[0].reason).toBe(
+      'only older stable Electron 44.4.3 bundles chromium 152.0.7977.130; no stable release at or above 45.0.0 has the fix yet'
+    )
   })
 
   it('TRACKS when only a pre-release carries the fix (the 2026-09-25 release failure)', () => {
