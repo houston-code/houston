@@ -24,10 +24,11 @@
 //             Electron's published release metadata. Lets the scan run before anything is built.
 //   evaluate  --report <grype.json> --releases <releases.json>
 //             [--vex-in <doc>] [--vex-out <doc>] [--release <version>] [--summary <file>]
-//             [--scope <text>]
+//             [--scope <text>] [--lockfile package-lock.json]
 //             Classify the grype findings, write the Markdown summary and (optionally) the
 //             release VEX document, and exit 1 if anything is BLOCKING. --scope names what was
-//             scanned in the summary heading, so a run with two scans tells them apart.
+//             scanned in the summary heading, so a run with two scans tells them apart. The
+//             lockfile's Electron picks the upgrade each blocking finding names.
 //   sarif     --report <grype.json> --in <grype.sarif> --out <out.sarif> [--lockfile <path>]
 //             Reduce grype's SARIF to the High/Critical findings and give each a real file
 //             location, for upload to GitHub code scanning.
@@ -35,7 +36,7 @@
 // <releases.json> is https://releases.electronjs.org/releases.json, downloaded once per run so
 // every step of a run judges against the same snapshot. Missing metadata fails closed.
 
-import { readFileSync, writeFileSync, appendFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, appendFileSync, existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EXPECTED_BINARIES } from './binary-sbom.mjs'
@@ -81,21 +82,36 @@ export function componentKey(artifact) {
   return artifact?.name || 'unknown'
 }
 
-// First stable Electron release (oldest) that fixes the finding, or undefined.
-export function stableUpgrade(key, fixes, releases) {
+// Stable Electron release to upgrade to for a finding, or undefined if no stable release fixes it.
+// Given the Electron we ship (`current`), the oldest fixed release at or above it: the oldest fixed
+// release overall is often a backport on an older major (43.8.4 while we ship 45.0.0), which is
+// not an upgrade. Without `current`, or when only older lines have the fix, the oldest overall.
+export function stableUpgrade(key, fixes, releases, current) {
   const field = RUNTIME_FIELD[key]
   if (!field) return undefined
-  return releases
+  const fixed = releases
     .filter(isStable)
     .filter((r) => satisfiesFix(r[field], fixes))
-    .sort((a, b) => compareVersions(a.version, b.version))[0]
+    .sort((a, b) => compareVersions(a.version, b.version))
+  return (current && fixed.find((r) => compareVersions(r.version, current) >= 0)) || fixed[0]
+}
+
+// Why a finding blocks, naming the Electron to move to. An upgrade below `current` exists only on
+// an older line, so say that rather than suggest a downgrade.
+function upgradeReason(key, upgrade, current) {
+  const bundles = `${key} ${upgrade[RUNTIME_FIELD[key]]}`
+  if (current && compareVersions(upgrade.version, current) < 0) {
+    return `only older stable Electron ${upgrade.version} bundles ${bundles}; no stable release at or above ${current} has the fix yet`
+  }
+  return `upgrade Electron${current ? ` from ${current}` : ''} to ${upgrade.version}, which bundles ${bundles}`
 }
 
 // Classify every fixable High/Critical match. Returns { blocking, tracked }, each a list of
 // { id, severity, kev, key, purl, installed, fixes, upgrade?, reason }. `kev` marks a CVE on
 // CISA's Known Exploited Vulnerabilities list; it does not change the class (blocking cannot ship
-// a fix no stable Electron has), but the summary puts it in front of whoever reads it.
-export function classify(report, releases) {
+// a fix no stable Electron has), but the summary puts it in front of whoever reads it. `electron`
+// is the Electron we ship, used only to name the right upgrade in `upgrade` and `reason`.
+export function classify(report, releases, { electron } = {}) {
   if (!Array.isArray(releases) || releases.length === 0) {
     throw new Error('Electron release metadata is missing or empty; refusing to classify (fail closed).')
   }
@@ -123,13 +139,9 @@ export function classify(report, releases) {
       blocking.push({ ...item, reason: `not supplied by Electron; update ${key} to ${item.fixes.join(' or ')}` })
       continue
     }
-    const upgrade = stableUpgrade(key, item.fixes, releases)
+    const upgrade = stableUpgrade(key, item.fixes, releases, electron)
     if (upgrade) {
-      blocking.push({
-        ...item,
-        upgrade: upgrade.version,
-        reason: `stable Electron ${upgrade.version} bundles ${key} ${upgrade[RUNTIME_FIELD[key]]}`
-      })
+      blocking.push({ ...item, upgrade: upgrade.version, reason: upgradeReason(key, upgrade, electron) })
     } else {
       tracked.push({ ...item, reason: `no stable Electron bundles ${key} at or above ${item.fixes.join(' or ')}` })
     }
@@ -291,7 +303,10 @@ function main(argv) {
   }
   if (o.cmd === 'evaluate') {
     if (!o.report) throw new Error('--report <grype.json> is required')
-    const result = classify(readJson(o.report), releases)
+    const lockfile = o.lockfile || 'package-lock.json'
+    // Only names the upgrade, so a run without the lockfile still classifies.
+    const electron = existsSync(lockfile) ? lockfileElectronVersion(readJson(lockfile)) : undefined
+    const result = classify(readJson(o.report), releases, { electron })
     const summary = renderSummary(result, { scope: o.scope })
     process.stdout.write(summary)
     if (o.summary) appendFileSync(o.summary, summary)
