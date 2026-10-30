@@ -1,6 +1,14 @@
 import { beforeEach, describe, it, expect, vi } from 'vitest'
 import type { ChatMessage, Provider, ProviderStreamEvent } from '@shared/agent'
-import { sanitizeTitle, buildTitleMessages, generateTitle, maybeGenerateTitle } from './title'
+import {
+  sanitizeTitle,
+  buildTitleMessages,
+  generateTitle,
+  maybeGenerateTitle,
+  titleRequestOptions,
+  TITLE_MAX_TOKENS,
+  TITLE_REASONING_MAX_TOKENS
+} from './title'
 
 // Only maybeGenerateTitle touches these; the pure helpers and generateTitle don't.
 const h = vi.hoisted(() => ({
@@ -133,6 +141,49 @@ describe('buildTitleMessages', () => {
   })
 })
 
+describe('titleRequestOptions', () => {
+  it('keeps the tiny cap for a model that does not reason', () => {
+    expect(titleRequestOptions('openai-compatible', 'qwen/qwen3-coder-next', { reasoning: false })).toEqual({
+      maxTokens: TITLE_MAX_TOKENS
+    })
+  })
+
+  it('gives a host-listed reasoning model the lowest effort and room to think', () => {
+    // Reasoning is mandatory on this model and defaults to its highest effort, so at
+    // the tiny cap every token went to thinking and no title came back.
+    expect(titleRequestOptions('openai-compatible', 'qwen/qwen3.8-max-prime', { reasoning: true })).toEqual({
+      maxTokens: TITLE_REASONING_MAX_TOKENS,
+      reasoningEffort: 'low',
+      reasoningCapable: true
+    })
+  })
+
+  it('falls back to the id heuristic when the host lists no capabilities', () => {
+    expect(titleRequestOptions('openai', 'gpt-5')).toEqual({
+      maxTokens: TITLE_REASONING_MAX_TOKENS,
+      reasoningEffort: 'low'
+    })
+  })
+
+  it('lets host metadata saying "no reasoning" override the id heuristic', () => {
+    expect(titleRequestOptions('openai-compatible', 'gpt-5', { reasoning: false })).toEqual({
+      maxTokens: TITLE_MAX_TOKENS
+    })
+  })
+
+  it('leaves Claude and Gemini adapters, which budget their own thinking, alone', () => {
+    for (const [kind, model] of [
+      ['anthropic', 'claude-opus-4-6'],
+      ['bedrock', 'claude-opus-4-6'],
+      ['vertex', 'claude-opus-4-6'],
+      ['foundry', 'claude-opus-4-6'],
+      ['gemini', 'gemini-2.5-pro']
+    ] as const) {
+      expect(titleRequestOptions(kind, model, { reasoning: true })).toEqual({ maxTokens: TITLE_MAX_TOKENS })
+    }
+  })
+})
+
 describe('generateTitle', () => {
   const opening: ChatMessage[] = [
     { role: 'user', content: 'Help me add a dark mode toggle' },
@@ -213,7 +264,7 @@ describe('maybeGenerateTitle', () => {
     // A chat at turn start: only the user message is persisted so far.
     h.getConversation.mockReturnValue({ id: 'c1', messages: [{ role: 'user', content: 'Add dark mode' }] })
     h.needsGeneratedTitle.mockReturnValue(true)
-    h.getProvider.mockReturnValue({ id: 'p' })
+    h.getProvider.mockReturnValue({ id: 'p', kind: 'openai-compatible', models: [] })
     h.setGeneratedTitle.mockReturnValue(true)
   })
 
@@ -260,6 +311,27 @@ describe('maybeGenerateTitle', () => {
     const onTitle = vi.fn()
     await maybeGenerateTitle(opts(onTitle))
     expect(onTitle).not.toHaveBeenCalled()
+  })
+
+  it("sizes the call from the host's capability metadata for the model", async () => {
+    h.getProvider.mockReturnValue({
+      id: 'p',
+      kind: 'openai-compatible',
+      models: [{ id: 'm', caps: { reasoning: true } }]
+    })
+    const streamChat = vi.fn(async function* () {
+      yield { type: 'text', text: 'Add Dark Mode' } as ProviderStreamEvent
+    })
+    h.createProvider.mockReturnValue({ streamChat })
+    await maybeGenerateTitle(opts())
+    expect(streamChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxTokens: TITLE_REASONING_MAX_TOKENS,
+        reasoningEffort: 'low',
+        reasoningCapable: true
+      })
+    )
+    expect(h.setGeneratedTitle).toHaveBeenCalledWith('c1', 'Add Dark Mode')
   })
 
   it('skips the provider entirely for an already-titled chat', async () => {
