@@ -1,4 +1,6 @@
-import type { ChatMessage, Provider } from '@shared/agent'
+import type { ChatMessage, ChatRequest, Provider } from '@shared/agent'
+import { modelHasReasoning } from '@shared/model-facts'
+import type { ModelCaps, ProviderKind } from '@shared/types'
 import { getProvider } from '../agentHost'
 import { createProvider } from '../providers'
 import { getConversation, needsGeneratedTitle, setGeneratedTitle } from '../conversations'
@@ -18,6 +20,20 @@ import { providerStreamError, withProviderRetry } from './retry'
 
 /** Tokens the title call may produce — a title is a few words, so keep it tiny. */
 export const TITLE_MAX_TOKENS = 32
+
+/**
+ * The cap for a reasoning model on an adapter that passes the cap straight through.
+ * Those hosts count reasoning against `max_tokens`, so at {@link TITLE_MAX_TOKENS} a
+ * model that thinks by default spends the whole budget thinking and returns no text.
+ * Paired with the lowest effort, this leaves room for a short think plus the title.
+ */
+export const TITLE_REASONING_MAX_TOKENS = 1024
+
+/**
+ * Kinds whose adapter sizes `max_tokens` around its own thinking budget (the Claude
+ * and Gemini ones), so a reasoning model there already gets room for the reply.
+ */
+const SELF_BUDGETING_KINDS: ReadonlySet<ProviderKind> = new Set(['anthropic', 'bedrock', 'vertex', 'foundry', 'gemini'])
 
 /** Hard cap on the persisted title length (matches the first-message placeholder). */
 const MAX_TITLE_LEN = 60
@@ -99,6 +115,27 @@ export function sanitizeTitle(raw: string): string | null {
   return t.length > MAX_TITLE_LEN ? `${t.slice(0, MAX_TITLE_LEN - 1)}…` : t
 }
 
+/** The token cap and reasoning fields for a title call. */
+export type TitleRequestOptions = Pick<ChatRequest, 'maxTokens' | 'reasoningEffort' | 'reasoningCapable'>
+
+/**
+ * Size the title call for the model serving it. A reasoning model behind an
+ * OpenAI-style adapter gets the lowest effort and a cap with room to think: some
+ * (OpenRouter's Qwen 3.8 Max, for one) reason by default at their highest effort and
+ * can't turn it off, so the tiny cap alone always comes back empty. Everything else
+ * keeps the tiny cap. Host capability metadata wins over the id heuristic, as on a
+ * turn. Pure.
+ */
+export function titleRequestOptions(kind: ProviderKind, model: string, caps?: ModelCaps): TitleRequestOptions {
+  const reasons = caps?.reasoning ?? modelHasReasoning(model)
+  if (!reasons || SELF_BUDGETING_KINDS.has(kind)) return { maxTokens: TITLE_MAX_TOKENS }
+  return {
+    maxTokens: TITLE_REASONING_MAX_TOKENS,
+    reasoningEffort: 'low',
+    ...(caps?.reasoning !== undefined ? { reasoningCapable: caps.reasoning } : {})
+  }
+}
+
 /**
  * Ask the provider for a title and sanitize it. Tools are omitted so the model can
  * only reply with prose. Returns null when the model produces nothing usable; throws
@@ -108,7 +145,8 @@ export async function generateTitle(
   provider: Provider,
   model: string,
   messages: ChatMessage[],
-  signal: AbortSignal
+  signal: AbortSignal,
+  request: TitleRequestOptions = { maxTokens: TITLE_MAX_TOKENS }
 ): Promise<string | null> {
   const built = buildTitleMessages(messages)
   if (!built) return null
@@ -119,7 +157,7 @@ export async function generateTitle(
         model,
         system: titleSystemPrompt,
         messages: built,
-        maxTokens: TITLE_MAX_TOKENS,
+        ...request,
         signal
       })) {
         if (ev.type === 'text') acc += ev.text
@@ -163,7 +201,9 @@ export async function maybeGenerateTitle(opts: {
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), TITLE_TIMEOUT_MS)
   try {
-    const title = await generateTitle(provider, opts.model, conv.messages, abort.signal)
+    const caps = providerConfig.models.find((m) => m.id === opts.model)?.caps
+    const request = titleRequestOptions(providerConfig.kind, opts.model, caps)
+    const title = await generateTitle(provider, opts.model, conv.messages, abort.signal, request)
     if (title && setGeneratedTitle(opts.conversationId, title)) opts.onTitle?.(title)
   } catch {
     // network/abort/provider error — silently keep the placeholder title.
