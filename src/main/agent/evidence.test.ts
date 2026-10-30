@@ -188,6 +188,19 @@ describe('parseTestCounts', () => {
     )
   })
 
+  it('reads a vitest summary through its colour codes', () => {
+    const summary =
+      '\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m47 passed\x1b[39m\x1b[22m\x1b[2m | \x1b[22m\x1b[33m2 skipped\x1b[39m\x1b[90m (49)\x1b[39m\n'
+    expect(parseTestCounts(summary)).toEqual({ passed: 47, failed: 0, skipped: 2 })
+  })
+
+  it('reads a vitest run whose filter matched no files as passing nothing', () => {
+    expect(parseTestCounts('\x1b[31mNo test files found, exiting with code 1\n\x1b[39m\nfilter: src/a.test.ts\n')).toEqual({
+      passed: 0,
+      failed: 0
+    })
+  })
+
   it('reads mocha, node:test, cargo, and unittest summaries', () => {
     expect(parseTestCounts('\n  12 passing (30ms)\n  1 failing\n  2 pending\n')).toEqual({ passed: 12, failed: 1, skipped: 2 })
     expect(parseTestCounts('# tests 3\n# pass 3\n# fail 0\n')).toEqual({ passed: 3, failed: 0 })
@@ -248,6 +261,15 @@ describe('EvidenceLedger', () => {
     const l = new EvidenceLedger()
     l.recordShell(shell('pytest; echo done', { output: '==== 1 failed, 11 passed in 0.1s ====\ndone' }))
     expect(l.receipt()?.checks[0]).toMatchObject({ ok: false, counts: { passed: 11, failed: 1 } })
+  })
+
+  it('reads a coloured vitest summary through a pipe that hides the exit code', () => {
+    const l = new EvidenceLedger()
+    const out = '\x1b[2m      Tests \x1b[22m \x1b[1m\x1b[32m3 passed\x1b[39m\x1b[22m\x1b[90m (3)\x1b[39m\n'
+    l.recordShell(shell('npx vitest run a.test.ts 2>&1 | tail -20', { output: out }))
+    expect(l.receipt()?.checks[0]).toMatchObject({ ok: true, counts: { passed: 3, failed: 0 } })
+    l.recordShell(shell('npx vitest run b.test.ts 2>&1 | head', { output: 'No test files found, exiting with code 1\n' }))
+    expect(l.receipt()?.checks[1]).toMatchObject({ ok: false, counts: { passed: 0, failed: 0 } })
   })
 
   it('fails a run that found no tests, even on exit 0', () => {
