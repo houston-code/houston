@@ -13,6 +13,7 @@ import {
   type TurnReceipt,
   type UnknownReason
 } from '@shared/evidence'
+import { stripAnsi } from './loopback'
 import type { RequiredCheck } from './todoEvidence'
 
 /**
@@ -529,15 +530,19 @@ const SUMMARY_TAIL_CHARS = 16_000
  * The output is whatever the command printed, so a test can print anything here.
  * Every pattern is linear: no repeated group holds optional parts that could match
  * the same text two ways, which on crafted output would stall the main process.
+ * Colour codes are stripped first: a runner can colour its summary even through a
+ * pipe (in a pty, or under FORCE_COLOR), and the codes break the line anchors.
  */
 export function parseTestCounts(output: string): TestCounts | undefined {
-  const text = output.slice(-SUMMARY_TAIL_CHARS)
+  const text = stripAnsi(output.slice(-SUMMARY_TAIL_CHARS))
   // vitest: "      Tests  1 failed | 11 passed (12)"
   const vitest = lastMatch(text, /^ *Tests +(\d[^(\n]*)\(\d+\) *$/gm)
   if (vitest) {
     const c = sumMatches(vitest[1], /(\d+) +(passed|failed|skipped|todo)\b/g)
     if (Object.keys(c).length) return withSkipped(c.passed ?? 0, c.failed ?? 0, (c.skipped ?? 0) + (c.todo ?? 0))
   }
+  // vitest with a filter that matched nothing: "No test files found, exiting with code 1"
+  if (/^No test files found\b/m.test(text)) return { passed: 0, failed: 0 }
   // jest: "Tests:       1 failed, 11 passed, 12 total"
   const jest = lastMatch(text, /^Tests: +(\d[^\n]*total) *$/gm)
   if (jest) {
