@@ -31,6 +31,7 @@ import {
   cleanRunLog,
   capLogMiddle,
   describeRunStanding,
+  parseMergeQueueBranch,
   networkBlockHint,
   NETWORK_BLOCKED_HINT,
   HEADLESS_NETWORK_BLOCKED_HINT,
@@ -1698,7 +1699,7 @@ describe('gh_run_view standing', () => {
     createdAt: at
   })
   /** A gh stand-in routing each call by its subcommand, recording every argv. */
-  const ghCtx = (over: { meta?: unknown; list?: unknown; compare?: string; failAll?: boolean } = {}) => {
+  const ghCtx = (over: { meta?: unknown; list?: unknown; compare?: string; pr?: unknown; failAll?: boolean } = {}) => {
     const calls: (readonly string[])[] = []
     const ctx: ToolContext = {
       workspace,
@@ -1711,6 +1712,7 @@ describe('gh_run_view standing', () => {
         if (a[0] === 'run' && a[1] === 'view') return ok(JSON.stringify(over.meta ?? meta))
         if (a[0] === 'run' && a[1] === 'list') return ok(JSON.stringify(over.list ?? []))
         if (a[0] === 'api') return over.compare === undefined ? fail() : ok(over.compare)
+        if (a[0] === 'pr' && a[1] === 'view') return over.pr === undefined ? fail() : ok(JSON.stringify(over.pr))
         return fail()
       }
     }
@@ -1761,6 +1763,74 @@ describe('gh_run_view standing', () => {
     expect(out).toContain('Re-running this run reuses commit 4f630eb2')
   })
 
+  describe('a merge-queue run', () => {
+    const BASE = '5f541aae0b2c7f1e93d4a6b8c0e2f4a6b8c0d1e2'
+    const queued = {
+      ...meta,
+      event: 'merge_group',
+      headBranch: `gh-readonly-queue/main/pr-499-${'5a0cbd17'.padEnd(40, '0')}`
+    }
+
+    it('follows the base branch, names the PR, and says it merged since', async () => {
+      const { ctx, calls } = ghCtx({
+        meta: queued,
+        list: [later(8, 'success', '2026-10-21T17:04:22Z')],
+        compare: `diverged\t3\t${BASE}\n`,
+        pr: { state: 'MERGED', mergedAt: '2026-10-21T11:05:53Z' }
+      })
+      const out = await view(ctx)
+      expect(out).toContain('- This was a merge-queue run of PR #499: it tested the PR merged onto its base branch at commit 5f541aae')
+      expect(out).toContain('- PR #499 has since merged (2026-10-21T11:05:53Z), so a later merge-queue run of it passed.')
+      expect(out).toContain('- Its base branch has 3 newer commits since 5f541aae that this run never tested.')
+      expect(out).toContain('git log --oneline 5f541aae..origin/<base branch> -- <failing test file>')
+      expect(out).toContain('- 1 later run of this workflow on its base branch; newest: run 8 [success]')
+      expect(out).toContain('look at run 8 before changing anything')
+      expect(out).toContain('a fix lands on the base branch as its own PR, and this PR goes back in the queue.')
+      expect(out).not.toContain('the same branch')
+      expect(out).not.toContain('gh-readonly-queue')
+      expect(calls).toContainEqual(['run', 'list', '--workflow', '99', '--branch', 'main', '--limit', '20', '--json', expect.any(String)])
+      expect(calls).toContainEqual([
+        'api',
+        `repos/{owner}/{repo}/compare/${SHA}...main`,
+        '--jq',
+        '[.status, .ahead_by, .merge_base_commit.sha] | @tsv'
+      ])
+      expect(calls).toContainEqual(['pr', 'view', '499', '--json', 'state,mergedAt'])
+    })
+
+    it('points at the merged PR when no later run on the base branch passed', async () => {
+      const { ctx } = ghCtx({ meta: queued, pr: { state: 'MERGED', mergedAt: 'yesterday' } })
+      const out = await view(ctx)
+      expect(out).toContain('- PR #499 has since merged, so a later merge-queue run of it passed.')
+      expect(out).toContain('The PR merged after this run, so this failure may already be fixed: check the base branch')
+      expect(out).not.toContain('newer commit')
+    })
+
+    it('reports an open or closed PR without claiming a fix', async () => {
+      const open = await view(ghCtx({ meta: queued, pr: { state: 'OPEN' } }).ctx)
+      expect(open).toContain('- PR #499 is still open and has not merged.')
+      expect(open).not.toContain('may already be fixed')
+      const closed = await view(ghCtx({ meta: queued, pr: { state: 'CLOSED' }, compare: `ahead\t0\t${BASE}\n` }).ctx)
+      expect(closed).toContain('- PR #499 was closed without merging.')
+      expect(closed).toContain('- Nothing has landed on its base branch since 5f541aae.')
+    })
+
+    it('drops a compare answer without a merge base, and still names the PR when lookups fail', async () => {
+      const { ctx } = ghCtx({ meta: queued, compare: 'ahead\t3\n' })
+      const out = await view(ctx)
+      expect(out).not.toContain('newer commit')
+      expect(out).toContain('- This was a merge-queue run of PR #499: it tested the PR merged onto its base branch, so')
+    })
+
+    it('treats a merge_group run on any other branch name like an ordinary run', async () => {
+      const { ctx, calls } = ghCtx({ meta: { ...meta, event: 'merge_group' }, compare: 'ahead\t2\n' })
+      const out = await view(ctx)
+      expect(out).toContain("- The run's branch has 2 newer commits")
+      expect(out).not.toContain('merge-queue')
+      expect(calls.some((a) => a[0] === 'pr')).toBe(false)
+    })
+  })
+
   it('adds nothing when every lookup fails or the metadata is unusable', async () => {
     const failing = ghCtx({ failAll: true })
     expect((await view(failing.ctx)).startsWith('Logs of the failed steps of run 7.')).toBe(true)
@@ -1773,6 +1843,20 @@ describe('gh_run_view standing', () => {
     const out = await view(ctx)
     expect(out).not.toContain('newer commit')
     expect(out).not.toContain('later run')
+  })
+})
+
+describe('parseMergeQueueBranch', () => {
+  const sha = 'a'.repeat(40)
+  it('reads the base branch and PR number', () => {
+    expect(parseMergeQueueBranch(`gh-readonly-queue/main/pr-499-${sha}`)).toEqual({ base: 'main', pr: 499 })
+    expect(parseMergeQueueBranch(`gh-readonly-queue/release/1.2/pr-7-${sha}`)).toEqual({ base: 'release/1.2', pr: 7 })
+  })
+  it('rejects anything else', () => {
+    expect(parseMergeQueueBranch('main')).toBeNull()
+    expect(parseMergeQueueBranch(`gh-readonly-queue/main/pr-499-${sha.slice(1)}`)).toBeNull()
+    expect(parseMergeQueueBranch(`gh-readonly-queue/main/pr-0-${sha}`)).toBeNull()
+    expect(parseMergeQueueBranch(`gh-readonly-queue/-x/pr-1-${sha}`)).toBeNull()
   })
 })
 

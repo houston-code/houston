@@ -4687,6 +4687,30 @@ export interface RunStanding {
   newerCommits?: number
   /** Later runs of the same workflow on the same branch, newest first. */
   laterRuns?: RunPoint[]
+  /**
+   * Set for a merge-queue run. Its own branch is gone once the queue moves on, so
+   * `newerCommits` and `laterRuns` then describe the queue's base branch instead.
+   */
+  queue?: QueueStanding
+}
+
+/** A merge-queue run's PR and what has become of it. */
+export interface QueueStanding {
+  pr: number
+  /** The base-branch commit the queue built the run on; undefined when not looked up. */
+  baseCommit?: string
+  /** The PR's state now; undefined when not looked up. */
+  prState?: 'merged' | 'open' | 'closed'
+  mergedAt?: string
+}
+
+/**
+ * The branch GitHub's merge queue tests a PR on, `gh-readonly-queue/<base>/pr-<number>-<sha>`:
+ * the base branch and PR number, or null. The base must itself be a safe ref.
+ */
+export function parseMergeQueueBranch(branch: string): { base: string; pr: number } | null {
+  const m = /^gh-readonly-queue\/(.+)\/pr-([1-9]\d{0,8})-[0-9a-f]{40}$/.exec(branch)
+  return m && isSafeGitRef(m[1]) ? { base: m[1], pr: Number(m[2]) } : null
 }
 
 const HEX_SHA = /^[0-9a-f]{7,64}$/
@@ -4716,7 +4740,28 @@ const FAILED_OUTCOMES = new Set(['failure', 'timed_out', 'cancelled', 'startup_f
 export function describeRunStanding(st: RunStanding): string {
   const short = st.run.sha.slice(0, 8)
   const lines: string[] = []
-  if (st.newerCommits !== undefined) {
+  const q = st.queue
+  const where = q ? 'its base branch' : 'the same branch'
+  if (q) {
+    const base = q.baseCommit ? ` at commit ${q.baseCommit.slice(0, 8)}` : ''
+    lines.push(
+      `- This was a merge-queue run of PR #${q.pr}: it tested the PR merged onto its base branch${base}, so a failure ` +
+        "can come from the base branch even when the PR's own diff cannot cause it."
+    )
+    if (q.prState === 'merged') {
+      lines.push(`- PR #${q.pr} has since merged${q.mergedAt ? ` (${q.mergedAt})` : ''}, so a later merge-queue run of it passed.`)
+    } else if (q.prState === 'open') lines.push(`- PR #${q.pr} is still open and has not merged.`)
+    else if (q.prState === 'closed') lines.push(`- PR #${q.pr} was closed without merging.`)
+    if (st.newerCommits !== undefined && q.baseCommit) {
+      const b = q.baseCommit.slice(0, 8)
+      lines.push(
+        st.newerCommits === 0
+          ? `- Nothing has landed on its base branch since ${b}.`
+          : `- Its base branch has ${st.newerCommits} newer commit${st.newerCommits === 1 ? '' : 's'} since ${b} that this run never ` +
+              `tested. \`git log --oneline ${b}..origin/<base branch> -- <failing test file>\` lists any that touched the failing test.`
+      )
+    }
+  } else if (st.newerCommits !== undefined) {
     lines.push(
       st.newerCommits === 0
         ? `- This run's commit ${short} is still the tip of its branch.`
@@ -4726,11 +4771,11 @@ export function describeRunStanding(st: RunStanding): string {
   const later = st.laterRuns ?? []
   const passed = later.find((r) => r.outcome === 'success')
   if (st.laterRuns !== undefined) {
-    if (later.length === 0) lines.push('- No later run of this workflow on the same branch.')
+    if (later.length === 0) lines.push(`- No later run of this workflow on ${where}.`)
     else {
       const newest = later[0]
       lines.push(
-        `- ${later.length} later run${later.length === 1 ? '' : 's'} of this workflow on the same branch; newest: run ${newest.id} [${newest.outcome}]${newest.event ? ` (${newest.event})` : ''}, commit ${newest.sha.slice(0, 8)}, ${newest.createdAt}.`
+        `- ${later.length} later run${later.length === 1 ? '' : 's'} of this workflow on ${where}; newest: run ${newest.id} [${newest.outcome}]${newest.event ? ` (${newest.event})` : ''}, commit ${newest.sha.slice(0, 8)}, ${newest.createdAt}.`
       )
       if (passed && passed !== newest) lines.push(`- Run ${passed.id} [success] is a later run that passed.`)
     }
@@ -4740,10 +4785,15 @@ export function describeRunStanding(st: RunStanding): string {
       lines.push(
         `- A later run passed, so this failure may already be fixed: look at run ${passed.id} before changing anything.`
       )
+    } else if (q?.prState === 'merged') {
+      lines.push('- The PR merged after this run, so this failure may already be fixed: check the base branch before changing anything.')
     }
     lines.push(
       `- Re-running this run reuses commit ${short}, so it cannot pick up anything newer. Edits in the local checkout ` +
-        "do not reach it either: a fix gets to CI as a commit or PR on the run's branch, then a new run."
+        'do not reach it either: ' +
+        (q
+          ? 'a fix lands on the base branch as its own PR, and this PR goes back in the queue.'
+          : "a fix gets to CI as a commit or PR on the run's branch, then a new run.")
     )
   }
   return lines.length ? `Where run ${st.run.id} (started ${st.run.createdAt}) stands now:\n${lines.join('\n')}` : ''
@@ -4759,7 +4809,26 @@ async function readRunStanding(runJson: unknown, run: GhExec, ctx: ToolContext):
   const point = runPoint(runJson)
   if (!point || !isRecord(runJson)) return ''
   const st: RunStanding = { run: point }
-  const branch = typeof runJson.headBranch === 'string' && isSafeGitRef(runJson.headBranch) ? runJson.headBranch : ''
+  const head = typeof runJson.headBranch === 'string' && isSafeGitRef(runJson.headBranch) ? runJson.headBranch : ''
+  // A merge-queue branch is deleted once the queue moves on: follow its base branch instead.
+  const queued = point.event === 'merge_group' ? parseMergeQueueBranch(head) : null
+  const branch = queued ? queued.base : head
+  if (queued) {
+    st.queue = { pr: queued.pr }
+    const r = await run(['pr', 'view', String(queued.pr), '--json', 'state,mergedAt'], ctx.workspace, ctx.signal).catch(
+      () => null
+    )
+    try {
+      const pr: unknown = r?.ok ? JSON.parse(r.stdout) : null
+      if (isRecord(pr)) {
+        const state = ghEnum(pr.state)
+        if (state === 'merged' || state === 'open' || state === 'closed') st.queue.prState = state
+        if (state === 'merged' && typeof pr.mergedAt === 'string' && ISO_TIME.test(pr.mergedAt)) st.queue.mergedAt = pr.mergedAt
+      }
+    } catch {
+      // leave the PR's state unknown
+    }
+  }
   const workflow = runJson.workflowDatabaseId
   if (branch && typeof workflow === 'number' && Number.isSafeInteger(workflow) && workflow > 0) {
     const r = await run(
@@ -4784,15 +4853,21 @@ async function readRunStanding(runJson: unknown, run: GhExec, ctx: ToolContext):
   // A pull_request run's branch can live in a fork, so the same name here may be another
   // branch entirely: only compare for runs of this repository's own branches.
   if (branch && !point.event.startsWith('pull_request')) {
+    const jq = queued ? '[.status, .ahead_by, .merge_base_commit.sha] | @tsv' : '[.status, .ahead_by] | @tsv'
     const r = await run(
-      ['api', `repos/{owner}/{repo}/compare/${point.sha}...${encodeURIComponent(branch)}`, '--jq', '[.status, .ahead_by] | @tsv'],
+      ['api', `repos/{owner}/{repo}/compare/${point.sha}...${encodeURIComponent(branch)}`, '--jq', jq],
       ctx.workspace,
       ctx.signal
     ).catch(() => null)
-    const m = r?.ok ? /^(identical|ahead|behind|diverged)\t(\d+)\s*$/.exec(r.stdout) : null
+    const m = r?.ok ? /^(identical|ahead|behind|diverged)\t(\d+)(?:\t([0-9a-f]{40}))?\s*$/.exec(r.stdout) : null
     // `ahead_by` counts the branch's commits not in the run's commit; diverged (a force-push
     // dropped the run's commit) still means the branch has that many commits the run never saw.
-    if (m) st.newerCommits = Number(m[2])
+    // For a queue run, the merge base is the base-branch commit the queue built it on, which
+    // (unlike the run's own commit) a local fetch of the base branch can reach.
+    if (m && (!queued || m[3])) {
+      st.newerCommits = Number(m[2])
+      if (st.queue && m[3]) st.queue.baseCommit = m[3]
+    }
   }
   return describeRunStanding(st)
 }
