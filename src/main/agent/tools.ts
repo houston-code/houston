@@ -100,7 +100,7 @@ import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type 
 import { displayLines, numberLines, numberWidth } from './line-numbers'
 import { MAX_READ_CHARS, numberedRead, streamNumberedRead } from './read-lines'
 import { fileDigest, type FileReadTracker, type StaleWriteReason } from './readCache'
-import type { EvidenceDraft } from './evidence'
+import { classifyCommand, type EvidenceDraft } from './evidence'
 import { isSensitivePath } from './sensitive-paths'
 import { bundledRipgrep, bundledAstGrep } from '../binaries'
 import { parsePatch } from './apply-patch'
@@ -1690,6 +1690,17 @@ export const UNSANDBOXED_SHELL_NOTE =
   '[warning: this command did NOT run inside a sandbox. It executed with your full user ' +
   'privileges, not confined to the project directory. No OS-enforced sandbox was available on this host.]'
 
+/**
+ * Appended when a zero exit is the status of the program at the end of a pipe (`head`
+ * in `npm test | head`), not of the test run, build, or check that feeds it.
+ */
+export function maskedExitNote(program: string): string {
+  return (
+    `[note: exit code 0 is \`${program}\`'s, the last command in the pipe, so it does not show whether the command ` +
+    'before it succeeded. Read its output for errors, or run it with `set -o pipefail;` in front to get its own status.]'
+  )
+}
+
 /** The hint appended to a failure that looks like the sandbox denied a write. */
 export const SANDBOX_WRITE_BLOCKED_HINT =
   '[note: the sandbox only allows writes inside the project and temp dirs. A write outside them was denied, ' +
@@ -1705,9 +1716,10 @@ export const SANDBOX_WRITE_BLOCKED_HINT =
  */
 export function sandboxWriteBlockHint(
   result: { exitCode: number | null; timedOut?: boolean },
-  output: string
+  output: string,
+  statusMasked = false
 ): string {
-  const failed = result.timedOut === true || result.exitCode === null || result.exitCode !== 0
+  const failed = statusMasked || result.timedOut === true || result.exitCode === null || result.exitCode !== 0
   if (!failed) return ''
   if (NETWORK_ERROR_RE.test(output)) return ''
   return isWriteDenial(output, result.exitCode) ? SANDBOX_WRITE_BLOCKED_HINT : ''
@@ -1735,9 +1747,10 @@ export const SANDBOX_OP_DENIED_HINT =
  */
 export function sandboxOpDeniedHint(
   result: { exitCode: number | null; timedOut?: boolean },
-  output: string
+  output: string,
+  statusMasked = false
 ): string {
-  const failed = result.timedOut === true || result.exitCode === null || result.exitCode !== 0
+  const failed = statusMasked || result.timedOut === true || result.exitCode === null || result.exitCode !== 0
   if (!failed) return ''
   if (NETWORK_ERROR_RE.test(output)) return ''
   if (isWriteDenial(output, result.exitCode)) return ''
@@ -1912,6 +1925,9 @@ const runShell: ToolDef = {
     if (body) parts.push(body)
     if (result.timedOut) parts.push(shellTimeoutHint(timeoutMs ?? DEFAULT_TIMEOUT_MS))
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
+    // `npm test | head` exits with head's status: say so, or a failed run reads as a pass.
+    const masked = result.exitCode === 0 ? classifyCommand(command).maskedBy : undefined
+    if (masked) parts.push(maskedExitNote(masked))
     // At most one diagnostic hint: an egress-allowlist refusal (network granted
     // but the destination denied), else a network-blocked failure (network not
     // granted), else a sandbox write-denied failure (e.g. a package manager's
@@ -1922,12 +1938,12 @@ const runShell: ToolDef = {
     let blocked: BlockedReason | undefined = egressHint ? 'egress' : netHint ? 'network' : undefined
     if (netHint) parts.push(netHint)
     else {
-      const writeHint = sandboxWriteBlockHint(result, body)
+      const writeHint = sandboxWriteBlockHint(result, body, masked !== undefined)
       if (writeHint) {
         parts.push(writeHint)
         blocked = 'sandbox-write'
       } else {
-        const opHint = sandboxOpDeniedHint(result, body)
+        const opHint = sandboxOpDeniedHint(result, body, masked !== undefined)
         if (opHint) {
           parts.push(opHint)
           blocked = 'sandbox-op'
