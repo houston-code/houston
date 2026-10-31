@@ -37,6 +37,7 @@ import {
   egressBlockHint,
   EGRESS_BLOCKED_HINT,
   sandboxWriteBlockHint,
+  maskedExitNote,
   SANDBOX_WRITE_BLOCKED_HINT,
   sandboxOpDeniedHint,
   SANDBOX_OP_DENIED_HINT,
@@ -2783,6 +2784,27 @@ describe('backgroundsItself', () => {
   })
 })
 
+describe('run_shell exit code hidden by a pipe', () => {
+  it('says a zero exit is the last piped command\'s, not the test run\'s', async () => {
+    const out = await run('run_shell', { command: 'export PATH=/houston-no-such-dir; pytest 2>&1 | /usr/bin/head -3' })
+    expect(out).toContain('[exit code: 0]')
+    expect(out).toContain(maskedExitNote('head'))
+  })
+
+  it('still gives the sandbox write hint when the pipe hides the failure', async () => {
+    const out = await run('run_shell', {
+      command: "export PATH=/houston-no-such-dir; pytest 2>&1 | /usr/bin/sed 's/^/code: EPERM /'"
+    })
+    expect(out).toContain('[exit code: 0]')
+    expect(out).toContain(SANDBOX_WRITE_BLOCKED_HINT)
+  })
+
+  it('adds no note when the exit code speaks for the command', async () => {
+    const out = await run('run_shell', { command: 'echo hi | /usr/bin/head -1' })
+    expect(out).not.toContain('last command in the pipe')
+  })
+})
+
 describe('run_shell missing-runtime hint', () => {
   it('tells the model a runtime is missing and not to install it itself', async () => {
     const out = await run('run_shell', { command: 'export PATH=/houston-no-such-dir; node --version' })
@@ -4077,6 +4099,12 @@ describe('sandboxWriteBlockHint', () => {
 
   it('hints when a failed command hit a sandbox-denied write (npm cache EPERM)', () => {
     expect(sandboxWriteBlockHint(failed, npmEperm)).toBe(SANDBOX_WRITE_BLOCKED_HINT)
+  })
+
+  it('hints on a zero exit only when a pipe hid the command\'s own status', () => {
+    const vitestEperm = "Serialized Error: { errno: -1, code: 'EPERM', syscall: 'open', path: '/repo/src/x.ts' }"
+    expect(sandboxWriteBlockHint({ exitCode: 0 }, vitestEperm)).toBe('')
+    expect(sandboxWriteBlockHint({ exitCode: 0 }, vitestEperm, true)).toBe(SANDBOX_WRITE_BLOCKED_HINT)
   })
 
   it('matches pip-style "Permission denied" and a read-only filesystem', () => {

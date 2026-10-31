@@ -122,6 +122,22 @@ describe('classifyCommand', () => {
     expect(classifyCommand('set -euo pipefail; pytest | tail -5').exitAttributable).toBe(true)
   })
 
+  it('names the program at the end of a pipe whose status the exit code is', () => {
+    expect(classifyCommand('pytest | tail -5').maskedBy).toBe('tail')
+    expect(classifyCommand('cd /repo && npm test -- a.test.ts 2>&1 | head -200').maskedBy).toBe('head')
+    expect(classifyCommand('npm test 2>&1 | grep FAIL | /usr/bin/head -3').maskedBy).toBe('head')
+    expect(classifyCommand('npm run build | tee build.log').maskedBy).toBe('tee')
+    // The status speaks for the part, or the command already checks the part's own status.
+    expect(classifyCommand('pytest').maskedBy).toBeUndefined()
+    expect(classifyCommand('set -o pipefail; pytest | tail -5').maskedBy).toBeUndefined()
+    expect(classifyCommand('pytest | tail -5; echo "exit=${PIPESTATUS[0]}"').maskedBy).toBeUndefined()
+    expect(classifyCommand('pytest; echo "exit=$?"').maskedBy).toBeUndefined()
+    // The pipe isn't the end of the command, or isn't what decides the status.
+    expect(classifyCommand('pytest | tail -5; echo done').maskedBy).toBeUndefined()
+    expect(classifyCommand('pytest || true').maskedBy).toBeUndefined()
+    expect(classifyCommand('ls | head').maskedBy).toBeUndefined()
+  })
+
   it('finds the line an echo of `$?` prints for the part before it', () => {
     expect(classifyCommand('node test.mjs; echo "exit=$?"').statusEcho).toMatchObject({ count: 1, nth: 0 })
     expect(classifyCommand('pytest -q; echo Exit code: $?; ls -la').statusEcho).toMatchObject({ count: 1, nth: 0 })

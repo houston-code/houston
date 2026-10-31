@@ -409,6 +409,11 @@ export interface CommandClass {
   httpStatusChecked: boolean
   /** For `pytest; echo "exit=$?"`: where in the output the classified part's own status is. */
   statusEcho?: StatusEcho
+  /**
+   * For `npm test | head`: the program whose status the command's exit code is instead,
+   * the last one in a pipe (without pipefail) that the classified part feeds.
+   */
+  maskedBy?: string
 }
 
 /**
@@ -499,7 +504,30 @@ export function classifyCommand(command: string, background = false): CommandCla
   }
   const exitAttributable = zeroExitProves(segments, index, pipefail)
   const echo = exitAttributable ? undefined : statusEcho(segments, index)
-  return { kind, exitAttributable, httpStatusChecked, ...(echo ? { statusEcho: echo } : {}) }
+  const masked = exitAttributable || echo || pipefail ? undefined : pipeMask(segments, index)
+  return {
+    kind,
+    exitAttributable,
+    httpStatusChecked,
+    ...(echo ? { statusEcho: echo } : {}),
+    ...(masked ? { maskedBy: masked } : {})
+  }
+}
+
+/**
+ * The program at the end of the pipe the segment at `index` feeds, when only `&&`
+ * links them up to that pipe and the pipe ends the command (so its last program's
+ * status is the whole command's), else undefined. Assumes no pipefail. A command that
+ * reads `PIPESTATUS` is checking the part's own status, so it gets none.
+ */
+function pipeMask(segments: Segment[], index: number): string | undefined {
+  if (segments[index].before === '||' || segments.some((s) => s.text.includes('PIPESTATUS'))) return undefined
+  let i = index
+  while (segments[i].after === '&&') i++
+  if (segments[i].after !== '|') return undefined
+  while (segments[i].after === '|') i++
+  if (segments[i].after !== null) return undefined
+  return programName(stripWrappers(words(segments[i].text))[0] ?? '') || undefined
 }
 
 // ---------------------------------------------------------------------------
