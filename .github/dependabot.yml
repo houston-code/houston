@@ -14,6 +14,13 @@ updates:
     # subject to the cooldown, so a published fix still arrives immediately.
     cooldown:
       default-days: 7
+    # No labels. Dependabot adds its default labels right after opening a PR, and CI runs on
+    # `labeled` (for `full-ci` and `intentional-revert`), so each label started another CI run
+    # in the same second as the `opened` one. The concurrency group cancels all but one, but
+    # with identical start times GitHub can count a cancelled run as the latest result for a
+    # required check and refuse to queue the PR even after a re-run goes green (PR #558 sat
+    # four days that way). Nothing reads these labels; Dependabot PRs are found by author.
+    labels: []
     groups:
       dev-dependencies:
         dependency-type: development
@@ -45,3 +52,5 @@ updates:
     # to be caught before it is proposed.
     cooldown:
       default-days: 7
+    # No labels, for the same duplicate-CI-run reason as npm above.
+    labels: []
