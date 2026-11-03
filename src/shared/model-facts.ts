@@ -208,6 +208,8 @@ const OPENAI_FAMILIES: FamilyRule[] = [
 const OPENAI_PRICES: Rows<ModelPricing> = [
   [/gpt-6[\d.]*-astra/, freeWrites(10, 50, 1)],
   [/gpt-6-sol/, freeWrites(2, 10, 0.2)],
+  // Terra bills cache writes (1.25x input, 30-minute retention) and reads at 0.05x.
+  [/gpt-6[\d.]*-terra/, { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 }],
   [/gpt-6[\d.]*-luna/, freeWrites(0.1, 0.5, 0.01)],
   [/gpt-6/, freeWrites(2, 10, 0.1)], // gpt-6.1-sol and later sol releases
   // GPT-5.6 is priced per tier; the bare gpt-5.6 alias routes to sol.
@@ -285,6 +287,21 @@ const GEMINI_FAMILIES: FamilyRule[] = [
  *  free, and Pro prompts over 200K tokens bill at the long-context tier. 3.5-flash-lite has no context caching,
  *  so its reads are priced at input. Announced changes are scheduled on the row. */
 const GEMINI_PRICES: Rows<ModelPricing> = [
+  // From 2026-12-01 Google routes these two to newer models and bills them at those models'
+  // rates: 2.5 Pro to 3.8 Flash (whose own rates double on 2027-01-01), 2.5 Flash to 3.5
+  // Flash-Lite. Exact ids, since other 2.5 variants (flash-image, flash-lite) keep serving.
+  [
+    /^gemini-2\.5-pro$/,
+    {
+      ...freeWrites(1.25, 10, 0.125),
+      longContext: { above: 200_000, ...freeWrites(2.5, 15, 0.25) },
+      scheduled: [
+        { from: '2026-12-01', ...freeWrites(0.75, 3.75, 0.075) },
+        { from: '2027-01-01', ...freeWrites(1.5, 7.5, 0.15) }
+      ]
+    }
+  ],
+  [/^gemini-2\.5-flash$/, { ...freeWrites(0.3, 2.5, 0.03), scheduled: [{ from: '2026-12-01', ...freeWrites(0.3, 2.5) }] }],
   // Introductory rate through 2026-11-30, then the standard rate. No long-prompt tier.
   [
     /gemini-4-argon/,

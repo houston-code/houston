@@ -133,8 +133,19 @@ describe('settings migration — model backfill', () => {
       'o3',
       'gpt-6-astra',
       'gpt-6.1-sol',
-      'gpt-6-luna'
+      'gpt-6-luna',
+      'gpt-6.1-terra' // the v15 add, appended after the v8 ones
     ])
+  })
+
+  it('adds gpt-6.1-terra on the v15 bump without re-adding defaults the user deleted', async () => {
+    writeSettings({ schemaVersion: 14, providers: [openaiProvider(['gpt-6.1-sol'])] })
+    expect(await loadOpenAIModelIds()).toEqual(['gpt-6.1-sol', 'gpt-6.1-terra'])
+  })
+
+  it('leaves gpt-6.1-terra deleted once the v15 bump has run', async () => {
+    writeSettings({ schemaVersion: 15, providers: [openaiProvider(['gpt-6.1-sol'])] })
+    expect(await loadOpenAIModelIds()).toEqual(['gpt-6.1-sol'])
   })
 
   it('seeds the Claude 5.x lineup into a v8 Anthropic provider on the v9 bump', async () => {

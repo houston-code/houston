@@ -3,7 +3,7 @@ import type { AppSettings, ApprovalPolicy, ProviderConfig, SelectedModel } from 
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 14
+export const SETTINGS_SCHEMA_VERSION = 15
 
 /**
  * The reasoning effort a fresh install starts at. Coding and long agentic turns are the
@@ -104,11 +104,11 @@ export function defaultProviders(): ProviderConfig[] {
       kind: 'openai',
       label: 'OpenAI (GPT)',
       // The GPT-6 line, one model per codename tier: astra (flagship), sol (near-astra at a
-      // fifth of the price, so the default), luna (efficient). The GPT-5.x and o-series
-      // models it supersedes still serve, so the v8 migration only adds these ids to
-      // existing installs. Starting points only: the live list is a Fetch away, and the
-      // display name derives from the id.
-      models: [{ id: 'gpt-6-astra' }, { id: 'gpt-6.1-sol' }, { id: 'gpt-6-luna' }],
+      // fifth of the price, so the default), terra (half of sol's price, fast), luna
+      // (efficient). The GPT-5.x and o-series models it supersedes still serve, so the
+      // v8 and v15 migrations only add these ids to existing installs. Starting points
+      // only: the live list is a Fetch away, and the display name derives from the id.
+      models: [{ id: 'gpt-6-astra' }, { id: 'gpt-6.1-sol' }, { id: 'gpt-6.1-terra' }, { id: 'gpt-6-luna' }],
       defaultModel: 'gpt-6.1-sol',
       requiresKey: true,
       hasKey: false,
@@ -124,7 +124,9 @@ export function defaultProviders(): ProviderConfig[] {
       // 2026-12-01) and Google warns hard prompts can take minutes. It replaced
       // gemini-3.1-pro-preview in the seed. gemini-3.5-flash-lite is the low-cost tier.
       // Migrations only add ids to existing installs (v7, v13); nothing is pruned, since
-      // the models they supersede still serve, except 2.5-pro for new users.
+      // the models they supersede still serve. gemini-2.5-pro (closed to new users) is
+      // left on installs that have it: from 2026-12-01 Google serves it as 3.8 Flash and
+      // bills it at those rates, which model-facts.ts schedules, so it keeps answering.
       //
       // NB the live /models list is NOT a safe source of truth here: it has listed retired
       // ids that 404 and models that could not serve under load. Only a real call proves a

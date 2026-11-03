@@ -297,6 +297,8 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   if (fromVersion < 14 && upgraded.reasoningEffort === 'off') {
     upgraded.reasoningEffort = DEFAULT_REASONING_EFFORT
   }
+  // v15: GPT-6.1 Terra. Scoped like the other adds; nothing it sits beside is retired.
+  if (fromVersion < 15) providers = backfillDefaultModels(providers, ['gpt-6.1-terra'])
   const merged: AppSettings = {
     ...base,
     ...upgraded,

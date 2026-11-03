@@ -86,6 +86,7 @@ describe('contextWindowFor', () => {
     // GPT-6 ships a 1.05M window on every tier.
     expect(contextWindowFor('gpt-6-astra')).toBe(1_050_000)
     expect(contextWindowFor('gpt-6.1-sol')).toBe(1_050_000)
+    expect(contextWindowFor('gpt-6.1-terra')).toBe(1_050_000)
     expect(contextWindowFor('gpt-6-luna')).toBe(1_050_000)
     expect(contextWindowFor('gpt-4o')).toBe(128_000)
     expect(contextWindowFor('gpt-4o-mini')).toBe(128_000)
@@ -145,7 +146,7 @@ describe('modelPricing', () => {
     expect(modelPricing('claude-mythos-5-1')).toEqual({ input: 10, output: 50, cacheRead: 0.25 })
     // OpenAI / Gemini families carry explicit cache rates: discounted reads, free writes.
     expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 })
-    expect(modelPricing('gemini-2.5-flash')).toEqual({ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 })
+    expect(modelPricing('gemini-2.5-flash')).toMatchObject({ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 })
     expect(modelPricing('gemini-2.5-pro')).toMatchObject({ input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 })
   })
 
@@ -211,6 +212,8 @@ describe('modelPricing', () => {
     for (const [id, input, output, cacheRead] of rows) {
       expect(modelPricing(id), id).toEqual({ input, output, cacheRead, cacheWrite: 0 })
     }
+    // Terra bills cache writes at 1.25x input.
+    expect(modelPricing('gpt-6.1-terra')).toEqual({ input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 })
     // The -pro models have no cached-input rate, so a read is billed at input.
     expect(modelPricing('gpt-5.5-pro')).toEqual({ input: 30, output: 180, cacheRead: 30, cacheWrite: 0 })
     expect(modelPricing('o3-pro')).toEqual({ input: 20, output: 80, cacheRead: 20, cacheWrite: 0 })
@@ -459,6 +462,21 @@ describe('scheduled price changes', () => {
     expect(resolvePricing('gemini-3.8-flash', undefined, new Date('2027-01-01T00:00:00Z'))?.input).toBe(1.5)
     // A retired Flash id falls to the current rate and carries no schedule.
     expect(modelPricing('gemini-2.0-flash')?.scheduled).toBeUndefined()
+  })
+
+  it('bills gemini-2.5-pro and gemini-2.5-flash at their redirect targets from 2026-12-01', () => {
+    expect(resolvePricing('gemini-2.5-pro', undefined, before)).toMatchObject({ input: 1.25, output: 10 })
+    expect(resolvePricing('gemini-2.5-pro', undefined, before)?.longContext?.above).toBe(200_000)
+    // Served as 3.8 Flash: its rates, no long-prompt tier, and its 2027-01-01 doubling.
+    expect(resolvePricing('gemini-2.5-pro', undefined, after)).toEqual(resolvePricing('gemini-3.8-flash', undefined, after))
+    const nextYear = new Date('2027-01-01T00:00:00Z')
+    expect(resolvePricing('gemini-2.5-pro', undefined, nextYear)).toEqual(resolvePricing('gemini-3.8-flash', undefined, nextYear))
+    // Served as 3.5 Flash-Lite, which has no cache-read discount.
+    expect(resolvePricing('gemini-2.5-flash', undefined, before)?.cacheRead).toBe(0.03)
+    expect(resolvePricing('gemini-2.5-flash', undefined, after)).toEqual(resolvePricing('gemini-3.5-flash-lite', undefined, after))
+    // Other 2.5 variants are not redirected.
+    expect(modelPricing('gemini-2.5-flash-lite')?.scheduled).toBeUndefined()
+    expect(modelPricing('gemini-2.5-flash-image')?.scheduled).toBeUndefined()
   })
 
   it('lets a host-listed price override the schedule', () => {
