@@ -63,7 +63,7 @@ describe('defaultSettings', () => {
 
   it('seeds the GPT-6 line on the OpenAI provider and defaults to gpt-6.1-sol', () => {
     const openai = defaultSettings().providers.find((p) => p.id === 'openai')!
-    expect(openai.models.map((m) => m.id)).toEqual(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'])
+    expect(openai.models.map((m) => m.id)).toEqual(['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6.1-terra', 'gpt-6-luna'])
     expect(openai.defaultModel).toBe('gpt-6.1-sol')
   })
 
