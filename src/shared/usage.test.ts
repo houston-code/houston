@@ -184,36 +184,42 @@ describe('modelPricing', () => {
   })
 
   it('prices each OpenAI model at its published rate', () => {
-    // [id, input, output, cached input]: OpenAI's standard-tier table. Cache writes are free.
-    const rows: Array<[string, number, number, number]> = [
-      ['gpt-6-astra', 10, 50, 1],
-      ['gpt-6.1-sol', 2, 10, 0.1],
-      ['gpt-6-sol', 2, 10, 0.2],
-      ['gpt-6-luna', 0.1, 0.5, 0.01],
-      ['gpt-5.6-sol', 4, 20, 0.4],
-      ['gpt-5.6', 4, 20, 0.4], // the bare alias routes to sol
-      ['gpt-5.6-terra', 2, 12, 0.2],
-      ['gpt-5.6-luna', 0.2, 1.2, 0.02],
-      ['gpt-5.5', 5, 30, 0.5],
-      ['gpt-5.4', 2.5, 15, 0.25],
-      ['gpt-5.4-mini', 0.75, 4.5, 0.075],
-      ['gpt-5.4-nano', 0.2, 1.25, 0.02],
-      ['gpt-5.2', 1.75, 14, 0.175],
-      ['gpt-5.1', 1.25, 10, 0.125],
-      ['gpt-5-mini', 0.25, 2, 0.025],
-      ['gpt-5-nano', 0.05, 0.4, 0.005],
-      ['o3', 2, 8, 0.5],
-      ['o3-mini', 1.1, 4.4, 0.55],
-      ['o4-mini', 1.1, 4.4, 0.275],
-      ['o1', 15, 60, 7.5],
+    // [id, input, output, cached input, cache write]: OpenAI's standard-tier table. From
+    // GPT-5.6 on a write bills at 1.25x input; gpt-5.5 and earlier write for free.
+    const rows: Array<[string, number, number, number, number]> = [
+      ['gpt-6-astra', 10, 50, 1, 12.5],
+      ['gpt-6.1-sol', 2, 10, 0.1, 2.5],
+      ['gpt-6.1-terra', 1, 5, 0.05, 1.25],
+      ['gpt-6-sol', 2, 10, 0.2, 2.5],
+      ['gpt-6-luna', 0.1, 0.5, 0.01, 0.125],
+      ['gpt-5.6-sol', 4, 20, 0.4, 5],
+      ['gpt-5.6', 4, 20, 0.4, 5], // the bare alias routes to sol
+      ['gpt-5.6-terra', 2, 12, 0.2, 2.5],
+      ['gpt-5.6-luna', 0.2, 1.2, 0.02, 0.25],
+      ['gpt-5.6-cyber', 12.5, 75, 1.25, 15.625],
+      ['gpt-5.5', 5, 30, 0.5, 0],
+      ['gpt-5.4', 2.5, 15, 0.25, 0],
+      ['gpt-5.4-mini', 0.75, 4.5, 0.075, 0],
+      ['gpt-5.4-nano', 0.2, 1.25, 0.02, 0],
+      ['gpt-5.2', 1.75, 14, 0.175, 0],
+      ['gpt-5.1', 1.25, 10, 0.125, 0],
+      ['gpt-5-mini', 0.25, 2, 0.025, 0],
+      ['gpt-5-nano', 0.05, 0.4, 0.005, 0],
+      ['o3', 2, 8, 0.5, 0],
+      ['o3-mini', 1.1, 4.4, 0.55, 0],
+      ['o4-mini', 1.1, 4.4, 0.275, 0],
+      ['o1', 15, 60, 7.5, 0],
       // Routed ids carry a host prefix; the rate still applies.
-      ['openai/gpt-6.1-sol', 2, 10, 0.1]
+      ['openai/gpt-6.1-sol', 2, 10, 0.1, 2.5]
     ]
-    for (const [id, input, output, cacheRead] of rows) {
-      expect(modelPricing(id), id).toEqual({ input, output, cacheRead, cacheWrite: 0 })
+    for (const [id, input, output, cacheRead, cacheWrite] of rows) {
+      expect(modelPricing(id), id).toEqual({ input, output, cacheRead, cacheWrite })
     }
-    // Terra bills cache writes at 1.25x input.
-    expect(modelPricing('gpt-6.1-terra')).toEqual({ input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 })
+    // A GPT-6.1 Sol turn writing 10K tokens to the cache and reading 50K bills each at its rate.
+    expect(turnCostUsd('gpt-6.1-sol', 100_000, 0, { readTokens: 50_000, writeTokens: 10_000 })).toBeCloseTo(
+      (40_000 * 2 + 50_000 * 0.1 + 10_000 * 2.5) / 1_000_000,
+      9
+    )
     // The -pro models have no cached-input rate, so a read is billed at input.
     expect(modelPricing('gpt-5.5-pro')).toEqual({ input: 30, output: 180, cacheRead: 30, cacheWrite: 0 })
     expect(modelPricing('o3-pro')).toEqual({ input: 20, output: 80, cacheRead: 20, cacheWrite: 0 })

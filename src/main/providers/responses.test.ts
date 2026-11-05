@@ -313,6 +313,15 @@ describe('responses usage reporting', () => {
     expect(usage).toEqual({ inputTokens: 8_000, outputTokens: 30, cacheReadTokens: 7_000 })
   })
 
+  it('surfaces cache writes from input_tokens_details (subset of input_tokens)', async () => {
+    const usage = await drainDoneUsage({
+      input_tokens: 8_000,
+      output_tokens: 30,
+      input_tokens_details: { cached_tokens: 5_000, cache_write_tokens: 2_500 }
+    })
+    expect(usage).toEqual({ inputTokens: 8_000, outputTokens: 30, cacheReadTokens: 5_000, cacheWriteTokens: 2_500 })
+  })
+
   it('omits the cache field when no split is reported', async () => {
     const usage = await drainDoneUsage({ input_tokens: 1_000, output_tokens: 10 })
     expect(usage).toEqual({ inputTokens: 1_000, outputTokens: 10 })
