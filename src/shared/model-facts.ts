@@ -86,6 +86,23 @@ function openaiPaidWrites(input: number, output: number, cacheRead: number): Mod
   return { input, output, cacheRead, cacheWrite: input * 1.25 }
 }
 
+/** OpenAI bills a prompt over 272K input tokens at 2x input and cache rates and 1.5x output,
+ *  for the whole request. Only the models whose pricing lists a long-context column get it. */
+function openaiLongPrompt(p: ModelPricing): ModelPricing {
+  // Rounded so float products read as the published rates (1.2 * 1.5 is 1.7999999999999998).
+  const x = (rate: number, factor: number): number => Math.round(rate * factor * 1e6) / 1e6
+  return {
+    ...p,
+    longContext: {
+      above: 272_000,
+      input: x(p.input, 2),
+      output: x(p.output, 1.5),
+      cacheRead: x(p.cacheRead ?? p.input, 2),
+      cacheWrite: x(p.cacheWrite ?? 0, 2)
+    }
+  }
+}
+
 // ── Anthropic (Claude) ────────────────────────────────────────────────────────────
 //
 // The Claude gates match on a substring so they hold for the same model whichever host
@@ -210,24 +227,25 @@ const OPENAI_FAMILIES: FamilyRule[] = [
 
 /** OpenAI's published standard-tier rates, most specific first (a `-mini` / `-pro` variant
  *  before its base id). A later 6.x release of a codename tier takes that tier's rate. From
- *  GPT-5.6 on, cache writes are billed; gpt-5.5 and earlier write to the cache for free. */
+ *  GPT-5.6 on, cache writes are billed; gpt-5.5 and earlier write to the cache for free.
+ *  gpt-5.6-cyber's pricing lists no long-prompt tier, so it has none here. */
 const OPENAI_PRICES: Rows<ModelPricing> = [
-  [/gpt-6[\d.]*-astra/, openaiPaidWrites(10, 50, 1)],
-  [/gpt-6-sol/, openaiPaidWrites(2, 10, 0.2)],
-  [/gpt-6[\d.]*-terra/, openaiPaidWrites(1, 5, 0.05)],
-  [/gpt-6[\d.]*-luna/, openaiPaidWrites(0.1, 0.5, 0.01)],
-  [/gpt-6/, openaiPaidWrites(2, 10, 0.1)], // gpt-6.1-sol and later sol releases
+  [/gpt-6[\d.]*-astra/, openaiLongPrompt(openaiPaidWrites(10, 50, 1))],
+  [/gpt-6-sol/, openaiLongPrompt(openaiPaidWrites(2, 10, 0.2))],
+  [/gpt-6[\d.]*-terra/, openaiLongPrompt(openaiPaidWrites(1, 5, 0.05))],
+  [/gpt-6[\d.]*-luna/, openaiLongPrompt(openaiPaidWrites(0.1, 0.5, 0.01))],
+  [/gpt-6/, openaiLongPrompt(openaiPaidWrites(2, 10, 0.1))], // gpt-6.1-sol and later sol releases
   // GPT-5.6 is priced per tier; the bare gpt-5.6 alias routes to sol.
   [/gpt-5\.6-cyber/, openaiPaidWrites(12.5, 75, 1.25)],
-  [/gpt-5\.6-terra/, openaiPaidWrites(2, 12, 0.2)],
-  [/gpt-5\.6-luna/, openaiPaidWrites(0.2, 1.2, 0.02)],
-  [/gpt-5\.6/, openaiPaidWrites(4, 20, 0.4)],
-  [/gpt-5\.5-pro/, freeWrites(30, 180)],
-  [/gpt-5\.5/, freeWrites(5, 30, 0.5)],
-  [/gpt-5\.4-pro/, freeWrites(30, 180)],
+  [/gpt-5\.6-terra/, openaiLongPrompt(openaiPaidWrites(2, 12, 0.2))],
+  [/gpt-5\.6-luna/, openaiLongPrompt(openaiPaidWrites(0.2, 1.2, 0.02))],
+  [/gpt-5\.6/, openaiLongPrompt(openaiPaidWrites(4, 20, 0.4))],
+  [/gpt-5\.5-pro/, openaiLongPrompt(freeWrites(30, 180))],
+  [/gpt-5\.5/, openaiLongPrompt(freeWrites(5, 30, 0.5))],
+  [/gpt-5\.4-pro/, openaiLongPrompt(freeWrites(30, 180))],
   [/gpt-5\.4-mini/, freeWrites(0.75, 4.5, 0.075)],
   [/gpt-5\.4-nano/, freeWrites(0.2, 1.25, 0.02)],
-  [/gpt-5\.4/, freeWrites(2.5, 15, 0.25)],
+  [/gpt-5\.4/, openaiLongPrompt(freeWrites(2.5, 15, 0.25))],
   [/gpt-5\.2-pro/, freeWrites(21, 168)],
   [/gpt-5\.2/, freeWrites(1.75, 14, 0.175)],
   [/gpt-5-pro/, freeWrites(15, 120)],

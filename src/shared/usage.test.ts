@@ -213,7 +213,7 @@ describe('modelPricing', () => {
       ['openai/gpt-6.1-sol', 2, 10, 0.1, 2.5]
     ]
     for (const [id, input, output, cacheRead, cacheWrite] of rows) {
-      expect(modelPricing(id), id).toEqual({ input, output, cacheRead, cacheWrite })
+      expect(modelPricing(id), id).toMatchObject({ input, output, cacheRead, cacheWrite })
     }
     // A GPT-6.1 Sol turn writing 10K tokens to the cache and reading 50K bills each at its rate.
     expect(turnCostUsd('gpt-6.1-sol', 100_000, 0, { readTokens: 50_000, writeTokens: 10_000 })).toBeCloseTo(
@@ -221,8 +221,39 @@ describe('modelPricing', () => {
       9
     )
     // The -pro models have no cached-input rate, so a read is billed at input.
-    expect(modelPricing('gpt-5.5-pro')).toEqual({ input: 30, output: 180, cacheRead: 30, cacheWrite: 0 })
+    expect(modelPricing('gpt-5.5-pro')).toMatchObject({ input: 30, output: 180, cacheRead: 30, cacheWrite: 0 })
     expect(modelPricing('o3-pro')).toEqual({ input: 20, output: 80, cacheRead: 20, cacheWrite: 0 })
+  })
+
+  it('prices OpenAI prompts over 272K tokens at the published long-context rates', () => {
+    // [id, input, output, cached input, cache write] above 272K input tokens.
+    const rows: Array<[string, number, number, number, number]> = [
+      ['gpt-6-astra', 20, 75, 2, 25],
+      ['gpt-6.1-sol', 4, 15, 0.2, 5],
+      ['gpt-6.1-terra', 2, 7.5, 0.1, 2.5],
+      ['gpt-6-sol', 4, 15, 0.4, 5],
+      ['gpt-6-luna', 0.2, 0.75, 0.02, 0.25],
+      ['gpt-5.6-sol', 8, 30, 0.8, 10],
+      ['gpt-5.6-terra', 4, 18, 0.4, 5],
+      ['gpt-5.6-luna', 0.4, 1.8, 0.04, 0.5],
+      ['gpt-5.5', 10, 45, 1, 0],
+      ['gpt-5.5-pro', 60, 270, 60, 0],
+      ['gpt-5.4', 5, 22.5, 0.5, 0],
+      ['gpt-5.4-pro', 60, 270, 60, 0]
+    ]
+    for (const [id, input, output, cacheRead, cacheWrite] of rows) {
+      expect(modelPricing(id)?.longContext, id).toEqual({ above: 272_000, input, output, cacheRead, cacheWrite })
+    }
+    // Models whose pricing lists no long-context tier.
+    for (const id of ['gpt-5.6-cyber', 'gpt-5.4-mini', 'gpt-5.2', 'gpt-5.1', 'gpt-4.1', 'o3']) {
+      expect(modelPricing(id)?.longContext, id).toBeUndefined()
+    }
+    // The whole request moves to the higher tier once the prompt passes 272K.
+    expect(turnCostUsd('gpt-6.1-sol', 272_000, 1_000_000)).toBeCloseTo(0.544 + 10, 9)
+    expect(turnCostUsd('gpt-6.1-sol', 300_000, 1_000_000, { readTokens: 200_000 })).toBeCloseTo(
+      (100_000 * 4 + 200_000 * 0.2) / 1_000_000 + 15,
+      9
+    )
   })
 
   it('returns null for unknown / local models', () => {
