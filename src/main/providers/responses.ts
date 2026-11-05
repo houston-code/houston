@@ -146,8 +146,8 @@ interface ResponsesEvent {
     usage?: {
       input_tokens?: number
       output_tokens?: number
-      /** Prompt-cache read split; `cached_tokens` is a subset of `input_tokens`. */
-      input_tokens_details?: { cached_tokens?: number }
+      /** Prompt-cache split; both counts are subsets of `input_tokens`. */
+      input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number }
     }
     incomplete_details?: { reason?: string } | null
     /** Set on `response.failed`; the top-level `error` event carries these inline instead. */
@@ -282,6 +282,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       let inputTokens: number | undefined
       let outputTokens: number | undefined
       let cacheReadTokens: number | undefined
+      let cacheWriteTokens: number | undefined
       let stopReason: StopReason = 'end_turn'
       const turnReasoning: ReasoningBlock[] = []
 
@@ -336,8 +337,9 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
             inputTokens = u?.input_tokens
             outputTokens = u?.output_tokens
             // OpenAI caches automatically (no opt-in) and bills reads below the
-            // input rate; writes are free, so there's no write counterpart here.
+            // input rate. GPT-5.6 and later also bill writes, reported alongside.
             cacheReadTokens = u?.input_tokens_details?.cached_tokens
+            cacheWriteTokens = u?.input_tokens_details?.cache_write_tokens
             if (ev.response?.incomplete_details?.reason === 'max_output_tokens') stopReason = 'max_tokens'
             break
           }
@@ -376,7 +378,8 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         usage: {
           inputTokens,
           outputTokens,
-          ...(cacheReadTokens ? { cacheReadTokens } : {})
+          ...(cacheReadTokens ? { cacheReadTokens } : {}),
+          ...(cacheWriteTokens ? { cacheWriteTokens } : {})
         },
         ...(turnReasoning.length ? { reasoning: turnReasoning } : {})
       }

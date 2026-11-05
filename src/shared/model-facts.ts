@@ -81,6 +81,11 @@ function freeWrites(input: number, output: number, cacheRead?: number): ModelPri
   return { input, output, cacheRead: cacheRead ?? input, cacheWrite: 0 }
 }
 
+/** OpenAI's GPT-5.6 and later bill cache writes at 1.25x input (the default 30-minute TTL). */
+function openaiPaidWrites(input: number, output: number, cacheRead: number): ModelPricing {
+  return { input, output, cacheRead, cacheWrite: input * 1.25 }
+}
+
 // ── Anthropic (Claude) ────────────────────────────────────────────────────────────
 //
 // The Claude gates match on a substring so they hold for the same model whichever host
@@ -204,18 +209,19 @@ const OPENAI_FAMILIES: FamilyRule[] = [
 ]
 
 /** OpenAI's published standard-tier rates, most specific first (a `-mini` / `-pro` variant
- *  before its base id). A later 6.x release of a codename tier takes that tier's rate. */
+ *  before its base id). A later 6.x release of a codename tier takes that tier's rate. From
+ *  GPT-5.6 on, cache writes are billed; gpt-5.5 and earlier write to the cache for free. */
 const OPENAI_PRICES: Rows<ModelPricing> = [
-  [/gpt-6[\d.]*-astra/, freeWrites(10, 50, 1)],
-  [/gpt-6-sol/, freeWrites(2, 10, 0.2)],
-  // Terra bills cache writes (1.25x input, 30-minute retention) and reads at 0.05x.
-  [/gpt-6[\d.]*-terra/, { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 }],
-  [/gpt-6[\d.]*-luna/, freeWrites(0.1, 0.5, 0.01)],
-  [/gpt-6/, freeWrites(2, 10, 0.1)], // gpt-6.1-sol and later sol releases
+  [/gpt-6[\d.]*-astra/, openaiPaidWrites(10, 50, 1)],
+  [/gpt-6-sol/, openaiPaidWrites(2, 10, 0.2)],
+  [/gpt-6[\d.]*-terra/, openaiPaidWrites(1, 5, 0.05)],
+  [/gpt-6[\d.]*-luna/, openaiPaidWrites(0.1, 0.5, 0.01)],
+  [/gpt-6/, openaiPaidWrites(2, 10, 0.1)], // gpt-6.1-sol and later sol releases
   // GPT-5.6 is priced per tier; the bare gpt-5.6 alias routes to sol.
-  [/gpt-5\.6-terra/, freeWrites(2, 12, 0.2)],
-  [/gpt-5\.6-luna/, freeWrites(0.2, 1.2, 0.02)],
-  [/gpt-5\.6/, freeWrites(4, 20, 0.4)],
+  [/gpt-5\.6-cyber/, openaiPaidWrites(12.5, 75, 1.25)],
+  [/gpt-5\.6-terra/, openaiPaidWrites(2, 12, 0.2)],
+  [/gpt-5\.6-luna/, openaiPaidWrites(0.2, 1.2, 0.02)],
+  [/gpt-5\.6/, openaiPaidWrites(4, 20, 0.4)],
   [/gpt-5\.5-pro/, freeWrites(30, 180)],
   [/gpt-5\.5/, freeWrites(5, 30, 0.5)],
   [/gpt-5\.4-pro/, freeWrites(30, 180)],
