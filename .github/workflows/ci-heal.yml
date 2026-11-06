@@ -1,0 +1,68 @@
+name: CI heal
+
+# Re-runs a PR's CI when the newest CI run on its head commit was cancelled.
+#
+# GitHub reads a PR's required checks from the newest check suite on the head commit. When
+# several CI runs start in the same second (a PR opened with labels, which Dependabot always
+# does), the ci-<PR> concurrency group can keep an older run and cancel the newest one before
+# it creates any jobs. The PR then shows all four required checks as "expected" forever:
+# auto-merge never enqueues it, a manual enqueue is refused, and re-running the green sibling
+# does not help. PRs #558 and #577 each sat for days that way. scripts/heal-cancelled-ci.mjs
+# finds those PRs and re-runs the newest cancelled run; its rules are unit-tested there.
+#
+# Scheduled rather than on `workflow_run`: a workflow_run triggered by a Dependabot CI run
+# gets a read-only token and cannot re-run anything, and those are exactly the PRs this is
+# for. A schedule always runs with the permissions below.
+#
+# THIS WORKFLOW NEVER MERGES OR PUSHES ANYTHING. It reads PRs and workflow runs and can only
+# re-run a CI run that already exists on a PR's current head. The re-run is gated by the same
+# required checks and merge queue as any other run.
+
+on:
+  schedule:
+    # Every 15 minutes. A stuck PR otherwise waits for a human, so this is the delay before a
+    # Dependabot patch that hit the race is queued anyway.
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-heal
+  cancel-in-progress: false
+
+jobs:
+  heal:
+    timeout-minutes: 10
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # checkout, for the script
+      pull-requests: read # list open PRs and their head commits
+      actions: write # read CI runs, and re-run a cancelled one
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+        with:
+          cache: 'false'
+      # No `npm ci`: the script uses only node built-ins and the gh CLI on the runner.
+      - name: Re-run CI where the newest run on a PR head was cancelled
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: node scripts/heal-cancelled-ci.mjs
+
+  # A scheduled workflow that breaks tells no one, so alert on it like the others.
+  alert:
+    needs: [heal]
+    if: >-
+      always() && github.event_name == 'schedule'
+      && !cancelled() && !contains(needs.*.result, 'cancelled')
+    uses: ./.github/workflows/alert-on-failure.yml
+    permissions:
+      issues: write
+    with:
+      workflow: CI heal
+      failed: ${{ contains(needs.*.result, 'failure') }}

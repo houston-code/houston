@@ -14,18 +14,25 @@ updates:
     # subject to the cooldown, so a published fix still arrives immediately.
     cooldown:
       default-days: 7
-    # No labels. Dependabot adds its default labels right after opening a PR, and CI runs on
-    # `labeled` (for `full-ci` and `intentional-revert`), so each label started another CI run
-    # in the same second as the `opened` one. The concurrency group cancels all but one, but
-    # with identical start times GitHub can count a cancelled run as the latest result for a
-    # required check and refuse to queue the PR even after a re-run goes green (PR #558 sat
-    # four days that way). Nothing reads these labels; Dependabot PRs are found by author.
+    # No labels requested. Dependabot labels its PRs right after opening them anyway (PR #580
+    # still got `dependencies` and `javascript` with this set), and CI runs on `labeled` (for
+    # `full-ci` and `intentional-revert`), so each label starts another CI run in the same
+    # second as the `opened` one. When the run the concurrency group cancels is the newest
+    # one, the PR's required checks read "expected" forever (PRs #558, #577). ci-heal.yml
+    # re-runs that cancelled run; this setting only keeps the label noise down where it works.
+    # Nothing reads these labels; Dependabot PRs are found by author.
     labels: []
+    # Patch and minor updates only in the groups. dependabot-auto-queue.yml queues patch and
+    # minor PRs and leaves majors for review, and a group PR's update type is its largest
+    # bump, so one major in a group (PR #576: the Anthropic SDKs going 0.x to 1.x) held back
+    # every minor beside it. Majors now arrive as their own PRs.
     groups:
       dev-dependencies:
         dependency-type: development
+        update-types: [minor, patch]
       production-dependencies:
         dependency-type: production
+        update-types: [minor, patch]
     ignore:
       # typescript-eslint 8.x peers on `typescript >=4.8.4 <6.1.0`, so it cannot
       # resolve the native TypeScript 7 compiler — grouping TS 7 in dev-deps makes
@@ -52,5 +59,5 @@ updates:
     # to be caught before it is proposed.
     cooldown:
       default-days: 7
-    # No labels, for the same duplicate-CI-run reason as npm above.
+    # No labels requested, for the same duplicate-CI-run reason as npm above.
     labels: []

@@ -103,3 +103,30 @@ describe('Dependabot auto-queue workflow queues only what it should', () => {
     }
   })
 })
+
+describe('Dependabot auto-queue workflow survives the notices push', () => {
+  it('scopes its concurrency group to the job, so a skipped run cannot cancel the real one', () => {
+    // dependabot-notices.yml pushes with a PAT; that `synchronize` run is skipped by the
+    // actor check. At workflow level it would still join the group and could cancel the
+    // `opened` run before auto-merge was enabled.
+    expect(doc.concurrency).toBeUndefined()
+    expect(job.concurrency).toEqual({
+      group: 'dependabot-auto-queue-${{ github.event.pull_request.number }}',
+      'cancel-in-progress': true
+    })
+  })
+})
+
+describe('Dependabot groups never hide a minor behind a major', () => {
+  // A group PR's update type is its largest bump, and majors are left for review, so a
+  // major in a group held back every patch and minor beside it (PR #576).
+  const config = load(readFileSync(resolve(root, '.github/dependabot.yml'), 'utf8')) as any
+  const groups = config.updates.flatMap((u: any) => Object.entries(u.groups ?? {}))
+
+  it('limits every group to minor and patch updates', () => {
+    expect(groups.length).toBeGreaterThan(0)
+    for (const [name, group] of groups as [string, any][]) {
+      expect([...(group['update-types'] ?? [])].sort(), name).toEqual(['minor', 'patch'])
+    }
+  })
+})
