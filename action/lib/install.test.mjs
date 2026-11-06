@@ -98,6 +98,72 @@ describe('install', () => {
     ).rejects.toThrow(/reports version "0.7.0"/)
   })
 
+  describe('transient download failures', () => {
+    /** Wraps a fake server so the named asset's first `n` fetches fail with `fail()`. */
+    const flaky = (name, n, fail) => {
+      const inner = server()
+      let left = n
+      const urls = []
+      const fetchImpl = async (url, init) => {
+        urls.push(url)
+        if (url.endsWith(`/${name}`) && left > 0) {
+          left--
+          return fail()
+        }
+        return inner.fetchImpl(url, init)
+      }
+      return { fetchImpl, urls }
+    }
+    const sleeps = () => {
+      const waits = []
+      return { waits, sleep: async (ms) => void waits.push(ms) }
+    }
+    const env = () => envFor({ HOUSTON_INPUT_CLI_VERSION: '0.8.0' })
+
+    it('retries a gateway error and succeeds once the asset comes back', async () => {
+      const { fetchImpl, urls } = flaky('SHA256SUMS.cosign.bundle', 2, () => ({ ok: false, status: 504 }))
+      const { waits, sleep } = sleeps()
+      const logs = []
+      const r = await install({ env: env(), exec: execWith().exec, fetchImpl, log: (s) => logs.push(s), platform: 'linux', sleep })
+      expect(r.version).toBe('0.8.0')
+      expect(urls.filter((u) => u.endsWith('/SHA256SUMS.cosign.bundle'))).toHaveLength(3)
+      expect(waits).toEqual([2000, 5000])
+      expect(logs.filter((l) => /HTTP 504; retrying/.test(l))).toHaveLength(2)
+    })
+
+    it('retries a network error and throttling', async () => {
+      let calls = 0
+      const { fetchImpl } = flaky('houston-cli.cjs', 2, () => {
+        calls++
+        if (calls === 1) throw new TypeError('fetch failed')
+        return { ok: false, status: 429 }
+      })
+      const { waits, sleep } = sleeps()
+      await expect(install({ env: env(), exec: execWith().exec, fetchImpl, log: () => {}, platform: 'linux', sleep })).resolves.toMatchObject({
+        version: '0.8.0'
+      })
+      expect(waits).toHaveLength(2)
+    })
+
+    it('gives up after the retry budget on a persistent server error', async () => {
+      const { fetchImpl, urls } = flaky('SHA256SUMS', 99, () => ({ ok: false, status: 503 }))
+      const { exec, calls } = execWith()
+      const { waits, sleep } = sleeps()
+      await expect(install({ env: env(), exec, fetchImpl, log: () => {}, platform: 'linux', sleep })).rejects.toThrow(/SHA256SUMS failed: HTTP 503$/)
+      expect(urls.filter((u) => u.endsWith('/SHA256SUMS'))).toHaveLength(4)
+      expect(waits).toEqual([2000, 5000, 10000])
+      expect(calls).toEqual([])
+    })
+
+    it('never retries a missing asset', async () => {
+      const { fetchImpl, urls } = flaky('SHA256SUMS.asc', 99, () => ({ ok: false, status: 404 }))
+      const { waits, sleep } = sleeps()
+      await expect(install({ env: env(), exec: execWith().exec, fetchImpl, log: () => {}, platform: 'linux', sleep })).rejects.toThrow(/HTTP 404/)
+      expect(urls.filter((u) => u.endsWith('/SHA256SUMS.asc'))).toHaveLength(1)
+      expect(waits).toEqual([])
+    })
+  })
+
   it('refuses a Windows runner before downloading', async () => {
     const { fetchImpl, urls } = server()
     await expect(
