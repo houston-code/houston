@@ -127,8 +127,8 @@ describe('install', () => {
       const r = await install({ env: env(), exec: execWith().exec, fetchImpl, log: (s) => logs.push(s), platform: 'linux', sleep })
       expect(r.version).toBe('0.8.0')
       expect(urls.filter((u) => u.endsWith('/SHA256SUMS.cosign.bundle'))).toHaveLength(3)
-      expect(waits).toEqual([2000, 5000])
-      expect(logs.filter((l) => /HTTP 504; retrying/.test(l))).toHaveLength(2)
+      expect(waits).toEqual([30000, 30000])
+      expect(logs.filter((l) => /^::warning::.*HTTP 504 \(attempt \d of 3\); retrying in 30s$/.test(l))).toHaveLength(2)
     })
 
     it('retries a network error and throttling', async () => {
@@ -149,9 +149,9 @@ describe('install', () => {
       const { fetchImpl, urls } = flaky('SHA256SUMS', 99, () => ({ ok: false, status: 503 }))
       const { exec, calls } = execWith()
       const { waits, sleep } = sleeps()
-      await expect(install({ env: env(), exec, fetchImpl, log: () => {}, platform: 'linux', sleep })).rejects.toThrow(/SHA256SUMS failed: HTTP 503$/)
-      expect(urls.filter((u) => u.endsWith('/SHA256SUMS'))).toHaveLength(4)
-      expect(waits).toEqual([2000, 5000, 10000])
+      await expect(install({ env: env(), exec, fetchImpl, log: () => {}, platform: 'linux', sleep })).rejects.toThrow(/SHA256SUMS failed: HTTP 503 \(3 attempts\)$/)
+      expect(urls.filter((u) => u.endsWith('/SHA256SUMS'))).toHaveLength(3)
+      expect(waits).toEqual([30000, 30000])
       expect(calls).toEqual([])
     })
 

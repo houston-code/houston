@@ -18,8 +18,14 @@ export function pinnedRelease() {
   return JSON.parse(readFileSync(join(ACTION_DIR, 'cli-release.json'), 'utf8'))
 }
 
-/** Attempts per asset; the waits between them are RETRY_DELAYS_MS. */
-export const RETRY_DELAYS_MS = [2000, 5000, 10000]
+/**
+ * Tries per asset and the wait between them, matching scripts/retry.sh and the stapler
+ * retries in release-build.yml. Those wrap a whole command, which can't work here: a
+ * checksum or signature failure must fail at once, not re-download, so only the fetch
+ * itself is retried.
+ */
+export const RETRY_ATTEMPTS = 3
+export const RETRY_DELAY_MS = 30_000
 const realSleep = (ms) => delay(ms)
 
 /** A status worth retrying: the release CDN's gateway errors and throttling, not a missing asset. */
@@ -28,7 +34,7 @@ function transient(status) {
 }
 
 async function download(fetchImpl, url, dest, { sleep = realSleep, log = () => {} } = {}) {
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 1; ; attempt++) {
     let failure
     try {
       const res = await fetchImpl(url, { redirect: 'follow' })
@@ -45,9 +51,10 @@ async function download(fetchImpl, url, dest, { sleep = realSleep, log = () => {
       // fetch itself threw: a reset connection, DNS hiccup, or a body cut off mid-stream.
       failure = new Error(`downloading ${url} failed: ${e?.message ?? e}`)
     }
-    if (failure.final || attempt >= RETRY_DELAYS_MS.length) throw failure
-    log(`${failure.message}; retrying in ${RETRY_DELAYS_MS[attempt] / 1000}s`)
-    await sleep(RETRY_DELAYS_MS[attempt])
+    if (failure.final) throw failure
+    if (attempt >= RETRY_ATTEMPTS) throw new Error(`${failure.message} (${RETRY_ATTEMPTS} attempts)`)
+    log(`::warning::${failure.message} (attempt ${attempt} of ${RETRY_ATTEMPTS}); retrying in ${RETRY_DELAY_MS / 1000}s`)
+    await sleep(RETRY_DELAY_MS)
   }
 }
 
