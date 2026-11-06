@@ -15315,7 +15315,7 @@ MIT License
     SOFTWARE
 ```
 
-### @types/node: 26.6.5
+### @types/node: 26.6.6
 
 - License: MIT
 - Homepage: https://github.com/DefinitelyTyped/DefinitelyTyped/tree/master/types/node
