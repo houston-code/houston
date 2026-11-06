@@ -52,13 +52,17 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: dependabot-auto-queue-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
 jobs:
   auto-queue:
     if: github.event.pull_request.user.login == 'dependabot[bot]' && github.actor == 'dependabot[bot]'
+    # On the job, not the workflow. dependabot-notices.yml pushes the regenerated notices
+    # with a PAT about a minute after Dependabot opens the PR, and that `synchronize` run is
+    # skipped by the `if` above (its actor is the PAT owner). A workflow-level group would
+    # still let that skipped run cancel the `opened` run before it enabled auto-merge; a
+    # job-level group is only joined by a job that actually runs.
+    concurrency:
+      group: dependabot-auto-queue-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
