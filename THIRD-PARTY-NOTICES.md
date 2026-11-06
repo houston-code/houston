@@ -5187,7 +5187,7 @@ Apache License
    limitations under the License.
 ```
 
-### @google/genai: 2.30.0
+### @google/genai: 2.32.0
 
 - License: Apache-2.0
 - Homepage: https://github.com/googleapis/js-genai#readme
@@ -17602,7 +17602,7 @@ Apache License
    limitations under the License.
 ```
 
-### electron-updater: 6.8.10
+### electron-updater: 6.8.11
 
 - License: MIT
 - Homepage: https://github.com/electron-userland/electron-builder
@@ -19894,7 +19894,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### openai: 7.39.0
+### openai: 7.45.1
 
 - License: Apache-2.0
 - Homepage: github:openai/openai-node
