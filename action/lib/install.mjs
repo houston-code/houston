@@ -5,6 +5,7 @@
 import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { CLI_ASSET, SIGNED_ASSETS, assetUrl, parseVersion, verifyRelease } from './verify.mjs'
 
@@ -19,7 +20,7 @@ export function pinnedRelease() {
 
 /** Attempts per asset; the waits between them are RETRY_DELAYS_MS. */
 export const RETRY_DELAYS_MS = [2000, 5000, 10000]
-const realSleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const realSleep = (ms) => delay(ms)
 
 /** A status worth retrying: the release CDN's gateway errors and throttling, not a missing asset. */
 function transient(status) {
