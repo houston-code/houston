@@ -144,6 +144,10 @@ describe('modelPricing', () => {
     expect(modelPricing('claude-sonnet-5-5')).toEqual({ input: 2, output: 10, cacheRead: 0.1 })
     expect(modelPricing('claude-fable-5-1')).toEqual({ input: 10, output: 50, cacheRead: 0.25 })
     expect(modelPricing('claude-mythos-5-1')).toEqual({ input: 10, output: 50, cacheRead: 0.25 })
+    // Fable / Mythos 5.2 dropped the base rate and kept the 0.025x cache read.
+    expect(modelPricing('claude-fable-5-2')).toEqual({ input: 8, output: 40, cacheRead: 0.2 })
+    expect(modelPricing('anthropic.claude-fable-5-2')).toEqual({ input: 8, output: 40, cacheRead: 0.2 })
+    expect(modelPricing('claude-mythos-5-2')).toEqual({ input: 8, output: 40, cacheRead: 0.2 })
     // OpenAI / Gemini families carry explicit cache rates: discounted reads, free writes.
     expect(modelPricing('gpt-4o-mini')).toEqual({ input: 0.15, output: 0.6, cacheRead: 0.075, cacheWrite: 0 })
     expect(modelPricing('gemini-2.5-flash')).toMatchObject({ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 })
@@ -357,6 +361,7 @@ describe('modelCapabilities', () => {
     // Anthropic Claude — multimodal from 3 onward; thinking from 3.7 / 4.x / Fable.
     ['claude-fable-5', true, true],
     ['claude-fable-5-1', true, true],
+    ['claude-fable-5-2', true, true],
     ['claude-opus-5-5', true, true],
     ['claude-sonnet-5-5', true, true],
     ['claude-opus-4-8', true, true],

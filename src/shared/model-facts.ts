@@ -145,8 +145,8 @@ const CLAUDE_XHIGH = /claude-(opus-4-[7-9]|opus-[5-9]|sonnet-[5-9]|fable|mythos)
  *  Mythos). Some reject `{ type: 'disabled' }` outright, so reasoning can be turned down but never off. */
 const CLAUDE_THINKS_BY_DEFAULT = /claude-((opus|sonnet|haiku)-[5-9]|fable|mythos)/i
 
-/** Prefix-bound ("preserved") thinking: Fable 5.1, Opus 5.5, Sonnet 5.5, Haiku 5.5. Mythos 5.1
- *  doesn't run the check. */
+/** Prefix-bound ("preserved") thinking: Fable 5.1 and 5.2, Opus 5.5, Sonnet 5.5, Haiku 5.5.
+ *  Fable 5.2 runs the check for every account, whatever its age. Mythos 5.1 doesn't run it. */
 const CLAUDE_PRESERVED_THINKING = /claude-((opus|sonnet|haiku)-5-[5-9]|fable-5-[1-9])/i
 
 const CLAUDE_FAMILIES: FamilyRule[] = [
@@ -158,9 +158,11 @@ const CLAUDE_FAMILIES: FamilyRule[] = [
 
 /** Per-MTok rates. Fable / Mythos are the flagship tier, priced above Opus. Cache writes
  *  are 1.25x input everywhere (the absent-field default); cache reads are 0.1x except
- *  where a release cut them (Fable / Mythos 5.1 at 0.025x, Opus 5.5 and Sonnet 5.5 at 0.05x). Releases
- *  repriced within a family are matched before the family-wide rate. */
+ *  where a release cut them (Fable / Mythos 5.1 and 5.2 at 0.025x, Opus 5.5 and Sonnet 5.5 at
+ *  0.05x). Fable / Mythos 5.2 also dropped the base rate to $8 / $40. Releases repriced within a
+ *  family are matched before the family-wide rate. */
 const CLAUDE_PRICES: Rows<ModelPricing> = [
+  [/(fable|mythos)-5-2/, { input: 8, output: 40, cacheRead: 0.2 }],
   [/(fable|mythos)-5-1/, { input: 10, output: 50, cacheRead: 0.25 }],
   [/fable|mythos/, { input: 10, output: 50 }],
   [/opus-5-5/, { input: 4, output: 20, cacheRead: 0.2 }],

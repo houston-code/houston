@@ -270,7 +270,8 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   }
   // v9: the Claude 5.x lineup (Fable 5.1, Opus 5.5, Sonnet 5.5). Scoped like the v3 Fable
   // add so a user's deleted defaults stay deleted; nothing is pruned, since the releases
-  // they supersede still serve.
+  // they supersede still serve. (The Fable 5.1 add is a no-op since v16 replaced it in the
+  // seed with Fable 5.2.)
   if (fromVersion < 9) {
     providers = backfillDefaultModels(providers, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5'])
   }
@@ -299,6 +300,8 @@ function migrate(raw: Partial<AppSettings>): AppSettings {
   }
   // v15: GPT-6.1 Terra. Scoped like the other adds; nothing it sits beside is retired.
   if (fromVersion < 15) providers = backfillDefaultModels(providers, ['gpt-6.1-terra'])
+  // v16: Claude Fable 5.2. Scoped; Fable 5.1, which it replaces in the seed, still serves.
+  if (fromVersion < 16) providers = backfillDefaultModels(providers, ['claude-fable-5-2'])
   const merged: AppSettings = {
     ...base,
     ...upgraded,

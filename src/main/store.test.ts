@@ -152,8 +152,9 @@ describe('settings migration — model backfill', () => {
     writeSettings({ schemaVersion: 8, providers: [anthropicProvider(['claude-opus-4-8'])] })
     const ids = await loadAnthropicModelIds()
     expect(ids[0]).toBe('claude-opus-4-8') // user's model kept, in place
-    // Haiku 5.5 arrives too, via the later scoped v12 add.
-    expect(ids).toEqual(['claude-opus-4-8', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'])
+    // Haiku 5.5 arrives too, via the later scoped v12 add, and Fable 5.2 via v16. Fable 5.1
+    // left the seed when 5.2 replaced it, so the v9 add no longer brings it in.
+    expect(ids).toEqual(['claude-opus-4-8', 'claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2'])
   })
 
   it('scopes the v9 bump to the new ids — does not re-add a default the user deleted', async () => {
@@ -164,8 +165,9 @@ describe('settings migration — model backfill', () => {
 
   it('does not re-add a 5.x model a v9 install has already deleted', async () => {
     writeSettings({ schemaVersion: 9, providers: [anthropicProvider(['claude-opus-5-5'])] })
-    // Fable 5.1 and Sonnet 5.5 stay deleted; only the later v12 Haiku 5.5 add is new.
-    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5', 'claude-haiku-5-5'])
+    // Fable 5.1 and Sonnet 5.5 stay deleted; only the later adds are new (v12 Haiku 5.5,
+    // v16 Fable 5.2).
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5', 'claude-haiku-5-5', 'claude-fable-5-2'])
   })
 
   it('gives a pre-v2 install the full backfill without duplicating the v9 ids', async () => {
@@ -174,7 +176,17 @@ describe('settings migration — model backfill', () => {
     const ids = await loadAnthropicModelIds()
     expect(ids).toContain('claude-haiku-5-5') // full backfill ran
     expect(ids).toContain('claude-opus-5-5')
-    expect(ids.filter((id) => id === 'claude-fable-5-1')).toHaveLength(1) // no duplicate
+    expect(ids.filter((id) => id === 'claude-fable-5-2')).toHaveLength(1) // no duplicate
+  })
+
+  it('adds Fable 5.2 on the v16 bump and keeps Fable 5.1, which still serves', async () => {
+    writeSettings({ schemaVersion: 15, providers: [anthropicProvider(['claude-fable-5-1', 'claude-opus-5-5'])] })
+    expect(await loadAnthropicModelIds()).toEqual(['claude-fable-5-1', 'claude-opus-5-5', 'claude-fable-5-2'])
+  })
+
+  it('leaves Fable 5.2 deleted once the v16 bump has run', async () => {
+    writeSettings({ schemaVersion: 16, providers: [anthropicProvider(['claude-opus-5-5'])] })
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5'])
   })
 
   it('stamps the current schema version on load', async () => {
@@ -209,12 +221,19 @@ describe('settings migration — model backfill', () => {
 describe('settings migration — Claude Haiku 5.5 (v12)', () => {
   it('adds Haiku 5.5 and keeps Haiku 4.5, which still serves', async () => {
     writeSettings({ schemaVersion: 11, providers: [anthropicProvider(['claude-opus-5-5', 'claude-haiku-4-5'])] })
-    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5', 'claude-haiku-4-5', 'claude-haiku-5-5'])
+    // Fable 5.2 follows from the later v16 add.
+    expect(await loadAnthropicModelIds()).toEqual([
+      'claude-opus-5-5',
+      'claude-haiku-4-5',
+      'claude-haiku-5-5',
+      'claude-fable-5-2'
+    ])
   })
 
   it('does not re-add Haiku 5.5 a v12 install has deleted', async () => {
     writeSettings({ schemaVersion: 12, providers: [anthropicProvider(['claude-opus-5-5'])] })
-    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5'])
+    // Haiku 5.5 stays deleted; only the later v16 Fable 5.2 add is new.
+    expect(await loadAnthropicModelIds()).toEqual(['claude-opus-5-5', 'claude-fable-5-2'])
   })
 })
 
@@ -490,7 +509,8 @@ describe('selected-model reconciliation', () => {
 
   it('drops a dangling selection read from a hand-edited settings.json on load', async () => {
     writeSettings({
-      schemaVersion: 9,
+      // Current version, so no migration adds a model that would outrank the survivor.
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
       providers: [anthropicProvider(['claude-opus-4-8'])],
       selected: { providerId: 'anthropic', model: 'a-model-that-was-deleted' }
     })
