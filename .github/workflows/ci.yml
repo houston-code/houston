@@ -173,8 +173,15 @@ jobs:
           electron-cache: headers
       - name: Set up bubblewrap + unprivileged user namespaces
         run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
+          # apt-install.sh, not a bare apt-get: a stalled Ubuntu mirror once held `apt-get
+          # update` until this job's timeout, failing the required check in the merge queue
+          # before any test ran. The script bounds and retries every apt call.
+          # (A release run can check out a commit that predates the script: fall back.)
+          if [ -f scripts/apt-install.sh ]; then
+            bash scripts/apt-install.sh bubblewrap
+          else
+            sudo apt-get update && sudo apt-get install -y bubblewrap
+          fi
           # Newer Ubuntu (24.04) restricts unprivileged userns via AppArmor; relax it
           # for this ephemeral runner so the bubblewrap backend can actually confine.
           echo 0 | sudo tee /proc/sys/kernel/apparmor_restrict_unprivileged_userns || true
@@ -319,9 +326,7 @@ jobs:
       # namespaces, so unlike linux-sandbox it needs no AppArmor change.)
       - name: Set up a display and bubblewrap for the e2e
         if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y xvfb bubblewrap
+        run: bash scripts/apt-install.sh xvfb bubblewrap
       # The app was just packaged above, so run the suite against it without rebuilding.
       - name: Packaged-app e2e
         run: |
