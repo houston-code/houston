@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.12.0 - 2026-11-10
+
+Adds Claude Fable 5.2 and gpt-6.1-terra, retries dropped streams, and fixes macOS updates and OpenAI cost estimates.
+
+This release also updates the bundled Electron runtime for Chromium and Node security fixes.
+
+### Breaking changes
+
+- None.
+
+### Added
+
+- Claude Fable 5.2 is now the default Anthropic flagship model. Existing installs get it added automatically, and Fable 5.1 stays available. It is priced at $8 input, $40 output and $0.20 cached reads per million tokens. The Bedrock, Vertex and Foundry model lists now offer 5.2. Your selected default model does not change. (#594)
+- gpt-6.1-terra is now a default OpenAI model, added automatically to existing installs. It has its own pricing ($1 input, $5 output per million tokens) instead of being estimated at the gpt-6.1-sol rate. If you delete it, it stays deleted. (#579)
+- When a test, build, lint or similar command is piped into another program (for example `| head`), the shell tool now notes that the exit code belongs to that last program, not the command itself. It also explains how to get the real status. Sandbox and permission hints now appear in this case too, so the agent no longer reads a failed run as a pass. (#574)
+
+### Fixed
+
+- On macOS, choosing **Check for updates → Update** after an update had already downloaded now installs it. Previously the app could restart on the same version. (#551)
+- A connection that drops mid-response is now retried instead of ending the run or a subagent with a "terminated" error. A connection that goes silent (for example after a network switch or a sleeping laptop) is retried after 120 seconds without data. Previously the run froze for up to five minutes and then failed. (#557)
+- Chats using a reasoning model on an OpenAI-style host (such as OpenRouter) now get a generated title instead of keeping the truncated first message. (#567)
+- Test runs piped through `tail` or `head` are now recorded as passed when they pass, instead of "unknown". A test filter that matches no files is now reported as failed. (#568)
+- Cost estimates for GPT-5.6 and all GPT-6 models now include prompt-cache write charges. Previously written tokens were billed at the full input price. gpt-5.6-cyber now has its own pricing. (#583)
+- Cost estimates for OpenAI prompts over 272K input tokens now use OpenAI's long-context rates on the models that have them. Previously those turns were underestimated. (#585)
+- The Houston GitHub Action now retries temporary server and network errors when downloading the Houston CLI (up to 3 attempts), instead of failing on the first error. (#587)
+
+### Changed
+
+- Updated Electron to 45.2.3, which includes fixes for high and critical security vulnerabilities in the bundled Chromium and Node. (#565, #570, #584)
+- Cost estimates for `gemini-2.5-pro` and `gemini-2.5-flash` switch to the rates of the models Google redirects them to, starting 2026-12-01. (#579)
+- For merge-queue runs, `gh_run_view` now reports where the run stands. It shows the pull request's current state, how many commits have landed on the base branch since the run, and later runs on that branch. It also gives a `git log` command to find fixes to the failing test. (#573)
+
 ## v0.11.1 - 2026-10-26
 
 This release fixes updates on macOS so an already-downloaded update installs instead of reopening the old version.
