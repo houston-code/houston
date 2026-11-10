@@ -16,7 +16,8 @@
 #     own: the install still runs against whatever package lists the runner has.
 #
 # Env: APT_ATTEMPTS (default 3), APT_RETRY_DELAY seconds (default 10) and APT_TIMEOUT seconds
-# per apt call (default 120) tune it.
+# per apt call (default 75) tune it. The defaults cap the worst case (every call timing out on
+# every attempt) near 8 minutes, inside the 15-minute timeout of the jobs that use this.
 set -uo pipefail
 
 if [ "$#" -eq 0 ]; then
@@ -25,7 +26,7 @@ if [ "$#" -eq 0 ]; then
 fi
 max=${APT_ATTEMPTS:-3}
 delay=${APT_RETRY_DELAY:-10}
-limit=${APT_TIMEOUT:-120}
+limit=${APT_TIMEOUT:-75}
 
 missing=()
 for pkg in "$@"; do

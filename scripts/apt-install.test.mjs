@@ -84,8 +84,8 @@ describe.skipIf(process.platform === 'win32')('apt-install.sh', () => {
       expect(line).toContain('Acquire::https::Timeout=20')
       expect(line).toContain('Acquire::Retries=2')
     }
-    // Both apt calls ran under `timeout -k 10 120`.
-    expect(res.timeouts.trim().split('\n')).toEqual(['timeout -k 10 120', 'timeout -k 10 120'])
+    // Both apt calls ran under `timeout -k 10 75`.
+    expect(res.timeouts.trim().split('\n')).toEqual(['timeout -k 10 75', 'timeout -k 10 75'])
   })
 
   it('still installs when apt-get update fails, and says so', () => {
