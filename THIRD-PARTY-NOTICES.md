@@ -19712,7 +19712,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### minimatch: 11.0.1
+### minimatch: 11.0.4
 
 - License: BlueOak-1.0.0
 - Homepage: git@github.com:isaacs/minimatch
@@ -19956,7 +19956,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
-### openai: 7.45.1
+### openai: 7.47.0
 
 - License: Apache-2.0
 - Homepage: github:openai/openai-node
