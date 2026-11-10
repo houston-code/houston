@@ -81,7 +81,7 @@ describe('defaultSettings', () => {
   it('seeds the current Claude lineup with Opus 5.5 as the default', () => {
     const anthropic = defaultSettings().providers.find((p) => p.id === 'anthropic')!
     expect(anthropic.models.map((m) => m.id)).toEqual([
-      'claude-fable-5-1',
+      'claude-fable-5-2',
       'claude-opus-5-5',
       'claude-sonnet-5-5',
       'claude-haiku-5-5'
@@ -160,27 +160,27 @@ describe('backfillDefaultModels', () => {
   })
 
   it('with onlyIds, appends just those ids and leaves other missing defaults out', () => {
-    // The scoped call a version bump makes: seed Fable 5.1 without re-adding other Claude defaults the
+    // The scoped call a version bump makes: seed Fable 5.2 without re-adding other Claude defaults the
     // user has since deleted.
     const saved = [
       provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-opus-4-8' }] })
     ]
-    const models = backfillDefaultModels(saved, ['claude-fable-5-1'], new Date('2026-10-18T09:00:00Z'))[0]
+    const models = backfillDefaultModels(saved, ['claude-fable-5-2'], new Date('2026-10-18T09:00:00Z'))[0]
       .models
-    expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5-1'])
+    expect(models.map((m) => m.id)).toEqual(['claude-opus-4-8', 'claude-fable-5-2'])
     // The appended model carries no seeded label (its display name is derived) and is
     // stamped with the day it arrived, for the picker's "New" mark.
-    expect(models.find((m) => m.id === 'claude-fable-5-1')).toEqual({ id: 'claude-fable-5-1', addedAt: '2026-10-18' })
+    expect(models.find((m) => m.id === 'claude-fable-5-2')).toEqual({ id: 'claude-fable-5-2', addedAt: '2026-10-18' })
     // The user's existing model is untouched.
     expect(models[0]).toEqual({ id: 'claude-opus-4-8' })
   })
 
   it('with onlyIds, does not re-add an already-present scoped id', () => {
     const saved = [
-      provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-fable-5-1' }] })
+      provider({ id: 'anthropic', kind: 'anthropic', models: [{ id: 'claude-fable-5-2' }] })
     ]
-    const ids = backfillDefaultModels(saved, ['claude-fable-5-1'])[0].models.map((m) => m.id)
-    expect(ids).toEqual(['claude-fable-5-1'])
+    const ids = backfillDefaultModels(saved, ['claude-fable-5-2'])[0].models.map((m) => m.id)
+    expect(ids).toEqual(['claude-fable-5-2'])
   })
 
   it('leaves custom (non-built-in) providers untouched', () => {

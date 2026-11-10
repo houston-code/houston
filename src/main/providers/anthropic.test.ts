@@ -111,7 +111,7 @@ describe('anthropic request reasoning params', () => {
   })
 
   it('opts preserved-thinking models into drop_block so an edited history does not 400', async () => {
-    for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1']) {
+    for (const model of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-fable-5-2']) {
       const params = await captureRequest({ model, reasoningEffort: 'high' })
       expect(params.thinking).toEqual({
         type: 'adaptive',

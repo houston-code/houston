@@ -24,8 +24,10 @@ import {
  */
 const CORPUS = [
   // Anthropic: current, superseded, legacy, and as the cloud hosts address them.
+  'claude-fable-5-2',
   'claude-fable-5-1',
   'claude-fable-5',
+  'claude-mythos-5-2',
   'claude-mythos-5-1',
   'claude-mythos-5',
   'claude-opus-5-5',
@@ -53,6 +55,7 @@ const CORPUS = [
   'claude-2.1',
   'claude-instant-1.2',
   'anthropic.claude-opus-5-5',
+  'anthropic.claude-fable-5-2',
   'anthropic.claude-fable-5-1',
   'anthropic.claude-sonnet-5-5',
   'anthropic.claude-haiku-4-5',

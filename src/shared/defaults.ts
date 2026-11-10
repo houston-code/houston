@@ -3,7 +3,7 @@ import type { AppSettings, ApprovalPolicy, ProviderConfig, SelectedModel } from 
 import { DEFAULT_SEARCH_PROVIDER_ID } from './search'
 import { pickDefaultModel } from './models'
 
-export const SETTINGS_SCHEMA_VERSION = 15
+export const SETTINGS_SCHEMA_VERSION = 16
 
 /**
  * The reasoning effort a fresh install starts at. Coding and long agentic turns are the
@@ -81,11 +81,11 @@ export function defaultProviders(): ProviderConfig[] {
       // Model ids only — the display name is derived from the id (see
       // `modelDisplayName` in models.ts), so a seeded model reads identically to one
       // added via Fetch. No hardcoded labels to drift out of sync with fetched ids.
-      // The current lineup, one model per tier. Superseded releases (Fable 5, Opus 4.8 /
+      // The current lineup, one model per tier. Superseded releases (Fable 5.1 / 5, Opus 4.8 /
       // 4.7, Sonnet 4.6, Haiku 4.5) still serve, so the migrations that brought in their
-      // successors (v9, v12) only add new ids; they never remove a model a user may be using.
+      // successors (v9, v12, v16) only add new ids; they never remove a model a user may be using.
       models: [
-        { id: 'claude-fable-5-1' },
+        { id: 'claude-fable-5-2' },
         { id: 'claude-opus-5-5' },
         { id: 'claude-sonnet-5-5' },
         { id: 'claude-haiku-5-5' }

@@ -41,6 +41,7 @@ describe('anthropic thinking', () => {
       'claude-sonnet-5-5',
       'claude-sonnet-5',
       'claude-fable-5-1',
+      'claude-fable-5-2',
       'anthropic.claude-opus-5-5',
       'claude-sonnet-5-5@20260901'
     ]) {
@@ -52,7 +53,14 @@ describe('anthropic thinking', () => {
   })
 
   it('flags only the prefix-bound (preserved thinking) releases', () => {
-    for (const id of ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'anthropic.claude-opus-5-5']) {
+    for (const id of [
+      'claude-opus-5-5',
+      'claude-sonnet-5-5',
+      'claude-fable-5-1',
+      'claude-fable-5-2',
+      'anthropic.claude-fable-5-2',
+      'anthropic.claude-opus-5-5'
+    ]) {
       expect(anthropicPreservesThinking(id)).toBe(true)
     }
     for (const id of ['claude-opus-5', 'claude-sonnet-5', 'claude-fable-5', 'claude-mythos-5-1', 'claude-opus-4-8']) {
@@ -61,7 +69,7 @@ describe('anthropic thinking', () => {
   })
 
   it('maps off to the lowest effort on models that think regardless', () => {
-    for (const id of ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-mythos-5']) {
+    for (const id of ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5', 'claude-fable-5-1', 'claude-fable-5-2', 'claude-mythos-5']) {
       expect(anthropicThinksByDefault(id)).toBe(true)
       expect(anthropicThinking(id, 'off')).toMatchObject({ kind: 'adaptive', effort: 'low', display: 'omitted' })
       expect(anthropicThinking(id, undefined)).toMatchObject({ effort: 'low' })
