@@ -6,37 +6,67 @@ import { builtinToolset, getTool, PRESENT_PLAN_NAME } from './tools'
 import { isDeferredBuiltin } from './deferred-tools'
 
 /**
- * A short, factual addendum tailored to the model family in use, or '' for
- * families we don't special-case. Detection is intentionally permissive: it
- * keys off the provider id (built-ins use a stable id) and the model name, so
- * custom OpenAI-compatible endpoints pointing at GPT models are still covered.
+ * Notes for the model family in use, or '' for families we don't special-case.
+ * Each note answers a failure seen from that family in real conversations, so the
+ * section stays short: a family with no observed failure gets no note. Detection
+ * is intentionally permissive: it keys off the provider id (built-ins use a stable
+ * id) and the model name, so custom OpenAI-compatible endpoints pointing at GPT
+ * models are still covered.
  */
 function modelFamilyAddendum(providerId?: string, model?: string, applyPatch = true): string {
+  const notes = modelFamilyNotes(providerId, model, applyPatch)
+  return notes.length ? `# Notes for this model\n${notes.map((n) => `- ${n}`).join('\n')}` : ''
+}
+
+function modelFamilyNotes(providerId?: string, model?: string, applyPatch = true): string[] {
   const id = (providerId ?? '').toLowerCase()
   const m = (model ?? '').toLowerCase()
 
   // Local runtimes (Ollama, LM Studio): usually smaller models that do better
-  // with tight, deliberate tool use.
+  // with tight, deliberate tool use. They have also written tool calls out as
+  // reply text and filled gaps in what they read with invented facts.
   if (id === 'ollama' || id === 'lmstudio') {
-    return 'You are running on a local model: prefer concise, deliberate tool use, one focused call at a time over many speculative ones.'
+    return [
+      'You are running on a local model: prefer concise, deliberate tool use, one focused call at a time over many speculative ones.',
+      'Make every tool call through the tool-calling interface. Never write a tool call out as text in your reply: text is shown to the user and runs nothing.',
+      "State only what you read in the project or in a tool result. If you haven't read it, say you don't know rather than filling the gap."
+    ]
   }
 
   // OpenAI / GPT / codex family (incl. the o-series reasoning models). These tend
-  // to stop at a proposed plan or a "shall I proceed?" instead of doing the work.
+  // to stop at a proposed plan or a "shall I proceed?" instead of doing the work,
+  // and to do the reverse on a proposal request: dozens of reads and no answer.
   if (id === 'openai' || m.includes('gpt') || m.includes('codex') || /^o[1-9]/.test(m)) {
-    const patch = applyPatch
-      ? 'apply_patch is available for multi-file edits: prefer it when a single change spans several files. '
-      : ''
-    return `${patch}When the user asks for a change, carry it through to a verified result in this turn rather than stopping to propose a plan or ask whether to continue.`
+    return [
+      ...(applyPatch
+        ? [
+            "apply_patch is available for multi-file edits: prefer it when a single change spans several files. Don't send a patch that changes nothing: if a file already reads the way you want, leave it and move on."
+          ]
+        : []),
+      'When the user asks for a change, carry it through to a verified result in this turn rather than stopping to propose a plan or ask whether to continue.',
+      'When the user asks only for a proposal, a plan, or an explanation, read what the answer needs and then give it. A long run of reads that ends without the answer has not done what was asked.'
+    ]
   }
 
   // Gemini family (direct, or via Vertex/an aggregator). Prone to ending a step
   // with neither text nor a tool call, which reads as a silent stall.
   if (id === 'gemini' || m.includes('gemini')) {
-    return 'After every tool result, either make the next tool call or reply to the user. Never end a reply with no text and no tool call.'
+    return ['After every tool result, either make the next tool call or reply to the user. Never end a reply with no text and no tool call.']
   }
 
-  return ''
+  // The small Claude tier. Most of the malformed calls, repeated failing commands,
+  // pasted file contents, and overstated results in saved conversations came from
+  // it, and the base rules for the last two were not enough on their own.
+  if (m.includes('haiku')) {
+    return [
+      'Send each tool argument as the plain JSON type its schema names. Never put XML or other markup tags inside an argument value.',
+      'When a command or edit fails twice the same way, stop repeating it: read the full error and the file involved, then change the approach.',
+      'Claim only what a check you ran showed. One passing fix does not show the whole task works, so say what you verified and what you did not.',
+      "In your final message, describe what changed and where. Don't paste the contents of files you wrote."
+    ]
+  }
+
+  return []
 }
 
 /** The host facts the prompt states: the OS and the shell sandbox backend in use. */
