@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { isPlanDecision, sanitizeElicitationResult } from './agent'
+import { isPlanDecision, retryProgress, sanitizeElicitationResult } from './agent'
+
+describe('retryProgress', () => {
+  it('counts against the cap, or by attempt during an outage', () => {
+    expect(retryProgress({ attempt: 3, max: 6 })).toBe('3/6')
+    expect(retryProgress({ attempt: 9 })).toBe('attempt 9')
+  })
+})
 
 describe('isPlanDecision', () => {
   it('accepts a valid accept decision with a known mode', () => {

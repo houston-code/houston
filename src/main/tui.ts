@@ -62,7 +62,7 @@ import type {
 } from '@shared/agent'
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
-import { isReasoningEffort, REASONING_EFFORTS, SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd } from '@shared/usage'
 import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
@@ -4082,8 +4082,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
         case 'retry':
-          deps.io.setSpinnerLabel?.(`Retrying ${e.attempt}/${e.max}`)
-          if (retryStreak === 0) deps.io.out(paint(`\n· retrying (${e.attempt}/${e.max})… ${e.message}\n`, 'yellow'))
+          deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
+          if (retryStreak === 0) deps.io.out(paint(`\n· retrying (${retryProgress(e)})… ${e.message}\n`, 'yellow'))
           retryStreak = e.attempt
           break
         case 'model_fallback':

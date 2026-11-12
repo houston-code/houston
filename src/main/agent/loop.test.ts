@@ -38,6 +38,7 @@ import {
 import { checkEgressHost, type EgressRunScope } from './egress'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
+import { MAX_PROVIDER_RETRIES } from './retry'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
 import { idleTimeoutFetch } from '../providers/idle-fetch'
@@ -1187,6 +1188,33 @@ describe('startRun', () => {
       } finally {
         await server.close()
       }
+    })
+
+    it('rides out a network outage past the attempt count once the provider has answered', async () => {
+      const offline: ProviderStreamEvent = { type: 'error', message: 'Connection error.' }
+      const outage = MAX_PROVIDER_RETRIES + 4
+      const r = await run({
+        turns: [[{ type: 'text', text: 'par' }, offline], ...Array.from({ length: outage }, () => [offline]), answer],
+        policy: 'full-auto'
+      })
+      expect(flow(r).at(-1)).toBe('done')
+      expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'the whole answer' })
+      const retries = r.events.filter((e) => e.type === 'retry') as Array<Extract<AgentEvent, { type: 'retry' }>>
+      expect(retries).toHaveLength(outage + 1)
+      // A time budget, not a cap, so no attempt count is promised.
+      expect(retries.every((e) => e.max === undefined)).toBe(true)
+    })
+
+    it('holds a provider it never reached to the attempt count on network errors', async () => {
+      const offline: ProviderStreamEvent = { type: 'error', message: 'Connection error.' }
+      const r = await run({
+        turns: [...Array.from({ length: MAX_PROVIDER_RETRIES + 1 }, () => [offline]), answer],
+        policy: 'full-auto'
+      })
+      expect(types(r).at(-1)).toBe('error')
+      const retries = r.events.filter((e) => e.type === 'retry') as Array<Extract<AgentEvent, { type: 'retry' }>>
+      expect(retries).toHaveLength(MAX_PROVIDER_RETRIES)
+      expect(retries.every((e) => e.max === MAX_PROVIDER_RETRIES)).toBe(true)
     })
 
     it('aborts during the backoff after a discard without retrying', async () => {
