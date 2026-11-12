@@ -109,6 +109,7 @@ jobs:
       - name: Upload test results
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: test-results-linux
           retention-days: 7
@@ -319,6 +320,7 @@ jobs:
       - name: Upload test results
         if: ${{ !cancelled() && runner.os != 'Linux' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: test-results-${{ matrix.target }}
           retention-days: 7
@@ -377,14 +379,32 @@ jobs:
       # Playwright's error context and traces, so a red e2e can be diagnosed from the run.
       - if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: e2e-results-${{ matrix.target }}
           retention-days: 7
           path: test-results/
           if-no-files-found: ignore
+      # Packaging must have produced something to install. This is the gate; the upload below
+      # is not (see the next comment), so its own "no files found" error cannot be.
+      - name: Check that packaging produced installers
+        run: |
+          shopt -s nullglob
+          files=(release/*.dmg release/*.zip release/*-setup.exe release/*.AppImage release/*.deb)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::packaging produced no installer in release/"
+            exit 1
+          fi
+          printf '%s\n' "${files[@]}"
       # Inspection-only build of this PR (never a published feed: the updater reads
       # Releases). Lets a reviewer install the PR's app without building it locally.
+      #
+      # Every artifact upload in this workflow is continue-on-error: the artifacts are for
+      # people to inspect and no job reads them, so a failed upload (the artifact service was
+      # once unresolvable from a macOS runner, which ejected a good PR from the merge queue)
+      # shows as a warning instead of failing a required check.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        continue-on-error: true
         with:
           name: houston-${{ matrix.target }}
           retention-days: 3
