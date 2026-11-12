@@ -4,7 +4,7 @@ import { modelPricing } from '@shared/model-facts'
 
 /**
  * Model drift: which models a first-party provider now lists that Houston doesn't ship
- * and probably should. Pure, so the weekly model-drift workflow's live runner
+ * and probably should. Pure, so the daily model-drift workflow's live runner
  * (model-drift.integration.test.ts) and the unit tests share it. The workflow turns the
  * result into one rolling GitHub issue; nothing here adds a model. A listing can include
  * models that don't actually serve, so adding one still goes through a PR, the coverage

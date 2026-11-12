@@ -1,5 +1,5 @@
 {
-  "$comment": "Models the weekly model-drift workflow should not flag: released, but deliberately not seeded as defaults. Each needs a reason. Remove an entry to have it flagged again.",
+  "$comment": "Models the daily model-drift workflow should not flag: released, but deliberately not seeded as defaults. Each needs a reason. Remove an entry to have it flagged again.",
   "ignore": [
     { "id": "claude-opus-5", "reason": "Superseded by claude-opus-5-5 at a lower price." },
     { "id": "claude-sonnet-5", "reason": "Superseded by claude-sonnet-5-5 at the same price." },
