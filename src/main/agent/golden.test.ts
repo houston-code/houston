@@ -605,6 +605,7 @@ describe('agent behavior goldens', () => {
       caps?: Record<string, unknown>
     }[] = [
       { providerId: 'anthropic', model: 'claude-sonnet-5', caps: { reasoning: true } },
+      { providerId: 'anthropic', model: 'claude-haiku-5-5', caps: { reasoning: true } },
       { providerId: 'openai', model: 'gpt-5.2' },
       { providerId: 'ollama', model: 'llama3.3' }
     ]
@@ -854,6 +855,7 @@ describe('system prompt names only tools the run offers', () => {
   }
 
   for (const family of [
+    { providerId: 'anthropic', model: 'claude-haiku-5-5' },
     { providerId: 'openai', model: 'gpt-5.2' },
     { providerId: 'gemini', model: 'gemini-2.5-pro' },
     { providerId: 'ollama', model: 'llama3.3' }
