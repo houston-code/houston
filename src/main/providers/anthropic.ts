@@ -452,6 +452,50 @@ function toolCallFromBuffer(buf: { id: string; name: string; json: string }): To
     : { id, name: buf.name, arguments: {}, incomplete: true }
 }
 
+/** The first-party API host. Any other base URL is a gateway or proxy the user runs. */
+const ANTHROPIC_API_HOST = 'api.anthropic.com'
+
+/**
+ * Default headers for a first-party client: the user's own headers, plus, for a gateway,
+ * the key in `X-Api-Key`.
+ *
+ * SDK 1.x sends the API key as `Authorization: Bearer`, where 0.x sent `X-Api-Key`. The
+ * Claude API accepts either, but a gateway the user points Houston at (a custom base URL)
+ * may read only `X-Api-Key`, and would start rejecting every request after the upgrade.
+ * So a gateway keeps getting the key in `X-Api-Key`, exactly as before, and
+ * `Authorization: null` stops the SDK from also sending it as a bearer token (and tells
+ * the SDK the missing `Authorization` is deliberate). The user's own headers are spread
+ * last, so an `Authorization` they configured for the gateway still goes out.
+ * Exported for testing.
+ */
+export function anthropicDefaultHeaders(
+  apiKey: string,
+  baseURL?: string,
+  headers?: Record<string, string>
+): Record<string, string | null> | undefined {
+  const merged: Record<string, string | null> = {
+    ...(apiKey && isGatewayUrl(baseURL) ? { 'X-Api-Key': apiKey, Authorization: null } : {}),
+    ...(headers ?? {})
+  }
+  return Object.keys(merged).length ? merged : undefined
+}
+
+function withDefaultHeaders(
+  defaultHeaders: Record<string, string | null> | undefined
+): { defaultHeaders?: Record<string, string | null> } {
+  return defaultHeaders ? { defaultHeaders } : {}
+}
+
+function isGatewayUrl(baseURL?: string): boolean {
+  if (!baseURL) return false
+  try {
+    return new URL(baseURL).host !== ANTHROPIC_API_HOST
+  } catch {
+    // Unparseable: not the first-party host, so treat it as the user's own endpoint.
+    return true
+  }
+}
+
 /** A provider for the first-party Anthropic API, authenticated with an API key. */
 export function createAnthropicProvider(
   apiKey: string,
@@ -468,7 +512,7 @@ export function createAnthropicProvider(
           fetch: idleTimeoutFetch(),
           apiKey,
           ...(baseURL ? { baseURL } : {}),
-          ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
+          ...withDefaultHeaders(anthropicDefaultHeaders(apiKey, baseURL, headers))
         })
     ))
 
@@ -485,7 +529,7 @@ export async function listAnthropicModels(
   const client = new Anthropic({
     apiKey,
     ...(baseURL ? { baseURL } : {}),
-    ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
+    ...withDefaultHeaders(anthropicDefaultHeaders(apiKey, baseURL, headers))
   })
   const page = await client.models.list({ limit: 100 })
   return page.data.map((m) => {
