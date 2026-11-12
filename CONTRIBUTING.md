@@ -441,7 +441,9 @@ and minor updates, security fixes included. Here that means the PR enters the me
 once its required checks pass, and the queue tests it again before it lands. Nothing
 skips a check. Major updates are left alone: review them and choose **Merge when ready**
 yourself. The npm groups hold only minor and patch updates, so a major always arrives as its
-own PR and never holds back the minor updates it would otherwise be grouped with.
+own PR and never holds back the minor updates it would otherwise be grouped with. The one
+exception is the `@anthropic-ai/*` packages: each platform package's major needs the matching
+`@anthropic-ai/sdk` major, so they share a group, majors included, and arrive as one PR.
 
 A PR opened with labels (Dependabot always labels its PRs) starts several CI runs in the
 same second, and the concurrency group cancels all but one. If the cancelled one is the
