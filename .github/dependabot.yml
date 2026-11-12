@@ -22,11 +22,19 @@ updates:
     # re-runs that cancelled run; this setting only keeps the label noise down where it works.
     # Nothing reads these labels; Dependabot PRs are found by author.
     labels: []
-    # Patch and minor updates only in the groups. dependabot-auto-queue.yml queues patch and
-    # minor PRs and leaves majors for review, and a group PR's update type is its largest
-    # bump, so one major in a group (PR #576: the Anthropic SDKs going 0.x to 1.x) held back
-    # every minor beside it. Majors now arrive as their own PRs.
+    # Patch and minor updates only in the dependency-type groups. dependabot-auto-queue.yml
+    # queues patch and minor PRs and leaves majors for review, and a group PR's update type
+    # is its largest bump, so one major in a group (PR #576: the Anthropic SDKs going 0.x to
+    # 1.x) held back every minor beside it. Majors arrive as their own PRs, except the
+    # Anthropic SDKs, which only work moved together.
     groups:
+      # The Anthropic SDK and its platform packages move together, majors included. Each
+      # platform package's major needs the matching @anthropic-ai/sdk major, so bumped one
+      # at a time every PR fails typecheck (PRs #601-#603 did). Listed first: a dependency
+      # goes to the first group it matches. A group PR with a major in it is left for
+      # review like any other major; a minor-only one queues as usual.
+      anthropic-sdks:
+        patterns: ['@anthropic-ai/*']
       dev-dependencies:
         dependency-type: development
         update-types: [minor, patch]

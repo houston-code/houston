@@ -121,12 +121,36 @@ describe('Dependabot groups never hide a minor behind a major', () => {
   // A group PR's update type is its largest bump, and majors are left for review, so a
   // major in a group held back every patch and minor beside it (PR #576).
   const config = load(readFileSync(resolve(root, '.github/dependabot.yml'), 'utf8')) as any
-  const groups = config.updates.flatMap((u: any) => Object.entries(u.groups ?? {}))
+  const groups = config.updates.flatMap((u: any) => Object.entries(u.groups ?? {})) as [string, any][]
 
-  it('limits every group to minor and patch updates', () => {
+  it('limits every group but the Anthropic SDKs to minor and patch updates', () => {
     expect(groups.length).toBeGreaterThan(0)
-    for (const [name, group] of groups as [string, any][]) {
+    for (const [name, group] of groups) {
+      if (name === 'anthropic-sdks') continue
       expect([...(group['update-types'] ?? [])].sort(), name).toEqual(['minor', 'patch'])
     }
+  })
+})
+
+describe('Dependabot moves the Anthropic SDKs together', () => {
+  // Each platform package's major needs the matching @anthropic-ai/sdk major, so a
+  // one-package bump fails typecheck (PRs #601-#603). They have to share one PR.
+  const config = load(readFileSync(resolve(root, '.github/dependabot.yml'), 'utf8')) as any
+  const npm = config.updates.find((u: any) => u['package-ecosystem'] === 'npm')
+  const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
+  const anthropicDeps = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).filter((d) =>
+    d.startsWith('@anthropic-ai/')
+  )
+
+  it('groups every @anthropic-ai package, majors included', () => {
+    expect(anthropicDeps.length).toBeGreaterThan(1)
+    const group = npm.groups['anthropic-sdks']
+    expect(group.patterns).toEqual(['@anthropic-ai/*'])
+    // No update-types filter: a major must land in the group, not in a PR of its own.
+    expect(group['update-types']).toBeUndefined()
+  })
+
+  it('lists the group first, since a dependency joins the first group it matches', () => {
+    expect(Object.keys(npm.groups)[0]).toBe('anthropic-sdks')
   })
 })
