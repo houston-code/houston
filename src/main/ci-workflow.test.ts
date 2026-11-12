@@ -427,4 +427,19 @@ describe('CI keeps PR caches warm', () => {
   it('never gates a merge: it runs only after the merge, and `build` does not need it', () => {
     expect(job('build')).not.toContain('warm-caches')
   })
+
+  it('never lets a failed artifact upload fail a job', () => {
+    // The artifacts are inspection-only (no job downloads them), and the artifact service
+    // being unreachable from one runner once ejected a good PR from the merge queue.
+    const uploads = workflow.split('\n').flatMap((line, i, lines) => (/uses: actions\/upload-artifact@/.test(line) ? [lines[i + 1]] : []))
+    expect(uploads.length).toBeGreaterThanOrEqual(4)
+    for (const next of uploads) expect(next.trim()).toBe('continue-on-error: true')
+    expect(workflow).not.toContain('actions/download-artifact')
+    // With the upload non-fatal, a separate step still fails the leg when nothing was built.
+    const check = workflow.indexOf('name: Check that packaging produced installers')
+    expect(check).toBeGreaterThan(-1)
+    expect(check).toBeLessThan(workflow.indexOf('name: houston-${{ matrix.target }}'))
+    expect(workflow.slice(check, check + 500)).toContain('exit 1')
+  })
+
 })
