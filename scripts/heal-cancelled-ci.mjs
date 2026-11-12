@@ -25,6 +25,10 @@
 //
 // Usage:  node scripts/heal-cancelled-ci.mjs
 // Env:    GH_TOKEN (actions: write, pull-requests: read), GH_REPO
+//         HEAD_SHA (optional): check only the open PR whose head is this commit. Set when a
+//           CI run finishing triggers this, so it looks at that run's PR instead of all of them.
+//         SOFT_FAIL (optional, '1'): a refused re-run is a warning, not an error. Set for
+//           the CI-completion trigger, where the schedule is the backstop that still fails loudly.
 // Exit 0 on success, including when there is nothing to heal; non-zero only on a real error.
 
 import { execFileSync } from 'node:child_process'
@@ -33,6 +37,11 @@ import { execFileSync } from 'node:child_process'
 export const WORKFLOW = 'ci.yml'
 /** Attempts a run may reach before this stops re-running it: the original plus two re-runs. */
 export const MAX_ATTEMPTS = 3
+
+/** The PRs to check: non-draft ones, narrowed to the PR at `headSha` when one is given. */
+export function selectPrs(prs, headSha) {
+  return prs.filter((pr) => !pr.isDraft && (!headSha || pr.headRefOid === headSha))
+}
 
 /**
  * What to do about one PR, given the CI runs (REST `workflow_run` objects) on its head
@@ -62,11 +71,14 @@ function main() {
     process.exit(2)
   }
 
+  const headSha = process.env.HEAD_SHA || ''
+  const softFail = process.env.SOFT_FAIL === '1'
   // Every open PR, not just Dependabot's: a human PR opened with a label races the same way.
   // Drafts cannot be queued, so their CI minutes are not worth spending here.
-  const prs = JSON.parse(
-    gh(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '200', '--json', 'number,headRefOid,isDraft'])
-  ).filter((pr) => !pr.isDraft)
+  const prs = selectPrs(
+    JSON.parse(gh(['pr', 'list', '--repo', repo, '--state', 'open', '--limit', '200', '--json', 'number,headRefOid,isDraft'])),
+    headSha
+  )
 
   let healed = 0
   for (const pr of prs) {
@@ -86,12 +98,20 @@ function main() {
       )
       continue
     }
-    gh(['api', '-X', 'POST', `repos/${repo}/actions/runs/${verdict.run.id}/rerun`])
+    try {
+      gh(['api', '-X', 'POST', `repos/${repo}/actions/runs/${verdict.run.id}/rerun`])
+    } catch (err) {
+      if (!softFail) throw err
+      console.log(
+        `::warning::PR #${pr.number}: could not re-run CI run ${verdict.run.id} (${String(err.message).split('\n')[0]}). The scheduled run will retry it.`
+      )
+      continue
+    }
     console.log(`PR #${pr.number}: newest CI run ${verdict.run.id} was cancelled; re-running it.`)
     healed++
   }
-  console.log(`${prs.length} open non-draft PRs checked, ${healed} CI run(s) re-run.`)
+  console.log(`${prs.length} open non-draft PR(s) checked${headSha ? ` at ${headSha}` : ''}, ${healed} CI run(s) re-run.`)
 }
 
-// Only run when invoked as a script, so the tests can import decide().
+// Only run when invoked as a script, so the tests can import the pure helpers.
 if (process.argv[1] && process.argv[1].endsWith('heal-cancelled-ci.mjs')) main()

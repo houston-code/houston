@@ -10,30 +10,53 @@ name: CI heal
 # does not help. PRs #558 and #577 each sat for days that way. scripts/heal-cancelled-ci.mjs
 # finds those PRs and re-runs the newest cancelled run; its rules are unit-tested there.
 #
-# Scheduled rather than on `workflow_run`: a workflow_run triggered by a Dependabot CI run
-# gets a read-only token and cannot re-run anything, and those are exactly the PRs this is
-# for. A schedule always runs with the permissions below.
+# Two triggers:
+#
+# - A CI run on a PR finishing (`workflow_run`). That is the moment a PR becomes healable:
+#   the cancelled runs end within seconds, the surviving run ends minutes later, and once
+#   nothing on the commit is still running the newest suite is final. This run checks only
+#   that commit's PR, so a stuck PR is re-run within a minute or two.
+# - A schedule, as the backstop. GitHub throttles cron hard (the 15-minute schedule actually
+#   ran about every 5 hours), so it is too slow to be the only trigger, but it catches
+#   anything the first one missed. It is also the only run that fails loudly.
+#
+# The workflow_run run is soft-fail. A Dependabot-triggered run gets a read-only token
+# unless the workflow raises it with `permissions:`, which this one does; if GitHub still
+# refuses the re-run there, the script logs a warning and the schedule retries it rather
+# than the job going red on every Dependabot CI completion.
+#
+# workflow_run is safe here: it always runs this file and this script as they are on the
+# default branch, never the PR's copy, and nothing from the triggering run is executed. The
+# only value taken from it is the head commit SHA, passed through env and compared, never
+# interpolated into a command.
 #
 # THIS WORKFLOW NEVER MERGES OR PUSHES ANYTHING. It reads PRs and workflow runs and can only
 # re-run a CI run that already exists on a PR's current head. The re-run is gated by the same
 # required checks and merge queue as any other run.
 
 on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
   schedule:
-    # Every 15 minutes. A stuck PR otherwise waits for a human, so this is the delay before a
-    # Dependabot patch that hit the race is queued anyway.
+    # Every 15 minutes, as GitHub's scheduler allows.
     - cron: '*/15 * * * *'
   workflow_dispatch: {}
 
 permissions:
   contents: read
 
+# One sweep at a time, and one check per commit, so two CI runs on one PR finishing together
+# cannot both re-run the same cancelled run.
 concurrency:
-  group: ci-heal
+  group: ci-heal-${{ github.event.workflow_run.head_sha || 'sweep' }}
   cancel-in-progress: false
 
 jobs:
   heal:
+    # Only CI runs for PRs. Runs on main pushes, queue candidates and the nightly have no PR
+    # head to heal.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
     timeout-minutes: 10
     runs-on: ubuntu-24.04
     permissions:
@@ -52,6 +75,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          SOFT_FAIL: ${{ github.event_name == 'workflow_run' && '1' || '' }}
         run: node scripts/heal-cancelled-ci.mjs
 
   # A scheduled workflow that breaks tells no one, so alert on it like the others.
