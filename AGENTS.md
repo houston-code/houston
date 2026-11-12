@@ -87,7 +87,7 @@ provider's section there, add the id to the corpus in
 `src/main/providers/goldens/model-knowledge.json` with `-u`; the golden diff is the review
 surface for what changed. `model-coverage.test.ts` fails any default or curated cloud-host
 model that lacks a price, context window, named display family, tool calling or reasoning
-mode, or isn't pinned in that golden. The weekly `model-drift.yml` workflow lists each
+mode, or isn't pinned in that golden. The daily `model-drift.yml` workflow lists each
 provider's models and keeps one "New models available" issue of releases Houston doesn't ship
 yet; to stop flagging one deliberately, add it with a reason to
 `src/main/providers/model-drift-ignore.json`. Seeding it as a default is separate: `src/shared/defaults.ts`

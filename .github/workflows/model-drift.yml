@@ -1,6 +1,6 @@
 name: Model drift
 
-# Weekly: which models do Anthropic, OpenAI and Google now list that Houston doesn't ship?
+# Daily: which models do Anthropic, OpenAI and Google now list that Houston doesn't ship?
 # Flags them in one rolling GitHub issue, assigned to the ALERT_ASSIGNEE repo variable, so a new release gets
 # added through a normal update (rules in model-facts.ts, the model-coverage check, the live
 # canary) soon after it ships, rather than users fetching it half-recognized.
@@ -20,8 +20,9 @@ name: Model drift
 
 on:
   schedule:
-    # Mondays 10:00 UTC, after provider-canary (08:00 daily) and eval-live (09:00 Mondays).
-    - cron: '0 10 * * 1'
+    # Daily at 10:00 UTC, after provider-canary (08:00 daily) and eval-live (09:00 Mondays). A
+    # run takes about a minute and only lists models, so a new model is flagged within a day.
+    - cron: '0 10 * * *'
   workflow_dispatch: {}
 
 permissions:
@@ -166,7 +167,7 @@ jobs:
               echo
             fi
             echo
-            echo "_Updated weekly by \`.github/workflows/model-drift.yml\`; it closes itself once nothing is pending._"
+            echo "_Updated daily by \`.github/workflows/model-drift.yml\`; it closes itself once nothing is pending._"
           } > "$body_file"
 
           if [ -z "$ASSIGNEE" ]; then
@@ -183,7 +184,7 @@ jobs:
           before=$(jq -r .body <<<"$existing" | head -1 | sed -E 's/^<!-- model-drift ids: (.*) -->$/\1/' | tr ',' '\n' | sed '/^$/d' | sort -u)
           gh issue edit "$number" --body-file "$body_file"
           # Comment only when something new appeared: the assignee is notified on a comment, not
-          # on a body edit, so an unchanged list stays quiet week to week.
+          # on a body edit, so an unchanged list stays quiet day to day.
           new=$(comm -13 <(printf '%s\n' "$before") <(printf '%s\n' "$all_ids") | sed '/^$/d' | sed 's/^price:\(.*\)@\(.*\)$/\1 price change on \2/' | paste -sd, - | sed 's/,/, /g')
           if [ -n "$new" ]; then
             gh issue comment "$number" --body "New since the last check: $new. See the table above."

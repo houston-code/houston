@@ -16,7 +16,7 @@ import {
 } from './drift'
 
 /**
- * Live runner for the weekly model-drift workflow (.github/workflows/model-drift.yml).
+ * Live runner for the daily model-drift workflow (.github/workflows/model-drift.yml).
  * Lists one provider's models with that provider's key, keeps the ones Houston doesn't
  * ship and should consider (see drift.ts), and writes a Markdown section plus the flagged
  * ids to DRIFT_OUT for the workflow's report job.
