@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { ULTRATHINK_HINT } from '@shared/ultrathink'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
@@ -385,6 +386,28 @@ describe('readComposer (raw-mode composer)', () => {
     const finalEcho = out.slice(out.lastIndexOf('\x1b[0J') + '\x1b[0J'.length)
     expect(finalEcho).toContain('/changes')
     expect(finalEcho).not.toContain('What is different')
+  })
+
+  it('shows the ultrathink hint under the draft, and keeps it out of the scrollback', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('fix it, ultrathink')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('fix it, ultrathink')
+    const out = t.text()
+    expect(out).toContain(ULTRATHINK_HINT)
+    const finalEcho = out.slice(out.lastIndexOf('\x1b[0J') + '\x1b[0J'.length)
+    expect(finalEcho).toContain('fix it, ultrathink')
+    expect(finalEcho).not.toContain(ULTRATHINK_HINT)
+  })
+
+  it('shows no ultrathink hint for a draft that only mentions the word', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('open ultrathink.ts')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('open ultrathink.ts')
+    expect(t.text()).not.toContain(ULTRATHINK_HINT)
   })
 
   it('submits a typed line on Enter', async () => {

@@ -1,6 +1,7 @@
 import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
 import { spinnerFrame, type TuiIo, type Painter } from './tui'
 import { visibleWidth } from './tui-wrap'
+import { hasUltrathink, ULTRATHINK_HINT } from '@shared/ultrathink'
 import {
   initialPickerState,
   reducePicker,
@@ -583,7 +584,12 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const view = (withMenu = true): ReturnType<typeof renderEditor> => {
         // The line under the cursor drives the menu: typing `/` shows what you can
         // run, without having to already know its name.
-        const below = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '') ?? []) : []
+        const menu = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '') ?? []) : []
+        // The keyword raises this turn's reasoning; say so while it is in the draft.
+        // Only where it fits on one row: a wrapped row would desync the redraw region.
+        const hinted =
+          withMenu && ULTRATHINK_HINT.length <= width() && hasUltrathink(state.lines.join('\n'))
+        const below = hinted ? [...menu, paint(ULTRATHINK_HINT, 'dim')] : menu
         return renderEditor(state, {
           // The mode marker rides in front of the prompt, so which mode you are in
           // is answered where you are already looking.
