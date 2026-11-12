@@ -466,8 +466,9 @@ Open source under the [Apache License 2.0](LICENSE).
   **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
   direction without disturbing the original.
 - **Auto-named chats.** A new chat shows the first message as a placeholder, then,
-  once the first turn finishes, the conversation's own model writes a short,
-  specific title to replace it (the new title appears in the sidebar live). Renaming
+  as soon as the first turn starts, the conversation's own model writes a short,
+  specific title to replace it, usually within seconds (the new title appears in the
+  sidebar live). If that misses, it tries once more when the turn finishes. Renaming
   a chat yourself always wins; auto-titling never overwrites a title you set.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
