@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { decide, MAX_ATTEMPTS, WORKFLOW } from './heal-cancelled-ci.mjs'
+import { decide, selectPrs, MAX_ATTEMPTS, WORKFLOW } from './heal-cancelled-ci.mjs'
 
 // Shaped like the REST workflow_run objects `gh api .../runs?head_sha=` returns.
 const run = (id, suite, conclusion, extra = {}) => ({
@@ -65,5 +65,28 @@ describe('decide', () => {
 
   it('targets the CI workflow, the only one whose checks gate merges', () => {
     expect(WORKFLOW).toBe('ci.yml')
+  })
+})
+
+describe('selectPrs', () => {
+  const prs = [
+    { number: 1, headRefOid: 'aaa', isDraft: false },
+    { number: 2, headRefOid: 'bbb', isDraft: true },
+    { number: 3, headRefOid: 'ccc', isDraft: false }
+  ]
+
+  it('checks every non-draft PR on the scheduled sweep', () => {
+    expect(selectPrs(prs, '').map((p) => p.number)).toEqual([1, 3])
+    expect(selectPrs(prs, undefined).map((p) => p.number)).toEqual([1, 3])
+  })
+
+  it('checks only the PR whose head finished CI when triggered by a CI run', () => {
+    expect(selectPrs(prs, 'ccc').map((p) => p.number)).toEqual([3])
+  })
+
+  it('checks nothing when that commit is no longer any PR head, or is a draft', () => {
+    // A superseded commit: its CI result can no longer gate anything.
+    expect(selectPrs(prs, 'zzz')).toEqual([])
+    expect(selectPrs(prs, 'bbb')).toEqual([])
   })
 })

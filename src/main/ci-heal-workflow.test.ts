@@ -17,11 +17,27 @@ const heal = doc.jobs.heal
 const steps = heal.steps as any[]
 
 describe('CI heal workflow', () => {
-  it('runs on a schedule (and by hand), never on a PR event', () => {
-    // A schedule runs main's code with a writable token. A PR trigger would run the PR's
-    // tree, and a Dependabot-triggered workflow_run gets a read-only token that cannot re-run.
-    expect(Object.keys(triggers).sort()).toEqual(['schedule', 'workflow_dispatch'])
+  it('runs when CI finishes, on a schedule, and by hand, never on a PR event', () => {
+    // A PR trigger would run the PR's tree. workflow_run always runs the default branch's copy.
+    expect(Object.keys(triggers).sort()).toEqual(['schedule', 'workflow_dispatch', 'workflow_run'])
+    expect(triggers.workflow_run).toEqual({ workflows: ['CI'], types: ['completed'] })
     expect(triggers.schedule[0].cron).toBe('*/15 * * * *')
+  })
+
+  it('heals only after PR CI runs, scoped to that run\'s head commit', () => {
+    expect(heal.if).toBe("github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'")
+    const run = steps.find((s) => s.run)
+    expect(run.env.HEAD_SHA).toBe('${{ github.event.workflow_run.head_sha }}')
+    expect(doc.concurrency.group).toBe("ci-heal-${{ github.event.workflow_run.head_sha || 'sweep' }}")
+  })
+
+  it('fails softly only on the CI-completion trigger, so the schedule still fails loudly', () => {
+    const run = steps.find((s) => s.run)
+    expect(run.env.SOFT_FAIL).toBe("${{ github.event_name == 'workflow_run' && '1' || '' }}")
+  })
+
+  it('passes event data through env, never interpolated into the script', () => {
+    for (const step of steps) if (step.run) expect(step.run).not.toContain('${{')
   })
 
   it('grants only what a re-run needs', () => {

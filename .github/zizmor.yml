@@ -9,6 +9,13 @@ rules:
       # the job firing after a human pushes to a Dependabot branch.
       - dependabot-auto-queue.yml
       - dependabot-notices.yml
+  dangerous-triggers:
+    ignore:
+      # workflow_run fires when a PR's CI run finishes. It runs the default branch's copy of
+      # the workflow and script, checks out nothing from the PR, executes nothing from the
+      # triggering run, and takes only its head SHA (through env, compared, never
+      # interpolated). Its only write is re-running an existing CI run.
+      - ci-heal.yml
   # Style only: `./.github/workflows/x.yml` and the newer `$/...` spelling resolve the same
   # file in this repository.
   self-repository:

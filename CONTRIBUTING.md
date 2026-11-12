@@ -446,8 +446,9 @@ own PR and never holds back the minor updates it would otherwise be grouped with
 A PR opened with labels (Dependabot always labels its PRs) starts several CI runs in the
 same second, and the concurrency group cancels all but one. If the cancelled one is the
 newest, GitHub reads the required checks from it and shows them as "expected" forever, even
-though a sibling run passed. `.github/workflows/ci-heal.yml` checks every 15 minutes and
-re-runs that cancelled run, after which the PR queues normally. Run it by hand
+though a sibling run passed. `.github/workflows/ci-heal.yml` re-runs that cancelled run as
+soon as the PR's last CI run finishes, with a scheduled sweep as a backstop, after which the
+PR queues normally. Run it by hand
 (`gh workflow run ci-heal.yml`) to fix a stuck PR straight away.
 
 The workflow needs **Allow auto-merge** turned on in the repository settings. It never
