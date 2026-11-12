@@ -483,6 +483,24 @@ describe('release legs verify before they upload', () => {
     }
   })
 
+  it('retries the uploads and downloads of the jobs that run after the legs', () => {
+    // mac-feed, checksums and distribute run once every leg has built and signed; a dropped
+    // connection there should not fail the release. (sync-main's download only warns.)
+    const lines = workflow.split('\n')
+    const transfers = lines.filter((line) => /gh release (upload|download) /.test(line) && !line.includes('if ! {'))
+    expect(transfers).toHaveLength(6)
+    for (const line of transfers) {
+      expect(line).toContain('bash scripts/retry.sh gh release ')
+    }
+    // --clobber is what makes repeating a transfer safe.
+    for (const [i, line] of lines.entries()) {
+      if (!line.includes('bash scripts/retry.sh gh release ')) continue
+      let end = i
+      while (lines[end].trimEnd().endsWith('\\')) end++
+      expect(lines.slice(i, end + 1).join('\n')).toContain('--clobber')
+    }
+  })
+
   it('uploads exactly one update feed per non-macOS leg, last, and hands macOS feeds to mac-feed', () => {
     const start = at("- name: Upload this leg's installers to the draft")
     const step = leg.slice(start, leg.indexOf('\n      - ', start + 1))

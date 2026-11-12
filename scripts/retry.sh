@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Run a command, retrying it when it fails. release-build.yml uses it for the uploads into the
-# draft release: they run after a leg has built, signed and notarized, so a dropped connection
-# would otherwise mean redoing the whole leg. Only for commands that are safe to repeat
-# (`gh release upload --clobber` replaces what an earlier attempt uploaded).
+# Run a command, retrying it when it fails. release-build.yml and release-publish.yml use it for
+# the uploads into the draft release and the downloads from it: they run after a leg has built,
+# signed and notarized, so a dropped connection would otherwise mean redoing the whole leg.
+# Only for commands that are safe to repeat (`gh release upload --clobber` and
+# `gh release download --clobber` replace what an earlier attempt left).
 #
 # Usage: scripts/retry.sh <command> [args...]
 # RETRY_ATTEMPTS (default 3) and RETRY_DELAY (seconds, default 30) tune it.

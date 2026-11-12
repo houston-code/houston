@@ -40,12 +40,12 @@ jobs:
           persist-credentials: false
           ref: ${{ inputs.ref || github.sha }}
       # Production install: the enrichment reads each package's installed manifest (supplier +
-      # copyright). Must match how sbom.yml / release-publish build the shipped SBOMs.
+      # copyright). Must match how release-build.yml builds the shipped SBOMs.
       - uses: ./.github/actions/setup-node
         with:
           install: production
-      # Generate, enrich and verify the three SBOMs (the same composite sbom.yml and
-      # release-publish.yml use). Its completeness floor runs BEFORE the checkers below,
+      # Generate, enrich and verify the three SBOMs (the same composite
+      # release-build.yml uses). Its completeness floor runs BEFORE the checkers below,
       # because none of them can catch a truncated closure: see scripts/verify-sbom.mjs.
       - uses: ./.github/actions/sbom-generate
 

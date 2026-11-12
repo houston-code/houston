@@ -88,6 +88,9 @@ jobs:
             echo "::error::NOTICES_PAT is not set as a Dependabot secret; cannot enable auto-merge."
             exit 1
           fi
+          # --merge only prints "The merge strategy for main is set by the merge queue" while
+          # the queue is on. It stays because without the queue a non-interactive gh refuses
+          # --auto with no method.
           gh pr merge --auto --merge "${PR_URL}"
           echo "Auto-merge enabled (${UPDATE_TYPE}); the PR joins the merge queue once its required checks pass."
       - name: Leave major updates for review

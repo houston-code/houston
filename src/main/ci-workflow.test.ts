@@ -321,8 +321,9 @@ describe('CI alerts on a red main', () => {
     const alert = job('alert')
     expect(alert).toContain("(github.event_name == 'push' || github.event_name == 'schedule')")
     expect(alert).toContain('uses: ./.github/workflows/alert-on-failure.yml')
-    // `build` carries the package legs nightly (it is skipped on push).
-    expect(alert).toContain('needs: [test, linux-sandbox, build]')
+    // `build` carries the package legs nightly (it is skipped on push). `plan` and
+    // `warm-caches` are named because nothing else reports them on a push.
+    expect(alert).toContain('needs: [test, linux-sandbox, build, plan, warm-caches]')
     expect(alert).toContain("workflow: ${{ github.event_name == 'schedule' && 'CI nightly' || 'CI on main' }}")
     expect(alert).toContain("failed: ${{ contains(needs.*.result, 'failure') }}")
   })
