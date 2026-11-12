@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { ChatRequest } from '@shared/agent'
-import { createBedrockProvider, listBedrockModels } from './bedrock'
+import { createBedrockProvider, explainLegacyModelError, listBedrockModels, predatesClaude47 } from './bedrock'
+import { ProviderError } from '../agent/retry'
 
 /**
  * Bedrock rides the shared Anthropic adapter, so these tests cover the two things
@@ -168,5 +169,66 @@ describe('listBedrockModels', () => {
     for (const m of models) expect(m.id).toMatch(/^anthropic\.claude-/)
     // No client is constructed: there is no Models API to call.
     expect(h.ctor).not.toHaveBeenCalled()
+  })
+})
+
+describe('pre-4.7 models on Bedrock', () => {
+  it('recognizes Claude 3.x and 4.x through 4.6, in every id shape', () => {
+    for (const id of [
+      'anthropic.claude-sonnet-4-6',
+      'anthropic.claude-opus-4-6',
+      'anthropic.claude-haiku-4-5',
+      'anthropic.claude-opus-4-1',
+      'us.anthropic.claude-sonnet-4-20250514-v1:0',
+      'anthropic.claude-3-5-sonnet-20240620-v1:0',
+      'anthropic.claude-3-haiku-20240307-v1:0'
+    ]) {
+      expect(predatesClaude47(id), id).toBe(true)
+    }
+  })
+
+  it('leaves 4.7 and later alone', () => {
+    for (const id of [
+      'anthropic.claude-opus-4-7',
+      'anthropic.claude-opus-4-8',
+      'anthropic.claude-opus-5-5',
+      'anthropic.claude-sonnet-5-5',
+      'anthropic.claude-haiku-5-5',
+      'anthropic.claude-fable-5-2',
+      ...listBedrockModels().map((m) => m.id)
+    ]) {
+      expect(predatesClaude47(id), id).toBe(false)
+    }
+  })
+
+  it('explains a 400 for an older model, keeping the original message and status', () => {
+    const err = Object.assign(new Error('400 invalid anthropic_version'), { status: 400 })
+    const out = explainLegacyModelError(err, 'anthropic.claude-sonnet-4-6') as ProviderError
+    expect(out).toBeInstanceOf(ProviderError)
+    expect(out.status).toBe(400)
+    expect(out.message).toContain('400 invalid anthropic_version')
+    expect(out.message).toContain('Claude 4.7 and later')
+    expect(out.message).toContain('anthropic.claude-sonnet-4-6')
+  })
+
+  it('passes every other error through untouched', () => {
+    const rateLimited = Object.assign(new Error('429'), { status: 429 })
+    expect(explainLegacyModelError(rateLimited, 'anthropic.claude-sonnet-4-6')).toBe(rateLimited)
+    const badRequest = Object.assign(new Error('400'), { status: 400 })
+    expect(explainLegacyModelError(badRequest, 'anthropic.claude-opus-5-5')).toBe(badRequest)
+    const network = new Error('fetch failed')
+    expect(explainLegacyModelError(network, 'anthropic.claude-sonnet-4-6')).toBe(network)
+  })
+
+  it('applies to errors thrown from a real turn', async () => {
+    h.stream.mockReset()
+    h.stream.mockImplementation(() => {
+      throw Object.assign(new Error('400 bad version'), { status: 400 })
+    })
+    const gen = createBedrockProvider({ region: 'us-east-1' }).streamChat({
+      model: 'anthropic.claude-sonnet-4-6',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest)
+    await expect(gen.next()).rejects.toThrow(/Claude 4\.7 and later/)
   })
 })

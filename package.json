@@ -62,10 +62,10 @@
     "dist:unpacked": "npm run build && npm run verify:resources && electron-builder --mac --arm64 --dir"
   },
   "dependencies": {
-    "@anthropic-ai/bedrock-sdk": "^0.35.0",
-    "@anthropic-ai/foundry-sdk": "^0.6.0",
-    "@anthropic-ai/sdk": "^0.135.0",
-    "@anthropic-ai/vertex-sdk": "^0.21.0",
+    "@anthropic-ai/bedrock-sdk": "^1.1.1",
+    "@anthropic-ai/foundry-sdk": "^1.1.1",
+    "@anthropic-ai/sdk": "^1.6.0",
+    "@anthropic-ai/vertex-sdk": "^1.1.2",
     "@google/genai": "^2.32.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
