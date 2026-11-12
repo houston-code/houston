@@ -36,7 +36,8 @@ import {
   type StopReason,
   type ToolApprovalDecision,
   type ToolScope,
-  type ToolScopeEntry
+  type ToolScopeEntry,
+  retryProgress,
 } from '@shared/agent'
 import type { McpServerConfig } from '@shared/types'
 import { SubagentTermLines } from '@shared/subagents'
@@ -1220,7 +1221,7 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
           if (!opts.json && !e.ok) deps.err(`· ${e.name} failed\n`)
           break
         case 'retry':
-          if (!opts.json) deps.err(`· retrying (${e.attempt}/${e.max})… ${e.message}\n`)
+          if (!opts.json) deps.err(`· retrying (${retryProgress(e)})… ${e.message}\n`)
           break
         case 'model_fallback':
           if (!opts.json) deps.err(`· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`)

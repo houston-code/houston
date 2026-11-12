@@ -1267,7 +1267,15 @@ export type AgentEvent =
       invokedAs?: PromptInvocation
     }
   | { runId: string; type: 'compaction'; summarized: number }
-  | { runId: string; type: 'retry'; attempt: number; max: number; message: string }
+  | {
+      // `max` is the attempt cap; absent while the run rides out a network outage,
+      // whose budget is time rather than a count (see retryProgress).
+      runId: string
+      type: 'retry'
+      attempt: number
+      max?: number
+      message: string
+    }
   | {
       // A model turn failed transiently after part of it had streamed, and the loop
       // threw that partial turn away to retry it: nothing from it was persisted, and
@@ -1402,3 +1410,11 @@ export const BLOCKING_EVENT_TYPES = ['tool_approval', 'tool_question', 'plan_rea
 export type BlockingEventType = (typeof BLOCKING_EVENT_TYPES)[number]
 
 export type BlockingEvent = Extract<AgentEvent, { type: BlockingEventType }>
+
+/**
+ * A retry's progress for display: "3/6" against the attempt cap, or "attempt 9" while
+ * riding out a network outage, which has a time budget instead of a cap.
+ */
+export function retryProgress(e: { attempt: number; max?: number }): string {
+  return e.max !== undefined ? `${e.attempt}/${e.max}` : `attempt ${e.attempt}`
+}

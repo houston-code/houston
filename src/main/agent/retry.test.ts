@@ -4,14 +4,17 @@ import {
   backoffDelayMs,
   describeProviderError,
   isModelNotFoundError,
+  isNetworkError,
   isQuotaExhaustedError,
   isRetryableError,
   isToolsUnsupportedError,
   MAX_PROVIDER_RETRIES,
+  NETWORK_OUTAGE_BUDGET_MS,
   ProviderError,
   providerStreamError,
   retryAfterHintMs,
   retryDelayMs,
+  RetryBudget,
   withProviderRetry
 } from './retry'
 
@@ -308,7 +311,115 @@ describe('providerStreamError', () => {
   })
 })
 
+describe('isNetworkError', () => {
+  it('is a failure where the network never answered', () => {
+    const socket = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })
+    expect(isNetworkError(new TypeError('terminated', { cause: socket }))).toBe(true)
+    expect(isNetworkError(new Error('Connection error.'))).toBe(true)
+    expect(isNetworkError(new TypeError('fetch failed', { cause: Object.assign(new Error('x'), { code: 'ENOTFOUND' }) }))).toBe(true)
+    expect(isNetworkError(Object.assign(new Error('stalled'), { code: 'HOUSTON_STREAM_IDLE' }))).toBe(true)
+  })
+
+  it('is never a failure a server answered, however it is worded', () => {
+    expect(isNetworkError(apiError(503, 'network unavailable'))).toBe(false)
+    expect(isNetworkError(apiError(429, 'rate limited'))).toBe(false)
+    expect(isNetworkError(new Error('Overloaded'))).toBe(false)
+    expect(isNetworkError(new Error('invalid api key'))).toBe(false)
+  })
+})
+
+describe('RetryBudget', () => {
+  const offline = (): Error => new Error('Connection error.')
+
+  it('holds an unreached provider to the attempt count, even on network errors', () => {
+    const b = new RetryBudget(() => false, { maxRetries: 2 })
+    expect(b.allows(offline(), 1)).toBe(true)
+    expect(b.allows(offline(), 2)).toBe(true)
+    expect(b.allows(offline(), 3)).toBe(false)
+    expect(b.reportedMax).toBe(2)
+  })
+
+  it('rides out an outage on time, not attempts, once the provider has answered', () => {
+    let now = 1_000
+    const b = new RetryBudget(() => true, { maxRetries: 2, now: () => now })
+    for (let retry = 1; retry <= 30; retry++) {
+      expect(b.allows(offline(), retry)).toBe(true)
+      expect(b.reportedMax).toBeUndefined()
+      now += 9_000
+    }
+    // 30 retries in, 270s gone; the budget ends at five minutes from the first failure.
+    now = 1_000 + NETWORK_OUTAGE_BUDGET_MS - 1
+    expect(b.allows(offline(), 31)).toBe(true)
+    now = 1_000 + NETWORK_OUTAGE_BUDGET_MS
+    expect(b.allows(offline(), 32)).toBe(false)
+  })
+
+  it('ends the outage streak on a failure that reached a server', () => {
+    let now = 0
+    const b = new RetryBudget(() => true, { maxRetries: 2, now: () => now })
+    expect(b.allows(offline(), 5)).toBe(true)
+    // The network is back but the provider is overloaded: the attempt count rules again.
+    expect(b.allows(apiError(529, 'overloaded'), 5)).toBe(false)
+    expect(b.reportedMax).toBe(2)
+    // A new outage starts a fresh clock.
+    now = NETWORK_OUTAGE_BUDGET_MS * 3
+    expect(b.allows(offline(), 6)).toBe(true)
+    now += NETWORK_OUTAGE_BUDGET_MS - 1
+    expect(b.allows(offline(), 7)).toBe(true)
+  })
+
+  it('never retries a permanent failure, reached or not', () => {
+    const b = new RetryBudget(() => true)
+    expect(b.allows(apiError(401, 'bad key'), 1)).toBe(false)
+    expect(b.allows(new Error('invalid api key'), 1)).toBe(false)
+  })
+})
+
 describe('withProviderRetry', () => {
+  it('keeps retrying a network outage past the attempt count once the provider was reached', async () => {
+    vi.useFakeTimers()
+    try {
+      let attempts = 0
+      const maxes: Array<number | undefined> = []
+      const p = withProviderRetry(
+        async () => {
+          attempts++
+          if (attempts < 10) throw new Error('Connection error.')
+          return 'back'
+        },
+        { maxRetries: 2, reachable: () => true, onRetry: (_n, _e, max) => maxes.push(max) }
+      )
+      await vi.runAllTimersAsync()
+      await expect(p).resolves.toBe('back')
+      expect(attempts).toBe(10)
+      expect(maxes).toEqual(Array(9).fill(undefined))
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('gives up on a network outage at the attempt count when the provider was never reached', async () => {
+    vi.useFakeTimers()
+    try {
+      let attempts = 0
+      const maxes: Array<number | undefined> = []
+      const p = withProviderRetry(
+        async () => {
+          attempts++
+          throw new Error('Connection error.')
+        },
+        { maxRetries: 2, onRetry: (_n, _e, max) => maxes.push(max) }
+      )
+      const settled = p.catch((e: unknown) => e)
+      await vi.runAllTimersAsync()
+      expect(await settled).toBeInstanceOf(Error)
+      expect(attempts).toBe(3)
+      expect(maxes).toEqual([2, 2])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('retries a transient failure and discards the failed attempt', async () => {
     vi.useFakeTimers()
     try {

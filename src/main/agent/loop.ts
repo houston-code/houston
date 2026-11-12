@@ -123,6 +123,7 @@ import {
   MAX_PROVIDER_RETRIES,
   providerStreamError,
   retryDelayMs,
+  RetryBudget,
   withProviderRetry
 } from './retry'
 import { isBlockedByPlan, decideApproval } from './approval'
@@ -314,7 +315,8 @@ async function summarize(
   messages: ChatMessage[],
   maxTokens: number,
   signal: AbortSignal,
-  onRetry?: (attempt: number, err: unknown) => void
+  onRetry?: (attempt: number, err: unknown, max: number | undefined) => void,
+  reachable?: () => boolean
 ): Promise<string> {
   return withProviderRetry(
     async () => {
@@ -334,7 +336,7 @@ async function summarize(
       if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
       return text.trim()
     },
-    { signal, onRetry }
+    { signal, onRetry, reachable }
   )
 }
 
@@ -1366,6 +1368,10 @@ export async function startRun(
         p.models.filter((m) => m.unavailableAt).map((m) => modelKey(p.id, m.id))
       )
     )
+    // Whether a provider has answered in this run. Until one has, a network failure is
+    // indistinguishable from a bad address, so it gets the attempt count, not the
+    // outage budget (see RetryBudget).
+    let providerReached = false
     const rules = await loadProjectRules(workspace)
     // Permission-rule precedence, highest first (first match wins):
     //   1. Admin managed policy — org-distributed, root-owned; deny/ask only.
@@ -2306,6 +2312,7 @@ export async function startRun(
         workspace,
         prompt: opts.prompt,
         signal: abort.signal,
+        reachable: () => providerReached,
         systemOverride,
         tools: allowedTools,
         // The writable tier gets the real roots and a FRESH shell session so the
@@ -3116,13 +3123,14 @@ export async function startRun(
           // Report a retry in here the same way the turn loop does. Compaction can be
           // forced mid-turn, so without this a summary riding out a blip is just a run
           // sitting silent for the length of the backoff.
-          (attempt, err) =>
+          (attempt, err, max) =>
             emit({
               type: 'retry',
               attempt,
-              max: MAX_PROVIDER_RETRIES,
+              ...(max !== undefined ? { max } : {}),
               message: redact(describeProviderError(err))
-            })
+            }),
+          () => providerReached
         )
         if (!text) return 'failed'
         // Messages folded into the summary *this round* (a count, which is what the
@@ -3407,7 +3415,11 @@ export async function startRun(
       // clients to retract what it showed, so the redo can't duplicate it. A long
       // reasoning phase is where a dropped stream is likeliest, and ending the run
       // there threw away a turn the model would have finished on a second try.
+      let retries = new RetryBudget(() => providerReached, { maxRetries: MAX_STREAM_RETRIES })
       streaming: for (let attempt = 0; ; attempt++) {
+        // A fresh budget whenever the attempt count restarts: a new turn, a smaller
+        // request, or a hop to the next model.
+        if (attempt === 0) retries = new RetryBudget(() => providerReached, { maxRetries: MAX_STREAM_RETRIES })
         assistantText = ''
         toolCalls = []
         stopReason = 'end_turn'
@@ -3438,6 +3450,7 @@ export async function startRun(
             ...(outputCapRaised ? raisedOutputCap(route.model) : {}),
             signal: abort.signal
           })) {
+            if (ev.type !== 'error') providerReached = true
             if (ev.type === 'text') {
               emitted = true
               assistantText += ev.text
@@ -3575,7 +3588,7 @@ export async function startRun(
             run.transcript.length = attemptMark
           }
           // Not transient, or this model is out of attempts.
-          if (attempt >= MAX_STREAM_RETRIES || !isRetryableError(e)) {
+          if (!retries.allows(e, attempt + 1)) {
             // This model is done for. Before failing the turn, try the next one in
             // the chain — but only for a transient failure the model itself couldn't
             // shake off (overloaded, rate-limited, 5xx). A non-retryable error is a
@@ -3597,7 +3610,8 @@ export async function startRun(
             return
           }
           discardPartial()
-          emit({ type: 'retry', attempt: attempt + 1, max: MAX_STREAM_RETRIES, message: reason })
+          const max = retries.reportedMax
+          emit({ type: 'retry', attempt: attempt + 1, ...(max !== undefined ? { max } : {}), message: reason })
           await abortableSleep(retryDelayMs(e, attempt + 1), abort.signal)
           if (abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })

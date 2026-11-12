@@ -6,7 +6,8 @@ import {
   type ElicitationField,
   type PlanPayload,
   type QuestionOption,
-  type ReviewFinding
+  type ReviewFinding,
+  retryProgress,
 } from '@shared/agent'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import type { FileDiffPreview } from '@shared/diff'
@@ -634,7 +635,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'retry': {
       const finalized = finalizeStreaming(items)
-      const text = `⟳ Connection issue, retrying (${e.attempt}/${e.max}): ${e.message}`
+      const text = `⟳ Connection issue, retrying (${retryProgress(e)}): ${e.message}`
       // Back-to-back attempts update one line ("retrying (3/6)") rather than stacking
       // a row per attempt down the transcript.
       const last = finalized[finalized.length - 1]

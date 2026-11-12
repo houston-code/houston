@@ -255,6 +255,12 @@ describe('reduceEvent — retry', () => {
     message: 'Connection error.'
   })
 
+  it('counts attempts without a cap while riding out a network outage', () => {
+    const items = reduceEvent([], { runId: 'r', type: 'retry', attempt: 9, message: 'Connection error.' })
+    const notice = items.find((i): i is NoticeItem => i.kind === 'notice')
+    expect(notice?.text).toBe('⟳ Connection issue, retrying (attempt 9): Connection error.')
+  })
+
   it('updates one notice in place across consecutive attempts', () => {
     let items: DisplayItem[] = []
     for (const n of [1, 2, 3]) items = reduceEvent(items, retry(n))

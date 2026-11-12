@@ -365,6 +365,10 @@ retries the turn with a growing pause between attempts and tells you it's retryi
 - **Stalled connections are cut.** A reply that stops arriving for two minutes (a
   network switch or a laptop waking from sleep can leave the connection open but
   dead) is treated as dropped and retried on a fresh connection.
+- **Outages are waited out.** If the network goes away after the provider has
+  already answered in this run, Houston keeps retrying for up to five minutes and
+  picks up when the connection comes back. Before the provider has answered once,
+  a connection failure gets the usual few attempts, so a mistyped address fails fast.
 - **Nothing half-runs.** Tool calls in a discarded reply never run.
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.

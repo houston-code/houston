@@ -24,7 +24,8 @@ import {
   type PlanDecision,
   type PlanPayload,
   type ReasoningEffort,
-  type ToolApprovalDecision
+  type ToolApprovalDecision,
+  retryProgress,
 } from '@shared/agent'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
@@ -1198,7 +1199,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           notice(`Compacted ${e.summarized} earlier messages to free up context.`)
           break
         case 'retry':
-          notice(`Retrying (${e.attempt}/${e.max}): ${e.message}`, 'warning')
+          notice(`Retrying (${retryProgress(e)}): ${e.message}`, 'warning')
           break
         case 'model_fallback':
           notice(`${e.from} is unavailable, falling back to ${e.to}: ${e.reason}`, 'warning')

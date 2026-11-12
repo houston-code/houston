@@ -188,6 +188,12 @@ export interface SubAgentOptions {
   /** The task/question delegated to the subagent. */
   prompt: string
   signal: AbortSignal
+  /**
+   * Whether the parent run has reached the provider. With the subagent's own answers,
+   * it lets a network outage ride on the time budget rather than the attempt count
+   * (see RetryBudget).
+   */
+  reachable?: () => boolean
   /** A custom agent's system prompt to use instead of the default one. */
   systemOverride?: string
   /**
@@ -504,6 +510,8 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const stall =
     opts.stall === false ? null : new StallDetector(resolveStallThresholds(opts.stall || undefined))
   let turnsTaken = 0
+  // Whether the provider has answered this subagent (see RetryBudget).
+  let reached = false
 
   // Steps for the caller's record. Indexes are assigned here, in order.
   let nextStep = 0
@@ -609,6 +617,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
             ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
             signal
           })) {
+            if (ev.type !== 'error') reached = true
             if (ev.type === 'text') text += ev.text
             else if (ev.type === 'tool_call') calls.push(ev.call)
             else if (ev.type === 'done') {
@@ -620,6 +629,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         },
         {
           signal,
+          reachable: () => reached || (opts.reachable?.() ?? false),
           // Otherwise a subagent riding out a blip is indistinguishable from a hung one.
           onRetry: (n) => {
             opts.onProgress?.(`step ${iter + 1} · retrying (${n})`)

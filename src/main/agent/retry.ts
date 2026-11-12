@@ -19,6 +19,16 @@
 export const MAX_PROVIDER_RETRIES = 6
 
 /**
+ * How long a run keeps retrying once the network itself is gone, in place of the
+ * attempt count. {@link MAX_PROVIDER_RETRIES} is sized for a provider blip (about 40s),
+ * and that's far too short for a dropped Wi-Fi or a train tunnel: every attempt fails
+ * fast on DNS or connect, so the budget burned out while the user was still waiting for
+ * the network to come back. Only granted once the provider has answered in this run
+ * (see {@link RetryBudget}), so a mistyped base URL still fails at the attempt count.
+ */
+export const NETWORK_OUTAGE_BUDGET_MS = 5 * 60_000
+
+/**
  * Longest we'll honor a server's `Retry-After`. A provider shedding load can name a
  * window far longer than a run should sit blocked, and a broken one can name an absurd
  * one, so clamp it: we retry early, and if the server still isn't ready it just says so
@@ -169,6 +179,61 @@ export function isRetryableError(err: unknown): boolean {
 }
 
 /**
+ * Whether a failure means the network never answered: a lookup, connect, reset, or a
+ * body that dropped or stalled. Never one that carries an HTTP status, which means a
+ * server did answer. A subset of {@link isRetryableError}.
+ */
+export function isNetworkError(err: unknown): boolean {
+  if (typeof (err as { status?: unknown })?.status === 'number') return false
+  if (hasTransientNetworkCode(err)) return true
+  const msg = String((err as { message?: unknown })?.message ?? err).toLowerCase()
+  if (msg.trim() === 'terminated') return true
+  return /connection error|fetch failed|econnreset|econnrefused|etimedout|enotfound|eai_again|socket hang up|network/.test(msg)
+}
+
+/**
+ * Decides, per provider call, whether a failed attempt gets another try. Transient
+ * failures get {@link MAX_PROVIDER_RETRIES} attempts; a network outage, once the
+ * provider has been reached in this run, gets {@link NETWORK_OUTAGE_BUDGET_MS} of wall
+ * clock instead, measured from the first network failure of the current streak. Any
+ * other failure in between ends the streak, so a provider that comes back overloaded
+ * is held to the attempt count again.
+ *
+ * `reachable` reports whether the provider has answered in this run: a completed call,
+ * or any output streamed before a drop. It's what separates a network that went away
+ * from an address that never worked (a mistyped base URL fails with the same DNS
+ * error, and shouldn't sit retrying for five minutes).
+ */
+export class RetryBudget {
+  private outageSince: number | undefined
+
+  constructor(
+    private readonly reachable: () => boolean,
+    private readonly opts: { maxRetries?: number; now?: () => number } = {}
+  ) {}
+
+  /** Whether retry number `retry` (1-based) may go ahead after `err`. */
+  allows(err: unknown, retry: number): boolean {
+    if (!isRetryableError(err)) return false
+    const now = this.opts.now ?? Date.now
+    if (this.reachable() && isNetworkError(err)) {
+      this.outageSince ??= now()
+      return now() - this.outageSince < NETWORK_OUTAGE_BUDGET_MS
+    }
+    this.outageSince = undefined
+    return retry <= (this.opts.maxRetries ?? MAX_PROVIDER_RETRIES)
+  }
+
+  /**
+   * The attempt cap to report with a retry, or undefined while riding out an outage,
+   * where the budget is time rather than a count. Read after {@link allows}.
+   */
+  get reportedMax(): number | undefined {
+    return this.outageSince === undefined ? (this.opts.maxRetries ?? MAX_PROVIDER_RETRIES) : undefined
+  }
+}
+
+/**
  * Whether a provider error means "this model can't do tool calling at all".
  * The agent is built on tools, so this is fatal (not retryable) — the caller
  * surfaces a friendlier message pointing at a tool-capable model instead of the
@@ -292,17 +357,24 @@ export async function withProviderRetry<T>(
   opts: {
     signal?: AbortSignal
     maxRetries?: number
-    onRetry?: (attempt: number, err: unknown) => void
+    /**
+     * Whether the provider has answered in this run, which turns a network outage's
+     * budget from the attempt count into {@link NETWORK_OUTAGE_BUDGET_MS} (see
+     * {@link RetryBudget}). Omitted, the attempt count always applies.
+     */
+    reachable?: () => boolean
+    /** `max` is undefined while riding out a network outage (a time budget, not a count). */
+    onRetry?: (attempt: number, err: unknown, max: number | undefined) => void
   } = {}
 ): Promise<T> {
-  const max = opts.maxRetries ?? MAX_PROVIDER_RETRIES
+  const budget = new RetryBudget(opts.reachable ?? (() => false), { maxRetries: opts.maxRetries })
   const signal = opts.signal ?? new AbortController().signal
   for (let n = 0; ; n++) {
     try {
       return await attempt()
     } catch (e) {
-      if (signal.aborted || n >= max || !isRetryableError(e)) throw e
-      opts.onRetry?.(n + 1, e)
+      if (signal.aborted || !budget.allows(e, n + 1)) throw e
+      opts.onRetry?.(n + 1, e, budget.reportedMax)
       await abortableSleep(retryDelayMs(e, n + 1), signal)
       // The backoff itself is where a Stop most often lands; don't spend an attempt
       // on a request we'd immediately abandon.
