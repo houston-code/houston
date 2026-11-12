@@ -171,7 +171,25 @@ jobs:
       - uses: ./.github/actions/setup-node
         with:
           electron-cache: headers
+      # The .deb files apt downloads are cached per runner image, so a run installs them with
+      # dpkg and needs no Ubuntu mirror. Every mirror was once unresolvable for the whole
+      # retry budget, failing this job before any test ran. A cache from an older image is
+      # only a fallback for when apt fails (see scripts/apt-install.sh).
+      - name: Key the apt package cache on the runner image
+        id: apt-image
+        run: |
+          echo "os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - id: apt-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/apt-debs
+          key: apt-debs-bubblewrap-${{ steps.apt-image.outputs.os }}-${{ steps.apt-image.outputs.version }}
+          restore-keys: apt-debs-bubblewrap-${{ steps.apt-image.outputs.os }}-
       - name: Set up bubblewrap + unprivileged user namespaces
+        env:
+          APT_DEB_CACHE: ${{ runner.temp }}/apt-debs
+          APT_DEB_CACHE_FRESH: ${{ steps.apt-cache.outputs.cache-hit }}
         run: |
           # apt-install.sh, not a bare apt-get: a stalled Ubuntu mirror once held `apt-get
           # update` until this job's timeout, failing the required check in the merge queue
@@ -324,8 +342,28 @@ jobs:
       # agent-turn test's shell command run in the real Linux sandbox backend rather than
       # unconfined. (This leg is ubuntu-22.04, which doesn't restrict unprivileged user
       # namespaces, so unlike linux-sandbox it needs no AppArmor change.)
+      # The .deb files apt downloads are cached per runner image, so a run installs them with
+      # dpkg and needs no Ubuntu mirror. Every mirror was once unresolvable for the whole
+      # retry budget, failing this job before any test ran. A cache from an older image is
+      # only a fallback for when apt fails (see scripts/apt-install.sh).
+      - name: Key the apt package cache on the runner image
+        id: apt-image
+        if: runner.os == 'Linux'
+        run: |
+          echo "os=${ImageOS:-unknown}" >> "$GITHUB_OUTPUT"
+          echo "version=${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+      - id: apt-cache
+        if: runner.os == 'Linux'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/apt-debs
+          key: apt-debs-xvfb-bubblewrap-${{ steps.apt-image.outputs.os }}-${{ steps.apt-image.outputs.version }}
+          restore-keys: apt-debs-xvfb-bubblewrap-${{ steps.apt-image.outputs.os }}-
       - name: Set up a display and bubblewrap for the e2e
         if: runner.os == 'Linux'
+        env:
+          APT_DEB_CACHE: ${{ runner.temp }}/apt-debs
+          APT_DEB_CACHE_FRESH: ${{ steps.apt-cache.outputs.cache-hit }}
         run: bash scripts/apt-install.sh xvfb bubblewrap
       # The app was just packaged above, so run the suite against it without rebuilding.
       - name: Packaged-app e2e
