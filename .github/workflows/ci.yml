@@ -577,7 +577,9 @@ jobs:
   # closes) one issue per kind of run through the same reusable alert the scheduled
   # workflows use. `build` is skipped on push and carries the package legs nightly.
   alert:
-    needs: [test, linux-sandbox, build]
+    # `plan` and `warm-caches` are listed for the push run, where nothing else reports them: a
+    # cache refresh that fails after a merge would otherwise turn the run red and tell no one.
+    needs: [test, linux-sandbox, build, plan, warm-caches]
     if: >-
       always() && (github.event_name == 'push' || github.event_name == 'schedule')
       && !cancelled() && !contains(needs.*.result, 'cancelled')

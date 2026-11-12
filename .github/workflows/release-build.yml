@@ -233,10 +233,7 @@ jobs:
       # own dev flags, excludes dev by default, and emits BOTH formats from one scan so they
       # describe an identical closure. Built on the Linux leg only (the closure is platform-
       # independent). This is THE per-release SBOM path: it attaches the SBOM to the
-      # published Release deterministically, regardless of how the release commit landed. The
-      # push-triggered sbom.yml can't be relied on for this: it yields a transient 90-day
-      # Actions artifact, not a durable Release asset. (It also has no push trigger today; see
-      # the note at the top of sbom.yml.)
+      # published Release deterministically, regardless of how the release commit landed.
       - name: Generate SBOMs (production dependency closure)
         if: inputs.os == 'ubuntu-22.04'
         uses: ./.github/actions/sbom-generate
@@ -361,12 +358,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
         run: node .pipeline/scripts/release-draft.mjs check houston-code/houston "v$VERSION"
-      # Fail the release if the macOS artifact isn't properly Developer-ID-signed AND
-      # notarized. codesign --verify + `stapler validate` are deterministic checks (stapler
-      # retried for its network lookup)
-      # and GATE the release. `spctl --assess` (the full Gatekeeper policy assessment) is
-      # flaky on CI runners — the reason electron-builder's gatekeeperAssess is off — so it
-      # runs last, INFORMATIONAL only, and never fails the job.
       - name: Attach standalone CLI + SBOMs to the release
         if: ${{ inputs.os == 'ubuntu-22.04' && !inputs.dry_run }}
         env:
@@ -374,13 +365,13 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           tag="v$VERSION"
-          # Upload the bundle, its checksum, and the attribution notices together:
+          # Upload the bundle and the attribution notices together:
           # the bundle inlines MIT/Apache-licensed dependencies, so the notices must
           # travel with the redistributed code (the .cjs ships no node_modules). The
           # lockfile SBOMs ship alongside so each released version carries a verifiable
           # production dependency manifest in CycloneDX + SPDX. (The per-platform deep
-          # binary SBOMs are attached + signed separately, per leg — see "Attach + sign
-          # the binary SBOM".) The VEX travels with them so consumers get the
+          # binary SBOMs are attached separately, per leg — see "Attach the binary
+          # SBOM"; the `checksums` job signs them.) The VEX travels with them so consumers get the
           # exploitability assessment, not just the list.
           bash .pipeline/scripts/retry.sh gh release upload "$tag" \
             out/cli/houston-cli.cjs \

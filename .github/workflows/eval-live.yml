@@ -60,7 +60,7 @@ on:
         required: false
         type: string
       provider:
-        description: 'Provider id'
+        description: 'Provider id: anthropic, openai or gemini'
         required: false
         default: 'anthropic'
         type: string
@@ -98,13 +98,27 @@ jobs:
       # The suite itself throws on a missing key rather than skipping, so this can't go green
       # empty-handed. Assert it here, before the install, so a misconfigured secret reds the job at an obvious
       # step instead of surfacing as a column of identical provider errors that read like a regression.
+      # The key is the chosen provider's (the `provider` input; anthropic on a scheduled run). The
+      # three providers below are the ones this repository holds a key for; any other id stops
+      # here, naming them, instead of running with no key.
       - name: Require the model API key
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PROVIDER: ${{ inputs.provider || 'anthropic' }}
+          API_KEY: >-
+            ${{ (inputs.provider || 'anthropic') == 'anthropic' && secrets.ANTHROPIC_API_KEY
+            || inputs.provider == 'openai' && secrets.OPENAI_API_KEY
+            || inputs.provider == 'gemini' && secrets.GEMINI_API_KEY
+            || '' }}
         run: |
           set -euo pipefail
-          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "::error::ANTHROPIC_API_KEY is empty or unset, so the live eval suite cannot run. Set the repo secret."
+          case "$PROVIDER" in
+            anthropic) key_name=ANTHROPIC_API_KEY ;;
+            openai) key_name=OPENAI_API_KEY ;;
+            gemini) key_name=GEMINI_API_KEY ;;
+            *) echo "::error::No API key is wired up for provider '$PROVIDER'. This workflow can score anthropic, openai or gemini."; exit 1 ;;
+          esac
+          if [ -z "${API_KEY:-}" ]; then
+            echo "::error::${key_name} is empty or unset, so the live eval suite cannot run. Set the repo secret."
             exit 1
           fi
       - uses: ./.github/actions/setup-node
@@ -127,8 +141,24 @@ jobs:
           HOUSTON_EVAL_PROVIDER: ${{ inputs.provider }}
           HOUSTON_EVAL_MODEL: ${{ inputs.model || ((inputs.provider || 'anthropic') == 'anthropic' && 'claude-haiku-5-5' || '') }}
           HOUSTON_EVAL_ATTEMPTS: ${{ inputs.attempts }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: npm run eval
+          # Only the chosen provider's key reaches the step, exported under the name the suite
+          # reads (the provider-canary.yml pattern).
+          PROVIDER: ${{ inputs.provider || 'anthropic' }}
+          API_KEY: >-
+            ${{ (inputs.provider || 'anthropic') == 'anthropic' && secrets.ANTHROPIC_API_KEY
+            || inputs.provider == 'openai' && secrets.OPENAI_API_KEY
+            || inputs.provider == 'gemini' && secrets.GEMINI_API_KEY
+            || '' }}
+        run: |
+          set -euo pipefail
+          case "$PROVIDER" in
+            anthropic) key_name=ANTHROPIC_API_KEY ;;
+            openai) key_name=OPENAI_API_KEY ;;
+            gemini) key_name=GEMINI_API_KEY ;;
+          esac
+          export "${key_name}=${API_KEY}"
+          unset API_KEY
+          npm run eval
 
   # Tell a human when the scheduled eval breaks — GitHub's own failure notification for a
   # scheduled run goes to github-actions[bot]. Scheduled runs only; a hand-dispatched run

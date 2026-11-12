@@ -2,7 +2,7 @@ name: Generate the lockfile SBOMs
 description: >-
   Syft scans package-lock.json into CycloneDX 1.6, SPDX 2.3 and SPDX 3.0, enrich-sbom.mjs adds
   hashes and suppliers, and verify-sbom.mjs fails closed on a truncated or unenriched result.
-  The SBOM workflow, the conformance gate and the release all use this, so they describe the
+  The conformance gate and the release both use this, so they describe the
   same closure by construction. Needs a checkout and an install that has each production
   package's manifest (the enrichment reads supplier and copyright from it).
 

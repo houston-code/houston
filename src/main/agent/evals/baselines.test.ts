@@ -19,6 +19,21 @@ const WORKFLOW = fileURLToPath(new URL('../../../../.github/workflows/eval-live.
 const load = (file: string): unknown => JSON.parse(readFileSync(join(BASELINES_DIR, file), 'utf8'))
 
 describe('live eval baselines', () => {
+  it('gives a dispatched run the key of the provider it scores', () => {
+    // A run dispatched with another provider once had only the Anthropic key in scope.
+    const text = readFileSync(WORKFLOW, 'utf8')
+    for (const [provider, secret] of [
+      ['openai', 'OPENAI_API_KEY'],
+      ['gemini', 'GEMINI_API_KEY']
+    ]) {
+      expect(text).toContain(`inputs.provider == '${provider}' && secrets.${secret}`)
+      expect(text).toContain(`${provider}) key_name=${secret} ;;`)
+    }
+    expect(text).toContain("(inputs.provider || 'anthropic') == 'anthropic' && secrets.ANTHROPIC_API_KEY")
+    // No key is set for the whole job: each is scoped to the step that uses it.
+    expect(text).not.toMatch(/^ {4}env:\n(?: {6}.*\n)*? {6}\w*API_KEY/m)
+  })
+
   it('has a baseline for the model the scheduled run scores', () => {
     // With no `model` input (every scheduled run), eval-live.yml picks the Anthropic
     // model it names in its HOUSTON_EVAL_MODEL expression.

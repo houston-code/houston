@@ -7,7 +7,7 @@ dependency closure actually affects Houston. It answers the question a raw scann
 
 ## How it is used
 
-Every `grype` scan (the lockfile gates in [`sbom.yml`](../workflows/sbom.yml) and the `deps`
+Every `grype` scan (the lockfile gate in the `deps`
 job of [`native-vuln-scan.yml`](../workflows/native-vuln-scan.yml), which runs daily and before
 every release, and the native-layer scans in its `scan` job and the release's Linux leg) reads
 this file via `--vex`. Any statement with status `not_affected` or `fixed` moves the matching

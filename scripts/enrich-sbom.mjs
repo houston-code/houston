@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Enrich a Syft-generated SBOM (CycloneDX + SPDX) with per-component integrity hashes and
 // supplier/author metadata. Syft scans package-lock.json to enumerate the COMPLETE
-// production closure (see .github/workflows/sbom.yml), but the lockfile carries neither
+// production closure (see .github/actions/sbom-generate), but the lockfile carries neither
 // file hashes nor supplier data, so those fields come out empty. This post-process fills
 // them in WITHOUT touching the component set — so the completeness the scan guarantees
 // (every production package present) is preserved exactly; it only adds fields.

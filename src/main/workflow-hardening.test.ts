@@ -75,7 +75,7 @@ describe('workflow hardening', () => {
   })
 
   it('generates the lockfile SBOMs only through the shared composite action', () => {
-    // sbom.yml, the conformance gate and the release must describe the same closure.
+    // The conformance gate and the release must describe the same closure.
     for (const { name, text } of workflows) {
       expect(text, name).not.toMatch(/^\s*syft scan file:/m)
     }
