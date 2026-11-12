@@ -19,6 +19,14 @@ const WORKFLOW = fileURLToPath(new URL('../../../../.github/workflows/eval-live.
 const load = (file: string): unknown => JSON.parse(readFileSync(join(BASELINES_DIR, file), 'utf8'))
 
 describe('live eval baselines', () => {
+  it('records only when a dispatch asks to, and uploads the result instead of pushing it', () => {
+    const text = readFileSync(WORKFLOW, 'utf8')
+    // Empty on a scheduled run, which the suite treats as unset: the schedule always grades.
+    expect(text).toContain("HOUSTON_EVAL_RECORD: ${{ inputs.record && '1' || '' }}")
+    expect(text).toContain('name: eval-baseline')
+    expect(text).not.toMatch(/contents: write|git push/)
+  })
+
   it('gives a dispatched run the key of the provider it scores', () => {
     // A run dispatched with another provider once had only the Anthropic key in scope.
     const text = readFileSync(WORKFLOW, 'utf8')

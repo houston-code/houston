@@ -174,6 +174,10 @@ the file the same way you'd commit a golden:
 HOUSTON_EVAL_MODEL=claude-opus-4-8 npm run eval:baseline
 ```
 
+Without a local key, dispatch the Task evals (live) workflow with `record` checked (and the
+`provider` and `model` to record). It runs the same command with the repository's key and
+uploads the baseline as the `eval-baseline` artifact for you to review and commit.
+
 The scheduled run scores `claude-haiku-5-5`, not the provider's `defaultModel`. A
 model that sometimes fails is what makes a regression visible, and Haiku solves most
 but not all of the harder tasks, at a small fraction of a larger model's cost.
