@@ -81,12 +81,6 @@ process.once('exit', () => {
   lspManager.killAll()
 })
 
-// Verify outbound TLS against the OS certificate store too, before any provider call.
-// Without it, a network that re-signs TLS with a root CA installed in the Windows store
-// or macOS keychain (corporate proxies, endpoint security) fails every API request with
-// a bare "Connection error." See system-ca.ts.
-trustSystemCertificates()
-
 // Bind the agent engine to its Electron-backed host capabilities before any run
 // can start (every client — GUI, headless, TUI, ACP — boots through here). The
 // engine never imports electron/store/secrets, so these are the wiring points:
@@ -226,8 +220,18 @@ const tui = acp ? null : parseTuiArgs(process.argv, process.cwd())
 // a launch opens the window, whatever stdin holds.
 const headless = acp || tui ? null : parseHeadlessArgs(process.argv, process.cwd(), { stdinPiped: stdinIsPiped() })
 
+// Each mode below verifies outbound TLS against the OS certificate store too, by calling
+// trustSystemCertificates(). Without it, a network that re-signs TLS with a root CA
+// installed in the Windows store or macOS keychain (corporate proxies, endpoint security)
+// fails every API request with a bare "Connection error." See system-ca.ts.
+//
+// Reading the store is synchronous and takes tens of milliseconds, so it runs once the
+// app is ready rather than while the main bundle loads, where it held up `ready` itself.
+// It must still come before any outbound request: each call sits in the synchronous
+// stretch that starts its client, so nothing can open a socket ahead of it.
 if (acp) {
   app.whenReady().then(async () => {
+    trustSystemCertificates()
     await initSecrets()
     const code = await runAcpEntry({ version: app.getVersion() })
     app.exit(await flushBeforeExit(code))
@@ -236,12 +240,14 @@ if (acp) {
   // The full client wiring lives in terminalEntry.ts, shared verbatim with the
   // standalone CLI (src/cli) — only the exit call is Electron's.
   app.whenReady().then(async () => {
+    trustSystemCertificates()
     await initSecrets()
     const code = await runTuiEntry(tui, { version: app.getVersion() })
     app.exit(await flushBeforeExit(code))
   })
 } else if (headless) {
   app.whenReady().then(async () => {
+    trustSystemCertificates()
     await initSecrets()
     const code = await runHeadlessEntry(headless, { version: app.getVersion() })
     app.exit(await flushBeforeExit(code))
@@ -258,6 +264,10 @@ if (acp) {
     registerIpc()
     buildAppMenu()
     createWindow()
+    // After the window exists, so its renderer starts loading while the store is read.
+    // Still ahead of every request: nothing above has awaited, so the scheduler's
+    // catch-up run that registerIpc started cannot have reached a provider yet.
+    trustSystemCertificates()
     // Restart-to-install asks the same "work is still running" question as ⌘Q.
     setInstallGuard(confirmRestartForUpdate, resetQuitConfirmation)
     initUpdates()

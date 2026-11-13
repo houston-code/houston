@@ -1,6 +1,5 @@
 import { app, autoUpdater as nativeUpdater, BrowserWindow, dialog } from 'electron'
 import type { MessageBoxOptions } from 'electron'
-import electronUpdater from 'electron-updater'
 import type { CancellationToken, UpdateInfo } from 'electron-updater'
 import { IPC } from '@shared/constants'
 import {
@@ -144,9 +143,26 @@ export function setInstallGuard(guard: () => Promise<boolean>, onAborted?: () =>
   onInstallAborted = onAborted ?? (() => {})
 }
 
+type ElectronUpdater = typeof import('electron-updater')
+let electronUpdaterModule: Promise<ElectronUpdater> | null = null
+
+/**
+ * electron-updater, loaded on first use rather than with the main bundle. It is about
+ * 160 files that every launch paid for before the window could open (tens of
+ * milliseconds), including launches that never check for updates: a development
+ * build, a terminal session, a run with the updater disabled.
+ */
+function loadElectronUpdater(): Promise<ElectronUpdater> {
+  electronUpdaterModule ??= import('electron-updater').then(
+    // A CommonJS package: its exports arrive as the default export once bundled.
+    (m) => (m as { default?: ElectronUpdater }).default ?? m
+  )
+  return electronUpdaterModule
+}
+
 /** Apply the updater config + error logging exactly once. */
-function configureUpdater(): typeof electronUpdater.autoUpdater {
-  const { autoUpdater } = electronUpdater
+async function configureUpdater(): Promise<ElectronUpdater['autoUpdater']> {
+  const { autoUpdater } = await loadElectronUpdater()
   if (!configured) {
     // Only signed + notarized platforms (macOS today) auto-download and install in
     // place; unsigned ones (Windows/Linux) fall back to the manual-download banner.
@@ -246,7 +262,8 @@ export async function installUpdate(): Promise<boolean> {
   }
   if (!(await installGuard())) return false
   try {
-    electronUpdater.autoUpdater.quitAndInstall()
+    const { autoUpdater } = await loadElectronUpdater()
+    autoUpdater.quitAndInstall()
     return true
   } catch (e) {
     console.error('[updater] install failed:', (e as Error)?.message ?? e)
@@ -266,8 +283,9 @@ async function downloadAndInstall(version: string): Promise<boolean> {
   if (downloadedVersion !== version) {
     let download = pendingDownload?.promise
     if (!download) {
-      const token = new electronUpdater.CancellationToken()
-      download = trackDownload(configureUpdater().downloadUpdate(token), token)
+      const { CancellationToken: Token } = await loadElectronUpdater()
+      const token = new Token()
+      download = trackDownload((await configureUpdater()).downloadUpdate(token), token)
     }
     try {
       await download
@@ -326,7 +344,7 @@ async function runCheck(): Promise<UpdateCheckResult> {
     return { status: 'disabled', currentVersion }
   }
   try {
-    const autoUpdater = configureUpdater()
+    const autoUpdater = await configureUpdater()
     const autoInstall = shouldAutoInstallUpdates()
     // With an update already handed to Squirrel.Mac, an auto-downloading check would
     // re-hand it the cached copy, restarting Squirrel's fetch + signature check, and a
@@ -355,7 +373,8 @@ async function runCheck(): Promise<UpdateCheckResult> {
       result.updateInfo.version !== staged &&
       result.updateInfo.version !== refusedVersion
     ) {
-      const token = new electronUpdater.CancellationToken()
+      const { CancellationToken: Token } = await loadElectronUpdater()
+      const token = new Token()
       trackDownload(autoUpdater.downloadUpdate(token), token)
     }
     if (result?.isUpdateAvailable) {
