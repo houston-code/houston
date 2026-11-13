@@ -225,7 +225,10 @@ Open source under the [Apache License 2.0](LICENSE).
   more permissive). Schedules persist across restarts, fire while Houston (the
   desktop app or the TUI) is running, and catch up an occurrence missed while it
   was closed; `list_scheduled_runs` and `cancel_scheduled_run` manage them, and
-  creating or cancelling is approval-gated.
+  creating or cancelling is approval-gated. In the desktop app, **Settings >
+  Scheduled Runs** lists them with their next and last run, pauses and resumes
+  them, runs one now, deletes them, and creates one from a form (task, schedule,
+  folder, model, approval mode).
 - **Adversarial review.** `review_changes` (or `/review`) reviews your uncommitted
   changes for correctness, security, and quality. It runs an independent read-only
   reviewer per dimension (each in its own fresh context, so they don't inherit the

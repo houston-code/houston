@@ -8,6 +8,7 @@ export const PAGE_LABELS = {
   tools: 'Tools',
   mcp: 'MCP Servers',
   hooks: 'Hooks',
+  schedules: 'Scheduled Runs',
   memory: 'Memory',
   workspace: 'Workspace',
   general: 'General',

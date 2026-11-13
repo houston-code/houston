@@ -264,3 +264,52 @@ describe('reasoning effort on a stored schedule', () => {
     expect(JSON.parse(readFileSync(file, 'utf8')).schedules[0].reasoningEffort).toBe('xhigh')
   })
 })
+
+describe('pause, resume and run now', () => {
+  it('a paused schedule never fires, and resuming skips what came due meanwhile', async () => {
+    const { service, fired } = makeService()
+    const info = service.create(input({ spec: 'every 30m' }))
+    service.start()
+    expect(service.setPaused(info.id, true)?.paused).toBe(true)
+    await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1000)
+    expect(fired).toHaveLength(0)
+    // Survives a reload from disk.
+    expect(makeService().service.list()[0].paused).toBe(true)
+    const resumed = service.setPaused(info.id, false)!
+    expect(resumed.paused).toBeUndefined()
+    expect(resumed.nextRunAt).toBe(Date.now() + 30 * 60 * 1000)
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 5)
+    expect(fired).toHaveLength(1)
+  })
+
+  it('reports an unknown id', () => {
+    const { service } = makeService()
+    expect(service.setPaused('sch-nope', true)).toBeNull()
+  })
+
+  it('runs one occurrence now without moving the next planned run', async () => {
+    const { service, fired } = makeService()
+    const info = service.create(input({ spec: 'daily at 09:00' }))
+    await service.runNow(info.id)
+    expect(fired.map((s) => s.id)).toEqual([info.id])
+    const [s] = service.list()
+    expect(s.nextRunAt).toBe(info.nextRunAt)
+    expect(s.lastFiredAt).toBe(Date.now())
+    expect(s.lastResult).toBe('ok')
+  })
+
+  it('runs a paused schedule on request, and records a run that could not start', async () => {
+    const { service } = makeService({
+      fire: async () => {
+        throw new Error('Too many background sessions')
+      }
+    })
+    const info = service.create(input())
+    service.setPaused(info.id, true)
+    await expect(service.runNow(info.id)).rejects.toThrow('Too many background sessions')
+    const [s] = service.list()
+    expect(s).toMatchObject({ lastResult: 'error', lastError: 'Too many background sessions', paused: true })
+    await expect(service.runNow('sch-nope')).rejects.toThrow('no longer exists')
+  })
+})
+

@@ -22,6 +22,7 @@ import {
   LanguageServersSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
+import { ScheduledRunsSection } from './sections/schedules'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import {
@@ -199,6 +200,18 @@ export const PAGES: SettingsPage[] = [
         id: 'project-hooks',
         Component: ProjectHooksSection,
         keywords: ['project', 'repository', 'trusted', 'settings.json']
+      }
+    ]
+  },
+  {
+    id: 'schedules',
+    label: PAGE_LABELS.schedules,
+    group: 'AI',
+    sections: [
+      {
+        id: 'scheduled-runs',
+        Component: ScheduledRunsSection,
+        keywords: ['schedule', 'cron', 'recurring', 'timer', 'automation', 'background', 'daily', 'weekly', 'run later']
       }
     ]
   },

@@ -3141,7 +3141,8 @@ const listScheduledRuns: ToolDef = {
               s.lastResult === 'error' ? ` (failed: ${s.lastError ?? 'unknown error'})` : ''
             }`
           : ''
-        return `- ${s.id}: "${s.name}", ${s.spec}; next run ${formatFireTime(s.nextRunAt)}${last}`
+        const next = s.paused ? 'paused' : `next run ${formatFireTime(s.nextRunAt)}`
+        return `- ${s.id}: "${s.name}", ${s.spec}; ${next}${last}`
       })
       .join('\n')
   }

@@ -61,6 +61,7 @@ import type {
   UpdateInstallFailed,
   WhatsNew
 } from '@shared/update'
+import type { ScheduleCreateRequest, SchedulePreview, ScheduleResult, ScheduleView } from '@shared/schedules'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 
 /**
@@ -207,6 +208,17 @@ const api = {
     ipcRenderer.invoke(IPC.ollamaSupportsTools, providerId, model),
   /** Status of optional integrations (gh CLI, formatters) for the Settings hint. */
   getIntegrations: (): Promise<IntegrationsInfo> => ipcRenderer.invoke(IPC.integrationsGet),
+  /** Scheduled runs (Settings > Scheduled runs). */
+  listSchedules: (): Promise<ScheduleView[]> => ipcRenderer.invoke(IPC.schedulesList),
+  /** What a typed schedule means: normalized form and next run, or the reason it isn't one. */
+  previewSchedule: (spec: string): Promise<SchedulePreview> => ipcRenderer.invoke(IPC.schedulesPreview, spec),
+  createSchedule: (request: ScheduleCreateRequest): Promise<ScheduleResult> =>
+    ipcRenderer.invoke(IPC.schedulesCreate, request),
+  setSchedulePaused: (id: string, paused: boolean): Promise<ScheduleResult> =>
+    ipcRenderer.invoke(IPC.schedulesSetPaused, id, paused),
+  /** Start one run of a schedule now, as a background session. */
+  runScheduleNow: (id: string): Promise<ScheduleResult> => ipcRenderer.invoke(IPC.schedulesRunNow, id),
+  deleteSchedule: (id: string): Promise<ScheduleResult> => ipcRenderer.invoke(IPC.schedulesDelete, id),
   /**
    * OAuth sign-in for a saved remote MCP server: opens the browser flow and
    * stores the tokens. Resolves once the flow completes (or fails); the returned

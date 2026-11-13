@@ -8368,6 +8368,38 @@ describe('scheduled runs (loop wiring)', () => {
     expect(results[0]?.type === 'tool_result' && results[0].output).toContain('No scheduled runs')
     expect(results[1]?.type === 'tool_result' && results[1].output).toContain('Cancelled scheduled run sch-test')
   })
+
+  it('lists a paused schedule as paused instead of giving a next run', async () => {
+    const paused: ScheduledRunInfo = {
+      name: 'nightly',
+      spec: 'daily at 09:00',
+      prompt: 'p',
+      workspace: 'w',
+      providerId: 'anthropic',
+      model: 'm',
+      approvalPolicy: 'plan',
+      id: 'sch-p',
+      nextRunAt: 4102444800000,
+      createdAt: 1,
+      paused: true
+    }
+    setSchedulerBackend({ ...fakeBackend([]), list: () => [paused] })
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'c1', name: 'list_scheduled_runs', arguments: {} } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'text', text: 'ok' },
+          { type: 'done', stopReason: 'end_turn' }
+        ]
+      ]
+    })
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect(result?.type === 'tool_result' && result.output).toBe('- sch-p: "nightly", daily at 09:00; paused')
+  })
 })
 
 /**
