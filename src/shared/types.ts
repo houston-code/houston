@@ -837,6 +837,11 @@ export interface AppSettings {
   previewWidth?: number
   /** Whether the preview panel is open. */
   previewOpen?: boolean
+  /**
+   * Open the Preview panel when the agent starts a dev server whose URL is detected,
+   * once per chat. Absent means on.
+   */
+  previewAutoOpen?: boolean
   /** Width (px) of the docked plan-review panel (Plan mode). */
   planWidth?: number
   /**

@@ -47,6 +47,8 @@ The full GUI:
 - a chat sidebar and diffs
 - a right-hand dock with a **Background tasks** list of background commands (stop
   them, read their output, see which port each one holds) and the live **Preview**
+  (it opens by itself, once per chat, when the agent starts a dev server and its
+  address shows up; turn that off in Settings > Tools > Preview)
 - Settings
 
 **Chat status.** Each chat in the sidebar has a status dot:
@@ -1757,7 +1759,7 @@ missed while Houston was closed fires once at the next launch.
 | Tool | Does |
 | --- | --- |
 | `review_changes` (or `/review`) | an adversarial review of uncommitted changes |
-| `todo_write` | keeps a task list for multi-step work, rendered live in the transcript |
+| `todo_write` | keeps a task list for multi-step work, rendered live in the transcript and, in the desktop app, pinned above the message box while a turn runs or items are left |
 | `pr_sweep` | tracks batch pull-request work (author new PRs from a task list, or process a batch of existing open PRs) |
 | `show_images` | shows you image files the agent produced |
 | `render_mockup` | screenshots an HTML mockup without a dev server (desktop app) |

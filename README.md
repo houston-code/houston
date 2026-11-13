@@ -101,8 +101,9 @@ Open source under the [Apache License 2.0](LICENSE).
   window with no network, and the result is shown as an image. Sandboxed
   interactive HTML visuals are off by default (Settings > *Appearance*).
 - **Live preview panel.** When the agent starts a dev server (a background
-  `run_shell`), Houston detects the loopback URLs it prints and offers a **Preview**
-  panel: a resizable right-hand dock that renders the running page live and
+  `run_shell`), Houston detects the loopback URLs it prints and opens a **Preview**
+  panel, once per chat (Settings → *Tools* → *Preview* turns that off; the title-bar
+  button opens it any time): a resizable right-hand dock that renders the running page live and
   interactively, right beside the chat. A script that starts several servers (a
   client and its API) shows the page it labels `Local:`, with a picker for the
   others. Multiple servers stack top-to-bottom (up to three), each showing its full
@@ -283,7 +284,9 @@ Open source under the [Apache License 2.0](LICENSE).
   demand the same way, with approvals and rules applying exactly as before.
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
-  watch it tick off items.
+  watch it tick off items. While a turn runs, or items are left, the current list is
+  also pinned as a small card above the message box (progress and the item in
+  progress; click it for the whole list).
 - **Desktop notifications.** Wander off during a long turn: Houston fires a
   native notification when the agent finishes, needs approval, asks a question, or
   opens/merges a pull request while the window isn't focused, and clicking it
