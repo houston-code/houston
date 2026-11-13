@@ -4,6 +4,7 @@ import {
   agentTurn,
   commandTurn,
   invocationText,
+  reviewCommentsTurn,
   sanitizeInvocation,
   shipTurn,
   spawnedTurn
@@ -137,5 +138,26 @@ describe('invocationText', () => {
   it('prefers what the user typed, else the label', () => {
     expect(invocationText({ kind: 'command', label: '/review', typed: '/review now' })).toBe('/review now')
     expect(invocationText({ kind: 'action', label: 'Create PR' })).toBe('Create PR')
+  })
+})
+
+describe('reviewCommentsTurn', () => {
+  it('sends every comment with its file, line and code, labelled as review comments', () => {
+    const turn = reviewCommentsTurn([
+      { path: 'src/a.ts', side: 'new', line: 12, code: '  const x = 1', body: 'Use a named constant.' },
+      { path: 'src/a.ts', side: 'old', line: 30, code: 'oldCall()', body: 'Why was this removed?\nIt handled retries.' },
+      { path: 'README.md', side: 'new', line: 3, code: '', body: 'Typo' }
+    ])
+    expect(turn.invokedAs).toEqual({ kind: 'action', label: '3 review comments', detail: 'On 2 files' })
+    expect(turn.text).toContain('Address each one')
+    expect(turn.text).toContain('1. src/a.ts, line 12\n   Code: const x = 1\n   Comment: Use a named constant.')
+    expect(turn.text).toContain('2. src/a.ts, line 30 (a removed line)\n   Code: oldCall()\n   Comment: Why was this removed?\n   It handled retries.')
+    expect(turn.text).toContain('3. README.md, line 3\n   Comment: Typo')
+  })
+
+  it('words a single comment in the singular', () => {
+    const turn = reviewCommentsTurn([{ path: 'a', side: 'new', line: 1, code: 'x', body: 'y' }])
+    expect(turn.invokedAs).toMatchObject({ label: 'Review comment', detail: 'On 1 file' })
+    expect(turn.text).toMatch(/^I left a comment on the changes in this project\. Address it,/)
   })
 })

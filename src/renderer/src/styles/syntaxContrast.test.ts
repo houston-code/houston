@@ -49,6 +49,36 @@ describe.each([
   })
 })
 
+// Accent presets: on dark, --accent is read on the panel surfaces and --accent-fill
+// carries white text; on light, --accent carries white text (the user's bubbles) and
+// is read on the warm surfaces. The default accent is held to the same rules.
+describe.each(['default', 'violet', 'green', 'orange', 'pink'])('%s accent', (accent) => {
+  const preset = (selector: string): Record<string, string> => (accent === 'default' ? {} : themeVars(selector))
+  const dark = { ...themeVars(':root'), ...preset(`:root:not([data-theme='light'])[data-accent='${accent}']`) }
+  const light = {
+    ...themeVars(':root'),
+    ...themeVars(":root[data-theme='light']"),
+    ...preset(`:root[data-theme='light'][data-accent='${accent}']`)
+  }
+
+  it('reads on the dark surfaces, and its dark fill carries white text', () => {
+    for (const surface of ['--bg', '--bg-elevated', '--bg-input']) {
+      expect(contrast(dark['--accent'], dark[surface]), `--accent on ${surface}`).toBeGreaterThanOrEqual(4.5)
+    }
+    expect(contrast('#ffffff', dark['--accent-fill'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrast('#ffffff', dark['--accent-fill-hover'])).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('carries white text in light, and reads on the light surfaces', () => {
+    for (const fill of ['--accent', '--accent-fill', '--accent-fill-hover']) {
+      expect(contrast('#ffffff', light[fill]), `white on ${fill}`).toBeGreaterThanOrEqual(4.5)
+    }
+    for (const surface of ['--bg', '--bg-elevated', '--bg-hover']) {
+      expect(contrast(light['--accent'], light[surface]), `--accent on ${surface}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+})
+
 // Each code theme overrides the tokens and the code surface for both palettes; the
 // panel surfaces (--bg, --bg-elevated) stay the base theme's.
 describe.each([

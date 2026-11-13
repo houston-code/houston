@@ -37,7 +37,7 @@ import {
   type ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
-import { parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
+import { isForkPoint, parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDataUrl } from '@shared/images'
 import { sanitizeInvocation } from '@shared/promptInvocation'
@@ -104,6 +104,7 @@ import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
+import { issueReportText, openIssueReport, revealLogs } from './issueReport'
 import type { DoctorFacts } from '@shared/doctor'
 import { saveMemory } from './memory'
 import { handleMemoryRequest } from './memoryIpc'
@@ -111,6 +112,7 @@ import { defaultMemoryRoot } from './agent/memoryStore'
 import type { MemoryResponse } from '@shared/memoryTypes'
 import { decideLegacyRulesNotice, legacyRulesNoticeApplies } from './globalRules'
 import { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } from './legacyRulesNotice'
+import { registerImportIpc } from './importIpc'
 import { MAX_MEMORY_NOTE } from '@shared/memory'
 import { notifyAgentEvent, workspaceLabel } from './notifications'
 import { attentionSignals } from '@shared/notify'
@@ -125,6 +127,7 @@ import { log } from './logger'
 import { dismissEnvKeyOffers, dismissedEnvKeyOffers, envKeyOffers, envKeyValue } from './envKeys'
 import { setMenuState, setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
+import { anyChatWindowFocused, chatWindows, setWindowShowing, targetWindow, windowShowing } from './windows'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
@@ -154,6 +157,7 @@ import {
   conversationExists,
   createConversation,
   forkConversation,
+  forkConversationAt,
   deleteConversation,
   otherConversationsInWorktree,
   importConversation,
@@ -186,6 +190,7 @@ import {
   type UndoRewindResult
 } from '@shared/rewind'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
+import { registerScheduleIpc } from './scheduleIpc'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 
 /** A preferences export is a few KB; anything past this is not one. */
@@ -296,10 +301,25 @@ function updateAppBadge(status: ChatStatusMap): void {
  */
 let attention: ChatAttention | null = null
 
-/** Stream one agent event to the renderer, persisting usage totals along the way. */
+/**
+ * The renderers a run's output goes to: the window that started it, then every other
+ * chat window. Each renderer routes events by run and conversation and ignores runs it
+ * isn't showing, so a chat open in another window (or reopened there after the starting
+ * window closed) follows the run live. With one window this is just that window.
+ */
+function runOutputTargets(sender: WebContents): WebContents[] {
+  const out = sender.isDestroyed() ? [] : [sender]
+  for (const win of chatWindows()) {
+    const wc = win.webContents
+    if (!wc.isDestroyed() && wc.id !== sender.id) out.push(wc)
+  }
+  return out
+}
+
+/** Stream one agent event to the renderers, persisting usage totals along the way. */
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
   const ev = applyRunningUsage(conversationId, e)
-  if (!sender.isDestroyed()) sender.send(IPC.agentEvent, ev)
+  for (const wc of runOutputTargets(sender)) wc.send(IPC.agentEvent, ev)
   maybeNotify(sender, conversationId, ev)
   attention?.noteEvent(conversationId, ev)
 }
@@ -315,11 +335,14 @@ function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): 
 function maybeNotify(sender: WebContents, conversationId: string, e: AgentEvent): void {
   const signals = attentionSignals(e, getSettings())
   if (!signals) return
-  // Nothing is signalled while the window is focused (the user is watching), so
-  // don't parse the chat file just to label a notification that won't appear.
-  const win = BrowserWindow.fromWebContents(sender)
-  if (win && !win.isDestroyed() && win.isFocused()) return
-  if (signals.sound && !sender.isDestroyed()) sender.send(IPC.attentionSound, signals.sound)
+  // Nothing is signalled while the app is focused (the user is watching), so don't
+  // parse the chat file just to label a notification that won't appear.
+  const starter = sender.isDestroyed() ? null : BrowserWindow.fromWebContents(sender)
+  if ((starter && !starter.isDestroyed() && starter.isFocused()) || anyChatWindowFocused()) return
+  // The sound plays in, and a click lands on, the window showing the chat, else the one
+  // that started the run, else the window the user was last in.
+  const win = windowShowing(conversationId) ?? (starter && !starter.isDestroyed() ? starter : targetWindow()) ?? null
+  if (signals.sound && win && !win.isDestroyed()) win.webContents.send(IPC.attentionSound, signals.sound)
   if (!signals.notify) return
   const conv = peekConversation(conversationId)
   notifyAgentEvent(e, win, {
@@ -335,12 +358,12 @@ function emitQueueChanged(
   conversationId: string,
   items: QueuedInputMeta[]
 ): void {
-  if (!sender.isDestroyed()) sender.send(IPC.agentQueueChanged, { conversationId, items })
+  for (const wc of runOutputTargets(sender)) wc.send(IPC.agentQueueChanged, { conversationId, items })
 }
 
-/** Push a conversation's freshly model-generated title to the renderer. */
+/** Push a conversation's freshly model-generated title to the renderers. */
 function emitTitleChanged(sender: WebContents, conversationId: string, title: string): void {
-  if (!sender.isDestroyed()) sender.send(IPC.conversationTitleChanged, { id: conversationId, title })
+  for (const wc of runOutputTargets(sender)) wc.send(IPC.conversationTitleChanged, { id: conversationId, title })
 }
 
 /**
@@ -390,6 +413,7 @@ function makeIo(sender: WebContents): DrainIO {
   const coalesced = coalescedEmit((conversationId, e) => emitEvent(sender, conversationId, e))
   return {
     imageGallery: true,
+    liveShellOutput: true,
     emit: coalesced,
     emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items),
     emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title)
@@ -406,17 +430,18 @@ function makeIo(sender: WebContents): DrainIO {
  */
 function makeBroadcastIo(): DrainIO {
   const toEach = (send: (wc: WebContents) => void): void => {
-    for (const win of BrowserWindow.getAllWindows()) {
+    for (const win of chatWindows()) {
       if (!win.webContents.isDestroyed()) send(win.webContents)
     }
   }
   return {
     imageGallery: true,
+    liveShellOutput: true,
     emit: coalescedEmit((conversationId, e) => {
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))
-      const primary = BrowserWindow.getAllWindows()[0]?.webContents
-      if (primary) maybeNotify(primary, conversationId, ev)
+      const notifyVia = (windowShowing(conversationId) ?? targetWindow())?.webContents
+      if (notifyVia) maybeNotify(notifyVia, conversationId, ev)
       attention?.noteEvent(conversationId, ev)
     }),
     emitQueueChanged: (conversationId, items) =>
@@ -579,6 +604,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
   setSchedulerBackend(scheduler)
   // Its catch-up run needs the provider keys, so not before the credential store is ready.
   afterReady(() => scheduler.start())
+  // Settings > Scheduled runs: list, create, pause/resume, run now, delete.
+  registerScheduleIpc(handle, scheduler)
 
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.
@@ -591,6 +618,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
     const cwd = typeof workspace === 'string' ? workspace : ''
     return gatherDoctorFacts(cwd, { version: APP_VERSION, update: null })
   })
+  // Help → Open Logs, and the text Report an Issue shows before it opens GitHub.
+  // Opening rebuilds the text in main rather than taking it from the renderer, so the
+  // URL can only ever carry what issueReportBody allows.
+  handle(IPC.logsReveal, () => revealLogs())
+  handle(IPC.issueReportPreview, (): string => issueReportText())
+  handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
   ipcMain.handle(
     IPC.sandboxStatus,
@@ -646,6 +679,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
         }
       })
   )
+
+  // Import from other tools (Settings > Import, and the one-time offer).
+  registerImportIpc(handle)
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
   handle(IPC.updateCheck, () => checkForUpdates())
@@ -1183,6 +1219,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     return meta
   })
   handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
+  // "Fork from here" on a message: the point is checked here, at the IPC boundary.
+  handle(IPC.conversationForkAt, (_event, id: string, point: unknown) =>
+    typeof id === 'string' && isForkPoint(point) ? forkConversationAt(id, point) : null
+  )
   handle(
     IPC.conversationCompact,
     (_event, id: string, providerId: string, model: string) =>
@@ -1804,6 +1844,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
     }
     const viewing = typeof conversationId === 'string' ? conversationId : null
     chat.setViewing(id, viewing, focused === true)
+    setWindowShowing(id, viewing)
     if (launchedIds.has(id) && (viewing === null || conversationExists(viewing))) lastChat.set(viewing)
   })
   // "Mark unread from here" names a reply by its position among the transcript's
@@ -1951,10 +1992,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Reconcile the native preview views to the renderer-measured rectangles. A
   // fire-and-forget send: it runs on every dock resize / overlay toggle, so it
   // must stay cheap and never block the renderer.
-  on(IPC.previewSync, (_event, specs: PreviewPaneSpec[], visible: boolean) =>
-    syncPreviewPanes(specs, visible)
+  on(IPC.previewSync, (event, specs: PreviewPaneSpec[], visible: boolean) =>
+    syncPreviewPanes(BrowserWindow.fromWebContents(event.sender), specs, visible)
   )
-  on(IPC.previewReload, (_event, id: string) => reloadPreviewPane(id))
+  on(IPC.previewReload, (event, id: string) =>
+    reloadPreviewPane(BrowserWindow.fromWebContents(event.sender), id)
+  )
   // Open a preview's URL in the OS browser — user-initiated, but re-validate
   // loopback-only so a stale/spoofed URL can't turn this into an open-redirect.
   handle(IPC.previewOpenExternal, async (_event, url: string): Promise<void> => {
