@@ -1905,7 +1905,24 @@ All times are local.
 
 ### Managing schedules
 
-- `list_scheduled_runs` shows what's configured, with next and last fire times.
+**Settings > Scheduled Runs** (desktop) lists every schedule with its recurrence, folder,
+model, approval mode, next run, and how the last run went. Each has:
+
+- **Pause** / **Resume**: a paused schedule is kept but never runs. Resuming picks up
+  from now, so the runs it missed while paused don't all start at once.
+- **Run now**: starts one run immediately as a background chat, without moving the next
+  planned run.
+- **Delete**, after you confirm.
+
+**New scheduled run** opens a form: the task each run starts with, an optional name, when
+it runs (checked as you type, showing the first run time), the folder, the model, and the
+approval mode (Plan mode by default). A run that needs your approval waits in its chat
+until you answer.
+
+The agent manages the same list:
+
+- `list_scheduled_runs` shows what's configured, with next and last fire times (or
+  "paused").
 - `cancel_scheduled_run` removes one.
 - Creating or cancelling a schedule asks for approval.
 
@@ -2721,7 +2738,7 @@ sidebar) or `Esc` returns to the chat.
 
 | Group | Pages |
 | --- | --- |
-| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Memory, Import |
+| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Scheduled Runs, Memory, Import |
 | **App** | General, Appearance, Keyboard |
 | **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (whether new chats start in a worktree, and additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |

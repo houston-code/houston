@@ -160,6 +160,13 @@ export const IPC = {
   mcpStatus: 'mcp:status',
   // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
   integrationsGet: 'integrations:get',
+  /** Settings > Scheduled runs over the scheduler service. */
+  schedulesList: 'schedules:list',
+  schedulesPreview: 'schedules:preview',
+  schedulesCreate: 'schedules:create',
+  schedulesSetPaused: 'schedules:setPaused',
+  schedulesRunNow: 'schedules:runNow',
+  schedulesDelete: 'schedules:delete',
   // "Open project in…" — launch an external editor / reveal in the file manager.
   // A user gesture (not the agent); see main/openInEditor.ts.
   editorsList: 'editors:list',

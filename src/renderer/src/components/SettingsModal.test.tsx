@@ -228,6 +228,7 @@ describe('SettingsModal', () => {
       'Customize',
       'MCP Servers',
       'Hooks',
+      'Scheduled Runs',
       'Memory',
       'Import',
       'General',

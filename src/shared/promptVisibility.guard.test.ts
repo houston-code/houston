@@ -123,9 +123,12 @@ describe('prompt visibility guard', () => {
     // card (sent only via proposalHereTurn). spawn_session's prompt labels its tool
     // row in shared/toolLabel.ts, which both clients use. SubagentPanel shows the task
     // a subagent was given (its setup tab and transcript), display only, never sent.
+    // Settings > Scheduled Runs shows a schedule's stored task, display only: a fired
+    // run is started by the scheduler service in main, never sent from the renderer.
     expect(occurrences(['renderer/src'], /\.prompt\b/)).toEqual({
       'renderer/src/components/ProposalCard.tsx': 1,
-      'renderer/src/components/SubagentPanel.tsx': 2
+      'renderer/src/components/SubagentPanel.tsx': 2,
+      'renderer/src/components/settings/sections/schedules.tsx': 1
     })
     expect(occurrences(['shared'], /\ba\.prompt\b/)).toEqual({ 'shared/toolLabel.ts': 1 })
     expect(occurrences(['shared'], /\baction\.prompt\b/)).toEqual({ 'shared/promptInvocation.ts': 1 })

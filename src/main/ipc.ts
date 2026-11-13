@@ -186,6 +186,7 @@ import {
   type UndoRewindResult
 } from '@shared/rewind'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
+import { registerScheduleIpc } from './scheduleIpc'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 
 /** A preferences export is a few KB; anything past this is not one. */
@@ -599,6 +600,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
   setSchedulerBackend(scheduler)
   // Its catch-up run needs the provider keys, so not before the credential store is ready.
   afterReady(() => scheduler.start())
+  // Settings > Scheduled runs: list, create, pause/resume, run now, delete.
+  registerScheduleIpc(handle, scheduler)
 
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.
