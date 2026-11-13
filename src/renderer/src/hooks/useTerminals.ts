@@ -17,9 +17,10 @@ export interface UseTerminals {
   activeId: string | null
   /**
    * Open a new tab. `run`, when given, is typed into the fresh shell followed by
-   * Enter, and names the tab (used for a one-click runtime install).
+   * Enter, and names the tab (used for a one-click runtime install). `type` is typed
+   * in WITHOUT Enter, so the user reads it and runs it themselves.
    */
-  addTab: (opts?: { run?: string; title?: string }) => Promise<void>
+  addTab: (opts?: { run?: string; type?: string; title?: string }) => Promise<void>
   closeTab: (id: string) => void
   setActive: (id: string) => void
 }
@@ -36,7 +37,7 @@ export function useTerminals(workspace: string | null): UseTerminals {
   const counter = useRef(0)
 
   const addTab = useCallback(
-    async (opts?: { run?: string; title?: string }) => {
+    async (opts?: { run?: string; type?: string; title?: string }) => {
       const id = await window.api.createTerminal({ cwd: workspace ?? undefined })
       counter.current += 1
       const title = opts?.title ?? `Terminal ${counter.current}`
@@ -45,6 +46,8 @@ export function useTerminals(workspace: string | null): UseTerminals {
       // The PTY buffers input until the shell reads it, so this is safe to send
       // before the prompt has drawn.
       if (opts?.run) await window.api.writeTerminal(id, `${opts.run}\r`)
+      // Typed in only: any line break is dropped so nothing can run before Enter.
+      else if (opts?.type) await window.api.writeTerminal(id, opts.type.replace(/[\r\n]+/g, ' '))
     },
     [workspace]
   )

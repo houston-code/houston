@@ -59,6 +59,7 @@ import {
 } from './store'
 import { loadProjectConfig } from './agent/projectConfig'
 import { getIntegrations, languageServerIntegration } from './integrations'
+import { inferVerifyCommand } from './verifyInfer'
 import {
   detectEditors,
   openProjectInEditor,
@@ -1151,6 +1152,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     openProjectInEditor(editorId, dir)
   )
   handle(IPC.revealInFileManager, (_event, target: string) => revealInFileManager(target))
+  // Settings > Agent Behavior: a verification command suggested by the project's files.
+  handle(IPC.verifyInfer, (_event, workspace: unknown) =>
+    typeof workspace === 'string' && workspace ? inferVerifyCommand(workspace) : null
+  )
 
   // Conversations
   handle(IPC.conversationList, () => listConversations())

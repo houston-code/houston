@@ -1,5 +1,7 @@
 import { resolveGh, runGh } from './agent/github'
-import { FORMATTERS, canRunTool, type Formatter } from './agent/format'
+import { FORMATTERS, canRunTool, resolveBinaryPath, type Formatter } from './agent/format'
+import { resolveRipgrep } from './agent/search'
+import { INSTALLERS, installCommand, type Installer } from '@shared/installCommands'
 import { backendShellSyntax, type ShellSyntax } from './sandbox'
 import type { FormatterStatus, IntegrationsInfo } from '@shared/types'
 import { LspManager, type LspSettings } from './agent/lsp/manager'
@@ -25,6 +27,34 @@ export interface IntegrationsDeps {
   shellSyntax?: ShellSyntax
   /** Language-server status; omitted from the result when not given. */
   languageServers?: () => Pick<IntegrationsInfo, 'languageServers' | 'languageServersBlocked'>
+  /** Whether ripgrep is found (default: the search tool's own lookup). */
+  hasRipgrep?: () => boolean
+  /** Whether an installer (brew, npm, ...) is on PATH (default: the real PATH probe). */
+  hasInstaller?: (bin: Installer) => boolean
+  platform?: NodeJS.Platform
+}
+
+/**
+ * The install command for each missing item that an installer on this machine can
+ * install. Items nothing here can install are left out.
+ */
+export function installCommandsFor(
+  info: Omit<IntegrationsInfo, 'install'>,
+  platform: NodeJS.Platform,
+  hasInstaller: (bin: Installer) => boolean
+): Record<string, string> {
+  const available = new Set(INSTALLERS.filter(hasInstaller))
+  const missing: string[] = []
+  if (!info.gh.installed) missing.push('gh')
+  if (info.ripgrep && !info.ripgrep.installed) missing.push('rg')
+  if (!info.formattersNeedGitBash) for (const f of info.formatters) if (!f.installed) missing.push(`fmt:${f.bin}`)
+  for (const l of info.languageServers ?? []) if (!l.path && !l.user) missing.push(`lsp:${l.id}`)
+  const out: Record<string, string> = {}
+  for (const key of missing) {
+    const cmd = installCommand(key, platform, available)
+    if (cmd) out[key] = cmd
+  }
+  return out
 }
 
 /** Language-server status for these settings: each server's binary resolved on PATH (nothing is started). */
@@ -76,11 +106,15 @@ export async function getIntegrations(deps: IntegrationsDeps = {}): Promise<Inte
   const installed = ghPath !== null
   const authenticated = installed ? await authOk(ghPath) : false
 
-  return {
+  const info: Omit<IntegrationsInfo, 'install'> = {
     gh: { installed, authenticated },
     formatters: formatterStatuses(registry, hasBin),
     // cmd.exe can't be handed a safely quoted formatter command (see planToolRun).
     formattersNeedGitBash: (deps.shellSyntax ?? backendShellSyntax()) === 'cmd',
-    ...(deps.languageServers ? deps.languageServers() : {})
+    ...(deps.languageServers ? deps.languageServers() : {}),
+    ripgrep: { installed: (deps.hasRipgrep ?? (() => resolveRipgrep() !== null))() }
   }
+  const platform = deps.platform ?? process.platform
+  const hasInstaller = deps.hasInstaller ?? ((b: Installer) => resolveBinaryPath(b) !== null)
+  return { ...info, install: installCommandsFor(info, platform, hasInstaller) }
 }

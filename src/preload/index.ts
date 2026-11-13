@@ -65,6 +65,7 @@ import type {
   UpdateInstallFailed,
   WhatsNew
 } from '@shared/update'
+import type { VerifySuggestion } from '@shared/types'
 import type { ScheduleCreateRequest, SchedulePreview, ScheduleResult, ScheduleView } from '@shared/schedules'
 import type { ImportOutcome, ImportScan } from '@shared/importConfig'
 import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
@@ -284,6 +285,8 @@ const api = {
   /** Reveal a folder in the OS file manager (Finder / Explorer). */
   revealInFileManager: (target: string): Promise<OpenResult> =>
     ipcRenderer.invoke(IPC.revealInFileManager, target),
+  /** A verification command inferred from the project's files, or null. */
+  inferVerifyCommand: (workspace: string): Promise<VerifySuggestion | null> => ipcRenderer.invoke(IPC.verifyInfer, workspace),
 
   // Conversations
   listConversations: (): Promise<ConversationMeta[]> => ipcRenderer.invoke(IPC.conversationList),
