@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { permissionRuleKey, type PermissionRule } from '@shared/types'
-import { nodeVersionError, selectRunMode, wireCliHost } from './index'
+import { cliArgvError, nodeVersionError, selectRunMode, shortUsage, USAGE, wireCliHost } from './index'
+import { HEADLESS_FLAGS } from '../main/headless'
 import { noteRuleUsed } from '../main/agentHost'
 import { flushRuleUsage, resetRuleUsageForTests } from '../main/ruleUsage'
 
@@ -120,5 +121,57 @@ describe('wireCliHost', () => {
     flushRuleUsage()
     const usage = JSON.parse(readFileSync(join(dir, 'rule-usage.json'), 'utf8')) as Record<string, number>
     expect(typeof usage[permissionRuleKey(rule)]).toBe('number')
+  })
+})
+
+describe('cliArgvError', () => {
+  it('accepts every documented run-mode command line', () => {
+    expect(cliArgvError([])).toBeNull()
+    expect(cliArgvError(['-i', '--model', 'm', '--provider', 'p', '-C', '/x'])).toBeNull()
+    expect(cliArgvError(['-p', 'fix the bug', '--json', '--max-turns', '3'])).toBeNull()
+    expect(cliArgvError(['-p', '-', '--full-auto'])).toBeNull()
+    expect(cliArgvError(['-p', '--json'])).toBeNull() // prompt piped in
+    expect(cliArgvError(['--prompt=hi', '--cwd=/x', '--approval=plan'])).toBeNull()
+    expect(cliArgvError(['--max-cost', '-1'])).toBeNull() // a value may start with a dash
+    expect(cliArgvError(['--acp'])).toBeNull()
+  })
+
+  it('rejects an unknown flag by name', () => {
+    expect(cliArgvError(['--modle', 'x'])).toBe('unknown option: --modle')
+    expect(cliArgvError(['--frobnicate=1'])).toBe('unknown option: --frobnicate')
+  })
+
+  it('rejects a stray word, pointing at -p for a prompt', () => {
+    const err = cliArgvError(['fix the bug'])
+    expect(err).toContain('unexpected argument: "fix the bug"')
+    expect(err).toContain('-p "fix the bug"')
+    expect(cliArgvError(['--continue', 'extra'])).toContain('unexpected argument')
+  })
+
+  it('rejects a flag missing its value, and a switch given one', () => {
+    expect(cliArgvError(['--model'])).toBe('--model needs a value')
+    expect(cliArgvError(['--json=yes'])).toBe('--json takes no value')
+  })
+
+  it('knows every flag the run-mode parsers read', () => {
+    for (const flag of [...HEADLESS_FLAGS, '-i', '--interactive', '--tui', '--acp']) {
+      expect(cliArgvError([flag, 'v']) ?? '').not.toContain('unknown option')
+    }
+  })
+
+  it('documents every flag it accepts in --help', () => {
+    for (const flag of [...HEADLESS_FLAGS, '-i', '--interactive', '--tui', '--acp', '-h', '--help', '-v', '--version']) {
+      expect(USAGE).toMatch(new RegExp(`(^|[\\s,(])${flag.replace(/[-]/g, '\\-')}([\\s,=)]|$)`, 'm'))
+    }
+    expect(USAGE).toContain('houston providers remove <id>')
+  })
+})
+
+describe('shortUsage', () => {
+  it('is the run-mode block of --help, without the option list', () => {
+    const u = shortUsage()
+    expect(u.startsWith('Usage:')).toBe(true)
+    expect(u).toContain('houston -p "<prompt>"')
+    expect(u).not.toContain('Options:')
   })
 })

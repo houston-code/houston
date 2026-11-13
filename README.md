@@ -1025,8 +1025,11 @@ node houston-cli.cjs providers add openrouter        # register a catalog host (
 printf %s "sk-..." | node houston-cli.cjs providers set-key openrouter   # store its key (piped, not echoed)
 ```
 
-Local providers (Ollama, LM Studio) need no key at all: point the CLI at the
-same machine and it just works.
+Local providers (Ollama, LM Studio) need no key at all. When no model is ready,
+the interactive setup list shows them, and any endpoint added with
+`houston providers add`, after asking each one for its models, so a running
+server is one pick away. An unknown flag or a stray argument stops with an
+error and the usage rather than being ignored.
 
 **Custom auth headers.** A provider or MCP server can carry custom HTTP headers
 (a gateway bearer token, attribution headers), and a stdio MCP server can carry
