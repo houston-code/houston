@@ -1,3 +1,4 @@
+import { useRef, useState } from 'react'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_HINT,
@@ -23,6 +24,8 @@ import { baseName } from '../lib/paths'
 import { ModelPicker } from './ModelPicker'
 import { CostBreakdown } from './CostBreakdown'
 import { ChoiceMenu, type Choice } from './ChoiceMenu'
+import { Popover } from './Popover'
+import { recentFolders } from '../lib/recentFolders'
 
 /** Approval-policy names, shared with the terminal so both clients say the same thing. */
 export const POLICY_LABEL = APPROVAL_POLICY_LABEL
@@ -75,6 +78,7 @@ export function ControlBar({
   onChangePolicy,
   onChangeReasoning,
   onChangeWorkspace,
+  onOpenWorkspace,
   onOpenSettings,
   onMakeDefault,
   sandbox = null,
@@ -105,6 +109,12 @@ export function ControlBar({
   onChangePolicy: (p: ApprovalPolicy) => void
   onChangeReasoning: (e: ReasoningEffort) => void
   onChangeWorkspace: () => void
+  /**
+   * Open a recent folder. When set and there are recent folders, the folder button
+   * opens a small menu of them plus "Choose folder…"; without recents it opens the
+   * picker directly, as before.
+   */
+  onOpenWorkspace?: (path: string) => void
   onOpenSettings: () => void
   /**
    * Make the open chat's model, reasoning effort and approval mode the defaults for
@@ -164,15 +174,12 @@ export function ControlBar({
           share one row; without, the "how" group moves down whole instead of leaving
           the approval mode alone on a second line. */}
       <div className="control-bar__group">
-        <button
-          className="control control--ws"
-          onClick={onChangeWorkspace}
-          title="Change project folder"
-          aria-label={folderLabel ? `Project folder: ${folderLabel}. Change` : 'Choose project folder'}
-        >
-          <Icon name="folder" className="control__icon" />
-          <span className="control__text">{folderLabel ?? 'Choose folder…'}</span>
-        </button>
+        <FolderButton
+          label={folderLabel}
+          recents={onOpenWorkspace ? recentFolders(settings.recentWorkspaces, workspace) : []}
+          onChoose={onChangeWorkspace}
+          onOpen={(path) => onOpenWorkspace?.(path)}
+        />
 
         {showWorktreeEditor && (
           <div className="control-bar__wt">
@@ -342,5 +349,83 @@ export function ControlBar({
         />
       )}
     </div>
+  )
+}
+
+/**
+ * The project-folder control. With recent folders it opens a short menu of them plus
+ * "Choose folder…"; with none it goes straight to the folder picker.
+ */
+function FolderButton({
+  label,
+  recents,
+  onChoose,
+  onOpen
+}: {
+  label: string | null
+  recents: ReturnType<typeof recentFolders>
+  onChoose: () => void
+  onOpen: (path: string) => void
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const btnRef = useRef<HTMLButtonElement>(null)
+  const hasMenu = recents.length > 0
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        className="control control--ws"
+        onClick={() => (hasMenu ? setOpen((o) => !o) : onChoose())}
+        title="Change project folder"
+        aria-label={label ? `Project folder: ${label}. Change` : 'Choose project folder'}
+        {...(hasMenu ? { 'aria-haspopup': 'menu' as const, 'aria-expanded': open } : {})}
+      >
+        <Icon name="folder" className="control__icon" />
+        <span className="control__text">{label ?? 'Choose folder…'}</span>
+      </button>
+      {open && (
+        <Popover
+          anchorRef={btnRef}
+          onClose={() => setOpen(false)}
+          align="left"
+          className="menu folder-menu"
+          role="menu"
+          ariaLabel="Project folder"
+        >
+          <div className="menu__label" aria-hidden="true">
+            Recent folders
+          </div>
+          {recents.map((r) => (
+            <button
+              key={r.path}
+              type="button"
+              role="menuitem"
+              className="menu__item folder-menu__item"
+              title={r.path}
+              onClick={() => {
+                setOpen(false)
+                onOpen(r.path)
+              }}
+            >
+              <span className="folder-menu__name">{r.name}</span>
+              <span className="folder-menu__where">{r.where}</span>
+            </button>
+          ))}
+          <div className="menu__sep" role="separator" />
+          <button
+            type="button"
+            role="menuitem"
+            className="menu__item"
+            onClick={() => {
+              setOpen(false)
+              onChoose()
+            }}
+          >
+            Choose folder…
+          </button>
+        </Popover>
+      )}
+    </>
   )
 }

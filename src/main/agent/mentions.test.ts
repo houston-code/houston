@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { findFiles, fuzzyScore, clearMentionCache, CACHE_TTL_MS } from './mentions'
+import { findFiles, fuzzyScore, clearMentionCache, mentionCacheSize, CACHE_TTL_MS } from './mentions'
 
 let workspace: string
 const write = (rel: string): void => {
@@ -147,5 +147,35 @@ describe('findFiles — what it can now see', () => {
     expect(await findFiles(ws, 'brand', 20, NOW + 100)).not.toContain('brand-new.ts')
     // Past it: seen.
     expect(await findFiles(ws, 'brand', 20, NOW + CACHE_TTL_MS + 1)).toContain('brand-new.ts')
+  })
+})
+
+describe('mention listing cache', () => {
+  const folders: string[] = []
+  afterEach(() => {
+    for (const f of folders.splice(0)) rmSync(f, { recursive: true, force: true })
+    clearMentionCache()
+  })
+  const folder = (): string => {
+    const d = realpathSync(mkdtempSync(join(tmpdir(), 'houston-mention-')))
+    writeFileSync(join(d, 'app.ts'), '')
+    folders.push(d)
+    return d
+  }
+
+  it('drops listings that have expired instead of keeping them until reused', async () => {
+    clearMentionCache()
+    await findFiles(folder(), 'app', 20, 0)
+    await findFiles(folder(), 'app', 20, 10)
+    expect(mentionCacheSize()).toBe(2)
+    // Much later, another folder: the two stale listings go.
+    await findFiles(folder(), 'app', 20, 10 + CACHE_TTL_MS * 2)
+    expect(mentionCacheSize()).toBe(1)
+  })
+
+  it('keeps at most a few folders even while they are fresh', async () => {
+    clearMentionCache()
+    for (let i = 0; i < 12; i++) await findFiles(folder(), 'app', 20, i)
+    expect(mentionCacheSize()).toBeLessThanOrEqual(8)
   })
 })

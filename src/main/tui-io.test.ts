@@ -474,6 +474,18 @@ describe('readComposer (raw-mode composer)', () => {
     expect(text()).toContain('\x1b[?2004l')
   })
 
+  it('asks for modified-key reports while reading (Shift-Enter), and stops after', async () => {
+    const { io, stdin, text } = harness()
+    const read = io.readComposer!('> ')
+    expect(text()).toContain('\x1b[>4;1m')
+    stdin.push('one')
+    stdin.push('\x1b[27;2;13~')
+    stdin.push('two')
+    stdin.push('\r')
+    await expect(read).resolves.toBe('one\ntwo')
+    expect(text()).toContain('\x1b[>4;0m')
+  })
+
   it('enters raw mode for the read and restores cooked mode after', async () => {
     const { io, stdin } = harness()
     const read = io.readComposer!('> ')
@@ -829,6 +841,30 @@ describe('mid-run input', () => {
     })
     return { io, stdin, text: () => written.join(''), tick: (ms = 500) => (clock += ms) }
   }
+
+  it('Shift-Tab while a turn runs cycles the approval mode', () => {
+    const t = harness()
+    let cycles = 0
+    t.io.onCycleMode!(() => cycles++)
+    t.io.startSpinner!('Working')
+    t.stdin.push('\x1b[Z')
+    expect(cycles).toBe(1)
+    // Not typed into the draft.
+    t.stdin.push('\r')
+    expect(t.io.takeQueued!()).toEqual([])
+  })
+
+  it('keeps the status on the spinner line, dropping it before the line would wrap', () => {
+    const t = harness()
+    t.io.setStatus!('claude · main · 30%')
+    t.io.startSpinner!('Working')
+    t.stdin.push('x')
+    expect(t.text()).toContain('claude · main · 30%')
+    t.stdin.push('y'.repeat(70)) // the draft now fills the 80-column line
+    const last = t.text().split('\x1b[2K').at(-1)!
+    expect(last).not.toContain('claude · main')
+    expect(last).toContain('yyyy')
+  })
 
   it('queues what is typed while a turn runs, and hands it over at the end', () => {
     const t = harness()

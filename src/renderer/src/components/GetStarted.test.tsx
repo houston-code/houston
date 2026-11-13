@@ -44,6 +44,36 @@ describe('GetStarted', () => {
     expect(p.onChooseFolder).toHaveBeenCalledTimes(1)
   })
 
+  it('offers recent folders under the open folder step', () => {
+    const onOpenFolder = vi.fn()
+    render(
+      <GetStarted
+        facts={{ modelReady: true, hasWorkspace: false, hasConversation: false }}
+        onConnectModel={vi.fn()}
+        onChooseFolder={vi.fn()}
+        recentFolders={[{ path: '/home/me/app', name: 'app', where: '…/home/me/app' }]}
+        onOpenFolder={onOpenFolder}
+      />
+    )
+    const recents = screen.getByRole('navigation', { name: 'Or reopen' })
+    expect(recents.closest('li')).toHaveTextContent('Open a project folder')
+    fireEvent.click(screen.getByRole('button', { name: 'Open app (…/home/me/app)' }))
+    expect(onOpenFolder).toHaveBeenCalledWith('/home/me/app')
+  })
+
+  it('hides recent folders once a folder is open', () => {
+    render(
+      <GetStarted
+        facts={{ modelReady: true, hasWorkspace: true, hasConversation: false }}
+        onConnectModel={vi.fn()}
+        onChooseFolder={vi.fn()}
+        recentFolders={[{ path: '/home/me/app', name: 'app', where: '…/home/me/app' }]}
+        onOpenFolder={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('navigation', { name: 'Or reopen' })).not.toBeInTheDocument()
+  })
+
   it('leaves only the first-task hint once model and folder are ready', () => {
     setup({ modelReady: true, hasWorkspace: true })
     expect(screen.getByText('2 of 3')).toBeInTheDocument()

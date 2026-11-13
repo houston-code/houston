@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, isAbsolute } from 'node:path'
 import { writeFileAtomicSync } from './atomic-write'
 import { getUserDataDir } from './userData'
 import type {
@@ -639,6 +639,23 @@ export function rememberWorkspace(path: string): AppSettings {
     ...current.recentWorkspaces.filter((p) => p !== path && workspaceExists(p))
   ].slice(0, 10)
   return updateSettings({ recentWorkspaces: recents })
+}
+
+/**
+ * Open a folder the renderer named directly (a recent folder picked from the welcome
+ * screen or the folder menu, or a folder dragged onto the window) rather than one the
+ * native picker returned. Accepts only an absolute path to an existing directory, so a
+ * dropped file or a recent that vanished comes back null, and records it as the most
+ * recent workspace. Returns the path to open, or null.
+ */
+export function openWorkspaceFolder(path: unknown): string | null {
+  if (typeof path !== 'string' || path === '' || !isAbsolute(path)) return null
+  if (!workspaceExists(path)) {
+    pruneRecentWorkspaces()
+    return null
+  }
+  rememberWorkspace(path)
+  return path
 }
 
 /**

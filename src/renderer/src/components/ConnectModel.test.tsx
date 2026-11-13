@@ -9,10 +9,16 @@ function settings(over: Partial<AppSettings> = {}): AppSettings {
 }
 
 function installApi(
-  opts: { listModels?: () => Promise<unknown>; testKey?: () => Promise<number> } = {}
+  opts: {
+    listModels?: () => Promise<unknown>
+    testKey?: () => Promise<number>
+    envOffers?: unknown[]
+  } = {}
 ) {
   const fresh = settings()
   const api = {
+    getEnvKeyOffers: vi.fn(() => Promise.resolve(opts.envOffers ?? [])),
+    importEnvKey: vi.fn().mockResolvedValue(fresh),
     setKey: vi.fn().mockResolvedValue(fresh),
     deleteKey: vi.fn().mockResolvedValue(fresh),
     testKey: vi.fn(opts.testKey ?? (() => Promise.resolve(3))),
@@ -290,5 +296,39 @@ describe('ConnectModel reopened from a finished step 1', () => {
     expect(screen.getByLabelText('Model')).toHaveValue('qwen3')
     fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
     expect(screen.getByRole('button', { name: 'Check connection' })).toBeInTheDocument()
+  })
+
+  describe('a key in the environment', () => {
+    const offer = {
+      providerId: 'anthropic',
+      providerLabel: 'Anthropic (Claude)',
+      envVar: 'ANTHROPIC_API_KEY',
+      last4: 'wxyz'
+    }
+
+    it('is offered for its provider by the last four characters, and stored on Use it', async () => {
+      const { api, fresh } = installApi({ envOffers: [offer] })
+      const { onConnected } = renderPanel()
+      const box = await screen.findByRole('group', { name: 'Key from your environment' })
+      expect(api.getEnvKeyOffers).toHaveBeenCalledWith('connect')
+      expect(box).toHaveTextContent('ANTHROPIC_API_KEY holds a key ending in wxyz.')
+      fireEvent.click(screen.getByRole('button', { name: 'Use it' }))
+      await waitFor(() => expect(onConnected).toHaveBeenCalledWith(fresh, 'anthropic'))
+      expect(api.importEnvKey).toHaveBeenCalledWith('anthropic')
+      expect(api.setKey).not.toHaveBeenCalled()
+    })
+
+    it('is not offered on another provider, and a failed check is shown', async () => {
+      const { api } = installApi({ envOffers: [offer] })
+      api.importEnvKey.mockRejectedValueOnce(new Error('invalid x-api-key'))
+      const { onConnected } = renderPanel()
+      await screen.findByRole('group', { name: 'Key from your environment' })
+      fireEvent.click(screen.getByRole('radio', { name: 'OpenAI' }))
+      expect(screen.queryByRole('group', { name: 'Key from your environment' })).not.toBeInTheDocument()
+      fireEvent.click(screen.getByRole('radio', { name: 'Anthropic' }))
+      fireEvent.click(screen.getByRole('button', { name: 'Use it' }))
+      expect(await screen.findByRole('alert')).toHaveTextContent("That key didn't work: invalid x-api-key")
+      expect(onConnected).not.toHaveBeenCalled()
+    })
   })
 })

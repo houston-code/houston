@@ -1,6 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { mediaDigest, rememberMediaDigest } from './mediaDigest'
 
 /**
  * Image and document bytes kept beside a conversation instead of inside its JSON.
@@ -49,18 +50,12 @@ function isStored(v: Record<string, unknown>): v is Stored {
 }
 
 /**
- * Digest per attachment object. The in-memory message log hands the same objects to
- * every save of a run, so each image is hashed once rather than on every write.
+ * The attachment's content address. Its digest is remembered per attachment object
+ * (the in-memory message log hands the same objects to every save of a run), so each
+ * image is hashed once rather than on every write.
  */
-const digestCache = new WeakMap<object, string>()
-
 function refFor(att: Inline): string {
-  let digest = digestCache.get(att)
-  if (!digest) {
-    digest = createHash('sha256').update(att.data).digest('hex')
-    digestCache.set(att, digest)
-  }
-  return `${digest}.${extFor(att.mediaType)}`
+  return `${mediaDigest(att)}.${extFor(att.mediaType)}`
 }
 
 /**
@@ -145,7 +140,11 @@ export function hydrateMedia<T>(value: T, mediaDir: string): T {
       try {
         const data = readFileSync(join(mediaDir, v.mediaRef)).toString('base64')
         const { mediaRef: _ref, ...rest } = v
-        return { ...rest, data }
+        const hydrated = { ...rest, data }
+        // The file is named by the digest of these bytes, so later lookups (the next
+        // save, the model's image cache) reuse it instead of hashing the image again.
+        rememberMediaDigest(hydrated, v.mediaRef.slice(0, 64))
+        return hydrated
       } catch {
         return DROP
       }

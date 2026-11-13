@@ -28,8 +28,8 @@ const MAX_WORKTREES = 10
 
 export type GitExec = (args: string[], cwd: string) => Promise<string>
 
-async function runGit(args: string[], cwd: string): Promise<string> {
-  const hardening = await hardenedGitArgs(cwd)
+async function runGit(args: string[], cwd: string, shared?: Promise<string[]>): Promise<string> {
+  const hardening = await (shared ?? hardenedGitArgs(cwd))
   return new Promise((resolve, reject) => {
     execFile(
       'git',
@@ -167,15 +167,20 @@ export function formatBaseContext(rel: BaseRelation | null): string {
 export async function readBaseRelation(workspace: string, exec: GitExec): Promise<BaseRelation | null> {
   const verify = async (ref: string): Promise<boolean> =>
     /^[0-9a-f]{7,64}$/.test((await exec(['rev-parse', '--verify', '-q', `${ref}^{commit}`], workspace).catch(() => '')).trim())
-  if (!(await verify('HEAD'))) return null
-  let base: string | null = null
-  const head = (await exec(['rev-parse', '--abbrev-ref', 'origin/HEAD'], workspace).catch(() => '')).trim()
-  for (const ref of [head, 'origin/main', 'origin/master']) {
-    if (ref.startsWith('origin/') && isSafeGitRef(ref) && (await verify(ref))) {
-      base = ref
-      break
-    }
-  }
+  // These read-only lookups don't depend on each other, so they run at once; the
+  // answer is picked in the same order as checking them one by one.
+  const [headOk, head] = await Promise.all([
+    verify('HEAD'),
+    exec(['rev-parse', '--abbrev-ref', 'origin/HEAD'], workspace)
+      .catch(() => '')
+      .then((s) => s.trim())
+  ])
+  if (!headOk) return null
+  const candidates = [...new Set([head, 'origin/main', 'origin/master'])].filter(
+    (ref) => ref.startsWith('origin/') && isSafeGitRef(ref)
+  )
+  const valid = await Promise.all(candidates.map(verify))
+  const base = candidates[valid.indexOf(true)] ?? null
   if (!base) return null
   let mergeBase: string
   try {
@@ -191,7 +196,16 @@ export async function readBaseRelation(workspace: string, exec: GitExec): Promis
 }
 
 /** Read the workspace's git context, or '' if it isn't a git repo. `exec` is injectable for tests. */
-export async function gitContext(workspace: string, exec: GitExec = runGit): Promise<string> {
+export async function gitContext(workspace: string, injected?: GitExec): Promise<string> {
+  // One hardening probe for every command below, rather than one per command: they
+  // run moments apart, as one operation.
+  let exec: GitExec
+  if (injected) exec = injected
+  else {
+    const shared = hardenedGitArgs(workspace)
+    shared.catch(() => {}) // awaited by the first command; see runGit
+    exec = (args, cwd) => runGit(args, cwd, cwd === workspace ? shared : undefined)
+  }
   let branch: string
   try {
     branch = (await exec(['rev-parse', '--abbrev-ref', 'HEAD'], workspace)).trim()
@@ -205,25 +219,17 @@ export async function gitContext(workspace: string, exec: GitExec = runGit): Pro
     }
   }
   if (!branch) return ''
-  let status = ''
-  try {
-    status = await exec(['status', '--porcelain'], workspace)
-  } catch {
-    // status failed (e.g. detached/edge state) — still report the branch.
-  }
-  let worktrees = ''
-  try {
-    const out = await exec(['worktree', 'list', '--porcelain'], workspace)
-    worktrees = formatWorktreeContext(parseWorktreePorcelain(out), workspace)
-  } catch {
-    // worktree listing is best-effort (old git, edge state) — omit it.
-  }
-  let relation: BaseRelation | null = null
-  try {
-    relation = await readBaseRelation(workspace, exec)
-  } catch {
+  // Independent of each other: run them together, then assemble in the fixed order.
+  const [status, worktrees, relation] = await Promise.all([
+    // status failed (e.g. detached/edge state): still report the branch.
+    exec(['status', '--porcelain'], workspace).catch(() => ''),
+    // worktree listing is best-effort (old git, edge state): omit it.
+    exec(['worktree', 'list', '--porcelain'], workspace)
+      .then((out) => formatWorktreeContext(parseWorktreePorcelain(out), workspace))
+      .catch(() => ''),
     // best-effort, like the worktree listing
-  }
+    readBaseRelation(workspace, exec).catch((): BaseRelation | null => null)
+  ])
   return [formatGitContext(branch, status), formatBaseContext(relation), worktrees].filter(Boolean).join('\n')
 }
 

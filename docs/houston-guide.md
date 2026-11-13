@@ -63,6 +63,10 @@ The full GUI:
 - **Picking up where you left off.** A reply's hover actions include **Mark unread from
   here**, and reopening an unread chat lands on a "New" divider above the first reply
   you haven't seen.
+- **When, and what it cost.** Each message shows when it was sent ("5m ago"; hover for
+  the full date and time). Under a turn's last reply, a quiet line names the model that
+  answered and what the turn spent: tokens in and out, and the cost when the model's
+  price is known. Messages saved by older versions show none of this.
 - **Back where you were after a restart.** Houston reopens the chat that was open when
   you quit. If that chat was deleted, or its folder or worktree is gone, it opens a new
   chat in your last folder instead.
@@ -378,6 +382,26 @@ retries the turn with a growing pause between attempts and tells you it's retryi
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.
 
+### When a turn fails
+
+In the desktop app, a failed turn leaves a bar above the message box that says what
+went wrong in plain words and offers the next step:
+
+| Cause | Next steps offered |
+| --- | --- |
+| The key was rejected, or none is set | Open provider settings, Run the doctor, Retry |
+| Rate limited | Retry, Switch model |
+| Out of credit or over quota | Switch model, Open provider settings, Retry |
+| The provider had a server error (5xx, overloaded) | Retry, Switch model |
+| No network (offline, DNS, proxy) | Retry, Run the doctor |
+| The model isn't offered to this key | Switch model, Retry |
+| The conversation is too long for the model | Switch model, Retry |
+| The model can't call tools | Switch model, Retry |
+
+Anything else reads "The last turn failed" with Retry and Run the doctor.
+**Details** shows the provider's own message, which is also in the transcript.
+`/retry` works in both clients.
+
 ### Fallback models
 
 Name backup models for Houston to try when your selected model can't serve a turn:
@@ -405,6 +429,22 @@ Set them as an ordered list in settings.json:
   retried on another model, since it would fail there too.
 
 Leave the list unset to have a failing model simply end the turn.
+
+### Web search without a search key
+
+The `web_search` tool uses the search provider picked in Settings → *Tools* → *Web
+search* (Tavily, Brave Search or Exa) when its API key is set. With no key, it falls
+back to the model provider's own web search where the provider offers one:
+
+- **Claude API** (the Anthropic provider without a custom base URL).
+- **OpenAI** (the built-in OpenAI provider without a custom base URL).
+
+The search runs as a short extra request on the chat's current model, so it is billed
+to the model key you already set: the provider's per-search fee plus the tokens of the
+results. Each call runs one search. Other providers (Gemini, Bedrock, Vertex, Azure,
+Foundry, Ollama and other compatible servers) still need a search key. A search key,
+once set, is always used first. Approvals and the untrusted-content fence work the same
+either way.
 
 ## Slash commands
 
@@ -495,7 +535,9 @@ The interactive terminal's composer is a full line editor, so a message can be a
 long as it needs to be.
 
 - **Send:** `Enter` sends.
-- **New line:** `Ctrl-J` or `Alt-Enter` adds a line break (or just paste one).
+- **New line:** `Shift-Enter`, `Ctrl-J` or `Alt-Enter` adds a line break (or just paste
+  one). `Shift-Enter` works in terminals that report it as a separate key; in the rest
+  it sends, so use `Ctrl-J` there.
 - **Pasting:** paste anything, including many lines. The whole block lands in the
   composer as one editable message and is never sent line by line. A large paste
   collapses to a short placeholder like `[#1 pasted 120 lines]` so it doesn't bury the
@@ -505,13 +547,18 @@ long as it needs to be.
   multi-line ones included.
 - **Shell commands:** a line starting with `!` runs in your own shell. See "Running
   your own commands".
+- **Finding all this:** the startup banner shows two tips about keys and prefixes like
+  these, a different pair each time, and `/help` ends with a **Keys** section.
+- **Status line:** above the composer it shows the model, approval mode, folder, git
+  branch, session cost and how full the context window is. While a turn runs, the
+  model, branch and context stay on the spinner line.
 
 ### Keys
 
 | Key | Does |
 | --- | --- |
 | `Enter` | send the message |
-| `Ctrl-J`, `Alt-Enter` | insert a line break |
+| `Shift-Enter`, `Ctrl-J`, `Alt-Enter` | insert a line break (`Shift-Enter` where the terminal reports it) |
 | `Up` / `Down` | move between lines, then step through past messages |
 | `Ctrl-R` | search past messages (type to filter, `Ctrl-R` again for older, `Enter` to accept, `Esc` to cancel) |
 | `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`) |
@@ -559,7 +606,7 @@ conversation, not a log. To see more:
 - **Failures show themselves.** A failed tool prints its first lines without you
   asking, so you can see why.
 - **`/verbose`** shows each tool's full output as it runs. `/verbose off` stops it,
-  and plain `/verbose` toggles.
+  and plain `/verbose` toggles. The choice is remembered for later sessions.
 - **`/output`** reprints the last tool result in full, after the fact. `/output 3`
   goes three results back. Nothing extra is stored for this: the whole output was
   always kept in the conversation.
@@ -878,6 +925,15 @@ the run works as usual at any point.
 the keep-going-while-productive switch, and the hard limit. If you had already set
 your own step count, it stays a hard stop until you turn the switch on.
 
+### Watching a running turn
+
+- **Desktop:** the status bar shows how long the turn has run and the output tokens
+  it has produced so far ("1m 5s · 2.4k tokens"). The count is estimated from the
+  text while a reply streams and replaced by the provider's own figure when each reply
+  finishes. A tool call that takes longer than a second shows its own running time on
+  its row.
+- **Terminal:** the spinner line shows the same running time.
+
 ### Long replies
 
 A single reply also has an output limit.
@@ -1111,11 +1167,14 @@ The desktop app updates itself separately.
 - in the terminal, the terminal's size and color support
 
 Each row is marked healthy, worth knowing, or broken, and anything not healthy comes
-with what to do about it.
+with what to do about it. The fixes fit where you are: the terminal names its slash
+commands (`/login`, `/model`), the desktop app names its own Settings pages and the
+model menu.
 
-**Questions it answers:** "is my shell really sandboxed here?" and "why did setting my
-API key change nothing?" (an environment variable silently outranks a stored key, and
-`/doctor` names it).
+**Questions it answers:** "is my shell really sandboxed here?" and, in the terminal,
+"why did setting my API key change nothing?" (an environment variable silently
+outranks a stored key, and `/doctor` names it; the desktop app never reads keys from
+the environment, so it doesn't warn about them).
 
 ## Running your own commands (!)
 
@@ -1252,6 +1311,12 @@ commands.
 - `find … -delete`
 - deleting a branch or a stash, rewriting history
 - a forced or deleting `git push`
+- wiping a database: `prisma migrate reset`, `rails db:drop` or `db:reset`,
+  `manage.py flush`, `artisan migrate:fresh`, `dropdb`, and `DROP`, `TRUNCATE`, or an
+  unfiltered `DELETE FROM` handed to `psql`, `mysql`, or `sqlite3` (also `FLUSHALL` in
+  `redis-cli`)
+- removing Docker volumes (`docker volume rm`, `docker compose down -v`) and tearing
+  down infrastructure (`terraform destroy`, `kubectl delete namespace`)
 
 Quoting a word, splitting it across lines, or running it through `bash -c` doesn't
 hide one. "Allow for run" doesn't stop these asking; an `allow` permission rule for
@@ -1278,6 +1343,20 @@ On any single tool call you can:
   conversation (for a network call, just that one destination, which the prompt
   names)
 - **always allow / always deny:** save a permission rule so the choice persists
+
+**Keys in the desktop app.** A waiting approval answers to `Y` (allow), `A` (allow for
+the run) and `N` (deny, with any reason typed in the box below), shown on the buttons.
+The keys work whenever you are not typing in a text box. When the prompt appears and
+the message box is empty and idle, the prompt takes the keyboard, and gives it back
+once answered. With several prompts waiting, the keys answer the first. The two
+"always" choices have no key, so a stray key press never saves a rule.
+
+**What was saved.** After "Always allow" or "Always deny", a note at the bottom of the
+window names each rule exactly as it was saved (a shell command is saved as its
+command prefixes, a web fetch as the site), with **Undo** to remove it again and
+**Permissions** to open Settings > Permissions. Undo removes the rule from your saved
+rules; the run already under way keeps using it until it ends. If an existing rule
+already covered the call, the note says so and nothing new is saved.
 
 **Reading the diff.** A file edit shows a real diff before you approve it: the changed
 part with a few lines of context (long untouched stretches are folded away with a
@@ -1873,6 +1952,25 @@ remote **HTTP** (streamable) or **SSE** endpoint.
   demand" under "Context, worktrees, and history"), and the agent pulls in only the
   tool definitions it needs instead of sending every schema on every request.
 
+### Adding a server
+
+Under the server list in Settings > MCP Servers:
+
+- **+ Add MCP server** adds an empty entry to fill in by hand.
+- **Add from catalog** lists a few well-known servers: the protocol's reference
+  servers (Filesystem, Git, Fetch, Memory, Sequential thinking, Time), GitHub's hosted
+  server, and Playwright. **Review** opens one with its command and arguments (one per
+  line) filled in, the open project's folder where it needs one, for you to check and
+  edit. **Add server** saves it switched off unless you tick **Switch it on now**. The
+  catalog ships with Houston; nothing is downloaded to show it.
+- **Paste JSON** takes the `{ "mcpServers": { "<name>": { ... } } }` object that server
+  instructions usually give (a `servers` map or Houston's own list works too). **Read
+  it** shows each server it found and anything it couldn't read; adding them saves them
+  switched off, skipping any id you already have.
+
+Nothing runs until a server is saved and switched on; `npx` and `uvx` servers then
+download their package the first time they start.
+
 ### Signing in
 
 Remote servers take custom headers (such as a static `Authorization: Bearer` token),
@@ -2414,6 +2512,10 @@ commands, `@` for files, `#` to save a rule, ⇧Tab to switch the approval mode,
 your last prompt, and ⌘K for everything else. The row goes away once the chat has
 messages. Keys you rebind in Settings > Keyboard show as you bound them.
 
+Hover any icon button to see what it does: the title-bar and sidebar buttons name their
+shortcut where they have one (for example New chat ⌘N and Settings ⌘,), and the
+message box's **+**, image and **@** buttons say what they add.
+
 ## Edit, View, and Go menus
 
 The desktop app's menus list what its shortcuts do, with the shortcut beside each
@@ -2536,17 +2638,35 @@ On first launch, the welcome screen shows a three-step **Get started** checklist
    marks the ones already running, without saving anything. **More providers** opens
    Settings > Providers & Models for OpenRouter, Bedrock, Vertex, Azure, other hosts,
    and custom endpoints.
-2. **Open a project folder.**
+2. **Open a project folder.** Choose one, reopen a recent folder listed under the step,
+   or drag a folder from your file manager onto the window.
 3. **Send a first task.** When only this step is left, the cursor moves into the
    message box (which glows) and the step suggests a task: "Explain how this project is
    organized." for a folder with files, or "Build a simple to-do list web page in this
    folder." for an empty one. Click the suggestion to put it in the message box.
 
+**Keys you already exported.** The desktop app only uses keys saved in its secure
+store, never one that happens to be in its environment. When it starts and finds
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `GEMINI_API_KEY` set for a provider with no
+saved key, it asks once: **Use it** checks the key with the provider and saves it, so
+the app and the terminal stop needing it entered twice; **Not now** stops asking for
+that provider. The notice shows only the provider, the variable's name, and the key's
+last four characters, and nothing is saved unless you choose **Use it**. An app opened
+from the Dock or Start menu often doesn't see variables set in your shell profile; when
+it does, the Connect panel offers the same key above the key box.
+
 Each step ticks itself off from the app's real state, and the checklist goes away for
 good once the first task is sent. After that, every empty new chat shows a row of
 starter tasks suited to the folder (for a project: explain it, find a bug, add tests,
 suggest improvements; for an empty folder: small things to build). Clicking one puts
-the task in the message box to edit or send.
+the task in the message box to edit or send. Below them, **Recent folders** lists the
+last few project folders you opened; click one to start a new chat there.
+
+**Switching folders.** The folder button in the control bar opens a short menu of
+recent folders plus **Choose folder…** (with no recents yet it opens the folder picker
+straight away). You can also drag a folder onto the window from anywhere outside the
+message box to start a new chat in it; images dropped on the message box are still
+attached to your message. File > Open Recent lists the same folders.
 
 **Changing your mind.** While the checklist is open, each finished step shows what it
 set and has a **Change** button, so you can switch model, provider, or folder before

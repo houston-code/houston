@@ -283,3 +283,33 @@ describe('decodeInput — Shift-Tab', () => {
     expect(r.keys).toEqual([])
   })
 })
+
+describe('decodeInput — Shift-Enter', () => {
+  it('reads the modifyOtherKeys report of Shift-Enter as a new line', () => {
+    expect(feed('\x1b[27;2;13~')).toEqual([{ type: 'newline' }])
+  })
+
+  it('reads the CSI-u report of Shift-Enter as a new line', () => {
+    expect(feed('\x1b[13;2u')).toEqual([{ type: 'newline' }])
+  })
+
+  it('reads an unmodified CSI-u Enter as Enter', () => {
+    expect(feed('\x1b[13u')).toEqual([{ type: 'enter' }])
+    expect(feed('\x1b[13;1u')).toEqual([{ type: 'enter' }])
+  })
+
+  it('keeps Ctrl-J, Alt-Enter and plain Enter as before', () => {
+    expect(feed('\n')).toEqual([{ type: 'newline' }])
+    expect(feed('\x1b\r')).toEqual([{ type: 'newline' }])
+    expect(feed('\r')).toEqual([{ type: 'enter' }])
+  })
+
+  it('holds a report split across reads until it completes', () => {
+    expect(feed('\x1b[27;2', ';13~')).toEqual([{ type: 'newline' }])
+  })
+
+  it('ignores other modified keys', () => {
+    expect(feed('\x1b[27;5;9~')).toEqual([])
+    expect(feed('\x1b[97;5u')).toEqual([])
+  })
+})
