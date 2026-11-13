@@ -10,7 +10,8 @@ import './styles/global.css'
 // attach, Sidebar reorder) keep working — they read their data in their own
 // handlers — these window-level preventDefaults only suppress the browser's
 // default navigate action. (The main process also blocks it via will-navigate;
-// this stops the attempt one layer earlier.)
+// this stops the attempt one layer earlier.) A folder dropped on the window is read
+// by useFolderDrop, which opens it as the project; it never navigates either.
 window.addEventListener('dragover', (e) => e.preventDefault())
 window.addEventListener('drop', (e) => e.preventDefault())
 

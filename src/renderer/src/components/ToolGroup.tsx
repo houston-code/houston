@@ -9,10 +9,21 @@ import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
 import { droppedSummary, findingTally, isDropped, sortFindings } from '@shared/reviewFindings'
 import { deniedPromptText, stoppedPromptText } from '@shared/promptOutcome'
 import { isSubagentTool } from '@shared/subagents'
+import { formatElapsed } from '@shared/elapsed'
+import { useTick } from '../hooks/useTick'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
 import { toolRowStartsOpen, useTranscriptPrefs, type TranscriptPrefs } from './transcriptPrefs'
+import {
+  approvalKeyDecision,
+  isApprovalKeyEvent,
+  isTypingTarget,
+  mayTakeFocus,
+  RECENT_TYPING_MS,
+  trackKeyActivity,
+  type ApprovalVariant
+} from '../lib/approvalKeys'
 import { SubagentBody, SubagentChips, SubagentTranscript } from './SubagentPanel'
 import { ImageGallery } from './ImageGallery'
 import {
@@ -134,6 +145,70 @@ const GLYPH: Record<Exclude<ToolItem['status'], 'running'>, string> = {
 function StatusGlyph({ status }: { status: ToolItem['status'] }): JSX.Element {
   if (status === 'running') return <span className="tool-row__spinner" aria-label="running" />
   return <span className={`tool-row__glyph tool-row__glyph--${status}`}>{GLYPH[status]}</span>
+}
+
+/**
+ * Y / A / N on a waiting approval prompt. When several prompts wait at once only the
+ * first on the page answers, so one key press is never two verdicts. Keys are read
+ * only while the user is not typing in a field, and never under a modal dialog.
+ *
+ * The prompt takes keyboard focus when it appears if focus is nowhere in particular
+ * or in an empty message box the user is not typing in (it waits for a pause in
+ * typing first), and gives it back to that box once it has been answered.
+ */
+function useApprovalKeys(
+  ref: { current: HTMLDivElement | null },
+  variant: ApprovalVariant,
+  decide: (decision: ToolApprovalDecision) => void
+): void {
+  const decideRef = useRef(decide)
+  decideRef.current = decide
+  useEffect(() => {
+    trackKeyActivity()
+    let returnTo: HTMLElement | null = null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tryFocus = (): void => {
+      const el = ref.current
+      if (!el) return
+      const active = document.activeElement
+      if (mayTakeFocus(active)) {
+        if (active instanceof HTMLElement && active !== document.body) returnTo = active
+        el.focus({ preventScroll: true })
+      } else if (!el.contains(active) && (active === document.body || active?.classList.contains('composer__input'))) {
+        // Mid-typing or a pause too short to tell: look again shortly.
+        timer = setTimeout(tryFocus, RECENT_TYPING_MS / 3)
+      }
+    }
+    tryFocus()
+    const onKey = (e: KeyboardEvent): void => {
+      if (!isApprovalKeyEvent(e)) return
+      if (isTypingTarget(document.activeElement) || isTypingTarget(e.target as Element | null)) return
+      if (document.querySelector('[aria-modal="true"]')) return
+      if (document.querySelector('[data-approval-keys]') !== ref.current) return
+      const decision = approvalKeyDecision(e.key, variant)
+      if (!decision) return
+      e.preventDefault()
+      decideRef.current(decision)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      clearTimeout(timer)
+      document.removeEventListener('keydown', onKey)
+      const active = document.activeElement
+      if (returnTo?.isConnected && (!active || active === document.body || !active.isConnected)) {
+        returnTo.focus({ preventScroll: true })
+      }
+    }
+  }, [ref, variant])
+}
+
+/** A key hint inside an approval button, kept out of the button's accessible name. */
+function KeyHint({ k }: { k: string }): JSX.Element {
+  return (
+    <kbd className="tool-row__approval-key" aria-hidden="true">
+      {k}
+    </kbd>
+  )
 }
 
 /** The status tag at the end of a finding row. Nothing for a settled confirmed finding. */
@@ -281,6 +356,10 @@ const ToolRow = memo(function ToolRow({
   const awaiting = item.status === 'awaiting-approval'
   const running = item.status === 'running'
   const tally = reviewTally(item.findings, running)
+  // How long a running call has been going, once it has taken a noticeable while. A
+  // subagent's row already shows its own clock in its chips.
+  const now = useTick(running && item.startedAt !== undefined)
+  const runFor = running && item.startedAt !== undefined && now ? now - item.startedAt : 0
   // A denial comes back in the model's wording ("Denied by the user. They said: …"),
   // which read as someone else talking about the user. Say what happened instead,
   // and for an approval the run was stopped in front of, that it was stopped.
@@ -309,8 +388,6 @@ const ToolRow = memo(function ToolRow({
   useFollowExpandAll(prefs, setOpen, awaiting)
   // A review's agents, opened from the row in the transcript drawer.
   const [agentsOpen, setAgentsOpen] = useState(false)
-  // Guidance to send with a denial ("no, use staging instead").
-  const [note, setNote] = useState('')
   // Todo/sweep rows render their list inline, so they have nothing extra to expand.
   const expandable =
     !isTodo && !isSweep && Boolean(allLines.length > 0 || output || (isAgent && records?.length))
@@ -347,6 +424,11 @@ const ToolRow = memo(function ToolRow({
         )}
         {isAgent && records && records.length > 0 && <SubagentChips records={records} />}
         <span className="tool-row__spacer" />
+        {runFor >= 1000 && !(isSubagentTool(item.name) && item.records?.length) && (
+          <span className="tool-row__elapsed" title="How long this has been running">
+            {formatElapsed(runFor)}
+          </span>
+        )}
         {tally && (
           <span className={`tool-row__tally${tally.alarm ? ' tool-row__tally--alarm' : ''}`}>{tally.text}</span>
         )}
@@ -485,120 +567,153 @@ const ToolRow = memo(function ToolRow({
         </div>
       )}
 
-      {awaiting && item.egressHost && (
-        <div className="tool-row__approval">
-          <p className="tool-row__approval-note">
-            A command tried to reach <strong>{item.egressHost}</strong>, which isn't on the sandbox's
-            list of allowed domains, so it was blocked. Allowing it applies to shell commands in
-            the rest of this chat, for this host only.
-          </p>
-          <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'always')}>
-            Allow {item.egressHost} for this chat
-          </button>
-          <button className="btn btn--sm" onClick={() => onApprove(item.id, 'deny')}>
-            Keep blocked
-          </button>
-        </div>
-      )}
-
-      {awaiting && item.shellNetwork && !item.egressHost && (
-        <div className="tool-row__approval">
-          <p className="tool-row__approval-note">
-            This command could not reach the network. Shell commands in this chat run offline
-            until you allow it. Allowing applies to the rest of this chat, not just this
-            command.
-          </p>
-          <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'always')}>
-            Allow network for this chat
-          </button>
-          <button className="btn btn--sm" onClick={() => onApprove(item.id, 'deny')}>
-            Keep offline
-          </button>
-        </div>
-      )}
-
-      {awaiting && !item.shellNetwork && !item.egressHost && (
-        <div className="tool-row__approval">
-          {item.sensitiveRead && (
-            <p className="tool-row__approval-note">
-              This reads a credential or secret file. Reads normally run without asking, so
-              Houston is checking first even in full auto. Choose "Allow for run" to stop asking
-              about credential reads for the rest of this conversation.
-            </p>
-          )}
-          {item.sensitiveWrite && (
-            <p className="tool-row__approval-note">
-              This changes a sensitive file: a credential or secret such as .env, or a git hook
-              or setting that git can run outside the sandbox later. Houston checks first even
-              in full auto.
-            </p>
-          )}
-          {item.shellOffline && (
-            <p className="tool-row__approval-note">
-              Runs without network. Choose "Allow for run" to also allow network for this run.
-            </p>
-          )}
-          {item.networkScope && (
-            <p className="tool-row__approval-note">
-              "Allow for run" covers {item.networkScope} for the rest of this chat.
-            </p>
-          )}
-          <button className="btn btn--sm btn--ok" onClick={() => onApprove(item.id, 'allow')}>
-            Allow
-          </button>
-          <button className="btn btn--sm" onClick={() => onApprove(item.id, 'always')}>
-            Allow for run
-          </button>
-          <button
-            className="btn btn--sm"
-            title={
-              item.name === 'web_fetch'
-                ? 'Save a permission rule so fetches from this site are allowed in future runs too'
-                : item.name === 'web_search'
-                  ? 'Save a permission rule so web searches are allowed in future runs too'
-                  : 'Save a permission rule so this is allowed in future runs too'
-            }
-            onClick={() => onApprove(item.id, 'rule-allow')}
-          >
-            Always allow
-          </button>
-          <button
-            className="btn btn--sm btn--danger"
-            onClick={() => onApprove(item.id, 'deny', note.trim() || undefined)}
-          >
-            Deny
-          </button>
-          <button
-            className="btn btn--sm btn--danger"
-            title="Save a permission rule so this is denied in future runs too"
-            onClick={() => onApprove(item.id, 'rule-deny', note.trim() || undefined)}
-          >
-            Always deny
-          </button>
-          {/*
-            Guidance rides the same interaction as the refusal. Without it a denial
-            is a dead end: the agent is told only that it was refused, so it retries
-            a variant instead of doing what you actually wanted.
-          */}
-          <input
-            className="tool-row__approval-reason"
-            type="text"
-            value={note}
-            placeholder="Why not? (optional: tell the agent what to do instead)"
-            aria-label="Reason for denying, sent to the agent"
-            maxLength={MAX_APPROVAL_NOTE}
-            onChange={(e) => setNote(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter in the reason box means "deny, with this reason" — the only
-              // verdict the text applies to, and the one they are already typing for.
-              if (e.key === 'Enter' && note.trim()) onApprove(item.id, 'deny', note.trim())
-            }}
-          />
-        </div>
-      )}
+      {awaiting && <ApprovalPrompt item={item} onApprove={onApprove} />}
     </div>
   )
 })
+
+/** The waiting approval's verdict buttons, with Y / A / N keys (see useApprovalKeys). */
+function ApprovalPrompt({
+  item,
+  onApprove
+}: {
+  item: ToolItem
+  onApprove: (callId: string, decision: ToolApprovalDecision, note?: string) => void
+}): JSX.Element {
+  // Guidance to send with a denial ("no, use staging instead").
+  const [note, setNote] = useState('')
+  const ref = useRef<HTMLDivElement | null>(null)
+  const chatGrant = Boolean(item.egressHost || item.shellNetwork)
+  useApprovalKeys(ref, chatGrant ? 'chat-grant' : 'standard', (decision) =>
+    onApprove(item.id, decision, decision === 'deny' ? note.trim() || undefined : undefined)
+  )
+  const keysTitle = chatGrant
+    ? 'Keys: Y allows, N keeps it blocked (while you are not typing in a text box)'
+    : 'Keys: Y allows, A allows for this run, N denies (while you are not typing in a text box)'
+  const shared = {
+    ref,
+    className: 'tool-row__approval',
+    tabIndex: -1,
+    role: 'group',
+    'aria-label': 'Approval',
+    title: keysTitle,
+    'data-approval-keys': ''
+  } as const
+  if (item.egressHost) {
+    return (
+      <div {...shared}>
+        <p className="tool-row__approval-note">
+          A command tried to reach <strong>{item.egressHost}</strong>, which isn't on the sandbox's
+          list of allowed domains, so it was blocked. Allowing it applies to shell commands in
+          the rest of this chat, for this host only.
+        </p>
+        <button className="btn btn--sm btn--ok" aria-keyshortcuts="Y" onClick={() => onApprove(item.id, 'always')}>
+          Allow {item.egressHost} for this chat <KeyHint k="Y" />
+        </button>
+        <button className="btn btn--sm" aria-keyshortcuts="N" onClick={() => onApprove(item.id, 'deny')}>
+          Keep blocked <KeyHint k="N" />
+        </button>
+      </div>
+    )
+  }
+  if (item.shellNetwork) {
+    return (
+      <div {...shared}>
+        <p className="tool-row__approval-note">
+          This command could not reach the network. Shell commands in this chat run offline
+          until you allow it. Allowing applies to the rest of this chat, not just this
+          command.
+        </p>
+        <button className="btn btn--sm btn--ok" aria-keyshortcuts="Y" onClick={() => onApprove(item.id, 'always')}>
+          Allow network for this chat <KeyHint k="Y" />
+        </button>
+        <button className="btn btn--sm" aria-keyshortcuts="N" onClick={() => onApprove(item.id, 'deny')}>
+          Keep offline <KeyHint k="N" />
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div {...shared}>
+      {item.sensitiveRead && (
+        <p className="tool-row__approval-note">
+          This reads a credential or secret file. Reads normally run without asking, so
+          Houston is checking first even in full auto. Choose "Allow for run" to stop asking
+          about credential reads for the rest of this conversation.
+        </p>
+      )}
+      {item.sensitiveWrite && (
+        <p className="tool-row__approval-note">
+          This changes a sensitive file: a credential or secret such as .env, or a git hook
+          or setting that git can run outside the sandbox later. Houston checks first even
+          in full auto.
+        </p>
+      )}
+      {item.shellOffline && (
+        <p className="tool-row__approval-note">
+          Runs without network. Choose "Allow for run" to also allow network for this run.
+        </p>
+      )}
+      {item.networkScope && (
+        <p className="tool-row__approval-note">
+          "Allow for run" covers {item.networkScope} for the rest of this chat.
+        </p>
+      )}
+      <button className="btn btn--sm btn--ok" aria-keyshortcuts="Y" onClick={() => onApprove(item.id, 'allow')}>
+        Allow <KeyHint k="Y" />
+      </button>
+      <button className="btn btn--sm" aria-keyshortcuts="A" onClick={() => onApprove(item.id, 'always')}>
+        Allow for run <KeyHint k="A" />
+      </button>
+      <button
+        className="btn btn--sm"
+        title={
+          item.name === 'web_fetch'
+            ? 'Save a permission rule so fetches from this site are allowed in future runs too'
+            : item.name === 'web_search'
+              ? 'Save a permission rule so web searches are allowed in future runs too'
+              : 'Save a permission rule so this is allowed in future runs too'
+        }
+        onClick={() => onApprove(item.id, 'rule-allow')}
+      >
+        Always allow
+      </button>
+      <button
+        className="btn btn--sm btn--danger"
+        aria-keyshortcuts="N"
+        onClick={() => onApprove(item.id, 'deny', note.trim() || undefined)}
+      >
+        Deny <KeyHint k="N" />
+      </button>
+      <button
+        className="btn btn--sm btn--danger"
+        title="Save a permission rule so this is denied in future runs too"
+        onClick={() => onApprove(item.id, 'rule-deny', note.trim() || undefined)}
+      >
+        Always deny
+      </button>
+      {/*
+        Guidance rides the same interaction as the refusal. Without it a denial
+        is a dead end: the agent is told only that it was refused, so it retries
+        a variant instead of doing what you actually wanted.
+      */}
+      <input
+        className="tool-row__approval-reason"
+        type="text"
+        value={note}
+        placeholder="Why not? (optional: tell the agent what to do instead)"
+        aria-label="Reason for denying, sent to the agent"
+        maxLength={MAX_APPROVAL_NOTE}
+        onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => {
+          // Enter in the reason box means "deny, with this reason" — the only
+          // verdict the text applies to, and the one they are already typing for.
+          if (e.key === 'Enter' && note.trim()) onApprove(item.id, 'deny', note.trim())
+        }}
+      />
+        </div>
+  )
+}
 
 /** The status a fold of reads shows: the most attention-worthy across the run. */
 function combinedStatus(items: ToolItem[]): ToolItem['status'] {

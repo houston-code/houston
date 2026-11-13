@@ -397,6 +397,121 @@ describe('shellDiscardsWork', () => {
     expect(shellDiscardsWork('git reset --ha\\\nrd')).toBe(true)
     expect(shellDiscardsWork('r\\\nm -rf src')).toBe(true)
   })
+
+  describe('data outside the project', () => {
+    it.each([
+      'npx prisma migrate reset',
+      'npx prisma migrate reset --force',
+      'pnpm prisma db push --force-reset',
+      'yarn prisma db push --accept-data-loss',
+      'bunx prisma migrate reset -f',
+      'npm exec prisma migrate reset',
+      'bin/rails db:drop',
+      'bundle exec rails db:reset',
+      'rails db:schema:load',
+      'bundle exec rake db:purge',
+      'RAILS_ENV=test bin/rails db:migrate:reset',
+      'python manage.py flush --noinput',
+      'python3 ./manage.py reset_db',
+      './manage.py migrate shop zero',
+      'poetry run python manage.py flush',
+      'uv run python manage.py flush',
+      'django-admin flush',
+      'php artisan migrate:fresh --seed',
+      'php artisan db:wipe',
+      'mix ecto.reset',
+      'npx sequelize db:drop',
+      'npx typeorm schema:drop',
+      'npx knex migrate:rollback --all',
+      'supabase db reset',
+      'dotnet ef database drop --force',
+      'dropdb myapp_dev',
+      'psql -c "DROP TABLE users"',
+      'psql myapp -c "drop database myapp_dev;"',
+      'psql --command="TRUNCATE users CASCADE"',
+      'mysql -u root -e "DROP DATABASE shop"',
+      'mysql -e "TRUNCATE TABLE orders"',
+      'mysql -e "DELETE FROM orders;"',
+      'sqlite3 dev.db "DROP TABLE sessions"',
+      "mongosh myapp --eval 'db.dropDatabase()'",
+      "mongosh --eval 'db.users.deleteMany({})'",
+      'redis-cli FLUSHALL',
+      'redis-cli -n 2 flushdb',
+      'docker volume rm pgdata',
+      'docker volume prune -f',
+      'docker system prune -a --volumes',
+      'docker compose down -v',
+      'docker compose down --volumes --remove-orphans',
+      'docker-compose down -v',
+      'terraform destroy -auto-approve',
+      'terraform apply -destroy',
+      'tofu destroy',
+      'kubectl delete namespace staging',
+      'kubectl delete pvc data-postgres-0',
+      'kubectl delete pods --all',
+      'sudo -u postgres dropdb shop'
+    ])('flags %s', (command) => {
+      expect(shellDiscardsWork(command)).toBe(true)
+    })
+
+    it.each([
+      'npx prisma migrate dev',
+      'npx prisma migrate deploy',
+      'npx prisma db push',
+      'npx prisma generate',
+      'bin/rails db:migrate',
+      'bin/rails db:rollback',
+      'bin/rails db:seed',
+      'bundle exec rake test',
+      'python manage.py migrate',
+      'python manage.py migrate shop 0003',
+      'python manage.py test',
+      'python script.py flush',
+      'php artisan migrate',
+      'mix ecto.migrate',
+      'npx sequelize db:migrate',
+      'npx knex migrate:rollback',
+      'supabase start',
+      'dotnet ef database update',
+      'psql -c "SELECT * FROM users"',
+      'psql -c "DELETE FROM users WHERE id = 3"',
+      'mysql -e "SELECT TRUNCATE(1.234, 1)"',
+      'sqlite3 dev.db ".tables"',
+      "mongosh --eval 'db.users.find()'",
+      "mongosh --eval 'db.users.deleteMany({ banned: true })'",
+      'redis-cli get key',
+      'docker volume ls',
+      'docker compose down',
+      'docker compose up -d',
+      'docker system prune -f',
+      'terraform plan',
+      'terraform apply',
+      'kubectl delete pod web-7d9f',
+      'kubectl get ns',
+      'git commit -m "DROP TABLE users in the migration"',
+      'npm test',
+      'npm run db:migrate',
+      'pnpm install',
+      'yarn remove rails'
+    ])('does not flag %s', (command) => {
+      expect(shellDiscardsWork(command)).toBe(false)
+    })
+
+    it('reads statements piped or fed by here-document to a database client', () => {
+      expect(shellDiscardsWork('echo "DROP TABLE users;" | psql myapp')).toBe(true)
+      expect(shellDiscardsWork("printf 'truncate orders;' | mysql shop")).toBe(true)
+      expect(shellDiscardsWork('echo flushall | redis-cli')).toBe(true)
+      expect(shellDiscardsWork("psql myapp <<'SQL'\nDROP TABLE users;\nSQL")).toBe(true)
+      expect(shellDiscardsWork('echo "SELECT 1" | psql myapp')).toBe(false)
+      expect(shellDiscardsWork("psql myapp <<'SQL'\nSELECT count(*) FROM users;\nSQL")).toBe(false)
+    })
+
+    it('sees through quoting and nested shells', () => {
+      expect(shellDiscardsWork('"dropdb" shop')).toBe(true)
+      expect(shellDiscardsWork("bash -c 'npx prisma migrate reset --force'")).toBe(true)
+      expect(shellDiscardsWork('timeout 60 docker compose down -v')).toBe(true)
+    })
+  })
 })
 
 describe('shellReferencesExternalPath', () => {

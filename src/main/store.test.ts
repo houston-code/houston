@@ -717,6 +717,31 @@ describe('recent workspaces — existence pruning', () => {
     }
   })
 
+  it('openWorkspaceFolder opens only an existing directory and records it as most recent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ws-open-'))
+    const other = mkdtempSync(join(tmpdir(), 'ws-other-'))
+    const file = join(dir, 'notes.txt')
+    writeFileSync(file, 'x')
+    try {
+      const { openWorkspaceFolder, rememberWorkspace, getSettings } = await loadStore()
+      rememberWorkspace(other)
+      expect(openWorkspaceFolder(dir)).toBe(dir)
+      expect(getSettings().recentWorkspaces).toEqual([dir, other])
+      // A dropped file, a relative path, a non-string and a missing folder all open nothing.
+      expect(openWorkspaceFolder(file)).toBeNull()
+      expect(openWorkspaceFolder('relative/dir')).toBeNull()
+      expect(openWorkspaceFolder(42)).toBeNull()
+      expect(openWorkspaceFolder('')).toBeNull()
+      rmSync(other, { recursive: true, force: true })
+      expect(openWorkspaceFolder(other)).toBeNull()
+      // ...and the vanished recent is pruned on the way.
+      expect(getSettings().recentWorkspaces).toEqual([dir])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(other, { recursive: true, force: true })
+    }
+  })
+
   it('pruneRecentWorkspaces removes dead entries and is a no-op when all live', async () => {
     const a = mkdtempSync(join(tmpdir(), 'ws-a-'))
     const b = mkdtempSync(join(tmpdir(), 'ws-b-'))
