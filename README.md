@@ -101,9 +101,13 @@ Open source under the [Apache License 2.0](LICENSE).
   in the desktop app, with a switch to see the source. Mermaid renders in a hidden
   window with no network, and the result is shown as an image. Sandboxed
   interactive HTML visuals are off by default (Settings > *Appearance*).
+- **Live command output.** While a shell command runs, its row in the transcript
+  shows the latest lines of its output (credentials masked), following the newest
+  line, until the full result replaces it.
 - **Live preview panel.** When the agent starts a dev server (a background
-  `run_shell`), Houston detects the loopback URLs it prints and offers a **Preview**
-  panel: a resizable right-hand dock that renders the running page live and
+  `run_shell`), Houston detects the loopback URLs it prints and opens a **Preview**
+  panel, once per chat (Settings → *Tools* → *Preview* turns that off; the title-bar
+  button opens it any time): a resizable right-hand dock that renders the running page live and
   interactively, right beside the chat. A script that starts several servers (a
   client and its API) shows the page it labels `Local:`, with a picker for the
   others. Multiple servers stack top-to-bottom (up to three), each showing its full
@@ -231,7 +235,10 @@ Open source under the [Apache License 2.0](LICENSE).
   more permissive). Schedules persist across restarts, fire while Houston (the
   desktop app or the TUI) is running, and catch up an occurrence missed while it
   was closed; `list_scheduled_runs` and `cancel_scheduled_run` manage them, and
-  creating or cancelling is approval-gated.
+  creating or cancelling is approval-gated. In the desktop app, **Settings >
+  Scheduled Runs** lists them with their next and last run, pauses and resumes
+  them, runs one now, deletes them, and creates one from a form (task, schedule,
+  folder, model, approval mode).
 - **Adversarial review.** `review_changes` (or `/review`) reviews your uncommitted
   changes for correctness, security, and quality. It runs an independent read-only
   reviewer per dimension (each in its own fresh context, so they don't inherit the
@@ -293,7 +300,9 @@ Open source under the [Apache License 2.0](LICENSE).
   demand the same way, with approvals and rules applying exactly as before.
 - **Task list.** For multi-step work the agent keeps a `todo_write` scratchpad,
   rendered live as a checklist in the transcript so you can see the plan and
-  watch it tick off items.
+  watch it tick off items. While a turn runs, or items are left, the current list is
+  also pinned as a small card above the message box (progress and the item in
+  progress; click it for the whole list).
 - **Desktop notifications.** Wander off during a long turn: Houston fires a
   native notification when the agent finishes, needs approval, asks a question, or
   opens/merges a pull request while the window isn't focused, and clicking it
@@ -465,8 +474,14 @@ Open source under the [Apache License 2.0](LICENSE).
   animations honor the OS *reduce motion* setting.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
   *Appearance*; *System* follows your OS appearance and switches live. The same
-  page sets the chat text size (small, default, large), a compact density, and a
-  code theme (default, high contrast, muted) for code blocks and diffs.
+  page sets the chat text size (small, default, large), a compact density, a code
+  theme (default, high contrast, muted) for code blocks and diffs, and an accent
+  color (blue, violet, green, orange, pink). The terminal client picks its light
+  palette on a light terminal until you choose one with `/theme`.
+- **How much detail the transcript shows.** Tool rows start collapsed to one line;
+  the **Expand tools** button at a chat's bottom right opens them all (and collapses them
+  again). Settings → *Appearance* can open tool output by default and keep the
+  model's reasoning in view.
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
   dropped connections) are retried with exponential backoff, shown inline as a
   "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A
@@ -488,7 +503,8 @@ Open source under the [Apache License 2.0](LICENSE).
   the chat text.
   **Search** the sidebar to find a past chat by its title or anything said in it.
   **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
-  direction without disturbing the original.
+  direction without disturbing the original, or **Fork from here** on one message to
+  branch off at that point.
 - **Auto-named chats.** A new chat shows the first message as a placeholder, then,
   as soon as the first turn starts, the conversation's own model writes a short,
   specific title to replace it, usually within seconds (the new title appears in the
@@ -496,7 +512,8 @@ Open source under the [Apache License 2.0](LICENSE).
   a chat yourself always wins; auto-titling never overwrites a title you set.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
-  and groups persist across restarts. **Resize** the sidebar by dragging its right
+  and groups persist across restarts. The filter menu can also split the rest by
+  project folder or by date (Today, Yesterday, This week, Older). **Resize** the sidebar by dragging its right
   edge (double-click to reset), or **collapse** it to a thin rail with the ⌘B
   shortcut or the « toggle; the chosen width and collapsed state are remembered.
 - **Long sessions stay in budget.** When a conversation grows too large, Houston
@@ -522,6 +539,8 @@ Open source under the [Apache License 2.0](LICENSE).
   line numbers, and can be shown side by side. Each file can be opened in its default
   app or reverted, and each change inside an edited file can be reverted on its own;
   every revert asks first and is refused if the file changed since the list was read.
+  Click a line to leave a comment on it; **Send N comments to the agent** sends them all
+  as one message naming each file, line and the code it is on.
   Git runs hardened (no repository hooks or filters) with argument lists only. A
   **Create PR** action hands off to the agent: it commits, pushes, and opens the pull
   request through the same `gh_pr_*` tools and approval gate. It
@@ -590,6 +609,12 @@ Open source under the [Apache License 2.0](LICENSE).
   absolute), to split or share common rules across files. To reuse an existing
   global rules file such as `~/.claude/CLAUDE.md`, add `@~/.claude/CLAUDE.md` to
   `~/.houston/AGENTS.md`; Houston offers to do this once when it finds one.
+- **Import from other tools.** Settings > Import lists the instruction files, MCP
+  servers, skills, and custom commands other coding tools keep in your home folder
+  and the open project (for example a `.mcp.json` or `.claude/commands` in the
+  project), and copies the ones you pick into Houston's own locations. Originals
+  are never changed, nothing Houston already has is overwritten, and imported MCP
+  servers start switched off. Houston offers this once when it first finds any.
 - **Token usage & cost at a glance.** The control bar above the composer shows how
   full the context is (a small bar and "used/maximum") and the chat's **estimated
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show

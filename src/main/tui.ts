@@ -158,6 +158,11 @@ export interface TuiOptions {
    */
   continueSession?: boolean
   resumeId?: string
+  /**
+   * The theme the terminal's background suggests (`light` on a light background),
+   * used only while no theme is saved: a `/theme` choice always wins.
+   */
+  detectedTheme?: ThemeName
 }
 
 /**
@@ -252,13 +257,15 @@ export const THEMES = {
     blue: '\x1b[94m', magenta: '\x1b[95m', cyan: '\x1b[96m'
   },
   /**
-   * Standard (darker) foregrounds for a LIGHT background. Yellow especially is
-   * unreadable on white in its high-intensity form, and blue/cyan wash out.
+   * Darker foregrounds for a LIGHT background. Yellow is unreadable on white even in
+   * its standard form in many terminals, and cyan washes out, so those two use darker
+   * 256-color shades (dark gold, teal); the rest are the standard colors. Picked
+   * automatically when the terminal reports a light background and no theme is saved.
    */
   light: {
     reset: '\x1b[0m', dim: '\x1b[2m', bold: '\x1b[1m',
-    red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[33m',
-    blue: '\x1b[34m', magenta: '\x1b[35m', cyan: '\x1b[36m'
+    red: '\x1b[31m', green: '\x1b[32m', yellow: '\x1b[38;5;136m',
+    blue: '\x1b[34m', magenta: '\x1b[35m', cyan: '\x1b[38;5;30m'
   },
   /**
    * Colorblind-safe: red/green carry most of the meaning in a diff, and that is
@@ -3078,7 +3085,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   const settings = deps.getSettings()
   // Reassigned by /theme (takes effect from the next output); the spinner keeps the
   // initial theme since its painter lives in the terminal adapter.
-  let paint = makePainter(opts.color, resolveTheme(settings.tuiTheme ?? '') ?? 'default')
+  let paint = makePainter(opts.color, resolveTheme(settings.tuiTheme ?? '') ?? opts.detectedTheme ?? 'default')
   const newId = deps.newId ?? randomUUID
 
   // Trusted-folders gate: if this project's .houston/settings.json ELEVATES

@@ -50,6 +50,12 @@ export const NAV_ICON: Record<TabId, JSX.Element> = {
       <path d="M6 1.5v3M10 1.5v3M4.5 4.5h7v3a3.5 3.5 0 01-7 0zM8 11v3.5" />
     </svg>
   ),
+  schedules: (
+    <svg {...svg}>
+      <circle cx="8" cy="8.5" r="6" />
+      <path d="M8 5.5v3l2 1.5" />
+    </svg>
+  ),
   hooks: (
     <svg {...svg}>
       <path d="M8 1.5v7a3 3 0 11-3-3" />
@@ -60,6 +66,12 @@ export const NAV_ICON: Record<TabId, JSX.Element> = {
     <svg {...svg}>
       <path d="M4 1.5h6.5l2 2v11h-8.5a1 1 0 01-1-1v-11a1 1 0 011-1z" />
       <path d="M6 1.5v5l1.5-1 1.5 1v-5" />
+    </svg>
+  ),
+  import: (
+    <svg {...svg}>
+      <path d="M8 1.5v8M5 6.5l3 3 3-3" />
+      <path d="M2.5 10.5v2a1 1 0 001 1h9a1 1 0 001-1v-2" />
     </svg>
   ),
   workspace: (

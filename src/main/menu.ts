@@ -6,6 +6,9 @@ import type { MenuCommand, MenuPanel, MenuState } from '@shared/types'
 import { checkForUpdatesFromMenu } from './updater'
 import { shareHoustonFromMenu } from './share'
 import { openExternalSafely } from './safeExternal'
+import { ISSUES_URL, revealLogs } from './issueReport'
+export { ISSUES_URL }
+import { targetWindow } from './windows'
 import {
   getSettings,
   onSettingsSaved,
@@ -105,7 +108,7 @@ export function setMenuState(next: MenuState): void {
 }
 
 function focusedOrFirstWindow(): BrowserWindow | undefined {
-  return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  return targetWindow()
 }
 
 function sendMenuCommand(cmd: MenuCommand): void {
@@ -390,8 +393,7 @@ function goMenu(ctx: MenuContext): MenuItemConstructorOptions {
 
 /** Ask the renderer to open the Settings modal (native menu → in-app UI). */
 function onOpenSettings(): void {
-  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-  win?.webContents.send(IPC.menuOpenSettings)
+  targetWindow()?.webContents.send(IPC.menuOpenSettings)
 }
 
 /**
@@ -423,12 +425,21 @@ function macAppMenu(): MenuItemConstructorOptions {
 /** The product guide (docs/houston-guide.md) as published on the website, built from the
  * latest release (website/tools/build-docs.mjs). */
 export const GUIDE_URL = 'https://houstoncode.ai/docs/'
-export const ISSUES_URL = 'https://github.com/houston-code/houston/issues/new'
 export const REPO_URL = 'https://github.com/houston-code/houston'
 export const WEBSITE_URL = 'https://houstoncode.ai/'
 
+/**
+ * Help → Report an Issue…: the window shows what the report will include and opens it
+ * on the user's say-so. With no window to ask in, open the blank new-issue page.
+ */
+function onReportIssue(): void {
+  const win = focusedOrFirstWindow()
+  if (win) win.webContents.send(IPC.menuCommand, { type: 'report-issue' } satisfies MenuCommand)
+  else openExternalSafely(ISSUES_URL)
+}
+
 /** Help menu: the shortcut list and the tour (same as the command palette's), then the
- * guide, website and repository links, then issue reporting. On Windows/Linux it also carries the manual update check
+ * guide, website and repository links, then the logs and issue reporting. On Windows/Linux it also carries the manual update check
  * and sharing, which live in the app menu on macOS. */
 function helpMenu(isMac: boolean, ctx: MenuContext): MenuItemConstructorOptions {
   return {
@@ -441,7 +452,8 @@ function helpMenu(isMac: boolean, ctx: MenuContext): MenuItemConstructorOptions 
       { label: 'Houston Website', click: () => openExternalSafely(WEBSITE_URL) },
       { label: 'Houston on GitHub', click: () => openExternalSafely(REPO_URL) },
       { type: 'separator' },
-      { label: 'Report an Issue', click: () => openExternalSafely(ISSUES_URL) },
+      { label: 'Open Logs', click: () => void revealLogs() },
+      { label: 'Report an Issue…', click: onReportIssue },
       ...(isMac
         ? []
         : [

@@ -821,6 +821,13 @@ export interface AgentRunRequest {
    */
   imageGallery?: boolean
   /**
+   * The client shows a running shell command's output as it arrives (the desktop
+   * app): run_shell then reports the tail of its output so far in `tool_progress`
+   * events (see `output` there). Other clients don't set it, so their event streams
+   * are unchanged.
+   */
+  liveShellOutput?: boolean
+  /**
    * The client lists show_images results as clickable file links (the interactive
    * terminal app). show_images is offered where either this or imageGallery is set;
    * render_mockup, whose images are never files, needs imageGallery.
@@ -1165,7 +1172,19 @@ export type AgentEvent =
        */
       preview?: FileDiffPreview[]
     }
-  | { runId: string; type: 'tool_progress'; callId: string; message: string }
+  | {
+      runId: string
+      type: 'tool_progress'
+      callId: string
+      /** A progress line ('' when the event only carries `output`). */
+      message: string
+      /**
+       * The tail of a running shell command's output so far (bounded, redacted),
+       * replacing the previous one. Sent only to clients that ask for it
+       * (`liveShellOutput` on the request); the tool's result supersedes it.
+       */
+      output?: string
+    }
   | {
       // A nested subagent spawned by a tool (e.g. one of review_changes' per-dimension
       // reviewers), surfaced as its own live row under the parent tool's row. Emitted

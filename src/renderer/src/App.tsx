@@ -12,7 +12,7 @@ import { ultrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
-import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel } from '@shared/types'
+import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel, SidebarGroupBy } from '@shared/types'
 import type {
   ConversationMeta,
   PlanDecision,
@@ -27,11 +27,13 @@ import {
   agentTurn,
   commandTurn,
   proposalHereTurn,
+  reviewCommentsTurn,
   shipTurn,
   sideChatExchangeText,
   sideChatTurn,
   type InvokedTurn,
-  type PromptInvocation
+  type PromptInvocation,
+  type ReviewComment
 } from '@shared/promptInvocation'
 import { formatTokens, formatUsd, resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
@@ -44,7 +46,7 @@ import {
   planNewChatWorkspace,
   suggestBranch
 } from './lib/worktree'
-import { useApplyAppearance, useApplyTheme } from './hooks/useApplyTheme'
+import { useApplyAccent, useApplyAppearance, useApplyTheme } from './hooks/useApplyTheme'
 import { useChatStatus } from './hooks/useChatStatus'
 import { useWindowFocused } from './hooks/useWindowFocused'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
@@ -90,6 +92,7 @@ import { deliverMidRunMessage } from './lib/midRunMessage'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
 import type { ShipAction } from '@shared/shipAction'
 import { saveComposerDraft } from './lib/composerDraft'
+import type { ForkPoint } from '@shared/conversation-io'
 import {
   endsWithRecordedError,
   itemsFromMessages,
@@ -119,6 +122,10 @@ import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer, IDLE_ONLY_COMMANDS } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
+import { PinnedTodos } from './components/PinnedTodos'
+import { currentTodos, showPinnedTodos } from './lib/currentTodos'
+import { useAutoOpenPreview } from './hooks/useAutoOpenPreview'
+import { ImportNotice } from './components/ImportNotice'
 import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
@@ -165,6 +172,9 @@ import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutR
 // bar are imported above instead: they open on a keystroke and are typed into at
 // once, and while a lazy chunk loaded on first open, the next keys went to the
 // message box (and Enter sent them as a message).
+const IssueReportModal = lazy(() =>
+  import('./components/IssueReportModal').then((m) => ({ default: m.IssueReportModal }))
+)
 const DoctorModal = lazy(() =>
   import('./components/DoctorModal').then((m) => ({ default: m.DoctorModal }))
 )
@@ -239,6 +249,7 @@ export default function App(): JSX.Element {
   const [doctorOpen, setDoctorOpen] = useState(false)
   // Bumped by `/context` to open the usage chip's panel.
   const [usageOpenSignal, setUsageOpenSignal] = useState(0)
+  const [issueOpen, setIssueOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
   const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
@@ -352,6 +363,8 @@ export default function App(): JSX.Element {
   }, [])
   const chat = useChat(currentId)
   // What each subagent in this chat spent, for the cost breakdown.
+  // The chat's current todo list, pinned above the message box while it matters.
+  const todos = useMemo(() => currentTodos(chat.items), [chat.items])
   const subagentSpendRows = useMemo(
     () => subagentSpend(chat.items.flatMap((it) => (it.kind === 'tool' && it.records ? it.records : []))),
     [chat.items]
@@ -469,6 +482,7 @@ export default function App(): JSX.Element {
 
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
+  useApplyAccent(settings?.accentColor)
   useApplyAppearance({
     chatFontSize: settings?.chatFontSize,
     density: settings?.density,
@@ -1004,6 +1018,24 @@ export default function App(): JSX.Element {
     [currentId, chat, refreshConversations]
   )
 
+  // "Fork from here": a new chat holding the conversation up to a message. From one
+  // of the user's messages, the fork ends just before it and that message waits in the
+  // new chat's box to send or change.
+  const forkFrom = useCallback(
+    async (point: ForkPoint, draft?: string) => {
+      if (!currentId) return
+      const fork = await window.api.forkConversationAt(currentId, point)
+      if (!fork) {
+        chat.notify("Couldn't fork from that message. Reopen the chat and try again.", 'error')
+        return
+      }
+      if (draft) saveComposerDraft(fork.id, draft)
+      await refreshConversations()
+      await selectConversation(fork.id)
+    },
+    [currentId, chat, refreshConversations, selectConversation]
+  )
+
   const onForkConversation = useCallback(
     async (id: string) => {
       const fork = await window.api.forkConversation(id)
@@ -1144,6 +1176,14 @@ export default function App(): JSX.Element {
       sidebarUnreadFirst: !current.sidebarUnreadFirst
     })
     setSettings(fresh)
+  }, [])
+
+  const onSetSidebarGroupBy = useCallback(async (by: SidebarGroupBy | undefined) => {
+    const current = await window.api.getSettings()
+    const next = { ...current }
+    if (by) next.sidebarGroupBy = by
+    else delete next.sidebarGroupBy
+    setSettings(await window.api.saveSettings(next))
   }, [])
 
   const onSetArchived = useCallback(
@@ -1531,6 +1571,13 @@ export default function App(): JSX.Element {
       void persistPreview({ previewOpen: true })
     }
   }, [previewOpen, persistPreview])
+  // A dev server the agent started in this chat showed its address: open the Preview
+  // once per chat (not persisted, so the next launch keeps the user's own choice).
+  const autoOpenPreview = useCallback(() => {
+    setDockTab('preview')
+    setPreviewOpen(true)
+  }, [])
+  useAutoOpenPreview(allPreviewServers, currentId, settings?.previewAutoOpen !== false, autoOpenPreview)
   const toggleTasks = useCallback(() => toggleDockTab('tasks'), [toggleDockTab])
   const closeDock = useCallback(() => {
     setPreviewOpen(false)
@@ -1806,10 +1853,11 @@ export default function App(): JSX.Element {
         ? {
             disabled: chat.running,
             onRewind: (target, mode) => setRewindConfirm({ target, mode }),
-            onEdit: onEditMessage
+            onEdit: onEditMessage,
+            onFork: (target) => void forkFrom({ kind: 'turn', n: target.turn, text: target.text }, target.text)
           }
         : undefined,
-    [currentId, chat.running, onEditMessage]
+    [currentId, chat.running, onEditMessage, forkFrom]
   )
 
   // A different chat: whatever rewind UI was up belongs to the old one.
@@ -2000,6 +2048,12 @@ export default function App(): JSX.Element {
   // standing prompt (Create PR / Publish to GitHub / Commit & push, see
   // @shared/shipAction) as a normal turn, so the git and gh work runs through the
   // agent's tools and approval gate rather than the renderer touching git.
+  // "Send N comments to the agent" from the Changes view: one turn, labelled as such.
+  const onSendReviewComments = useCallback(
+    (comments: ReviewComment[]) => onInvoke(reviewCommentsTurn(comments)),
+    [onInvoke]
+  )
+
   const onShip = useCallback(
     (action: ShipAction) => {
       onInvoke(shipTurn(action))
@@ -2309,6 +2363,20 @@ export default function App(): JSX.Element {
         run: toggleTerminal
       },
       {
+        id: 'act-report-issue',
+        title: 'Report an issue',
+        section: 'Actions',
+        keywords: 'bug github feedback problem help',
+        run: () => setIssueOpen(true)
+      },
+      {
+        id: 'act-open-logs',
+        title: 'Open logs',
+        section: 'Actions',
+        keywords: 'log file folder debug troubleshoot help',
+        run: () => void window.api.revealLogs()
+      },
+      {
         id: 'act-toggle-preview',
         title: previewOpen && dockTab === 'preview' ? 'Hide preview panel' : 'Show preview panel',
         section: 'Actions',
@@ -2518,6 +2586,7 @@ export default function App(): JSX.Element {
   const overlays: OverlayFlags = {
     settings: settingsOpen,
     doctor: doctorOpen,
+    issue: issueOpen,
     files: filesOpen,
     scorecard: scorecardOpen,
     usage: usageOpen,
@@ -2542,6 +2611,7 @@ export default function App(): JSX.Element {
         else if (cmd.type === 'new-chat-in-workspace') enterNewChat(cmd.workspace)
         else if (cmd.type === 'import-chat') void onImportConversation()
         else if (cmd.type === 'take-tour') startTour()
+        else if (cmd.type === 'report-issue') setIssueOpen(true)
         else if (cmd.type === 'export-chat' && currentId) {
           if (cmd.format === 'html') void onExportConversationHtml(currentId)
           else void onExportConversation(currentId)
@@ -2819,6 +2889,8 @@ export default function App(): JSX.Element {
         onMarkAllRead={onMarkAllRead}
         unreadFirst={settings.sidebarUnreadFirst ?? false}
         onToggleUnreadFirst={onToggleUnreadFirst}
+        {...(settings.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {})}
+        onSetGroupBy={(by) => void onSetSidebarGroupBy(by)}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         statusCounts={statusCounts}
@@ -2965,6 +3037,9 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            {...(currentId ? { onForkFrom: (n: number) => void forkFrom({ kind: 'reply', n }) } : {})}
+            toolsExpanded={settings?.toolOutputExpanded === true}
+            showReasoning={settings?.showReasoning === true}
             {...(currentId && lastTurn && !chat.running ? { onRetryLast: () => void onRetryLast() } : {})}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
@@ -2985,6 +3060,15 @@ export default function App(): JSX.Element {
         />
 
         <GlobalRulesNotice onDecided={setSettings} />
+
+        <ImportNotice
+          workspace={workspace}
+          onReview={() => {
+            setSettingsSection('import')
+            setSettingsQuery('')
+            setSettingsOpen(true)
+          }}
+        />
 
         <EnvKeyNotice
           // A key stored with no model picked yet starts on that provider's default,
@@ -3086,6 +3170,7 @@ export default function App(): JSX.Element {
         )}
 
         <div className="dock">
+          {showPinnedTodos(todos, chat.running) && <PinnedTodos todos={todos} />}
           <ControlBar
             settings={settings}
             selected={settings.selected}
@@ -3194,6 +3279,7 @@ export default function App(): JSX.Element {
                 running={chat.running}
                 onShip={canChat ? onShip : undefined}
                 creating={chat.running}
+                onSendComments={canChat ? onSendReviewComments : undefined}
               />
             }
             tasks={
@@ -3267,6 +3353,7 @@ export default function App(): JSX.Element {
         )}
 
         {doctorOpen && <DoctorModal workspace={workspace} onClose={() => setDoctorOpen(false)} />}
+        {issueOpen && <IssueReportModal onClose={() => setIssueOpen(false)} />}
 
         {filesOpen && (
           <FilesPanel

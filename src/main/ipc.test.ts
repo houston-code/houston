@@ -118,6 +118,7 @@ import {
   turnFingerprint
 } from './agent/checkpoints'
 import { setUserDataDir } from './userData'
+import { registerAppWindow } from './windows'
 import {
   createConversation,
   deleteConversation,
@@ -707,6 +708,32 @@ describe('rewind IPC', () => {
     )
     // The rewind's log stands; the refused message was never appended.
     expect(getConversation(convId)?.messages).toEqual([])
+  })
+
+  it("sends a run's events to every chat window as well as the one that started it", async () => {
+    configureHasKey(() => false)
+    updateSettings({ desktopNotifications: false })
+    const send = vi.fn()
+    const sender = { id: 1, send, isDestroyed: () => false }
+    const otherSend = vi.fn()
+    const other = {
+      id: 7,
+      isDestroyed: () => false,
+      isFocused: () => false,
+      on: () => {},
+      webContents: { id: 77, send: otherSend, isDestroyed: () => false }
+    }
+    registerAppWindow(other as never)
+    const pending = handler(IPC.rewindApply)(from(1), convId, 0, 'both', 'make it so')
+    await handler(IPC.agentStart)({ sender }, {
+      runId: 'r-multi', conversationId: convId, providerId: 'p', model: 'm', approvalPolicy: 'ask', userText: 'next'
+    })
+    await pending
+    const refused = expect.objectContaining({ type: 'error', runId: 'r-multi' })
+    expect(send).toHaveBeenCalledWith(IPC.agentEvent, refused)
+    expect(otherSend).toHaveBeenCalledWith(IPC.agentEvent, refused)
+    // Once each: the starting window is not sent a second copy as a chat window.
+    expect(send.mock.calls.filter((c) => c[0] === IPC.agentEvent)).toHaveLength(1)
   })
 
   it('refuses a malformed undo and reports nothing to undo', async () => {

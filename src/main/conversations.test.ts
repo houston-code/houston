@@ -16,6 +16,8 @@ import {
   createConversation,
   deleteConversation,
   forkConversation,
+  forkConversationAt,
+  forkCut,
   importConversation,
   listConversations,
   reportChildToParent,
@@ -42,7 +44,7 @@ import {
   updateConversationMeta
 } from './conversations'
 import { setUserDataDir, resetUserDataDir } from './userData'
-import type { AgentEvent, Conversation, ConversationUsage } from '@shared/agent'
+import type { AgentEvent, ChatMessage, Conversation, ConversationUsage } from '@shared/agent'
 
 const conv = (over: Partial<Conversation>): Conversation => ({
   id: 'c',
@@ -448,6 +450,67 @@ describe('forks and the usage scorecard', () => {
     expect(getConversation(fork.id)!.forkedFrom?.historyLength).toBe(1)
     writeRewind(fork.id, { messages: fork.messages, compaction: null, lastError: null, backup: null })
     expect(getConversation(fork.id)!.forkedFrom?.historyLength).toBe(2)
+  })
+})
+
+describe('fork from a message', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const log: ChatMessage[] = [
+    { role: 'user', content: 'first ask' },
+    { role: 'assistant', content: 'looking', toolCalls: [{ id: 't1', name: 'read_file', arguments: { path: 'a' } }] },
+    { role: 'tool', content: 'file a', toolCallId: 't1', toolName: 'read_file' },
+    { role: 'assistant', content: 'here it is' },
+    { role: 'user', content: 'second ask' },
+    { role: 'assistant', content: 'second answer' }
+  ]
+
+  it('cuts after a reply with its tool results, or just before a user message', () => {
+    expect(forkCut(log, { kind: 'reply', n: 0 })).toBe(3) // the reply and its tool result
+    expect(forkCut(log, { kind: 'reply', n: 1 })).toBe(4)
+    expect(forkCut(log, { kind: 'reply', n: 2 })).toBe(6)
+    expect(forkCut(log, { kind: 'turn', n: 1, text: 'second ask' })).toBe(4)
+    expect(forkCut(log, { kind: 'turn', n: 0, text: 'first ask' })).toBe(0)
+  })
+
+  it('refuses a point that no longer names a message', () => {
+    expect(forkCut(log, { kind: 'reply', n: 9 })).toBeNull()
+    expect(forkCut(log, { kind: 'turn', n: 1, text: 'something else' })).toBeNull()
+  })
+
+  it('makes a new chat with the conversation up to that point', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, log)
+    const fork = forkConversationAt(c.id, { kind: 'reply', n: 1 })!
+    expect(fork.id).not.toBe(c.id)
+    expect(fork.messages.map((m) => m.content)).toEqual(['first ask', 'looking', 'file a', 'here it is'])
+    expect(fork.forkedFrom).toEqual({ conversationId: c.id, historyLength: 4 })
+    expect(getConversation(fork.id)!.messages).toHaveLength(4)
+    // The source is untouched.
+    expect(getConversation(c.id)!.messages).toHaveLength(6)
+  })
+
+  it('closes off a tool call whose result the cut left out', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    // A reply that ran a tool, then text in the same message: its result follows it.
+    setMessages(c.id, [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'running', toolCalls: [{ id: 'x', name: 'run_shell', arguments: {} }] }
+    ])
+    const fork = forkConversationAt(c.id, { kind: 'reply', n: 0 })!
+    expect(fork.messages.at(-1)).toMatchObject({ role: 'tool', toolCallId: 'x' })
+  })
+
+  it('returns null for a chat that is gone', () => {
+    expect(forkConversationAt('00000000-0000-4000-8000-000000000000', { kind: 'reply', n: 0 })).toBeNull()
   })
 })
 

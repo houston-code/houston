@@ -4,6 +4,7 @@ import { conversationToHtml, HTML_DATA_OPEN_TAG } from './html-export'
 import {
   forkConversationData,
   forkTitle,
+  isForkPoint,
   parseConversationFile,
   resolveImportWorkspace,
   validateImportedConversation,
@@ -293,5 +294,18 @@ describe('forkConversationData', () => {
     expect(fork.messages).not.toBe(src.messages)
     fork.messages.push({ role: 'assistant', content: 'yo' })
     expect(src.messages).toHaveLength(1)
+  })
+})
+
+describe('isForkPoint', () => {
+  it('accepts a reply or a turn with its text, and nothing else', () => {
+    expect(isForkPoint({ kind: 'reply', n: 0 })).toBe(true)
+    expect(isForkPoint({ kind: 'turn', n: 2, text: 'hi' })).toBe(true)
+    expect(isForkPoint({ kind: 'turn', n: 2 })).toBe(false)
+    expect(isForkPoint({ kind: 'reply', n: -1 })).toBe(false)
+    expect(isForkPoint({ kind: 'reply', n: 1.5 })).toBe(false)
+    expect(isForkPoint({ kind: 'other', n: 0 })).toBe(false)
+    expect(isForkPoint(null)).toBe(false)
+    expect(isForkPoint('reply')).toBe(false)
   })
 })

@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { cachedImageDataUrl } from '../lib/imageUrl'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -14,6 +14,7 @@ import { useTick } from '../hooks/useTick'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
+import { toolRowStartsOpen, useTranscriptPrefs, type TranscriptPrefs } from './transcriptPrefs'
 import { FileLink, useFileLinks } from './FileLink'
 import { fileTargetFromPath, toolFileTarget } from '../lib/fileLinks'
 import {
@@ -374,14 +375,21 @@ const ToolRow = memo(function ToolRow({
   const records = item.records
   // Open the diff/output by default while a change is awaiting approval, and a
   // subagent's steps while it runs.
-  const [open, setOpen] = useState(awaiting || (isAgent && running))
+  // The transcript's detail settings and its Expand/Collapse tools control decide
+  // where the rest start.
+  const prefs = useTranscriptPrefs()
+  const [open, setOpen] = useState(() =>
+    toolRowStartsOpen(prefs, { awaiting, agentRunning: isAgent && running })
+  )
   const wasRunning = useRef(running)
   useEffect(() => {
     if (!isAgent) return
     if (running && !wasRunning.current) setOpen(true)
-    if (!running && wasRunning.current) setOpen(false)
+    // A finished subagent folds to its summary, unless tool output is kept open.
+    if (!running && wasRunning.current && !prefs.toolsExpanded && !prefs.expandAll?.open) setOpen(false)
     wasRunning.current = running
-  }, [isAgent, running])
+  }, [isAgent, running, prefs.toolsExpanded, prefs.expandAll])
+  useFollowExpandAll(prefs, setOpen, awaiting)
   // A review's agents, opened from the row in the transcript drawer.
   const [agentsOpen, setAgentsOpen] = useState(false)
   // Todo/sweep rows render their list inline, so they have nothing extra to expand.
@@ -449,6 +457,8 @@ const ToolRow = memo(function ToolRow({
       {item.status === 'running' && item.progress && !(isAgent && records?.length) && (
         <div className="tool-row__progress">{item.progress}</div>
       )}
+
+      {item.status === 'running' && item.liveOutput && <LiveOutput text={item.liveOutput} />}
 
       {isAgent && open && (records?.length || output) ? (
         <SubagentBody records={records} output={output} running={running} />
@@ -727,6 +737,50 @@ function combinedStatus(items: ToolItem[]): ToolItem['status'] {
   return 'done'
 }
 
+/**
+ * A running command's output so far, in a short scrolling pane that follows the
+ * newest line unless the user has scrolled up to read.
+ */
+function LiveOutput({ text }: { text: string }): JSX.Element {
+  const ref = useRef<HTMLPreElement>(null)
+  const following = useRef(true)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el && following.current) el.scrollTop = el.scrollHeight
+  }, [text])
+  return (
+    <pre
+      ref={ref}
+      className="tool-row__live"
+      aria-label="Output so far"
+      tabIndex={0}
+      onScroll={(e) => {
+        const el = e.currentTarget
+        following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8
+      }}
+    >
+      {text}
+    </pre>
+  )
+}
+
+/**
+ * Follow the transcript's Expand all / Collapse all: each new command opens or closes
+ * the row. A command given before the row existed already chose its starting state,
+ * so only later ones apply. A row awaiting approval never collapses, since its card
+ * holds the buttons the run is waiting on.
+ */
+function useFollowExpandAll(prefs: TranscriptPrefs, setOpen: (open: boolean) => void, awaiting: boolean): void {
+  const seen = useRef(prefs.expandAll?.seq)
+  const cmd = prefs.expandAll
+  useEffect(() => {
+    if (!cmd || cmd.seq === seen.current) return
+    seen.current = cmd.seq
+    if (!cmd.open && awaiting) return
+    setOpen(cmd.open)
+  }, [cmd, setOpen, awaiting])
+}
+
 /** A diff's file header: opens the file unless the change deleted it. */
 function DiffPath({ path, deleted }: { path: string; deleted: boolean }): JSX.Element {
   const files = useFileLinks()
@@ -770,7 +824,9 @@ function sameItems(a: ToolItem[], b: ToolItem[]): boolean {
 
 /** A fold of consecutive reads: one "Read N files" row that expands to the list. */
 const ReadAggregateRow = memo(function ReadAggregateRow({ items }: { items: ToolItem[] }): JSX.Element {
-  const [open, setOpen] = useState(false)
+  const prefs = useTranscriptPrefs()
+  const [open, setOpen] = useState(() => toolRowStartsOpen(prefs, { awaiting: false, agentRunning: false }))
+  useFollowExpandAll(prefs, setOpen, false)
   const status = combinedStatus(items)
   return (
     <div className={`tool-row tool-row--${status}`}>

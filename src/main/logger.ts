@@ -42,7 +42,8 @@ function stringifyError(e: unknown): string {
   return typeof e === 'string' ? e : JSON.stringify(e)
 }
 
-function logFilePath(): string {
+/** The log file (`<profile>/logs/houston.log`), creating its folder if needed. */
+export function logFilePath(): string {
   // Throws if the userData seam isn't wired yet; the caller's catch keeps that
   // silent, preserving the "logging never breaks the app" contract.
   const dir = join(getUserDataDir(), 'logs')

@@ -92,8 +92,8 @@ describe('prompt visibility guard', () => {
   // Every renderer call that starts or queues a turn.
   const RENDERER_SEND_SITES: Record<string, { count: number; why: string }> = {
     'renderer/src/App.tsx': {
-      count: 14,
-      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" + project-card /init invocations, the mid-run steer, its idle send, and its off-chat queue (user text), and Retry on the last reply (resends that user message as it was, keeping its invokedAs)'
+      count: 15,
+      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" + project-card /init + Changes-view review-comment invocations, the mid-run steer, its idle send, and its off-chat queue (user text), and Retry on the last reply (resends that user message as it was, keeping its invokedAs)'
     },
     'renderer/src/components/Composer.tsx': { count: 3, why: 'the /review invocation and two sends of composer text' },
     'renderer/src/hooks/useChat.ts': { count: 1, why: 'startAgent, forwarding invokedAs' },
@@ -123,9 +123,12 @@ describe('prompt visibility guard', () => {
     // card (sent only via proposalHereTurn). spawn_session's prompt labels its tool
     // row in shared/toolLabel.ts, which both clients use. SubagentPanel shows the task
     // a subagent was given (its setup tab and transcript), display only, never sent.
+    // Settings > Scheduled Runs shows a schedule's stored task, display only: a fired
+    // run is started by the scheduler service in main, never sent from the renderer.
     expect(occurrences(['renderer/src'], /\.prompt\b/)).toEqual({
       'renderer/src/components/ProposalCard.tsx': 1,
-      'renderer/src/components/SubagentPanel.tsx': 2
+      'renderer/src/components/SubagentPanel.tsx': 2,
+      'renderer/src/components/settings/sections/schedules.tsx': 1
     })
     expect(occurrences(['shared'], /\ba\.prompt\b/)).toEqual({ 'shared/toolLabel.ts': 1 })
     expect(occurrences(['shared'], /\baction\.prompt\b/)).toEqual({ 'shared/promptInvocation.ts': 1 })
