@@ -686,6 +686,30 @@ describe('setModelUnavailable — a model its provider answered "not found" for'
   })
 })
 
+describe('recent models', () => {
+  it('rememberModel fronts the model, dedupes, caps, and skips models the settings do not list', async () => {
+    const { rememberModel, getSettings, saveSettings, RECENT_MODEL_LIMIT } = await loadStore()
+    const providerId = getSettings().providers[0].id
+    const models = getSettings().providers[0].models.map((m) => m.id)
+    expect(models.length).toBeGreaterThan(1)
+    rememberModel({ providerId, model: models[0] })
+    rememberModel({ providerId, model: models[1] })
+    expect(rememberModel({ providerId, model: models[0] }).recentModels).toEqual([
+      { providerId, model: models[0] },
+      { providerId, model: models[1] }
+    ])
+    // Unknown provider or model, or junk from IPC, records nothing.
+    rememberModel({ providerId, model: 'not-a-listed-model' })
+    rememberModel({ providerId: 'nope', model: models[0] })
+    rememberModel({ providerId: 42, model: null })
+    expect(getSettings().recentModels).toHaveLength(2)
+    // A save carrying an older copy of the list (the renderer's) keeps main's list.
+    const stale = { ...getSettings(), recentModels: [] }
+    expect(saveSettings(stale).recentModels).toHaveLength(2)
+    expect(RECENT_MODEL_LIMIT).toBe(5)
+  })
+})
+
 describe('recent workspaces — existence pruning', () => {
   it('rememberWorkspace fronts the path, dedupes, and keeps live entries in order', async () => {
     const a = mkdtempSync(join(tmpdir(), 'ws-a-'))

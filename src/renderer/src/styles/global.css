@@ -1055,6 +1055,45 @@ body.is-resizing {
   font-weight: 700;
   vertical-align: 1px;
 }
+/* The provider's default model, which Houston recommends. */
+.model-menu__recommended {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--ok);
+  border-radius: 3px;
+  color: var(--ok);
+  font-size: 9.5px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+/* In the Recent section, which provider a model comes from. */
+.model-menu__provider {
+  margin-left: 6px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+/* What the badges mean, in one quiet line under the list. */
+.model-menu__legend {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 6px 9px 3px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.model-menu__legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.model-menu__legend + .model-menu__footnote {
+  border-top: none;
+  margin-top: 0;
+}
+
 /* One line naming the providers with no models yet, instead of an empty group each. */
 .model-menu__footnote {
   flex: none;
