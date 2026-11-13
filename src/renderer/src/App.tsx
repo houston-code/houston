@@ -120,6 +120,9 @@ import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer, IDLE_ONLY_COMMANDS } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
+import { PinnedTodos } from './components/PinnedTodos'
+import { currentTodos, showPinnedTodos } from './lib/currentTodos'
+import { useAutoOpenPreview } from './hooks/useAutoOpenPreview'
 import { ImportNotice } from './components/ImportNotice'
 import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
@@ -356,6 +359,8 @@ export default function App(): JSX.Element {
   }, [])
   const chat = useChat(currentId)
   // What each subagent in this chat spent, for the cost breakdown.
+  // The chat's current todo list, pinned above the message box while it matters.
+  const todos = useMemo(() => currentTodos(chat.items), [chat.items])
   const subagentSpendRows = useMemo(
     () => subagentSpend(chat.items.flatMap((it) => (it.kind === 'tool' && it.records ? it.records : []))),
     [chat.items]
@@ -1562,6 +1567,13 @@ export default function App(): JSX.Element {
       void persistPreview({ previewOpen: true })
     }
   }, [previewOpen, persistPreview])
+  // A dev server the agent started in this chat showed its address: open the Preview
+  // once per chat (not persisted, so the next launch keeps the user's own choice).
+  const autoOpenPreview = useCallback(() => {
+    setDockTab('preview')
+    setPreviewOpen(true)
+  }, [])
+  useAutoOpenPreview(allPreviewServers, currentId, settings?.previewAutoOpen !== false, autoOpenPreview)
   const toggleTasks = useCallback(() => toggleDockTab('tasks'), [toggleDockTab])
   const closeDock = useCallback(() => {
     setPreviewOpen(false)
@@ -3141,6 +3153,7 @@ export default function App(): JSX.Element {
         )}
 
         <div className="dock">
+          {showPinnedTodos(todos, chat.running) && <PinnedTodos todos={todos} />}
           <ControlBar
             settings={settings}
             selected={settings.selected}

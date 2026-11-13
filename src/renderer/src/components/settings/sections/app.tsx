@@ -320,6 +320,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   density: 'density',
   codeTheme: 'code theme',
   htmlVisuals: 'interactive visuals',
+  previewAutoOpen: 'open Preview for dev servers',
   toolOutputExpanded: 'tool output expanded',
   showReasoning: 'always show reasoning',
   memoryEnabled: 'memory',

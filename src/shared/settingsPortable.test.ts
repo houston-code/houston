@@ -136,6 +136,7 @@ describe('import checks per preference', () => {
     ['density', 'compact', 'tight'],
     ['codeTheme', 'muted', 'neon'],
     ['htmlVisuals', true, {}],
+    ['previewAutoOpen', false, 'no'],
     ['toolOutputExpanded', true, 'open'],
     ['showReasoning', false, 1],
     ['memoryEnabled', false, 'yes'],

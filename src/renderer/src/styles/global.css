@@ -6161,6 +6161,62 @@ body.is-resizing .preview-dock__resizer::after {
   text-decoration: line-through;
 }
 
+/* ---- Pinned task list above the message box ---- */
+.pinned-todos {
+  margin: 0 var(--chat-gap) 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  overflow: hidden;
+}
+.pinned-todos__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.pinned-todos__head:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.pinned-todos__count {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.pinned-todos__current {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pinned-todos__current > span {
+  color: var(--accent);
+}
+.pinned-todos__toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+.pinned-todos__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 12px 8px 12px;
+  max-height: 180px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
 /* ---- PR sweep board (pr_sweep) ---- */
 .sweep {
   flex-wrap: wrap;

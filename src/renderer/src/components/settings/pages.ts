@@ -19,7 +19,8 @@ import {
   FormatOnSaveSection,
   HooksSection,
   IntegrationsSection,
-  LanguageServersSection
+  LanguageServersSection,
+  PreviewSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
 import { ScheduledRunsSection } from './sections/schedules'
@@ -166,6 +167,12 @@ export const PAGES: SettingsPage[] = [
         keys: ['diagnosticsOnSave'],
         Component: DiagnosticsSection,
         keywords: ['lint', 'eslint', 'errors', 'type check', 'problems']
+      },
+      {
+        id: 'preview',
+        keys: ['previewAutoOpen'],
+        Component: PreviewSection,
+        keywords: ['dev server', 'localhost', 'browser', 'auto open', 'panel', 'web app']
       }
     ]
   },
