@@ -118,6 +118,31 @@ export function locateSymbol(text: string, line: number, symbol: string, occurre
   return { line: line - 1, character: hits[n - 1] }
 }
 
+/**
+ * `p`, or a rejection as soon as the run is stopped. A server still starting (or slow
+ * to answer) keeps going in the background, so the next call finds it further along;
+ * only this call stops waiting for it.
+ */
+function untilStopped<T>(p: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return p
+  return new Promise<T>((resolve, reject) => {
+    const stopped = (): void => reject(new Error('Stopped before the language server answered.'))
+    const settle = (): void => signal.removeEventListener('abort', stopped)
+    p.then(
+      (v) => {
+        settle()
+        resolve(v)
+      },
+      (e) => {
+        settle()
+        reject(e)
+      }
+    )
+    if (signal.aborted) return stopped()
+    signal.addEventListener('abort', stopped, { once: true })
+  })
+}
+
 /** The client each call's `target` used, keyed by the call's args, for the missing-dependency note. */
 const clientOfCall = new WeakMap<object, LspClient>()
 
@@ -674,12 +699,12 @@ export function makeLspTools(deps: LspToolDeps): ToolDef[] {
     // gate as any patch: permission rules per file, sensitive-file prompts, approval
     // with a diff preview, checkpoints, and root containment.
     async materialize(args, ctx) {
-      const plan = await planRename(deps, args, ctx)
+      const plan = await untilStopped(planRename(deps, args, ctx), ctx.signal)
       return { name: deps.applyPatch.schema.name, arguments: { patch: plan.patch }, note: plan.summary }
     },
     // Hosts that drive tools directly (no loop) still get the same edit applied.
     async execute(args, ctx) {
-      const plan = await planRename(deps, args, ctx)
+      const plan = await untilStopped(planRename(deps, args, ctx), ctx.signal)
       const applied = await deps.applyPatch.execute({ patch: plan.patch }, ctx)
       return `${plan.summary} ${applied}`
     }
@@ -689,15 +714,16 @@ export function makeLspTools(deps: LspToolDeps): ToolDef[] {
 }
 
 /**
- * A read tool whose result also carries the server's missing-dependency note, so an
- * empty or partial answer isn't taken as the whole truth about the code.
+ * A read tool that stops waiting when the run is stopped (a cold server can take a
+ * minute to initialize), and whose result also carries the server's missing-dependency
+ * note, so an empty or partial answer isn't taken as the whole truth about the code.
  */
 function withMissingDepsNote(tool: ToolDef): ToolDef {
   const run = tool.execute.bind(tool)
   return {
     ...tool,
     async execute(args, ctx) {
-      const out = await run(args, ctx)
+      const out = await untilStopped(run(args, ctx), ctx.signal)
       const hint = clientOfCall.get(args)?.missingDepsHint
       return hint ? `${out}\n\n(note: ${hint})` : out
     }

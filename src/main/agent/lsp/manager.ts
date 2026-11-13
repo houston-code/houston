@@ -108,6 +108,13 @@ export type LspServerStatus = LanguageServerStatus
 
 export class LspManager {
   private readonly entries = new Map<string, Entry>()
+  /**
+   * Servers being set up (between deciding to start one and recording it), per key.
+   * Making room can wait on stopping another server, and lsp_* calls run in parallel,
+   * so without this two callers for one workspace would each start a server and the
+   * one recorded second would orphan the first: never reused, and missed by killAll.
+   */
+  private readonly creating = new Map<string, Promise<Entry | null>>()
   /** Crash timestamps per key, for the restart budget. */
   private readonly crashes = new Map<string, number[]>()
   private settings: LspSettings = {}
@@ -230,28 +237,16 @@ export class LspManager {
       entry = undefined
     }
     if (!entry) {
-      if (this.crashBudgetSpent(key)) return null
-      const server = resolveServer(spec, this.resolveOpts(roots))
-      if (!server) return null
-      const client = new LspClient({
-        server,
-        roots,
-        spawn: this.deps.spawn ?? sandboxedSpawn,
-        initTimeoutMs: this.deps.initTimeoutMs,
-        requestTimeoutMs: this.deps.requestTimeoutMs
-      })
-      client.missingDepsHint = (this.deps.depsHint ?? defaultDepsHint)(spec, roots)
-      await this.makeRoom()
-      const now = (this.deps.now ?? Date.now)()
-      const created: Entry = { client, key, roots: [...roots], lastUsed: now, idleTimer: null, stale: false, depsCheckedAt: now }
-      client.onDeath(() => {
-        if (created.idleTimer) clearTimeout(created.idleTimer)
-        if (this.entries.get(key) === created) this.entries.delete(key)
-        const list = this.crashes.get(key) ?? []
-        list.push((this.deps.now ?? Date.now)())
-        this.crashes.set(key, list)
-      })
-      this.entries.set(key, created)
+      let pending = this.creating.get(key)
+      if (!pending) {
+        const p = this.createEntry(spec, roots, key).finally(() => {
+          if (this.creating.get(key) === p) this.creating.delete(key)
+        })
+        this.creating.set(key, p)
+        pending = p
+      }
+      const created = await pending
+      if (!created) return null
       entry = created
     }
     // The idle clock runs only once the server is up: armed before the start, a slow
@@ -272,6 +267,33 @@ export class LspManager {
       await entry.client.refreshAll().catch(() => {})
     }
     return entry.client
+  }
+
+  /** Make and record a client for `key` (not yet started), stopping another if at the cap. */
+  private async createEntry(spec: LspServerSpec, roots: string[], key: string): Promise<Entry | null> {
+    if (this.crashBudgetSpent(key)) return null
+    const server = resolveServer(spec, this.resolveOpts(roots))
+    if (!server) return null
+    const client = new LspClient({
+      server,
+      roots,
+      spawn: this.deps.spawn ?? sandboxedSpawn,
+      initTimeoutMs: this.deps.initTimeoutMs,
+      requestTimeoutMs: this.deps.requestTimeoutMs
+    })
+    client.missingDepsHint = (this.deps.depsHint ?? defaultDepsHint)(spec, roots)
+    await this.makeRoom()
+    const now = (this.deps.now ?? Date.now)()
+    const created: Entry = { client, key, roots: [...roots], lastUsed: now, idleTimer: null, stale: false, depsCheckedAt: now }
+    client.onDeath(() => {
+      if (created.idleTimer) clearTimeout(created.idleTimer)
+      if (this.entries.get(key) === created) this.entries.delete(key)
+      const list = this.crashes.get(key) ?? []
+      list.push((this.deps.now ?? Date.now)())
+      this.crashes.set(key, list)
+    })
+    this.entries.set(key, created)
+    return created
   }
 
   /** Whether a server that was missing dependencies would now find them all (looked at most every DEPS_RECHECK_MS). */
