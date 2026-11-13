@@ -342,7 +342,10 @@ describe.skipIf(!hasGit)('a repository git cannot open', () => {
     const wt = brokenWorktree()
     const changes = await collectWorkingTreeChanges(wt)
     expect(changes.isRepo).toBe(false)
-    expect(changes.unreadable).toMatch(/not a git repository/)
+    // git's wording varies by version ("not a git repository", "gitfile does not point to a
+    // valid repository"); either way it is git's reason, without the fatal: prefix.
+    expect(changes.unreadable).toMatch(/repositor/)
+    expect(changes.unreadable).not.toMatch(/^fatal:/)
     const stats = await collectWorkingTreeStats(wt)
     expect(stats).toMatchObject({ isRepo: false, unreadable: changes.unreadable })
   })
