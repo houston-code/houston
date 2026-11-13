@@ -108,14 +108,42 @@ function languageServerChecks(f: DoctorFacts): DoctorCheck[] {
   return checks
 }
 
-/** Turn probed facts into the graded report. Pure. */
-export function buildDoctorReport(f: DoctorFacts): DoctorReport {
+/** Which app shows the report: its fix hints name that app's own way of doing it. */
+export type DoctorClient = 'terminal' | 'desktop'
+
+/**
+ * The fix hints that differ by client. The terminal has slash commands (`/login`,
+ * `/model`); the desktop has Settings pages and the model picker, and typing a
+ * terminal command there would do nothing.
+ */
+const FIXES: Record<DoctorClient, { noKey: (id: string) => string; noProviders: string; noModel: string; mcpAuth: string }> = {
+  terminal: {
+    noKey: (id) => `run /login and pick ${id}`,
+    noProviders: 'run /login to add one',
+    noModel: 'run /login, or /model <id>',
+    mcpAuth: '/mcp login <n>'
+  },
+  desktop: {
+    noKey: (id) => `add a key for ${id} in Settings > Providers & Models`,
+    noProviders: 'connect one in Settings > Providers & Models',
+    noModel: 'pick one in the model menu above the message box',
+    mcpAuth: 'sign in from Settings > MCP Servers'
+  }
+}
+
+/**
+ * Turn probed facts into the graded report. Pure. `client` picks the fix hints: the
+ * desktop's point at its own Settings and menus, and it skips the environment-key
+ * warning, since the desktop app never reads API keys from the environment.
+ */
+export function buildDoctorReport(f: DoctorFacts, client: DoctorClient = 'terminal'): DoctorReport {
+  const fixes = FIXES[client]
   const providerChecks: DoctorCheck[] = f.providers.map((p) => {
     if (!p.requiresKey) return { label: p.id, status: 'ok', detail: 'no key needed' }
     if (!p.hasKey) {
-      return { label: p.id, status: 'warn', detail: 'no API key', fix: `run /login and pick ${p.id}` }
+      return { label: p.id, status: 'warn', detail: 'no API key', fix: fixes.noKey(p.id) }
     }
-    if (p.shadowedByEnv) {
+    if (p.shadowedByEnv && client === 'terminal') {
       // Not broken, but the cause of "I changed my key and nothing happened".
       return {
         label: p.id,
@@ -131,14 +159,14 @@ export function buildDoctorReport(f: DoctorFacts): DoctorReport {
       label: 'providers',
       status: 'fail',
       detail: 'none configured',
-      fix: 'run /login to add one'
+      fix: fixes.noProviders
     })
   } else if (!f.active) {
     providerChecks.push({
       label: 'active model',
       status: 'fail',
       detail: 'none selected',
-      fix: 'run /login, or /model <id>'
+      fix: fixes.noModel
     })
   }
 
@@ -207,7 +235,7 @@ export function buildDoctorReport(f: DoctorFacts): DoctorReport {
               : m.state === 'idle'
                 ? 'not connected yet'
                 : (m.detail ?? 'failed to connect'),
-        ...(m.state === 'needs-auth' ? { fix: '/mcp login <n>' } : {})
+        ...(m.state === 'needs-auth' ? { fix: client === 'terminal' ? `/mcp login ${m.id}` : fixes.mcpAuth } : {})
       }))
     }
   ]

@@ -240,7 +240,7 @@ export interface SubAgentOptions {
    * through `gate`, which propagates it to the user for per-destination consent
    * (the loop mirrors its own network gating: deny rules refuse without a prompt,
    * an allow rule or an already-granted destination skips it, and a denial comes
-   * back as the tool result). `getSecret`/`searchProvider` feed web_search its key;
+   * back as the tool result). `getSecret`/`searchProvider` feed web_search its key (or `nativeWebSearch`, the model provider's own search);
    * `collectSecrets` feeds egress credential masking, so a subagent fetch refuses
    * to transmit a stored secret exactly like the main loop's. Absent => no network
    * tools are offered and the tiers stay local-only (fail closed: a dispatcher that
@@ -254,6 +254,8 @@ export interface SubAgentOptions {
     ) => Promise<string>
     getSecret?: (id: string) => string | null
     searchProvider?: string
+    /** The model provider's own web search, for web_search when no search key is set. */
+    nativeWebSearch?: ToolContext['nativeWebSearch']
     collectSecrets?: () => string[]
   }
   /**
@@ -444,6 +446,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     // only meaningful when the network tools are offered at all.
     ...(opts.network?.getSecret ? { getSecret: opts.network.getSecret } : {}),
     ...(opts.network?.searchProvider ? { searchProvider: opts.network.searchProvider } : {}),
+    ...(opts.network?.nativeWebSearch ? { nativeWebSearch: opts.network.nativeWebSearch } : {}),
     ...(opts.network?.collectSecrets ? { collectSecrets: opts.network.collectSecrets } : {}),
     // A subagent fetches the same untrusted web as the main loop, so it isolates
     // flagged pages the same way, on its own provider/model. Without this it would

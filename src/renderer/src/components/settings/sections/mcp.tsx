@@ -3,6 +3,7 @@ import type { AppSettings, McpServerConfig, McpServerStatus } from '@shared/type
 import { sanitizeServerId } from '@shared/mcp'
 import { HeadersField, SettingsSection } from '../fields'
 import type { SettingsCtx } from '../context'
+import { McpAddPanels } from './mcpCatalog'
 
 /** Model Context Protocol servers: stdio processes or remote HTTP/SSE endpoints. */
 export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
@@ -227,6 +228,11 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
       <button className="btn btn--sm" onClick={addServer}>
         + Add MCP server
       </button>
+      <McpAddPanels
+        servers={servers}
+        workspace={ctx.workspace}
+        onAdd={(added) => setSettings((s) => ({ ...s, mcpServers: [...(s.mcpServers ?? []), ...added] }))}
+      />
     </SettingsSection>
   )
 }

@@ -20,6 +20,7 @@ import { rendersAsReply } from '@shared/chatStatus'
 import { upsertFinding } from '@shared/reviewFindings'
 import { capSteps, upsertStep, type SubagentRecord } from '@shared/subagents'
 import { turnLabel, turnText } from '@shared/rewind'
+import { addRound, type TurnStats } from './messageMeta'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
 
@@ -47,6 +48,14 @@ export interface UserItem {
    * Set live from the `steered` event and, on reload, from the saved message.
    */
   steered?: boolean
+  /** When it was sent (ISO 8601); absent on messages saved before that was recorded. */
+  at?: string
+  /**
+   * What the turn this message started cost (models, tokens, cost), folded in as each
+   * model round reports. Shown under the turn's last reply. Absent on a steered
+   * message (it belongs to the turn it was steered into) and on older messages.
+   */
+  turn?: TurnStats
 }
 export interface AssistantItem {
   kind: 'assistant'
@@ -61,6 +70,8 @@ export interface AssistantItem {
    * find the reply to put the "New" divider above.
    */
   messageIndex?: number
+  /** When the reply was written (ISO 8601); absent on older saved messages. */
+  at?: string
 }
 /** A nested subagent spawned by a tool (e.g. a review_changes dimension reviewer), shown as its own row. */
 export interface SubAgentRow {
@@ -84,6 +95,12 @@ export interface ToolItem {
    */
   preview?: FileDiffPreview[]
   status: ToolStatus
+  /**
+   * When the call started running (epoch ms, this window's clock), so a running row
+   * can show how long it has been going. Stamped when `tool_start` arrives; absent on
+   * rows rebuilt from the saved log, which never run again.
+   */
+  startedAt?: number
   /**
    * True on the full-auto shell-network question, raised after a command failed for
    * lack of network: the approval decides whether the chat's shell commands may reach
@@ -319,6 +336,46 @@ function planFromArgs(args: Record<string, unknown>): PlanPayload {
   }
 }
 
+const nowIso = (): string => new Date().toISOString()
+
+/**
+ * The index of the user message that started the turn ending before `end`: the
+ * latest one that is neither steered into a running turn nor the compaction summary.
+ * -1 when there is none.
+ */
+export function turnStartIndex(items: DisplayItem[], end: number): number {
+  for (let i = Math.min(end, items.length) - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind === 'user' && !it.steered && !it.isSummary) return i
+  }
+  return -1
+}
+
+/**
+ * Each turn's details keyed by the id of its last reply, where the transcript shows
+ * them. A turn whose details are unknown (older messages) or that has no reply is
+ * left out.
+ */
+export function turnStatsByReply(items: DisplayItem[]): Map<string, TurnStats> {
+  const out = new Map<string, TurnStats>()
+  let stats: TurnStats | undefined
+  let lastReply: string | undefined
+  const close = (): void => {
+    if (stats && lastReply) out.set(lastReply, stats)
+  }
+  for (const it of items) {
+    if (it.kind === 'user' && !it.steered && !it.isSummary) {
+      close()
+      stats = it.turn
+      lastReply = undefined
+    } else if (it.kind === 'assistant') {
+      lastReply = it.id
+    }
+  }
+  close()
+  return out
+}
+
 let counter = 0
 const nextId = (): string => `i${Date.now().toString(36)}-${counter++}`
 
@@ -372,7 +429,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       if (last && last.kind === 'assistant' && last.streaming) {
         return [...items.slice(0, -1), { ...last, text: last.text + e.delta }]
       }
-      return [...items, { kind: 'assistant', id: nextId(), text: e.delta, streaming: true }]
+      return [...items, { kind: 'assistant', id: nextId(), text: e.delta, streaming: true, at: nowIso() }]
     }
     // A course correction typed mid-turn. It goes into the model's window as an
     // ordinary user turn, so it renders as one — the transcript should read the way
@@ -381,14 +438,17 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     case 'steered':
       return [
         ...items.map((i) => (i.kind === 'assistant' && i.streaming ? { ...i, streaming: false } : i)),
-        { kind: 'user', id: nextId(), text: e.text, steered: true }
+        { kind: 'user', id: nextId(), text: e.text, steered: true, at: nowIso() }
       ]
     case 'reasoning': {
       const last = items[items.length - 1]
       if (last && last.kind === 'assistant' && last.streaming) {
         return [...items.slice(0, -1), { ...last, reasoning: (last.reasoning ?? '') + e.delta }]
       }
-      return [...items, { kind: 'assistant', id: nextId(), text: '', streaming: true, reasoning: e.delta }]
+      return [
+        ...items,
+        { kind: 'assistant', id: nextId(), text: '', streaming: true, reasoning: e.delta, at: nowIso() }
+      ]
     }
     case 'tool_approval': {
       const finalized = finalizeStreaming(items)
@@ -445,6 +505,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       if (exists)
         return updateTool(finalized, e.callId, {
           status: 'running',
+          startedAt: Date.now(),
           args: e.args,
           ...(e.preview ? { preview: e.preview } : {})
         })
@@ -462,7 +523,8 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           // Likewise the diff: an auto-approved write never showed an approval card, so
           // tool_start is the only place its preview arrives.
           ...(e.preview ? { preview: e.preview } : {}),
-          status: 'running'
+          status: 'running',
+          startedAt: Date.now()
         }
       ]
     }
@@ -753,12 +815,22 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           : finalized
       return [...settled, { kind: 'notice', id: nextId(), text: e.message, tone: 'error' }]
     }
-    case 'usage':
+    case 'usage': {
+      // Fold this round into the turn it belongs to. The GUI seam rewrites the
+      // top-level numbers to the conversation's running totals and keeps the round's
+      // own under `round`; a raw event's top-level numbers are the round's.
+      const round = e.round ?? { inputTokens: e.inputTokens, outputTokens: e.outputTokens, cost: e.cost }
+      const at = turnStartIndex(items, items.length)
+      if (at < 0) return items
+      const user = items[at] as UserItem
+      const next = items.slice()
+      next[at] = { ...user, turn: addRound(user.turn, e.model, round) }
+      return next
+    }
     case 'turn_start':
     case 'run_info':
     case 'steers_returned':
-      // Not transcript items: usage totals are folded into the store/control bar,
-      // turn_start is adopted by App, run_info goes only to the headless client
+      // Not transcript items: turn_start is adopted by App, run_info goes only to the headless client
       // that asks for it (announceTools), and a returned steer is already in the
       // queue bar (main keeps the desktop's steers there). No display change here.
       return items
@@ -806,6 +878,8 @@ export function itemsFromMessages(
   }
 
   const items: DisplayItem[] = []
+  // The user message that started the turn being read, to fold its replies' usage into.
+  let turnUser: UserItem | undefined
   for (const [i, m] of messages.entries()) {
     if (m.role === 'user') {
       // An automated guidance turn the loop injected (a stall nudge, the budget
@@ -816,18 +890,24 @@ export function itemsFromMessages(
         if (text) items.push({ kind: 'notice', id: nextId(), text, tone: 'info' })
       } else if (m.content.trim() || m.images?.length) {
         const invokedAs = sanitizeInvocation(m.invokedAs)
-        items.push({
+        const user: UserItem = {
           kind: 'user',
           id: nextId(),
           text: m.content,
           ...(m.images?.length ? { images: m.images } : {}),
           ...(invokedAs ? { invokedAs } : {}),
           ...(m.steered === true ? { steered: true } : {}),
-          ...(m.content.startsWith(COMPACTION_SUMMARY_PREFIX) ? { isSummary: true } : {})
-        })
+          ...(m.content.startsWith(COMPACTION_SUMMARY_PREFIX) ? { isSummary: true } : {}),
+          ...(typeof m.at === 'string' ? { at: m.at } : {})
+        }
+        items.push(user)
+        if (!user.steered && !user.isSummary) turnUser = user
       }
     } else if (m.role === 'assistant') {
       const reasoning = m.reasoning?.map((r) => r.text).filter(Boolean).join('\n') || undefined
+      if (turnUser && (typeof m.model === 'string' || m.usage)) {
+        turnUser.turn = addRound(turnUser.turn, typeof m.model === 'string' ? m.model : undefined, m.usage)
+      }
       if (rendersAsReply(m)) {
         items.push({
           kind: 'assistant',
@@ -835,7 +915,8 @@ export function itemsFromMessages(
           text: m.content,
           streaming: false,
           reasoning,
-          messageIndex: offset + i
+          messageIndex: offset + i,
+          ...(typeof m.at === 'string' ? { at: m.at } : {})
         })
       }
       for (const tc of m.toolCalls ?? []) {

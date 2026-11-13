@@ -19,7 +19,7 @@ import {
   importConversation,
   listConversations,
   reportChildToParent,
-  MAX_SEARCH_CACHE_CHARS,
+  _setSearchCacheBudget,
   SEARCH_CACHE_IDLE_MS,
   resetConversationListCache,
   resetConversationSearchCache,
@@ -194,6 +194,11 @@ describe('mergeRunningTotals', () => {
     // The cost field must be carried — sending the turn's own 0.05 instead of the
     // cumulative 1.5 is the exact drift this guards against.
     expect(out).toMatchObject({ inputTokens: 100, outputTokens: 200, cost: 1.5, runId: 'r' })
+  })
+
+  it("keeps the round's own numbers beside the running totals, for the transcript", () => {
+    const out = mergeRunningTotals(usage(), total)
+    expect(out).toMatchObject({ round: { inputTokens: 10, outputTokens: 20, cost: 0.05 } })
   })
 
   it('passes non-usage events through unchanged', () => {
@@ -926,14 +931,21 @@ describe('searchConversations cache', () => {
   })
 
   it('stays correct when the cache is over its size and has to evict', () => {
-    const chats = Array.from({ length: 3 }, (_, i) => {
-      const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
-      // Each chat alone is over half the cap, so caching a second evicts the first.
-      setMessages(c.id, [{ role: 'user', content: `chat${i} ${'x'.repeat(Math.ceil(MAX_SEARCH_CACHE_CHARS / 2) + 10)}` }])
-      return c
-    })
-    for (let round = 0; round < 2; round++) {
-      for (const [i, c] of chats.entries()) expect(ids(`chat${i}`)).toEqual([c.id])
+    // A small cap, so a few short chats overflow it without building megabytes of text.
+    const cap = 1000
+    _setSearchCacheBudget(cap)
+    try {
+      const chats = Array.from({ length: 3 }, (_, i) => {
+        const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+        // Each chat alone is over half the cap, so caching a second evicts the first.
+        setMessages(c.id, [{ role: 'user', content: `chat${i} ${'x'.repeat(Math.ceil(cap / 2) + 10)}` }])
+        return c
+      })
+      for (let round = 0; round < 2; round++) {
+        for (const [i, c] of chats.entries()) expect(ids(`chat${i}`)).toEqual([c.id])
+      }
+    } finally {
+      _setSearchCacheBudget(null)
     }
   })
 })

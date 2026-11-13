@@ -100,6 +100,25 @@ describe('assertRecordable', () => {
     expect(() => assertRecordable([score('a', 0)])).toThrow(/misconfiguration/)
   })
 
+  /**
+   * REGRESSION (the out-of-credit recording). The provider account ran dry two
+   * thirds of the way through; the recorder wrote the remaining tasks as 0 beside
+   * real scores, and the all-zero check above did not fire.
+   */
+  it('refuses a run where failed attempts ended in a run error', () => {
+    const scores = [score('a', 1), score('b', 0), score('c', 1 / 3)]
+    const errored = [
+      { taskId: 'b', attempts: 3 },
+      { taskId: 'c', attempts: 2 }
+    ]
+    expect(() => assertRecordable(scores, errored)).toThrow(/5 attempt\(s\) across 2 task\(s\) ended in a run error/)
+    expect(() => assertRecordable(scores, errored)).toThrow(/Tasks: b, c/)
+  })
+
+  it('records real zeros when no attempt errored', () => {
+    expect(() => assertRecordable([score('a', 1), score('b', 0)], [])).not.toThrow()
+  })
+
   it('refuses an empty score set', () => {
     expect(() => assertRecordable([])).toThrow(/no tasks/)
   })

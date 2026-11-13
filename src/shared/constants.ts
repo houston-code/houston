@@ -45,6 +45,9 @@ export const IPC = {
   importOfferStatus: 'import:offerStatus',
   /** Answer the one-time import notice. */
   importOfferAnswer: 'import:offerAnswer',
+  envKeyOffers: 'app:envKeyOffers',
+  envKeyImport: 'app:envKeyImport',
+  envKeyDismiss: 'app:envKeyDismiss',
   // Updates
   updateCheck: 'update:check',
   updateWhatsNew: 'update:whatsNew',
@@ -73,6 +76,7 @@ export const IPC = {
   shareFromMenu: 'share:fromMenu',
   // Workspace
   workspacePick: 'workspace:pick',
+  workspaceOpen: 'workspace:open',
   directoryPick: 'directory:pick',
   workspaceListFiles: 'workspace:listFiles',
   /** One directory level for the Finder-like Files panel (lazy tree expansion). */

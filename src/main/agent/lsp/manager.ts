@@ -10,6 +10,7 @@
  * sandbox can't confine it, servers stay off unless the user turned them on explicitly.
  */
 import type { ChildProcess } from 'node:child_process'
+import { sep } from 'node:path'
 import { resolveInRoots } from '../tools'
 import { shellQuote } from '../format'
 import { backendShellSyntax, isSandboxed, spawnSandboxedEx } from '../../sandbox'
@@ -35,6 +36,12 @@ export interface LspSettings {
 
 /** How long an unused server keeps running. */
 export const IDLE_TIMEOUT_MS = 10 * 60_000
+/**
+ * Most language servers running at once. Servers are per folder, so every worktree
+ * chat that edits a covered file starts its own, and a TypeScript server can hold
+ * hundreds of megabytes. Past this, starting one stops the least recently used.
+ */
+export const MAX_LIVE_SERVERS = 4
 /** A server that crashes this many times inside the window is not restarted again. */
 const MAX_CRASHES = 3
 const CRASH_WINDOW_MS = 5 * 60_000
@@ -66,6 +73,10 @@ export const sandboxedSpawn: LspSpawn = (server: ResolvedServer, roots: string[]
 interface Entry {
   client: LspClient
   key: string
+  /** The workspace roots this server was started for. */
+  roots: string[]
+  /** When it was last asked for, for choosing which server to stop at the cap. */
+  lastUsed: number
   idleTimer: ReturnType<typeof setTimeout> | null
   /** A shell command ran since the open documents were last re-read from disk. */
   stale: boolean
@@ -83,6 +94,8 @@ export interface LspManagerDeps {
   env?: NodeJS.ProcessEnv
   resolve?: ResolveOptions
   idleTimeoutMs?: number
+  /** Most servers running at once (default: MAX_LIVE_SERVERS). */
+  maxServers?: number
   initTimeoutMs?: number
   requestTimeoutMs?: number
   now?: () => number
@@ -171,6 +184,7 @@ export class LspManager {
   }
 
   private touch(entry: Entry): void {
+    entry.lastUsed = (this.deps.now ?? Date.now)()
     if (entry.idleTimer) clearTimeout(entry.idleTimer)
     entry.idleTimer = setTimeout(() => void this.stopEntry(entry), this.deps.idleTimeoutMs ?? IDLE_TIMEOUT_MS)
     entry.idleTimer.unref?.()
@@ -227,7 +241,9 @@ export class LspManager {
         requestTimeoutMs: this.deps.requestTimeoutMs
       })
       client.missingDepsHint = (this.deps.depsHint ?? defaultDepsHint)(spec, roots)
-      const created: Entry = { client, key, idleTimer: null, stale: false, depsCheckedAt: (this.deps.now ?? Date.now)() }
+      await this.makeRoom()
+      const now = (this.deps.now ?? Date.now)()
+      const created: Entry = { client, key, roots: [...roots], lastUsed: now, idleTimer: null, stale: false, depsCheckedAt: now }
       client.onDeath(() => {
         if (created.idleTimer) clearTimeout(created.idleTimer)
         if (this.entries.get(key) === created) this.entries.delete(key)
@@ -317,6 +333,28 @@ export class LspManager {
   noteShell(roots: string[]): void {
     const suffix = `\0${roots.join('\0')}`
     for (const e of this.entries.values()) if (e.key.endsWith(suffix)) e.stale = true
+  }
+
+  /** Stop least recently used servers until one more fits under the cap. */
+  private async makeRoom(): Promise<void> {
+    const max = Math.max(1, this.deps.maxServers ?? MAX_LIVE_SERVERS)
+    while (this.entries.size >= max) {
+      let oldest: Entry | null = null
+      for (const e of this.entries.values()) if (!oldest || e.lastUsed < oldest.lastUsed) oldest = e
+      if (!oldest) return
+      await this.stopEntry(oldest)
+    }
+  }
+
+  /**
+   * Stop every server started for `path` or a folder inside it. Called when a chat's
+   * worktree is removed: its servers have nothing left to serve, and would otherwise
+   * run until their idle timeout.
+   */
+  async stopForRoot(path: string): Promise<void> {
+    const inside = (r: string): boolean => r === path || r.startsWith(path.endsWith(sep) ? path : path + sep)
+    const gone = [...this.entries.values()].filter((e) => e.roots.some(inside))
+    await Promise.all(gone.map((e) => this.stopEntry(e)))
   }
 
   private async stopEntry(entry: Entry): Promise<void> {
