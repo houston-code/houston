@@ -80,3 +80,56 @@ export function sendToChatWindows(channel: string, ...args: unknown[]): void {
     if (!win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, ...args)
   }
 }
+
+/** The chat a chat window's renderer last reported showing (null: a new chat, or not a chat window). */
+export function chatShownBy(webContentsId: number): string | null {
+  const e = registry.byWebContentsId(webContentsId)
+  return e ? registry.showingIn(e) : null
+}
+
+// ---- Opening more windows ----
+
+let opener: (() => BrowserWindow) | null = null
+/** Renderer id → the chat its window opens on (null: a new chat), until it asks. */
+const launchRequests = new Map<number, string | null>()
+
+/** Install how a chat window is created (index.ts owns the window options). */
+export function setWindowOpener(open: () => BrowserWindow): void {
+  opener = open
+}
+
+/**
+ * Open a chat in a new window (null: a new chat). When another window already shows
+ * that chat, it is brought forward instead of opening a second copy.
+ */
+export function openChatWindow(
+  conversationId: string | null,
+  requester?: BrowserWindow | null
+): BrowserWindow | undefined {
+  if (conversationId) {
+    const existing = windowShowing(conversationId)
+    if (existing && existing !== requester && !existing.isDestroyed()) {
+      if (existing.isMinimized()) existing.restore()
+      existing.show()
+      existing.focus()
+      return existing
+    }
+  }
+  if (!opener) return undefined
+  const win = opener()
+  launchRequests.set(win.webContents.id, conversationId)
+  win.webContents.once('destroyed', () => launchRequests.delete(win.webContents.id))
+  return win
+}
+
+/**
+ * The chat a newly opened window should start on, the first time its renderer asks.
+ * Undefined for a window that wasn't opened with one (the launch window), which
+ * reopens the last chat instead.
+ */
+export function takeLaunchRequest(webContentsId: number): { conversationId: string | null } | undefined {
+  if (!launchRequests.has(webContentsId)) return undefined
+  const conversationId = launchRequests.get(webContentsId) ?? null
+  launchRequests.delete(webContentsId)
+  return { conversationId }
+}

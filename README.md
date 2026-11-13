@@ -475,6 +475,10 @@ Open source under the [Apache License 2.0](LICENSE).
   and groups persist across restarts. **Resize** the sidebar by dragging its right
   edge (double-click to reset), or **collapse** it to a thin rail with the ⌘B
   shortcut or the « toggle; the chosen width and collapsed state are remembered.
+- **Several windows.** File → *New Window*, or *Open in New Window* in a chat's ⋯
+  menu, puts a chat in a window of its own. Every window shares the sidebar, and runs,
+  approvals, notifications and the app badge keep working whichever window shows the
+  chat.
 - **Long sessions stay in budget.** When a conversation grows too large, Houston
   first trims tool output the agent has moved past, then summarizes the older turns
   so it never overflows the model's context window. The threshold is sized from the

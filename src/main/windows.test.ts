@@ -87,3 +87,55 @@ describe('chat windows', () => {
     expect(b.webContents.send).toHaveBeenCalledWith('ch', 1)
   })
 })
+
+describe('opening chat windows', () => {
+  it('opens a new window on the requested chat, handing the chat to its renderer once', async () => {
+    const m = await load()
+    const made: ReturnType<typeof fakeWindow>[] = []
+    m.setWindowOpener(() => {
+      const w = fakeWindow(10 + made.length)
+      ;(w.webContents as unknown as { once: () => void }).once = () => {}
+      made.push(w)
+      m.registerAppWindow(w as never)
+      return w as never
+    })
+    expect(m.openChatWindow('conv-1')).toBe(made[0])
+    expect(m.takeLaunchRequest(110)).toEqual({ conversationId: 'conv-1' })
+    expect(m.takeLaunchRequest(110)).toBeUndefined()
+    m.openChatWindow(null)
+    expect(m.takeLaunchRequest(111)).toEqual({ conversationId: null })
+    // The launch window was never given a request.
+    expect(m.takeLaunchRequest(999)).toBeUndefined()
+  })
+
+  it('brings forward a window already showing the chat instead of opening another', async () => {
+    const m = await load()
+    const a = Object.assign(fakeWindow(1), { isMinimized: () => true, restore: vi.fn(), show: vi.fn(), focus: vi.fn() })
+    m.registerAppWindow(a as never)
+    m.setWindowShowing(101, 'conv-1')
+    const open = vi.fn()
+    m.setWindowOpener(open)
+    expect(m.openChatWindow('conv-1')).toBe(a)
+    expect(a.restore).toHaveBeenCalled()
+    expect(a.focus).toHaveBeenCalled()
+    expect(open).not.toHaveBeenCalled()
+    expect(m.chatShownBy(101)).toBe('conv-1')
+    expect(m.chatShownBy(5)).toBeNull()
+  })
+
+  it('opens a second copy when the window asking is the one showing it', async () => {
+    const m = await load()
+    const a = fakeWindow(1)
+    m.registerAppWindow(a as never)
+    m.setWindowShowing(101, 'conv-1')
+    const b = Object.assign(fakeWindow(2), {})
+    ;(b.webContents as unknown as { once: () => void }).once = () => {}
+    m.setWindowOpener(() => b as never)
+    expect(m.openChatWindow('conv-1', a as never)).toBe(b)
+  })
+
+  it('opens nothing before an opener is installed', async () => {
+    const m = await load()
+    expect(m.openChatWindow(null)).toBeUndefined()
+  })
+})

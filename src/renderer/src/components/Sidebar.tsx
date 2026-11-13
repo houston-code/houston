@@ -66,6 +66,8 @@ export interface SidebarProps {
   onNew: () => void
   onDelete: (id: string) => void
   onFork: (id: string) => void
+  /** Open the chat in a new window (desktop app only). */
+  onOpenInNewWindow?: (id: string) => void
   onExport: (id: string) => void
   onExportHtml: (id: string) => void
   onImport: () => void
@@ -469,6 +471,18 @@ function ConvRow({
             >
               <Icon name="gitBranch" /> Fork
             </button>
+            {props.onOpenInNewWindow && (
+              <button
+                role="menuitem"
+                className="menu__item"
+                onClick={() => {
+                  props.onOpenInNewWindow?.(conv.id)
+                  close()
+                }}
+              >
+                <Icon name="external" /> Open in New Window
+              </button>
+            )}
             <button
               role="menuitem"
               className="menu__item"

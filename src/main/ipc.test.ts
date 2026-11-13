@@ -118,7 +118,7 @@ import {
   turnFingerprint
 } from './agent/checkpoints'
 import { setUserDataDir } from './userData'
-import { registerAppWindow } from './windows'
+import { registerAppWindow, setWindowOpener, setWindowShowing } from './windows'
 import {
   createConversation,
   deleteConversation,
@@ -515,6 +515,81 @@ describe('run-control IPC ownership', () => {
     h.runOwner.mockReturnValue(undefined)
     handler(IPC.agentCancel)(from(OTHER), RUN)
     expect(h.cancelRun).toHaveBeenCalledWith(RUN)
+  })
+
+  // A chat open in a second window (or reopened after the starting window closed):
+  // that window may answer the run while it shows the run's chat, and only then.
+  describe('another chat window', () => {
+    const SECOND = 55
+    const second = {
+      id: 5,
+      isDestroyed: () => false,
+      isFocused: () => false,
+      on: () => {},
+      webContents: { id: SECOND, send: () => {}, isDestroyed: () => false }
+    }
+    registerAppWindow(second as never)
+    afterEach(() => {
+      setWindowShowing(SECOND, null)
+      h.activeRun.mockReturnValue(null)
+    })
+
+    it("may approve and cancel a run while it shows that run's chat", () => {
+      setWindowShowing(SECOND, 'conv-live')
+      h.activeRun.mockImplementation((cid) => (cid === 'conv-live' ? RUN : null))
+      handler(IPC.agentApprove)(from(SECOND), RUN, CALL, 'allow')
+      expect(h.resolveApproval).toHaveBeenCalledWith(RUN, CALL, 'allow', undefined)
+      handler(IPC.agentCancel)(from(SECOND), RUN)
+      expect(h.cancelRun).toHaveBeenCalledWith(RUN)
+    })
+
+    it('may not control a run of a chat it does not show', () => {
+      setWindowShowing(SECOND, 'conv-other')
+      h.activeRun.mockImplementation((cid) => (cid === 'conv-live' ? RUN : null))
+      handler(IPC.agentApprove)(from(SECOND), RUN, CALL, 'allow')
+      handler(IPC.agentCancel)(from(SECOND), RUN)
+      expect(h.resolveApproval).not.toHaveBeenCalled()
+      expect(h.cancelRun).not.toHaveBeenCalled()
+    })
+
+    it('gives a renderer that is not a chat window nothing, whatever it claims to show', () => {
+      setWindowShowing(OTHER, 'conv-live')
+      h.activeRun.mockImplementation((cid) => (cid === 'conv-live' ? RUN : null))
+      handler(IPC.agentCancel)(from(OTHER), RUN)
+      expect(h.cancelRun).not.toHaveBeenCalled()
+    })
+  })
+})
+
+describe('window IPC', () => {
+  registerIpc()
+  const handler = (channel: string): ((...args: unknown[]) => unknown) => {
+    const fn = h.handlers.get(channel)
+    if (!fn) throw new Error(`no handler registered for ${channel}`)
+    return fn
+  }
+
+  it('opens a new window only for a new chat or an existing chat id', () => {
+    const opened: number[] = []
+    let next = 300
+    setWindowOpener(() => {
+      const id = next++
+      opened.push(id)
+      return {
+        id,
+        isDestroyed: () => false,
+        webContents: { id, once: () => {} }
+      } as never
+    })
+    const ev = { sender: { id: 1 } }
+    handler(IPC.windowOpenChat)(ev, '../../etc/passwd')
+    handler(IPC.windowOpenChat)(ev, 42)
+    handler(IPC.windowOpenChat)(ev, '0f8fad5b-d9cb-469f-a165-70867728950e')
+    expect(opened).toEqual([])
+    handler(IPC.windowOpenChat)(ev, null)
+    expect(opened).toEqual([300])
+    // The new window's renderer starts on a new chat, not the remembered last chat.
+    expect(handler(IPC.chatLaunch)({ sender: { id: 300, once: () => {} } })).toBeNull()
   })
 })
 

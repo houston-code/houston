@@ -2591,6 +2591,7 @@ export default function App(): JSX.Element {
         onNew={onNewChat}
         onDelete={onDeleteConversation}
         onFork={onForkConversation}
+        onOpenInNewWindow={(id) => void window.api.openChatInNewWindow(id)}
         onExport={onExportConversation}
         onExportHtml={onExportConversationHtml}
         onImport={onImportConversation}

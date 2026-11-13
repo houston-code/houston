@@ -6,7 +6,7 @@ import type { MenuCommand, MenuPanel, MenuState } from '@shared/types'
 import { checkForUpdatesFromMenu } from './updater'
 import { shareHoustonFromMenu } from './share'
 import { openExternalSafely } from './safeExternal'
-import { targetWindow } from './windows'
+import { openChatWindow, targetWindow } from './windows'
 import {
   getSettings,
   onSettingsSaved,
@@ -241,6 +241,8 @@ function fileMenu(isMac: boolean, ctx: MenuContext): MenuItemConstructorOptions 
       shortcutItem('New Chat in Another Folder…', 'new-chat-in-folder', ctx, {
         type: 'new-chat-in-folder'
       }),
+      // A second window on a new chat; each window shows its own chat.
+      { label: 'New Window', click: () => openChatWindow(null) },
       // A side chat belongs to the open chat, so it needs one.
       {
         label: 'New Side Chat',
