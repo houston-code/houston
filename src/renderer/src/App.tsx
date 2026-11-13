@@ -12,7 +12,7 @@ import { ultrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
-import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel } from '@shared/types'
+import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel, SidebarGroupBy } from '@shared/types'
 import type {
   ConversationMeta,
   PlanDecision,
@@ -1100,6 +1100,14 @@ export default function App(): JSX.Element {
       sidebarUnreadFirst: !current.sidebarUnreadFirst
     })
     setSettings(fresh)
+  }, [])
+
+  const onSetSidebarGroupBy = useCallback(async (by: SidebarGroupBy | undefined) => {
+    const current = await window.api.getSettings()
+    const next = { ...current }
+    if (by) next.sidebarGroupBy = by
+    else delete next.sidebarGroupBy
+    setSettings(await window.api.saveSettings(next))
   }, [])
 
   const onSetArchived = useCallback(
@@ -2719,6 +2727,8 @@ export default function App(): JSX.Element {
         onMarkAllRead={onMarkAllRead}
         unreadFirst={settings.sidebarUnreadFirst ?? false}
         onToggleUnreadFirst={onToggleUnreadFirst}
+        {...(settings.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {})}
+        onSetGroupBy={(by) => void onSetSidebarGroupBy(by)}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         statusCounts={statusCounts}

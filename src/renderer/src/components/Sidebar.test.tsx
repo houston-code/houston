@@ -289,6 +289,44 @@ describe('Sidebar — expanded rendering', () => {
     expect(onToggleUnreadFirst).toHaveBeenCalled()
   })
 
+  it('offers grouping by project folder or date in the filter menu, and shows the sections', () => {
+    const onSetGroupBy = vi.fn()
+    const conversations = [
+      makeConv({ id: 'a', title: 'Alpha', workspace: '/code/app' }),
+      makeConv({ id: 'b', title: 'Beta', workspace: '/code/site' })
+    ]
+    const { rerender } = render(<Sidebar {...baseProps({ conversations, onSetGroupBy })} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
+    expect(screen.getByRole('menuitemradio', { name: /Your groups only/ })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Project folder/ }))
+    expect(onSetGroupBy).toHaveBeenCalledWith('folder')
+
+    rerender(<Sidebar {...baseProps({ conversations, onSetGroupBy, groupBy: 'folder' })} />)
+    const heads = Array.from(document.querySelectorAll('.section-head__name')).map((h) => h.textContent)
+    expect(heads.sort()).toEqual(['app', 'site'])
+    fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
+    expect(screen.getByRole('menuitemradio', { name: /Project folder/ })).toHaveAttribute('aria-checked', 'true')
+    fireEvent.click(screen.getByRole('menuitemradio', { name: /Your groups only/ }))
+    expect(onSetGroupBy).toHaveBeenLastCalledWith(undefined)
+  })
+
+  it('collapses an automatic section through the section toggle', () => {
+    const onToggleSectionCollapsed = vi.fn()
+    const now = new Date(2026, 2, 15, 12).getTime()
+    render(
+      <Sidebar
+        {...baseProps({
+          conversations: [makeConv({ id: 'a', title: 'Alpha', updatedAt: now })],
+          groupBy: 'date',
+          now,
+          onToggleSectionCollapsed
+        })}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Today/ }))
+    expect(onToggleSectionCollapsed).toHaveBeenCalledWith('auto:date:today')
+  })
+
   it('disables Mark all as read when nothing is unread', () => {
     render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], onMarkAllRead: vi.fn() })} />)
     fireEvent.click(screen.getByRole('button', { name: 'Filter chats' }))
