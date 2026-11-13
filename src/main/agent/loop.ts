@@ -307,6 +307,25 @@ interface Route extends SelectedModel {
 }
 
 /**
+ * The `nativeWebSearch` tool-context entry for a route whose provider runs web search
+ * itself (empty otherwise). Retried on a transient failure like any provider call.
+ */
+export function nativeWebSearchFor(
+  route: Pick<Route, 'provider' | 'model' | 'providerId'>,
+  signal: AbortSignal
+): Pick<ToolContext, 'nativeWebSearch'> {
+  const { provider, model } = route
+  if (!provider.webSearch) return {}
+  return {
+    nativeWebSearch: {
+      label: getProvider(route.providerId)?.label ?? 'the model provider',
+      search: (query, maxResults) =>
+        withProviderRetry(() => provider.webSearch!({ model, query, maxResults, signal }), { signal })
+    }
+  }
+}
+
+/**
  * Ask the provider to summarize a slice of the conversation. Returns the summary
  * text; tools are intentionally omitted so the model can only reply with prose.
  *
@@ -2377,6 +2396,7 @@ export async function startRun(
           gate: gateNetwork,
           getSecret: getKey,
           searchProvider: settings.searchProvider,
+          ...nativeWebSearchFor({ provider: primaryRoute.provider, providerId: req.providerId, model }, abort.signal),
           collectSecrets: () => knownSecrets
         },
         explicitCacheControl: needsExplicitCacheControl(model, modelCaps),
@@ -2632,6 +2652,10 @@ export async function startRun(
       getSecret: getKey,
       collectSecrets: () => knownSecrets,
       searchProvider: settings.searchProvider,
+      // The model provider's own web search, used when no search key is set. Follows
+      // the fallback route like quarantineExtract: it runs on whichever model is
+      // serving the run now, billed to that provider's key.
+      ...nativeWebSearchFor(route, abort.signal),
       // Reads flagged web content on the run's own model, but with no tools and no
       // history — so the page has nothing to act through and nothing to override.
       // Follows the fallback route (provider and model move together here, like the

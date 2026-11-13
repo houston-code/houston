@@ -5,6 +5,7 @@ import type {
   ChatRequest,
   Provider,
   ProviderStreamEvent,
+  ProviderWebSearchRequest,
   ReasoningBlock,
   StopReason,
   ToolCall
@@ -13,6 +14,7 @@ import { imageDataUrl } from '@shared/images'
 import { openaiResponsesReasoning } from './reasoning'
 import { parseToolArguments } from './tool-args'
 import { idleTimeoutFetch } from './idle-fetch'
+import { responsesWebSearch, type ResponsesCreateClient } from './native-search'
 
 /**
  * Adapter for OpenAI's **Responses API** (`client.responses.create`), the path
@@ -383,6 +385,14 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         },
         ...(turnReasoning.length ? { reasoning: turnReasoning } : {})
       }
-    }
+    },
+    // OpenAI's hosted search tool runs only on its own endpoint; a custom base URL
+    // (a gateway speaking the Responses wire format) gets no built-in search.
+    ...(baseURL
+      ? {}
+      : {
+          webSearch: async (req: ProviderWebSearchRequest) =>
+            responsesWebSearch((await getClient()) as unknown as ResponsesCreateClient, req)
+        })
   }
 }

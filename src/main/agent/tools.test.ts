@@ -1951,6 +1951,68 @@ describe('web_search', () => {
     const withKey: ToolContext = { ...ctx, getSecret: () => 'tvly-x' }
     await expect(getTool('web_search')!.execute({}, withKey)).rejects.toThrow(/query is required/)
   })
+
+  it("falls back to the model provider's own search when no search key is set", async () => {
+    const search = vi.fn(async () => ({
+      answer: 'Widgets 2 shipped in May.',
+      hits: [{ title: 'Release notes', url: 'https://example.test/notes', content: 'Widgets 2 is out.' }]
+    }))
+    const native: ToolContext = {
+      ...ctx,
+      getSecret: () => null,
+      nativeWebSearch: { label: 'Anthropic', search }
+    }
+    const out = (await getTool('web_search')!.execute({ query: 'widgets release', max_results: 50 }, native)) as string
+    // The requested count is clamped to the advertised 1 to 10 before it reaches the provider.
+    expect(search).toHaveBeenCalledWith('widgets release', 10)
+    expect(out.startsWith('Web search results from Anthropic:\n')).toBe(true)
+    expect(out).toContain('Answer: Widgets 2 shipped in May.')
+    expect(out).toContain('https://example.test/notes')
+  })
+
+  it('prefers a configured search key over the model provider search', async () => {
+    const search = vi.fn()
+    vi.stubGlobal('fetch', async () =>
+      Response.json({ results: [{ title: 'T', url: 'https://example.test/t', content: 'c' }] })
+    )
+    try {
+      const both: ToolContext = {
+        ...ctx,
+        getSecret: () => 'tvly-x',
+        nativeWebSearch: { label: 'Anthropic', search }
+      }
+      const out = (await getTool('web_search')!.execute({ query: 'x' }, both)) as string
+      expect(out.startsWith('Web search results from Tavily:')).toBe(true)
+      expect(search).not.toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('returns the plain empty result when the model provider search finds nothing', async () => {
+    const native: ToolContext = {
+      ...ctx,
+      nativeWebSearch: { label: 'OpenAI', search: async () => ({ hits: [] }) }
+    }
+    expect(await getTool('web_search')!.execute({ query: 'x' }, native)).toBe('No results.')
+  })
+
+  it('refuses a credential in the query before the model provider search sees it', async () => {
+    const search = vi.fn()
+    const native: ToolContext = {
+      ...ctx,
+      collectSecrets: () => ['sk-live-secret-value-123456'],
+      nativeWebSearch: { label: 'OpenAI', search }
+    }
+    await expect(
+      getTool('web_search')!.execute({ query: 'look up sk-live-secret-value-123456' }, native)
+    ).rejects.toThrow()
+    expect(search).not.toHaveBeenCalled()
+  })
+
+  it("says the model's provider has no built-in search when neither is available", async () => {
+    await expect(run('web_search', { query: 'x' })).rejects.toThrow(/has no built-in web search/)
+  })
 })
 
 describe('view_localhost', () => {

@@ -276,8 +276,32 @@ export interface ChatRequest {
   signal?: AbortSignal
 }
 
+/** One search through the model provider's own server-side web-search tool. */
+export interface ProviderWebSearchRequest {
+  /** The model that runs the search (the run's current model). */
+  model: string
+  query: string
+  /** Most hits to return (already clamped to 1 to 10 by the caller). */
+  maxResults: number
+  signal?: AbortSignal
+}
+
+/** What a provider-run search found, normalized across providers. */
+export interface ProviderWebSearchResult {
+  /** The model's short summary of the results, when it wrote one. */
+  answer?: string
+  hits: Array<{ title?: string; url?: string; content?: string }>
+}
+
 export interface Provider {
   streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent>
+  /**
+   * Search the web with the provider's own server-side search tool, billed to the
+   * model key the provider already holds. Present only on hosts whose API offers
+   * one (the Claude API, OpenAI's Responses API); web_search falls back to it when
+   * no search-provider key is set.
+   */
+  webSearch?(req: ProviderWebSearchRequest): Promise<ProviderWebSearchResult>
 }
 
 // ---- Agent run protocol (main <-> renderer) ----
