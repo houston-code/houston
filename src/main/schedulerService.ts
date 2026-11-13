@@ -67,6 +67,11 @@ export interface SchedulerServiceDeps {
   /** Clock, injectable for tests. */
   now?: () => number
   warn?: (message: string) => void
+  /**
+   * How many times to try for the store's lock before going ahead without it
+   * (default LOCK_ATTEMPTS). Tests that hold the lock on purpose shorten the wait.
+   */
+  lockAttempts?: number
 }
 
 export interface SchedulerService extends SchedulerBackend {
@@ -151,7 +156,7 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
   function locked<T>(fn: () => T): T {
     const lock = `${deps.file}.lock`
     let held = false
-    for (let attempt = 0; attempt < LOCK_ATTEMPTS && !held; attempt++) {
+    for (let attempt = 0; attempt < (deps.lockAttempts ?? LOCK_ATTEMPTS) && !held; attempt++) {
       try {
         mkdirSync(dirname(deps.file), { recursive: true })
         writeFileSync(lock, String(process.pid), { flag: 'wx', mode: 0o600 })

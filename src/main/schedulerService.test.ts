@@ -33,12 +33,13 @@ const input = (over: Partial<ScheduledRunInput> = {}): ScheduledRunInput => ({
   ...over
 })
 
-function makeService(opts: { fire?: (s: ScheduledRunInfo) => Promise<void> } = {}) {
+function makeService(opts: { fire?: (s: ScheduledRunInfo) => Promise<void>; lockAttempts?: number } = {}) {
   const fired: ScheduledRunInfo[] = []
   const service = createSchedulerService({
     file,
     fire: opts.fire ?? (async (s) => void fired.push({ ...s })),
-    warn: (m) => warns.push(m)
+    warn: (m) => warns.push(m),
+    ...(opts.lockAttempts !== undefined ? { lockAttempts: opts.lockAttempts } : {})
   })
   return { service, fired }
 }
@@ -233,7 +234,8 @@ describe('createSchedulerService', () => {
       writeFileSync(lock, String(process.pid))
       const now = Date.now() / 1000
       utimesSync(lock, now, now)
-      const { service } = makeService()
+      // A short wait: the point is what happens once it runs out, not its length.
+      const { service } = makeService({ lockAttempts: 3 })
       service.create(input())
       // Waited out, then went ahead without it; the holder's lock is left in place.
       expect(warns).toEqual([`could not lock ${file}; updating schedules without the lock`])
