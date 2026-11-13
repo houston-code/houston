@@ -19,6 +19,7 @@ import type {
   PermissionTestResult,
   SandboxStatus
 } from '@shared/types'
+import type { ForkPoint } from '@shared/conversation-io'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
@@ -64,6 +65,7 @@ import type {
   UpdateInstallFailed,
   WhatsNew
 } from '@shared/update'
+import type { ScheduleCreateRequest, SchedulePreview, ScheduleResult, ScheduleView } from '@shared/schedules'
 import type { ImportOutcome, ImportScan } from '@shared/importConfig'
 import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
@@ -77,6 +79,12 @@ const api = {
   /** Gather the /doctor health facts for the given workspace. */
   getDoctorFacts: (workspace: string): Promise<DoctorFacts> =>
     ipcRenderer.invoke(IPC.doctorFacts, workspace),
+  /** Show the log file in the OS file manager (Help → Open Logs). */
+  revealLogs: (): Promise<void> => ipcRenderer.invoke(IPC.logsReveal),
+  /** The text Report an Issue fills in, to show before opening it. */
+  getIssueReport: (): Promise<string> => ipcRenderer.invoke(IPC.issueReportPreview),
+  /** Open a new GitHub issue with that text filled in. */
+  openIssueReport: (): Promise<boolean> => ipcRenderer.invoke(IPC.issueReportOpen),
   /** Whether an OS sandbox confines shell commands on this host. */
   getSandboxStatus: (): Promise<SandboxStatus> => ipcRenderer.invoke(IPC.sandboxStatus),
   /** Save a `#`-captured standing instruction; resolves to the file path written, or null. */
@@ -243,6 +251,17 @@ const api = {
     ipcRenderer.invoke(IPC.ollamaSupportsTools, providerId, model),
   /** Status of optional integrations (gh CLI, formatters) for the Settings hint. */
   getIntegrations: (): Promise<IntegrationsInfo> => ipcRenderer.invoke(IPC.integrationsGet),
+  /** Scheduled runs (Settings > Scheduled runs). */
+  listSchedules: (): Promise<ScheduleView[]> => ipcRenderer.invoke(IPC.schedulesList),
+  /** What a typed schedule means: normalized form and next run, or the reason it isn't one. */
+  previewSchedule: (spec: string): Promise<SchedulePreview> => ipcRenderer.invoke(IPC.schedulesPreview, spec),
+  createSchedule: (request: ScheduleCreateRequest): Promise<ScheduleResult> =>
+    ipcRenderer.invoke(IPC.schedulesCreate, request),
+  setSchedulePaused: (id: string, paused: boolean): Promise<ScheduleResult> =>
+    ipcRenderer.invoke(IPC.schedulesSetPaused, id, paused),
+  /** Start one run of a schedule now, as a background session. */
+  runScheduleNow: (id: string): Promise<ScheduleResult> => ipcRenderer.invoke(IPC.schedulesRunNow, id),
+  deleteSchedule: (id: string): Promise<ScheduleResult> => ipcRenderer.invoke(IPC.schedulesDelete, id),
   /**
    * OAuth sign-in for a saved remote MCP server: opens the browser flow and
    * stores the tokens. Resolves once the flow completes (or fails); the returned
@@ -292,6 +311,9 @@ const api = {
     ipcRenderer.invoke(IPC.conversationSetSettings, id, patch),
   forkConversation: (id: string): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationFork, id),
+  /** Fork a chat from one of its messages (see ForkPoint). Null when that message is gone. */
+  forkConversationAt: (id: string, point: ForkPoint): Promise<Conversation | null> =>
+    ipcRenderer.invoke(IPC.conversationForkAt, id, point),
   compactConversation: (
     id: string,
     providerId: string,

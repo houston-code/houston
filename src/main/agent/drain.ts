@@ -27,6 +27,8 @@ export interface DrainIO {
    * queued follow-ups included, are offered show_images and render_mockup.
    */
   imageGallery?: boolean
+  /** The client shows a running shell command's output as it arrives (the desktop app). */
+  liveShellOutput?: boolean
 }
 
 /**
@@ -85,7 +87,12 @@ export async function runAndDrain(
   // conversation (a second would interleave its setMessages writes and corrupt
   // the log). The slot is freed when this run ends, before any queue drain below.
   await startRun(
-    { ...runReq, conversationId, ...(io.imageGallery ? { imageGallery: true } : {}) },
+    {
+      ...runReq,
+      conversationId,
+      ...(io.imageGallery ? { imageGallery: true } : {}),
+      ...(io.liveShellOutput ? { liveShellOutput: true } : {})
+    },
     send,
     (msgs) => setMessages(conversationId, msgs),
     owner

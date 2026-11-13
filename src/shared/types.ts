@@ -564,6 +564,8 @@ export type MenuCommand =
   | { type: 'switch-model' }
   /** Help → Keyboard Shortcuts. */
   | { type: 'show-shortcuts' }
+  /** Help → Report an Issue…: show what the report includes before opening it. */
+  | { type: 'report-issue' }
 
 /** The panels the View menu shows and hides. */
 export type MenuPanel = 'sidebar' | 'terminal' | 'tasks' | 'preview' | 'side-chat'
@@ -802,6 +804,8 @@ export interface AppSettings {
   attentionSounds?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
+  /** Accent color preset. Absent = 'default' (the theme's own accent). */
+  accentColor?: AccentColor
   /** Text size in the chat transcript. Absent = 'default'. */
   chatFontSize?: ChatFontSize
   /** Spacing in the chat transcript. Absent = 'comfortable'. */
@@ -876,6 +880,11 @@ export interface AppSettings {
   previewWidth?: number
   /** Whether the preview panel is open. */
   previewOpen?: boolean
+  /**
+   * Open the Preview panel when the agent starts a dev server whose URL is detected,
+   * once per chat. Absent means on.
+   */
+  previewAutoOpen?: boolean
   /** Width (px) of the docked plan-review panel (Plan mode). */
   planWidth?: number
   /**
@@ -979,6 +988,10 @@ export interface EnvKeyOffer {
   envVar: string
   last4: string
 }
+
+/** Accent color presets (Settings > Appearance); 'default' is each theme's own. */
+export const ACCENT_COLORS = ['default', 'violet', 'green', 'orange', 'pink'] as const
+export type AccentColor = (typeof ACCENT_COLORS)[number]
 
 /** How the sidebar sorts chats outside any group into sections. */
 export type SidebarGroupBy = 'folder' | 'date'

@@ -25,6 +25,9 @@ export const IPC = {
   appGetVersion: 'app:getVersion',
   /** Gather the /doctor health facts (sandbox, provider keys, MCP, binaries). */
   doctorFacts: 'app:doctorFacts',
+  logsReveal: 'app:logsReveal',
+  issueReportPreview: 'app:issueReportPreview',
+  issueReportOpen: 'app:issueReportOpen',
   /** Whether an OS sandbox confines shell commands on this host. */
   sandboxStatus: 'app:sandboxStatus',
   /** Save a `#`-captured standing instruction to AGENTS.md (project or global). */
@@ -157,6 +160,13 @@ export const IPC = {
   mcpStatus: 'mcp:status',
   // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
   integrationsGet: 'integrations:get',
+  /** Settings > Scheduled runs over the scheduler service. */
+  schedulesList: 'schedules:list',
+  schedulesPreview: 'schedules:preview',
+  schedulesCreate: 'schedules:create',
+  schedulesSetPaused: 'schedules:setPaused',
+  schedulesRunNow: 'schedules:runNow',
+  schedulesDelete: 'schedules:delete',
   // "Open project in…" — launch an external editor / reveal in the file manager.
   // A user gesture (not the agent); see main/openInEditor.ts.
   editorsList: 'editors:list',
@@ -168,6 +178,7 @@ export const IPC = {
   conversationGet: 'conversation:get',
   conversationCreate: 'conversation:create',
   conversationFork: 'conversation:fork',
+  conversationForkAt: 'conversation:fork-at',
   conversationSetSettings: 'conversation:setSettings',
   conversationCompact: 'conversation:compact',
   conversationDelete: 'conversation:delete',

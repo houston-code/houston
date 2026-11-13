@@ -47,6 +47,8 @@ The full GUI:
 - a chat sidebar and diffs
 - a right-hand dock with a **Background tasks** list of background commands (stop
   them, read their output, see which port each one holds) and the live **Preview**
+  (it opens by itself, once per chat, when the agent starts a dev server and its
+  address shows up; turn that off in Settings > Tools > Preview)
 - Settings
 
 **Chat status.** Each chat in the sidebar has a status dot:
@@ -550,12 +552,14 @@ the model.
 ### Terminal themes
 
 `/theme` lists the terminal's palettes, and `/theme <name>` switches. Your choice is
-remembered.
+remembered. Until you pick one, Houston asks the terminal for its background color
+when it starts (or reads `COLORFGBG`) and uses `light` on a light background; a
+terminal that doesn't answer gets `default`.
 
 | Theme | For |
 | --- | --- |
 | `dark` | bright foregrounds for a dark background |
-| `light` | readable on white (which a dark theme's bright yellow isn't) |
+| `light` | readable on white: darker yellow and teal instead of colors that wash out |
 | `colorblind` | maps a diff's red and green to orange and blue, for the most common form of color blindness |
 | `mono` | no color at all |
 | `default` | the default palette |
@@ -663,6 +667,11 @@ conversation, not a log. To see more:
   always kept in the conversation.
 
 Very long output is capped, with a note saying how much was left out.
+
+In the desktop app, a shell command shows its output in its row while it runs: the
+latest lines, scrolling to follow the newest unless you scroll up to read. It's a
+window onto the last 200 lines or so, with credentials masked as in the result, and it
+gives way to the full result when the command finishes.
 
 In the desktop app:
 
@@ -1058,6 +1067,12 @@ picked.
   back to its last commit (a new file is deleted); in the chat scopes, it goes back to
   how it was before the turn or chat (a file the chat created is deleted). A revert is
   refused when the file changed since the list was read, and while the chat is running.
+- **Comment on lines.** Click a line (or its line number) to leave a comment on it;
+  `Cmd+Enter` (`Ctrl+Enter`) saves and `Esc` cancels. Comments wait under their lines,
+  can be edited or deleted, and stay while you switch scope, close the view or open
+  another chat. **Send N comments to the agent** sends them all as one message naming
+  each file, line and the code on it; the chat shows it as "N review comments", with
+  the full text one click away. **Discard** asks before dropping them.
 
 ### Shipping changes (desktop app)
 
@@ -1905,7 +1920,24 @@ All times are local.
 
 ### Managing schedules
 
-- `list_scheduled_runs` shows what's configured, with next and last fire times.
+**Settings > Scheduled Runs** (desktop) lists every schedule with its recurrence, folder,
+model, approval mode, next run, and how the last run went. Each has:
+
+- **Pause** / **Resume**: a paused schedule is kept but never runs. Resuming picks up
+  from now, so the runs it missed while paused don't all start at once.
+- **Run now**: starts one run immediately as a background chat, without moving the next
+  planned run.
+- **Delete**, after you confirm.
+
+**New scheduled run** opens a form: the task each run starts with, an optional name, when
+it runs (checked as you type, showing the first run time), the folder, the model, and the
+approval mode (Plan mode by default). A run that needs your approval waits in its chat
+until you answer.
+
+The agent manages the same list:
+
+- `list_scheduled_runs` shows what's configured, with next and last fire times (or
+  "paused").
 - `cancel_scheduled_run` removes one.
 - Creating or cancelling a schedule asks for approval.
 
@@ -1918,7 +1950,7 @@ missed while Houston was closed fires once at the next launch.
 | Tool | Does |
 | --- | --- |
 | `review_changes` (or `/review`) | an adversarial review of uncommitted changes |
-| `todo_write` | keeps a task list for multi-step work, rendered live in the transcript |
+| `todo_write` | keeps a task list for multi-step work, rendered live in the transcript and, in the desktop app, pinned above the message box while a turn runs or items are left |
 | `pr_sweep` | tracks batch pull-request work (author new PRs from a task list, or process a batch of existing open PRs) |
 | `show_images` | shows you image files the agent produced |
 | `render_mockup` | screenshots an HTML mockup without a dev server (desktop app) |
@@ -2618,6 +2650,11 @@ checkout.
 - Saved per project folder.
 - Searchable, and you can fork them. A fork starts its own cost at zero: what the
   original spent stays with the original, so usage totals don't count it twice.
+- **Fork from here** forks from one message instead of the whole chat. On a reply (its
+  hover button), the new chat holds the conversation up to and including that reply.
+  On one of your messages (in its rewind menu), the new chat holds what came before it,
+  with that message waiting in the box to send or change. Both are also in the
+  message's right-click menu. The original is untouched.
 - **Export** as JSON or self-contained HTML, and **import** from either. An HTML export
   from an older version brings back only the chat text.
 - **The File menu** starts a new chat (⌘N), a new chat in another folder (⇧⌘N), or one
@@ -2677,7 +2714,15 @@ The desktop app's **Help** menu is last in the menu bar on every platform.
 - **Houston Website** opens houstoncode.ai.
 - **Houston on GitHub** opens the repository, where you can browse open issues and add a
   👍 to the ones you want fixed first.
-- **Report an Issue** opens a new GitHub issue.
+- **Open Logs** shows Houston's log file (`houston.log` in the app's profile folder) in
+  your file manager. Keys and tokens are scrubbed from it, but it can name your folders,
+  so read it before attaching it to a public report.
+- **Report an Issue…** first shows the text a new GitHub issue will start with: your
+  Houston version, platform, and a summary of the diagnostics (each check's name and
+  status, as in `/doctor`). It includes no logs, file paths, keys, or names you chose
+  (MCP servers and custom providers are only counted). **Open GitHub** opens the issue
+  in your browser with that text filled in; describe what happened there before you
+  submit. Both are also in the command palette.
 - **Take the Tour…** plays the getting-started tips again.
 - **On macOS** it also has the system search field: type part of a command's name (for
   example "settings") to find it in the menus.
@@ -2713,7 +2758,7 @@ sidebar) or `Esc` returns to the chat.
 
 | Group | Pages |
 | --- | --- |
-| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Memory, Import |
+| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Scheduled Runs, Memory, Import |
 | **App** | General, Appearance, Keyboard |
 | **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (whether new chats start in a worktree, and additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |
@@ -2725,6 +2770,9 @@ sidebar) or `Esc` returns to the chat.
 - **Density:** Comfortable, or Compact for less space between messages.
 - **Code theme:** Default, High contrast, or Muted, for code blocks, the Files preview,
   and diffs. Every theme keeps code readable in both light and dark.
+- **Accent color:** Default (blue in dark, indigo in light), Violet, Green, Orange, or
+  Pink. It colors buttons, links, the selected chat, and your messages in light mode,
+  with a shade for each of light and dark that keeps text readable.
 
 **Check for Updates…** is also in the app menu on macOS, and the Help menu on Windows
 and Linux.
@@ -2848,7 +2896,7 @@ What it looks for, and where a copy goes:
 | Instruction files | the project (`GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.clinerules`, `.github/copilot-instructions.md`) | the end of the project's `AGENTS.md` |
 | MCP servers | your home folder (for example `~/.cursor/mcp.json`, `~/.claude.json`) | Settings > MCP Servers, switched off |
 | MCP servers | the project (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`) | the project's `.houston/settings.json` |
-| Skills | the project (`.claude/skills/<name>/`) | `.houston/skills/<name>/` |
+| Skills | your home folder (`~/.claude/skills/<name>/`) or the project (`.claude/skills/<name>/`) | `~/.houston/skills/<name>/` or `.houston/skills/<name>/` |
 | Custom commands | your home folder (`~/.claude/commands`, `~/.codex/prompts`) or the project (`.claude/commands`) | `~/.houston/commands` or `.houston/commands` |
 
 `~/.claude/CLAUDE.md` is imported the way its own notice does it: one

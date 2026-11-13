@@ -114,7 +114,10 @@ function rewindItems(target: RewindItemTarget, handlers: RewindHandlers): Contex
     { label: 'Edit and resend', onSelect: () => handlers.onEdit(target), disabled },
     { label: 'Rewind conversation and code', onSelect: () => handlers.onRewind(target, 'both'), disabled },
     { label: 'Rewind conversation only', onSelect: () => handlers.onRewind(target, 'conversation'), disabled },
-    { label: 'Rewind code only', onSelect: () => handlers.onRewind(target, 'code'), disabled }
+    { label: 'Rewind code only', onSelect: () => handlers.onRewind(target, 'code'), disabled },
+    ...(handlers.onFork
+      ? [{ label: 'Fork from here', onSelect: () => handlers.onFork?.(target), separator: true }]
+      : [])
   ]
 }
 
@@ -292,6 +295,8 @@ export interface RewindHandlers {
   disabled: boolean
   onRewind: (target: RewindItemTarget, mode: RewindMode) => void
   onEdit: (target: RewindItemTarget) => void
+  /** Start a new chat from the conversation before this message; absent hides it. */
+  onFork?: (target: RewindItemTarget) => void
 }
 
 /**
@@ -324,9 +329,12 @@ function RewindMenu({ target, handlers }: { target: RewindItemTarget; handlers: 
       {open && (
         <Popover anchorRef={anchor} onClose={() => setOpen(false)} role="menu" ariaLabel="Rewind" align="right">
           {rewindItems(target, handlers).map((item) => (
-            <button key={item.label} role="menuitem" className="menu__item" onClick={() => pick(item.onSelect)}>
-              {item.label}
-            </button>
+            <Fragment key={item.label}>
+              {item.separator && <div className="menu__sep" role="separator" />}
+              <button role="menuitem" className="menu__item" onClick={() => pick(item.onSelect)}>
+                {item.label}
+              </button>
+            </Fragment>
           ))}
         </Popover>
       )}
@@ -385,6 +393,7 @@ const AssistantMessage = memo(function AssistantMessage({
   reasoning,
   replyNumber,
   onMarkUnreadFrom,
+  onForkFrom,
   onRetry,
   at,
   turn
@@ -400,14 +409,18 @@ const AssistantMessage = memo(function AssistantMessage({
   replyNumber?: number
   /** Mark the chat unread from a reply, by that position; absent hides the button. */
   onMarkUnreadFrom?: (replyNumber: number) => void
+  /** Start a new chat from the conversation through a reply, by its position; absent hides it. */
+  onForkFrom?: (replyNumber: number) => void
   /** On the chat's last reply once the run is over: run its user message again. */
   onRetry?: () => void
 }): JSX.Element {
   const onMarkUnread =
     onMarkUnreadFrom && replyNumber !== undefined ? (): void => onMarkUnreadFrom(replyNumber) : undefined
+  const onFork = onForkFrom && replyNumber !== undefined ? (): void => onForkFrom(replyNumber) : undefined
   const { showReasoning } = useTranscriptPrefs()
   const menu = useMessageMenu(text, () => [
     ...(!streaming && onMarkUnread ? [{ label: 'Mark unread from here', onSelect: onMarkUnread }] : []),
+    ...(!streaming && onFork ? [{ label: 'Fork from here', onSelect: onFork }] : []),
     ...(!streaming && onRetry ? [{ label: 'Retry', onSelect: onRetry }] : [])
   ])
   return (
@@ -435,6 +448,16 @@ const AssistantMessage = memo(function AssistantMessage({
           aria-label="Mark unread from here"
         >
           <Icon name="mail" />
+        </button>
+      )}
+      {!streaming && onFork && (
+        <button
+          className="msg__copy msg__fork"
+          onClick={onFork}
+          title="Fork from here: a new chat with the conversation up to this reply"
+          aria-label="Fork from here"
+        >
+          <Icon name="split" />
         </button>
       )}
       {!streaming && onRetry && (
@@ -511,6 +534,7 @@ export function Transcript({
   onOpenConversation,
   rewind,
   onMarkUnreadFrom,
+  onForkFrom,
   onRetryLast,
   newFromId,
   toolsExpanded = false,
@@ -536,6 +560,11 @@ export function Transcript({
    * (0-based). Absent hides the button.
    */
   onMarkUnreadFrom?: (replyNumber: number) => void
+  /**
+   * Start a new chat holding the conversation through a reply, named by its position
+   * among the replies (0-based). Absent hides the action.
+   */
+  onForkFrom?: (replyNumber: number) => void
   /**
    * Send the chat's last user message again for a new reply, offered on the last
    * reply. Absent (while a run is going, or with nothing to retry) hides it.
@@ -647,13 +676,20 @@ export function Transcript({
   }, [items])
   const rewindTo = useStableCallback(rewind?.onRewind)
   const rewindEdit = useStableCallback(rewind?.onEdit)
+  const rewindFork = useStableCallback(rewind?.onFork)
+  const forkFrom = useStableCallback(onForkFrom)
   const rewindDisabled = rewind?.disabled
   const stableRewind = useMemo<RewindHandlers | undefined>(
     () =>
       rewindTo && rewindEdit && rewindDisabled !== undefined
-        ? { disabled: rewindDisabled, onRewind: rewindTo, onEdit: rewindEdit }
+        ? {
+            disabled: rewindDisabled,
+            onRewind: rewindTo,
+            onEdit: rewindEdit,
+            ...(rewindFork ? { onFork: rewindFork } : {})
+          }
         : undefined,
-    [rewindTo, rewindEdit, rewindDisabled]
+    [rewindTo, rewindEdit, rewindFork, rewindDisabled]
   )
 
   // Memoized so it isn't rebuilt when the Transcript re-renders for a non-content
@@ -749,6 +785,7 @@ export function Transcript({
                     reasoning={node.item.reasoning}
                     replyNumber={n}
                     onMarkUnreadFrom={markUnreadFrom}
+                    onForkFrom={forkFrom}
                     onRetry={node.item.id === lastReplyId ? retryLast : undefined}
                     at={node.item.at}
                     turn={turnStats.get(node.item.id)}

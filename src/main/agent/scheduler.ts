@@ -64,6 +64,8 @@ export interface ScheduledRunInfo extends ScheduledRunInput {
   /** The most recent fire's failure, when lastResult is 'error'. */
   lastError?: string
   createdAt: number
+  /** Paused from Settings > Scheduled runs: kept, but not fired until resumed. */
+  paused?: boolean
 }
 
 /** The shell-side capability injected at startup. */
