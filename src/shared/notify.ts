@@ -57,6 +57,47 @@ export function notificationFor(e: AgentEvent, workspaceName?: string): NotifySp
   }
 }
 
+/**
+ * The two attention sounds: a turn ended (finished or failed), or the run is blocked
+ * on the user (an approval, a question, a plan to review, a server's input form).
+ */
+export type AttentionSound = 'done' | 'input'
+
+/**
+ * The sound for an agent event, or null. Same "worth interrupting for" line as
+ * {@link notificationFor}: a turn the user stopped themselves stays silent, and only
+ * events that end a turn or block on the user make a sound.
+ */
+export function soundFor(e: AgentEvent): AttentionSound | null {
+  switch (e.type) {
+    case 'done':
+      return e.stopReason === 'aborted' ? null : 'done'
+    case 'error':
+      return 'done'
+    case 'tool_approval':
+    case 'tool_question':
+    case 'plan_ready':
+    case 'elicitation':
+      return 'input'
+    default:
+      return null
+  }
+}
+
+/**
+ * What the desktop does for an event while its window is unfocused, given the user's
+ * two switches: whether to show a notification (on unless turned off) and which
+ * sound to play (only when sounds are turned on). Null when neither applies.
+ */
+export function attentionSignals(
+  e: AgentEvent,
+  prefs: { desktopNotifications?: boolean; attentionSounds?: boolean }
+): { notify: boolean; sound: AttentionSound | null } | null {
+  const sound = prefs.attentionSounds === true ? soundFor(e) : null
+  const notify = prefs.desktopNotifications !== false && notificationFor(e) !== null
+  return sound || notify ? { notify, sound } : null
+}
+
 /** A short project label for a workspace path (its basename), or undefined. */
 export function workspaceLabel(workspace: string | undefined): string | undefined {
   if (!workspace) return undefined

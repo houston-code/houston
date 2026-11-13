@@ -63,6 +63,7 @@ import { nextApprovalPolicy } from './lib/policyCycle'
 import { resolveShortcuts } from './lib/keybindingOverrides'
 import { modelPaletteItems, type PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
+import { playAttentionSound } from './lib/attentionSound'
 import { RunMeterText } from './components/RunMeterText'
 import { newGroupId } from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
@@ -1090,6 +1091,10 @@ export default function App(): JSX.Element {
     () => window.api.onChatOpenRequest?.((id) => void selectConversation(id)),
     [selectConversation]
   )
+
+  // The main process decides when a sound is due (the setting is on, the window is
+  // not focused, and the event ends a turn or needs the user); this window plays it.
+  useEffect(() => window.api.onAttentionSound?.((sound) => void playAttentionSound(sound)), [])
 
   // Other chats waiting on the user, in sidebar recency order, for the titlebar's
   // "N need you" pill; each click opens the next one after the open chat.
