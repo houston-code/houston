@@ -2549,7 +2549,8 @@ export async function startRun(
       })
 
       // Tell the model how to follow up. Only when a transcript was stored — an
-      // aborted/errored run isn't resumable, and nested dispatches never are.
+      // aborted run, or one that failed before its first step, isn't resumable, and
+      // nested dispatches never are.
       if (storedId) {
         const tool = writable ? 'dispatch_writable_agent' : 'dispatch_agent'
         return `${result}\n\n${resumeNote(storedId, tool)}`

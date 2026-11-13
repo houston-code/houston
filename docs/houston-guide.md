@@ -1858,6 +1858,9 @@ A subagent works under the same step budget as the main agent:
 - a custom agent's `max_turns` replaces all of this with a fixed limit
 - a review's agents keep the base budget without extending, since a review runs many
   at once
+- if its history grows too large for the model's context window, older tool output is
+  trimmed and the step retried; if it still doesn't fit (or the model fails partway),
+  it returns what it had found so far, marked as cut off, and can still be resumed
 
 ### Follow-ups and nesting
 

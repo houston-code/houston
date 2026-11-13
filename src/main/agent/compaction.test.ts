@@ -10,10 +10,12 @@ import {
   EVICT_KEEP_RECENT_TURNS,
   EVICT_MIN_BYTES,
   SUMMARY_MAX_TOKENS,
+  argumentStub,
   buildSummaryMessages,
   buildSummaryRequestMessages,
   compactionAnchor,
   compactionCandidates,
+  elideStaleToolArguments,
   estimateContextParts,
   estimateTokens,
   evictStaleToolResults,
@@ -696,6 +698,52 @@ describe('evictStaleToolResults', () => {
     expect(out[2].content.startsWith('[earlier ')).toBe(true)
     expect(out.slice(3)).toEqual(msgs.slice(3))
     expect(evictStaleToolResults(msgs, { keepFrom: 0 })).toBe(msgs)
+  })
+})
+
+describe('elideStaleToolArguments', () => {
+  const big = 'x'.repeat(300)
+  const msgs: ChatMessage[] = [
+    { role: 'user', content: 'go' },
+    {
+      role: 'assistant',
+      content: 'writing',
+      toolCalls: [
+        { id: 'w', name: 'write_file', arguments: { path: 'a.ts', content: big } },
+        {
+          id: 'm',
+          name: 'multi_edit',
+          arguments: { path: 'b.ts', edits: [{ old_string: 'small', new_string: big }] }
+        }
+      ]
+    },
+    { role: 'tool', content: 'ok', toolCallId: 'w', toolName: 'write_file' },
+    { role: 'tool', content: 'ok', toolCallId: 'm', toolName: 'multi_edit' },
+    {
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id: 'w2', name: 'write_file', arguments: { path: 'c.ts', content: big } }]
+    }
+  ]
+
+  it('stubs large arguments before keepFrom, nested ones included, and leaves the rest', () => {
+    const before = structuredClone(msgs)
+    const out = elideStaleToolArguments(msgs, { keepFrom: 4, minBytes: 256 })
+    expect(msgs).toEqual(before) // pure
+    const [w, m] = out[1].toolCalls!
+    expect(w).toMatchObject({ id: 'w', name: 'write_file' })
+    expect(w.arguments).toEqual({ path: 'a.ts', content: argumentStub('write_file', 'content', 300) })
+    expect(argumentStub('write_file', 'content', 300)).toBe('[earlier write_file content, 300 bytes elided]')
+    expect(m.arguments).toEqual({
+      path: 'b.ts',
+      edits: [{ old_string: 'small', new_string: '[earlier multi_edit new_string, 300 bytes elided]' }]
+    })
+    expect(out[1].content).toBe('writing')
+    // At or after keepFrom, untouched.
+    expect(out[4]).toBe(msgs[4])
+    // Already stubbed: nothing more to do, and the same array comes back.
+    expect(elideStaleToolArguments(out, { keepFrom: 4, minBytes: 256 })).toBe(out)
+    expect(elideStaleToolArguments(msgs, { keepFrom: 0, minBytes: 256 })).toBe(msgs)
   })
 })
 
