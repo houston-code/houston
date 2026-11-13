@@ -134,6 +134,23 @@ export function killTerminal(id: string): boolean {
   return true
 }
 
+/**
+ * Kill every terminal a renderer opened. Call when that renderer's page is gone: its
+ * window closed, it reloaded, or it crashed. The page held the only handle to them (a
+ * new page starts with no tabs and has no way to re-attach), so otherwise the shells,
+ * and anything started in them, kept running unseen until the app quit. Returns how
+ * many were killed.
+ */
+export function killTerminalsOf(sender: TerminalSender): number {
+  let killed = 0
+  for (const term of [...terminals.values()]) {
+    if (term.sender !== sender) continue
+    killTerminal(term.id)
+    killed++
+  }
+  return killed
+}
+
 /** Number of live terminals (used by tests). */
 export function terminalCount(): number {
   return terminals.size
