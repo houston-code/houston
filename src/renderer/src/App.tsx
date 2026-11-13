@@ -108,6 +108,7 @@ import type { DockTab } from './components/PreviewDock'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
 import { Transcript, type RewindHandlers } from './components/Transcript'
+import { FileLinkContext, type FileLinks } from './components/FileLink'
 import { RewindDialog } from './components/RewindDialog'
 import { RewindPicker } from './components/RewindPicker'
 import { rewindDoneText, rewindsConversation, type RewindMode, type RewindOutcome } from '@shared/rewind'
@@ -236,6 +237,8 @@ export default function App(): JSX.Element {
   const [filesOpen, setFilesOpen] = useState(false)
   // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
   const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
+  // The line to show in the previewed file, when a link named one.
+  const [filesLine, setFilesLine] = useState<number | undefined>(undefined)
   const [sideChatOpen, setSideChatOpen] = useState(false)
   // The open chat's decisions on its propose_session cards (keyed by call id).
   const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
@@ -581,6 +584,22 @@ export default function App(): JSX.Element {
     [conversations, currentId]
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
+  // File paths in the transcript (tool rows, the receipt, relative links in replies)
+  // open in the Files panel's preview, at the line when one is known.
+  const fileLinks = useMemo<FileLinks | null>(
+    () =>
+      workspace
+        ? {
+            workspace,
+            open: ({ path, line }) => {
+              setFilesTarget(path)
+              setFilesLine(line)
+              setFilesOpen(true)
+            }
+          }
+        : null,
+    [workspace]
+  )
   // Whether the open folder is empty, so the setup checklist's step 3 can suggest a
   // first task that fits it (build something vs. explain the project).
   const [workspaceKind, setWorkspaceKind] = useState<FolderKind>('unknown')
@@ -2851,6 +2870,7 @@ export default function App(): JSX.Element {
             )}
           </div>
         ) : (
+          <FileLinkContext.Provider value={fileLinks}>
           <Transcript
             // One per chat: a new chat opens at its latest message (or its "New"
             // divider), not at the scroll position the last chat was left at.
@@ -2869,6 +2889,7 @@ export default function App(): JSX.Element {
               : {})}
             {...(newFrom && newFrom.conversationId === currentId ? { newFromId: newFrom.itemId } : {})}
           />
+          </FileLinkContext.Provider>
         )}
 
         <TrustFolderBanner
@@ -3157,9 +3178,11 @@ export default function App(): JSX.Element {
           <FilesPanel
             workspace={workspace}
             initialPath={filesTarget}
+            initialLine={filesLine}
             onClose={() => {
               setFilesOpen(false)
               setFilesTarget(undefined)
+              setFilesLine(undefined)
             }}
           />
         )}

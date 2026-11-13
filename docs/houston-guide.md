@@ -626,6 +626,13 @@ conversation, not a log. To see more:
 
 Very long output is capped, with a note saying how much was left out.
 
+In the desktop app, file paths in the transcript open the file in the Files panel's
+preview: the file a tool row names (a read opens at the line it started from), a diff's
+file header, a file the receipt lists as changed, and a relative link in a reply
+(`[setup](docs/setup.md)`, `src/app.ts#L42`, or `src/app.ts:42` opens at that line).
+The preview's **Open** button hands the file to its default app. Only files inside the
+project folder open this way; web links still open in your browser.
+
 ## What actually ran (the receipt)
 
 A turn that ran checks or changed files ends with a line marked **Recorded by

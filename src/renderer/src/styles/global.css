@@ -5430,10 +5430,61 @@ body.is-resizing .preview-dock__resizer::after {
   padding: 4px 16px 16px;
 }
 .file-preview__code {
+  position: relative;
   display: flex;
   align-items: flex-start;
   min-height: 100%;
   background: var(--bg-code);
+}
+/* The line a link pointed at, marked across the gutter and the code. */
+.file-preview__line-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-left: 2px solid var(--accent);
+  pointer-events: none;
+}
+/* A file path in the transcript that opens the file: reads as a link, sized like
+   the text around it. */
+.file-link {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 2px;
+}
+.file-link:hover,
+.file-link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+.file-link.md-link {
+  color: var(--accent);
+}
+/* In tool rows and the receipt the paths stay quiet until hovered. */
+.tool-row__target.file-link,
+.tool-reads__path.file-link,
+.tool-row__diff-path.file-link,
+.receipt__file.file-link {
+  text-decoration: none;
+}
+.tool-row__target.file-link:hover,
+.tool-reads__path.file-link:hover,
+.tool-row__diff-path.file-link:hover,
+.receipt__file.file-link:hover,
+.tool-row__target.file-link:focus-visible,
+.tool-reads__path.file-link:focus-visible,
+.tool-row__diff-path.file-link:focus-visible,
+.receipt__file.file-link:focus-visible {
+  text-decoration: underline;
 }
 .file-preview__gutter {
   flex: none;
