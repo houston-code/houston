@@ -272,6 +272,57 @@ describe('startEgressProxy upstream lifetimes', () => {
     }
   })
 
+  it('answers 504 when a connected plain-HTTP upstream stays silent past the idle timeout', async () => {
+    // Accepts the request and never answers.
+    const silent = createHttpServer(() => {})
+    await new Promise<void>((done) => silent.listen(0, '127.0.0.1', () => done()))
+    const port = (silent.address() as { port: number }).port
+    const proxy = await startEgressProxy({
+      checkHost: (host) => ({ allowed: host === '127.0.0.1' }),
+      upstreamIdleTimeoutMs: 150
+    })
+    try {
+      const res = await rawProxyHttp(proxy.endpoints.tcpPort, `http://127.0.0.1:${port}/`)
+      expect(res).toContain('504')
+      expect(res).toContain('Gateway timeout: upstream sent nothing for 0.15s')
+    } finally {
+      await proxy.close()
+      silent.closeAllConnections()
+      await new Promise<void>((done) => silent.close(() => done()))
+    }
+  })
+
+  it('keeps a plain-HTTP response that streams for longer than the idle timeout', async () => {
+    const trickle = createHttpServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/plain' })
+      let n = 0
+      const tick = setInterval(() => {
+        res.write(`chunk${n} `)
+        if (++n === 6) {
+          clearInterval(tick)
+          res.end('done')
+        }
+      }, 50)
+    })
+    await new Promise<void>((done) => trickle.listen(0, '127.0.0.1', () => done()))
+    const port = (trickle.address() as { port: number }).port
+    const proxy = await startEgressProxy({
+      checkHost: (host) => ({ allowed: host === '127.0.0.1' }),
+      upstreamIdleTimeoutMs: 150
+    })
+    try {
+      const res = await rawProxyHttp(proxy.endpoints.tcpPort, `http://127.0.0.1:${port}/`)
+      expect(res).toContain('200')
+      // Chunked framing sits between the writes, so check each piece arrived.
+      expect(res).toContain('chunk5 ')
+      expect(res).toContain('done')
+      expect(res).not.toContain('Gateway timeout')
+    } finally {
+      await proxy.close()
+      await new Promise<void>((done) => trickle.close(() => done()))
+    }
+  })
+
   it('still denies plain HTTP to a disallowed host with the injected timeout', async () => {
     const proxy = await startEgressProxy({
       checkHost: () => ({ allowed: false, reason: 'not on the allowlist' }),

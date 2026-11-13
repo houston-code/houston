@@ -126,6 +126,8 @@ export interface StartEgressProxyOptions {
   baseTmpDir?: string
   /** How long an upstream may take to accept the connection (default 15s); injectable for tests. */
   upstreamConnectTimeoutMs?: number
+  /** How long a connected plain-HTTP upstream may stay silent (default 300s); injectable for tests. */
+  upstreamIdleTimeoutMs?: number
 }
 
 export interface EgressProxyHandle {
@@ -231,6 +233,16 @@ function forwardableHeaders(headers: IncomingMessage['headers']): Record<string,
 
 /** Grace for the upstream TCP connect before the attempt is reported as unreachable. */
 const UPSTREAM_CONNECT_TIMEOUT_MS = 15_000
+/**
+ * Once a plain-HTTP upstream is connected, how long it may go without sending or
+ * receiving a byte before the proxy gives up and answers 504. Generous, so a slow
+ * server is not cut off, but finite, so a sandboxed client with no timeout of its own
+ * never hangs forever on an upstream that never answers.
+ */
+const UPSTREAM_IDLE_TIMEOUT_MS = 300_000
+
+/** The upstream went quiet past the idle timeout (answered 504, not 502). */
+class UpstreamIdleError extends Error {}
 
 function denyBody(host: string, reason: string | undefined): string {
   const detail = reason ? ` (${reason})` : ''
@@ -248,6 +260,7 @@ function denyBody(host: string, reason: string | undefined): string {
  */
 export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressProxyHandle> {
   const connectTimeoutMs = opts.upstreamConnectTimeoutMs ?? UPSTREAM_CONNECT_TIMEOUT_MS
+  const idleTimeoutMs = opts.upstreamIdleTimeoutMs ?? UPSTREAM_IDLE_TIMEOUT_MS
   const sockets = new Set<Socket>()
   const track = (s: Socket): void => {
     sockets.add(s)
@@ -302,18 +315,35 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
         upRes.pipe(res)
       }
     )
-    // Time out the connect only. A socket timeout left armed past it is an idle timer
-    // over the whole exchange, which would 502 an upstream slow to send its first byte.
+    // Two timers: the short connect timeout while the socket is connecting, then a
+    // generous idle timeout once it is (reset by every byte either way), so an upstream
+    // slow to send its first byte still gets through but a silent one can't hang the
+    // client forever. Both listeners come off when the request ends, since a keep-alive
+    // socket goes back to the agent's pool and serves later requests.
     upstream.on('socket', (sock) => {
-      if (!sock.connecting) return // a reused keep-alive socket is already connected
-      const onTimeout = (): void => {
+      const onConnectTimeout = (): void => {
         upstream.destroy(new Error('upstream connect timed out'))
       }
-      sock.setTimeout(connectTimeoutMs)
-      sock.once('timeout', onTimeout)
-      sock.once('connect', () => {
-        sock.setTimeout(0)
-        sock.removeListener('timeout', onTimeout)
+      const onIdle = (): void => {
+        upstream.destroy(new UpstreamIdleError(`upstream sent nothing for ${idleTimeoutMs / 1000}s`))
+      }
+      const armIdle = (): void => {
+        sock.setTimeout(idleTimeoutMs)
+        sock.on('timeout', onIdle)
+      }
+      if (sock.connecting) {
+        sock.setTimeout(connectTimeoutMs)
+        sock.once('timeout', onConnectTimeout)
+        sock.once('connect', () => {
+          sock.removeListener('timeout', onConnectTimeout)
+          armIdle()
+        })
+      } else {
+        armIdle() // a reused keep-alive socket is already connected
+      }
+      upstream.once('close', () => {
+        sock.removeListener('timeout', onConnectTimeout)
+        sock.removeListener('timeout', onIdle)
       })
     })
     // A client that goes away mid-exchange takes its upstream request with it.
@@ -322,8 +352,9 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
     })
     upstream.on('error', (e) => {
       if (!res.headersSent) {
-        res.writeHead(502, { 'content-type': 'text/plain' })
-        res.end(`Bad gateway: ${e.message}\n`)
+        const idle = e instanceof UpstreamIdleError
+        res.writeHead(idle ? 504 : 502, { 'content-type': 'text/plain' })
+        res.end(`${idle ? 'Gateway timeout' : 'Bad gateway'}: ${e.message}\n`)
       } else {
         res.destroy()
       }
