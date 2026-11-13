@@ -89,6 +89,7 @@ import { deliverMidRunMessage } from './lib/midRunMessage'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
 import type { ShipAction } from '@shared/shipAction'
 import { saveComposerDraft } from './lib/composerDraft'
+import type { ForkPoint } from '@shared/conversation-io'
 import {
   endsWithRecordedError,
   itemsFromMessages,
@@ -971,6 +972,24 @@ export default function App(): JSX.Element {
     [currentId, chat, refreshConversations]
   )
 
+  // "Fork from here": a new chat holding the conversation up to a message. From one
+  // of the user's messages, the fork ends just before it and that message waits in the
+  // new chat's box to send or change.
+  const forkFrom = useCallback(
+    async (point: ForkPoint, draft?: string) => {
+      if (!currentId) return
+      const fork = await window.api.forkConversationAt(currentId, point)
+      if (!fork) {
+        chat.notify("Couldn't fork from that message. Reopen the chat and try again.", 'error')
+        return
+      }
+      if (draft) saveComposerDraft(fork.id, draft)
+      await refreshConversations()
+      await selectConversation(fork.id)
+    },
+    [currentId, chat, refreshConversations, selectConversation]
+  )
+
   const onForkConversation = useCallback(
     async (id: string) => {
       const fork = await window.api.forkConversation(id)
@@ -1723,10 +1742,11 @@ export default function App(): JSX.Element {
         ? {
             disabled: chat.running,
             onRewind: (target, mode) => setRewindConfirm({ target, mode }),
-            onEdit: onEditMessage
+            onEdit: onEditMessage,
+            onFork: (target) => void forkFrom({ kind: 'turn', n: target.turn, text: target.text }, target.text)
           }
         : undefined,
-    [currentId, chat.running, onEditMessage]
+    [currentId, chat.running, onEditMessage, forkFrom]
   )
 
   // A different chat: whatever rewind UI was up belongs to the old one.
@@ -2863,6 +2883,7 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            {...(currentId ? { onForkFrom: (n: number) => void forkFrom({ kind: 'reply', n }) } : {})}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
               : {})}

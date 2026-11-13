@@ -224,6 +224,8 @@ export interface RewindHandlers {
   disabled: boolean
   onRewind: (target: RewindItemTarget, mode: RewindMode) => void
   onEdit: (target: RewindItemTarget) => void
+  /** Start a new chat from the conversation before this message; absent hides it. */
+  onFork?: (target: RewindItemTarget) => void
 }
 
 /**
@@ -279,6 +281,19 @@ function RewindMenu({ target, handlers }: { target: RewindItemTarget; handlers: 
           >
             Rewind code only
           </button>
+          {handlers.onFork && (
+            <>
+              <div className="menu__sep" role="separator" />
+              <button
+                role="menuitem"
+                className="menu__item"
+                title="A new chat with the conversation before this message, and this message in its box"
+                onClick={() => pick(() => handlers.onFork?.(target))}
+              >
+                Fork from here
+              </button>
+            </>
+          )}
         </Popover>
       )}
     </>
@@ -336,6 +351,7 @@ const AssistantMessage = memo(function AssistantMessage({
   reasoning,
   replyNumber,
   onMarkUnreadFrom,
+  onForkFrom,
   at,
   turn
 }: {
@@ -350,9 +366,12 @@ const AssistantMessage = memo(function AssistantMessage({
   replyNumber?: number
   /** Mark the chat unread from a reply, by that position; absent hides the button. */
   onMarkUnreadFrom?: (replyNumber: number) => void
+  /** Start a new chat from the conversation through a reply, by its position; absent hides it. */
+  onForkFrom?: (replyNumber: number) => void
 }): JSX.Element {
   const onMarkUnread =
     onMarkUnreadFrom && replyNumber !== undefined ? (): void => onMarkUnreadFrom(replyNumber) : undefined
+  const onFork = onForkFrom && replyNumber !== undefined ? (): void => onForkFrom(replyNumber) : undefined
   return (
     <div className="msg msg--assistant">
       {reasoning && (
@@ -377,6 +396,16 @@ const AssistantMessage = memo(function AssistantMessage({
           aria-label="Mark unread from here"
         >
           <Icon name="mail" />
+        </button>
+      )}
+      {!streaming && onFork && (
+        <button
+          className="msg__copy msg__fork"
+          onClick={onFork}
+          title="Fork from here: a new chat with the conversation up to this reply"
+          aria-label="Fork from here"
+        >
+          <Icon name="split" />
         </button>
       )}
     </div>
@@ -443,6 +472,7 @@ export function Transcript({
   onOpenConversation,
   rewind,
   onMarkUnreadFrom,
+  onForkFrom,
   newFromId
 }: {
   items: DisplayItem[]
@@ -465,6 +495,11 @@ export function Transcript({
    * (0-based). Absent hides the button.
    */
   onMarkUnreadFrom?: (replyNumber: number) => void
+  /**
+   * Start a new chat holding the conversation through a reply, named by its position
+   * among the replies (0-based). Absent hides the action.
+   */
+  onForkFrom?: (replyNumber: number) => void
   /**
    * The reply where unseen output starts: a "New" divider goes above it, and the
    * view opens scrolled to it instead of to the bottom.
@@ -561,13 +596,20 @@ export function Transcript({
   const markUnreadFrom = useStableCallback(onMarkUnreadFrom)
   const rewindTo = useStableCallback(rewind?.onRewind)
   const rewindEdit = useStableCallback(rewind?.onEdit)
+  const rewindFork = useStableCallback(rewind?.onFork)
+  const forkFrom = useStableCallback(onForkFrom)
   const rewindDisabled = rewind?.disabled
   const stableRewind = useMemo<RewindHandlers | undefined>(
     () =>
       rewindTo && rewindEdit && rewindDisabled !== undefined
-        ? { disabled: rewindDisabled, onRewind: rewindTo, onEdit: rewindEdit }
+        ? {
+            disabled: rewindDisabled,
+            onRewind: rewindTo,
+            onEdit: rewindEdit,
+            ...(rewindFork ? { onFork: rewindFork } : {})
+          }
         : undefined,
-    [rewindTo, rewindEdit, rewindDisabled]
+    [rewindTo, rewindEdit, rewindFork, rewindDisabled]
   )
 
   // Memoized so it isn't rebuilt when the Transcript re-renders for a non-content
@@ -632,6 +674,7 @@ export function Transcript({
                     reasoning={node.item.reasoning}
                     replyNumber={n}
                     onMarkUnreadFrom={markUnreadFrom}
+                    onForkFrom={forkFrom}
                     at={node.item.at}
                     turn={turnStats.get(node.item.id)}
                   />

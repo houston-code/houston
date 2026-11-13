@@ -472,7 +472,8 @@ Open source under the [Apache License 2.0](LICENSE).
   the chat text.
   **Search** the sidebar to find a past chat by its title or anything said in it.
   **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
-  direction without disturbing the original.
+  direction without disturbing the original, or **Fork from here** on one message to
+  branch off at that point.
 - **Auto-named chats.** A new chat shows the first message as a placeholder, then,
   as soon as the first turn starts, the conversation's own model writes a short,
   specific title to replace it, usually within seconds (the new title appears in the

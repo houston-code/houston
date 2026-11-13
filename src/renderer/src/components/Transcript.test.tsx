@@ -721,3 +721,43 @@ describe('message timestamps and turn details', () => {
     expect(container.querySelector('.msg--assistant .msg__meta')).toBeNull()
   })
 })
+
+describe('fork from a message', () => {
+  it('forks through a reply by its position among the replies', () => {
+    const onForkFrom = vi.fn()
+    render(
+      <Transcript
+        items={[userItem({ id: 'u1' }), assistantItem({ id: 'a1', text: 'one' }), userItem({ id: 'u2', text: 'again' }), assistantItem({ id: 'a2', text: 'two' })]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        onForkFrom={onForkFrom}
+      />
+    )
+    const buttons = screen.getAllByRole('button', { name: 'Fork from here' })
+    expect(buttons).toHaveLength(2)
+    fireEvent.click(buttons[1])
+    expect(onForkFrom).toHaveBeenCalledWith(1)
+  })
+
+  it('offers Fork from here in a user message menu, with that message as the target', () => {
+    const handlers = { disabled: false, onRewind: vi.fn(), onEdit: vi.fn(), onFork: vi.fn() }
+    render(
+      <Transcript
+        items={[userItem({ id: 'u1', text: 'first' }), assistantItem(), userItem({ id: 'u2', text: 'second' }), assistantItem({ id: 'a2' })]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        rewind={handlers}
+      />
+    )
+    fireEvent.click(screen.getAllByRole('button', { name: 'Rewind to this message' })[1])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Fork from here' }))
+    expect(handlers.onFork).toHaveBeenCalledWith(expect.objectContaining({ id: 'u2', turn: 1, text: 'second' }))
+  })
+
+  it('shows no fork action without a handler', () => {
+    renderTranscript([userItem(), assistantItem()])
+    expect(screen.queryByRole('button', { name: 'Fork from here' })).toBeNull()
+  })
+})

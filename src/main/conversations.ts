@@ -29,7 +29,10 @@ import type {
   SpawnedFrom,
   StoredSideChat
 } from '@shared/agent'
-import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
+import { forkConversationData, type ForkPoint, type ImportedConversation } from '@shared/conversation-io'
+import { replyMessageIndexes } from '@shared/chatStatus'
+import { rewindableTurnIndices, turnText } from '@shared/rewind'
+import { repairDanglingToolResults } from './agent/repair'
 import { accumulateModelUsage } from '@shared/usage'
 import { invocationText } from '@shared/promptInvocation'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
@@ -358,6 +361,43 @@ export function conversationExists(id: string): boolean {
  * different direction without disturbing the original. Returns the new
  * conversation, or null if the source doesn't exist.
  */
+/**
+ * How many leading messages a fork from `point` keeps, or null when the point no
+ * longer names a message in `messages`. After a reply, that reply's tool results come
+ * along (a call without its results can't be sent); before a user message, nothing of
+ * that message or after it.
+ */
+export function forkCut(messages: ChatMessage[], point: ForkPoint): number | null {
+  if (point.kind === 'reply') {
+    const at = replyMessageIndexes(messages)[point.n]
+    if (at === undefined) return null
+    let cut = at + 1
+    while (messages[cut]?.role === 'tool') cut++
+    return cut
+  }
+  const at = rewindableTurnIndices(messages)[point.n]
+  if (at === undefined || turnText(messages[at]) !== point.text) return null
+  return at
+}
+
+/**
+ * Fork a chat from one of its messages: a new chat holding the conversation up to
+ * that point (see {@link forkCut}), made like a whole-chat fork. Null when the chat or
+ * the point is gone.
+ */
+export function forkConversationAt(id: string, point: ForkPoint): Conversation | null {
+  const src = getConversation(id)
+  if (!src) return null
+  const cut = forkCut(src.messages, point)
+  if (cut === null) return null
+  // Anything left unbalanced by the cut is closed off, as a hand-off's history is.
+  const messages = repairDanglingToolResults(src.messages.slice(0, cut))
+  const fork = forkConversationData({ ...src, messages }, randomUUID(), Date.now())
+  fork.titleGenerated = true
+  write(fork)
+  return fork
+}
+
 export function forkConversation(id: string): Conversation | null {
   // Hydrated: the fork's write() copies the bytes into the fork's own media folder.
   const src = getConversation(id)
