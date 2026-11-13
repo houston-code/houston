@@ -590,6 +590,28 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   )
 }
 
+/** The opt-in suggested next message (an extra, small model call per turn). */
+export function SuggestionsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
+  const { settings, setSettings } = ctx
+  return (
+    <SettingsSection title="Suggested next message">
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.suggestNextPrompt ?? false}
+          onChange={(e) => setSettings((s) => ({ ...s, suggestNextPrompt: e.target.checked }))}
+        />
+        <span>
+          Suggest a next message when a turn ends. The chat&apos;s model writes one short
+          follow-up, shown faintly in the empty message box; press Tab to use it. Each
+          suggestion is a small extra request to the model, billed like any other. Off by
+          default.
+        </span>
+      </label>
+    </SettingsSection>
+  )
+}
+
 export function ReasoningSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
   return (

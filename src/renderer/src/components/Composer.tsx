@@ -165,6 +165,7 @@ export function Composer({
   conversationId,
   disabled,
   disabledReason,
+  suggestion,
   running,
   attention,
   workspace,
@@ -191,6 +192,11 @@ export function Composer({
   /** The open conversation (null for a not-yet-created new chat); keys the draft. */
   conversationId: string | null
   disabled: boolean
+  /**
+   * A suggested next message (the "Suggest a next message" setting), shown as ghost
+   * text in the empty, idle box; Tab puts it in the box.
+   */
+  suggestion?: string
   /** Why the composer is disabled, shown as the placeholder (e.g. missing API key). */
   disabledReason?: string
   running: boolean
@@ -1001,6 +1007,13 @@ export function Composer({
         return
       }
     }
+    // Tab takes the suggested next message into the empty box (it stays editable).
+    if (e.key === 'Tab' && !e.shiftKey && suggestion && !running && text === '') {
+      e.preventDefault()
+      sync(suggestion, suggestion.length)
+      focusEnd(suggestion.length)
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       // Mid-run, Enter steers the running turn and Mod+Enter queues for after it.
@@ -1236,7 +1249,9 @@ export function Composer({
                   ? answering
                     ? answeringPlaceholder(isMacPlatform())
                     : runningPlaceholder(isMacPlatform())
-                  : 'Ask Houston anything…  (@ for files, / for commands, + for attachments)'
+                  : suggestion
+                    ? `${suggestion}   (Tab to use)`
+                    : 'Ask Houston anything…  (@ for files, / for commands, + for attachments)'
             }
             value={text}
             disabled={disabled}

@@ -8,6 +8,7 @@ import {
   LoopControlSection,
   ProvidersSection,
   ReasoningSection,
+  SuggestionsSection,
   ScorecardSection,
   SystemPromptSection,
   WebSearchSection
@@ -125,6 +126,12 @@ export const PAGES: SettingsPage[] = [
         keys: ['reasoningSummary', 'verbosity'],
         Component: ReasoningSection,
         keywords: ['thinking', 'effort', 'summary', 'verbosity']
+      },
+      {
+        id: 'suggestions',
+        keys: ['suggestNextPrompt'],
+        Component: SuggestionsSection,
+        keywords: ['suggest', 'suggestion', 'next prompt', 'autocomplete', 'ghost text', 'follow-up']
       }
     ]
   },

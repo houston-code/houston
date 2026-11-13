@@ -160,6 +160,7 @@ export const IPC = {
   conversationScorecard: 'conversation:scorecard',
   /** Main → renderer: a chat got a model-generated title (live sidebar/header update). */
   conversationTitleChanged: 'conversation:titleChanged',
+  conversationSuggestion: 'conversation:suggestion',
   // Agent
   agentStart: 'agent:start',
   agentRetry: 'agent:retry',

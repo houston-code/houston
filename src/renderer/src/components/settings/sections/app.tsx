@@ -226,6 +226,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   appBadge: 'app icon badge',
   theme: 'theme',
   htmlVisuals: 'interactive visuals',
+  suggestNextPrompt: 'suggested next message',
   memoryEnabled: 'memory',
   keybindings: 'keyboard shortcuts',
   sandboxEgress: 'sandbox egress'

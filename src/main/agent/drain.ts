@@ -4,7 +4,8 @@ import type { TurnErrorCause } from '@shared/turnError'
 import { combineQueued, type QueuedInputMeta } from '@shared/queue'
 import { startRun } from './loop'
 import { maybeGenerateTitle } from './title'
-import { removeFromQueue, settleSteers, takeQueue } from './queue'
+import { maybeSuggestNext } from './suggest'
+import { listQueue, removeFromQueue, settleSteers, takeQueue } from './queue'
 import {
   getConversation,
   setConversationError,
@@ -19,6 +20,8 @@ export interface DrainIO {
   emitQueueChanged: (conversationId: string, items: QueuedInputMeta[]) => void
   /** Push a conversation's freshly model-generated title to the renderer (live sidebar update). */
   emitTitleChanged?: (conversationId: string, title: string) => void
+  /** Push a suggested next message for a conversation whose turn ended (when turned on). */
+  emitSuggestion?: (conversationId: string, text: string) => void
   /**
    * The client draws image results as a gallery (the desktop app), so its runs,
    * queued follow-ups included, are offered show_images and render_mockup.
@@ -98,6 +101,18 @@ export async function runAndDrain(
     // that the reply is available as extra context. No-op if already titled or the
     // first attempt is still in flight. Must not delay the queue drain.
     requestTitle()
+    // Nothing queued to send next: offer a suggested next message, if the user turned
+    // that on (maybeSuggestNext checks the setting). A queued follow-up is the user's
+    // own next message, so there is nothing to suggest then.
+    if (io.emitSuggestion && listQueue(conversationId).length === 0) {
+      const emit = io.emitSuggestion
+      void maybeSuggestNext({
+        conversationId,
+        providerId: runReq.providerId,
+        model: runReq.model,
+        onSuggestion: (text) => emit(conversationId, text)
+      })
+    }
     drainQueue(io, conversationId, owner)
   } else if (terminal === 'error') {
     // Persist the failure so the "last turn failed" Retry banner survives a reload.
