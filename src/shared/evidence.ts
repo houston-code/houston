@@ -97,6 +97,17 @@ export interface ReceiptCheck {
    * Informational: a later edit to a README makes an earlier test run no less real.
    */
   beforeLastWrite?: true
+  /**
+   * For a test command that ran more than once this turn: its last run ran fewer tests
+   * (passed plus failed) than the most an earlier run of it ran, as when a test was
+   * deleted or filtered out. `from` is that earlier most, `to` the last run's.
+   */
+  shrunk?: { from: number; to: number }
+  /**
+   * For a test command that ran more than once this turn: its last run skipped more
+   * tests than the fewest an earlier run of it skipped, as when a `.skip` was added.
+   */
+  skippedRose?: { from: number; to: number }
   /** How many times this same command ran this turn. The fields above describe the last. */
   runs: number
 }
@@ -137,6 +148,11 @@ export interface TurnReceipt {
    * build, a browser check) with no passing run of it recorded. At most 10.
    */
   todoGaps?: string[]
+  /**
+   * Todo items the agent marked completed this turn whose claimed check passed only
+   * before a later file change, so it may not cover the final code. At most 10.
+   */
+  todoStale?: string[]
   /** Progress against the plan the user accepted, while it is still being carried out. */
   plan?: PlanProgress
 }
@@ -233,6 +249,8 @@ export function checkDetail(c: ReceiptCheck): string {
   if (c.blocked) parts.push(BLOCKED_TEXT[c.blocked])
   if (c.gate) parts.push('your verify command')
   if (c.by) parts.push(`run by ${c.by}`)
+  if (c.shrunk) parts.push(`an earlier run ran ${c.shrunk.from} test${c.shrunk.from === 1 ? '' : 's'}`)
+  if (c.skippedRose) parts.push(`an earlier run skipped ${c.skippedRose.from || 'none'}`)
   if (c.beforeLastWrite) parts.push('ran before the last file change')
   if (c.runs > 1) parts.push(`ran ${c.runs} times, last run shown`)
   return parts.join(', ')
@@ -259,6 +277,19 @@ function lastOf(r: TurnReceipt, kind: CheckKind): ReceiptCheck | undefined {
   return undefined
 }
 
+/**
+ * What follows a test run's count in the summary: that an earlier run of the same
+ * command ran more tests, and how many the last run skipped (and that earlier runs
+ * skipped fewer). "11, down from 12, 1 skipped, up from 0"
+ */
+function trendText(t: ReceiptCheck): string {
+  const parts: string[] = []
+  if (t.shrunk) parts.push(`down from ${t.shrunk.from}`)
+  const skipped = t.counts?.skipped ?? 0
+  if (skipped) parts.push(`${skipped} skipped${t.skippedRose ? `, up from ${t.skippedRose.from}` : ''}`)
+  return parts.map((p) => `, ${p}`).join('')
+}
+
 function testsPhrase(r: TurnReceipt): string | null {
   const t = lastOf(r, 'test')
   if (!t) {
@@ -266,11 +297,14 @@ function testsPhrase(r: TurnReceipt): string | null {
     // noise when the turn edited a README.
     return r.filesChangedCount > 0 && !onlyDocsChanged(r) ? 'no tests ran' : null
   }
-  if (t.ok === true) return t.counts ? `tests passed (${t.counts.passed})` : 'tests passed'
+  if (t.ok === true) {
+    const passed = t.counts ? `tests passed (${t.counts.passed}${trendText(t)})` : 'tests passed'
+    return t.beforeLastWrite ? `${passed} before the last change` : passed
+  }
   if (t.ok === false) {
     if (t.timedOut) return 'tests timed out'
     if (t.counts && t.counts.failed > 0) {
-      return `tests failed (${t.counts.failed} of ${t.counts.passed + t.counts.failed})`
+      return `tests failed (${t.counts.failed} of ${t.counts.passed + t.counts.failed}${trendText(t)})`
     }
     if (t.counts && t.counts.passed === 0) return 'no tests were found'
     const why = t.blocked ? ` (${BLOCKED_TEXT[t.blocked]})` : ''
@@ -316,6 +350,8 @@ export function receiptSummary(r: TurnReceipt): string {
   if (r.plan) parts.push(planPhrase(r.plan))
   const gaps = r.todoGaps?.length ?? 0
   if (gaps) parts.push(`${gaps} todo${gaps === 1 ? '' : 's'} marked done with nothing recorded`)
+  const stale = r.todoStale?.length ?? 0
+  if (stale) parts.push(`${stale} todo${stale === 1 ? '' : 's'} marked done, checked only before the last change`)
   const delegated = (r.delegated?.length ?? 0) + (r.delegatedOmitted ?? 0)
   if (delegated) parts.push(`${delegated} subagent command${delegated === 1 ? '' : 's'} ran`)
   if (!parts.length && r.otherCommands > 0) {
@@ -349,9 +385,17 @@ export function planCheckText(c: PlanCheckStatus): string {
   return PLAN_CHECK_TEXT[c.status]
 }
 
-/** Whether any check in the receipt failed, or a todo claims a check nothing backs. */
+/**
+ * Whether the receipt needs a second look, which every client shows the same way: a
+ * check failed, a test command ran fewer tests or skipped more than an earlier run of
+ * it, or a todo claims a check that nothing (or only a run before the last change) backs.
+ */
 export function receiptHasFailure(r: TurnReceipt): boolean {
-  return r.checks.some((c) => c.ok === false) || (r.todoGaps?.length ?? 0) > 0
+  return (
+    r.checks.some((c) => c.ok === false || c.shrunk !== undefined || c.skippedRose !== undefined) ||
+    (r.todoGaps?.length ?? 0) > 0 ||
+    (r.todoStale?.length ?? 0) > 0
+  )
 }
 
 /**
@@ -379,6 +423,7 @@ export function formatReceiptLines(r: TurnReceipt): string[] {
   const byFiles = Object.entries(r.filesBy ?? {})
   for (const [file, by] of byFiles) lines.push(`  changed ${file} (by ${by})`)
   for (const g of r.todoGaps ?? []) lines.push(`  ! marked done with nothing recorded: ${g}`)
+  for (const g of r.todoStale ?? []) lines.push(`  ! marked done, checked only before the last change: ${g}`)
   if (r.plan && !r.plan.complete) {
     lines.push(`  plan "${r.plan.title}":`)
     for (const c of r.plan.checks) {

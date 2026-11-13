@@ -9201,6 +9201,29 @@ describe('turn receipt', () => {
     expect(r.messages.at(-1)?.receipt).not.toHaveProperty('todoGaps')
   })
 
+  it('does not let a pass from before a later file change back a todo, and says why', async () => {
+    h.sandboxed = true
+    h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '12 passed in 0.1s' } })]
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('s1', 'run_shell', { command: 'pytest' }),
+        call('w1', 'write_file', { path: 'app.py', content: 'print(2)\n' }),
+        call('t1', 'todo_write', { todos: [{ content: 'Backend tests with pytest', status: 'completed' }] }),
+        say('Tests pass.')
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'todo_write') as { output: string }
+    expect(result.output).toContain(
+      '[note: "Backend tests with pytest" is marked completed, but the last passing test run Houston recorded came before a later file change.'
+    )
+    const receipt = r.messages.at(-1)?.receipt
+    expect(receipt?.todoStale).toEqual(['Backend tests with pytest'])
+    expect(receipt).not.toHaveProperty('todoGaps')
+    expect(receipt?.checks[0]).toMatchObject({ kind: 'test', ok: true, beforeLastWrite: true })
+  })
+
   it("carries an accepted plan's progress across turns until it is complete", async () => {
     h.sandboxed = true
     h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '2 passed in 0.1s' } })]

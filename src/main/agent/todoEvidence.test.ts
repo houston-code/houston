@@ -62,6 +62,22 @@ describe('todoEvidenceGaps', () => {
     ])
   })
 
+  it('does not count a pass from before the last file change as backing, and says it is stale', () => {
+    const l = new EvidenceLedger()
+    l.recordShell({ kind: 'shell', command: 'npm test', background: false, exitCode: 0, timedOut: false, output: '# pass 12\n# fail 0' })
+    l.recordShell({ kind: 'shell', command: 'npm run build', background: false, exitCode: 0, timedOut: false, output: '' })
+    l.recordFiles('/ws', ['src/a.ts'])
+    expect(todoEvidenceGaps([], [todo('Run the test suite')], l)).toEqual([
+      { item: 'Run the test suite', missing: [], stale: ['test'] }
+    ])
+    // A check nothing ran is still missing, not stale.
+    expect(todoEvidenceGaps([], [todo('Run the tests and the linter')], l)).toEqual([
+      { item: 'Run the tests and the linter', missing: ['lint'], stale: ['test'] }
+    ])
+    l.recordShell({ kind: 'shell', command: 'npm test', background: false, exitCode: 0, timedOut: false, output: '# pass 12\n# fail 0' })
+    expect(todoEvidenceGaps([], [todo('Run the test suite')], l)).toEqual([])
+  })
+
   it('counts a failed run as no backing', () => {
     const l = new EvidenceLedger()
     l.recordShell({ kind: 'shell', command: 'pytest', background: false, exitCode: 1, timedOut: false, output: '1 failed, 2 passed in 0.1s' })
@@ -73,6 +89,15 @@ describe('todoGapNote', () => {
   it('states the fact and the two honest ways forward', () => {
     expect(todoGapNote({ item: 'Backend tests with pytest', missing: ['test'] })).toBe(
       '[note: "Backend tests with pytest" is marked completed, but Houston has no passing test run recorded this turn. If it didn\'t run, keep the item open or say so when you report.]'
+    )
+  })
+
+  it('says when the only passing run came before a later file change', () => {
+    expect(todoGapNote({ item: 'Run the test suite', missing: [], stale: ['test'] })).toBe(
+      '[note: "Run the test suite" is marked completed, but the last passing test run Houston recorded came before a later file change. Run it on the final code, or keep the item open or say so when you report.]'
+    )
+    expect(todoGapNote({ item: 'Run the tests and the linter', missing: ['lint'], stale: ['test'] })).toBe(
+      '[note: "Run the tests and the linter" is marked completed, but Houston has no passing lint run recorded this turn, and the last passing test run Houston recorded came before a later file change. Run it on the final code, or keep the item open or say so when you report.]'
     )
   })
 })

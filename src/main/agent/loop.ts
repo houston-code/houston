@@ -1673,8 +1673,12 @@ export async function startRun(
       return gaps.map(todoGapNote)
     }
     beforeEnd = () => {
-      const todoGaps = todoEvidenceGaps(startTodos, latestTodos(messages), run.evidence).map((g) => g.item)
-      let receipt = run.evidence.receipt(peekShell, { todoGaps })
+      // An item claiming a check nothing ran is listed as such; one backed only by a run
+      // from before a later file change is listed apart, since something did run.
+      const gaps = todoEvidenceGaps(startTodos, latestTodos(messages), run.evidence)
+      const todoGaps = gaps.filter((g) => g.missing.length).map((g) => g.item)
+      const todoStale = gaps.filter((g) => !g.missing.length).map((g) => g.item)
+      let receipt = run.evidence.receipt(peekShell, { todoGaps, todoStale })
       // The accepted plan's progress, from every turn's receipt since it was accepted.
       // Only on a turn that did work (or accepted the plan): a question asked later in
       // the chat gets no receipt for it.

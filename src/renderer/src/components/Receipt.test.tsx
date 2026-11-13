@@ -81,6 +81,43 @@ describe('Receipt todo gaps', () => {
   })
 })
 
+describe('Receipt test runs that shrank', () => {
+  it('says the last run ran fewer tests and skipped more than before, and marks the receipt', () => {
+    const { container } = render(
+      <Receipt
+        receipt={receipt({
+          checks: [
+            {
+              kind: 'test',
+              label: 'npm test',
+              ok: true,
+              exitCode: 0,
+              counts: { passed: 11, failed: 0, skipped: 1 },
+              shrunk: { from: 12, to: 11 },
+              skippedRose: { from: 0, to: 1 },
+              runs: 2
+            }
+          ]
+        })}
+      />
+    )
+    expect(screen.getByText('Tests passed (11, down from 12, 1 skipped, up from 0) · 2 files changed')).toBeInTheDocument()
+    expect(container.querySelector('.receipt--failed')).not.toBeNull()
+    fireEvent.click(screen.getByText('What ran'))
+    expect(
+      screen.getByText('11 passed, 1 skipped, an earlier run ran 12 tests, an earlier run skipped none, ran 2 times, last run shown')
+    ).toBeInTheDocument()
+  })
+
+  it('lists todos checked only before the last change', () => {
+    const { container } = render(<Receipt receipt={receipt({ checks: [], todoStale: ['Run the test suite'] })} />)
+    fireEvent.click(screen.getByText('What ran'))
+    expect(screen.getByText('Marked done, checked only before the last change')).toBeInTheDocument()
+    expect(screen.getByText('Run the test suite')).toBeInTheDocument()
+    expect(container.querySelector('.receipt--failed')).not.toBeNull()
+  })
+})
+
 describe('Receipt plan progress', () => {
   it("lists the plan's checks and the files it named that no turn has changed", () => {
     render(
