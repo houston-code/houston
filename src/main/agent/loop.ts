@@ -135,6 +135,7 @@ import {
   providerStreamError,
   retryDelayMs,
   RetryBudget,
+  throttleInfo,
   withProviderRetry
 } from './retry'
 import { causeFromMessage, type TurnErrorCause } from '@shared/turnError'
@@ -3702,8 +3703,16 @@ export async function startRun(
           }
           discardPartial()
           const max = retries.reportedMax
-          emit({ type: 'retry', attempt: attempt + 1, ...(max !== undefined ? { max } : {}), message: reason })
-          await abortableSleep(retryDelayMs(e, attempt + 1), abort.signal)
+          const waitMs = retryDelayMs(e, attempt + 1)
+          const throttle = throttleInfo(e, waitMs)
+          emit({
+            type: 'retry',
+            attempt: attempt + 1,
+            ...(max !== undefined ? { max } : {}),
+            message: reason,
+            ...(throttle ? { throttle } : {})
+          })
+          await abortableSleep(waitMs, abort.signal)
           if (abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
             return

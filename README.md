@@ -579,6 +579,11 @@ Open source under the [Apache License 2.0](LICENSE).
   and each turn's last reply names the model that answered and that turn's tokens and
   cost. The model, project folder, approval policy and
   reasoning controls live there too, down by the composer, where you're typing.
+- **Usage across chats.** `/usage` opens spend and tokens per day (last 30 days)
+  and per project, summed from the chats saved on your computer (nothing leaves
+  it), with the per-turn cost reminder beside them. When a provider rate-limits a
+  request, the retry notice says so, how long Houston waits, and the remaining
+  quota the provider reported.
 
 ## Install (prebuilt binaries)
 

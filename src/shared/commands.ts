@@ -262,6 +262,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['gui', 'tui']
   },
   {
+    name: 'usage', group: 'Setup',
+    description: 'Spend and tokens per day and per project, from the chats on this computer',
+    clients: ['gui']
+  },
+  {
     name: 'doctor', group: 'Setup',
     description: 'Check your setup: model, sandbox, tools, MCP',
     clients: ['gui', 'tui']

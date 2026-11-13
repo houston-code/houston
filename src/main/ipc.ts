@@ -152,6 +152,7 @@ import {
   organizeConversation,
   reorderConversations,
   computeScorecard,
+  computeUsageReport,
   addUsage,
   mergeRunningTotals,
   setMessages,
@@ -1078,6 +1079,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
   })
   // Local-only per-model loop scorecard — aggregated on-device, never transmitted.
   handle(IPC.conversationScorecard, () => computeScorecard())
+  // Local-only spend and tokens per day and per project, for the usage view.
+  handle(IPC.conversationUsageReport, () => computeUsageReport())
   handle(
     IPC.conversationCreate,
     async (

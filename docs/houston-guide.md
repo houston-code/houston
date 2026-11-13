@@ -378,6 +378,10 @@ retries the turn with a growing pause between attempts and tells you it's retryi
   already answered in this run, Houston keeps retrying for up to five minutes and
   picks up when the connection comes back. Before the provider has answered once,
   a connection failure gets the usual few attempts, so a mistyped address fails fast.
+- **Rate limits are named.** When the provider throttles a request (HTTP 429),
+  the notice says so, how long Houston waits before trying again (the provider's
+  `Retry-After` when it sends one), and how many requests or tokens its headers say
+  are left in the current window. An exhausted quota is not retried.
 - **Nothing half-runs.** Tool calls in a discarded reply never run.
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.
@@ -1108,6 +1112,23 @@ also lists what each subagent spent (already counted in its model's row).
 **Watch the cached count** on a long session. Those tokens are real context, but they
 bill far below the base input rate, so a big number there is why a long conversation
 costs less than its token count suggests.
+
+### Usage across chats (/usage)
+
+In the desktop app, `/usage` (or **Show usage and spend** in the command palette)
+opens a panel built from the chats saved on this computer. Nothing is sent anywhere.
+
+- **Per day:** the last 30 days, with replies, tokens in and out, and estimated cost.
+- **Per project:** every project folder (a worktree counts under its repository),
+  all time, with its chats, tokens and cost.
+- **Undated spend:** subagents, reviews, and chats saved before replies recorded
+  their own usage count toward projects and the all-time total, but not toward a day.
+  The panel says how much that is.
+- **Cost reminder:** the same setting as Settings > Agent Behavior > Loop control.
+  When one turn has cost more than the amount, Houston tells the agent to wrap up and
+  summarize. It is a reminder, not a hard stop. 0 turns it off.
+
+Costs are estimates from each model's list price.
 
 ## Version and updates
 

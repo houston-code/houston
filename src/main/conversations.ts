@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { writeFileAtomicStampedSync } from './atomic-write'
+import { buildUsageReport, type UsageInput, type UsageReport } from '@shared/usageReport'
 import { externalizeMedia, hydrateMedia, pruneMedia } from './conversationMedia'
 import {
   COMPACTION_SUMMARY_PREFIX,
@@ -488,6 +489,27 @@ export function computeScorecard(): Scorecard {
     })
   }
   return buildScorecard(inputs)
+}
+
+/**
+ * Spend and tokens per day and per project over every saved chat, for the usage
+ * view. Local only, like {@link computeScorecard}: it reads the user's own chat files
+ * in the main process and hands back only the sums, never message text.
+ */
+export function computeUsageReport(now: Date = new Date()): UsageReport {
+  const files = readdirSync(dir()).filter((f) => f.endsWith('.json'))
+  const inputs: UsageInput[] = []
+  for (const f of files) {
+    const conv = read(f.replace(/\.json$/, ''))
+    if (!conv) continue
+    inputs.push({
+      project: conv.worktree?.repoRoot || conv.workspace,
+      messages: conv.messages,
+      inherited: inheritedMessages(conv),
+      ...(conv.usage ? { usage: conv.usage } : {})
+    })
+  }
+  return buildUsageReport(inputs, now)
 }
 
 /** How many messages at the start of `conv`'s log were copied from another chat. */
