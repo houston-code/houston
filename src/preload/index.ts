@@ -54,6 +54,7 @@ import type { Scorecard } from '@shared/scorecard'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type { ChatStatusMap } from '@shared/chatStatus'
+import type { AttentionSound } from '@shared/notify'
 import type {
   UpdateCheckResult,
   UpdateDownloaded,
@@ -62,6 +63,7 @@ import type {
   WhatsNew
 } from '@shared/update'
 import type { VerifySuggestion } from '@shared/types'
+import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 
 /**
@@ -138,12 +140,29 @@ const api = {
   registerHtmlVisual: (html: string): Promise<string | null> => ipcRenderer.invoke(IPC.visualRegisterHtml, html),
   listCommands: (workspace: string): Promise<Command[]> =>
     ipcRenderer.invoke(IPC.commandsList, workspace),
-  /** The workspace's skills (.houston/skills), name + description, for /skills. */
+  /** The project's and the user's skills (.houston/skills, ~/.houston/skills), name + description, for /skills. */
   listSkills: (workspace: string): Promise<Array<{ name: string; description: string }>> =>
     ipcRenderer.invoke(IPC.skillsList, workspace),
-  /** The workspace's custom agents (.houston/agents), name + description, for /agents. */
+  /** The project's and the user's custom agents (.houston/agents, ~/.houston/agents), for /agents. */
   listAgents: (workspace: string): Promise<Array<{ name: string; description: string }>> =>
     ipcRenderer.invoke(IPC.agentsList, workspace),
+  /** Settings > Customize: every skill, command and agent (project and user), and the loaded instruction files. */
+  customizeList: (workspace: string | null): Promise<CustomizeOverview> => ipcRenderer.invoke(IPC.customizeList, workspace),
+  /** Create a skill, command or agent from its template and open it. */
+  customizeCreate: (workspace: string | null, kind: CustomKind, scope: CustomScope, name: string): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeCreate, workspace, kind, scope, name),
+  /** Switch an item on or off (its `disabled` front-matter flag). */
+  customizeSetEnabled: (workspace: string | null, id: string, enabled: boolean): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeSetEnabled, workspace, id, enabled),
+  /** Open an item's file in its default app. */
+  customizeOpen: (workspace: string | null, id: string): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeOpen, workspace, id),
+  /** Move an item to the system trash. */
+  customizeDelete: (workspace: string | null, id: string): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeDelete, workspace, id),
+  /** Open a loaded instruction file by its label. */
+  customizeOpenInstruction: (workspace: string | null, label: string): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeOpenInstruction, workspace, label),
   /** Git repo info for the "new chat in a worktree" picker (or isRepo:false). */
   getRepoInfo: (workspace: string): Promise<RepoInfo> =>
     ipcRenderer.invoke(IPC.gitRepoInfo, workspace),
@@ -410,6 +429,12 @@ const api = {
   /** Mark every chat read. */
   markAllChatsRead: (): Promise<void> => ipcRenderer.invoke(IPC.chatMarkAllRead),
   /** Main asks to open a chat (its desktop notification was clicked). Returns an unsubscribe fn. */
+  /** Main asks for an attention sound (a turn ended or needs input while unfocused). */
+  onAttentionSound: (cb: (sound: AttentionSound) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, sound: AttentionSound): void => cb(sound)
+    ipcRenderer.on(IPC.attentionSound, listener)
+    return () => ipcRenderer.removeListener(IPC.attentionSound, listener)
+  },
   onChatOpenRequest: (cb: (conversationId: string) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, id: string): void => cb(id)
     ipcRenderer.on(IPC.chatOpenRequest, listener)

@@ -60,6 +60,9 @@ The full GUI:
 
 - **Read and unread.** A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read. The
   filter menu marks every chat read, or sorts the ones that want attention first.
+- **Right-click menus.** Right-click a chat in the sidebar for the same actions as its
+  ⋯ menu. Right-click a message to copy it (or just the text you selected) and for that
+  message's own actions: rewind or edit one of yours, or mark unread from a reply.
 - **Picking up where you left off.** A reply's hover actions include **Mark unread from
   here**, and reopening an unread chat lands on a "New" divider above the first reply
   you haven't seen.
@@ -84,6 +87,15 @@ The full GUI:
 - Slash commands switch settings mid-session.
 - `--continue` reopens this folder's most recent chat at launch; `--resume <id>`
   reopens a specific one.
+- **First run.** With no model ready, it lists the providers that take a key, then
+  the hosts that need none: Ollama and LM Studio on their usual ports, and any
+  endpoint added with `houston providers add`. It asks each host for its models
+  first, so the list says which are running; picking a running one starts on it
+  and remembers it. For an added endpoint that lists no models, you can type a
+  model id instead. `/login` shows the same list later.
+- **A typo is an error.** An unknown flag, a flag missing its value, or a stray word
+  (`houston "fix the bug"`) stops with a message and the usage, instead of opening
+  an empty session. To run a prompt once, use `-p`. `houston --help` lists every flag.
 
 See "The terminal composer" for how to type, paste, and edit a message.
 
@@ -269,8 +281,12 @@ OpenAI-compatible endpoint, or a local model runtime.
 **To add one:** open Settings, add a provider and its key, fetch its live model
 list, and pick a model.
 
-- The picker shows each model's context window and capability badges (tool calling,
-  vision, reasoning).
+- The picker shows each model's context window and capability badges: **T** tool
+  calling, **V** images (vision), **R** reasoning. A legend under the list says what
+  each letter means.
+- Each provider's default model is marked **Recommended**.
+- A **Recent** section at the top lists the last few models your chats ran on, so
+  switching back is one click. It hides while you search.
 - It warns you before you pick a model that can't call tools.
 - Keys are stored encrypted by the OS keychain and never reach the app's interface.
 
@@ -561,7 +577,7 @@ long as it needs to be.
 | `Shift-Enter`, `Ctrl-J`, `Alt-Enter` | insert a line break (`Shift-Enter` where the terminal reports it) |
 | `Up` / `Down` | move between lines, then step through past messages |
 | `Ctrl-R` | search past messages (type to filter, `Ctrl-R` again for older, `Enter` to accept, `Esc` to cancel) |
-| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`) |
+| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`). Typing `@` already lists the matching files under the message, as `/` lists commands |
 | `Ctrl-A` / `Ctrl-E` | start / end of line |
 | `Alt-B` / `Alt-F` | move a word |
 | `Ctrl-W` | delete the word before the cursor |
@@ -612,6 +628,13 @@ conversation, not a log. To see more:
   always kept in the conversation.
 
 Very long output is capped, with a note saying how much was left out.
+
+In the desktop app, file paths in the transcript open the file in the Files panel's
+preview: the file a tool row names (a read opens at the line it started from), a diff's
+file header, a file the receipt lists as changed, and a relative link in a reply
+(`[setup](docs/setup.md)`, `src/app.ts#L42`, or `src/app.ts:42` opens at that line).
+The preview's **Open** button hands the file to its default app. Only files inside the
+project folder open this way; web links still open in your browser.
 
 ## What actually ran (the receipt)
 
@@ -965,7 +988,12 @@ A single reply also has an output limit.
 | `/undo` | puts back the files the last turn changed |
 | `/redo` | re-applies them |
 | `/changes` (or `/diff`) | summarizes everything different in the working tree: each file with its status and lines gained and lost, plus a total |
+| `/diff last [n]` | *terminal:* shows the diff of this session's last edit, or the one `n` edits back |
 
+- **Edits you didn't approve one by one still show up.** In the terminal, an edit that
+  lands without a prompt (auto-edit, full auto, or a saved rule) prints one line naming
+  each file with its lines added and removed, like `✎ src/app.ts +12 -3`, and
+  `/diff last` shows the whole diff.
 - **Nothing to set up.** Houston snapshots every write before it happens.
 - **Best with auto-approve modes**, where edits land without a prompt: "that was
   wrong, put it back" is one word rather than a hand revert.
@@ -1009,7 +1037,8 @@ goes back:
 
 ### In the desktop app
 
-- Hover one of your messages and click the rewind button for these choices.
+- Hover one of your messages and click the rewind button for these choices, or
+  right-click the message.
 - Or press `Esc` twice in an empty composer (or type `/rewind`) to pick the message
   from a list.
 - A confirmation shows how many messages and files are affected before anything
@@ -1019,6 +1048,10 @@ goes back:
 - **Edit and resend** (same menu) puts a message in the composer for editing. Sending
   it rewinds to that message first (conversation and code by default, or conversation
   only), then sends the new text, so the agent re-runs from there.
+- **Retry** on the last reply (its hover button, or right-click it) sends your last
+  message again for a new reply, even after a turn that succeeded. The old reply is
+  rewound out of the conversation first (conversation only: files the turn changed stay
+  as they are), so the new reply replaces it.
 
 ### In the terminal
 
@@ -1064,6 +1097,15 @@ quiet, and stopping a run yourself never pings you (you're obviously there).
   The title still updates.
 - Notifications use the terminal's own channel, so they need no extra tools. Not every
   terminal supports them; the bell works everywhere.
+
+**In the desktop app**, a native notification fires for the same events while
+Houston isn't the focused window, and clicking it opens that chat. Settings >
+General > Notifications can also **play a sound**: a short rising chime when a turn
+finishes (or fails), and a soft double knock when the agent needs your input (an
+approval, a question, a plan to review, or a server's form). Sounds are off by
+default, play only while Houston isn't the focused window, and work independently of
+notifications. Turning the setting on plays the chime once so you know what to
+expect.
 
 ## How hard the model thinks (/reasoning)
 
@@ -1114,8 +1156,13 @@ reaches a model with no higher level to move to.
 - the dollar cost, with a total when more than one model billed
 
 Subagents and reviews often run on a different (cheaper) model, so they're listed
-separately rather than folded into the main one. In the desktop app, the breakdown
-also lists what each subagent spent (already counted in its model's row).
+separately rather than folded into the main one.
+
+In the desktop app, the usage chip in the control bar shows how full the context is
+(a small bar and "used/maximum") and the chat's cost so far (output tokens for a
+model with no known price). Clicking it opens the same breakdown, which also lists
+what each subagent spent (already counted in its model's row). The status bar at the
+bottom shows the git branch the chat's folder has checked out and the approval mode.
 
 **Watch the cached count** on a long session. Those tokens are real context, but they
 bill far below the base input rate, so a big number there is why a long conversation
@@ -1145,7 +1192,8 @@ The desktop app updates itself separately.
 
 - the version, and whether a newer one is out
 - Node and the platform
-- the active model and every provider's key status
+- the active model (in the terminal, the one this session runs on, however it was
+  chosen) and every provider's key status
 - whether the shell sandbox is actually enforced on this host
 - which external tools (`git`, `gh`, `rg`) are on `PATH`
 - which language servers are installed, and whether servers are off on this host
@@ -1528,7 +1576,8 @@ A skill is a reusable bundle of instructions the agent loads only when a task ne
 it.
 
 **Create one** at `.houston/skills/<name>/SKILL.md`, with frontmatter `name` and
-`description`, and a body of instructions.
+`description`, and a body of instructions. Put it in `~/.houston/skills/<name>/` to
+have it in every project; a project's skill wins if both use the same name.
 
 **How it's loaded (progressive disclosure):**
 
@@ -1552,7 +1601,8 @@ main conversation clean.
 
 **Define one** with a Markdown file at `.houston/agents/<name>.md`: frontmatter
 `description` plus a system-prompt body. The main agent dispatches it by name with
-`dispatch_agent`.
+`dispatch_agent`. One in `~/.houston/agents/` is available in every project; a
+project's agent wins if both use the same name.
 
 ### Frontmatter options
 
@@ -1563,6 +1613,7 @@ main conversation clean.
 | `model:` | pins it to a (usually cheaper) sibling model from the current provider; unknown ids fall back to the chat's model |
 | `max_turns:` | a hard limit on its steps (a whole number up to 500) that never extends |
 | `write: true` | gives it the writable tier (see below) |
+| `disabled: true` | switches it off without deleting it (also works for skills and commands) |
 
 ### Read-only and writable
 
@@ -1645,6 +1696,29 @@ A subagent works under the same step budget as the main agent:
 `/agent <name> <task>` hands a job to one of your agents directly, instead of
 describing it and hoping the right one gets picked. It works in the desktop app and
 the terminal. `/agent` alone (or `/agents`) lists them.
+
+## Customize page
+
+**Settings > Customize** gathers what you can add to Houston without code:
+
+- **Skills, commands and agents.** Every skill, custom command, and custom agent from
+  the project's `.houston/` folder and your own `~/.houston/`, each marked **This
+  project** or **All projects**. When both have one with the same name, the project's
+  is used, and yours says so.
+  - **Create** one from a starter template: type a name (letters, digits, `-` or
+    `_`), choose where it goes, and it opens in your editor. Nothing is overwritten.
+  - **Open** opens its file in your default app for that file type.
+  - The checkbox switches it **off** or on. Off adds `disabled: true` to the file's
+    frontmatter (on removes it), so it stays on disk but isn't offered in any client.
+  - **Delete** asks first, then moves the file (or a skill's whole folder) to the
+    system trash.
+- **Instruction files.** The rules files Houston reads at the start of each run, in
+  load order: `~/.houston/AGENTS.md`, the project's `AGENTS.md` and `CLAUDE.md`, and
+  nested ones in subfolders. One shortened to fit the rules budget is marked. **Open**
+  opens it in your default app.
+
+A project file that links outside the project can't be switched, opened, or deleted
+from here.
 
 ## Spawn separate sessions
 
@@ -2564,10 +2638,18 @@ sidebar) or `Esc` returns to the chat.
 
 | Group | Pages |
 | --- | --- |
-| **AI** | Providers & Models, Agent Behavior, Tools, MCP Servers, Hooks, Memory |
+| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Memory |
 | **App** | General, Appearance, Keyboard |
 | **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (whether new chats start in a worktree, and additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |
+
+**Appearance** sets how the app looks, and every change shows at once:
+
+- **Color theme:** System (follows your OS), Dark, or Light.
+- **Chat text size:** Small, Default, or Large. Scales the whole chat, code included.
+- **Density:** Comfortable, or Compact for less space between messages.
+- **Code theme:** Default, High contrast, or Muted, for code blocks, the Files preview,
+  and diffs. Every theme keeps code readable in both light and dark.
 
 **Check for Updates…** is also in the app menu on macOS, and the Help menu on Windows
 and Linux.

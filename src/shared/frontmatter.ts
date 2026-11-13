@@ -40,3 +40,11 @@ function stripQuotes(s: string): string {
   }
   return s
 }
+
+/**
+ * Whether a front-matter `disabled:` value switches a skill, command or agent off
+ * (`true`/`yes`/`on`/`1`, any case). Settings > Customize writes `disabled: true`.
+ */
+export function isDisabledFlag(value: string | undefined): boolean {
+  return value !== undefined && /^(true|yes|on|1)$/i.test(value.trim())
+}
