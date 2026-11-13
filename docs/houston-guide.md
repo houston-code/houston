@@ -259,6 +259,7 @@ repository.
 | 3 | the run hit a budget before finishing (its step cap or the model's output limit) |
 | 4 | the final answer still didn't match `--output-schema` after the corrective round |
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
+| 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `error`); a second signal exits at once |
 
 ### Standalone CLI
 
