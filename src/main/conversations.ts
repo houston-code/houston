@@ -35,6 +35,7 @@ import { invocationText } from '@shared/promptInvocation'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
 import type { StoredQueue } from '@shared/queue'
 import { clearConversationOverride } from './agent/overrides'
+import { forgetSubAgentSessions } from './agent/subagentSessions'
 import { redactSecrets } from './agent/redact'
 import { getUserDataDir } from './userData'
 
@@ -541,6 +542,8 @@ export function deleteConversation(id: string): void {
   rmSync(mediaDir(id), { recursive: true, force: true })
   // Drop any in-memory "Allow for run" consent so a future conversation can't inherit it.
   clearConversationOverride(id)
+  // And its resumable subagent transcripts, which nothing can reach any more.
+  forgetSubAgentSessions(id)
 }
 
 /**
