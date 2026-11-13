@@ -10,6 +10,7 @@ import type {
   ElicitationResult,
   PlanDecision,
   PlanPayload,
+  MessageUsage,
   Provider,
   QuestionOption,
   AgentQuestion,
@@ -3297,7 +3298,7 @@ export async function startRun(
       // iteration is still in the window the model lands with.
       if (run.steering.length) {
         const steers = run.steering.splice(0)
-        for (const { text: content } of steers) messages.push({ role: 'user', content, steered: true })
+        for (const { text: content } of steers) messages.push({ role: 'user', content, steered: true, at: new Date().toISOString() })
         // Emit BEFORE persist. The live renderer needs the `steered` event to draw
         // the bubble, but `persist` clears the re-adopt replay buffer — so emitting
         // AFTER it left the steered event in the buffer even though the steer was
@@ -3679,6 +3680,8 @@ export async function startRun(
         lastInputTokens = turnInput
       }
 
+      // What this round billed, saved on the reply it wrote for the transcript.
+      let roundUsage: MessageUsage | undefined
       if (turnInput || turnOutput) {
         // Priced against the model that actually served the turn, not the one the
         // user picked — after a hop they differ, and the rates usually do too.
@@ -3691,6 +3694,7 @@ export async function startRun(
         )
         // Accumulate for the adaptive-budget cost ceiling (the landing trigger).
         cumulativeCostUsd += turnCost
+        roundUsage = { inputTokens: turnInput, outputTokens: turnOutput, cost: turnCost }
         emit({
           type: 'usage',
           inputTokens: turnInput,
@@ -3742,7 +3746,10 @@ export async function startRun(
           content: assistantText,
           ...(toolCalls.length ? { toolCalls } : {}),
           ...(turnReasoning.length ? { reasoning: turnReasoning } : {}),
-          ...(runPromptId ? { promptId: runPromptId } : {})
+          ...(runPromptId ? { promptId: runPromptId } : {}),
+          at: new Date().toISOString(),
+          model: route.model,
+          ...(roundUsage ? { usage: roundUsage } : {})
         })
         persist(messages)
       }

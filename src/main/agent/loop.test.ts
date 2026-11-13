@@ -1112,7 +1112,14 @@ describe('startRun', () => {
         expect(r.events.find((e) => e.type === 'retry')).toMatchObject({ attempt: 1 })
         // Nothing of the dead attempt was persisted, and its tool call never ran.
         expect(r.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
-        expect(r.messages[1]).toEqual({ role: 'assistant', content: 'the whole answer', promptId: expect.any(String) })
+        expect(r.messages[1]).toEqual({
+          role: 'assistant',
+          content: 'the whole answer',
+          promptId: expect.any(String),
+          at: expect.any(String),
+          model: expect.any(String),
+          usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number), cost: expect.any(Number) }
+        })
         expect(existsSync(join(ws, 'x.txt'))).toBe(false)
       }
     )

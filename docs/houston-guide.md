@@ -63,6 +63,10 @@ The full GUI:
 - **Picking up where you left off.** A reply's hover actions include **Mark unread from
   here**, and reopening an unread chat lands on a "New" divider above the first reply
   you haven't seen.
+- **When, and what it cost.** Each message shows when it was sent ("5m ago"; hover for
+  the full date and time). Under a turn's last reply, a quiet line names the model that
+  answered and what the turn spent: tokens in and out, and the cost when the model's
+  price is known. Messages saved by older versions show none of this.
 - **Back where you were after a restart.** Houston reopens the chat that was open when
   you quit. If that chat was deleted, or its folder or worktree is gone, it opens a new
   chat in your last folder instead.

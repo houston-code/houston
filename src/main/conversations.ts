@@ -893,6 +893,8 @@ export function mergeRunningTotals(e: AgentEvent, total: ConversationUsage | nul
   if (e.type !== 'usage' || !total) return e
   return {
     ...e,
+    // The round's own numbers, before they are replaced by the running totals.
+    round: { inputTokens: e.inputTokens, outputTokens: e.outputTokens, cost: e.cost },
     inputTokens: total.inputTokens,
     outputTokens: total.outputTokens,
     cost: total.cost,

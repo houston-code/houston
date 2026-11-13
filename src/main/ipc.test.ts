@@ -819,9 +819,9 @@ describe('agentStart / agentRetry approval-policy validation', () => {
       })
     await send('r1', 'start the dev server') // the run fails before answering (drain is a spy)
     await send('r2', 'start the dev server')
-    expect(getConversation(id)?.messages).toEqual([{ role: 'user', content: 'start the dev server' }])
+    expect(getConversation(id)?.messages).toEqual([{ role: 'user', content: 'start the dev server', at: expect.any(String) }])
     const sent = h.runAndDrain.mock.calls[1][2] as { messages: unknown[] }
-    expect(sent.messages).toEqual([{ role: 'user', content: 'start the dev server' }])
+    expect(sent.messages).toEqual([{ role: 'user', content: 'start the dev server', at: expect.any(String) }])
     // A different message is still appended.
     await send('r3', 'use port 4000')
     expect(getConversation(id)?.messages).toHaveLength(2)

@@ -567,7 +567,9 @@ Open source under the [Apache License 2.0](LICENSE).
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show
   none), so you can see how big and how expensive a conversation is getting. Open it
   for a per-model breakdown (subagents and reviews often run on a cheaper model)
-  with the prompt-cache split. The model, project folder, approval policy and
+  with the prompt-cache split. In the transcript, each message shows when it was sent,
+  and each turn's last reply names the model that answered and that turn's tokens and
+  cost. The model, project folder, approval policy and
   reasoning controls live there too, down by the composer, where you're typing.
 
 ## Install (prebuilt binaries)

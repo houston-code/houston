@@ -2421,7 +2421,27 @@ body.is-resizing {
 }
 .msg--user {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+}
+/* The quiet line under a message: when it was sent and, under a turn's last reply,
+   the model and what the turn spent. */
+.msg__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.msg__meta--user {
+  flex-basis: 100%;
+  justify-content: flex-end;
+}
+.msg__time {
+  cursor: default;
 }
 .msg--user .msg__body {
   max-width: 86%;

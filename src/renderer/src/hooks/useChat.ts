@@ -149,7 +149,8 @@ export function useChat(conversationId: string | null = null): ChatController {
             id: `u-${e.runId}`,
             text: e.userText,
             ...(e.images?.length ? { images: e.images } : {}),
-            ...(e.invokedAs ? { invokedAs: e.invokedAs } : {})
+            ...(e.invokedAs ? { invokedAs: e.invokedAs } : {}),
+            at: new Date().toISOString()
           }
         ])
         return
@@ -165,6 +166,8 @@ export function useChat(conversationId: string | null = null): ChatController {
           cacheRead: e.cacheReadTokens ?? prev?.cacheRead,
           perModel: e.perModel ?? prev?.perModel
         }))
+        // ...and the round's own numbers go on the turn, for its details line.
+        setItems((prev) => reduceEvent(prev, e))
         return
       }
       // Track successful file writes so the turn's changes can be reverted.
@@ -223,7 +226,8 @@ export function useChat(conversationId: string | null = null): ChatController {
         id: `u-${runId}`,
         text: params.userText,
         ...(params.images?.length ? { images: params.images } : {}),
-        ...(params.invokedAs ? { invokedAs: params.invokedAs } : {})
+        ...(params.invokedAs ? { invokedAs: params.invokedAs } : {}),
+        at: new Date().toISOString()
       }
     ])
     setRunning(true)
