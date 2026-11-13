@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { parseDeepLink } from '@shared/deepLink'
-import { runOpenCommand, urlOpener, type OpenInAppDeps } from './openInApp'
+import { runOpenCommand, urlOpener, type OpenInAppDeps, resolveDirectory, launchDetached } from './openInApp'
 
 function deps(over: Partial<OpenInAppDeps> = {}): OpenInAppDeps & { out: ReturnType<typeof vi.fn>; err: ReturnType<typeof vi.fn> } {
   return {
@@ -47,5 +50,30 @@ describe('houston open', () => {
     expect(urlOpener('darwin', url)).toEqual({ cmd: 'open', args: [url] })
     expect(urlOpener('linux', url)).toEqual({ cmd: 'xdg-open', args: [url] })
     expect(urlOpener('win32', url)).toEqual({ cmd: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', url] })
+  })
+})
+
+describe('resolveDirectory', () => {
+  it('returns the canonical path of an existing folder, and null for a file or a missing path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-open-'))
+    try {
+      const file = join(dir, 'note.txt')
+      writeFileSync(file, 'x')
+      expect(resolveDirectory(dir)).toBe(realpathSync(dir))
+      expect(resolveDirectory(file)).toBeNull()
+      expect(resolveDirectory(join(dir, 'missing'))).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('launchDetached', () => {
+  it('resolves once the program has started', async () => {
+    await expect(launchDetached(process.execPath, ['-e', ''])).resolves.toBeUndefined()
+  })
+
+  it('rejects when the program cannot be started', async () => {
+    await expect(launchDetached(join(tmpdir(), 'houston-no-such-binary'), [])).rejects.toThrow()
   })
 })
