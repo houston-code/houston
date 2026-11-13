@@ -54,6 +54,7 @@ import {
   terminalKeepsKey
 } from './lib/shortcuts'
 import { chatAtIndex, cycleChatId } from './lib/sessionNav'
+import { coalesced } from './lib/coalesce'
 import { nextApprovalPolicy } from './lib/policyCycle'
 import { resolveShortcuts } from './lib/keybindingOverrides'
 import { modelPaletteItems, type PaletteItem } from './lib/palette'
@@ -333,10 +334,17 @@ export default function App(): JSX.Element {
   const [launchSettled, setLaunchSettled] = useState(false)
   // selectConversation is defined further down; the launch below reads it from here.
   const selectConversationRef = useRef<((id: string) => Promise<void>) | null>(null)
-  const refreshConversations = useCallback(async () => {
-    setConversations(await window.api.listConversations())
-    setConversationsLoaded(true)
-  }, [])
+  // Listing reads every chat from disk in the main process, and several effects ask
+  // for it at once (two on mount, two when a run starts or ends): overlapping asks
+  // share a run instead of each paying for their own (see coalesced).
+  const refreshConversations = useMemo(
+    () =>
+      coalesced(async () => {
+        setConversations(await window.api.listConversations())
+        setConversationsLoaded(true)
+      }),
+    []
+  )
   // The get-started checklist's inline "Connect a model" panel.
   const [connectOpen, setConnectOpen] = useState(false)
   // Backing out of the Connect panel returns focus to step 1's button, which the
@@ -374,13 +382,14 @@ export default function App(): JSX.Element {
       if (typeof s.previewWidth === 'number') setPreviewWidth(clampPreviewWidth(s.previewWidth))
       if (s.previewOpen) setPreviewOpen(true)
       if (typeof s.planWidth === 'number') setPlanWidth(clampPlanWidth(s.planWidth))
-      await refreshConversations()
       // Reopen the chat that was open at quit, as a click in the sidebar would. Skip it
-      // if the user already opened one while this loaded.
+      // if the user already opened one while this loaded. It does not wait for the
+      // sidebar list (opening a chat reads only that chat), which the effects below
+      // are already fetching.
       if (launchId && currentIdRef.current === null) await selectConversationRef.current?.(launchId)
       setLaunchSettled(true)
     })()
-  }, [refreshConversations])
+  }, [])
 
   // Reload the conversation list when a run finishes (titles/updatedAt change).
   useEffect(() => {
