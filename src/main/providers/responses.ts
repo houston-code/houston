@@ -15,6 +15,7 @@ import { openaiResponsesReasoning } from './reasoning'
 import { parseToolArguments } from './tool-args'
 import { idleTimeoutFetch } from './idle-fetch'
 import { responsesWebSearch, type ResponsesCreateClient } from './native-search'
+import { SDK_MAX_RETRIES } from '../agent/retry'
 
 /**
  * Adapter for OpenAI's **Responses API** (`client.responses.create`), the path
@@ -215,6 +216,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       (m) =>
         new m.default({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           apiKey: apiKey || 'no-key',
           ...(baseURL ? { baseURL } : {})
         })
