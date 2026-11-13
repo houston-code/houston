@@ -116,7 +116,7 @@ Open source under the [Apache License 2.0](LICENSE).
   when it is waiting on you (an approval, a question, a plan, a server asking for input,
   with the reason under the title), a grey pulse while it works, red when its last run
   failed, and blue when it finished while you were elsewhere. Mark any chat unread or
-  read from its ⋯ menu or with ⌥U (Alt+U), or from a specific reply with **Mark unread
+  read from its ⋯ menu (or right-click the chat) or with ⌥U (Alt+U), or from a specific reply with **Mark unread
   from here**. Reopening an unread chat lands on a "New" divider above what you missed.
   Mark everything read from the filter menu, or sort the chats that want attention to
   the top. Collapsed groups, the collapsed sidebar, and the app icon (Dock badge, or a
@@ -429,7 +429,8 @@ Open source under the [Apache License 2.0](LICENSE).
   confirmation says how many messages and files it affects, files you changed since
   the agent wrote them are left alone, and **Undo rewind** reverses it until you send
   again. **Edit and resend** rewinds to a message and sends your edited version in
-  its place. Esc Esc in an empty composer (or `/rewind`, also in the terminal app)
+  its place, and **Retry** on the last reply sends your last message again for a new
+  reply. Right-clicking a message offers the same actions plus copy. Esc Esc in an empty composer (or `/rewind`, also in the terminal app)
   picks the message from a list. Shell commands' side effects aren't snapshotted, so
   a rewind can't undo them.
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right

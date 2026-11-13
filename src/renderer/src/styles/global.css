@@ -2865,6 +2865,16 @@ body.is-resizing {
   color: var(--sig-unread);
   border-color: var(--sig-unread);
 }
+/* Retry sits after the reply's other hover buttons. */
+.msg__retry {
+  left: 26px;
+}
+.msg__mark-unread + .msg__retry {
+  left: 52px;
+}
+.msg__retry:focus-visible {
+  opacity: 1;
+}
 /* Where unseen output starts: a labelled rule in the unread blue, above the first
    reply the user hasn't seen. */
 .transcript__new {
