@@ -13,7 +13,7 @@ const ID = '0f8fad5b-d9cb-469f-a165-70867728950e'
 
 describe('parseDeepLink', () => {
   it('parses a folder link and round-trips paths with spaces and URL syntax', () => {
-    const path = '/Users/someone/My Projects/a&b?c#d'
+    const path = '/home/someone/My Projects/a&b?c#d'
     expect(parseDeepLink(folderDeepLink(path))).toEqual({ type: 'open-folder', path })
     expect(parseDeepLink(folderDeepLink('C:\\code\\app'))).toEqual({ type: 'open-folder', path: 'C:\\code\\app' })
   })
