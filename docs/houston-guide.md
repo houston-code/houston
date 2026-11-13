@@ -96,13 +96,28 @@ The full GUI:
   pill in the title bar opens the next chat waiting on you, and clicking a desktop
   notification opens the chat it's about.
 
+**More than one window.** **File > New Window** opens another window on a new chat, and
+a chat's ⋯ menu has **Open in New Window**. Each window shows its own chat, and the
+sidebar lists every chat in all of them.
+
+- If another window already shows that chat, it comes to the front instead of a second
+  copy opening.
+- A run keeps going, and stays live, in any window showing its chat. Approvals and
+  questions can be answered there, even after the window that started the run closes.
+- Notifications and the app icon badge cover every window. Clicking a notification
+  opens the window showing that chat.
+- Only the first window remembers its size and position for the next launch. Others
+  open slightly offset from the window you're in.
+- On Windows and Linux, closing the last window quits Houston, and Houston asks first if
+  work is still running. Closing any other window quits nothing.
+
 **Links.** The desktop app opens `houston://` links from a browser, another app, or
 the terminal. Only three kinds do anything:
 
 | Link | Opens |
 | --- | --- |
 | `houston://open?path=/path/to/folder` | a new chat in that folder |
-| `houston://chat/<chat id>` | that chat |
+| `houston://chat/<chat id>` | that chat (the window already showing it comes to the front) |
 | `houston://settings/<page>` | Settings at that page (`models`, `tools`, `permissions`, …); `houston://settings` alone opens the first page |
 
 - A link never runs a command, sends a message, or changes a setting.

@@ -241,6 +241,8 @@ export const IPC = {
   chatMarkAllRead: 'chat:markAllRead',
   /** Main → renderer: open this chat (its desktop notification was clicked). */
   chatOpenRequest: 'chat:openRequest',
+  /** Renderer → main: open a chat (or a new chat, null) in a new window. */
+  windowOpenChat: 'window:openChat',
   /** main → renderer: play an attention sound (the window is not focused). */
   attentionSound: 'attention:sound',
   agentEvent: 'agent:event',

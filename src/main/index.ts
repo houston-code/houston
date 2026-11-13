@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { APP_NAME } from '@shared/constants'
 import { openExternalSafely } from './safeExternal'
 import { isAllowedNavigation } from './navigation'
-import { loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
+import { cascadeBounds, loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { registerIpc } from './ipc'
 import { buildAppMenu } from './menu'
 import { killAllShells } from './agent/shells'
@@ -27,7 +27,7 @@ import { registerPrivilegedSchemes } from './schemes'
 import { wireDeepLinks } from './deepLinkHost'
 import { isAllowedChatFrameUrl } from './visualRender'
 import { appWindows, destroyHelperWindows } from './helperWindows'
-import { chatWindows, isPrimaryWindow, registerAppWindow, targetWindow } from './windows'
+import { chatWindows, isPrimaryWindow, registerAppWindow, setWindowOpener, targetWindow } from './windows'
 import { wireImageDownscale } from './imageDownscale'
 import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation } from './quit-confirm'
 import { parseHeadlessArgs } from './headless'
@@ -102,11 +102,17 @@ wireImageDownscale()
  * a second window never overwrites where the main one reopens.
  */
 function createWindow(): BrowserWindow {
-  const bounds = pickStartupBounds(
-    loadWindowState(),
-    screen.getPrimaryDisplay().workArea,
-    screen.getAllDisplays().map((d) => d.workArea)
-  )
+  // A window opened beside others (File > New Window, Open in New Window) cascades
+  // from the one in use, on that window's display.
+  const from = targetWindow()
+  const bounds =
+    from && !from.isDestroyed()
+      ? cascadeBounds(from.getBounds(), screen.getDisplayMatching(from.getBounds()).workArea)
+      : pickStartupBounds(
+          loadWindowState(),
+          screen.getPrimaryDisplay().workArea,
+          screen.getAllDisplays().map((d) => d.workArea)
+        )
 
   const win = new BrowserWindow({
     ...bounds,
@@ -290,6 +296,7 @@ if (acp) {
       buildAppMenu()
     })
     registerIpc(started)
+    setWindowOpener(createWindow)
     createWindow()
     // After the window exists, so its renderer starts loading while the store is read.
     // Still ahead of every request: nothing above has awaited, and the scheduler's

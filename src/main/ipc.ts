@@ -128,7 +128,16 @@ import { log } from './logger'
 import { dismissEnvKeyOffers, dismissedEnvKeyOffers, envKeyOffers, envKeyValue } from './envKeys'
 import { setMenuState, setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
-import { anyChatWindowFocused, chatWindows, setWindowShowing, targetWindow, windowShowing } from './windows'
+import {
+  anyChatWindowFocused,
+  chatShownBy,
+  chatWindows,
+  openChatWindow,
+  setWindowShowing,
+  takeLaunchRequest,
+  targetWindow,
+  windowShowing
+} from './windows'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
@@ -512,7 +521,12 @@ export const MAX_QUESTION_ANSWER_LEN = 100_000
  */
 function callerOwnsRun(event: { sender: WebContents }, runId: string): boolean {
   const owner = runOwner(runId)
-  return owner === undefined || owner === event.sender.id
+  if (owner === undefined || owner === event.sender.id) return true
+  // A chat can be open in more than one window, and the window that started a run may
+  // have closed. Another chat window may control the run while it shows that run's
+  // chat, the same as the starting window; any other window still can't.
+  const shown = chatShownBy(event.sender.id)
+  return shown !== null && activeRunForConversation(shown) === runId
 }
 
 /**
@@ -1832,7 +1846,20 @@ export function registerIpc(ready?: Promise<unknown>): void {
   const launchedIds = new Set<number>()
   handle(IPC.chatLaunch, (event): string | null => {
     launchedIds.add(event.sender.id)
+    // A window opened for a particular chat (or a new one) starts there; the launch
+    // window reopens the last chat.
+    const requested = takeLaunchRequest(event.sender.id)
+    if (requested) {
+      const id = requested.conversationId
+      return id && conversationExists(id) ? id : null
+    }
     return launchChat(lastChat.get(), (id) => peekConversation(id)?.workspace, isDirectory)
+  })
+  // File > New Window and a chat's "Open in New Window": a new chat window, on that
+  // chat (null: a new chat). Only an existing chat id is accepted.
+  handle(IPC.windowOpenChat, (event, conversationId: unknown): void => {
+    if (conversationId !== null && (typeof conversationId !== 'string' || !conversationExists(conversationId))) return
+    openChatWindow(conversationId, BrowserWindow.fromWebContents(event.sender))
   })
 
   // Each window says which chat it shows and whether it has focus; a focused view

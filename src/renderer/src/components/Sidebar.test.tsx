@@ -1394,6 +1394,24 @@ describe('Sidebar: attention outside the rows', () => {
 })
 
 describe('Sidebar: the ⋯ menus', () => {
+  it('offers Open in New Window only when the host can open windows', () => {
+    const onOpenInNewWindow = vi.fn()
+    const { unmount } = render(
+      <Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], onOpenInNewWindow })} />
+    )
+    openConvMenu('Alpha')
+    const open = screen.getByRole('menuitem', { name: 'Open in New Window' })
+    expect(open.querySelector('svg.icon')).not.toBeNull()
+    fireEvent.click(open)
+    expect(onOpenInNewWindow).toHaveBeenCalledWith('a')
+    expect(screen.queryByRole('menu', { name: 'Actions for Alpha' })).not.toBeInTheDocument()
+    unmount()
+
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })} />)
+    openConvMenu('Alpha')
+    expect(screen.queryByRole('menuitem', { name: 'Open in New Window' })).not.toBeInTheDocument()
+  })
+
   it('is a named menu of items that each lead with an icon, so their labels line up', () => {
     render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })} />)
     openConvMenu('Alpha')

@@ -482,6 +482,9 @@ const api = {
     ipcRenderer.invoke(IPC.chatSetUnread, conversationId, unread, fromReply),
   /** Mark every chat read. */
   markAllChatsRead: (): Promise<void> => ipcRenderer.invoke(IPC.chatMarkAllRead),
+  /** Open a chat in a new window (null: a new chat); a window already showing it comes forward instead. */
+  openChatInNewWindow: (conversationId: string | null): Promise<void> =>
+    ipcRenderer.invoke(IPC.windowOpenChat, conversationId),
   /** Main asks to open a chat (its desktop notification was clicked). Returns an unsubscribe fn. */
   /** Main asks for an attention sound (a turn ended or needs input while unfocused). */
   onAttentionSound: (cb: (sound: AttentionSound) => void): (() => void) => {

@@ -116,3 +116,46 @@ describe('pickStartupBounds', () => {
     expect(pickStartupBounds(saved, WORK_AREA, [WORK_AREA])).toEqual(WORK_AREA)
   })
 })
+
+describe('cascadeBounds', () => {
+  const work = { x: 0, y: 25, width: 1440, height: 875 }
+  let cascadeBounds: Awaited<ReturnType<typeof mod>>['cascadeBounds']
+  beforeEach(async () => {
+    ;({ cascadeBounds } = await mod())
+  })
+
+  it('steps a new window down and right from the one it opens from, same size', () => {
+    expect(cascadeBounds({ x: 100, y: 100, width: 1000, height: 700 }, work)).toEqual({
+      x: 128,
+      y: 128,
+      width: 1000,
+      height: 700
+    })
+  })
+
+  it('keeps the window behind visible when the one in use fills the screen', () => {
+    expect(cascadeBounds(work, work)).toEqual({ x: 28, y: 53, width: 1412, height: 847 })
+  })
+
+  it("starts over at the work area's corner when the step would leave the display", () => {
+    expect(cascadeBounds({ x: 28, y: 53, width: 1412, height: 847 }, work)).toEqual({
+      x: 0,
+      y: 25,
+      width: 1412,
+      height: 847
+    })
+    expect(cascadeBounds({ x: 420, y: 100, width: 1000, height: 700 }, work)).toEqual({
+      x: 0,
+      y: 25,
+      width: 1000,
+      height: 700
+    })
+  })
+
+  it('never makes a window larger than the work area', () => {
+    expect(cascadeBounds({ x: 0, y: 0, width: 3000, height: 2000 }, work)).toMatchObject({
+      width: 1412,
+      height: 847
+    })
+  })
+})

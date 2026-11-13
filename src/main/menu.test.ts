@@ -26,6 +26,7 @@ import {
   WEBSITE_URL
 } from './menu'
 import { isSafeExternalUrl } from './safeExternal'
+import { setWindowOpener } from './windows'
 
 describe('menu close routing', () => {
   it('routes Cmd+W to the active tab when the terminal is focused, else the window', () => {
@@ -161,9 +162,10 @@ describe('File menu', () => {
   it('lists the chat items above Close on every platform', () => {
     for (const mac of [true, false]) {
       const labels = fileMenu(appMenuTemplate(mac, ctx)).map((i) => i.label ?? i.role ?? i.type)
-      expect(labels.slice(0, 8)).toEqual([
+      expect(labels.slice(0, 9)).toEqual([
         'New Chat',
         'New Chat in Another Folder…',
+        'New Window',
         'New Side Chat',
         'Open Recent',
         'separator',
@@ -171,9 +173,17 @@ describe('File menu', () => {
         'Export Chat',
         'separator'
       ])
-      expect(labels[8]).toBe('Close')
+      expect(labels[9]).toBe('Close')
       expect(labels.includes('quit')).toBe(!mac)
     }
+  })
+
+  it('File > New Window opens a chat window on a new chat', () => {
+    const opened = vi.fn(() => ({ webContents: { id: 4242, once: () => {} } }))
+    setWindowOpener(opened as never)
+    const items = fileMenu(appMenuTemplate(true, ctx))
+    ;(item(items, 'New Window') as { click: () => void }).click()
+    expect(opened).toHaveBeenCalledTimes(1)
   })
 
   it('shows the new-chat shortcuts without registering them (the renderer owns the keys)', () => {

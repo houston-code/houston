@@ -78,3 +78,25 @@ export function pickStartupBounds(
   if (saved && isVisibleOn(saved, displays)) return saved
   return primaryWorkArea
 }
+
+/** How far each additional window steps down and right from the one it opens from. */
+export const CASCADE_STEP = 28
+
+/**
+ * Bounds for an additional window: stepped down and right from the window it opens
+ * from so both stay visible, and at most one step smaller than the display's work area
+ * so a window that fills the screen still leaves the one behind it showing. When the
+ * step would push it past the work area, it starts again at the work area's top-left
+ * corner. Never persisted: only the primary window's bounds are remembered.
+ */
+export function cascadeBounds(from: WindowBounds, workArea: WindowBounds, step = CASCADE_STEP): WindowBounds {
+  const width = Math.min(from.width, workArea.width - step)
+  const height = Math.min(from.height, workArea.height - step)
+  let x = from.x + step
+  let y = from.y + step
+  if (x + width > workArea.x + workArea.width || y + height > workArea.y + workArea.height) {
+    x = workArea.x
+    y = workArea.y
+  }
+  return { x, y, width, height }
+}
