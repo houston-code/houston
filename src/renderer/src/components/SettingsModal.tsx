@@ -24,7 +24,8 @@ export function SettingsModal({
   onClose,
   onSaved,
   onShowScorecard,
-  onShowDoctor
+  onShowDoctor,
+  onTypeInTerminal
 }: {
   initial: AppSettings
   /** The section to open on (e.g. Appearance for /theme). */
@@ -39,6 +40,8 @@ export function SettingsModal({
   onShowScorecard?: () => void
   /** Open the setup health check (from About). */
   onShowDoctor?: () => void
+  /** Open the terminal with a command typed in, not run (Tools' Install buttons). */
+  onTypeInTerminal?: (command: string) => void
 }): JSX.Element {
   const [settings, setSettings] = useState<AppSettings>(initial)
   const [tab, setTab] = useState<TabId>(initialTab)
@@ -197,6 +200,7 @@ export function SettingsModal({
     persistNow,
     onShowScorecard,
     onShowDoctor,
+    onTypeInTerminal,
     workspace,
     policy
   }

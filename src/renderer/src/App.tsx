@@ -1404,6 +1404,18 @@ export default function App(): JSX.Element {
     [terminals, persistTerminal]
   )
 
+  // Settings > Tools' Install: a new tab with the install command typed in but not
+  // run, so the user sees exactly what will run and presses Enter themselves.
+  const typeInTerminal = useCallback(
+    async (command: string) => {
+      await terminals.addTab({ type: command, title: 'Install' })
+      setTerminalMounted(true)
+      setTerminalOpen(true)
+      void persistTerminal({ terminalOpen: true })
+    },
+    [terminals, persistTerminal]
+  )
+
   // Open a background task from the title-bar indicator: surface + focus its
   // terminal tab (mounting/showing the dock), or switch to the conversation it
   // belongs to — its own for a chat, the spawning run for a background shell.
@@ -3142,6 +3154,10 @@ export default function App(): JSX.Element {
             onShowDoctor={() => {
               setSettingsOpen(false)
               setDoctorOpen(true)
+            }}
+            onTypeInTerminal={(command) => {
+              setSettingsOpen(false)
+              void typeInTerminal(command)
             }}
           />
         )}

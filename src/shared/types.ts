@@ -916,6 +916,14 @@ export interface IntegrationsInfo {
    * and not turned on explicitly), or 'needs-git-bash' (Windows without Git Bash).
    */
   languageServersBlocked?: 'disabled' | 'unsandboxed' | 'needs-git-bash'
+  /** ripgrep (`rg`), which makes content search faster; a slower built-in search runs without it. */
+  ripgrep?: { installed: boolean }
+  /**
+   * For each missing item that something on this machine can install, the command
+   * that does it (keys `gh`, `rg`, `fmt:<bin>`, `lsp:<id>`). Settings types it into
+   * the terminal for the user to run; it is never run on its own.
+   */
+  install?: Record<string, string>
 }
 
 /** The user's answer to the one-time "global rules moved" notice. */
@@ -940,4 +948,11 @@ export interface LegacyRulesDecideResult {
   /** The global rules file written, after a successful import. */
   file?: string
   error?: string
+}
+
+/** A verification command inferred from the project's files, and where it came from. */
+export interface VerifySuggestion {
+  command: string
+  /** What it was inferred from, for the UI: "package.json scripts typecheck and test", "go.mod". */
+  source: string
 }

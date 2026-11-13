@@ -402,7 +402,8 @@ Open source under the [Apache License 2.0](LICENSE).
   Python. The formatters are **optional, not bundled**: install the ones you want on
   your `PATH` and Houston uses them when present (it silently skips a file when its
   formatter is missing). Settings → *Tools* → *Optional integrations*
-  shows which it detects. Runs in the same sandbox as `run_shell` (no network); off by
+  shows which it detects, with an **Install** button for each missing one that
+  opens the terminal with the install command typed in for you to run. Runs in the same sandbox as `run_shell` (no network); off by
   default.
 - **Code intelligence from language servers (optional).** When a language server is
   installed (`typescript-language-server` or `vtsls`, `pyright`/`basedpyright`,

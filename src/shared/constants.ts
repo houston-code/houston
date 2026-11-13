@@ -90,6 +90,8 @@ export const IPC = {
   /** Keep an interactive HTML visual for its sandboxed frame to load; returns its id. */
   visualRegisterHtml: 'visual:registerHtml',
   commandsList: 'commands:list',
+  /** A verification command inferred from the project's files (Settings > Agent Behavior). */
+  verifyInfer: 'verify:infer',
   /** List the workspace's skills (.houston/skills) as {name, description}, for /skills. */
   skillsList: 'skills:list',
   /** List the workspace's custom agents (.houston/agents) as {name, description}, for /agents. */

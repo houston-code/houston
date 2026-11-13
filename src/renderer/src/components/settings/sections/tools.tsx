@@ -72,8 +72,46 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   )
 }
 
-/** Status of the optional extras on this machine (gh, formatters, language servers). */
-export function IntegrationsSection(): JSX.Element {
+/**
+ * Install buttons for missing items, each opening the terminal with the install
+ * command typed in (never run): the user reads it and presses Enter.
+ */
+export function InstallButtons({
+  items,
+  install,
+  onType
+}: {
+  /** `[key, label]` for each missing item. */
+  items: Array<[string, string]>
+  install: Record<string, string> | undefined
+  onType: ((command: string) => void) | undefined
+}): JSX.Element | null {
+  const ready = items.filter(([key]) => install?.[key])
+  if (!onType || ready.length === 0) return null
+  return (
+    <span className="integration__install">
+      {ready.map(([key, label]) => {
+        const command = install?.[key] as string
+        return (
+          <button
+            key={key}
+            type="button"
+            className="btn btn--sm"
+            title={command}
+            aria-label={`Install ${label} (types ${command} into the terminal)`}
+            onClick={() => onType(command)}
+          >
+            Install {label}
+          </button>
+        )
+      })}
+    </span>
+  )
+}
+
+/** Status of the optional extras on this machine (gh, ripgrep, formatters, language servers). */
+export function IntegrationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
+  const onType = ctx.onTypeInTerminal
   // Optional-integrations status (gh CLI + formatters), shown as a hint in the Tools tab.
   const [integrations, setIntegrations] = useState<IntegrationsInfo | null>(null)
   useEffect(() => {
@@ -101,7 +139,18 @@ export function IntegrationsSection(): JSX.Element {
   return (
     <SettingsSection
       title="Optional integrations"
-      desc="These extras are optional. Houston works without them. Status on this machine:"
+      desc={
+        <>
+          These extras are optional. Houston works without them. Status on this machine:
+          {onType && integrations?.install && Object.keys(integrations.install).length > 0 && (
+            <>
+              {' '}
+              <strong>Install</strong> opens the terminal with the command typed in; check it and
+              press Enter to run it.
+            </>
+          )}
+        </>
+      }
     >
       <div className="integration">
         <span className="integration__name">
@@ -130,6 +179,7 @@ export function IntegrationsSection(): JSX.Element {
                   cli.github.com
                 </a>{' '}
                 and run <code>gh auth login</code>.
+                <InstallButtons items={[['gh', 'gh']]} install={integrations.install} onType={onType} />
               </>
             ) : (
               <>
@@ -138,6 +188,27 @@ export function IntegrationsSection(): JSX.Element {
             )}
           </p>
         )}
+      {integrations?.ripgrep && (
+        <>
+          <div className="integration">
+            <span className="integration__name">
+              ripgrep (<code>rg</code>)
+            </span>
+            <span
+              className={`integration__status pill integration__status--${integrations.ripgrep.installed ? 'ok' : 'warn'} pill--${integrations.ripgrep.installed ? 'ok' : 'warn'}`}
+            >
+              {integrations.ripgrep.installed ? 'Installed' : 'Not found'}
+            </span>
+          </div>
+          {!integrations.ripgrep.installed && (
+            <p className="field__hint">
+              Makes the agent&apos;s content search fast in big projects. Without it a slower
+              built-in search is used.
+              <InstallButtons items={[['rg', 'ripgrep']]} install={integrations.install} onType={onType} />
+            </p>
+          )}
+        </>
+      )}
       {integrations != null && (
         <>
           <div className="integration">
@@ -174,6 +245,11 @@ export function IntegrationsSection(): JSX.Element {
               ))}
               . Install the ones you want on your <code>PATH</code>; the matching formatter
               runs only when present.
+              <InstallButtons
+                items={integrations.formatters.filter((f) => !f.installed).map((f) => [`fmt:${f.bin}`, f.bin])}
+                install={integrations.install}
+                onType={onType}
+              />
             </p>
           )}
         </>
@@ -206,6 +282,11 @@ export function IntegrationsSection(): JSX.Element {
             <code>PATH</code> (a project&apos;s own <code>node_modules/.bin</code> also
             counts), for example{' '}
             <code>npm install -g typescript-language-server typescript</code>.
+            <InstallButtons
+              items={integrations.languageServers.filter((l) => !l.path && !l.user).map((l) => [`lsp:${l.id}`, l.name])}
+              install={integrations.install}
+              onType={onType}
+            />
           </p>
         </>
       )}

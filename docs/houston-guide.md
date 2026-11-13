@@ -820,7 +820,12 @@ None are bundled; install the ones you want.
 `clangd`) replaces it.
 
 **What's installed:** Settings > Tools > **Optional integrations** and `/doctor` both
-show it.
+show it. There, each missing integration (`gh`, ripgrep, a formatter, or a language
+server) that a package manager on this machine can install has an **Install** button:
+it opens the terminal with the install command typed in (for example
+`brew install gh`, `winget install --id GitHub.cli -e`, or
+`npm install -g typescript-language-server typescript`) but not run. Check it and press
+Enter to run it.
 
 ### How servers run
 
@@ -924,6 +929,13 @@ the run works as usual at any point.
 **Settings:** Settings > Agent Behavior > Loop control has the per-turn step count,
 the keep-going-while-productive switch, and the hard limit. If you had already set
 your own step count, it stays a hard stop until you turn the switch on.
+
+**Checking the work when it finishes.** Loop control also has an opt-in verification
+command that runs when the agent stops after changing files, with a failure sent back
+for a bounded fix-up. With a project open, Houston suggests one from the project's
+files under the field: the `typecheck` and `test` scripts in `package.json` (run with
+npm, pnpm, yarn, or bun by lockfile), `cargo test`, `go test ./...`, or `pytest`.
+**Use this command** fills the field; it doesn't turn verification on.
 
 ### Watching a running turn
 

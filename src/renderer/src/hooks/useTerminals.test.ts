@@ -116,4 +116,18 @@ describe('useTerminals', () => {
     await waitFor(() => expect(result.current.tabs[0].exited).toBe(true))
     expect(result.current.tabs).toHaveLength(1)
   })
+
+  it('types a command in without Enter, so the user runs it themselves', async () => {
+    const { api } = installApi()
+    const { result } = renderHook(() => useTerminals('/repo'))
+    await act(async () => {
+      await result.current.addTab({ type: 'brew install gh', title: 'Install' })
+    })
+    expect(api.writeTerminal).toHaveBeenCalledWith('t1', 'brew install gh')
+    // A line break smuggled into the text can't press Enter for them.
+    await act(async () => {
+      await result.current.addTab({ type: 'echo a\nrm -rf x\r' })
+    })
+    expect(api.writeTerminal).toHaveBeenLastCalledWith('t2', 'echo a rm -rf x ')
+  })
 })

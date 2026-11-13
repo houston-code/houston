@@ -6925,6 +6925,12 @@ body:has(.coachmark) .get-started {
   color: var(--warn);
 }
 /* Optional-integrations status rows (Settings → Tools). */
+.integration__install {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
 .integration {
   display: flex;
   align-items: baseline;
