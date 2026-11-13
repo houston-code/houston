@@ -302,7 +302,10 @@ const CAPTURE_PARTITION = 'view-localhost-capture'
 let captureFilterInstalled = false
 
 function captureSession(): Session {
-  const ses = session.fromPartition(CAPTURE_PARTITION)
+  // No HTTP cache: a capture loads a page once and closes, so a cache only grew in the
+  // network process for the life of the app, and could hand a later capture a stale
+  // asset from a dev server that had since rebuilt it.
+  const ses = session.fromPartition(CAPTURE_PARTITION, { cache: false })
   if (!captureFilterInstalled) {
     // Subresource egress filter + download block + permission denial. Steps can
     // click links and buttons, so a page must never save a file to the user's disk

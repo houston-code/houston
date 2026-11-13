@@ -196,11 +196,12 @@ export function parseMermaidRequest(source: unknown, theme: unknown): { source: 
   return { source, theme: theme === 'dark' ? 'dark' : 'light' }
 }
 
-let mermaidJsCache: string | null = null
 function mermaidJs(): string {
-  // Copied next to the main bundle at build time (electron.vite.config.ts).
-  mermaidJsCache ??= readFileSync(join(__dirname, 'vendor', 'mermaid.min.js'), 'utf8')
-  return mermaidJsCache
+  // Copied next to the main bundle at build time (electron.vite.config.ts). Read per
+  // request, not kept: the renderer window asks once each time it is created, and a
+  // cached copy held several megabytes of main-process heap until quit for a read
+  // that takes a few milliseconds.
+  return readFileSync(join(__dirname, 'vendor', 'mermaid.min.js'), 'utf8')
 }
 
 let sessionReady: Promise<Session> | null = null

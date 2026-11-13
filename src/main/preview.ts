@@ -112,8 +112,8 @@ function destroyPane(pane: Pane): void {
 /**
  * Reconcile the live panes to `specs`: create new ones, drop removed ones, reload
  * any whose URL changed, and position + show/hide the rest. Passing `visible:
- * false` keeps the panes (so they don't reload on every overlay toggle) but hides
- * them; passing an empty `specs` tears them all down.
+ * false` keeps the panes that exist (so they don't reload on every overlay toggle)
+ * but hides them, and creates none; passing an empty `specs` tears them all down.
  */
 export function syncPreviewPanes(specs: PreviewPaneSpec[], visible: boolean): void {
   if (!host) return
@@ -134,6 +134,10 @@ export function syncPreviewPanes(specs: PreviewPaneSpec[], visible: boolean): vo
   for (const spec of specs) {
     let pane = panes.get(spec.id)
     if (!pane) {
+      // A pane nobody can see yet is not started: each one is a whole renderer process
+      // loading a dev server's page. The dock syncs again when it becomes visible (its
+      // tab is chosen, the overlay over it closes), and the pane is created then.
+      if (!visible) continue
       pane = createPane(spec)
       panes.set(spec.id, pane)
     } else if (pane.url !== spec.url) {
