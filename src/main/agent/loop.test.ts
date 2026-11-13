@@ -1325,6 +1325,17 @@ describe('startRun', () => {
       })
       expect(types(r)).not.toContain('retry')
       expect(types(r).at(-1)).toBe('error')
+      // Named, so the client can say "out of credit" rather than show a raw 429.
+      expect(r.events.at(-1)).toMatchObject({ type: 'error', cause: 'quota' })
+    })
+
+    it('names the cause of a provider failure that ends the turn', async () => {
+      const last = async (ev: ProviderStreamEvent) => (await run({ turns: [[ev]] })).events.at(-1)
+      expect(await last({ type: 'error', message: 'invalid x-api-key', status: 401 })).toMatchObject({
+        type: 'error',
+        cause: 'auth'
+      })
+      expect(await last({ type: 'error', message: 'invalid request body', status: 400 })).not.toHaveProperty('cause')
     })
 
     it('retracts a partial reply before hopping, so two models are never spliced', async () => {
@@ -1477,6 +1488,7 @@ describe('startRun', () => {
       expect(last.message).toContain('Pick another model and retry')
       expect(last.message).not.toContain('not_found_error') // the raw 404 body is replaced
       expect(last.modelUnavailable).toEqual({ providerId: 'anthropic', model: 'claude-test' })
+      expect(last).toMatchObject({ cause: 'model-not-found' })
       expect(h.unavailableCalls).toEqual([{ providerId: 'anthropic', model: 'claude-test', unavailable: true }])
     })
 

@@ -453,8 +453,11 @@ Open source under the [Apache License 2.0](LICENSE).
   dropped connections) are retried with exponential backoff, shown inline as a
   "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A
   reply that drops partway through is discarded and started over, never shown
-  twice. If a turn still fails, a **Retry** button re-runs it without you
-  re-typing.
+  twice. If a turn still fails, a bar says why in plain words (a rejected key, a
+  rate limit, the provider down, no network, a missing model, a conversation too
+  long for the model) with the next step: **Retry** re-runs it without you
+  re-typing, or open the provider settings, run the doctor, or switch model. The
+  provider's own message stays one click away.
 - **Secure key storage.** API keys are encrypted with the OS credential store
   through Electron `safeStorage` (the Keychain on macOS, DPAPI on Windows, a desktop
   keyring such as GNOME Keyring or KWallet on Linux) and never leave the main process

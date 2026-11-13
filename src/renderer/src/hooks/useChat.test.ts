@@ -272,6 +272,22 @@ describe('useChat', () => {
     expect(result.current.errored).toBe(true)
   })
 
+  it('keeps what the failed run reported, and seeds it from a saved failure on reset', async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'error', message: '429 slow down', cause: 'rate-limit' })
+    expect(result.current.failure).toEqual({ message: '429 slow down', cause: 'rate-limit' })
+    await act(async () => {
+      await result.current.retry({ ...SEND })
+    })
+    expect(result.current.failure).toBeNull()
+    act(() => result.current.reset([], null, true, { message: 'saved', cause: 'network' }))
+    expect(result.current.failure).toEqual({ message: 'saved', cause: 'network' })
+    act(() => result.current.reset([], null, false, { message: 'ignored' }))
+    expect(result.current.failure).toBeNull()
+  })
+
   it('retry re-runs the turn with a fresh runId, adds no user item, and clears errored', async () => {
     const { api, emit } = installApi()
     const { result } = renderHook(() => useChat())

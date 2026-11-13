@@ -1,3 +1,5 @@
+import { causeFromMessage, type TurnErrorCause } from '@shared/turnError'
+
 /**
  * Transient-failure handling for provider streaming. The SDKs retry the *initial*
  * request a couple of times, but a connection that drops mid-stream, or a failure
@@ -262,6 +264,22 @@ export function isModelNotFoundError(err: unknown, model: string): boolean {
   if (!is404) return false
   if (model && msg.includes(model)) return true
   return /not_found_error|model_not_found|\bmodel\b[^.]{0,80}\b(?:not found|does not exist)/i.test(msg)
+}
+
+/**
+ * The user-facing cause of a provider failure that ended a turn, read from the error
+ * itself: its HTTP status first (a server that answered said exactly what was wrong),
+ * then the network codes on its cause chain, then its wording. Undefined when none of
+ * them says, so the client falls back to a generic "the turn failed".
+ */
+export function classifyProviderFailure(err: unknown): TurnErrorCause | undefined {
+  if (isQuotaExhaustedError(err)) return 'quota'
+  const status = (err as { status?: unknown })?.status
+  if (status === 401 || status === 403) return 'auth'
+  if (status === 429) return 'rate-limit'
+  if (typeof status === 'number' && status >= 500) return 'provider-down'
+  if (isNetworkError(err)) return 'network'
+  return causeFromMessage(String((err as { message?: unknown })?.message ?? err))
 }
 
 /** Exponential backoff with full jitter, in ms. `rand` is injectable for tests. */

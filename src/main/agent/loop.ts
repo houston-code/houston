@@ -125,6 +125,7 @@ import { isParallelizableRead, partitionCalls } from './scheduling'
 import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import {
   abortableSleep,
+  classifyProviderFailure,
   describeProviderError,
   isModelNotFoundError,
   isQuotaExhaustedError,
@@ -136,6 +137,7 @@ import {
   RetryBudget,
   withProviderRetry
 } from './retry'
+import { causeFromMessage, type TurnErrorCause } from '@shared/turnError'
 import { isBlockedByPlan, decideApproval } from './approval'
 import { repairDanglingToolResults } from './repair'
 import {
@@ -1286,7 +1288,7 @@ export async function startRun(
   // place of the user-facing message, when the raw cause says more.
   const fail = (
     cls: RunEndClass,
-    e: { message: string; modelUnavailable?: { providerId: string; model: string } },
+    e: { message: string; modelUnavailable?: { providerId: string; model: string }; cause?: TurnErrorCause },
     detail?: string
   ): void => {
     failing = { cls, ...(detail !== undefined ? { detail } : {}) }
@@ -1365,7 +1367,9 @@ export async function startRun(
         createProvider(providerConfig)
         fail('unknown-provider', { message: `Unknown provider: ${req.providerId}` })
       } catch (e) {
-        fail('provider-unusable', { message: (e as Error).message })
+        const message = (e as Error).message
+        const cause = causeFromMessage(message)
+        fail('provider-unusable', { message, ...(cause ? { cause } : {}) })
       }
       return
     }
@@ -3613,7 +3617,8 @@ export async function startRun(
               message:
                 "The conversation is too large for this model's context window, even after " +
                 'compacting older messages. Start a new conversation, remove large attachments, ' +
-                'or switch to a model with a larger context window.'
+                'or switch to a model with a larger context window.',
+              cause: 'context-too-long'
             }, logDetail())
             return
           }
@@ -3635,7 +3640,8 @@ export async function startRun(
               message:
                 `${providerName} doesn't recognize the model "${missing.model}": it may be mistyped, ` +
                 'retired, or not available to this key. Pick another model and retry.',
-              modelUnavailable: { providerId: missing.providerId, model: missing.model }
+              modelUnavailable: { providerId: missing.providerId, model: missing.model },
+              cause: 'model-not-found'
             }, logDetail())
             return
           }
@@ -3646,7 +3652,8 @@ export async function startRun(
             fail('tools-unsupported', {
               message:
                 `The selected model "${route.model}" doesn't support tool calling, which this agent ` +
-                'requires. Pick a tool-capable model (e.g. qwen2.5-coder, llama3.1, mistral-nemo).'
+                'requires. Pick a tool-capable model (e.g. qwen2.5-coder, llama3.1, mistral-nemo).',
+              cause: 'tools-unsupported'
             }, logDetail())
             return
           }
@@ -3689,7 +3696,8 @@ export async function startRun(
               attempt = -1 // fresh transient-retry budget for the new model
               continue streaming
             }
-            fail('provider-error', { message: reason }, logDetail())
+            const cause = classifyProviderFailure(e)
+            fail('provider-error', { message: reason, ...(cause ? { cause } : {}) }, logDetail())
             return
           }
           discardPartial()

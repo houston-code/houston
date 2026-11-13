@@ -148,6 +148,8 @@ import {
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
 import { Icon } from './components/Icon'
+import { TurnErrorBar } from './components/TurnErrorBar'
+import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
 import { FindBar } from './components/FindBar'
 import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
@@ -843,7 +845,8 @@ export default function App(): JSX.Element {
         // Map through the shared helper so the persisted per-model breakdown and
         // cache split survive a reopen too — not just context/output/cost.
         conv.usage ? sessionUsageFromConversation(conv.usage) : null,
-        Boolean(conv.lastError)
+        Boolean(conv.lastError),
+        conv.lastError ?? null
       )
       // A run for this conversation is still in flight in the main process —
       // re-adopt it so the composer shows Stop and events/approvals reconnect.
@@ -1594,6 +1597,22 @@ export default function App(): JSX.Element {
       reasoningEffort: settings.reasoningEffort
     })
   }, [chat, settings, currentId])
+
+  // The failed-turn bar's next steps.
+  const onTurnErrorAction = useCallback(
+    (action: TurnErrorAction) => {
+      if (action === 'retry') onRetry()
+      else if (action === 'doctor') setDoctorOpen(true)
+      else if (action === 'switch-model') {
+        setPaletteSeed('model')
+        setPaletteOpen(true)
+      } else {
+        setSettingsSection('models')
+        setSettingsOpen(true)
+      }
+    },
+    [onRetry]
+  )
 
   const onReapply = useCallback(async () => {
     const expected = chat.checkpoint?.files ?? 0
@@ -2884,12 +2903,7 @@ export default function App(): JSX.Element {
         />
 
         {chat.errored && !chat.running && currentId && (
-          <div className="checkpoint-bar">
-            <span className="checkpoint-bar__label">The last turn failed.</span>
-            <button className="btn btn--sm" onClick={onRetry}>
-              <Icon name="refresh" /> Retry
-            </button>
-          </div>
+          <TurnErrorBar failure={chat.failure} onAction={onTurnErrorAction} />
         )}
 
         {chat.checkpoint && !chat.running && (
