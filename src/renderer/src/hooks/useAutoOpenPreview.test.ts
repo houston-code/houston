@@ -1,7 +1,8 @@
-import { renderHook } from '@testing-library/react'
+import { act, renderHook } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { PreviewServer } from '@shared/preview'
 import { chatToAutoOpen, useAutoOpenPreview } from './useAutoOpenPreview'
+import { PREVIEW_SERVERS_UNSEEDED, usePreviewServers } from './usePreviewServers'
 
 const server = (id: string, over: Partial<PreviewServer> = {}): PreviewServer => ({
   id,
@@ -54,4 +55,36 @@ describe('useAutoOpenPreview', () => {
     rerender({ list: [server('a'), server('b')], on: true })
     expect(open).not.toHaveBeenCalled()
   })
+
+  it('waits for the first list from main before deciding what was already running', () => {
+    const open = vi.fn()
+    const { rerender } = renderHook(({ list }) => useAutoOpenPreview(list, 'c1', true, open), {
+      initialProps: { list: PREVIEW_SERVERS_UNSEEDED }
+    })
+    // After a reload, main reports a server that was running all along.
+    rerender({ list: [server('old')] })
+    expect(open).not.toHaveBeenCalled()
+    rerender({ list: [server('old'), server('new')] })
+    expect(open).toHaveBeenCalledTimes(1)
+  })
 })
+
+describe('usePreviewServers', () => {
+  it('reports unseeded until main answers, and keeps a broadcast that beats the answer', async () => {
+    let answer: (l: PreviewServer[]) => void = () => {}
+    let push: (l: PreviewServer[]) => void = () => {}
+    window.api = {
+      listPreviewServers: vi.fn(() => new Promise<PreviewServer[]>((r) => (answer = r))),
+      onPreviewServersChanged: vi.fn((cb: (l: PreviewServer[]) => void) => {
+        push = cb
+        return () => {}
+      })
+    } as unknown as typeof window.api
+    const { result } = renderHook(() => usePreviewServers())
+    expect(result.current).toBe(PREVIEW_SERVERS_UNSEEDED)
+    act(() => push([server('b')]))
+    await act(async () => answer([]))
+    expect(result.current.map((s) => s.id)).toEqual(['b'])
+  })
+})
+
