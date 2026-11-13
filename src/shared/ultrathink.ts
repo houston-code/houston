@@ -6,7 +6,7 @@
  * exactly what the run does.
  */
 
-import { SYSTEM_NOTE_PREFIX, type ChatMessage } from './agent'
+import { SYSTEM_NOTE_PREFIX, type ChatMessage, type ReasoningEffort } from './agent'
 
 /** A use of the keyword: `[start, end)` offsets into the text. */
 export interface KeywordRange {
@@ -71,8 +71,31 @@ export const ULTRATHINK_NOTE =
 /** What the user is told when a turn's reasoning is raised. */
 export const ULTRATHINK_NOTICE = 'ultrathink: reasoning raised to the highest level for this turn'
 
-/** The hint a composer shows while the draft carries the keyword. */
+/** The hint a composer shows while the draft carries the keyword and it will raise the turn. */
 export const ULTRATHINK_HINT = 'ultrathink: this turn runs at the highest reasoning level'
+
+/** The hint when the chat is already at the level the keyword asks for. */
+export const ULTRATHINK_HINT_ALREADY = 'ultrathink: this chat already runs at the highest reasoning level'
+
+/** The hint when the model has no reasoning mode for the keyword to raise. */
+export const ULTRATHINK_HINT_NONE = 'ultrathink: this model has no reasoning level to raise'
+
+/**
+ * What the keyword does to a turn: `raises` its effort, finds the chat `already` at
+ * the top, or does `none` of it because the model cannot reason.
+ */
+export type UltrathinkEffect = 'raises' | 'already' | 'none'
+
+/** The keyword's effect for a chat at `effort` on a model that does or doesn't reason. */
+export function ultrathinkEffect(effort: ReasoningEffort | undefined, reasons: boolean): UltrathinkEffect {
+  if (!reasons) return 'none'
+  return effort === ULTRATHINK_EFFORT ? 'already' : 'raises'
+}
+
+/** The composer hint for an effect, so the hint never promises more than the turn gets. */
+export function ultrathinkHint(effect: UltrathinkEffect): string {
+  return effect === 'raises' ? ULTRATHINK_HINT : effect === 'already' ? ULTRATHINK_HINT_ALREADY : ULTRATHINK_HINT_NONE
+}
 
 /**
  * Whether the turn a run is starting carries the keyword, and whether the model has

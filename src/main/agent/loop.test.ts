@@ -2306,7 +2306,12 @@ describe('startRun', () => {
       writeFileSync(join(ws, 'x.txt'), 'hi')
       const seen: unknown[] = []
       const before = h.settings
-      const r = await run({ provider: twoTurns(seen), reasoningEffort: 'low', userText: 'why is this slow? ultrathink' })
+      const r = await run({
+        provider: twoTurns(seen),
+        model: 'claude-opus-4-8',
+        reasoningEffort: 'low',
+        userText: 'why is this slow? ultrathink'
+      })
       expect(seen).toEqual(['xhigh', 'xhigh'])
       expect(notes(r)).toHaveLength(1)
       expect(notices(r)).toHaveLength(1)
@@ -2316,6 +2321,30 @@ describe('startRun', () => {
       expect(r.messages[1].content).toContain(ULTRATHINK_NOTE)
       // Nothing saved: the chat's effort and the default are as they were.
       expect(h.settings).toBe(before)
+    })
+
+    it('does not announce a raise on a model that cannot reason, but still asks', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      const r = await run({ provider: twoTurns(seen), model: 'plain-model', reasoningEffort: 'low', userText: 'ultrathink' })
+      // The provider adapter drops an effort its model cannot take; the note still goes.
+      expect(seen).toEqual(['xhigh', 'xhigh'])
+      expect(notes(r)).toHaveLength(1)
+      expect(notices(r)).toHaveLength(0)
+    })
+
+    it('does not announce a raise in a chat already at the highest level', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      const r = await run({
+        provider: twoTurns(seen),
+        model: 'claude-opus-4-8',
+        reasoningEffort: 'xhigh',
+        userText: 'ultrathink'
+      })
+      expect(seen).toEqual(['xhigh', 'xhigh'])
+      expect(notes(r)).toHaveLength(1)
+      expect(notices(r)).toHaveLength(0)
     })
 
     it('raises a turn whose reasoning is off', async () => {
@@ -2371,6 +2400,7 @@ describe('startRun', () => {
       const seen: unknown[] = []
       const r = await run({
         provider: twoTurns(seen),
+        model: 'claude-opus-4-8',
         reasoningEffort: 'low',
         messages: [
           { role: 'user', content: 'ultrathink about the cache' },
@@ -2379,7 +2409,8 @@ describe('startRun', () => {
       })
       expect(seen).toEqual(['xhigh', 'xhigh'])
       expect(notes(r)).toHaveLength(1)
-      expect(notices(r)).toHaveLength(0)
+      // The retry is a new run for the user, so they are told again; the model is not.
+      expect(notices(r)).toHaveLength(1)
     })
 
     it('raises the rest of the turn when the keyword arrives in a steer', async () => {

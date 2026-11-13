@@ -445,6 +445,28 @@ function splitToWidth(s: string, width: number): string[] {
 }
 
 /**
+ * A wrapped chunk of a line, starting at string offset `at` in it, with the parts
+ * inside `marks` emphasized. A mark split by the wrap is painted on both rows.
+ */
+function markChunk(
+  chunk: string,
+  at: number,
+  marks: ReadonlyArray<{ start: number; end: number }>,
+  paint: Painter
+): string {
+  let out = ''
+  let pos = 0
+  for (const m of marks) {
+    const from = Math.max(m.start - at, pos)
+    const to = Math.min(m.end - at, chunk.length)
+    if (to <= from) continue
+    out += chunk.slice(pos, from) + paint(chunk.slice(from, to), 'bold', 'magenta')
+    pos = to
+  }
+  return out + chunk.slice(pos)
+}
+
+/**
  * Render the composer to exact display rows plus a cursor position. The adapter
  * erases exactly `rows.length` lines before redrawing, so the composer behaves
  * like the picker: a bounded live region, never a full-screen repaint.
@@ -465,6 +487,12 @@ export function renderEditor(
      * stays in the composer above them.
      */
     below?: string[]
+    /**
+     * Per buffer line, the `[start, end)` ranges (in string offsets) to draw
+     * emphasized. Styling only: wrapping and the cursor are computed from the plain
+     * text, so a marked draft lays out exactly as an unmarked one.
+     */
+    marks?: ReadonlyArray<ReadonlyArray<{ start: number; end: number }>>
   }
 ): EditorView {
   const width = Math.max(8, opts.width)
@@ -497,9 +525,12 @@ export function renderEditor(
         cursorCol = lead
       }
     }
+    const lineMarks = opts.marks?.[i] ?? []
+    let at = 0
     chunks.forEach((chunk, j) => {
       const prefix = i === 0 && j === 0 ? opts.prompt : j === 0 ? cont : ' '.repeat(lead)
-      rows.push(prefix + chunk)
+      rows.push(prefix + (lineMarks.length ? markChunk(chunk, at, lineMarks, opts.paint) : chunk))
+      at += chunk.length
     })
   })
 

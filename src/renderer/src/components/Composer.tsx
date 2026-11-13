@@ -58,7 +58,7 @@ import {
 } from '@shared/composerContext'
 import { workingTreeToText, type WorkingTreeChanges } from '@shared/workingTree'
 import type { ShipAction } from '@shared/shipAction'
-import { hasUltrathink, ULTRATHINK_HINT } from '@shared/ultrathink'
+import { hasUltrathink, ultrathinkHint, type UltrathinkEffect } from '@shared/ultrathink'
 
 /** Read an image File into a base64 ImageAttachment, or null if unsupported. */
 function readImageFile(file: File): Promise<ImageAttachment | null> {
@@ -168,6 +168,7 @@ export function Composer({
   workspace,
   commands,
   vision = true,
+  ultrathinkEffect,
   lastUserMessage,
   changes,
   onShowChanges,
@@ -200,6 +201,11 @@ export function Composer({
   commands: Command[]
   /** Whether the selected model accepts image inputs; gates the paste/drop affordance. */
   vision?: boolean
+  /**
+   * What the `ultrathink` keyword does on the chat's model at its reasoning level:
+   * picks the hint under the draft. Unset reads as raising the turn.
+   */
+  ultrathinkEffect?: UltrathinkEffect
   /** Text of the most recent user turn — recalled into the field on Esc Esc (empty field). */
   lastUserMessage?: string
   /** Working-tree change counts; drives the top Create-PR bar (omit to hide it). */
@@ -1200,7 +1206,7 @@ export function Composer({
         {notice && <div className="composer__notice">{notice}</div>}
         {ultrathink && (
           <div className="composer__notice" role="status">
-            {ULTRATHINK_HINT}
+            {ultrathinkHint(ultrathinkEffect ?? 'raises')}
           </div>
         )}
         <div className="composer__bar">

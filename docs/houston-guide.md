@@ -1012,8 +1012,11 @@ reaches a model with no higher level to move to.
   next message runs at the chat's level again.
 - **While the agent works.** Sent mid-turn, it raises the rest of that turn.
 - **Using the word, not mentioning it.** A quoted "ultrathink", the word in code, or
-  the word inside a file name, path, or flag does nothing. The composer shows a hint
-  under the draft whenever the word will take effect.
+  the word inside a file name, path, or flag does nothing.
+- **What you see.** While the word is in your draft, a line under it says what it will
+  do: raise this turn, nothing new because the chat is already at the highest level,
+  or nothing to raise because the model has no reasoning level. In the terminal, the
+  word itself is also coloured when it will raise the turn.
 - **Cost.** A higher level uses more tokens and takes longer per step. With Claude
   models, changing the level for a turn also means that turn's request does not reuse
   the cached conversation.

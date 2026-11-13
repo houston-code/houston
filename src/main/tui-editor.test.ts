@@ -232,6 +232,33 @@ describe('setEditorText', () => {
 })
 
 describe('renderEditor', () => {
+  const colour = makePainter(true)
+  const marked = (s: string): string => colour(s, 'bold', 'magenta')
+
+  it('draws marked ranges emphasized without moving the text or the cursor', () => {
+    const { state } = run([type('fix it, ultrathink now')])
+    const plain = renderEditor(state, { prompt: '> ', width: 40, paint: colour })
+    const v = renderEditor(state, { prompt: '> ', width: 40, paint: colour, marks: [[{ start: 8, end: 18 }]] })
+    expect(v.rows).toEqual([`> fix it, ${marked('ultrathink')} now`])
+    expect(v.cursorRow).toBe(plain.cursorRow)
+    expect(v.cursorCol).toBe(plain.cursorCol)
+  })
+
+  it('paints both halves of a mark the wrap splits', () => {
+    const { state } = run([type('ab ultrathink')])
+    // Width 10 with a 2-column prompt: 8 text columns per row.
+    const v = renderEditor(state, { prompt: '> ', width: 10, paint: colour, marks: [[{ start: 3, end: 13 }]] })
+    expect(v.rows).toEqual([`> ab ${marked('ultra')}`, `  ${marked('think')}`])
+  })
+
+  it('leaves unmarked lines and a colourless terminal as they were', () => {
+    const { state } = run([type('ultrathink')])
+    expect(renderEditor(state, { prompt: '> ', width: 40, paint, marks: [[{ start: 0, end: 10 }]] }).rows).toEqual([
+      '> ultrathink'
+    ])
+    expect(renderEditor(state, { prompt: '> ', width: 40, paint: colour, marks: [[]] }).rows).toEqual(['> ultrathink'])
+  })
+
   it('puts the prompt on the first row and the cursor after the text', () => {
     const { state } = run([type('hi')])
     const v = renderEditor(state, { prompt: '> ', width: 40, paint })

@@ -8,6 +8,7 @@ import {
   useState,
   type CSSProperties
 } from 'react'
+import { ultrathinkEffect } from '@shared/ultrathink'
 import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
@@ -2468,6 +2469,12 @@ export default function App(): JSX.Element {
   const visionSupported = settings.selected
     ? resolveCapabilities(settings.selected.model, selectedModelOption?.caps).vision
     : true
+  // What `ultrathink` would do on this chat's model at its reasoning level, so the
+  // composer's hint matches the turn. Before a model is picked there is nothing to raise.
+  const ultrathinkOnSend = ultrathinkEffect(
+    settings.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
+    settings.selected ? resolveCapabilities(settings.selected.model, selectedModelOption?.caps).reasoning : false
+  )
 
   return (
     <ImageViewerContext.Provider value={imageViewerApi}>
@@ -2778,6 +2785,7 @@ export default function App(): JSX.Element {
             workspace={workspace}
             commands={commands}
             vision={visionSupported}
+            ultrathinkEffect={ultrathinkOnSend}
             lastUserMessage={lastUserText(chat.items)}
             changes={workspace ? workingTreeStats : undefined}
             onShowChanges={() => setChangesOpen(true)}

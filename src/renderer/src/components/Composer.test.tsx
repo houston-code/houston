@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { ULTRATHINK_HINT } from '@shared/ultrathink'
+import { ULTRATHINK_HINT, ULTRATHINK_HINT_ALREADY, ULTRATHINK_HINT_NONE } from '@shared/ultrathink'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Command } from '@shared/commands'
 import { Composer } from './Composer'
@@ -125,6 +125,16 @@ describe('Composer', () => {
     // Talking about the word is not using it.
     fireEvent.change(input, { target: { value: 'what does "ultrathink" do?' } })
     expect(screen.queryByText(ULTRATHINK_HINT)).toBeNull()
+  })
+
+  it('words the hint by what the keyword will do on this model', () => {
+    const { rerender } = render(<Composer {...baseProps()} ultrathinkEffect="already" />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'ultrathink' } })
+    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT_ALREADY)
+    rerender(<Composer {...baseProps()} ultrathinkEffect="none" />)
+    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT_NONE)
+    rerender(<Composer {...baseProps()} ultrathinkEffect="raises" />)
+    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT)
   })
 
   it('names the message field, whatever the placeholder says', () => {

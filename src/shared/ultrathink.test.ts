@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { systemNoteMessage } from './agent'
-import { findUltrathink, hasUltrathink, ultrathinkAtTail, ULTRATHINK_NOTE } from './ultrathink'
+import {
+  findUltrathink,
+  hasUltrathink,
+  ultrathinkAtTail,
+  ultrathinkEffect,
+  ultrathinkHint,
+  ULTRATHINK_HINT,
+  ULTRATHINK_HINT_ALREADY,
+  ULTRATHINK_HINT_NONE,
+  ULTRATHINK_NOTE
+} from './ultrathink'
 
 describe('findUltrathink', () => {
   it('finds the keyword as a word of its own, anywhere in the message', () => {
@@ -134,5 +144,29 @@ describe('ultrathinkAtTail', () => {
 
   it('never reads the keyword out of a note Houston wrote', () => {
     expect(ultrathinkAtTail([{ role: 'user', content: 'hello' }, note])).toEqual({ on: false, noted: true })
+  })
+})
+
+describe('ultrathinkEffect', () => {
+  it('raises any level below the top on a model that reasons', () => {
+    for (const effort of ['off', 'low', 'medium', 'high'] as const) {
+      expect(ultrathinkEffect(effort, true)).toBe('raises')
+    }
+    expect(ultrathinkEffect(undefined, true)).toBe('raises')
+  })
+
+  it('has nothing to raise in a chat already at the top', () => {
+    expect(ultrathinkEffect('xhigh', true)).toBe('already')
+  })
+
+  it('does nothing on a model that cannot reason, whatever the chat is set to', () => {
+    expect(ultrathinkEffect('high', false)).toBe('none')
+    expect(ultrathinkEffect('xhigh', false)).toBe('none')
+  })
+
+  it('has a hint for each effect that promises only what the turn gets', () => {
+    expect(ultrathinkHint('raises')).toBe(ULTRATHINK_HINT)
+    expect(ultrathinkHint('already')).toBe(ULTRATHINK_HINT_ALREADY)
+    expect(ultrathinkHint('none')).toBe(ULTRATHINK_HINT_NONE)
   })
 })

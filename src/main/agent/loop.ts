@@ -50,7 +50,7 @@ import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
 import { hostPlatform, installHost } from './installHost'
-import { resolveContextWindow, turnCostUsd } from '@shared/usage'
+import { resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
 import {
   addPermissionRule,
   noteRuleUsed,
@@ -67,7 +67,14 @@ import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt, promptId } from './prompt'
 import { applyRunOverrides } from './run-overrides'
-import { hasUltrathink, ultrathinkAtTail, ULTRATHINK_EFFORT, ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
+import {
+  hasUltrathink,
+  ultrathinkAtTail,
+  ultrathinkEffect,
+  ULTRATHINK_EFFORT,
+  ULTRATHINK_NOTE,
+  ULTRATHINK_NOTICE
+} from '@shared/ultrathink'
 import { loadProjectRules } from './rules'
 import { loadProjectConfig, mergeProjectMcpServers, mergeRunMcpServers } from './projectConfig'
 import { scopeRefusalText, scopeVerdict, toolOffered } from './toolScope'
@@ -492,6 +499,8 @@ interface RunState {
   ultrathink: boolean
   /** The model has been told about {@link RunState.ultrathink} (see ULTRATHINK_NOTE). */
   ultrathinkNoted: boolean
+  /** The user has been told (or it was decided there is nothing to tell) this run. */
+  ultrathinkAnnounced: boolean
   /**
    * The events emitted since the message log was last persisted — the in-flight
    * turn's streamed output (assistant text, running tools, prompts) that isn't on
@@ -1179,6 +1188,7 @@ export async function startRun(
     ...(isReasoningEffort(req.reasoningEffort) ? { effort: req.reasoningEffort } : {}),
     ultrathink: ultrathinkTail.on,
     ultrathinkNoted: ultrathinkTail.noted,
+    ultrathinkAnnounced: false,
     transcript: [],
     evidence: new EvidenceLedger(),
     ...(owner !== undefined ? { owner } : {})
@@ -3303,7 +3313,6 @@ export async function startRun(
         run.ultrathinkNoted = true
         messages.push(systemNoteMessage(ULTRATHINK_NOTE))
         persist(messages)
-        emit({ type: 'notice', message: ULTRATHINK_NOTICE })
       }
 
       // Productive-run extension, checked first so it pre-empts the landing nudge it
@@ -3426,6 +3435,15 @@ export async function startRun(
       // The keyword outranks the chat's effort and a run's own override alike: it is the
       // most specific thing the user said about this turn.
       const reasoningEffort = run.ultrathink ? ULTRATHINK_EFFORT : turnSettings.reasoningEffort
+      // Said once, and only where the keyword changed something: not on a model that
+      // cannot reason, nor in a chat already at the top.
+      if (run.ultrathink && !run.ultrathinkAnnounced) {
+        run.ultrathinkAnnounced = true
+        const reasons = resolveCapabilities(route.model, { reasoning: route.reasoningCapable }).reasoning
+        if (ultrathinkEffect(turnSettings.reasoningEffort, reasons) === 'raises') {
+          emit({ type: 'notice', message: ULTRATHINK_NOTICE })
+        }
+      }
 
       let assistantText = ''
       let toolCalls: ToolCall[] = []
