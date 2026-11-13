@@ -705,6 +705,11 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
 
     const iterErrors: string[] = []
     for (const call of calls) {
+      // Stop between calls too, not just between turns: after Stop the rest of the
+      // batch must not run (a later write would still land) or ask anything (a new
+      // prompt would wait for an answer nobody gives). An aborted run hands back no
+      // transcript, so the unanswered calls leave nothing to resume from.
+      if (signal.aborted) return stop(lastText.trim() || '[subagent aborted]', 'aborted')
       progress(iter, call)
       const startedAt = Date.now()
       const stepIndex = step({ turn: iter + 1, kind: 'tool', tool: call.name, summary: labelFor(call), startedAt })

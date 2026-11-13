@@ -989,6 +989,10 @@ export function setRunEffort(runId: string, effort: ReasoningEffort): void {
 }
 
 function waitForApproval(run: RunState, callId: string): Promise<ApprovalResolution> {
+  // A stopped run has already resolved (and cleared) every pending approval, so one
+  // registered after the Stop would wait for an answer nobody gives: the run would never
+  // end. Resolve it the way cancelRun resolves the ones it found.
+  if (run.abort.signal.aborted) return Promise.resolve({ decision: 'deny', note: APPROVAL_INTERRUPTED_NOTE })
   return new Promise((resolve) => run.approvals.set(callId, resolve))
 }
 
@@ -1302,9 +1306,16 @@ export async function startRun(
   // this point is now on disk, so only what streams *after* it needs replaying on a
   // mid-turn re-open. Wraps the caller's onMessages so every persist site stays in
   // lockstep with the buffer (see {@link RunState.transcript}).
+  // A failed save (a full disk, a permissions error) is logged rather than thrown: it
+  // must not unwind the run, and above all not the `finally` that frees the
+  // conversation's run slot, or the chat stays "already running" until a restart.
   const persist = (msgs: ChatMessage[]): void => {
     run.transcript = []
-    onMessages?.(msgs)
+    try {
+      onMessages?.(msgs)
+    } catch (err) {
+      log.warn(`run ${runId}: could not save the conversation: ${err instanceof Error ? err.message : String(err)}`)
+    }
   }
 
   // End the run on an error of a known class. `detail` is what the app log gets in
@@ -2045,6 +2056,9 @@ export async function startRun(
     // race ahead of it; cancelRun resolves any still-pending question.
     const askRunUser = (callId: string, q: AgentQuestion): Promise<string> =>
       new Promise<string>((resolve) => {
+        // After Stop, cancelRun has already answered every pending question; a new one
+        // would block forever, so answer it the same way.
+        if (abort.signal.aborted) return resolve(QUESTION_STOPPED_ANSWER)
         run.questions.set(callId, resolve)
         run.pendingQuestions.set(callId, {
           question: q.question,
@@ -2161,7 +2175,8 @@ export async function startRun(
         // Register the resolver before emitting: a host that answers inside its
         // send callback (headless) would otherwise resolve a prompt nobody awaits.
         const approval = waitForApproval(run, subCallId)
-        emit({
+        // A stopped run's approval is already resolved as interrupted: show no card.
+        if (!abort.signal.aborted) emit({
           type: 'tool_approval',
           callId: subCallId,
           name,
@@ -2587,7 +2602,8 @@ export async function startRun(
       tool: ToolDef,
       output: string
     ): Promise<string> => {
-      if (run.policy !== 'full-auto' || !isSandboxed() || shellNetworkOn() || egressUnavailable) {
+      // A stopped run asks nothing: nobody is left to answer the card.
+      if (abort.signal.aborted || run.policy !== 'full-auto' || !isSandboxed() || shellNetworkOn() || egressUnavailable) {
         return output
       }
       const unattended = req.unattended === true
@@ -2721,6 +2737,8 @@ export async function startRun(
       // any still-pending elicitation as a cancel so the server gets its reply.
       elicitMcp: (req) =>
         new Promise<ElicitationResult>((resolve) => {
+          // A stopped run cancels, as cancelRun does for one already pending.
+          if (abort.signal.aborted) return resolve({ action: 'cancel' })
           const elicitId = `${callId}:e${++run.elicitSeq}`
           run.elicitations.set(elicitId, resolve)
           run.pendingElicitations.set(elicitId, { callId, ...req })
@@ -2739,6 +2757,8 @@ export async function startRun(
       // Accepting flips run.policy here so the next tool call this turn isn't blocked.
       presentPlan: (plan) =>
         new Promise<string>((resolve) => {
+          // A stopped run rejects, as cancelRun does for a plan already up.
+          if (abort.signal.aborted) return resolve(planDecisionResult(run, { kind: 'reject' }))
           // Whether the plan's checks can run here, shown with the plan and told to the
           // agent on accept. File checks and PATH lookups only: nothing runs.
           const readiness = planReadiness(
@@ -3080,6 +3100,15 @@ export async function startRun(
     const visibleFilePaths = (): Set<string> =>
       pathsSeenInHistory(messages.slice(Math.max(cut, evictBefore)), resolvePath, patchPaths)
     const fileTracker = fileTrackerForRun(conversationId, visibleFilePaths())
+    // Drop the read records for files the model can no longer see (after eviction or
+    // compaction), and the cached reads with them: a cached read_file hit doesn't run
+    // the tool, so it would never re-record the file, and the agent's re-read before
+    // its next edit would be refused as unread again, over and over.
+    const forgetUnseenFiles = (): void => {
+      const before = fileTracker.size
+      fileTracker.retainOnly(visibleFilePaths())
+      if (fileTracker.size !== before) readCache.invalidateAll()
+    }
     // Invalidate cached reads after a mutating tool call. A write invalidates the
     // paths it touched (or everything, if those paths can't be determined); shell —
     // and anything else non-read that changes state — clears the cache wholesale.
@@ -3187,7 +3216,7 @@ export async function startRun(
       evictBefore = boundary
       lastInputTokens = 0
       persistContextState()
-      fileTracker.retainOnly(visibleFilePaths())
+      forgetUnseenFiles()
       return true
     }
 
@@ -3250,7 +3279,7 @@ export async function startRun(
         // fresh summarization of the same head.
         persistContextState()
         // Files known only from the summarized head are no longer seen.
-        fileTracker.retainOnly(visibleFilePaths())
+        forgetUnseenFiles()
         emit({ type: 'compaction', summarized: compactedNow })
         return 'ok'
       } catch {
@@ -4870,19 +4899,26 @@ export async function startRun(
     // stall stop) before the next iteration boundary could take them. steerRun told
     // the caller they were in, so it fell back to nothing; hand them back so they
     // go out as a follow-up instead of vanishing with the run.
-    if (run.steering.length) emit({ type: 'steers_returned', texts: run.steering.splice(0).map((s) => s.text) })
-    // A plan accepted on the run's last step is told in its tool result; save that,
-    // so the next turn doesn't repeat it.
-    if (conversationId && storedAnnounced !== undefined && storedAnnounced !== run.announcedPolicy) {
-      setAnnouncedPolicy(conversationId, run.announcedPolicy)
-    }
-    releaseEgressRun?.()
-    runs.delete(runId)
-    // Only clear the conversation's slot if it still points at this run, so a
-    // (guarded-against, but defensive) later run can't have its entry removed.
-    if (conversationId && runsByConversation.get(conversationId) === runId) {
-      runsByConversation.delete(conversationId)
-      notifyActiveRunsChanged()
+    try {
+      if (run.steering.length) emit({ type: 'steers_returned', texts: run.steering.splice(0).map((s) => s.text) })
+      // A plan accepted on the run's last step is told in its tool result; save that,
+      // so the next turn doesn't repeat it.
+      if (conversationId && storedAnnounced !== undefined && storedAnnounced !== run.announcedPolicy) {
+        setAnnouncedPolicy(conversationId, run.announcedPolicy)
+      }
+    } catch (err) {
+      log.warn(`run ${runId}: cleanup failed: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+      // Always free the run's slots, whatever failed above: a run left in these maps
+      // keeps its conversation "already running" and queues everything behind it.
+      releaseEgressRun?.()
+      runs.delete(runId)
+      // Only clear the conversation's slot if it still points at this run, so a
+      // (guarded-against, but defensive) later run can't have its entry removed.
+      if (conversationId && runsByConversation.get(conversationId) === runId) {
+        runsByConversation.delete(conversationId)
+        notifyActiveRunsChanged()
+      }
     }
   }
 }
