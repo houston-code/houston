@@ -9,6 +9,7 @@ describe('desktopCommandAction', () => {
     expect(desktopCommandAction('hooks', '')).toEqual({ kind: 'settings', section: 'hooks' })
     expect(desktopCommandAction('memory', 'show 1')).toEqual({ kind: 'settings', section: 'memory' })
     expect(desktopCommandAction('settings', '')).toEqual({ kind: 'settings', section: 'models' })
+    expect(desktopCommandAction('context', '')).toEqual({ kind: 'context' })
     expect(desktopCommandAction('settings', 'Permissions')).toEqual({ kind: 'settings', section: 'permissions' })
     expect(desktopCommandAction('settings', 'agent behavior')).toEqual({ kind: 'settings', section: 'agent' })
     expect(desktopCommandAction('settings', 'providers & models')).toEqual({ kind: 'settings', section: 'models' })

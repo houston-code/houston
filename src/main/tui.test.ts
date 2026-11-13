@@ -5067,6 +5067,30 @@ describe('/cost breakdown', () => {
   })
 })
 
+describe('/context', () => {
+  it('shows what filled the context on the last round, against the measured size', async () => {
+    const { d } = deps([
+      {
+        runId: 'x',
+        type: 'usage',
+        inputTokens: 21_000,
+        outputTokens: 10,
+        cost: 0,
+        context: { system: 4000, tools: 5000, instructions: 1000, memory: 200, conversation: 6000, toolResults: 3800 }
+      },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['/context', 'go', '/context', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    // Before any turn: how to get one. After: the parts and the measured total.
+    expect(out).toContain('No context yet')
+    expect(out).toMatch(/Tool results\s+~\s*3\.8k\s+19%/)
+    expect(out).toMatch(/Total\s+21k/)
+  })
+})
+
 // The composer has been emacs-keyed since it stopped being readline. For anyone
 // whose fingers type `dw` when they mean it, that is a tax on every message.
 describe('/vim', () => {

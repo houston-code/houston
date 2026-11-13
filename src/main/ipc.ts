@@ -255,7 +255,8 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
     cost: e.cost,
     ...(e.model ? { model: e.model } : {}),
     ...(e.cacheReadTokens ? { cacheReadTokens: e.cacheReadTokens } : {}),
-    ...(e.cacheWriteTokens ? { cacheWriteTokens: e.cacheWriteTokens } : {})
+    ...(e.cacheWriteTokens ? { cacheWriteTokens: e.cacheWriteTokens } : {}),
+    ...(e.context ? { contextParts: e.context } : {})
   })
   return mergeRunningTotals(e, total)
 }

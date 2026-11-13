@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { EARLIER_MODELS_LABEL, formatTokens, formatUsd, unattributedUsage, type SessionUsage } from '@shared/usage'
 import type { SubagentSpend } from '@shared/subagents'
+import { ContextBreakdown } from './ContextBreakdown'
 
 /** Subagent rows shown in the breakdown before the rest are summed into one. */
 const MAX_AGENT_ROWS = 8
@@ -20,7 +21,8 @@ export function CostBreakdown({
   contextWindow,
   meterPct,
   meterClass,
-  agents = []
+  agents = [],
+  openSignal = 0
 }: {
   usage: SessionUsage
   /** What each subagent in the chat spent (already counted in the model rows). */
@@ -30,9 +32,14 @@ export function CostBreakdown({
   meterPct: number | null
   /** Extra class for the meter fill at warn/danger fill levels. */
   meterClass: string
+  /** Bumped to open the panel from elsewhere (the `/context` command). */
+  openSignal?: number
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (openSignal > 0) setOpen(true)
+  }, [openSignal])
 
   // A breakdown is only worth a click when there's something the inline chip does
   // not already show: more than one model, or cache reads.
@@ -40,7 +47,9 @@ export function CostBreakdown({
   // Houston kept them), so the rows add up to the total printed under them.
   const earlier = unattributedUsage(usage)
   const rows = [...(usage.perModel ?? []), ...(earlier ? [earlier] : [])]
-  const hasDetail = rows.length > 1 || (usage.cacheRead ?? 0) > 0 || agents.length > 0
+  // What fills the context is always worth a click once it is known.
+  const hasDetail =
+    rows.length > 1 || (usage.cacheRead ?? 0) > 0 || agents.length > 0 || usage.contextParts !== undefined
   const agentRows = agents.slice(0, MAX_AGENT_ROWS)
   const agentRest = agents.slice(MAX_AGENT_ROWS)
 
@@ -79,7 +88,7 @@ export function CostBreakdown({
       : `Context: ${usage.context.toLocaleString()} tokens`) +
     `\nOutput this conversation: ${usage.output.toLocaleString()} tokens` +
     (usage.cost > 0 ? `\nEstimated cost: ${formatUsd(usage.cost)} (approximate)` : '') +
-    (hasDetail ? '\nClick for the per-model breakdown' : '')
+    (hasDetail ? '\nClick for what fills the context and the per-model breakdown' : '')
 
   // Nothing extra to show → the plain, non-interactive chip, exactly as before.
   if (!hasDetail) {
@@ -110,6 +119,7 @@ export function CostBreakdown({
       </button>
       {open && (
         <div className="usage-panel" role="dialog" aria-label="Cost breakdown">
+          <ContextBreakdown parts={usage.contextParts} measured={usage.context} contextWindow={contextWindow} />
           <div className="usage-panel__head">
             <span>Model</span>
             <span>In</span>

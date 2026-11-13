@@ -253,6 +253,16 @@ describe('addUsage — persisted per-model + cache breakdown', () => {
     // Persisted — the breakdown survives a reload (the "resets on restart" fix).
     expect(getConversation(c.id)?.usage?.perModel?.[1].model).toBe('haiku')
   })
+
+  it('keeps the latest context breakdown, past rounds that carry none', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const parts = { system: 1, tools: 2, instructions: 3, memory: 4, conversation: 5, toolResults: 6 }
+    addUsage(c.id, { inputTokens: 100, outputTokens: 5, cost: 0, contextParts: parts })
+    // A subagent's round has no breakdown of the main window; the last one stays.
+    const total = addUsage(c.id, { inputTokens: 0, outputTokens: 5, cost: 0 })
+    expect(total?.contextParts).toEqual(parts)
+    expect(getConversation(c.id)?.usage?.contextParts).toEqual(parts)
+  })
 })
 
 describe('setMessages title handling', () => {

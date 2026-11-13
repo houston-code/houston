@@ -66,7 +66,8 @@ import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
-import type { ModelUsage } from '@shared/agent'
+import type { ContextParts, ModelUsage } from '@shared/agent'
+import { renderContextReport } from '@shared/contextBreakdown'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
@@ -1585,6 +1586,7 @@ export function parseSlashCommand(
     case 'cwd':
     case 'share':
     case 'cost':
+    case 'context':
     case 'model?':
       return { kind: 'handled' }
     default: {
@@ -1656,6 +1658,7 @@ export const HELP_TEXT = [
   '  /btw clear            start this chat\'s side chat over',
   '  /fork                 branch the current session into a copy',
   '  /cost                 show session token + cost totals',
+  '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
   '  /settings             settings overview + where to edit them',
@@ -2994,6 +2997,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       branch = null
     }
   }
+  // What filled the context on the last main round, for /context (estimated parts).
+  let contextParts: ContextParts | null = null
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
@@ -3367,6 +3372,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         persistedSettings = null // stored meta belongs to the old conversation
         pendingImages = [] // don't carry a staged /image into the fresh conversation
         contextTokens = 0 // the context meter belongs to the old conversation
+        contextParts = null
         deps.io.out(paint('· conversation cleared\n', 'dim'))
         continue
       }
@@ -3576,6 +3582,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           messages = res.messages
           // The meter measured the log before the undo; the next turn reports the real size.
           contextTokens = 0
+          contextParts = null
           const left = res.conflicts.length ? `; left ${res.conflicts.length} file(s) that changed since: ${res.conflicts.join(', ')}` : ''
           deps.io.out(paint(`· undid the rewind (${res.reapplied} file(s) put back${left})\n`, 'dim'))
           continue
@@ -3630,7 +3637,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         messages = res.messages
         // The meter measured the log before the cut; the next turn reports the real size.
-        if (rewindsConversation(mode)) contextTokens = 0
+        if (rewindsConversation(mode)) {
+          contextTokens = 0
+          contextParts = null
+        }
         // The last turn's run may be gone from the chat, or reverted already: /undo
         // must not fall back to it.
         lastRunId = null
@@ -3773,7 +3783,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const choices = deps.io.select ? modelChoices(deps.getSettings(), providerId, model) : []
         if (choices.length === 0) {
           // No picker (or nothing ready to pick): list providers and models instead.
-          handleInfoCommand(text, { providerId, model, policy, cwd: opts.cwd, sessionCost, modelCosts }, deps, paint)
+          handleInfoCommand(
+            text,
+            { providerId, model, policy, cwd: opts.cwd, sessionCost, modelCosts, contextParts, contextTokens },
+            deps,
+            paint
+          )
           continue
         }
         const r = await deps.io.select!({
@@ -3943,7 +3958,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // 'handled' — informational commands print here where the state lives.
         handleInfoCommand(
           text,
-          { providerId, model, policy, cwd: opts.cwd, sessionCost, modelCosts },
+          { providerId, model, policy, cwd: opts.cwd, sessionCost, modelCosts, contextParts, contextTokens },
           deps,
           paint,
           customCommands
@@ -4378,6 +4393,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             contextTokens = e.inputTokens
             deps.io.setStatus?.(renderRunStatus({ model: model ?? '', branch, contextTokens }, paint))
           }
+          if (e.context) contextParts = e.context
           break
         case 'error':
           // The run gave up mid-streak: say the retries are over, so the line above
@@ -4575,6 +4591,10 @@ function handleInfoCommand(
     cwd: string
     sessionCost: SessionCost
     modelCosts: ModelCost[]
+    /** What filled the context on the last main round; absent or null before one ran. */
+    contextParts?: ContextParts | null
+    /** The provider's measured context size for that round (0 when unknown). */
+    contextTokens?: number
   },
   deps: TuiDeps,
   paint: Painter,
@@ -4606,6 +4626,11 @@ function handleInfoCommand(
   }
   if (name === 'cost') {
     deps.io.out(`${renderCostReport(state.modelCosts, paint)}\n`)
+    return
+  }
+  if (name === 'context') {
+    const window = state.model ? contextWindowFor(state.model) : null
+    deps.io.out(`${renderContextReport(state.contextParts ?? null, state.contextTokens ?? 0, window)}\n`)
     return
   }
   if (name === 'theme') {

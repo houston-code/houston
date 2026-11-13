@@ -20,6 +20,7 @@ import type {
   ConversationError,
   ConversationMeta,
   ConversationSettingsPatch,
+  ContextParts,
   ConversationUsage,
   ConversationWorktree,
   PromptSnapshot,
@@ -872,6 +873,8 @@ export function addUsage(
     model?: string
     cacheReadTokens?: number
     cacheWriteTokens?: number
+    /** What filled the context on this round's request; a round without it keeps the last. */
+    contextParts?: ContextParts
   }
 ): ConversationUsage | null {
   const open = openForBookkeeping(id)
@@ -885,7 +888,8 @@ export function addUsage(
     cacheReadTokens: (prev.cacheReadTokens ?? 0) + (turn.cacheReadTokens ?? 0),
     // Per-model tallies via the shared accumulator, so the GUI's persisted
     // breakdown and the TUI's in-memory one agree on what a session cost.
-    perModel: accumulateModelUsage(prev.perModel ?? [], turn)
+    perModel: accumulateModelUsage(prev.perModel ?? [], turn),
+    ...(turn.contextParts ?? prev.contextParts ? { contextParts: turn.contextParts ?? prev.contextParts } : {})
   }
   open.save()
   return conv.usage

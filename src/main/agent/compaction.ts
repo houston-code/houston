@@ -1,6 +1,7 @@
 import {
   COMPACTION_SUMMARY_PREFIX,
   type ChatMessage,
+  type ContextParts,
   type ConversationCompaction,
   type ToolSchema
 } from '@shared/agent'
@@ -181,6 +182,32 @@ export function estimateTokens(system: string, messages: ChatMessage[]): number 
  */
 export function estimateToolTokens(tools: ToolSchema[]): number {
   return Math.ceil(JSON.stringify(tools).length / 4)
+}
+
+/**
+ * Split a request's estimated size into what fills it, on the same basis as
+ * {@link estimateTokens}. `instructionsChars` and `memoryChars` are the parts of
+ * `system` that came from the project's rules and the user's prompt addition, and
+ * from the saved-memory index; the rest of the system prompt is Houston's own.
+ */
+export function estimateContextParts(opts: {
+  system: string
+  instructionsChars: number
+  memoryChars: number
+  toolTokens: number
+  messages: ChatMessage[]
+}): ContextParts {
+  const instructions = Math.ceil(opts.instructionsChars / 4)
+  const memory = Math.ceil(opts.memoryChars / 4)
+  const system = Math.max(0, estimateTokens(opts.system, []) - instructions - memory)
+  let conversation = 0
+  let toolResults = 0
+  for (const m of opts.messages) {
+    const t = estimateTokens('', [m])
+    if (m.role === 'tool') toolResults += t
+    else conversation += t
+  }
+  return { system, instructions, memory, tools: opts.toolTokens, conversation, toolResults }
 }
 
 /** Text characters a message contributes to the estimate: content plus tool-call JSON. */

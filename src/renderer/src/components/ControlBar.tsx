@@ -82,7 +82,8 @@ export function ControlBar({
   onOpenSettings,
   onMakeDefault,
   sandbox = null,
-  subagentSpend = []
+  subagentSpend = [],
+  usageOpenSignal = 0
 }: {
   settings: AppSettings
   selected: SelectedModel | null
@@ -90,6 +91,8 @@ export function ControlBar({
   usage: SessionUsage | null
   /** What each subagent in this chat spent, for the cost breakdown. */
   subagentSpend?: SubagentSpend[]
+  /** Bumped to open the usage panel (what fills the context), for `/context`. */
+  usageOpenSignal?: number
   /** True for a not-yet-started chat — show the editable worktree controls. */
   newChat: boolean
   /** Git info for the current workspace (drives the worktree controls), or null. */
@@ -346,6 +349,7 @@ export function ControlBar({
           meterPct={pct}
           meterClass={meterClass}
           agents={subagentSpend}
+          openSignal={usageOpenSignal}
         />
       )}
     </div>

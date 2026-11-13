@@ -479,7 +479,7 @@ Both clients accept the same names, so a command learned in one works in the oth
 | `/skills`, `/agents` | list the workspace's skills and custom agents |
 | `/help` | list the available commands (in the desktop app, opens the command palette on them) |
 
-Also: `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`, `/cost`, `/cwd`, `/share`,
+Also: `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`, `/cost`, `/context`, `/cwd`, `/share`,
 and `/doctor`. The exact set depends on the client.
 
 **Settings commands.** `/settings`, `/login`, `/mcp`, `/hooks`, `/memory`, `/trust`, and
@@ -1108,6 +1108,23 @@ also lists what each subagent spent (already counted in its model's row).
 **Watch the cached count** on a long session. Those tokens are real context, but they
 bill far below the base input rate, so a big number there is why a long conversation
 costs less than its token count suggests.
+
+### What fills the context (/context)
+
+`/context` shows what the most recent request sent to the model was made of:
+
+- **Houston's instructions:** the system prompt Houston writes
+- **Tool definitions:** the built-in tools and any MCP server tools offered
+- **Project instructions:** rules files such as `AGENTS.md`, and your own prompt addition
+- **Memories:** the index of saved memories
+- **Conversation:** your messages, the replies, tool calls and summaries
+- **Tool results:** file contents, command output and search results
+
+Each part is an estimate (about four characters per token), so treat the figures as
+approximate. The total is the size the provider measured, when it reports one, against
+the model's context window. In the desktop app, `/context` opens the panel behind the
+usage chip under the message box, and clicking the chip opens it too. Large tool
+results are usually what compaction trims first.
 
 ## Version and updates
 

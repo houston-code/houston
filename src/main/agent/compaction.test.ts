@@ -14,6 +14,7 @@ import {
   buildSummaryRequestMessages,
   compactionAnchor,
   compactionCandidates,
+  estimateContextParts,
   estimateTokens,
   evictStaleToolResults,
   evictionBoundary,
@@ -729,5 +730,31 @@ describe('hasEvictableToolResults', () => {
       { role: 'tool', content: evictionStub('read_file', 'f.ts', 9000), toolCallId: 'b', toolName: 'read_file' }
     ]
     expect(hasEvictableToolResults(msgs, 0, 2)).toBe(false)
+  })
+})
+
+describe('estimateContextParts', () => {
+  it('splits a request into its parts, which add up to the request estimate', () => {
+    const system = 'H'.repeat(4000) + 'R'.repeat(800) + 'M'.repeat(400)
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'u'.repeat(400) },
+      { role: 'assistant', content: 'a'.repeat(200), toolCalls: [{ id: 't', name: 'read_file', arguments: { path: 'x' } }] },
+      { role: 'tool', toolCallId: 't', content: 'f'.repeat(2000) }
+    ]
+    const parts = estimateContextParts({ system, instructionsChars: 800, memoryChars: 400, toolTokens: 1234, messages })
+    expect(parts.instructions).toBe(200)
+    expect(parts.memory).toBe(100)
+    expect(parts.system).toBe(1000)
+    expect(parts.tools).toBe(1234)
+    expect(parts.toolResults).toBe(estimateTokens('', [messages[2]]))
+    expect(parts.conversation).toBe(estimateTokens('', messages.slice(0, 2)))
+    const sum = parts.system + parts.instructions + parts.memory + parts.conversation + parts.toolResults
+    // Same basis as the request estimate (a message's framing rounds per message).
+    expect(Math.abs(sum - estimateTokens(system, messages))).toBeLessThanOrEqual(messages.length)
+  })
+
+  it('never reports a negative share for Houston’s own prompt', () => {
+    const parts = estimateContextParts({ system: 'x', instructionsChars: 100, memoryChars: 100, toolTokens: 0, messages: [] })
+    expect(parts.system).toBe(0)
   })
 })

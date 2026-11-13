@@ -301,6 +301,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'fork', group: 'Chat', description: 'Branch the current session into a copy', clients: ['gui', 'tui'] },
   { name: 'cost', group: 'Setup', description: 'Session token and cost totals', clients: ['gui', 'tui'] },
   {
+    name: 'context', group: 'Setup',
+    description: 'What fills the context now, part by part',
+    clients: ['gui', 'tui']
+  },
+  {
     name: 'skills', group: 'Extend',
     description: 'List the workspace skills (.houston/skills)',
     clients: ['gui', 'tui']

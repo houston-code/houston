@@ -81,6 +81,32 @@ describe('CostBreakdown', () => {
     fireEvent.keyDown(document, { key: 'Escape' })
     expect(screen.queryByRole('dialog')).toBeNull()
   })
+
+  it('opens on what fills the context once a breakdown is known, even with one model', () => {
+    const usage: SessionUsage = {
+      ...base,
+      perModel: [row('claude')],
+      contextParts: { system: 4000, tools: 5000, instructions: 1000, memory: 0, conversation: 1500, toolResults: 500 }
+    }
+    render(<CostBreakdown usage={usage} contextWindow={200_000} meterPct={6} meterClass="" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Cost breakdown' }))
+    const ctx = screen.getByRole('region', { name: 'What fills the context' })
+    expect(within(ctx).getByText('Context: 12,000 of 200,000 tokens (6%)')).toBeInTheDocument()
+    expect(within(ctx).getByText('Tool definitions')).toBeInTheDocument()
+    expect(within(ctx).getByText('~5k')).toBeInTheDocument()
+    expect(within(ctx).getByText(/approximate/)).toBeInTheDocument()
+  })
+
+  it('opens when asked from elsewhere (the /context command)', () => {
+    const usage: SessionUsage = {
+      ...base,
+      contextParts: { system: 1, tools: 1, instructions: 0, memory: 0, conversation: 1, toolResults: 0 }
+    }
+    const { rerender } = render(<CostBreakdown usage={usage} contextWindow={null} meterPct={null} meterClass="" />)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    rerender(<CostBreakdown usage={usage} contextWindow={null} meterPct={null} meterClass="" openSignal={1} />)
+    expect(screen.getByRole('dialog', { name: 'Cost breakdown' })).toBeInTheDocument()
+  })
 })
 
 function row(

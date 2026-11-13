@@ -231,6 +231,8 @@ export default function App(): JSX.Element {
   // A settings search to open on (`/settings <words>`).
   const [settingsQuery, setSettingsQuery] = useState('')
   const [doctorOpen, setDoctorOpen] = useState(false)
+  // Bumped by `/context` to open the usage chip's panel.
+  const [usageOpenSignal, setUsageOpenSignal] = useState(0)
   const [changesOpen, setChangesOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
@@ -2051,9 +2053,16 @@ export default function App(): JSX.Element {
             u && (u.context > 0 || u.output > 0)
               ? `This chat: ${formatTokens(u.context)} context · ${formatTokens(u.output)} out` +
                   (u.cost > 0 ? ` · about ${formatUsd(u.cost)}` : '') +
-                  '. Hover the token count under the message box for a per-model breakdown.'
+                  '. Click the token count under the message box for a per-model breakdown.'
               : 'No usage yet in this chat.'
           )
+          return
+        }
+        case 'context': {
+          const u = chat.usage
+          if (!u || (u.context <= 0 && u.output <= 0)) chat.notify('No context yet: send a message first.')
+          // The usage chip under the message box opens on what fills the context.
+          else setUsageOpenSignal((n) => n + 1)
           return
         }
         case 'cwd':
@@ -2988,6 +2997,7 @@ export default function App(): JSX.Element {
             workspace={workspace}
             usage={chat.usage}
             subagentSpend={subagentSpendRows}
+            usageOpenSignal={usageOpenSignal}
             newChat={currentId === null}
             repoInfo={repoInfo}
             worktreeMode={worktreeMode}
