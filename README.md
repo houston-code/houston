@@ -988,7 +988,10 @@ Prefer npm's own linking? The package exposes a `houston` `bin`, so
 a `houston.cmd` shim) or invoke the bundle directly.
 
 **API keys.** The desktop app's keys live in the OS keychain (Electron
-`safeStorage`) and can't be read outside it, so the CLI resolves credentials in
+`safeStorage`) and can't be read outside it. The desktop app never uses an
+environment key on its own, but when it finds `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
+or `GEMINI_API_KEY` for a provider with no saved key it offers to check and save it
+(showing only the key's last four characters). The CLI resolves credentials in
 this order:
 
 1. Environment variables. The built-in providers use their conventional names
