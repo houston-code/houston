@@ -84,7 +84,9 @@ export const USAGE = `Houston CLI ${VERSION}: coding agent in your terminal (no 
 
 Usage:
   houston [options]                    stay-resident interactive session (bare command; same as -i)
-  houston -p "<prompt>" [options]      one-shot run; assistant text on stdout
+  houston -i [options]                 interactive session, even when stdin is not a terminal
+                                       (also --interactive, --tui)
+  houston -p "<prompt>" [options]      one-shot run; assistant text on stdout (also --prompt)
   houston -p - [options] < task.md     one-shot run with the prompt read from stdin
   houston --acp                        serve the Agent Client Protocol on stdio, for editors
 
@@ -92,10 +94,12 @@ Usage:
   houston open [dir]                   open a folder in the Houston desktop app
 
 Options:
-  --cwd <dir>           project folder (default: the current directory)
+  -C, --cwd <dir>       project folder (default: the current directory)
   --provider <id>       provider id from your settings (default: your selection)
   --model <id>          model id (default: your selection)
   --approval <policy>   plan | ask | auto-edit | full-auto
+                        (-p defaults to plan, which changes nothing)
+  --full-auto           same as --approval full-auto
   --on-approval <mode>  (-p) approval prompts with no human: allow | deny | fail
                         (default: deny, or allow under full-auto)
   --allow-shell-network (-p) let shell commands reach the network this run
@@ -137,6 +141,7 @@ Providers:
   houston providers                    list configured providers and hosts to add
   houston providers add <id>           add a catalog host (e.g. openrouter, groq)
   houston providers add --url <url>    add a custom OpenAI-compatible endpoint
+  houston providers remove <id>        remove a provider you added
   houston providers set-key <id> [key] store an API key (key from arg or stdin)
   houston providers remove-key <id>    forget a stored API key
 
@@ -152,6 +157,95 @@ MCP OAuth (remote servers that require sign-in):
 
 Profile: shared with the desktop app; override with HOUSTON_DATA_DIR.
 `
+
+/** The Usage block of --help: the run modes, without the option list. */
+export function shortUsage(): string {
+  const start = USAGE.indexOf('Usage:')
+  const end = USAGE.indexOf('Options:')
+  return start >= 0 && end > start ? USAGE.slice(start, end) : USAGE
+}
+
+/** Flags that take a value (`--flag value` or `--flag=value`). */
+const VALUE_FLAGS = new Set([
+  '-C',
+  '--cwd',
+  '--provider',
+  '--model',
+  '--approval',
+  '--resume',
+  '--on-approval',
+  '--effort',
+  '--max-turns',
+  '--max-cost',
+  '--verify',
+  '--allowed-tools',
+  '--disallowed-tools',
+  '--append-system-prompt',
+  '--output-schema',
+  '--mcp-config',
+  '--input-format'
+])
+/** Flags that stand alone. */
+const SWITCH_FLAGS = new Set([
+  '-i',
+  '--interactive',
+  '--tui',
+  '--acp',
+  '--full-auto',
+  '--continue',
+  '--json',
+  '--allow-shell-network',
+  '--no-memory',
+  '-h',
+  '--help',
+  '-v',
+  '--version'
+])
+/** `-p` takes the prompt, or nothing (then the prompt comes from piped stdin). */
+const PROMPT_FLAGS = new Set(['-p', '--prompt'])
+
+function flagName(arg: string): string {
+  const eq = arg.indexOf('=')
+  return eq >= 0 ? arg.slice(0, eq) : arg
+}
+
+/**
+ * Check a run-mode command line (everything after `houston`) for a typo'd flag, a
+ * flag missing its value, or a stray word. The run-mode parsers skip what they
+ * don't know (they also read the desktop app's argv, where Electron adds its own),
+ * so without this `houston --modle x` or `houston "fix the bug"` silently opened an
+ * empty session. Returns the message to show above the usage, or null when fine.
+ */
+export function cliArgvError(args: string[]): string | null {
+  const isKnown = (a: string): boolean => {
+    const n = flagName(a)
+    return VALUE_FLAGS.has(n) || SWITCH_FLAGS.has(n) || PROMPT_FLAGS.has(n)
+  }
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]
+    const name = flagName(arg)
+    const inline = arg.includes('=')
+    if (PROMPT_FLAGS.has(name)) {
+      // Its value is the next word unless that is another flag (`-p --json` with
+      // the prompt piped in).
+      if (!inline && args[i + 1] !== undefined && !isKnown(args[i + 1])) i++
+      continue
+    }
+    if (VALUE_FLAGS.has(name)) {
+      if (inline) continue
+      if (args[i + 1] === undefined) return `${name} needs a value`
+      i++
+      continue
+    }
+    if (SWITCH_FLAGS.has(name)) {
+      if (inline) return `${name} takes no value`
+      continue
+    }
+    if (arg.startsWith('-') && arg !== '-') return `unknown option: ${name}`
+    return `unexpected argument: ${JSON.stringify(arg)}. To run a prompt once, use -p ${JSON.stringify(arg)}`
+  }
+  return null
+}
 
 /** Wire the Node-side host capabilities. Must run before any settings read. */
 export function wireCliHost(): void {
@@ -237,6 +331,12 @@ async function main(): Promise<number> {
   const positionals = argv.slice(2).filter((a) => !a.startsWith('-'))
   if (positionals[0] === 'providers') {
     return runProvidersCommand(argv.slice(argv.indexOf('providers') + 1), providersDeps())
+  }
+  const argvError = cliArgvError(argv.slice(2))
+  if (argvError) {
+    // The short usage, not all of --help: the error must stay on screen.
+    process.stderr.write(`houston: ${argvError}\n\n${shortUsage()}Run houston --help for every option.\n`)
+    return 2
   }
 
   const mode = selectRunMode(argv, process.cwd(), Boolean(process.stdin.isTTY), stdinIsPiped())
