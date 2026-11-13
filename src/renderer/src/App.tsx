@@ -9,6 +9,7 @@ import {
   type CSSProperties
 } from 'react'
 import { ultrathinkEffect } from '@shared/ultrathink'
+import { providerSendsXhigh } from '@shared/model-facts'
 import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
 import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
@@ -2473,7 +2474,10 @@ export default function App(): JSX.Element {
   // composer's hint matches the turn. Before a model is picked there is nothing to raise.
   const ultrathinkOnSend = ultrathinkEffect(
     settings.reasoningEffort ?? DEFAULT_REASONING_EFFORT,
-    settings.selected ? resolveCapabilities(settings.selected.model, selectedModelOption?.caps).reasoning : false
+    settings.selected ? resolveCapabilities(settings.selected.model, selectedModelOption?.caps).reasoning : false,
+    settings.selected && selectedProvider
+      ? providerSendsXhigh(selectedProvider.kind, settings.selected.model, Boolean(selectedProvider.baseUrl))
+      : false
   )
 
   return (

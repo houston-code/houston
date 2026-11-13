@@ -2347,6 +2347,27 @@ describe('startRun', () => {
       expect(notices(r)).toHaveLength(0)
     })
 
+    it('does not announce a raise where the provider clamps the request back to the chat\'s level', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const high: unknown[] = []
+      // Opus 4.6 has no xhigh tier: a chat at high is already at its top.
+      const atTop = await run({
+        provider: twoTurns(high),
+        model: 'claude-opus-4-6',
+        reasoningEffort: 'high',
+        userText: 'ultrathink'
+      })
+      expect(notices(atTop)).toHaveLength(0)
+      const medium: unknown[] = []
+      const below = await run({
+        provider: twoTurns(medium),
+        model: 'claude-opus-4-6',
+        reasoningEffort: 'medium',
+        userText: 'ultrathink'
+      })
+      expect(notices(below)).toHaveLength(1)
+    })
+
     it('raises a turn whose reasoning is off', async () => {
       writeFileSync(join(ws, 'x.txt'), 'hi')
       const seen: unknown[] = []

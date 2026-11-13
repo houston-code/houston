@@ -56,6 +56,26 @@ export function findUltrathink(text: string): KeywordRange[] {
   return out
 }
 
+/**
+ * The text cut at `ranges` into runs, each flagged as keyword or not, for a client
+ * that draws the keyword differently. Null when there is nothing to mark.
+ */
+export function splitByRanges(
+  text: string,
+  ranges: readonly KeywordRange[]
+): { text: string; keyword: boolean }[] | null {
+  if (!ranges.length) return null
+  const parts: { text: string; keyword: boolean }[] = []
+  let pos = 0
+  for (const r of ranges) {
+    if (r.start > pos) parts.push({ text: text.slice(pos, r.start), keyword: false })
+    parts.push({ text: text.slice(r.start, r.end), keyword: true })
+    pos = r.end
+  }
+  if (pos < text.length) parts.push({ text: text.slice(pos), keyword: false })
+  return parts
+}
+
 /** Whether a message uses the keyword (see {@link findUltrathink}). */
 export function hasUltrathink(text: string): boolean {
   return findUltrathink(text).length > 0
@@ -86,10 +106,20 @@ export const ULTRATHINK_HINT_NONE = 'ultrathink: this model has no reasoning lev
  */
 export type UltrathinkEffect = 'raises' | 'already' | 'none'
 
-/** The keyword's effect for a chat at `effort` on a model that does or doesn't reason. */
-export function ultrathinkEffect(effort: ReasoningEffort | undefined, reasons: boolean): UltrathinkEffect {
+/**
+ * The keyword's effect for a chat at `effort`. `reasons`: the model has a reasoning
+ * mode at all. `sendsXhigh`: the provider passes `xhigh` through instead of clamping
+ * it to `high` (see providerSendsXhigh), in which case a chat at `high` is already at
+ * the most this model can be asked for.
+ */
+export function ultrathinkEffect(
+  effort: ReasoningEffort | undefined,
+  reasons: boolean,
+  sendsXhigh: boolean
+): UltrathinkEffect {
   if (!reasons) return 'none'
-  return effort === ULTRATHINK_EFFORT ? 'already' : 'raises'
+  const atTop = effort === ULTRATHINK_EFFORT || (!sendsXhigh && effort === 'high')
+  return atTop ? 'already' : 'raises'
 }
 
 /** The composer hint for an effect, so the hint never promises more than the turn gets. */
