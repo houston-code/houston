@@ -5982,6 +5982,34 @@ describe('turn receipt', () => {
     expect(out.indexOf('All tests pass.')).toBeLessThan(out.indexOf('What ran'))
   })
 
+  it('draws attention to a test run that ran fewer tests than before, as it does to a failure', async () => {
+    const shrank = {
+      v: 1 as const,
+      checks: [
+        {
+          kind: 'test' as const,
+          label: 'npm test',
+          ok: true,
+          exitCode: 0,
+          counts: { passed: 11, failed: 0 },
+          shrunk: { from: 12, to: 11 },
+          runs: 2
+        }
+      ],
+      otherCommands: 0,
+      filesChanged: [],
+      filesChangedCount: 0
+    }
+    const { d } = deps([
+      { runId: 'x', type: 'receipt', receipt: shrank },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui({ ...opts, color: true }, d)
+    expect(t.text()).toContain('\x1b[33m\n· What ran: Tests passed (11, down from 12)\n')
+  })
+
   it('strips control characters from the commands it prints', async () => {
     const { d } = deps([
       { runId: 'x', type: 'receipt', receipt },

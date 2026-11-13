@@ -11,8 +11,16 @@ class Houston < Formula
 
   def install
     libexec.install "houston-cli.cjs"
+    # Node's on-disk compile cache spares recompiling the bundle on every start. A
+    # NODE_COMPILE_CACHE the user set (even to empty) wins.
+    cache_dir = if OS.mac?
+      "$HOME/Library/Caches/houston/compile-cache"
+    else
+      "${XDG_CACHE_HOME:-$HOME/.cache}/houston/compile-cache"
+    end
     (bin/"houston").write <<~SH
       #!/bin/bash
+      if [ -z "${NODE_COMPILE_CACHE+set}" ]; then export NODE_COMPILE_CACHE="#{cache_dir}"; fi
       exec "#{formula_opt_bin("node")}/node" "#{libexec}/houston-cli.cjs" "$@"
     SH
   end

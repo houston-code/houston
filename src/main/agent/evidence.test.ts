@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import {
   formatReceiptLines,
+  receiptHasFailure,
   receiptSummary,
   RECEIPT_LABEL_MAX,
   RECEIPT_MAX_CHECKS,
@@ -412,6 +413,77 @@ describe('EvidenceLedger', () => {
     expect(checks[1]).toMatchObject({ ok: true, runs: 2, counts: { passed: 12, failed: 0 } })
   })
 
+  it('keeps a skip added between two runs of the same command, and the count it dropped from', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('npm test', { exitCode: 1, output: '      Tests  1 failed | 11 passed (12)' }))
+    l.recordShell(shell('npm test', { output: '      Tests  11 passed | 1 skipped (12)' }))
+    const r = l.receipt()!
+    expect(r.checks[0]).toMatchObject({
+      ok: true,
+      runs: 2,
+      counts: { passed: 11, failed: 0, skipped: 1 },
+      shrunk: { from: 12, to: 11 },
+      skippedRose: { from: 0, to: 1 }
+    })
+    expect(receiptSummary(r)).toBe('Tests passed (11, down from 12, 1 skipped, up from 0)')
+    expect(receiptHasFailure(r)).toBe(true)
+  })
+
+  it('keeps a test deleted between two runs of the same command', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('pytest', { exitCode: 1, output: '==== 1 failed, 11 passed in 0.1s ====' }))
+    l.recordShell(shell('pytest', { output: '==== 11 passed in 0.1s ====' }))
+    const r = l.receipt()!
+    expect(r.checks[0]).toMatchObject({ ok: true, shrunk: { from: 12, to: 11 } })
+    expect(r.checks[0]).not.toHaveProperty('skippedRose')
+    expect(receiptSummary(r)).toBe('Tests passed (11, down from 12)')
+    expect(receiptHasFailure(r)).toBe(true)
+  })
+
+  it('keeps more tests skipped than an earlier run of the same command skipped', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('pytest', { output: '12 passed, 1 skipped in 0.1s' }))
+    l.recordShell(shell('pytest', { output: '12 passed, 3 skipped in 0.1s' }))
+    const r = l.receipt()!
+    expect(r.checks[0]).toMatchObject({ skippedRose: { from: 1, to: 3 } })
+    expect(r.checks[0]).not.toHaveProperty('shrunk')
+    expect(receiptSummary(r)).toBe('Tests passed (12, 3 skipped, up from 1)')
+    expect(receiptHasFailure(r)).toBe(true)
+  })
+
+  it('holds the most tests any earlier run ran, through later runs', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('pytest', { output: '12 passed in 0.1s' }))
+    l.recordShell(shell('pytest', { output: '11 passed in 0.1s' }))
+    l.recordShell(shell('pytest', { output: '11 passed in 0.1s' }))
+    expect(l.receipt()!.checks[0]).toMatchObject({ runs: 3, shrunk: { from: 12, to: 11 } })
+  })
+
+  it('flags nothing when a rerun ran as many tests or more, or a different command ran fewer', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('pytest', { exitCode: 1, output: '1 failed, 11 passed, 2 skipped in 0.1s' }))
+    l.recordShell(shell('pytest', { output: '13 passed, 1 skipped in 0.1s' }))
+    l.recordShell(shell('npx vitest run a.test.ts', { output: '      Tests  12 passed (12)' }))
+    l.recordShell(shell('npx vitest run b.test.ts', { output: '      Tests  3 passed (3)' }))
+    // A rerun with no summary to read can't be compared.
+    l.recordShell(shell('npm test', { output: '      Tests  12 passed (12)' }))
+    l.recordShell(shell('npm test', { output: '' }))
+    const r = l.receipt()!
+    for (const c of r.checks) {
+      expect(c).not.toHaveProperty('shrunk')
+      expect(c).not.toHaveProperty('skippedRose')
+    }
+    expect(receiptHasFailure(r)).toBe(false)
+  })
+
+  it('compares a backgrounded rerun that finished with the earlier runs', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('npm test', { output: '      Tests  12 passed (12)' }))
+    l.recordShell(shell('npm test', { background: true, shellId: 'sh1', exitCode: null }))
+    const r = l.receipt(() => ({ running: false, exitCode: 0, output: '      Tests  10 passed (10)' }))!
+    expect(r.checks[0]).toMatchObject({ ok: true, runs: 2, shrunk: { from: 12, to: 10 } })
+  })
+
   it('keeps no blocked cause on a run that passed', () => {
     const l = new EvidenceLedger()
     l.recordShell(shell('npm test', { blocked: 'network' }))
@@ -637,6 +709,30 @@ describe('EvidenceLedger.passed and todo gaps', () => {
     const installOnly = new EvidenceLedger()
     installOnly.recordShell(shell('npm install'))
     expect(installOnly.passed('any')).toBe(false)
+  })
+
+  it('can require the pass to come after the last file change', () => {
+    const l = new EvidenceLedger()
+    l.recordShell(shell('npm test', { output: '      Tests  12 passed (12)' }))
+    l.recordShell(shell('npm install'))
+    l.recordFiles('/ws', ['src/a.ts'])
+    expect(l.passed('test')).toBe(true)
+    expect(l.passed('test', { afterLastWrite: true })).toBe(false)
+    expect(l.passed('any', { afterLastWrite: true })).toBe(false)
+    // An install isn't a check of the code, so a later change doesn't make it stale.
+    expect(l.passed('install', { afterLastWrite: true })).toBe(true)
+    expect(receiptSummary(l.receipt()!)).toBe('Tests passed (12) before the last change · install passed · 1 file changed')
+    l.recordShell(shell('npm test', { output: '      Tests  12 passed (12)' }))
+    expect(l.passed('test', { afterLastWrite: true })).toBe(true)
+    expect(receiptSummary(l.receipt()!)).toBe('Tests passed (12) · install passed · 1 file changed')
+  })
+
+  it('lists todos backed only by a run before the last change apart from those with nothing recorded', () => {
+    const l = new EvidenceLedger()
+    const r = l.receipt(undefined, { todoStale: Array.from({ length: 12 }, (_, i) => `Run tests ${i}\u001b[2J`) })!
+    expect(r.todoStale).toHaveLength(10)
+    expect(r.todoStale?.[0]).toBe('Run tests 0[2J')
+    expect(r).not.toHaveProperty('todoGaps')
   })
 
   it('makes a receipt for todo gaps alone, capped and cleaned', () => {

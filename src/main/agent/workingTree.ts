@@ -6,7 +6,8 @@ import {
   untrackedToFileDiff,
   totalStat,
   type FileDiff,
-  type WorkingTreeChanges
+  type WorkingTreeChanges,
+  type WorkingTreeStats
 } from '@shared/workingTree'
 import { classifyRemoteUrl, type RepoShipState } from '@shared/shipAction'
 import { runGitCapture, captureTry, uncommittedDiffBase } from './gitRead'
@@ -61,22 +62,10 @@ function readUntracked(root: string, rel: string): FileDiff {
  * not just the current chat's edits.
  */
 export async function collectWorkingTreeChanges(workspace: string): Promise<WorkingTreeChanges> {
-  if (!workspace) return NOT_A_REPO
-  let root: string
-  try {
-    root = realpathSync(workspace)
-  } catch {
-    return NOT_A_REPO
-  }
+  const root = await workTreeRoot(workspace)
+  if (!root) return NOT_A_REPO
 
-  const inside = await runGitCapture(['rev-parse', '--is-inside-work-tree'], root)
-  if (!inside.ok || inside.stdout.trim() !== 'true') return NOT_A_REPO
-
-  // symbolic-ref names the branch even when unborn (no commits yet) and fails
-  // only on a detached HEAD, where `rev-parse --abbrev-ref` would say "HEAD".
-  let branch: string | null = null
-  const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], root)
-  if (head.ok) branch = head.stdout.trim() || null
+  const branch = await currentBranch(root)
 
   // Tracked changes (staged + unstaged) vs HEAD, or vs the empty tree on an
   // unborn HEAD (no commits yet) so staged files still show.
@@ -87,11 +76,7 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
   )
   const tracked = diff.ok ? parseUnifiedDiff(diff.stdout) : []
 
-  // Untracked, non-ignored files. -z keeps paths with spaces/newlines intact.
-  const others = await runGitCapture(['ls-files', '--others', '--exclude-standard', '-z'], root)
-  const untrackedPaths = others.ok
-    ? others.stdout.split('\0').map((p) => p.replace(/\r$/, '')).filter(Boolean)
-    : []
+  const untrackedPaths = await listUntracked(root)
   const truncated = untrackedPaths.length > MAX_UNTRACKED_FILES
   const untracked = untrackedPaths
     .slice(0, MAX_UNTRACKED_FILES)
@@ -108,6 +93,94 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
     removed,
     ship,
     ...(truncated ? { truncated: true } : {})
+  }
+}
+
+/** The workspace's real path when it is inside a git work tree, else null. */
+async function workTreeRoot(workspace: string): Promise<string | null> {
+  if (!workspace) return null
+  let root: string
+  try {
+    root = realpathSync(workspace)
+  } catch {
+    return null
+  }
+  const inside = await runGitCapture(['rev-parse', '--is-inside-work-tree'], root)
+  return inside.ok && inside.stdout.trim() === 'true' ? root : null
+}
+
+/**
+ * The checked-out branch, or null on a detached HEAD. symbolic-ref names the branch
+ * even when unborn (no commits yet) and fails only on a detached HEAD, where
+ * `rev-parse --abbrev-ref` would say "HEAD".
+ */
+async function currentBranch(root: string): Promise<string | null> {
+  const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], root)
+  return head.ok ? head.stdout.trim() || null : null
+}
+
+/** Untracked, non-ignored paths. -z keeps paths with spaces/newlines intact. */
+async function listUntracked(root: string): Promise<string[]> {
+  const others = await runGitCapture(['ls-files', '--others', '--exclude-standard', '-z'], root)
+  return others.ok
+    ? others.stdout.split('\0').map((p) => p.replace(/\r$/, '')).filter(Boolean)
+    : []
+}
+
+/**
+ * Sum a `git diff --numstat -z` listing. Each changed file is one record,
+ * `added\tremoved\tpath`, or for a rename or copy `added\tremoved\t` followed by
+ * the old and new paths as two more NUL-terminated fields. A binary file reads
+ * `-\t-` and counts as zero lines, as it does in the parsed diff.
+ */
+export function sumNumstat(out: string): { files: number; added: number; removed: number } {
+  const parts = out.split('\0')
+  let files = 0
+  let added = 0
+  let removed = 0
+  for (let i = 0; i < parts.length; i++) {
+    const m = /^(-|\d+)\t(-|\d+)\t([\s\S]*)$/.exec(parts[i])
+    if (!m) continue
+    if (m[3] === '') i += 2 // a rename or copy: skip its old and new path fields
+    files++
+    if (m[1] !== '-') added += Number(m[1])
+    if (m[2] !== '-') removed += Number(m[2])
+  }
+  return { files, added, removed }
+}
+
+/**
+ * The counts behind the Changes badge (file count, added and removed lines, ship
+ * state): the numbers {@link collectWorkingTreeChanges} yields for the same tree,
+ * without building or shipping the full diff. Tracked files are summed from
+ * `git diff --numstat` rather than a parsed patch; untracked files are counted
+ * exactly as the full path counts them, under the same file cap.
+ */
+export async function collectWorkingTreeStats(workspace: string): Promise<WorkingTreeStats> {
+  const root = await workTreeRoot(workspace)
+  if (!root) return { isRepo: false, branch: null, fileCount: 0, added: 0, removed: 0 }
+
+  const base = await uncommittedDiffBase(captureTry(root))
+  const [branch, diff, untrackedPaths, ship] = await Promise.all([
+    currentBranch(root),
+    runGitCapture(
+      ['diff', base, '--numstat', '-z', '--no-color', '--no-ext-diff', '--no-textconv'],
+      root
+    ),
+    listUntracked(root),
+    collectShipState(root)
+  ])
+  const tracked = diff.ok ? sumNumstat(diff.stdout) : { files: 0, added: 0, removed: 0 }
+  const untracked = untrackedPaths.slice(0, MAX_UNTRACKED_FILES)
+  let added = tracked.added
+  for (const rel of untracked) added += readUntracked(root, rel).added
+  return {
+    isRepo: true,
+    branch,
+    fileCount: tracked.files + untracked.length,
+    added,
+    removed: tracked.removed,
+    ship
   }
 }
 

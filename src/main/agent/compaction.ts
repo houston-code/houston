@@ -5,7 +5,9 @@ import {
   type ConversationCompaction,
   type ToolSchema
 } from '@shared/agent'
+import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
+import { APPROVAL_DENIED } from '@shared/promptOutcome'
 
 // Re-exported from shared so existing main-process imports/tests keep their path.
 export { COMPACTION_SUMMARY_PREFIX }
@@ -305,8 +307,9 @@ export function compactionCandidates(
  * The anchor for a new cut: when the kept tail starts inside the turn (on an
  * assistant iteration rather than a user message), the index of the request that
  * opened it, `turnStart`. The loop re-sends that request verbatim between the
- * summary and the tail, so the user's own words are never paraphrased away while
- * the work they asked for is still running, and the tail still follows a user
+ * summary and the tail (with any steers the cut passed, see
+ * {@link buildAnchorMessages}), so the user's own words are never paraphrased away
+ * while the work they asked for is still running, and the tail still follows a user
  * message as every adapter requires. Undefined when the cut starts a whole turn.
  */
 export function compactionAnchor(
@@ -316,6 +319,31 @@ export function compactionAnchor(
 ): number | undefined {
   if (cut <= 0 || cut >= messages.length || messages[cut].role === 'user') return undefined
   return turnStart >= 0 && turnStart < cut ? turnStart : undefined
+}
+
+/**
+ * What the loop re-sends between the summary and a tail that starts inside a turn:
+ * the anchored request, with every steer the user sent into that turn before the cut
+ * merged in after it, verbatim and in order. A steer is the user's own mid-run
+ * correction ("use pnpm, not npm"); left to the summary it survives only as a
+ * paraphrase, and the model drifts back to the request it amended. Houston's own
+ * notes in between (a stall nudge, verification feedback) are left to the summary.
+ *
+ * One message, not one per steer: the tail opens on an assistant iteration, so a
+ * single user message keeps roles alternating for every adapter. Derived from the
+ * log, the anchor, and the cut alone, so it is byte-identical between compactions
+ * and across runs that resume the persisted state, which keeps the cached prefix
+ * valid. `[]` when there is no anchor; the request itself, untouched, when no steer
+ * came before the cut.
+ */
+export function buildAnchorMessages(
+  messages: ChatMessage[],
+  anchor: number | undefined,
+  cut: number
+): ChatMessage[] {
+  if (anchor === undefined) return []
+  const steers = messages.slice(anchor + 1, cut).filter((m) => m.role === 'user' && m.steered)
+  return [steers.reduce(mergeUserMessages, messages[anchor])]
 }
 
 /**
@@ -629,14 +657,35 @@ export function evictionBoundary(messages: ChatMessage[], params: EvictionParams
 }
 
 /**
+ * Tools whose result is the user's reply: an `ask_user` answer, and a `present_plan`
+ * decision (the plan as the user edited it before accepting, or the changes they
+ * asked for). See {@link carriesUserWords}.
+ */
+const USER_REPLY_TOOLS: ReadonlySet<string> = new Set([ASK_USER_TOOL, PRESENT_PLAN_TOOL])
+
+/**
+ * Whether a tool result carries the user's own words: a reply from one of
+ * {@link USER_REPLY_TOOLS}, or a denial, which holds any guidance the user typed
+ * with it. The call that asked stays in the window whatever happens to its result,
+ * so stubbing one of these would leave the model's own question, or its original
+ * plan, standing without the user's answer: it would then follow its plan over the
+ * user's edit.
+ */
+function carriesUserWords(m: ChatMessage): boolean {
+  return (m.toolName !== undefined && USER_REPLY_TOOLS.has(m.toolName)) || m.content.startsWith(APPROVAL_DENIED)
+}
+
+/**
  * Whether a tool result would be replaced by a stub: large by text, or carrying an
  * attachment (images/documents have a big real token cost even when the text is
  * short). An already-stubbed result (recall/eviction output) never is, so recall
- * and eviction can't ping-pong.
+ * and eviction can't ping-pong, and neither is one that carries the user's own
+ * words ({@link carriesUserWords}).
  */
 function isEvictable(m: ChatMessage, minBytes: number): boolean {
   if (m.role !== 'tool') return false
   if (m.content.startsWith('[earlier ')) return false
+  if (carriesUserWords(m)) return false
   const hasAttachment = (m.images?.length ?? 0) > 0 || (m.documents?.length ?? 0) > 0
   return hasAttachment || byteLength(m.content) >= minBytes
 }
@@ -674,7 +723,8 @@ export function hasEvictableToolResults(
  *
  * "Stale" = before `keepFrom`, which defaults to {@link evictionBoundary} (older
  * than the recent turns or the recent iterations). "Large" = the result text is at
- * least `minBytes` bytes, or it carries an attachment.
+ * least `minBytes` bytes, or it carries an attachment. A result holding the user's
+ * own words (an `ask_user` answer, a plan decision, a denial) is never stubbed.
  */
 export function evictStaleToolResults(
   window: ChatMessage[],

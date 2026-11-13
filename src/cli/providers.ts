@@ -21,7 +21,7 @@ import { providerKeyEnvVars } from '@shared/provider-keys'
  *   houston providers remove-key <id>      forget a stored key
  *
  * Pure and dependency-injected (settings/keys/output are passed in) so it unit-tests
- * without a real profile dir; cli/index.ts wires the real store + credential file.
+ * without a real profile dir; cli/run.ts wires the real store + credential file.
  */
 
 export interface ProvidersDeps {

@@ -73,7 +73,7 @@ import {
 import { backgroundShellGroups, killShell, readShellOutput, registerShell } from './shells'
 import { reviewGitChanges, type GitGuard } from './gitGuard'
 import { foreignListenerNote, urlPort, type PortListener } from './portOwner'
-import { runInSession, type ShellSession } from './shell-session'
+import { cwdFromRoot, runInSession, shellCwdLabel, shellCwdLine, type ShellSession } from './shell-session'
 import {
   presentUntrusted,
   presentUntrustedInline,
@@ -488,6 +488,72 @@ async function exists(abs: string): Promise<boolean> {
   }
 }
 
+/**
+ * A note for a file tool whose `rel` is missing from the project root but exists
+ * under the shell's working directory, naming the path that does exist. A `cd` lasts
+ * for the turn while file tools always resolve from the root, so a model that cd'd
+ * and then reused a shell-relative path got a bare ENOENT with nothing pointing at
+ * the cause.
+ *
+ * The candidate goes through {@link resolveInRoots}, the tools' own containment
+ * check, before it is stat'ed or named, so the note can only name a path the tools
+ * could open themselves: one outside the roots, lexically or through a symlink, gets
+ * no note at all. Null whenever the note doesn't apply; never throws.
+ */
+async function shellCwdPathHint(ctx: ToolContext, rel: string): Promise<string | null> {
+  const session = ctx.shellSession
+  if (!session || !rel || isAbsolute(rel)) return null
+  const roots = rootsOf(ctx)
+  const root = roots[0]
+  const fromRoot = cwdFromRoot(root, session.cwd)
+  if (fromRoot === '') return null
+  // Only for a path the root lacks: a failure on one it has is about something else.
+  try {
+    if (await exists(resolveInRoots(roots, rel))) return null
+  } catch {
+    // Unresolvable from the root (a `..` climbing out of it); read from the shell's
+    // directory it may still land inside the roots.
+  }
+  let candidate: string
+  try {
+    candidate = resolveInRoots(roots, resolve(fromRoot === null ? session.cwd : join(root, fromRoot), rel))
+  } catch {
+    return null
+  }
+  if (!(await exists(candidate))) return null
+  // Relative paths resolve from the first root, so one in another root is named in full.
+  const named = isWithin(root, candidate) ? relative(root, candidate) || '.' : candidate
+  const where = shellCwdLabel(root, session.cwd)
+  return `[note: file tools resolve paths from the project root, not from the shell's working directory (${where}). ${named} exists; use that path.]`
+}
+
+/**
+ * `tool` with {@link shellCwdPathHint} added to the message of any call that fails.
+ * For the tools that take one `path` naming something that must already exist.
+ */
+function withShellCwdHint(tool: ToolDef): ToolDef {
+  return {
+    ...tool,
+    async execute(args, ctx) {
+      try {
+        return await tool.execute(args, ctx)
+      } catch (e) {
+        if (e instanceof Error) {
+          const hint = await shellCwdPathHint(ctx, str(args, 'path'))
+          if (hint) e.message = `${e.message}\n${hint}`
+        }
+        throw e
+      }
+    }
+  }
+}
+
+/** {@link shellCwdPathHint} as a suffix for an error message: a new line and the note, or ''. */
+async function shellCwdHintSuffix(ctx: ToolContext, rel: string): Promise<string> {
+  const hint = await shellCwdPathHint(ctx, rel)
+  return hint ? `\n${hint}` : ''
+}
+
 function num(args: Record<string, unknown>, key: string): number | undefined {
   const v = args[key]
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
@@ -511,7 +577,7 @@ function refOr(args: Record<string, unknown>, fallback: string): string {
   return n ? `#${n}` : fallback
 }
 
-const readFile: ToolDef = {
+const readFile: ToolDef = withShellCwdHint({
   kind: 'read',
   summarize: (a) => {
     const offset = num(a, 'offset')
@@ -648,7 +714,7 @@ const readFile: ToolDef = {
     }
     return data || '[empty file]'
   }
-}
+})
 
 /**
  * The tools {@link staleWriteRefusal} guards: the ones that change an existing file in
@@ -816,7 +882,7 @@ const writeFile: ToolDef = {
   }
 }
 
-const editFile: ToolDef = {
+const editFile: ToolDef = withShellCwdHint({
   kind: 'write',
   summarize: (a) => `Edit ${str(a, 'path')}`,
   schema: {
@@ -859,7 +925,7 @@ const editFile: ToolDef = {
     if (sensitive) return `${done} Because ${note}, check the result${where} with read_file. ${SENSITIVE_SNIPPET_NOTE}`
     return `${done} Because ${note}, check the result as written${where}:\n${editSnippets(displayLines(result.content), result.regions)}`
   }
-}
+})
 
 interface EditSpec {
   old_string: string
@@ -901,7 +967,7 @@ function shiftRegion(region: EditRegion, later: EditRegion[]): EditRegion {
   return { ...region, startLine: region.startLine + shift }
 }
 
-const multiEdit: ToolDef = {
+const multiEdit: ToolDef = withShellCwdHint({
   kind: 'write',
   summarize: (a) => {
     const n = Array.isArray(a.edits) ? a.edits.length : 0
@@ -974,10 +1040,10 @@ const multiEdit: ToolDef = {
     })
     return `${done}\n${sections.join('\n')}${sensitive ? `\n${SENSITIVE_SNIPPET_NOTE}` : ''}`
   }
-}
+})
 
 /** A staged file mutation computed before anything is written, for atomic apply. */
-const notebookEdit: ToolDef = {
+const notebookEdit: ToolDef = withShellCwdHint({
   kind: 'write',
   summarize: (a) => {
     const mode = str(a, 'mode') || 'replace'
@@ -1053,7 +1119,7 @@ const notebookEdit: ToolDef = {
           : `Replaced the source of cell ${cell}`
     return `${what} in ${rel}. The notebook now has ${updated.cells.length} cell${updated.cells.length === 1 ? '' : 's'}.`
   }
-}
+})
 
 interface StagedChange {
   abs: string
@@ -1204,7 +1270,9 @@ const applyPatch: ToolDef = {
         staged.push({ abs, rel: op.path, content: op.content, verb: 'add' })
         added += 1
       } else if (op.type === 'delete') {
-        if (!(await exists(abs))) throw new Error(`Delete File: ${op.path} does not exist.`)
+        if (!(await exists(abs))) {
+          throw new Error(`Delete File: ${op.path} does not exist.${await shellCwdHintSuffix(ctx, op.path)}`)
+        }
         staged.push({ abs, rel: op.path, content: null, verb: 'delete' })
         deleted += 1
       } else {
@@ -1212,7 +1280,7 @@ const applyPatch: ToolDef = {
         try {
           bytes = await fs.readFile(abs)
         } catch {
-          throw new Error(`Update File: ${op.path} does not exist.`)
+          throw new Error(`Update File: ${op.path} does not exist.${await shellCwdHintSuffix(ctx, op.path)}`)
         }
         let data = editableText(bytes, `Update File: ${op.path}`)
         const original = data
@@ -1303,7 +1371,7 @@ const applyPatch: ToolDef = {
   }
 }
 
-const listDir: ToolDef = {
+const listDir: ToolDef = withShellCwdHint({
   kind: 'read',
   summarize: (a) => `List ${str(a, 'path') || '.'}`,
   schema: {
@@ -1318,7 +1386,7 @@ const listDir: ToolDef = {
     const target = str(args, 'path') || '.'
     return dirListing(resolveInRoots(rootsOf(ctx), target))
   }
-}
+})
 
 /** A directory's entries, sorted, with a trailing slash on subdirectories (list_dir's format). */
 async function dirListing(abs: string): Promise<string> {
@@ -1943,6 +2011,10 @@ const runShell: ToolDef = {
     if (body) parts.push(body)
     if (result.timedOut) parts.push(shellTimeoutHint(timeoutMs ?? DEFAULT_TIMEOUT_MS))
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
+    // A `cd` carries over to later commands, but file tools keep resolving from the
+    // project root: say where the shell is whenever that isn't the root.
+    const cwdLine = session ? shellCwdLine(ctx.workspace, session.cwd) : null
+    if (cwdLine) parts.push(cwdLine)
     // `npm test | head` exits with head's status: say so, or a failed run reads as a pass.
     const masked = result.exitCode === 0 ? classifyCommand(command).maskedBy : undefined
     if (masked) parts.push(maskedExitNote(masked))

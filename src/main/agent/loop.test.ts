@@ -3242,6 +3242,49 @@ describe('context management inside a long turn', () => {
     for (const w of t.sends) expectValidWindow(w)
   })
 
+  it('re-sends a steer verbatim once an in-turn cut passes it', async () => {
+    // The user corrects course after the first read; compaction later cuts past the
+    // correction. Only the request used to be re-sent, so the steer survived only as
+    // the summarizer's paraphrase of it.
+    h.probeTools = [bigReadFile()]
+    h.settings.compactionThreshold = 8000
+    const STEER = 'use pnpm, not npm'
+    const t = longTurn(8)
+    h.provider = t.provider
+    const runId = 'run-steer-compaction'
+    const events: AgentEvent[] = []
+    let messages: ChatMessage[] = []
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: REQUEST }]
+      },
+      (e) => {
+        events.push(e)
+        if (e.type === 'tool_result' && e.callId === 'read1') steerRun(runId, STEER)
+      },
+      (m) => {
+        messages = m
+      }
+    )
+
+    expect(events.at(-1)?.type).toBe('done')
+    expect(messages.filter((m) => m.steered).map((m) => m.content)).toEqual([STEER])
+    const compacted = t.sends.filter((w) => w[0].content.startsWith(COMPACTION_SUMMARY_PREFIX))
+    // Some cut really did fold the steer's own message into the summary…
+    expect(compacted.some((w) => !w.some((m) => m.content === STEER))).toBe(true)
+    for (const w of compacted) {
+      // …yet every compacted window still carries it word for word, exactly once.
+      expect(w.filter((m) => m.role === 'user' && m.content.includes(STEER))).toHaveLength(1)
+      expect(w.filter((m) => m.role === 'user' && m.content.includes(REQUEST))).toHaveLength(1)
+      expectValidWindow(w)
+    }
+  })
+
   it('keeps each turn\'s first window an extension of the last turn\'s final one', async () => {
     // Nothing compacted. The pinned block used to be spliced in front of each turn's
     // request, so it moved down a turn every turn and the next turn's first request
@@ -6471,6 +6514,38 @@ describe('loop control — stall detection', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  it('ends a persistent stall with a reply step that runs no tools', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    let calls = 0
+    let sawFinalNote = false
+    const looping: Provider = {
+      async *streamChat(req) {
+        if (req.messages.some((m) => typeof m.content === 'string' && /this turn is ending now/.test(m.content))) {
+          sawFinalNote = true
+          // A model that still reaches for a tool on its last step: the call must not run.
+          yield { type: 'text', text: 'I kept rereading a.txt without progress.' }
+          yield { type: 'tool_call', call: { id: `x${calls}`, name: 'read_file', arguments: { path: 'a.txt' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        calls++
+        yield { type: 'tool_call', call: { id: `c${calls}`, name: 'read_file', arguments: { path: 'a.txt' } } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const r = await withSettings({ stallDetection: true, stallRepeatCallLimit: 2, maxIterations: 40 }, () =>
+      run({ provider: looping, policy: 'full-auto' })
+    )
+    expect(sawFinalNote).toBe(true)
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('stalled')
+    const last = r.messages.at(-1)!
+    expect(last.role).toBe('assistant')
+    expect(last.content).toMatch(/without progress/)
+    expect(last.toolCalls ?? []).toHaveLength(0)
+    expect(types(r).at(-1)).toBe('done')
+  })
+
   it('does not fire on a healthy varied run', async () => {
     writeFileSync(join(ws, 'a.txt'), 'x')
     writeFileSync(join(ws, 'b.txt'), 'y')
@@ -9368,6 +9443,29 @@ describe('turn receipt', () => {
     const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'todo_write') as { output: string }
     expect(result.output).not.toContain('[note:')
     expect(r.messages.at(-1)?.receipt).not.toHaveProperty('todoGaps')
+  })
+
+  it('does not let a pass from before a later file change back a todo, and says why', async () => {
+    h.sandboxed = true
+    h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '12 passed in 0.1s' } })]
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        call('s1', 'run_shell', { command: 'pytest' }),
+        call('w1', 'write_file', { path: 'app.py', content: 'print(2)\n' }),
+        call('t1', 'todo_write', { todos: [{ content: 'Backend tests with pytest', status: 'completed' }] }),
+        say('Tests pass.')
+      ],
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'todo_write') as { output: string }
+    expect(result.output).toContain(
+      '[note: "Backend tests with pytest" is marked completed, but the last passing test run Houston recorded came before a later file change.'
+    )
+    const receipt = r.messages.at(-1)?.receipt
+    expect(receipt?.todoStale).toEqual(['Backend tests with pytest'])
+    expect(receipt).not.toHaveProperty('todoGaps')
+    expect(receipt?.checks[0]).toMatchObject({ kind: 'test', ok: true, beforeLastWrite: true })
   })
 
   it("carries an accepted plan's progress across turns until it is complete", async () => {

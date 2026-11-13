@@ -151,7 +151,7 @@ import {
   removeWorktree,
   isWorktreeDisposable
 } from './agent/worktree'
-import { collectWorkingTreeChanges } from './agent/workingTree'
+import { collectWorkingTreeChanges, collectWorkingTreeStats } from './agent/workingTree'
 import { branchSyncFor, commitAll, lookupPr, pushBranch, suggestCommitMessage } from './agent/gitActions'
 import { isKnownWorkspace } from './knownWorkspace'
 import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
@@ -886,6 +886,11 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // for the Changes panel. Read-only and hardened; a non-repo yields isRepo:false.
   handle(IPC.workingTreeChanges, async (_event, workspace: string) =>
     collectWorkingTreeChanges(typeof workspace === 'string' ? workspace : '')
+  )
+  // The same change set reduced to its counts, for the titlebar badge, which
+  // refreshes on every window focus and would otherwise ship the whole diff.
+  handle(IPC.workingTreeStats, async (_event, workspace: string) =>
+    collectWorkingTreeStats(typeof workspace === 'string' ? workspace : '')
   )
 
   // The Changes view's commit form and the composer's PR chip run git and gh

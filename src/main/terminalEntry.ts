@@ -133,7 +133,7 @@ function withUnread(convs: { id: string; title: string; updatedAt: number }[]): 
  * and one-shot headless (`-p`) clients onto the shared agent core, settings
  * store, and conversation persistence. Everything here is Electron-free: the
  * desktop app calls these from inside `app.whenReady()` (index.ts) and the
- * standalone CLI calls them directly (src/cli/index.ts), each after wiring the
+ * standalone CLI calls them directly (src/cli/run.ts), each after wiring the
  * userData seam and host credentials for its environment. Extracted from
  * index.ts so the two hosts can't drift apart.
  *
