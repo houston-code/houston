@@ -2185,6 +2185,9 @@ project deny.
 ### How hooks run
 
 - **Several matches** run in order. Any block wins, and the last rewrite wins.
+- **Each hook gets 60 seconds.** One still running then is stopped and its output
+  ignored. A PreToolUse or UserPromptSubmit hook that times out still blocks, with a
+  message saying it timed out; a Stop hook that times out lets the turn end.
 - **Sandboxed:** hooks run in the same project sandbox as `run_shell`, with no
   network.
 - **Failing safe:** a hook that can't be started counts as failed, so a PreToolUse or
