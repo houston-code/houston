@@ -15,7 +15,8 @@ import type {
   ModelOption,
   PermissionPolicyView,
   PermissionRule,
-  PermissionTestResult
+  PermissionTestResult,
+  SandboxStatus
 } from '@shared/types'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
@@ -70,6 +71,8 @@ const api = {
   /** Gather the /doctor health facts for the given workspace. */
   getDoctorFacts: (workspace: string): Promise<DoctorFacts> =>
     ipcRenderer.invoke(IPC.doctorFacts, workspace),
+  /** Whether an OS sandbox confines shell commands on this host. */
+  getSandboxStatus: (): Promise<SandboxStatus> => ipcRenderer.invoke(IPC.sandboxStatus),
   /** Save a `#`-captured standing instruction; resolves to the file path written, or null. */
   saveMemory: (workspace: string, scope: MemoryScope, text: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.memorySave, workspace, scope, text),

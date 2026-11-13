@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   APPROVAL_POLICIES,
+  APPROVAL_POLICY_HINT,
   APPROVAL_POLICY_LABEL,
   permissionRuleKey,
-  type ApprovalPolicy,
   type PermissionRule,
   type PermissionTestResult
 } from '@shared/types'
@@ -667,14 +667,6 @@ function RuleTester({
       </p>
     </details>
   )
-}
-
-/** What each approval mode lets the agent do without asking. */
-const APPROVAL_POLICY_HINT: Record<ApprovalPolicy, string> = {
-  plan: 'The agent researches and proposes a plan; nothing is written or run.',
-  ask: 'Asks before every shell command and file write.',
-  'auto-edit': 'Reads and edits files in the workspace without asking; asks before shell commands.',
-  'full-auto': 'Runs everything without asking, still confined to the workspace sandbox.'
 }
 
 /** The approval mode new chats start in. */

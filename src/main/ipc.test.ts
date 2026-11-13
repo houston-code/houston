@@ -172,6 +172,16 @@ describe('resolveDeleteAction', () => {
   })
 })
 
+describe('sandboxStatus', () => {
+  registerIpc()
+
+  it('reports the sandbox backend and whether it confines, as the badge shows it', () => {
+    const status = h.handlers.get(IPC.sandboxStatus)!({ sender: {} }) as { backend: string; enforced: boolean }
+    expect(status).toEqual({ backend: expect.any(String), enforced: expect.any(Boolean) })
+    expect(status.backend.length).toBeGreaterThan(0)
+  })
+})
+
 /**
  * The delete handler probes the worktree before asking: an untouched worktree gets
  * the plain two-button confirmation and is removed with the chat, while one with
