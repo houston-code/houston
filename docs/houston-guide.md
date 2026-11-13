@@ -2477,10 +2477,13 @@ On first launch, the welcome screen shows a three-step **Get started** checklist
 3. **Send a first task.** When only this step is left, the cursor moves into the
    message box (which glows) and the step suggests a task: "Explain how this project is
    organized." for a folder with files, or "Build a simple to-do list web page in this
-   folder." for an empty one.
+   folder." for an empty one. Click the suggestion to put it in the message box.
 
 Each step ticks itself off from the app's real state, and the checklist goes away for
-good once the first task is sent.
+good once the first task is sent. After that, every empty new chat shows a row of
+starter tasks suited to the folder (for a project: explain it, find a bug, add tests,
+suggest improvements; for an empty folder: small things to build). Clicking one puts
+the task in the message box to edit or send.
 
 **Changing your mind.** While the checklist is open, each finished step shows what it
 set and has a **Change** button, so you can switch model, provider, or folder before

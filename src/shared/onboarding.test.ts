@@ -11,6 +11,7 @@ import {
   relevantTips,
   restartTips,
   shouldShowChecklist,
+  starterPrompts,
   type ChecklistFacts,
   type TipId
 } from './onboarding'
@@ -199,3 +200,33 @@ describe('folderKind / firstTaskExample', () => {
   })
 })
 
+
+describe('starterPrompts', () => {
+  it('leads with the checklist example for every kind of folder', () => {
+    for (const kind of ['empty', 'has-files', 'unknown'] as const) {
+      expect(starterPrompts(kind)[0].task).toBe(firstTaskExample(kind))
+    }
+  })
+
+  it('offers things to build in an empty folder and ways into code in a project', () => {
+    expect(starterPrompts('empty').map((p) => p.label)).toContain('Make a landing page')
+    expect(starterPrompts('has-files').map((p) => p.label)).toEqual([
+      'Explain this project',
+      'Find a bug',
+      'Add tests',
+      'Suggest improvements'
+    ])
+  })
+
+  it('gives each chip a short, unique label and a full task', () => {
+    for (const kind of ['empty', 'has-files', 'unknown'] as const) {
+      const list = starterPrompts(kind)
+      expect(new Set(list.map((p) => p.label)).size).toBe(list.length)
+      for (const p of list) {
+        expect(p.label.length).toBeLessThanOrEqual(24)
+        expect(p.task.length).toBeGreaterThan(p.label.length)
+        expect(p.task).not.toContain('\u2014')
+      }
+    }
+  })
+})

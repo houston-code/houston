@@ -168,5 +168,53 @@ export function firstTaskExample(kind: FolderKind): string {
   }
 }
 
+/** A starter task: the short label on its chip, and the task it fills in. */
+export interface StarterPrompt {
+  label: string
+  task: string
+}
+
+/**
+ * Tasks offered on an empty new chat, suited to the folder. The first is always the
+ * checklist's own example, so the first chip a new user sees is the one it named.
+ * Empty folders get small things to build; projects get ways in to existing code.
+ */
+export function starterPrompts(kind: FolderKind): StarterPrompt[] {
+  const first = { label: firstTaskLabel(kind), task: firstTaskExample(kind) }
+  switch (kind) {
+    case 'empty':
+      return [
+        first,
+        { label: 'Start a TS project', task: 'Set up a minimal TypeScript project here with a test runner and one passing test.' },
+        { label: 'Write a small script', task: 'Write a small command-line script that renames the photos in a folder by the date they were taken.' },
+        { label: 'Make a landing page', task: 'Make a one-page landing site for a neighborhood coffee shop, in plain HTML and CSS.' }
+      ]
+    case 'has-files':
+      return [
+        first,
+        { label: 'Find a bug', task: 'Find a likely bug in this project, explain it, and fix it.' },
+        { label: 'Add tests', task: 'Find the most important code that has no tests and write tests for it.' },
+        { label: 'Suggest improvements', task: 'Suggest three improvements to this codebase, most valuable first. Do not change anything yet.' }
+      ]
+    case 'unknown':
+      return [
+        first,
+        { label: 'Explain this folder', task: 'Explain what is in this folder.' },
+        { label: 'Find a bug', task: 'Find a likely bug here, explain it, and fix it.' }
+      ]
+  }
+}
+
+function firstTaskLabel(kind: FolderKind): string {
+  switch (kind) {
+    case 'empty':
+      return 'Build a to-do page'
+    case 'has-files':
+      return 'Explain this project'
+    case 'unknown':
+      return 'Suggest a first task'
+  }
+}
+
 /** How long the pre-send tips wait after step 3 becomes current: a follow-up, not a jolt. */
 export const PRE_SEND_TIP_DELAY_MS = 2000

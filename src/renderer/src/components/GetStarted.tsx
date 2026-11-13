@@ -21,6 +21,8 @@ export interface GetStartedProps {
   folderSummary?: string
   /** An example first task suited to the folder, appended to step 3's hint. */
   taskExample?: string
+  /** Put the example in the message box; when given, the example is a button. */
+  onUseExample?: (task: string) => void
   onConnectModel: () => void
   onChooseFolder: () => void
   /**
@@ -35,6 +37,7 @@ export function GetStarted({
   modelSummary,
   folderSummary,
   taskExample,
+  onUseExample,
   onConnectModel,
   onChooseFolder,
   focusModelStep = false
@@ -90,7 +93,23 @@ export function GetStarted({
                 {!done && (
                   <span className="get-started__hint">
                     {step.hint}
-                    {step.id === 'task' && taskExample && <> For example: &ldquo;{taskExample}&rdquo;</>}
+                    {step.id === 'task' && taskExample && (
+                      <>
+                        {' For example: '}
+                        {onUseExample && current ? (
+                          <button
+                            type="button"
+                            className="get-started__example"
+                            title="Put this task in the message box"
+                            onClick={() => onUseExample(taskExample)}
+                          >
+                            &ldquo;{taskExample}&rdquo;
+                          </button>
+                        ) : (
+                          <>&ldquo;{taskExample}&rdquo;</>
+                        )}
+                      </>
+                    )}
                   </span>
                 )}
                 {redo?.summary && <span className="get-started__hint">{redo.summary}</span>}
