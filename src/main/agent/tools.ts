@@ -70,7 +70,7 @@ import {
   spawnSandboxed,
   type EgressProxyEndpoints
 } from '../sandbox'
-import { backgroundShellGroups, killShell, readShellOutput, registerShell } from './shells'
+import { backgroundShellGroups, readShellOutput, registerShell, stopShell } from './shells'
 import { reviewGitChanges, type GitGuard } from './gitGuard'
 import { foreignListenerNote, urlPort, type PortListener } from './portOwner'
 import { cwdFromRoot, runInSession, shellCwdLabel, shellCwdLine, type ShellSession } from './shell-session'
@@ -2132,8 +2132,11 @@ const killShellTool: ToolDef = {
   async execute(args, ctx) {
     const id = str(args, 'shell_id')
     if (!id) throw new Error('shell_id is required.')
+    // Waits for the stop to finish (SIGTERM, then SIGKILL after a grace), so the
+    // result only says "killed" once the shell's processes are actually gone.
+    const outcome = await stopShell(id)
     const text = ((): string => {
-      switch (killShell(id)) {
+      switch (outcome) {
         case 'killed':
           return `Killed background shell ${id}.`
         case 'killed-leftovers':

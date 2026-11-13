@@ -48,6 +48,7 @@ export {
   sandboxEnv,
   OFFLINE_FAIL_FAST_ENV,
   killProcessTree,
+  KILL_GRACE_MS,
   signalProcessTree,
   planKill,
   runWithBackend,

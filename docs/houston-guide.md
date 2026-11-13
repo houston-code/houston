@@ -259,6 +259,16 @@ repository.
 | 3 | the run hit a budget before finishing (its step cap or the model's output limit) |
 | 4 | the final answer still didn't match `--output-schema` after the corrective round |
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
+| 128 + n | stopped by a signal: 129 for a closed terminal (SIGHUP), 130 for Ctrl-C (SIGINT), 143 for `kill` or `timeout` (SIGTERM) |
+
+**Stopping Houston stops what the agent started.** When `-p`, `-i`, or `--acp` ends,
+normally or because the terminal closed or it was sent SIGHUP, SIGTERM, or (for `-p`
+and `--acp`) Ctrl-C, it stops the background commands the agent started, its MCP
+connections, and its language servers before exiting. Background commands get SIGTERM
+first, so a dev server or `docker compose up` can shut down cleanly (and stop its
+containers), and anything still running a moment later is killed. A second Ctrl-C
+exits at once. Stopping one background command, from the agent or the Background tasks
+list, works the same way, with a few seconds' grace. On Windows the stop is immediate.
 
 ### Standalone CLI
 

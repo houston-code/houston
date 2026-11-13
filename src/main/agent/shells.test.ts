@@ -9,6 +9,7 @@ import {
   MAX_EXITED_SHELLS,
   appendCapped,
   backgroundShellGroups,
+  killAllShells,
   killShell,
   listPreviewServers,
   listShells,
@@ -17,6 +18,7 @@ import {
   registerShell,
   peekShell,
   shellTail,
+  stopShell,
   unreadSlice,
   windowOf
 } from './shells'
@@ -372,4 +374,82 @@ describe('finished shells', () => {
     expect(readShellOutput(runningId).running).toBe(true)
     await killShell(runningId)
   }, 60_000)
+})
+
+// Graceful stops signal process groups, which Windows doesn't have (its tree kill is
+// always forceful), so these are POSIX only.
+describe.skipIf(process.platform === 'win32')('graceful stop', () => {
+  const exited = (child: ChildProcess): Promise<{ code: number | null; signal: NodeJS.Signals | null }> =>
+    new Promise((resolve) => child.on('exit', (code, signal) => resolve({ code, signal })))
+  const groupAlive = (pgid: number): boolean => {
+    try {
+      process.kill(-pgid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  /** A detached shell (as the sandbox backends spawn them) that prints `ready` once its trap is set. */
+  const shell = async (script: string): Promise<{ child: ChildProcess; id: string }> => {
+    const child = spawn('/bin/sh', ['-c', script], { detached: true })
+    const id = registerShell(script, child)
+    await vi.waitFor(() => expect(readShellOutput(id, { full: true }).stdout).toContain('ready'))
+    return { child, id }
+  }
+
+  it('lets a shell shut down on SIGTERM (as docker compose needs to stop its containers)', async () => {
+    const { child, id } = await shell("trap 'echo stopping; exit 0' TERM; echo ready; while :; do sleep 0.05; done")
+    const done = exited(child)
+    expect(killShell(id, { graceMs: 5_000 })).toBe('killed')
+    expect(await done).toEqual({ code: 0, signal: null })
+    expect(readShellOutput(id, { full: true }).stdout).toContain('stopping')
+  })
+
+  it('sends SIGTERM first and SIGKILL only after the grace when the shell ignores it', async () => {
+    const { child, id } = await shell("trap '' TERM; echo ready; while :; do sleep 0.05; done")
+    const done = exited(child)
+    const started = Date.now()
+    expect(killShell(id, { graceMs: 400 })).toBe('killed')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(readShellOutput(id).running).toBe(true)
+    const { signal } = await done
+    expect(signal).toBe('SIGKILL')
+    expect(Date.now() - started).toBeGreaterThanOrEqual(400)
+    await vi.waitFor(() => expect(groupAlive(child.pid!)).toBe(false))
+  })
+
+  it('stopShell resolves only once the shell is actually gone', async () => {
+    const { child, id } = await shell("trap '' TERM; echo ready; while :; do sleep 0.05; done")
+    expect(await stopShell(id, { graceMs: 300 })).toBe('killed')
+    expect(readShellOutput(id).running).toBe(false)
+    expect(groupAlive(child.pid!)).toBe(false)
+  })
+
+  it('killAllShells gives every shell a bounded chance to exit on SIGTERM, then SIGKILLs the rest', async () => {
+    const polite = await shell("trap 'echo stopping; exit 0' TERM; echo ready; while :; do sleep 0.05; done")
+    const stubborn = await shell("trap '' TERM; echo ready; while :; do sleep 0.05; done")
+    const politeDone = exited(polite.child)
+    const stubbornDone = exited(stubborn.child)
+    const started = Date.now()
+    killAllShells({ graceMs: 600 })
+    const blocked = Date.now() - started
+    // Bounded: the stubborn shell holds the quit for the grace, not forever.
+    expect(blocked).toBeGreaterThanOrEqual(550)
+    expect(blocked).toBeLessThan(3_000)
+    expect(await politeDone).toEqual({ code: 0, signal: null })
+    expect((await stubbornDone).signal).toBe('SIGKILL')
+    await vi.waitFor(() => {
+      expect(groupAlive(polite.child.pid!)).toBe(false)
+      expect(groupAlive(stubborn.child.pid!)).toBe(false)
+    })
+  })
+
+  it('killAllShells returns as soon as every shell has stopped, without waiting out the grace', async () => {
+    const polite = await shell("trap 'exit 0' TERM; echo ready; while :; do sleep 0.05; done")
+    const done = exited(polite.child)
+    const started = Date.now()
+    killAllShells({ graceMs: 5_000 })
+    expect(Date.now() - started).toBeLessThan(2_500)
+    expect(await done).toEqual({ code: 0, signal: null })
+  })
 })

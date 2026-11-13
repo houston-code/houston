@@ -1,8 +1,8 @@
-import type { ChildProcess } from 'node:child_process'
+import { execFileSync, type ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { StringDecoder } from 'node:string_decoder'
 import type { BackgroundShellInfo, KillShellOutcome } from '@shared/agent'
-import { killProcessTree } from '../sandbox'
+import { KILL_GRACE_MS, killProcessTree, signalProcessTree } from '../sandbox'
 import { detectLocalUrls, stripAnsi, type FoundUrl } from './loopback'
 import { writeShellLedger, type LedgerEntry } from './shellLedger'
 import { redactSecrets } from './redact'
@@ -67,6 +67,8 @@ interface Shell {
   announcedCount: number
   /** URLs read_shell_output has already reported to the agent. */
   reportedUrls: Set<string>
+  /** Pending SIGKILL escalation after a graceful stop's SIGTERM (see {@link stopGracefully}). */
+  stopTimer?: ReturnType<typeof setTimeout>
 }
 
 /** Most URLs kept per shell: a dev script starts a few servers, not dozens. */
@@ -411,27 +413,69 @@ export type KillShellResult = KillShellOutcome
 const LEFTOVER_SETTLE_MS = 300
 
 /**
- * Stop a background shell and its process tree. A shell that already exited is still
- * checked for leftover group members, because "exited" only means the shell's own
- * process ended: a server it backgrounded keeps running (and holding its port) until
- * the group is signalled.
+ * Ask a shell's process tree to stop: SIGTERM the group now, then SIGKILL whatever is
+ * still running once the grace runs out. A server (or `docker compose up`, which only
+ * stops its containers on SIGTERM) gets to shut down cleanly; one that ignores the
+ * signal is still reaped. Windows has no graceful group signal (the tree kill there is
+ * always forceful), so the first signal already ends it and nothing is escalated.
  */
-export function killShell(id: string): KillShellResult {
+function stopGracefully(s: Shell, graceMs: number): void {
+  signalProcessTree(s.child, 'SIGTERM')
+  if (process.platform === 'win32' || s.stopTimer) return
+  s.stopTimer = setTimeout(() => {
+    s.stopTimer = undefined
+    // hasLeftover latches an empty group, so a recycled group id is never signalled.
+    if (s.running || hasLeftover(s)) killProcessTree(s.child)
+    persistLedger()
+    setTimeout(notifyShellsChanged, LEFTOVER_SETTLE_MS).unref?.()
+  }, graceMs)
+  s.stopTimer.unref?.()
+}
+
+/**
+ * Stop a background shell and its process tree: SIGTERM first, SIGKILL after
+ * `graceMs` (the same grace a timed-out foreground command gets) for anything that
+ * ignored it. A shell that already exited is still checked for leftover group members,
+ * because "exited" only means the shell's own process ended: a server it backgrounded
+ * keeps running (and holding its port) until the group is signalled. Returns as soon
+ * as the stop is under way; {@link stopShell} waits for it to finish.
+ */
+export function killShell(id: string, opts: { graceMs?: number } = {}): KillShellResult {
   const s = shells.get(id)
   if (!s) return 'not-found'
+  const graceMs = opts.graceMs ?? KILL_GRACE_MS
   if (s.running) {
-    killProcessTree(s.child)
+    stopGracefully(s, graceMs)
     return 'killed'
   }
   if (hasLeftover(s)) {
-    killProcessTree(s.child)
-    persistLedger()
+    stopGracefully(s, graceMs)
     // No 'close' event follows (the shell already exited), so tell listeners the
-    // leftover is gone once SIGKILL has had a moment to land.
+    // leftover is gone once the signal has had a moment to land.
     setTimeout(notifyShellsChanged, LEFTOVER_SETTLE_MS).unref?.()
     return 'killed-leftovers'
   }
   return 'already-exited'
+}
+
+/** How often {@link stopShell} checks whether a stopping shell is gone. */
+const STOP_POLL_MS = 50
+
+/**
+ * {@link killShell}, then wait until the shell and everything left in its group have
+ * actually ended (at most the grace plus a moment for the SIGKILL to land), so a
+ * caller that reports the shell stopped and then restarts a server on the same port
+ * isn't racing the old one's shutdown.
+ */
+export async function stopShell(id: string, opts: { graceMs?: number } = {}): Promise<KillShellResult> {
+  const result = killShell(id, opts)
+  const s = shells.get(id)
+  if (!s || (result !== 'killed' && result !== 'killed-leftovers')) return result
+  const deadline = Date.now() + (opts.graceMs ?? KILL_GRACE_MS) + 1_000
+  while ((s.running || hasLeftover(s)) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, STOP_POLL_MS))
+  }
+  return result
 }
 
 /** The process groups of every background shell this run of Houston started. */
@@ -498,10 +542,87 @@ export function listPreviewServers(): PreviewServer[] {
   }))
 }
 
-/** Kill every tracked shell, and any leftovers of exited ones, then clear the registry (wired on app shutdown). */
-export function killAllShells(): void {
+/**
+ * Longest {@link killAllShells} blocks, after SIGTERMing every shell, for them to stop
+ * on their own before it SIGKILLs the rest. Short, because it holds up the quit.
+ */
+export const QUIT_GRACE_MS = 1_500
+
+/** How often killAllShells re-checks the groups it is waiting on. */
+const QUIT_POLL_MS = 50
+
+/** Block the thread for `ms` (only on the way out, where waiting on the event loop isn't an option). */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
+}
+
+/**
+ * The given shell pids whose process (or a member of the group it leads) is still
+ * running. Read from `ps`, because a signal-0 probe also "finds" a zombie: while
+ * killAllShells blocks the event loop, nothing reaps a shell that exited on SIGTERM,
+ * so the probe alone would always wait out the whole grace. Falls back to the probe
+ * when `ps` can't be run. POSIX only.
+ */
+function stillRunning(pids: number[]): Set<number> {
+  const wanted = new Set(pids)
+  const alive = new Set<number>()
+  try {
+    const out = execFileSync('ps', ['-A', '-o', 'pgid=,pid=,stat='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1_000
+    })
+    for (const line of out.split('\n')) {
+      const [pgid, pid, stat] = line.trim().split(/\s+/)
+      if (!stat || stat.startsWith('Z')) continue
+      for (const n of [Number(pgid), Number(pid)]) if (wanted.has(n)) alive.add(n)
+    }
+    return alive
+  } catch {
+    for (const pid of pids) {
+      try {
+        process.kill(-pid, 0)
+        alive.add(pid)
+      } catch {
+        try {
+          process.kill(pid, 0)
+          alive.add(pid)
+        } catch {
+          // gone
+        }
+      }
+    }
+    return alive
+  }
+}
+
+/**
+ * Stop every tracked shell, and any leftovers of exited ones, then clear the registry
+ * (wired on app shutdown and on a terminal client's exit). Synchronous, because the
+ * quit paths that call it can't wait on the event loop: every group gets SIGTERM, the
+ * call blocks up to `graceMs` for them to exit, then SIGKILLs whatever is left.
+ * Windows has no graceful group signal, so there every tree is killed at once.
+ */
+export function killAllShells(opts: { graceMs?: number } = {}): void {
+  const graceMs = opts.graceMs ?? QUIT_GRACE_MS
+  const live = [...shells.values()].filter((s) => s.running || hasLeftover(s))
   for (const s of shells.values()) {
-    if (s.running || hasLeftover(s)) killProcessTree(s.child)
+    if (s.stopTimer) clearTimeout(s.stopTimer)
+    s.stopTimer = undefined
+  }
+  if (live.length > 0 && process.platform !== 'win32' && graceMs > 0) {
+    for (const s of live) signalProcessTree(s.child, 'SIGTERM')
+    const deadline = Date.now() + graceMs
+    let pending = live.filter((s) => s.child.pid !== undefined)
+    while (pending.length > 0 && Date.now() < deadline) {
+      sleepSync(QUIT_POLL_MS)
+      const alive = stillRunning(pending.map((s) => s.child.pid as number))
+      pending = pending.filter((s) => alive.has(s.child.pid as number))
+    }
+    // Only what is still running: a group that emptied may already be recycled.
+    for (const s of pending) killProcessTree(s.child)
+  } else {
+    for (const s of live) killProcessTree(s.child)
   }
   shells.clear()
   if (leftoverWatch) {

@@ -242,7 +242,7 @@ if (acp) {
   app.whenReady().then(async () => {
     trustSystemCertificates()
     await initSecrets()
-    const code = await runAcpEntry({ version: app.getVersion() })
+    const code = await runAcpEntry({ version: app.getVersion(), flush: flushSecrets })
     app.exit(await flushBeforeExit(code))
   })
 } else if (tui) {
@@ -251,14 +251,14 @@ if (acp) {
   app.whenReady().then(async () => {
     trustSystemCertificates()
     await initSecrets()
-    const code = await runTuiEntry(tui, { version: app.getVersion() })
+    const code = await runTuiEntry(tui, { version: app.getVersion(), flush: flushSecrets })
     app.exit(await flushBeforeExit(code))
   })
 } else if (headless) {
   app.whenReady().then(async () => {
     trustSystemCertificates()
     await initSecrets()
-    const code = await runHeadlessEntry(headless, { version: app.getVersion() })
+    const code = await runHeadlessEntry(headless, { version: app.getVersion(), flush: flushSecrets })
     app.exit(await flushBeforeExit(code))
   })
 } else if (!app.requestSingleInstanceLock()) {

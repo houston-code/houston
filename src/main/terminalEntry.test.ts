@@ -3,7 +3,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AgentEvent, ElicitationResult, PlanDecision } from '@shared/agent'
-import { resolveBackgroundEvent, wireTerminalSessionBackends } from './terminalEntry'
+import { EventEmitter } from 'node:events'
+import { spawn } from 'node:child_process'
+import { guardTerminalExit, resolveBackgroundEvent, wireTerminalSessionBackends } from './terminalEntry'
+import { readShellOutput, registerShell } from './agent/shells'
+import type { SignalProcess } from './signalCleanup'
 import { setUserDataDir, resetUserDataDir } from './userData'
 import { resetSpawnBackend, isSpawnBackendConfigured, spawnSession } from './agent/spawn'
 import { resetSchedulerBackend, isSchedulerConfigured, scheduleCreate, scheduleList } from './agent/scheduler'
@@ -162,4 +166,46 @@ describe('wireTerminalSessionBackends', () => {
     expect(info.id).toMatch(/^sch-/)
     expect(scheduleList()).toHaveLength(1)
   })
+})
+
+describe('guardTerminalExit', () => {
+  // A closed terminal (SIGHUP) or a `kill` must not leave a dev server holding its
+  // port: background shells lead their own process group, so the hangup never reaches
+  // them and only Houston's cleanup can. POSIX only (process groups).
+  it.skipIf(process.platform === 'win32')(
+    'stops a running background shell on SIGHUP, then exits with 129',
+    async () => {
+      // Detached, as the sandbox backends spawn background shells: it leads its group,
+      // and the server it starts shares that group.
+      const child = spawn('/bin/sh', ['-c', 'sleep 30 & echo up; wait'], { detached: true })
+      const id = registerShell('sleep 30', child)
+      await vi.waitFor(() => expect(readShellOutput(id, { full: true }).stdout).toContain('up'))
+      const pgid = child.pid!
+      expect(() => process.kill(-pgid, 0)).not.toThrow()
+
+      const emitter = new EventEmitter()
+      let exited: (code: number) => void = () => {}
+      const exitCode = new Promise<number>((r) => (exited = r))
+      const proc: SignalProcess = {
+        on: (sig, fn) => emitter.on(sig, fn),
+        removeListener: (sig, fn) => emitter.removeListener(sig, fn),
+        exit: (code) => exited(code)
+      }
+      const flush = vi.fn(async () => {})
+      guardTerminalExit(['SIGHUP', 'SIGTERM'], { flush }, proc)
+      emitter.emit('SIGHUP')
+      expect(await exitCode).toBe(129)
+      expect(flush).toHaveBeenCalledTimes(1)
+      await vi.waitFor(() => {
+        let err: NodeJS.ErrnoException | undefined
+        try {
+          process.kill(-pgid, 0)
+        } catch (e) {
+          err = e as NodeJS.ErrnoException
+        }
+        expect(err?.code).toBe('ESRCH')
+      })
+    },
+    15_000
+  )
 })

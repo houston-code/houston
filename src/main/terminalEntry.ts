@@ -24,6 +24,8 @@ import {
 } from './agent/loop'
 import { killAllShells } from './agent/shells'
 import { lspManager } from './agent/lsp/manager'
+import { flushRuleUsage } from './ruleUsage'
+import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
 import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
@@ -139,8 +141,52 @@ function withUnread(convs: { id: string; title: string; updatedAt: number }[]): 
  *
  * Both entries return the process exit code rather than exiting, since the two
  * hosts exit differently (`app.exit` vs `process.exit`), and both tear down the
- * agent's background shells and MCP connections before returning.
+ * agent's background shells, MCP connections, and language servers before returning
+ * (or, on a signal, before exiting: see {@link guardTerminalExit}).
  */
+
+/** What a terminal host hands its entry, beyond the shared wiring. */
+export interface TerminalHost {
+  version?: string
+  /**
+   * Anything the host must write before the process ends (the desktop app's pending
+   * credential writes). Run only on the signal path, which never returns to the host's
+   * own exit step; a normal exit leaves it to the host.
+   */
+  flush?: () => Promise<unknown>
+}
+
+/**
+ * Tear down what a terminal client started, once, on a normal exit or a signal
+ * (SIGHUP when the terminal closes, SIGTERM from `kill`, `timeout`, or an editor
+ * stopping `--acp`, SIGINT for the clients that don't read Ctrl-C themselves). Each
+ * entry's `finally` awaits `run()` and then disposes the listeners; a signal runs the
+ * same cleanup and exits with `128 + n`. Background shells lead their own process
+ * groups, so without this they never see the hangup and keep their ports.
+ */
+export function guardTerminalExit(
+  signals: CleanupSignal[],
+  host: Pick<TerminalHost, 'flush'> = {},
+  proc?: SignalProcess
+): SignalCleanup {
+  return installSignalCleanup(
+    async () => {
+      killAllShells()
+      disconnectAllMcp()
+      await lspManager.stopAll()
+    },
+    {
+      signals,
+      // What the host's own exit step does after the entry returns, which a signal skips.
+      beforeSignalExit: async () => {
+        flushRuleUsage()
+        await host.flush?.()
+      },
+      ...(proc ? { proc } : {}),
+      onSignal: (sig) => log.info(`received ${sig}; stopping background shells and servers before exiting`)
+    }
+  )
+}
 
 /**
  * True when stdin carries data piped or redirected in (a pipe, a socket, or a
@@ -453,7 +499,7 @@ function probeDoctor(
  * the desktop app gets it from Electron), since this module is shared by both and
  * neither can read the other's source of truth.
  */
-export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = {}): Promise<number> {
+export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Promise<number> {
   // Interactive mode needs a real terminal for the composer and inline
   // approval prompts. In a pipe/CI there's no TTY to read from — point the
   // user at headless (`-p`) rather than hanging on a dead stdin.
@@ -546,6 +592,9 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
     startScheduler: true
   })
 
+  // Ctrl-C is the TUI's own key (clear the composer, stop a turn), read from the
+  // raw terminal, so only a closed terminal or a kill ends it from outside.
+  const exitGuard = guardTerminalExit(['SIGHUP', 'SIGTERM'], host)
   let code = 1
   try {
     code = await runTui(tui, {
@@ -765,15 +814,14 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
   } finally {
-    killAllShells()
-    disconnectAllMcp()
-    await lspManager.stopAll()
+    await exitGuard.run()
+    exitGuard.dispose()
   }
   return code
 }
 
 /** Run the one-shot headless client to completion. Returns the exit code. */
-export async function runHeadlessEntry(headless: HeadlessOptions, opts: { version?: string } = {}): Promise<number> {
+export async function runHeadlessEntry(headless: HeadlessOptions, opts: TerminalHost = {}): Promise<number> {
   // spawn_session works headless too: children run concurrently in this process
   // and are awaited below so the one-shot exit doesn't kill them mid-run. The
   // scheduler backend is wired without starting timers — a headless run can
@@ -798,6 +846,7 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
         /* a failed update check is a non-event */
       })
   }
+  const exitGuard = guardTerminalExit(['SIGHUP', 'SIGINT', 'SIGTERM'], opts)
   let code = 1
   try {
     code = await runHeadless(headless, {
@@ -858,9 +907,8 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
   } finally {
-    killAllShells()
-    disconnectAllMcp()
-    await lspManager.stopAll()
+    await exitGuard.run()
+    exitGuard.dispose()
   }
   return code
 }
@@ -885,7 +933,7 @@ export function reserveStdoutForProtocol(): (frame: string) => void {
  * Run Houston as an Agent Client Protocol server on stdio (`--acp`) until the
  * editor closes the connection. Returns the exit code.
  */
-export async function runAcpEntry(host: { version?: string } = {}): Promise<number> {
+export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
   const writeFrame = reserveStdoutForProtocol()
   // The editor went away mid-write: there is no one left to serve.
   process.stdout.on('error', () => process.stdin.destroy())
@@ -893,6 +941,7 @@ export async function runAcpEntry(host: { version?: string } = {}): Promise<numb
     notify: (m) => process.stderr.write(`· ${m}\n`),
     startScheduler: false
   })
+  const exitGuard = guardTerminalExit(['SIGHUP', 'SIGINT', 'SIGTERM'], host)
   let code = 0
   try {
     await serveAcp(process.stdin, {
@@ -949,8 +998,8 @@ export async function runAcpEntry(host: { version?: string } = {}): Promise<numb
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
     code = 1
   } finally {
-    killAllShells()
-    disconnectAllMcp()
+    await exitGuard.run()
+    exitGuard.dispose()
   }
   return code
 }
