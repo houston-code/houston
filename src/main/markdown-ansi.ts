@@ -189,28 +189,76 @@ function indentLines(s: string, n: number): string {
  * final yet.
  */
 export function splitFinalizedBlocks(buf: string): { complete: string; rest: string } {
-  const lines = buf.split('\n')
+  const scan = new BlockScanner()
+  scan.advance(buf)
+  return scan.split(buf)
+}
+
+/** An open code fence: a closing fence must use the same char and be at least as long. */
+type Fence = { char: string; len: number } | null
+
+/**
+ * Line-by-line state for finding block boundaries in a growing buffer. Only
+ * complete lines (ended by a newline) are read, each exactly once: a boundary is a
+ * blank line, and a line can only be blank once its newline has arrived, so text
+ * after the last newline never needs reading yet. This keeps a long block (a big
+ * code fence) linear to stream instead of rescanning it on every delta.
+ */
+class BlockScanner {
+  /** Offset of the first line not yet read. */
+  private pos = 0
   // Track the OPEN fence's marker char + length: a closing fence must use the same
   // char and be at least as long (CommonMark). Toggling on any fence marker let a
   // `~~~` line inside a ``` block close the fence, splitting the buffer mid-code-block.
-  let fence: { char: string; len: number } | null = null
-  let lastBoundary = -1 // index of the last blank line outside a fence
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1]
-    if (marker) {
-      if (!fence) fence = { char: marker[0], len: marker.length }
-      else if (marker[0] === fence.char && marker.length >= fence.len) fence = null
-      // else: a different-char or shorter fence inside a code block is just content.
+  private fence: Fence = null
+  /** The last blank line outside a fence: where it starts, and where the line after it starts. */
+  private boundary: { start: number; next: number } | null = null
+
+  /** Read the complete lines of `buf` past the ones already read. */
+  advance(buf: string): void {
+    for (let nl = buf.indexOf('\n', this.pos); nl >= 0; nl = buf.indexOf('\n', this.pos)) {
+      const line = buf.slice(this.pos, nl)
+      const marker = /^\s{0,3}(`{3,}|~{3,})/.exec(line)?.[1]
+      if (marker) {
+        if (!this.fence) this.fence = { char: marker[0], len: marker.length }
+        else if (marker[0] === this.fence.char && marker.length >= this.fence.len) this.fence = null
+        // else: a different-char or shorter fence inside a code block is just content.
+      }
+      // A boundary is a blank line *between* content; a line still being written
+      // (no newline yet) is never one.
+      else if (!this.fence && line.trim() === '') this.boundary = { start: this.pos, next: nl + 1 }
+      this.pos = nl + 1
     }
-    // A boundary is a blank line *between* content. The final split element is the
-    // still-incomplete current line (the trailing "\n" artifact), never a boundary.
-    else if (!fence && line.trim() === '' && i < lines.length - 1) lastBoundary = i
   }
-  if (lastBoundary < 0) return { complete: '', rest: buf }
-  return {
-    complete: lines.slice(0, lastBoundary).join('\n'),
-    rest: lines.slice(lastBoundary + 1).join('\n')
+
+  /**
+   * Split `buf` (the text this scanner has read) at the last boundary: the finalized
+   * blocks before it, and the remainder after it. Nothing is final without one.
+   */
+  split(buf: string): { complete: string; rest: string } {
+    if (!this.boundary) return { complete: '', rest: buf }
+    return {
+      // Up to the newline that ends the line before the boundary, not including it.
+      complete: buf.slice(0, Math.max(0, this.boundary.start - 1)),
+      rest: buf.slice(this.boundary.next)
+    }
+  }
+
+  /**
+   * Drop everything up to the last boundary, which the caller has consumed. The fence
+   * state carries over: a boundary is only ever outside a fence, so reading the rest
+   * afresh would reach the same state.
+   */
+  consumeBoundary(): void {
+    if (!this.boundary) return
+    this.pos -= this.boundary.next
+    this.boundary = null
+  }
+
+  reset(): void {
+    this.pos = 0
+    this.fence = null
+    this.boundary = null
   }
 }
 
@@ -223,6 +271,9 @@ export class MarkdownStream {
   // Whether a block has been printed. Chunks are cut at the reply's blank lines, so
   // each later chunk starts with the blank line that separated it in the source.
   private printed = false
+  // Boundary-finding state for `buf`, kept between pushes so each delta reads only its
+  // own new lines rather than the whole unfinished block again.
+  private readonly scan = new BlockScanner()
   constructor(private readonly opts: MarkdownOpts) {}
 
   private emit(src: string): string {
@@ -233,24 +284,26 @@ export class MarkdownStream {
 
   push(delta: string): string {
     this.buf += delta
-    const { complete, rest } = splitFinalizedBlocks(this.buf)
-    if (!complete.trim()) {
-      this.buf = rest.length < this.buf.length ? rest : this.buf
-      return ''
-    }
+    // A block can only finalize at a blank line, which needs a newline to end it.
+    if (!delta.includes('\n')) return ''
+    this.scan.advance(this.buf)
+    const { complete, rest } = this.scan.split(this.buf)
+    this.scan.consumeBoundary()
     this.buf = rest
-    return this.emit(complete)
+    return complete.trim() ? this.emit(complete) : ''
   }
 
   flush(): string {
     const out = this.buf.trim() ? this.emit(this.buf) : ''
     this.buf = ''
+    this.scan.reset()
     return out
   }
 
   /** Drop the unfinished block without rendering it (text that was taken back). */
   discard(): void {
     this.buf = ''
+    this.scan.reset()
   }
 
   /** True when nothing is buffered — used to decide whether a flush is needed. */

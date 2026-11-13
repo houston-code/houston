@@ -22,7 +22,8 @@ export type RequiredCheck = CheckKind | 'any'
 
 /** The ledger's answer to "did a check of this kind pass this turn?". */
 export interface CheckOracle {
-  passed(kind: RequiredCheck): boolean
+  /** With `afterLastWrite`, only a pass after the turn's last file change counts. */
+  passed(kind: RequiredCheck, opts?: { afterLastWrite?: boolean }): boolean
 }
 
 /** Items that start by making something are about writing it, not running it. */
@@ -77,27 +78,39 @@ export function checksNamedBy(step: string): RequiredCheck[] {
 /** An item marked completed this turn with nothing recorded behind it. */
 export interface TodoGap {
   item: string
+  /** Checks it claims with no passing run this turn. */
   missing: RequiredCheck[]
+  /** Checks it claims whose only passing runs came before a later file change. */
+  stale?: RequiredCheck[]
 }
 
 /**
  * Items that went to `completed` between `before` and `after` (matched by text, so an
  * item already completed earlier is never flagged again) and that claim a check no
- * passing run backs.
+ * passing run backs. A pass counts only if it came after the turn's last file change:
+ * tests that passed before a later edit say nothing about the final code.
  */
 export function todoEvidenceGaps(before: Todo[], after: Todo[], ledger: CheckOracle): TodoGap[] {
   const doneBefore = new Set(before.filter((t) => t.status === 'completed').map((t) => t.content))
   const gaps: TodoGap[] = []
   for (const t of after) {
     if (t.status !== 'completed' || doneBefore.has(t.content)) continue
-    const missing = requiredChecks(t.content).filter((k) => !ledger.passed(k))
-    if (missing.length) gaps.push({ item: t.content, missing })
+    const claims = requiredChecks(t.content)
+    const missing = claims.filter((k) => !ledger.passed(k))
+    const stale = claims.filter((k) => ledger.passed(k) && !ledger.passed(k, { afterLastWrite: true }))
+    if (missing.length || stale.length) gaps.push({ item: t.content, missing, ...(stale.length ? { stale } : {}) })
   }
   return gaps
 }
 
 /** The line todo_write adds to its result for the model, one per gap. */
 export function todoGapNote(g: TodoGap): string {
-  const what = g.missing.map((k) => NEED_TEXT[k]).join(', ')
-  return `[note: "${g.item}" is marked completed, but Houston has no passing ${what} recorded this turn. If it didn't run, keep the item open or say so when you report.]`
+  const what = (kinds: RequiredCheck[]): string => kinds.map((k) => NEED_TEXT[k]).join(', ')
+  const facts: string[] = []
+  if (g.missing.length) facts.push(`Houston has no passing ${what(g.missing)} recorded this turn`)
+  if (g.stale?.length) facts.push(`the last passing ${what(g.stale)} Houston recorded came before a later file change`)
+  const next = g.stale?.length
+    ? 'Run it on the final code, or keep the item open or say so when you report.'
+    : "If it didn't run, keep the item open or say so when you report."
+  return `[note: "${g.item}" is marked completed, but ${facts.join(', and ')}. ${next}]`
 }

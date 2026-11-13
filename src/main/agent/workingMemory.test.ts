@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatMessage } from '@shared/agent'
+import { COMPACTION_SUMMARY_PREFIX, type ChatMessage } from '@shared/agent'
 import {
   PINNED_MEMORY_PREFIX,
   buildPinnedMemory,
@@ -179,6 +179,33 @@ describe('originalTaskIndex', () => {
       ])
     ).toBe(1)
     expect(originalTaskIndex([{ role: 'assistant', content: 'hi' }])).toBe(-1)
+  })
+
+  it('skips the summary /compact wrote into the log: that is not the user\'s task', () => {
+    // After /compact the log opens on the summary pair, so the first user message is
+    // Houston's summary, not anything the user wrote.
+    const summary: ChatMessage[] = [
+      { role: 'user', content: `${COMPACTION_SUMMARY_PREFIX}\n\n- The user wanted a CSV exporter; it is done.` },
+      { role: 'assistant', content: 'Understood.' }
+    ]
+    const msgs: ChatMessage[] = [
+      ...summary,
+      { role: 'user', content: 'Now add a JSON exporter' },
+      toolCall('read_file', { path: 'src/export.ts' }),
+      { role: 'tool', content: 'contents', toolCallId: 'c-read_file', toolName: 'read_file' },
+      { role: 'assistant', content: 'done' }
+    ]
+    expect(originalTaskIndex(msgs)).toBe(2)
+    expect(originalTask(msgs)).toBe('Now add a JSON exporter')
+
+    const block = buildPinnedMemory(msgs)
+    expect(block).toContain('Original task:\nNow add a JSON exporter')
+    expect(block).not.toContain(COMPACTION_SUMMARY_PREFIX)
+    expect(block).not.toContain('CSV exporter')
+
+    // A log that is nothing but the summary has no task of the user's to pin.
+    expect(originalTaskIndex(summary)).toBe(-1)
+    expect(buildPinnedMemory(summary)).toBe('')
   })
 })
 

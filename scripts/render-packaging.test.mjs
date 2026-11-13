@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { aurSrcinfo, isReleaseVersion, renderAll, renderTemplate, validate } from './render-packaging.mjs'
@@ -44,6 +44,18 @@ describe('renderTemplate', () => {
   })
 })
 
+/**
+ * Run a wrapper script with its exec line swapped for a print of NODE_COMPILE_CACHE,
+ * under exactly `env` (plus PATH), and return what Node would have been given.
+ */
+function wrapperCache(wrapper, env) {
+  const script = wrapper.replace(/^exec .*$/m, 'printf %s "${NODE_COMPILE_CACHE-unset}"')
+  expect(script).not.toBe(wrapper)
+  const r = spawnSync('sh', ['-c', script], { encoding: 'utf8', env: { PATH: process.env.PATH, ...env } })
+  expect(r.stderr).toBe('')
+  return r.stdout
+}
+
 describe('renderAll', () => {
   const out = renderAll(params)
 
@@ -55,6 +67,25 @@ describe('renderAll', () => {
     expect(rb).not.toMatch(/^\s*version /m)
     expect(rb).toContain(`sha256 "${params.sha256}"`)
     expect(rb).toContain('depends_on "node"')
+  })
+
+  it('Homebrew wrapper points Node at a per-OS compile cache unless the user set one', () => {
+    const rb = out['homebrew/houston.rb']
+    expect(rb).toContain('"$HOME/Library/Caches/houston/compile-cache"')
+    expect(rb).toContain('"${XDG_CACHE_HOME:-$HOME/.cache}/houston/compile-cache"')
+    const guard = 'if [ -z "${NODE_COMPILE_CACHE+set}" ]; then export NODE_COMPILE_CACHE="#{cache_dir}"; fi\n'
+    expect(rb).toContain(guard)
+    expect(rb.indexOf(guard)).toBeLessThan(rb.indexOf('exec "#{formula_opt_bin("node")}/node"'))
+    // The same line as the shell sees it once Ruby fills in each OS's directory.
+    for (const [dirExpr, env, expected] of [
+      ['$HOME/Library/Caches/houston/compile-cache', { HOME: '/mac/u' }, '/mac/u/Library/Caches/houston/compile-cache'],
+      ['${XDG_CACHE_HOME:-$HOME/.cache}/houston/compile-cache', { HOME: '/home/u' }, '/home/u/.cache/houston/compile-cache'],
+    ]) {
+      const wrapper = `#!/bin/bash\n${guard.replace('#{cache_dir}', dirExpr)}exec node\n`
+      expect(wrapperCache(wrapper, env)).toBe(expected)
+      expect(wrapperCache(wrapper, { ...env, NODE_COMPILE_CACHE: '/mine' })).toBe('/mine')
+      expect(wrapperCache(wrapper, { ...env, NODE_COMPILE_CACHE: '' })).toBe('')
+    }
   })
 
   it('pins the release asset and hash in the PKGBUILD', () => {
@@ -86,6 +117,34 @@ describe('renderAll', () => {
     expect(pkgbuild).toContain('pkgname=houston-bin\n')
     expect(pkgbuild).toContain('/usr/lib/houston/houston-cli.cjs')
     expect(pkgbuild).toContain('"${pkgdir}/usr/bin/houston"')
+  })
+
+  it('PKGBUILD wrapper points Node at a compile cache unless the user set one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-aur-pkg-'))
+    try {
+      const pkgbuild = join(dir, 'PKGBUILD')
+      writeFileSync(pkgbuild, out['aur/PKGBUILD'])
+      const pkgdir = join(dir, 'pkg')
+      mkdirSync(join(pkgdir, 'usr/bin'), { recursive: true })
+      // Run the real package() with install/chmod stubbed (BSD install lacks -D), so the
+      // wrapper under test is the exact text makepkg writes.
+      const r = spawnSync(
+        'bash',
+        ['-c', 'install() { :; }; chmod() { :; }; source "$1"; pkgdir="$2"; package', 'bash', pkgbuild, pkgdir],
+        { encoding: 'utf8' }
+      )
+      expect(r.stderr).toBe('')
+      const wrapper = readFileSync(join(pkgdir, 'usr/bin/houston'), 'utf8')
+      expect(wrapper.startsWith('#!/bin/sh\n')).toBe(true)
+      expect(wrapper).toContain('exec /usr/bin/node /usr/lib/houston/houston-cli.cjs "$@"\n')
+      expect(wrapper.indexOf('NODE_COMPILE_CACHE')).toBeLessThan(wrapper.indexOf('exec '))
+      expect(wrapperCache(wrapper, { HOME: '/home/u' })).toBe('/home/u/.cache/houston/compile-cache')
+      expect(wrapperCache(wrapper, { HOME: '/home/u', XDG_CACHE_HOME: '/xdg' })).toBe('/xdg/houston/compile-cache')
+      expect(wrapperCache(wrapper, { HOME: '/home/u', NODE_COMPILE_CACHE: '/mine' })).toBe('/mine')
+      expect(wrapperCache(wrapper, { HOME: '/home/u', NODE_COMPILE_CACHE: '' })).toBe('')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 
   it('.SRCINFO validates its inputs too', () => {
