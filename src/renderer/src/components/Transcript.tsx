@@ -22,7 +22,9 @@ import { rewindTargets, turnStatsByReply, type DisplayItem, type RewindItemTarge
 import { fullTime, parseAt, relativeTime, turnStatsParts, useNow, type TurnStats } from '../lib/messageMeta'
 import type { RewindMode } from '@shared/rewind'
 import { Popover } from './Popover'
-import { groupItems } from '../lib/toolDisplay'
+import { groupItems, type RenderNode } from '../lib/toolDisplay'
+import { ItemBoundary } from './ItemBoundary'
+import { countsAsReply } from '@shared/chatStatus'
 import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
 import { useTransientFlag } from '../hooks/useTransientFlag'
@@ -724,7 +726,10 @@ export function Transcript({
   // Each reply's position among the replies, by item id ("Mark unread from here").
   const replyNumbers = useMemo(() => {
     const out = new Map<string, number>()
-    for (const it of items) if (it.kind === 'assistant') out.set(it.id, out.size)
+    // Counted by the same rule main numbers saved replies with (forkCut, the unread
+    // anchor), so "the Nth reply" names one message on both sides.
+    for (const it of items)
+      if (it.kind === 'assistant' && countsAsReply(it.text, !!it.reasoning)) out.set(it.id, out.size)
     return out
   }, [items])
 
@@ -741,6 +746,95 @@ export function Transcript({
     if (last.kind === 'assistant') return last.item.streaming ? 'The agent is responding…' : 'Response ready.'
     return ''
   }, [nodes])
+
+  const renderNode = (node: RenderNode): ReactNode => {
+    switch (node.kind) {
+      case 'user': {
+        const target = stableRewind ? targets.get(node.item.id) : undefined
+        return (
+          <UserBubble
+            key={node.id}
+            text={node.item.text}
+            images={node.item.images}
+            isSummary={node.item.isSummary}
+            invokedAs={node.item.invokedAs}
+            at={node.item.at}
+            rewindTarget={target}
+            rewind={stableRewind}
+          />
+        )
+      }
+      case 'assistant': {
+        const n = replyNumbers.get(node.item.id)
+        const reply = (
+          <AssistantMessage
+            key={node.id}
+            text={node.item.text}
+            streaming={node.item.streaming}
+            reasoning={node.item.reasoning}
+            replyNumber={n}
+            onMarkUnreadFrom={markUnreadFrom}
+            onForkFrom={forkFrom}
+            onRetry={node.item.id === lastReplyId ? retryLast : undefined}
+            at={node.item.at}
+            turn={turnStats.get(node.item.id)}
+          />
+        )
+        if (node.item.id !== newFromId) return reply
+        return (
+          <Fragment key={node.id}>
+            <div ref={newRef} className="transcript__new" role="separator" aria-label="New since you last looked">
+              New
+            </div>
+            {reply}
+          </Fragment>
+        )
+      }
+      case 'toolgroup':
+        return <ToolGroup key={node.id} items={node.items} onApprove={approve} />
+      case 'question':
+        return <QuestionCard key={node.id} item={node.item} onAnswer={onAnswer} />
+      case 'proposal':
+        return <ProposalCard key={node.id} item={node.item} handlers={proposals} />
+      case 'elicitation':
+        return <ElicitationCard key={node.id} item={node.item} onResolve={onElicit} />
+      case 'receipt':
+        return <Receipt key={node.id} receipt={node.item.receipt} />
+      case 'plan':
+        return (
+          <PlanMarker
+            key={node.id}
+            title={node.item.plan.title}
+            status={node.item.status}
+            onOpen={onOpenPlan ? () => onOpenPlan(node.item.id) : undefined}
+          />
+        )
+      case 'notice':
+        return node.item.runtime ? (
+          <RuntimeNotice
+            key={node.id}
+            text={node.item.text}
+            runtime={node.item.runtime}
+            onRunInTerminal={onRunInTerminal}
+          />
+        ) : (
+          <div key={node.id} className={`notice notice--${node.item.tone}`}>
+            {node.item.text}
+            {node.item.openConversationId && onOpenConversation && (
+              <button
+                type="button"
+                className="notice__link"
+                onClick={() => onOpenConversation(node.item.openConversationId as string)}
+              >
+                Open that chat
+              </button>
+            )}
+          </div>
+        )
+      default:
+        return null
+    }
+  }
 
   return (
     <TranscriptPrefsContext.Provider value={prefs}>
@@ -770,94 +864,13 @@ export function Transcript({
       </div>
       <div className="transcript" ref={containerRef} onScroll={handleScroll}>
         <div className="transcript__inner">
-          {nodes.map((node) => {
-            switch (node.kind) {
-              case 'user': {
-                const target = stableRewind ? targets.get(node.item.id) : undefined
-                return (
-                  <UserBubble
-                    key={node.id}
-                    text={node.item.text}
-                    images={node.item.images}
-                    isSummary={node.item.isSummary}
-                    invokedAs={node.item.invokedAs}
-                    at={node.item.at}
-                    rewindTarget={target}
-                    rewind={stableRewind}
-                  />
-                )
-              }
-              case 'assistant': {
-                const n = replyNumbers.get(node.item.id)
-                const reply = (
-                  <AssistantMessage
-                    key={node.id}
-                    text={node.item.text}
-                    streaming={node.item.streaming}
-                    reasoning={node.item.reasoning}
-                    replyNumber={n}
-                    onMarkUnreadFrom={markUnreadFrom}
-                    onForkFrom={forkFrom}
-                    onRetry={node.item.id === lastReplyId ? retryLast : undefined}
-                    at={node.item.at}
-                    turn={turnStats.get(node.item.id)}
-                  />
-                )
-                if (node.item.id !== newFromId) return reply
-                return (
-                  <Fragment key={node.id}>
-                    <div ref={newRef} className="transcript__new" role="separator" aria-label="New since you last looked">
-                      New
-                    </div>
-                    {reply}
-                  </Fragment>
-                )
-              }
-              case 'toolgroup':
-                return <ToolGroup key={node.id} items={node.items} onApprove={approve} />
-              case 'question':
-                return <QuestionCard key={node.id} item={node.item} onAnswer={onAnswer} />
-              case 'proposal':
-                return <ProposalCard key={node.id} item={node.item} handlers={proposals} />
-              case 'elicitation':
-                return <ElicitationCard key={node.id} item={node.item} onResolve={onElicit} />
-              case 'receipt':
-                return <Receipt key={node.id} receipt={node.item.receipt} />
-              case 'plan':
-                return (
-                  <PlanMarker
-                    key={node.id}
-                    title={node.item.plan.title}
-                    status={node.item.status}
-                    onOpen={onOpenPlan ? () => onOpenPlan(node.item.id) : undefined}
-                  />
-                )
-              case 'notice':
-                return node.item.runtime ? (
-                  <RuntimeNotice
-                    key={node.id}
-                    text={node.item.text}
-                    runtime={node.item.runtime}
-                    onRunInTerminal={onRunInTerminal}
-                  />
-                ) : (
-                  <div key={node.id} className={`notice notice--${node.item.tone}`}>
-                    {node.item.text}
-                    {node.item.openConversationId && onOpenConversation && (
-                      <button
-                        type="button"
-                        className="notice__link"
-                        onClick={() => onOpenConversation(node.item.openConversationId as string)}
-                      >
-                        Open that chat
-                      </button>
-                    )}
-                  </div>
-                )
-              default:
-                return null
-            }
-          })}
+          {nodes.map((node) => (
+            // A row that fails to render shows a notice in its place; the rest of
+            // the chat (and the app) keeps working. Retried when its item changes.
+            <ItemBoundary key={node.id} resetKey={node.kind === 'toolgroup' ? node.items : node.item}>
+              {renderNode(node)}
+            </ItemBoundary>
+          ))}
         </div>
       </div>
       {newAbove && (
