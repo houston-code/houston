@@ -245,9 +245,9 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'htmlVisuals'],
+        keys: ['theme', 'accentColor', 'htmlVisuals'],
         Component: AppearanceSection,
-        keywords: ['theme', 'dark mode', 'light mode', 'colors', 'visuals', 'html']
+        keywords: ['theme', 'dark mode', 'light mode', 'colors', 'visuals', 'html', 'accent', 'highlight color']
       }
     ]
   },

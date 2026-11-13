@@ -4545,6 +4545,24 @@ describe('themes', () => {
     expect(t.text()).not.toContain('\x1b[36m')
   })
 
+  it('starts in the light theme when the terminal background is light and none is saved', async () => {
+    const { d } = deps(done)
+    const t = fakeIo([null])
+    d.io = t.io
+    await runTui({ ...opts, color: true, detectedTheme: 'light' }, d)
+    expect(t.text()).toContain(THEMES.light.cyan)
+    expect(t.text()).not.toContain(THEMES.default.cyan)
+  })
+
+  it('keeps a saved theme over the detected background', async () => {
+    const { d } = deps(done, { tuiTheme: 'dark' })
+    const t = fakeIo([null])
+    d.io = t.io
+    await runTui({ ...opts, color: true, detectedTheme: 'light' }, d)
+    expect(t.text()).toContain(THEMES.dark.cyan)
+    expect(t.text()).not.toContain(THEMES.light.cyan)
+  })
+
   it('ignores a saved theme that is not one, rather than failing to start', async () => {
     const { d } = deps(done, { tuiTheme: 'from-the-future' })
     const t = fakeIo([null])

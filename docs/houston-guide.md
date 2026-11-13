@@ -499,12 +499,14 @@ same thing instead of being sent to the model.
 ### Terminal themes
 
 `/theme` lists the terminal's palettes, and `/theme <name>` switches. Your choice is
-remembered.
+remembered. Until you pick one, Houston asks the terminal for its background color
+when it starts (or reads `COLORFGBG`) and uses `light` on a light background; a
+terminal that doesn't answer gets `default`.
 
 | Theme | For |
 | --- | --- |
 | `dark` | bright foregrounds for a dark background |
-| `light` | readable on white (which a dark theme's bright yellow isn't) |
+| `light` | readable on white: darker yellow and teal instead of colors that wash out |
 | `colorblind` | maps a diff's red and green to orange and blue, for the most common form of color blindness |
 | `mono` | no color at all |
 | `default` | the default palette |
@@ -2556,6 +2558,11 @@ sidebar) or `Esc` returns to the chat.
 | **App** | General, Appearance, Keyboard |
 | **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (whether new chats start in a worktree, and additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |
+
+**Appearance** also has an **Accent color**: Default (blue in dark, indigo in light),
+Violet, Green, Orange, or Pink. It colors buttons, links, the selected chat, and your
+messages in light mode, with a shade for each of light and dark that keeps text
+readable.
 
 **Check for Updates…** is also in the app menu on macOS, and the Help menu on Windows
 and Linux.

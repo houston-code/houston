@@ -1585,7 +1585,7 @@ describe('SettingsModal', () => {
       expect(document.documentElement.dataset.theme).toBe('dark')
 
       // Picking a new option applies immediately.
-      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Color theme' }), { target: { value: 'light' } })
       expect(document.documentElement.dataset.theme).toBe('light')
     })
 
@@ -1593,7 +1593,7 @@ describe('SettingsModal', () => {
       const api = installApi()
       const { onSaved, unmount } = renderModal({ theme: 'dark' })
       fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
-      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Color theme' }), { target: { value: 'light' } })
 
       // The choice is saved and propagated upward without a Save step.
       await waitFor(() => expect(onSaved).toHaveBeenCalled())
@@ -1670,5 +1670,18 @@ describe('SettingsModal: web search key', () => {
     const link = screen.getByRole('link', { name: 'api-dashboard.search.brave.com' })
     expect(link).toHaveAttribute('href', 'https://api-dashboard.search.brave.com')
     expect(link).toHaveAttribute('target', '_blank')
+  })
+})
+
+describe('SettingsModal accent color', () => {
+  afterEach(() => document.documentElement.removeAttribute('data-accent'))
+
+  it('previews the accent on the document root and saves it', async () => {
+    const api = installApi()
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Accent color' }), { target: { value: 'violet' } })
+    expect(document.documentElement.getAttribute('data-accent')).toBe('violet')
+    await waitFor(() => expect(api.saveSettings.mock.calls.at(-1)?.[0]).toMatchObject({ accentColor: 'violet' }))
   })
 })

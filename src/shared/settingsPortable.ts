@@ -1,5 +1,5 @@
 import type { AppSettings, Hook, PermissionRule } from './types'
-import { APPROVAL_POLICIES, HOOK_EVENTS } from './types'
+import { ACCENT_COLORS, APPROVAL_POLICIES, HOOK_EVENTS } from './types'
 import {
   DEFAULT_ITERATION_CEILING,
   DEFAULT_MAX_ITERATIONS,
@@ -45,6 +45,7 @@ export const PREFERENCE_DEFAULTS = {
   desktopNotifications: true,
   appBadge: true,
   theme: 'system',
+  accentColor: 'default',
   htmlVisuals: false,
   memoryEnabled: true,
   keybindings: {},
@@ -138,6 +139,7 @@ const CHECKS: Record<Exclude<PreferenceKey, 'permissionRules' | 'hooks'>, (v: un
   desktopNotifications: (v) => typeof v === 'boolean',
   appBadge: (v) => typeof v === 'boolean',
   theme: (v) => v === 'system' || v === 'dark' || v === 'light',
+  accentColor: (v) => typeof v === 'string' && (ACCENT_COLORS as readonly string[]).includes(v),
   htmlVisuals: (v) => typeof v === 'boolean',
   memoryEnabled: (v) => typeof v === 'boolean',
   keybindings: (v) => isObject(v) && Object.values(v).every((b) => b === null || typeof b === 'string'),

@@ -108,6 +108,65 @@
   --syn-attr: #8a5c00;
   --syn-meta: #0e7490;
 }
+/* ---- Accent color (Settings > Appearance) ----
+   Applied as data-accent on the root by applyAccent; with none set the theme's own
+   accent above stays. Each preset has a dark and a light shade: on dark, --accent is
+   bright enough to read on the surfaces and --accent-fill deep enough for white text;
+   on light, --accent itself carries white text (the user's bubbles). syntaxContrast.
+   test.ts holds every preset to AA both ways. */
+:root:not([data-theme='light'])[data-accent='violet'] {
+  --accent: #a78bfa;
+  --accent-hover: #c4b5fd;
+  --accent-fill: #7c3aed;
+  --accent-fill-hover: #6d28d9;
+}
+:root[data-theme='light'][data-accent='violet'] {
+  --accent: #6d28d9;
+  --accent-hover: #5b21b6;
+  --accent-fill: #6d28d9;
+  --accent-fill-hover: #5b21b6;
+  --shadow-accent: 0 4px 12px color-mix(in srgb, #6d28d9 25%, transparent);
+}
+:root:not([data-theme='light'])[data-accent='green'] {
+  --accent: #34d399;
+  --accent-hover: #6ee7b7;
+  --accent-fill: #047857;
+  --accent-fill-hover: #065f46;
+}
+:root[data-theme='light'][data-accent='green'] {
+  --accent: #047857;
+  --accent-hover: #065f46;
+  --accent-fill: #047857;
+  --accent-fill-hover: #065f46;
+  --shadow-accent: 0 4px 12px color-mix(in srgb, #047857 25%, transparent);
+}
+:root:not([data-theme='light'])[data-accent='orange'] {
+  --accent: #fb923c;
+  --accent-hover: #fdba74;
+  --accent-fill: #c2410c;
+  --accent-fill-hover: #9a3412;
+}
+:root[data-theme='light'][data-accent='orange'] {
+  --accent: #b23c0a;
+  --accent-hover: #9a3412;
+  --accent-fill: #b23c0a;
+  --accent-fill-hover: #9a3412;
+  --shadow-accent: 0 4px 12px color-mix(in srgb, #b23c0a 25%, transparent);
+}
+:root:not([data-theme='light'])[data-accent='pink'] {
+  --accent: #f472b6;
+  --accent-hover: #f9a8d4;
+  --accent-fill: #be185d;
+  --accent-fill-hover: #9d174d;
+}
+:root[data-theme='light'][data-accent='pink'] {
+  --accent: #be185d;
+  --accent-hover: #9d174d;
+  --accent-fill: #be185d;
+  --accent-fill-hover: #9d174d;
+  --shadow-accent: 0 4px 12px color-mix(in srgb, #be185d 25%, transparent);
+}
+
 /* Respect the OS "reduce motion" preference: disable the blink/spin animations
    and collapse transitions for users who are sensitive to motion. */
 @media (prefers-reduced-motion: reduce) {

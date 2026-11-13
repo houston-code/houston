@@ -130,6 +130,7 @@ describe('import checks per preference', () => {
     ['desktopNotifications', false, null],
     ['appBadge', false, 'yes'],
     ['theme', 'dark', 'sepia'],
+    ['accentColor', 'green', 'chartreuse'],
     ['htmlVisuals', true, {}],
     ['memoryEnabled', false, 'yes'],
     ['keybindings', { 'open-settings': 'Mod+,', 'toggle-sidebar': null }, { 'open-settings': 5 }],

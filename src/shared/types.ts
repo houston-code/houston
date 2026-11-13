@@ -775,6 +775,8 @@ export interface AppSettings {
   appBadge?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
+  /** Accent color preset. Absent = 'default' (the theme's own accent). */
+  accentColor?: AccentColor
   /**
    * The interactive terminal's color theme. Separate from `theme` above, which is
    * the desktop app's light/dark preference: the terminal's palettes are ANSI
@@ -933,6 +935,10 @@ export interface EnvKeyOffer {
   envVar: string
   last4: string
 }
+
+/** Accent color presets (Settings > Appearance); 'default' is each theme's own. */
+export const ACCENT_COLORS = ['default', 'violet', 'green', 'orange', 'pink'] as const
+export type AccentColor = (typeof ACCENT_COLORS)[number]
 
 /** Result of answering that notice. `error` is set (and nothing is persisted) when the import write failed. */
 export interface LegacyRulesDecideResult {

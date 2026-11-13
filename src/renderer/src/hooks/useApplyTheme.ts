@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
-import { applyTheme, type Theme } from '../lib/theme'
+import type { AccentColor } from '@shared/types'
+import { applyAccent, applyTheme, type Theme } from '../lib/theme'
 
 /**
  * Apply `theme` to the document root and keep it in sync with the OS while on
@@ -16,4 +17,11 @@ export function useApplyTheme(theme: Theme): void {
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
   }, [theme])
+}
+
+/** Apply the accent preset to the document root (app shell and Settings preview). */
+export function useApplyAccent(accent: AccentColor | undefined): void {
+  useEffect(() => {
+    applyAccent(accent)
+  }, [accent])
 }
