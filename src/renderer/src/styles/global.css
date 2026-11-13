@@ -2114,6 +2114,20 @@ body.is-resizing {
 .connect-model__saved-ok {
   color: var(--ok);
 }
+/* A local host found answering when the panel opened. */
+.connect-model__tile-live {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  vertical-align: middle;
+}
+/* "More providers" sits at the start of the action row, apart from Back / Connect. */
+.connect-model__more {
+  margin-right: auto;
+}
 .connect-model__saved {
   display: flex;
   align-items: center;

@@ -2472,7 +2472,11 @@ On first launch, the welcome screen shows a three-step **Get started** checklist
 
 1. **Connect a model.** Paste an API key for Anthropic, OpenAI, or Gemini (it's checked
    with a live model listing before it's saved), or point at a local Ollama or LM
-   Studio server.
+   Studio server. The panel says which model a new key starts on, and shows what a key
+   looks like. When it opens it looks for Ollama and LM Studio on their usual ports and
+   marks the ones already running, without saving anything. **More providers** opens
+   Settings > Providers & Models for OpenRouter, Bedrock, Vertex, Azure, other hosts,
+   and custom endpoints.
 2. **Open a project folder.**
 3. **Send a first task.** When only this step is left, the cursor moves into the
    message box (which glows) and the step suggests a task: "Explain how this project is

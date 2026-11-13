@@ -49,6 +49,13 @@ function initialModel(settings: AppSettings, p: ProviderConfig | undefined): str
   return pickDefaultModel(p) ?? p.models[0]?.id ?? ''
 }
 
+/** What a key looks like, per built-in cloud provider, as the key box's placeholder. */
+const KEY_SHAPE: Record<string, string> = {
+  anthropic: 'sk-ant-…',
+  openai: 'sk-…',
+  gemini: 'AIza…'
+}
+
 const LOCAL_HINT: Record<string, string> = {
   ollama: 'Start Ollama and pull a model (for example, ollama pull llama3.1), then check again.',
   lmstudio: 'Open LM Studio, load a model, and start its local server, then check again.'
@@ -71,9 +78,11 @@ export interface ConnectModelProps {
    */
   onConnected: (fresh: AppSettings, providerId: string, model?: string) => void
   onBack: () => void
+  /** Open Settings on the providers page, for hosts and endpoints beyond the tiles. */
+  onMoreProviders?: () => void
 }
 
-export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProps): JSX.Element {
+export function ConnectModel({ settings, onConnected, onBack, onMoreProviders }: ConnectModelProps): JSX.Element {
   const tiles = Object.keys(TILE_LABEL)
     .map((id) => settings.providers.find((p) => p.id === id))
     .filter((p): p is ProviderConfig => !!p)
@@ -98,6 +107,27 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
   // The platform, when a save failed because the OS secure store is unusable.
   const [storageBlocked, setStorageBlocked] = useState<string | null>(null)
 
+  // Local hosts found answering when the panel opened, with how many models each has.
+  // A quiet look only: nothing is saved until the user picks the tile and connects.
+  const [running, setRunning] = useState<Record<string, number>>({})
+  useEffect(() => {
+    let live = true
+    for (const p of tiles) {
+      if (p.requiresKey || isReady(p)) continue
+      void window.api
+        .listModels(p.id)
+        .then((models) => {
+          if (live && models.length > 0) setRunning((r) => ({ ...r, [p.id]: models.length }))
+        })
+        .catch(() => undefined)
+    }
+    return () => {
+      live = false
+    }
+    // Mount only: one look per opening of the panel.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const tilesRef = useRef<HTMLDivElement>(null)
   const keyRef = useRef<HTMLInputElement>(null)
   // The panel replaces the checklist whose button opened it, so focus would drop to
@@ -109,6 +139,12 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
   const provider = tiles.find((p) => p.id === providerId)
   const local = provider ? !provider.requiresKey : false
   const showReady = provider !== undefined && isReady(provider) && !replacing
+  // The model a first key on this provider will start on, named before connecting.
+  const startDefault = provider && !local ? pickDefaultModel(provider) : undefined
+  const startModel =
+    provider && startDefault
+      ? (provider.models.find((m) => m.id === startDefault)?.label ?? modelDisplayName(provider.kind, startDefault))
+      : null
 
   const choose = (id: string): void => {
     setProviderId(id)
@@ -262,14 +298,19 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
             onClick={() => choose(p.id)}
           >
             {TILE_LABEL[p.id]}
-            {isReady(p) && (
+            {isReady(p) ? (
               <>
                 <span className="connect-model__tile-ok" aria-hidden="true">
                   {' '}✓
                 </span>
                 <span className="sr-only"> (connected)</span>
               </>
-            )}
+            ) : running[p.id] ? (
+              <>
+                <span className="connect-model__tile-live" aria-hidden="true" />
+                <span className="sr-only"> (running)</span>
+              </>
+            ) : null}
           </button>
         ))}
       </div>
@@ -325,6 +366,7 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
               autoComplete="off"
               spellCheck={false}
               value={key}
+              placeholder={KEY_SHAPE[providerId]}
               aria-invalid={error !== null}
               aria-describedby={error ? 'connect-model-error' : 'connect-model-note'}
               onChange={(e) => {
@@ -341,12 +383,27 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
                 </a>
               )}
             </p>
+            {startModel && (
+              <p className="connect-model__note">
+                You&rsquo;ll start on <strong>{startModel}</strong>. Switch any time from the model
+                picker above the message box.
+              </p>
+            )}
           </>
         )}
         {!showReady && local && (
           <p className="connect-model__note">
-            Houston will look for {provider?.label.replace(/^Local\W+/, '')} at{' '}
-            <code>{provider?.baseUrl}</code>.
+            {running[providerId] ? (
+              <>
+                {providerShortName(provider!)} is running at <code>{provider?.baseUrl}</code> with{' '}
+                {running[providerId]} model{running[providerId] === 1 ? '' : 's'}.
+              </>
+            ) : (
+              <>
+                Houston will look for {provider?.label.replace(/^Local\W+/, '')} at{' '}
+                <code>{provider?.baseUrl}</code>.
+              </>
+            )}
           </p>
         )}
 
@@ -358,6 +415,11 @@ export function ConnectModel({ settings, onConnected, onBack }: ConnectModelProp
         {storageBlocked && <SecureStorageNotice platform={storageBlocked} />}
 
         <div className="onboard-card__actions">
+          {onMoreProviders && (
+            <button type="button" className="connect-model__link connect-model__more" onClick={onMoreProviders}>
+              More providers
+            </button>
+          )}
           <button type="button" className="btn btn--sm" onClick={onBack}>
             Back
           </button>
