@@ -110,10 +110,32 @@ export function regressions(verdicts: BaselineVerdict[]): Extract<BaselineVerdic
  * validation: that one stops the known cause, this one stops the CONSEQUENCE of
  * any cause, including ones not thought of yet. It really happened — a
  * set-but-empty `HOUSTON_EVAL_MODEL` produced exactly this file.
+ *
+ * `errored` is the partial form of the same problem: failed attempts whose run
+ * ended on an error event (the provider refused the call, the harness threw)
+ * rather than on a result. Those zeros measure the failure, not the model, and
+ * once frozen they can never regress. It really happened too: a provider account
+ * ran out of credit two thirds of the way through a recording, and the last nine
+ * tasks were written as 0 beside twenty real scores.
  */
-export function assertRecordable(scores: TaskScore[]): void {
+export function assertRecordable(scores: TaskScore[], errored: Array<{ taskId: string; attempts: number }> = []): void {
   if (scores.length === 0) {
     throw new Error('Refusing to record a baseline with no tasks — nothing ran.')
+  }
+  if (errored.length > 0) {
+    const attempts = errored.reduce((n, e) => n + e.attempts, 0)
+    throw new Error(
+      [
+        `Refusing to record a baseline: ${attempts} attempt(s) across ${errored.length} task(s) ended in a run error, not a result.`,
+        `Tasks: ${errored.map((e) => e.taskId).join(', ')}`,
+        '',
+        'A provider or harness failure (no credit, a rate limit, an outage, a bad key) is not',
+        'a score. Recording it would freeze those tasks at a number the model never earned,',
+        'and a task frozen at 0 can never regress.',
+        '',
+        'Fix the cause and re-record.'
+      ].join('\n')
+    )
   }
   if (scores.every((s) => s.passRate === 0)) {
     throw new Error(

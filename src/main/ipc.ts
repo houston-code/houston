@@ -48,6 +48,7 @@ import {
   getSettings,
   saveSettings,
   rememberWorkspace,
+  openWorkspaceFolder,
   rememberModel,
   workspacePickerStartDir,
   getProvider,
@@ -120,6 +121,7 @@ import {
 } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal, killTerminalsOf } from './terminal'
 import { log } from './logger'
+import { dismissEnvKeyOffers, dismissedEnvKeyOffers, envKeyOffers, envKeyValue } from './envKeys'
 import { setMenuState, setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
 import { compactConversationNow } from './agent/compact'
@@ -180,6 +182,11 @@ import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualP
 
 /** A preferences export is a few KB; anything past this is not one. */
 const MAX_SETTINGS_FILE_BYTES = 2_000_000
+
+/** Whether a usable key is stored for the provider, as settings report it. */
+function providerHasKey(providerId: string): boolean {
+  return getSettings().providers.some((p) => p.id === providerId && p.hasKey === true)
+}
 
 /** Longest pasted key accepted by testKey; real provider keys are far shorter. */
 const MAX_TEST_KEY_LENGTH = 4096
@@ -662,6 +669,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     return dir
   })
 
+  // Open a folder by path (a recent folder, or one dropped on the window). Main checks
+  // it is an existing directory; anything else (a dropped file, a vanished recent) is null.
+  handle(IPC.workspaceOpen, (_event, path: unknown): string | null => openWorkspaceFolder(path))
+
   // Pick a directory without recording it as a recent workspace (used to add an
   // extra allowed root in Settings).
   handle(IPC.directoryPick, async (event): Promise<string | null> => {
@@ -954,6 +965,32 @@ export function registerIpc(ready?: Promise<unknown>): void {
     setKey(providerId, key)
     await flushSecrets()
     return getSettings()
+  })
+
+  // API keys found in this app's environment, offered for the secure store (envKeys.ts).
+  // Only the provider, the variable's name and the key's last four characters cross to
+  // the renderer; storing one takes the user's "Use it" and a live check of the key.
+  handle(IPC.envKeyOffers, (_event, scope: unknown) =>
+    envKeyOffers(
+      process.env,
+      { providers: getSettings().providers, hasKey: providerHasKey, dismissed: dismissedEnvKeyOffers() },
+      scope === 'connect'
+    )
+  )
+  handle(IPC.envKeyImport, async (_event, providerId: unknown): Promise<AppSettings> => {
+    if (typeof providerId !== 'string') throw new Error('Invalid provider.')
+    const key = envKeyValue(process.env, providerId)
+    if (!key) throw new Error('That key is no longer in the environment.')
+    // Never replace a stored key: the offer is only for a provider without one.
+    if (providerHasKey(providerId)) throw new Error('A key is already saved for this provider.')
+    await testProviderKey(providerId, key)
+    setKey(providerId, key)
+    await flushSecrets()
+    log.info(`stored the ${providerId} API key from the environment, at the user's request`)
+    return getSettings()
+  })
+  handle(IPC.envKeyDismiss, (_event, providerIds: unknown) => {
+    dismissEnvKeyOffers(Array.isArray(providerIds) ? providerIds : [])
   })
 
   handle(IPC.settingsDeleteKey, async (_event, providerId: string) => {
@@ -1307,7 +1344,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
       role: 'user',
       content: req.userText,
       ...(images.length ? { images } : {}),
-      ...(invokedAs ? { invokedAs } : {})
+      ...(invokedAs ? { invokedAs } : {}),
+      // When it was sent, for the transcript's timestamp.
+      at: new Date().toISOString()
     }
     // A resend of a message whose turn failed replaces it rather than repeating it.
     const messages = appendUserTurn(conv.messages, userMessage)

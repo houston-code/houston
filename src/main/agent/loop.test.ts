@@ -292,7 +292,8 @@ const {
   MAX_PROPOSALS_PER_TURN,
   earlierProposalTitles,
   childReportsNote,
-  withUnansweredRecord
+  withUnansweredRecord,
+  nativeWebSearchFor
 } = await import('./loop')
 
 /** A provider that replays one pre-scripted turn per streamChat call. */
@@ -1112,7 +1113,14 @@ describe('startRun', () => {
         expect(r.events.find((e) => e.type === 'retry')).toMatchObject({ attempt: 1 })
         // Nothing of the dead attempt was persisted, and its tool call never ran.
         expect(r.messages.map((m) => m.role)).toEqual(['user', 'assistant'])
-        expect(r.messages[1]).toEqual({ role: 'assistant', content: 'the whole answer', promptId: expect.any(String) })
+        expect(r.messages[1]).toEqual({
+          role: 'assistant',
+          content: 'the whole answer',
+          promptId: expect.any(String),
+          at: expect.any(String),
+          model: expect.any(String),
+          usage: { inputTokens: expect.any(Number), outputTokens: expect.any(Number), cost: expect.any(Number) }
+        })
         expect(existsSync(join(ws, 'x.txt'))).toBe(false)
       }
     )
@@ -1317,6 +1325,17 @@ describe('startRun', () => {
       })
       expect(types(r)).not.toContain('retry')
       expect(types(r).at(-1)).toBe('error')
+      // Named, so the client can say "out of credit" rather than show a raw 429.
+      expect(r.events.at(-1)).toMatchObject({ type: 'error', cause: 'quota' })
+    })
+
+    it('names the cause of a provider failure that ends the turn', async () => {
+      const last = async (ev: ProviderStreamEvent) => (await run({ turns: [[ev]] })).events.at(-1)
+      expect(await last({ type: 'error', message: 'invalid x-api-key', status: 401 })).toMatchObject({
+        type: 'error',
+        cause: 'auth'
+      })
+      expect(await last({ type: 'error', message: 'invalid request body', status: 400 })).not.toHaveProperty('cause')
     })
 
     it('retracts a partial reply before hopping, so two models are never spliced', async () => {
@@ -1469,6 +1488,7 @@ describe('startRun', () => {
       expect(last.message).toContain('Pick another model and retry')
       expect(last.message).not.toContain('not_found_error') // the raw 404 body is replaced
       expect(last.modelUnavailable).toEqual({ providerId: 'anthropic', model: 'claude-test' })
+      expect(last).toMatchObject({ cause: 'model-not-found' })
       expect(h.unavailableCalls).toEqual([{ providerId: 'anthropic', model: 'claude-test', unavailable: true }])
     })
 
@@ -3406,7 +3426,9 @@ describe('one run per conversation', () => {
     expect(atPrompt?.['conv-status-A']).toEqual({
       running: true,
       // Named as its tool row names it, not by the wire name write_file.
-      pending: [{ kind: 'approval', label: 'Write s.txt' }]
+      pending: [{ kind: 'approval', label: 'Write s.txt' }],
+      // When the run began, so a client reopening the chat mid-run can show its clock.
+      startedAt: expect.any(Number)
     })
     // Listeners saw the blocked state, then the answered one, then the run ending.
     expect(seen.some((s) => s['conv-status-A']?.pending.length === 1)).toBe(true)
@@ -9729,5 +9751,24 @@ describe('withUnansweredRecord', () => {
     expect(records.at(-1)).toEqual({ reason: 'aborted', at: now.toISOString() })
     expect(records[0]).toEqual({ reason: 'error', message: 'fail 3', at: now.toISOString() })
     expect(withUnansweredRecord([], { reason: 'aborted' }, now)).toEqual([])
+  })
+})
+
+describe('nativeWebSearchFor', () => {
+  it('offers nothing when the provider has no built-in search', () => {
+    expect(nativeWebSearchFor({ provider: scripted([]), providerId: 'anthropic', model: 'm' }, new AbortController().signal)).toEqual({})
+  })
+
+  it("runs the provider's search on the route model, labeled with the provider, with the run's signal", async () => {
+    const webSearch = vi.fn(async () => ({ hits: [{ url: 'https://example.test' }] }))
+    const signal = new AbortController().signal
+    const entry = nativeWebSearchFor(
+      { provider: { ...scripted([]), webSearch }, providerId: 'anthropic', model: 'claude-x' },
+      signal
+    )
+    expect(entry.nativeWebSearch?.label).toBe('A')
+    const r = await entry.nativeWebSearch!.search('q', 3)
+    expect(r.hits[0].url).toBe('https://example.test')
+    expect(webSearch).toHaveBeenCalledWith({ model: 'claude-x', query: 'q', maxResults: 3, signal })
   })
 })
