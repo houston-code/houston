@@ -191,6 +191,13 @@ export function mergeCommands(builtin: Command[], custom: Command[]): Command[] 
 export const REVIEW_TEMPLATE =
   'Review my current uncommitted changes for correctness, security, and quality. Use the review_changes tool to run the adversarial review (a separate reviewer per dimension, then a verification pass), then fix any confirmed issues and summarize what you found.'
 
+/**
+ * The first-party `/init` command's prompt: write (or improve) the project's
+ * AGENTS.md, the instructions file Houston loads at the start of every run.
+ */
+export const INIT_TEMPLATE =
+  "Write an AGENTS.md at the root of this project for coding agents working in it. First look around: the README, the build and package files, the test setup, CI config, and a few representative source files. Then write a short file (aim for under 80 lines) covering how to install, build, run, and test, with the exact commands; how the code is laid out; the conventions a newcomer would get wrong; and anything that must not be done. Only write what you verified in the repository, not general advice. If an AGENTS.md or CLAUDE.md already exists, read it first and improve it in place instead of starting over, keeping what is still true. Finish with a short summary of what you wrote."
+
 /** The interactive clients that surface built-in slash commands. */
 export type CommandClient = 'gui' | 'tui'
 
@@ -321,6 +328,14 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'cwd', group: 'Setup', description: 'Show the working directory', clients: ['gui', 'tui'] },
   { name: 'share', group: 'Chat', description: 'Copy an invite to Houston to share with a friend', clients: ['gui', 'tui'] },
   { name: 'help', group: 'Setup', description: 'List the available slash commands', clients: ['gui', 'tui'] },
+  {
+    name: 'init',
+    group: 'Setup',
+    description: 'Write or improve AGENTS.md, the instructions file for this project',
+    clients: ['gui', 'tui'],
+    autoRun: true,
+    template: INIT_TEMPLATE
+  },
   {
     name: 'review', group: 'Review and undo',
     description: 'Adversarial review of your uncommitted changes',

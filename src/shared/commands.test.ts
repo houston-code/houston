@@ -281,3 +281,20 @@ describe('approval policy names', () => {
   })
 })
 
+
+describe('/init', () => {
+  it('is a template command in both clients that runs as soon as it is sent', () => {
+    for (const client of ['gui', 'tui'] as const) {
+      const init = builtinCommands(client).find((c) => c.name === 'init')
+      expect(init?.autoRun, client).toBe(true)
+      expect(init?.template, client).toMatch(/AGENTS\.md/)
+    }
+  })
+
+  it('asks for a verified, short file and to improve an existing one rather than replace it', () => {
+    const init = builtinCommands('gui').find((c) => c.name === 'init')!
+    expect(init.template).toMatch(/Only write what you verified/)
+    expect(init.template).toMatch(/improve it in place/)
+    expect(init.template).not.toContain('\u2014')
+  })
+})

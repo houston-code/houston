@@ -216,5 +216,53 @@ function firstTaskLabel(kind: FolderKind): string {
   }
 }
 
+/** What the project card says about an open folder, read from its top-level listing. */
+export interface ProjectFacts {
+  /** Languages and tools recognized from marker files, e.g. ['Node.js', 'TypeScript']. */
+  stack: string[]
+  /** The instructions file Houston will load, or null when there is none. */
+  instructions: 'AGENTS.md' | 'CLAUDE.md' | null
+}
+
+/** Marker files and the stack each one shows, in the order they're listed. */
+const STACK_MARKERS: readonly [file: string, stack: string][] = [
+  ['package.json', 'Node.js'],
+  ['tsconfig.json', 'TypeScript'],
+  ['deno.json', 'Deno'],
+  ['pyproject.toml', 'Python'],
+  ['requirements.txt', 'Python'],
+  ['setup.py', 'Python'],
+  ['Cargo.toml', 'Rust'],
+  ['go.mod', 'Go'],
+  ['pom.xml', 'Java'],
+  ['build.gradle', 'Java'],
+  ['build.gradle.kts', 'Kotlin'],
+  ['Gemfile', 'Ruby'],
+  ['composer.json', 'PHP'],
+  ['Package.swift', 'Swift'],
+  ['mix.exs', 'Elixir'],
+  ['pubspec.yaml', 'Dart'],
+  ['CMakeLists.txt', 'C/C++'],
+  ['Dockerfile', 'Docker']
+]
+
+/**
+ * The project card's facts from a folder's top-level entries: the stacks its marker
+ * files show (each named once), and which instructions file Houston would load
+ * (AGENTS.md wins over CLAUDE.md, as in the rules loader). Null when the folder
+ * couldn't be listed.
+ */
+export function projectFacts(entries: readonly { name: string }[] | null): ProjectFacts | null {
+  if (!entries) return null
+  const names = new Set(entries.map((e) => e.name))
+  const stack: string[] = []
+  for (const [file, label] of STACK_MARKERS) {
+    if (names.has(file) && !stack.includes(label)) stack.push(label)
+  }
+  if ([...names].some((n) => n.endsWith('.csproj') || n.endsWith('.sln')) && !stack.includes('.NET')) stack.push('.NET')
+  const instructions = names.has('AGENTS.md') ? 'AGENTS.md' : names.has('CLAUDE.md') ? 'CLAUDE.md' : null
+  return { stack, instructions }
+}
+
 /** How long the pre-send tips wait after step 3 becomes current: a follow-up, not a jolt. */
 export const PRE_SEND_TIP_DELAY_MS = 2000

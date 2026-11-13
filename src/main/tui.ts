@@ -1619,6 +1619,7 @@ export const HELP_TEXT = [
   '  /compact              summarize older turns to free up context now',
   '  /retry                run your last message again after a turn that failed',
   '  /review               adversarial review of your uncommitted changes',
+  '  /init                 write or improve AGENTS.md, the instructions file for this project',
   '  /resume [query]       list (or search) and reopen a saved session',
   '  /spawned              list the background sessions the agent started; open one',
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',

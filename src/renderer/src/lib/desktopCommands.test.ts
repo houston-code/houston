@@ -37,7 +37,7 @@ describe('desktopCommandAction', () => {
 
   it('has an action for every shared command the app does not handle elsewhere', () => {
     // App handles these directly (chat lifecycle, listings, policy words, templates).
-    const handledInApp = new Set(['new', 'clear', 'compact', 'rewind', 'plan', 'ask', 'auto', 'full', 'doctor', 'help', 'skills', 'agents', 'agent', 'review'])
+    const handledInApp = new Set(['new', 'clear', 'compact', 'rewind', 'plan', 'ask', 'auto', 'full', 'doctor', 'help', 'skills', 'agents', 'agent', 'review', 'init'])
     for (const c of builtinCommands('gui')) {
       if (handledInApp.has(c.name)) continue
       expect(desktopCommandAction(c.name, ''), `/${c.name}`).not.toBeNull()
