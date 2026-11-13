@@ -495,7 +495,9 @@ The interactive terminal's composer is a full line editor, so a message can be a
 long as it needs to be.
 
 - **Send:** `Enter` sends.
-- **New line:** `Ctrl-J` or `Alt-Enter` adds a line break (or just paste one).
+- **New line:** `Shift-Enter`, `Ctrl-J` or `Alt-Enter` adds a line break (or just paste
+  one). `Shift-Enter` works in terminals that report it as a separate key; in the rest
+  it sends, so use `Ctrl-J` there.
 - **Pasting:** paste anything, including many lines. The whole block lands in the
   composer as one editable message and is never sent line by line. A large paste
   collapses to a short placeholder like `[#1 pasted 120 lines]` so it doesn't bury the
@@ -505,13 +507,18 @@ long as it needs to be.
   multi-line ones included.
 - **Shell commands:** a line starting with `!` runs in your own shell. See "Running
   your own commands".
+- **Finding all this:** the startup banner shows two tips about keys and prefixes like
+  these, a different pair each time, and `/help` ends with a **Keys** section.
+- **Status line:** above the composer it shows the model, approval mode, folder, git
+  branch, session cost and how full the context window is. While a turn runs, the
+  model, branch and context stay on the spinner line.
 
 ### Keys
 
 | Key | Does |
 | --- | --- |
 | `Enter` | send the message |
-| `Ctrl-J`, `Alt-Enter` | insert a line break |
+| `Shift-Enter`, `Ctrl-J`, `Alt-Enter` | insert a line break (`Shift-Enter` where the terminal reports it) |
 | `Up` / `Down` | move between lines, then step through past messages |
 | `Ctrl-R` | search past messages (type to filter, `Ctrl-R` again for older, `Enter` to accept, `Esc` to cancel) |
 | `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`) |
@@ -559,7 +566,7 @@ conversation, not a log. To see more:
 - **Failures show themselves.** A failed tool prints its first lines without you
   asking, so you can see why.
 - **`/verbose`** shows each tool's full output as it runs. `/verbose off` stops it,
-  and plain `/verbose` toggles.
+  and plain `/verbose` toggles. The choice is remembered for later sessions.
 - **`/output`** reprints the last tool result in full, after the fact. `/output 3`
   goes three results back. Nothing extra is stored for this: the whole output was
   always kept in the conversation.
