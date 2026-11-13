@@ -3,6 +3,7 @@ import type { ModelOption } from '@shared/types'
 import { VERTEX_MODELS } from '@shared/provider-catalog'
 import { createMessagesProvider, type MessagesClient } from './anthropic'
 import { idleTimeoutFetch } from './idle-fetch'
+import { SDK_MAX_RETRIES } from '../agent/retry'
 
 /**
  * Claude on Google Vertex AI.
@@ -60,6 +61,7 @@ export function createVertexProvider(opts: VertexOptions = {}): Provider {
       (m) =>
         new m.AnthropicVertex({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           ...NO_ENV_AUTH,
           ...(opts.region ? { region: opts.region } : {}),
           ...(opts.projectId ? { projectId: opts.projectId } : {}),

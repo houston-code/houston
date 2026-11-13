@@ -8,7 +8,8 @@ import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
 import { ControlTagScrubber } from './control-tag-scrubber'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
-import { idleTimeoutFetch } from './idle-fetch'
+import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS } from './idle-fetch'
+import { SDK_MAX_RETRIES } from '../agent/retry'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
 
@@ -332,6 +333,7 @@ export function createOpenAIProvider(
       (m) =>
         new m.default({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           apiKey: apiKey || 'no-key',
           ...(baseURL ? { baseURL } : {}),
           ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})
@@ -414,6 +416,9 @@ export async function listOpenAIModels(
 ): Promise<ModelOption[]> {
   const { default: OpenAI } = await import('openai')
   const client = new OpenAI({
+    fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS),
+    timeout: LIST_MODELS_TIMEOUT_MS,
+    maxRetries: SDK_MAX_RETRIES,
     apiKey: apiKey || 'no-key',
     ...(baseURL ? { baseURL } : {}),
     ...(headers && Object.keys(headers).length ? { defaultHeaders: headers } : {})

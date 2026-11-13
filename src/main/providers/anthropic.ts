@@ -13,8 +13,9 @@ import type {
 import { anthropicMaxTokens, anthropicThinking } from './reasoning'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
-import { idleTimeoutFetch } from './idle-fetch'
+import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS } from './idle-fetch'
 import { anthropicWebSearch, isFirstPartyAnthropic, type AnthropicCreateClient } from './native-search'
+import { SDK_MAX_RETRIES } from '../agent/retry'
 
 /**
  * Beta header that turns on interleaved thinking for legacy budget-thinking
@@ -511,6 +512,7 @@ export function createAnthropicProvider(
       (m) =>
         new m.default({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           apiKey,
           ...(baseURL ? { baseURL } : {}),
           ...withDefaultHeaders(anthropicDefaultHeaders(apiKey, baseURL, headers))
@@ -535,6 +537,9 @@ export async function listAnthropicModels(
 ): Promise<ModelOption[]> {
   const { default: Anthropic } = await import('@anthropic-ai/sdk')
   const client = new Anthropic({
+    fetch: idleTimeoutFetch(LIST_MODELS_TIMEOUT_MS),
+    timeout: LIST_MODELS_TIMEOUT_MS,
+    maxRetries: SDK_MAX_RETRIES,
     apiKey,
     ...(baseURL ? { baseURL } : {}),
     ...withDefaultHeaders(anthropicDefaultHeaders(apiKey, baseURL, headers))
