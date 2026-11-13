@@ -9,6 +9,7 @@ export const PAGE_LABELS = {
   mcp: 'MCP Servers',
   hooks: 'Hooks',
   memory: 'Memory',
+  import: 'Import',
   workspace: 'Workspace',
   general: 'General',
   appearance: 'Appearance',

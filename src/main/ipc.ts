@@ -109,6 +109,7 @@ import { defaultMemoryRoot } from './agent/memoryStore'
 import type { MemoryResponse } from '@shared/memoryTypes'
 import { decideLegacyRulesNotice, legacyRulesNoticeApplies } from './globalRules'
 import { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } from './legacyRulesNotice'
+import { registerImportIpc } from './importIpc'
 import { MAX_MEMORY_NOTE } from '@shared/memory'
 import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
 import {
@@ -627,6 +628,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
         }
       })
   )
+
+  // Import from other tools (Settings > Import, and the one-time offer).
+  registerImportIpc(handle)
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
   handle(IPC.updateCheck, () => checkForUpdates())

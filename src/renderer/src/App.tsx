@@ -115,6 +115,7 @@ import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer, IDLE_ONLY_COMMANDS } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
+import { ImportNotice } from './components/ImportNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
@@ -2756,6 +2757,15 @@ export default function App(): JSX.Element {
         />
 
         <GlobalRulesNotice onDecided={setSettings} />
+
+        <ImportNotice
+          workspace={workspace}
+          onReview={() => {
+            setSettingsSection('import')
+            setSettingsQuery('')
+            setSettingsOpen(true)
+          }}
+        />
 
         <GitInitBanner
           // Re-evaluate cleanly per workspace: a new folder gets its own banner state.

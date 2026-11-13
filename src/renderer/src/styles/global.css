@@ -1826,6 +1826,80 @@ body.is-resizing {
   color: var(--text);
 }
 
+/* ---- Settings > Import: what other tools keep, one checkbox per find ---- */
+.import-group {
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+.import-group__title {
+  margin-bottom: 6px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.import-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.import-item--present {
+  opacity: 0.7;
+}
+.import-item__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.import-item__name {
+  font-weight: 600;
+}
+.import-item__path,
+.import-item__detail,
+.import-item__note {
+  padding-left: 24px;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.import-item__path code {
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+.import-item__note {
+  font-style: italic;
+}
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.import-failures {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--danger);
+}
+.import-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
 /* ---- Update-available banner (persistent until dismissed / updated) ---- */
 .update-banner {
   display: flex;
