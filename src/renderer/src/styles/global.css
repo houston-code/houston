@@ -2209,7 +2209,11 @@ body.is-resizing {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  overflow-anchor: none;
+  /* Scroll anchoring stays on (the default). Rows off screen are laid out lazily
+     (below), so their real height is only known once they come near the viewport;
+     anchoring is what keeps the row being read still while rows above it settle, and
+     what leaves a freshly opened chat at its true bottom. The pin-to-bottom logic in
+     Transcript.tsx only ever sets an instant scrollTop, which anchoring does not fight. */
   padding: 22px 0 28px;
 }
 .transcript__inner {
@@ -2218,6 +2222,19 @@ body.is-resizing {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+/* Lay out and paint only the rows near the viewport. A long chat mounts tens of
+   thousands of elements, and without this every one of them is styled, laid out and
+   kept paintable whether or not it is on screen. The rows stay in the DOM, so find-in-
+   chat, copy and jump-to-message still reach them. `auto` in contain-intrinsic-size
+   remembers a row's real height once it has been rendered; 90px stands in before that.
+   Skipped rows are paint-contained, which would clip what hangs outside a row's box:
+   the hover copy and rewind buttons sit just below a message (top: 100%) and cards
+   carry a shadow, so the clip edge is pushed out to keep them. */
+.transcript__inner > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 90px;
+  overflow-clip-margin: 40px;
 }
 
 /* ---- Messages ---- */
