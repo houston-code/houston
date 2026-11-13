@@ -5,6 +5,7 @@ import type { ConversationWorktree, RepoInfo, WorktreeRemoval } from '@shared/ag
 import { isSafeGitRef } from '@shared/git'
 import { parseWorktreePorcelain } from './git'
 import { GIT_ENV, hardenedGitArgs } from './gitRead'
+import { lspManager } from './lsp/manager'
 
 /**
  * Create and tear down git worktrees that back a conversation, so a chat can work
@@ -285,6 +286,8 @@ export async function removeWorktree(
     // `git worktree remove` refuses a dirty worktree without --force; keep the work.
     return { removed: false, branchDeleted: false, message: removalFailureMessage(wt, e) }
   }
+  // Its language servers have nothing left to serve.
+  await lspManager.stopForRoot(wt.path).catch(() => {})
   let branchDeleted = false
   try {
     await exec(['branch', force ? '-D' : '-d', wt.branch], wt.repoRoot)
