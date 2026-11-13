@@ -24,6 +24,8 @@ import {
   historyUp,
   loadPromptHistory
 } from '../lib/promptHistory'
+import { isLargePaste, pasteDetail, readDroppedFile } from '../lib/composerFiles'
+import { HistorySearch } from './HistorySearch'
 import {
   expandTemplate,
   commandGroup,
@@ -53,6 +55,7 @@ import {
   humanBytes,
   normalizeLink,
   truncateUtf8,
+  MAX_ATTACHMENT_FILES,
   MAX_CONTEXT_ATTACHMENTS,
   MAX_DIFF_TEXT_BYTES,
   type ContextAttachment,
@@ -110,7 +113,8 @@ const KIND_ICON: Record<ContextKind, IconName> = {
   file: 'file',
   folder: 'folder',
   diff: 'diff',
-  link: 'link'
+  link: 'link',
+  paste: 'clipboard'
 }
 
 /**
@@ -318,6 +322,8 @@ export function Composer({
   const histSnapshot = useRef<string[]>([])
   const histDraft = useRef('')
   const [histPos, setHistPos] = useState<number | null>(null)
+  // Ctrl+R: the sent prompts being searched (a snapshot), or null when closed.
+  const [histSearch, setHistSearch] = useState<string[] | null>(null)
   // Timestamp of the last Escape, for detecting the Esc-Esc "edit last message" chord.
   const lastEscAt = useRef(0)
 
@@ -638,7 +644,22 @@ export function Composer({
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>): void => {
     const files = Array.from(e.clipboardData.files).filter((f) => f.type.startsWith('image/'))
-    if (files.length === 0) return
+    if (files.length === 0) {
+      // A very large paste (a log, a whole file) folds into a chip so the message box
+      // stays usable; its text is sent as pasted, and Expand puts it back in the box.
+      const pasted = e.clipboardData.getData('text/plain')
+      if (pasted && isLargePaste(pasted)) {
+        e.preventDefault()
+        addContext({
+          id: crypto.randomUUID(),
+          kind: 'paste',
+          label: 'Pasted text',
+          detail: pasteDetail(pasted),
+          text: pasted
+        })
+      }
+      return
+    }
     if (!vision) {
       // Let any accompanying text paste through, but say why the image didn't attach.
       flashNotice('Switch to a vision model to attach images.')
@@ -649,14 +670,32 @@ export function Composer({
   }
 
   const onDrop = (e: DragEvent<HTMLDivElement>): void => {
-    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith('image/'))
-    if (files.length === 0) return
+    const dropped = Array.from(e.dataTransfer.files)
+    if (dropped.length === 0) return
     e.preventDefault()
+    const files = dropped.filter((f) => f.type.startsWith('image/'))
+    // Other files attach the way "+ Attach files" does: text inlined (capped), a
+    // binary file (a PDF, an archive) by name only.
+    const others = dropped.filter((f) => !f.type.startsWith('image/')).slice(0, MAX_ATTACHMENT_FILES)
+    if (others.length) {
+      void Promise.all(others.map(readDroppedFile)).then((read) => {
+        for (const f of read) addContext(fileToContext(f))
+      })
+    }
+    if (files.length === 0) return
     if (!vision) {
       flashNotice('Switch to a vision model to attach images.')
       return
     }
     void addFiles(files)
+  }
+
+  // Put a folded paste back into the message box, at the end, and drop its chip.
+  const expandPaste = (att: ContextAttachment): void => {
+    removeContext(att.id)
+    const joined = text ? `${text}${text.endsWith('\n') ? '' : '\n'}${att.text}` : att.text
+    sync(joined, joined.length)
+    focusEnd(joined.length)
   }
 
   // A leading "/name" (no space yet) opens the command menu.
@@ -906,6 +945,13 @@ export function Composer({
     // message or drive the menus. `keyCode === 229` catches browsers that report
     // the composing keydown without `isComposing`.
     if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    // Ctrl+R searches the messages sent before, as in a shell (Ctrl on every
+    // platform; on macOS Cmd+R is left alone).
+    if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'r') {
+      e.preventDefault()
+      setHistSearch(loadPromptHistory())
+      return
+    }
     if (showCmdMenu) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -1092,6 +1138,16 @@ export function Composer({
                 </span>
                 <span className="ctx-chip__label">{att.label}</span>
                 {att.detail && <span className="ctx-chip__detail">{att.detail}</span>}
+                {att.kind === 'paste' && (
+                  <button
+                    type="button"
+                    className="ctx-chip__expand"
+                    title="Put the pasted text back in the message box"
+                    onClick={() => expandPaste(att)}
+                  >
+                    Expand
+                  </button>
+                )}
                 <button
                   className="ctx-chip__remove"
                   aria-label={`Remove ${att.label}`}
@@ -1102,6 +1158,22 @@ export function Composer({
               </div>
             ))}
           </div>
+        )}
+        {histSearch && (
+          <HistorySearch
+            history={histSearch}
+            onPick={(picked) => {
+              setHistSearch(null)
+              setHistPos(null)
+              sync(picked, picked.length)
+              focusEnd(picked.length)
+            }}
+            onClose={() => {
+              setHistSearch(null)
+              ref.current?.focus()
+            }}
+            onDismiss={() => setHistSearch(null)}
+          />
         )}
         {showCmdMenu && (
           <ul className="mention-menu" id={cmdMenuId} role="listbox" aria-label="Commands">

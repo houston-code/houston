@@ -1065,3 +1065,75 @@ describe('Composer + attachment menu notices', () => {
     ).toBeInTheDocument()
   })
 })
+
+describe('Composer power features', () => {
+  it('folds a very large paste into a chip that is sent as pasted, and can be expanded', () => {
+    const props = baseProps()
+    render(<Composer {...props} />)
+    const input = type('see this')
+    const big = Array.from({ length: 60 }, (_, i) => `log line ${i}`).join('\n')
+    fireEvent.paste(input, { clipboardData: { files: [], getData: () => big } })
+    expect(input.value).toBe('see this')
+    expect(screen.getByText('Pasted text')).toBeInTheDocument()
+    expect(screen.getByText('60 lines')).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onSend).toHaveBeenCalledWith(`see this\n\n${big}`, undefined)
+  })
+
+  it('puts a folded paste back in the box on Expand', () => {
+    render(<Composer {...baseProps()} />)
+    const input = type('')
+    const big = 'z'.repeat(5000)
+    fireEvent.paste(input, { clipboardData: { files: [], getData: () => big } })
+    fireEvent.click(screen.getByRole('button', { name: 'Expand' }))
+    expect(input.value).toBe(big)
+    expect(screen.queryByText('Pasted text')).toBeNull()
+  })
+
+  it('lets an ordinary paste through to the box', () => {
+    render(<Composer {...baseProps()} />)
+    const input = type('')
+    const ev = fireEvent.paste(input, { clipboardData: { files: [], getData: () => 'short' } })
+    expect(ev).toBe(true) // not prevented
+    expect(screen.queryByText('Pasted text')).toBeNull()
+  })
+
+  it('attaches a dropped text file the way + Attach files does', async () => {
+    const props = baseProps()
+    const { container } = render(<Composer {...props} />)
+    const file = new File(['const x = 1\n'], 'a.ts', { type: 'text/plain' })
+    fireEvent.drop(container.querySelector('.composer__card')!, { dataTransfer: { files: [file] } })
+    expect(await screen.findByText('a.ts')).toBeInTheDocument()
+    const input = type('look')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onSend).toHaveBeenCalledWith(expect.stringContaining('File: a.ts'), undefined)
+    expect(props.onSend).toHaveBeenCalledWith(expect.stringContaining('const x = 1'), undefined)
+  })
+
+  it('searches sent messages with Ctrl+R and puts the pick in the box', () => {
+    localStorage.setItem('houston.promptHistory', JSON.stringify(['fix the login bug', 'add tests', 'fix lint']))
+    render(<Composer {...baseProps()} />)
+    const input = type('')
+    fireEvent.keyDown(input, { key: 'r', ctrlKey: true })
+    const search = screen.getByRole('combobox', { name: 'Search sent messages' })
+    expect(within(screen.getByRole('listbox', { name: 'Sent messages' })).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      'fix lint',
+      'add tests',
+      'fix the login bug'
+    ])
+    fireEvent.change(search, { target: { value: 'fix' } })
+    fireEvent.keyDown(search, { key: 'r', ctrlKey: true }) // Ctrl+R again: the next older match
+    fireEvent.keyDown(search, { key: 'Enter' })
+    expect(input.value).toBe('fix the login bug')
+    expect(screen.queryByRole('combobox', { name: 'Search sent messages' })).toBeNull()
+  })
+
+  it('closes the search on Escape without changing the box', () => {
+    render(<Composer {...baseProps()} />)
+    const input = type('draft')
+    fireEvent.keyDown(input, { key: 'r', ctrlKey: true })
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Search sent messages' }), { key: 'Escape' })
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(input.value).toBe('draft')
+  })
+})
