@@ -28,6 +28,7 @@ export const DEEP_LINK_SETTINGS_PAGES = [
   'mcp',
   'hooks',
   'memory',
+  'import',
   'workspace',
   'general',
   'appearance',
