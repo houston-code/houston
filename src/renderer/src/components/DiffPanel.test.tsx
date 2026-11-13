@@ -92,6 +92,22 @@ describe('DiffPanel', () => {
     expect(await screen.findByText(/isn’t a git repository/)).toBeInTheDocument()
   })
 
+  it('explains a repository git cannot open, with git\'s reason and no init offer', async () => {
+    installApi({
+      isRepo: false,
+      unreadable: 'not a git repository: (null)',
+      branch: null,
+      files: [],
+      added: 0,
+      removed: 0
+    })
+    render(<DiffPanel workspace="/repo/wt" />)
+    expect(await screen.findByText(/in a git repository that git can’t open/)).toBeInTheDocument()
+    expect(screen.getByText('not a git repository: (null)')).toBeInTheDocument()
+    expect(screen.queryByText(/isn’t a git repository/)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Initialize git repository/ })).not.toBeInTheDocument()
+  })
+
   it('initializes a repo from the empty state, then reloads to show the files', async () => {
     const untracked: WorkingTreeChanges = {
       isRepo: true,

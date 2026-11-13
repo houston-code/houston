@@ -64,6 +64,14 @@ describe('GitInitBanner', () => {
     expect(screen.queryByText(TITLE)).not.toBeInTheDocument()
   })
 
+  it('stays hidden for a repository git cannot open (repair it, not init over it)', async () => {
+    const { getRepoInfo } = installApi({ exists: true, isRepo: false })
+    getRepoInfo.mockResolvedValue({ ...repoInfo(true, false), unreadable: true })
+    render(<GitInitBanner {...props()} />)
+    await waitFor(() => expect(getRepoInfo).toHaveBeenCalled())
+    expect(screen.queryByText(TITLE)).not.toBeInTheDocument()
+  })
+
   it('stays hidden when the workspace path no longer exists', async () => {
     const { getRepoInfo } = installApi({ exists: false, isRepo: false })
     render(<GitInitBanner {...props()} />)

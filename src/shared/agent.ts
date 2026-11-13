@@ -400,6 +400,11 @@ export interface RepoInfo {
    * new-chat UI can drop the stale default instead of anchoring to a phantom.
    */
   exists: boolean
+  /**
+   * True (with `isRepo` false) when git can't open the path although a `.git` sits
+   * in it or a parent folder, so it isn't offered a fresh `git init`.
+   */
+  unreadable?: boolean
 }
 
 /** Outcome of tearing down a conversation's worktree, for reporting to the user. */

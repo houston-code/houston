@@ -127,11 +127,19 @@ describe('getRepoInfo', () => {
     expect(await at('/repo/.houston/worktrees/x/sub')).toBe(false)
   })
 
+  it('flags a folder with a .git that git cannot open as unreadable', async () => {
+    const exec: GitRun = async () => {
+      throw new Error('not a git repository: (null)')
+    }
+    const info = await getRepoInfo('/repo/wt', exec, onDisk, () => '/repo/wt/.git')
+    expect(info).toMatchObject({ isRepo: false, exists: true, unreadable: true })
+  })
+
   it('reports an existing non-repo folder as isRepo:false, exists:true', async () => {
     const exec: GitRun = async () => {
       throw new Error('not a git repository')
     }
-    expect(await getRepoInfo('/tmp/x', exec, onDisk)).toEqual({
+    expect(await getRepoInfo('/tmp/x', exec, onDisk, () => null)).toEqual({
       isRepo: false,
       root: '',
       currentBranch: null,
