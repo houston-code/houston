@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { cachedImageDataUrl } from '../lib/imageUrl'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -437,6 +437,8 @@ const ToolRow = memo(function ToolRow({
         <div className="tool-row__progress">{item.progress}</div>
       )}
 
+      {item.status === 'running' && item.liveOutput && <LiveOutput text={item.liveOutput} />}
+
       {isAgent && open && (records?.length || output) ? (
         <SubagentBody records={records} output={output} running={running} />
       ) : null}
@@ -714,6 +716,33 @@ function combinedStatus(items: ToolItem[]): ToolItem['status'] {
   if (items.some((it) => it.status === 'error')) return 'error'
   if (items.some((it) => it.status === 'denied')) return 'denied'
   return 'done'
+}
+
+/**
+ * A running command's output so far, in a short scrolling pane that follows the
+ * newest line unless the user has scrolled up to read.
+ */
+function LiveOutput({ text }: { text: string }): JSX.Element {
+  const ref = useRef<HTMLPreElement>(null)
+  const following = useRef(true)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (el && following.current) el.scrollTop = el.scrollHeight
+  }, [text])
+  return (
+    <pre
+      ref={ref}
+      className="tool-row__live"
+      aria-label="Output so far"
+      tabIndex={0}
+      onScroll={(e) => {
+        const el = e.currentTarget
+        following.current = el.scrollHeight - el.scrollTop - el.clientHeight < 8
+      }}
+    >
+      {text}
+    </pre>
+  )
 }
 
 /** Whether two item lists hold the same item objects in the same order. */

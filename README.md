@@ -100,6 +100,9 @@ Open source under the [Apache License 2.0](LICENSE).
   in the desktop app, with a switch to see the source. Mermaid renders in a hidden
   window with no network, and the result is shown as an image. Sandboxed
   interactive HTML visuals are off by default (Settings > *Appearance*).
+- **Live command output.** While a shell command runs, its row in the transcript
+  shows the latest lines of its output (credentials masked), following the newest
+  line, until the full result replaces it.
 - **Live preview panel.** When the agent starts a dev server (a background
   `run_shell`), Houston detects the loopback URLs it prints and offers a **Preview**
   panel: a resizable right-hand dock that renders the running page live and

@@ -613,6 +613,11 @@ conversation, not a log. To see more:
 
 Very long output is capped, with a note saying how much was left out.
 
+In the desktop app, a shell command shows its output in its row while it runs: the
+latest lines, scrolling to follow the newest unless you scroll up to read. It's a
+window onto the last 200 lines or so, with credentials masked as in the result, and it
+gives way to the full result when the command finishes.
+
 ## What actually ran (the receipt)
 
 A turn that ran checks or changed files ends with a line marked **Recorded by
