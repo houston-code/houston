@@ -60,6 +60,11 @@ The full GUI:
 
 - **Read and unread.** A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read. The
   filter menu marks every chat read, or sorts the ones that want attention first.
+- **Grouping by folder or date.** Under **Group chats by** in the filter menu, choose
+  **Project folder** (a worktree chat goes under its repository) or **Date** (Today,
+  Yesterday, This week, Older) to split the chats outside your own groups into
+  sections. Pinned chats and your groups stay as they are, and each section collapses
+  on its own. **Your groups only** (the default) turns it off. The choice is remembered.
 - **Right-click menus.** Right-click a chat in the sidebar for the same actions as its
   ⋯ menu. Right-click a message to copy it (or just the text you selected) and for that
   message's own actions: rewind or edit one of yours, or mark unread from a reply.

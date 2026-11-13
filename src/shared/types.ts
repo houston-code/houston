@@ -836,6 +836,12 @@ export interface AppSettings {
    */
   sidebarUnreadFirst?: boolean
   /**
+   * Split the chats outside any group into automatic sections by project folder or
+   * by date (Today, Yesterday, This week, Older). Pinned chats and the user's own
+   * groups stay as they are. Absent = no automatic sections.
+   */
+  sidebarGroupBy?: SidebarGroupBy
+  /**
    * Whether a new chat at a git repository's root starts with "New worktree" on: the
    * chat then works on its own branch in a separate folder. Set when the user flips the
    * toggle (or in Settings), so their choice carries to the next chat. Absent = on,
@@ -967,6 +973,9 @@ export interface EnvKeyOffer {
   envVar: string
   last4: string
 }
+
+/** How the sidebar sorts chats outside any group into sections. */
+export type SidebarGroupBy = 'folder' | 'date'
 
 /** Result of answering that notice. `error` is set (and nothing is persisted) when the import write failed. */
 export interface LegacyRulesDecideResult {

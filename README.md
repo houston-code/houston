@@ -499,7 +499,8 @@ Open source under the [Apache License 2.0](LICENSE).
   a chat yourself always wins; auto-titling never overwrites a title you set.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
-  and groups persist across restarts. **Resize** the sidebar by dragging its right
+  and groups persist across restarts. The filter menu can also split the rest by
+  project folder or by date (Today, Yesterday, This week, Older). **Resize** the sidebar by dragging its right
   edge (double-click to reset), or **collapse** it to a thin rail with the ⌘B
   shortcut or the « toggle; the chosen width and collapsed state are remembered.
 - **Long sessions stay in budget.** When a conversation grows too large, Houston
