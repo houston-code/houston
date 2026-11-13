@@ -70,6 +70,27 @@ describe('Content-Length framing', () => {
     }
   })
 
+  it('decodes the same messages however a stream of large ones is chunked', () => {
+    const msgs = Array.from({ length: 6 }, (_, i) => ({
+      jsonrpc: '2.0' as const,
+      id: i,
+      result: `${'é✓世'.repeat(200 * (i + 1))}${'z'.repeat(i * 3000)}`
+    }))
+    const bytes = Buffer.concat(msgs.map(encodeMessage))
+    let seed = 2
+    const rnd = (): number => ((seed = (seed * 1664525 + 1013904223) >>> 0), seed / 2 ** 32)
+    for (let round = 0; round < 30; round++) {
+      const dec = new MessageDecoder()
+      const out = []
+      for (let i = 0; i < bytes.length; ) {
+        const n = 1 + Math.floor(rnd() * (round % 3 === 0 ? 7 : 4000))
+        out.push(...dec.push(bytes.subarray(i, i + n)))
+        i += n
+      }
+      expect(out).toEqual(msgs)
+    }
+  })
+
   it('accepts a Content-Type header and header names in any case', () => {
     const body = Buffer.from('{"jsonrpc":"2.0","id":3,"result":null}')
     const frame = Buffer.concat([
