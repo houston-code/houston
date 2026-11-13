@@ -6134,6 +6134,78 @@ body:has(.coachmark) .get-started {
   z-index: 50;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
+/* Ctrl+R search of sent messages: a panel above the message box with its own
+   field, then the matches (newest first). */
+.history-search {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin: 0 0 6px;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  z-index: 50;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.history-search__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.history-search__input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.history-search__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.history-search .history-search__list {
+  position: static;
+  margin: 6px 0 0;
+  box-shadow: none;
+  border: none;
+  padding: 0;
+}
+.history-search__text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font);
+  font-size: 13px;
+}
+.history-search__empty {
+  margin: 8px 2px 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+/* The Expand action on a folded paste's chip. */
+.ctx-chip__expand {
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ctx-chip__expand:hover,
+.ctx-chip__expand:focus-visible {
+  border-color: var(--accent);
+}
 .mention-item {
   padding: 6px 9px;
   border-radius: 6px;

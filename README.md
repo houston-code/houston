@@ -135,6 +135,9 @@ Open source under the [Apache License 2.0](LICENSE).
   (syntax-highlighted code, images) and an Open action that hands a file to its
   default app. Each chat's ⋯ menu also has **Open in**, which opens the chat's
   folder in a detected editor or reveals it in the file manager.
+- **Message box extras.** `Ctrl+R` searches the messages you sent before, a very
+  large paste folds into a chip you can expand, and any file dropped on the box
+  attaches (text inlined, binary files such as PDFs by name).
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message, with no need to paste or describe where things live.
 - **Slash commands.** Type `/` for a command menu. The desktop app and the terminal
