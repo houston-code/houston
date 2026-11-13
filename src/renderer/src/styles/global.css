@@ -1617,6 +1617,12 @@ body.is-resizing {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.usage__cost {
+  color: var(--text);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 /* The `#`-capture scope prompt, above the composer input. */
 .memory-bar {
   display: flex;
@@ -1643,7 +1649,7 @@ body.is-resizing {
   gap: 6px;
   flex-shrink: 0;
 }
-/* The chip is clickable only when there's a breakdown behind it. */
+/* The chip opens the breakdown by model. */
 .usage-wrap {
   position: relative;
   flex-shrink: 0;
@@ -1664,7 +1670,7 @@ body.is-resizing {
   top: calc(100% + 6px);
   right: 0;
   z-index: 30;
-  min-width: 320px;
+  min-width: 400px;
   padding: 8px 10px;
   background: var(--bg-raised, var(--bg));
   border: 1px solid var(--border);
@@ -1676,8 +1682,10 @@ body.is-resizing {
 .usage-panel__head,
 .usage-panel__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
-  gap: 12px;
+  /* Fixed number columns: every row is its own grid, so auto widths let a row's
+     figures drift out from under the header. */
+  grid-template-columns: minmax(0, 1fr) 48px 48px 52px 56px;
+  gap: 10px;
   padding: 3px 0;
 }
 .usage-panel__head {
@@ -1698,6 +1706,10 @@ body.is-resizing {
   border-top: 1px solid var(--border);
   margin-top: 2px;
   font-weight: 600;
+}
+.usage-panel__context {
+  margin: 0 0 6px;
+  color: var(--text-dim);
 }
 .usage-panel__note {
   margin: 6px 0 0;
@@ -2056,6 +2068,25 @@ body.is-resizing {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.statusbar__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 220px;
+  white-space: nowrap;
+}
+.statusbar__branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+}
+.statusbar__icon {
+  flex-shrink: 0;
+}
+.statusbar__mode {
+  white-space: nowrap;
 }
 .statusbar__meter {
   white-space: nowrap;

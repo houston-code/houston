@@ -1106,8 +1106,13 @@ reaches a model with no higher level to move to.
 - the dollar cost, with a total when more than one model billed
 
 Subagents and reviews often run on a different (cheaper) model, so they're listed
-separately rather than folded into the main one. In the desktop app, the breakdown
-also lists what each subagent spent (already counted in its model's row).
+separately rather than folded into the main one.
+
+In the desktop app, the usage chip in the control bar shows how full the context is
+(a small bar and "used/maximum") and the chat's cost so far (output tokens for a
+model with no known price). Clicking it opens the same breakdown, which also lists
+what each subagent spent (already counted in its model's row). The status bar at the
+bottom shows the git branch the chat's folder has checked out and the approval mode.
 
 **Watch the cached count** on a long session. Those tokens are real context, but they
 bill far below the base input rate, so a big number there is why a long conversation

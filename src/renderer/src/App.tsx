@@ -148,6 +148,7 @@ import {
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
 import { Icon } from './components/Icon'
+import { StatusBarInfo } from './components/StatusBarInfo'
 import { TurnErrorBar } from './components/TurnErrorBar'
 import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
@@ -3057,6 +3058,10 @@ export default function App(): JSX.Element {
             open={terminalOpen}
             shortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
             onShow={toggleTerminal}
+          />
+          <StatusBarInfo
+            branch={workspace ? workingTreeStats.branch : undefined}
+            policy={canChat ? settings.approvalPolicy : null}
           />
           {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
         </footer>

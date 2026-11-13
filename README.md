@@ -431,8 +431,9 @@ Open source under the [Apache License 2.0](LICENSE).
   a rewind can't undo them.
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right
   now (Ready, Responding…, running a tool, or waiting for your approval, answer, or
-  plan review), how long the turn has run with its output tokens so far, and the
-  active model. A tool call that runs longer than a second shows its own time.
+  plan review), how long the turn has run with its output tokens so far, the git
+  branch the chat's folder has checked out, the approval mode, and the active model.
+  A tool call that runs longer than a second shows its own time.
 - **Turn receipts.** A reply that ran checks or changed files ends with a
   **Recorded by Houston** line built from what actually executed, not from what the
   agent says: tests (with pass/fail counts for common runners), builds, installs,
@@ -571,14 +572,14 @@ Open source under the [Apache License 2.0](LICENSE).
   absolute), to split or share common rules across files. To reuse an existing
   global rules file such as `~/.claude/CLAUDE.md`, add `@~/.claude/CLAUDE.md` to
   `~/.houston/AGENTS.md`; Houston offers to do this once when it finds one.
-- **Token usage & cost at a glance.** The control bar above the composer shows the
-  current context size, the output tokens used this session, and an **estimated
+- **Token usage & cost at a glance.** The control bar above the composer shows how
+  full the context is (a small bar and "used/maximum") and the chat's **estimated
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show
-  none), so you can see how big and how expensive a conversation is getting. Open it
-  for a per-model breakdown (subagents and reviews often run on a cheaper model)
-  with the prompt-cache split. In the transcript, each message shows when it was sent,
-  and each turn's last reply names the model that answered and that turn's tokens and
-  cost. The model, project folder, approval policy and
+  their output tokens instead), so you can see how big and how expensive a
+  conversation is getting. Click it for a per-model breakdown (subagents and reviews
+  often run on a cheaper model) with the prompt-cache split. In the transcript, each
+  message shows when it was sent, and each turn's last reply names the model that
+  answered and that turn's tokens and cost. The model, project folder, approval policy and
   reasoning controls live there too, down by the composer, where you're typing.
 
 ## Install (prebuilt binaries)
