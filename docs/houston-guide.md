@@ -1172,9 +1172,15 @@ The Changes view also has a commit form, for when you'd rather not spend an agen
   default model in a new chat) to describe the uncommitted changes, the way a chat gets
   its title. The diff goes to that model's provider. Edit the suggestion as you like.
 - **Commit** stages every change and commits it (`Cmd+Enter` / `Ctrl+Enter` in the
-  message box). The repository's own git hooks do not run.
-- **Push** sends the branch's new commits to its upstream; on a first push it reads
-  **Publish branch** and sets the upstream on the repository's remote.
+  message box). The repository's own git hooks do not run. While a merge, rebase,
+  cherry-pick, or revert is in progress, Commit is refused: resolve the conflicts and
+  finish the operation in a terminal first.
+- **Push** sends the branch's new commits to the branch of the same name on its
+  remote; on a first push it reads **Publish branch** and sets the upstream on the
+  repository's remote. A branch made from another one (`git switch -c feat
+  origin/main`) is pushed as `feat`, never onto `main`, and its upstream becomes
+  `origin/feat`. If ssh would need to ask something (an unknown host key, a key
+  passphrase), the push fails instead of waiting.
 
 Houston refuses to commit or push when the repository's own git config names a program
 git would run for it (a signing program, an ssh command, a credential helper, or an
