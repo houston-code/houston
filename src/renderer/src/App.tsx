@@ -26,11 +26,13 @@ import {
   agentTurn,
   commandTurn,
   proposalHereTurn,
+  reviewCommentsTurn,
   shipTurn,
   sideChatExchangeText,
   sideChatTurn,
   type InvokedTurn,
-  type PromptInvocation
+  type PromptInvocation,
+  type ReviewComment
 } from '@shared/promptInvocation'
 import { formatTokens, formatUsd, resolveCapabilities, sessionUsageFromConversation } from '@shared/usage'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
@@ -1812,6 +1814,12 @@ export default function App(): JSX.Element {
   // standing prompt (Create PR / Publish to GitHub / Commit & push, see
   // @shared/shipAction) as a normal turn, so the git and gh work runs through the
   // agent's tools and approval gate rather than the renderer touching git.
+  // "Send N comments to the agent" from the Changes view: one turn, labelled as such.
+  const onSendReviewComments = useCallback(
+    (comments: ReviewComment[]) => onInvoke(reviewCommentsTurn(comments)),
+    [onInvoke]
+  )
+
   const onShip = useCallback(
     (action: ShipAction) => {
       onInvoke(shipTurn(action))
@@ -2966,6 +2974,7 @@ export default function App(): JSX.Element {
                 running={chat.running}
                 onShip={canChat ? onShip : undefined}
                 creating={chat.running}
+                onSendComments={canChat ? onSendReviewComments : undefined}
               />
             }
             tasks={

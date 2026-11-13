@@ -930,6 +930,12 @@ picked.
   back to its last commit (a new file is deleted); in the chat scopes, it goes back to
   how it was before the turn or chat (a file the chat created is deleted). A revert is
   refused when the file changed since the list was read, and while the chat is running.
+- **Comment on lines.** Click a line (or its line number) to leave a comment on it;
+  `Cmd+Enter` (`Ctrl+Enter`) saves and `Esc` cancels. Comments wait under their lines,
+  can be edited or deleted, and stay while you switch scope, close the view or open
+  another chat. **Send N comments to the agent** sends them all as one message naming
+  each file, line and the code on it; the chat shows it as "N review comments", with
+  the full text one click away. **Discard** asks before dropping them.
 
 ### Shipping changes (desktop app)
 

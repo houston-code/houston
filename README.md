@@ -498,6 +498,8 @@ Open source under the [Apache License 2.0](LICENSE).
   line numbers, and can be shown side by side. Each file can be opened in its default
   app or reverted, and each change inside an edited file can be reverted on its own;
   every revert asks first and is refused if the file changed since the list was read.
+  Click a line to leave a comment on it; **Send N comments to the agent** sends them all
+  as one message naming each file, line and the code it is on.
   Git runs hardened (no repository hooks or filters) with argument lists only. A
   **Create PR** action hands off to the agent: it commits, pushes, and opens the pull
   request through the same `gh_pr_*` tools and approval gate. It
