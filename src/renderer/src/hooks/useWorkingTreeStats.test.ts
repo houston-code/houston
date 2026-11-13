@@ -30,13 +30,24 @@ describe('useWorkingTreeStats', () => {
     const { result } = renderHook(() => useWorkingTreeStats('/repo', false))
 
     expect(api.getWorkingTreeChanges).toHaveBeenCalledWith('/repo')
-    await waitFor(() => expect(result.current).toEqual({ fileCount: 3, added: 12, removed: 4 }))
+    await waitFor(() => expect(result.current).toEqual({ fileCount: 3, added: 12, removed: 4, branch: 'main' }))
   })
 
   it('reports zero when the workspace is not a repo', async () => {
     installApi(changes({ isRepo: false }))
     const { result } = renderHook(() => useWorkingTreeStats('/repo', false))
     await waitFor(() => expect(result.current).toEqual({ fileCount: 0, added: 0, removed: 0 }))
+  })
+
+  it('carries the checked-out branch, or null when the repo has none checked out', async () => {
+    const api = installApi(changes({ branch: 'feature/x' }))
+    const { result, rerender } = renderHook(({ running }) => useWorkingTreeStats('/repo', running), {
+      initialProps: { running: true }
+    })
+    await waitFor(() => expect(result.current.branch).toBe('feature/x'))
+    api.set(changes({ branch: null }))
+    rerender({ running: false })
+    await waitFor(() => expect(result.current.branch).toBeNull())
   })
 
   it('does not fetch when there is no workspace', () => {
@@ -59,7 +70,7 @@ describe('useWorkingTreeStats', () => {
     api.set(changes({ files: files(2), added: 9, removed: 2 }))
     rerender({ running: false })
 
-    await waitFor(() => expect(result.current).toEqual({ fileCount: 2, added: 9, removed: 2 }))
+    await waitFor(() => expect(result.current).toEqual({ fileCount: 2, added: 9, removed: 2, branch: 'main' }))
     expect(api.getWorkingTreeChanges).toHaveBeenCalledTimes(2)
   })
 

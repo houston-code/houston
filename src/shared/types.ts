@@ -601,6 +601,12 @@ export interface AppSettings {
   approvalPolicy: ApprovalPolicy
   recentWorkspaces: string[]
   /**
+   * The models runs used most recently, newest first (capped), for the model picker's
+   * Recent section. Main records it when a run starts and owns it: a settings save from
+   * the renderer keeps main's copy rather than a stale one it read earlier.
+   */
+  recentModels?: SelectedModel[]
+  /**
    * Realpath-normalized workspace paths the user has opted out of the first-write
    * "Initialize git repository" prompt for ("Don't ask again for this folder").
    * Checked before showing the banner; appended to on opt-out.
@@ -775,6 +781,11 @@ export interface AppSettings {
    * unread replies. On by default.
    */
   appBadge?: boolean
+  /**
+   * Play a short sound when a turn finishes and when the agent needs input (approval,
+   * question, plan) while Houston isn't the focused window. Off by default.
+   */
+  attentionSounds?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
   /**

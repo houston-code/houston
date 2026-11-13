@@ -63,6 +63,7 @@ import { nextApprovalPolicy } from './lib/policyCycle'
 import { resolveShortcuts } from './lib/keybindingOverrides'
 import { modelPaletteItems, type PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
+import { playAttentionSound } from './lib/attentionSound'
 import { RunMeterText } from './components/RunMeterText'
 import { newGroupId } from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
@@ -109,6 +110,7 @@ import type { DockTab } from './components/PreviewDock'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
 import { Transcript, type RewindHandlers } from './components/Transcript'
+import { FileLinkContext, type FileLinks } from './components/FileLink'
 import { RewindDialog } from './components/RewindDialog'
 import { RewindPicker } from './components/RewindPicker'
 import { rewindDoneText, rewindsConversation, type RewindMode, type RewindOutcome } from '@shared/rewind'
@@ -149,6 +151,7 @@ import {
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
 import { Icon } from './components/Icon'
+import { StatusBarInfo } from './components/StatusBarInfo'
 import { TurnErrorBar } from './components/TurnErrorBar'
 import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
@@ -235,6 +238,8 @@ export default function App(): JSX.Element {
   const [changesOpen, setChangesOpen] = useState(false)
   // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
   const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
+  // The line to show in the previewed file, when a link named one.
+  const [filesLine, setFilesLine] = useState<number | undefined>(undefined)
   const [sideChatOpen, setSideChatOpen] = useState(false)
   // The open chat's decisions on its propose_session cards (keyed by call id).
   const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
@@ -589,6 +594,24 @@ export default function App(): JSX.Element {
     [conversations, currentId]
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
+  // File paths in the transcript (tool rows, the receipt, relative links in replies)
+  // open in the Files tab's preview, at the line when one is known. The tab is opened
+  // through a ref because showFiles is defined further down.
+  const showFilesRef = useRef<() => void>(() => undefined)
+  const fileLinks = useMemo<FileLinks | null>(
+    () =>
+      workspace
+        ? {
+            workspace,
+            open: ({ path, line }) => {
+              setFilesTarget(path)
+              setFilesLine(line)
+              showFilesRef.current()
+            }
+          }
+        : null,
+    [workspace]
+  )
   // Whether the open folder is empty, so the setup checklist's step 3 can suggest a
   // first task that fits it (build something vs. explain the project).
   const [workspaceKind, setWorkspaceKind] = useState<FolderKind>('unknown')
@@ -1080,6 +1103,10 @@ export default function App(): JSX.Element {
     [selectConversation]
   )
 
+  // The main process decides when a sound is due (the setting is on, the window is
+  // not focused, and the event ends a turn or needs the user); this window plays it.
+  useEffect(() => window.api.onAttentionSound?.((sound) => void playAttentionSound(sound)), [])
+
   // Other chats waiting on the user, in sidebar recency order, for the titlebar's
   // "N need you" pill; each click opens the next one after the open chat.
   const waitingIds = useMemo(
@@ -1534,6 +1561,7 @@ export default function App(): JSX.Element {
     })()
   }, [])
   const showFiles = useCallback(() => showDockTab('files'), [showDockTab])
+  showFilesRef.current = showFiles
 
   // Drag the panel's left edge: update the width CSS variable live (no re-render of
   // the transcript while dragging), then commit on release. Dragging left grows the
@@ -1788,6 +1816,36 @@ export default function App(): JSX.Element {
       left ? 'error' : 'info'
     )
   }, [currentId, chat, selectConversation])
+
+  // Retry on the last reply: take the conversation back to just before the last
+  // message the user sent (the files are left as they are), then send it again, so
+  // the new reply replaces the old one. Same rewind the message menu does, without
+  // its confirmation: what goes away is only the reply being retried.
+  const lastTurn = useMemo(() => {
+    const targets = rewindTargets(chat.items)
+    const target = targets[targets.length - 1]
+    if (!target) return null
+    const item = chat.items.find((it) => it.id === target.id)
+    return item?.kind === 'user' ? { target, item } : null
+  }, [chat.items])
+  const onRetryLast = useCallback(async () => {
+    const id = currentId
+    if (!id || !lastTurn || chat.running) return
+    const { target, item } = lastTurn
+    let res
+    try {
+      res = await window.api.rewind(id, target.turn, 'conversation', target.text)
+    } catch {
+      res = { ok: false as const, error: "Couldn't retry this reply." }
+    }
+    if (!res.ok) {
+      chat.notify(res.error, 'error')
+      return
+    }
+    await selectConversation(id)
+    if (currentIdRef.current !== id) return
+    dispatch(item.text, item.images, item.invokedAs)
+  }, [currentId, lastTurn, chat, selectConversation, dispatch])
 
   const rewindHandlers = useMemo<RewindHandlers | undefined>(
     () =>
@@ -2933,6 +2991,7 @@ export default function App(): JSX.Element {
             )}
           </div>
         ) : (
+          <FileLinkContext.Provider value={fileLinks}>
           <Transcript
             // One per chat: a new chat opens at its latest message (or its "New"
             // divider), not at the scroll position the last chat was left at.
@@ -2946,11 +3005,13 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            {...(currentId && lastTurn && !chat.running ? { onRetryLast: () => void onRetryLast() } : {})}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
               : {})}
             {...(newFrom && newFrom.conversationId === currentId ? { newFromId: newFrom.itemId } : {})}
           />
+          </FileLinkContext.Provider>
         )}
 
         <TrustFolderBanner
@@ -3141,6 +3202,10 @@ export default function App(): JSX.Element {
             shortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
             onShow={toggleTerminal}
           />
+          <StatusBarInfo
+            branch={workspace ? workingTreeStats.branch : undefined}
+            policy={canChat ? settings.approvalPolicy : null}
+          />
           {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
         </footer>
       </div>
@@ -3164,10 +3229,11 @@ export default function App(): JSX.Element {
             files={
               workspace ? (
                 <FilesPanel
-                  // A new "Show in Files" target remounts the tree to reveal it.
-                  key={`${workspace}:${filesTarget ?? ''}`}
+                  // A new "Show in Files" target (or line) remounts the tree to reveal it.
+                  key={`${workspace}:${filesTarget ?? ''}:${filesLine ?? ''}`}
                   workspace={workspace}
                   initialPath={filesTarget}
+                  initialLine={filesLine}
                   onClose={closeDock}
                   docked
                 />
@@ -3366,6 +3432,7 @@ export default function App(): JSX.Element {
             if (!rel) return 'That file is outside the project folder.'
             setViewer(null)
             setFilesTarget(rel)
+            setFilesLine(undefined)
             showFiles()
             return null
           }}
