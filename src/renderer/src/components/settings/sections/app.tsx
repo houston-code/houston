@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AppSettings, ChatFontSize, CodeTheme, Density } from '@shared/types'
+import type { AccentColor, AppSettings, ChatFontSize, CodeTheme, Density } from '@shared/types'
 import { LICENSE_URL, PRIVACY_URL } from '@shared/legal'
 import { updateErrorHint, type UpdateCheckResult } from '@shared/update'
 import {
@@ -69,6 +69,21 @@ export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           <option value="muted">Muted</option>
         </select>
       </label>
+      <label className="field">
+        <span>Accent color</span>
+        <select
+          value={settings.accentColor ?? 'default'}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, accentColor: e.target.value as AccentColor }))
+          }
+        >
+          <option value="default">Default (blue in dark, indigo in light)</option>
+          <option value="violet">Violet</option>
+          <option value="green">Green</option>
+          <option value="orange">Orange</option>
+          <option value="pink">Pink</option>
+        </select>
+      </label>
       <label className="field field--checkbox">
         <input
           type="checkbox"
@@ -79,6 +94,28 @@ export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           Run interactive visuals in the chat. When the agent writes an HTML visual (a small
           chart or control you can interact with), run it in a sandboxed frame with no network
           access. Diagrams and images show either way. Off by default.
+        </span>
+      </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.toolOutputExpanded ?? false}
+          onChange={(e) => setSettings((s) => ({ ...s, toolOutputExpanded: e.target.checked }))}
+        />
+        <span>
+          Show tool output expanded. Each tool row in the chat opens with its output or diff in
+          view instead of collapsed to one line. Off by default.
+        </span>
+      </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.showReasoning ?? false}
+          onChange={(e) => setSettings((s) => ({ ...s, showReasoning: e.target.checked }))}
+        />
+        <span>
+          Always show reasoning. Keep the model&apos;s reasoning open above each reply instead of
+          folding it away once the reply starts. Off by default.
         </span>
       </label>
     </SettingsSection>
@@ -278,10 +315,14 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   appBadge: 'app icon badge',
   attentionSounds: 'sounds',
   theme: 'theme',
+  accentColor: 'accent color',
   chatFontSize: 'chat text size',
   density: 'density',
   codeTheme: 'code theme',
   htmlVisuals: 'interactive visuals',
+  previewAutoOpen: 'open Preview for dev servers',
+  toolOutputExpanded: 'tool output expanded',
+  showReasoning: 'always show reasoning',
   memoryEnabled: 'memory',
   keybindings: 'keyboard shortcuts',
   sandboxEgress: 'sandbox egress'

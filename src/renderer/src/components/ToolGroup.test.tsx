@@ -838,6 +838,16 @@ describe('ToolGroup: a denied call', () => {
   })
 })
 
+describe('ToolGroup live output', () => {
+  it('shows a running command its output so far, and nothing once it is done', () => {
+    const running = tool({ id: 'c', name: 'run_shell', status: 'running', args: { command: 'make' }, liveOutput: 'compiling a.c\n' })
+    const { rerender } = render(<ToolGroup items={[running]} onApprove={vi.fn()} />)
+    expect(screen.getByLabelText('Output so far')).toHaveTextContent('compiling a.c')
+    rerender(<ToolGroup items={[{ ...running, status: 'done', liveOutput: undefined, output: 'ok' }]} onApprove={vi.fn()} />)
+    expect(screen.queryByLabelText('Output so far')).toBeNull()
+  })
+})
+
 describe('ToolGroup file links', () => {
   const withLinks = (ui: JSX.Element, open = vi.fn()) =>
     render(<FileLinkContext.Provider value={{ workspace: '/repo', open }}>{ui}</FileLinkContext.Provider>)

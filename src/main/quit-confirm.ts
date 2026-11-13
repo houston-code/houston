@@ -5,6 +5,7 @@ import { activeRunCount } from './agent/loop'
 import { listShells } from './agent/shells'
 import { terminalCount } from './terminal'
 import { log } from './logger'
+import { targetWindow } from './windows'
 import {
   quitConfirmButton,
   quitConfirmDetail,
@@ -27,7 +28,7 @@ function liveWork(): LiveWork {
 }
 
 function dialogParent(): BrowserWindow | undefined {
-  return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined
+  return targetWindow()
 }
 
 /** Ask whether to tear down live work. Resolves true when the user confirms. */

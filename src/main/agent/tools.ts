@@ -164,6 +164,11 @@ export interface ToolContext {
   egressProxy?: EgressProxyEndpoints
   signal?: AbortSignal
   /**
+   * Watches a foreground run_shell command's output as it arrives, for a client that
+   * shows it live. Observation only: the tool's result is built as before.
+   */
+  onShellOutput?: (chunk: string) => void
+  /**
    * The conversation this run belongs to, when started from the UI. Tagged onto a
    * background shell so the tasks indicator can open the run that spawned it.
    */
@@ -1911,6 +1916,7 @@ const runShell: ToolDef = {
           egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
+          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {}),
           run: runSandboxed
         })
       : await runSandboxed({
@@ -1921,7 +1927,8 @@ const runShell: ToolDef = {
           allowNetwork: ctx.allowNetwork,
           egressProxy: ctx.egressProxy,
           timeoutMs,
-          signal: ctx.signal
+          signal: ctx.signal,
+          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {})
         })
     const segments: string[] = []
     if (result.stdout) segments.push(result.stdout.trimEnd())
@@ -3141,7 +3148,8 @@ const listScheduledRuns: ToolDef = {
               s.lastResult === 'error' ? ` (failed: ${s.lastError ?? 'unknown error'})` : ''
             }`
           : ''
-        return `- ${s.id}: "${s.name}", ${s.spec}; next run ${formatFireTime(s.nextRunAt)}${last}`
+        const next = s.paused ? 'paused' : `next run ${formatFireTime(s.nextRunAt)}`
+        return `- ${s.id}: "${s.name}", ${s.spec}; ${next}${last}`
       })
       .join('\n')
   }

@@ -4,6 +4,7 @@ import { modalOpen, occludesPreview, ownsShiftTab, suppressesTips, type OverlayF
 const none: OverlayFlags = {
   settings: false,
   doctor: false,
+  issue: false,
   scorecard: false,
   usage: false,
   help: false,
@@ -19,6 +20,7 @@ const only = (key: keyof OverlayFlags): OverlayFlags => ({ ...none, [key]: true 
 const MODALS: (keyof OverlayFlags)[] = [
   'settings',
   'doctor',
+  'issue',
   'scorecard',
   'usage',
   'help',
