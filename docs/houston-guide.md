@@ -406,6 +406,22 @@ Set them as an ordered list in settings.json:
 
 Leave the list unset to have a failing model simply end the turn.
 
+### Web search without a search key
+
+The `web_search` tool uses the search provider picked in Settings → *Tools* → *Web
+search* (Tavily, Brave Search or Exa) when its API key is set. With no key, it falls
+back to the model provider's own web search where the provider offers one:
+
+- **Claude API** (the Anthropic provider without a custom base URL).
+- **OpenAI** (the built-in OpenAI provider without a custom base URL).
+
+The search runs as a short extra request on the chat's current model, so it is billed
+to the model key you already set: the provider's per-search fee plus the tokens of the
+results. Each call runs one search. Other providers (Gemini, Bedrock, Vertex, Azure,
+Foundry, Ollama and other compatible servers) still need a search key. A search key,
+once set, is always used first. Approvals and the untrusted-content fence work the same
+either way.
+
 ## Slash commands
 
 Type `/` in the composer for the command menu. In the terminal it appears under what

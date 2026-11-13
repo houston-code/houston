@@ -292,7 +292,8 @@ const {
   MAX_PROPOSALS_PER_TURN,
   earlierProposalTitles,
   childReportsNote,
-  withUnansweredRecord
+  withUnansweredRecord,
+  nativeWebSearchFor
 } = await import('./loop')
 
 /** A provider that replays one pre-scripted turn per streamChat call. */
@@ -9729,5 +9730,24 @@ describe('withUnansweredRecord', () => {
     expect(records.at(-1)).toEqual({ reason: 'aborted', at: now.toISOString() })
     expect(records[0]).toEqual({ reason: 'error', message: 'fail 3', at: now.toISOString() })
     expect(withUnansweredRecord([], { reason: 'aborted' }, now)).toEqual([])
+  })
+})
+
+describe('nativeWebSearchFor', () => {
+  it('offers nothing when the provider has no built-in search', () => {
+    expect(nativeWebSearchFor({ provider: scripted([]), providerId: 'anthropic', model: 'm' }, new AbortController().signal)).toEqual({})
+  })
+
+  it("runs the provider's search on the route model, labeled with the provider, with the run's signal", async () => {
+    const webSearch = vi.fn(async () => ({ hits: [{ url: 'https://example.test' }] }))
+    const signal = new AbortController().signal
+    const entry = nativeWebSearchFor(
+      { provider: { ...scripted([]), webSearch }, providerId: 'anthropic', model: 'claude-x' },
+      signal
+    )
+    expect(entry.nativeWebSearch?.label).toBe('A')
+    const r = await entry.nativeWebSearch!.search('q', 3)
+    expect(r.hits[0].url).toBe('https://example.test')
+    expect(webSearch).toHaveBeenCalledWith({ model: 'claude-x', query: 'q', maxResults: 3, signal })
   })
 })

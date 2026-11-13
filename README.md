@@ -74,7 +74,8 @@ Open source under the [Apache License 2.0](LICENSE).
   language (`ts`, `tsx`, `py`, `rust`, …).
 - **Web search.** Pick a search provider and supply its API key (Settings →
   *Tools* → *Web search*) and the agent can `web_search` the web for current
-  information. Like `web_fetch`, it asks before it leaves the machine (once per chat
+  information. With no search key, models on the Claude API or OpenAI use their
+  provider's built-in web search instead, billed to your model key. Like `web_fetch`, it asks before it leaves the machine (once per chat
   in full auto, unless Settings → *Permissions* → *Web reads in full auto* lets it
   run without asking).
 - **See its own localhost.** After starting a dev server (a background
