@@ -46,9 +46,13 @@ The full GUI:
 
 - a chat sidebar and diffs
 - a right-hand dock with a **Background tasks** list of background commands (stop
-  them, read their output, see which port each one holds) and the live **Preview**
-  (it opens by itself, once per chat, when the agent starts a dev server and its
-  address shows up; turn that off in Settings > Tools > Preview)
+  them, read their output, see which port each one holds), the live **Preview** (it
+  opens by itself, once per chat, when the agent starts a dev server and its address
+  shows up; turn that off in Settings > Tools > Preview), the **Changes** in the
+  project, its **Files**, and a waiting **Plan review**. It opens on the tab you used last.
+  A plan opens it on its review and puts it back as it was once you answer.
+  **View > Reset Layout** (or "Reset layout" in the command palette) closes it and the
+  terminal and side chat, and puts every panel back to its first-launch size
 - Settings
 
 **Chat status.** Each chat in the sidebar has a status dot:
@@ -1895,8 +1899,7 @@ to it.
 - **Continue in new chat** forks the chat with the exchange as a draft.
 
 **It keeps its place.** Each chat has one side chat, kept with the chat. Closing the
-panel, switching chats, a plan review taking over the panel, or restarting Houston
-never loses it, and an answer still coming in keeps going and shows up when you come
+panel, switching chats, or restarting Houston never loses it, and an answer still coming in keeps going and shows up when you come
 back. Before each follow-up it catches up on what the main chat said since its last
 answer. **New side chat** (the + in its header) clears it and starts over.
 
@@ -2709,8 +2712,9 @@ item. A shortcut you rebind in Settings shows up in the menus too.
   (⌘F).
 - **View** opens the **Command Palette…** (⌘K) and shows or hides the sidebar (⌘B),
   the terminal (⌃`), **Background Tasks**, **Preview**, and the **Side Chat**. Each
-  item reads **Show** or **Hide** by whether that panel is open. **Show Changes** and
-  **Show Files** open those views of the project folder. Zoom and full screen are
+  item reads **Show** or **Hide** by whether that panel is open. **Show Changes** opens
+  the project's uncommitted changes, **Show Files** opens the Files tab of the side
+  panel, and **Reset Layout** puts every panel back as it was on first launch. Zoom and full screen are
   below them.
 - **Go** moves to the **Previous Chat** (⌃⇧Tab) or **Next Chat** (⌃Tab), puts the
   cursor in the sidebar's search field (**Search Chats…**), and opens the model list

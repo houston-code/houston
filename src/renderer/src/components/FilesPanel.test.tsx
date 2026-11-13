@@ -38,6 +38,26 @@ describe('FilesPanel', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('docked in the side panel: no dialog, no close button, and focus stays where it was', async () => {
+    installApi({ '': [file('README.md', 'README.md')] })
+    const onClose = vi.fn()
+    render(
+      <>
+        <textarea aria-label="message" />
+        <FilesPanel workspace="/ws" onClose={onClose} docked />
+      </>
+    )
+    const box = screen.getByLabelText('message')
+    box.focus()
+    expect(await screen.findByText('README.md')).toBeInTheDocument()
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('region', { name: 'Files' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Close' })).toBeNull()
+    expect(document.activeElement).toBe(box)
+    fireEvent.keyDown(box, { key: 'Escape' })
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('lists the workspace root', async () => {
     installApi({ '': [dir('src', 'src'), file('README.md', 'README.md')] })
     render(<FilesPanel workspace="/repo" onClose={vi.fn()} />)

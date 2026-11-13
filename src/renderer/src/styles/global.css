@@ -9147,6 +9147,41 @@ body:has(.coachmark) .get-started {
   box-shadow: 0 0 0 2px var(--accent);
 }
 
+/* ---- Files and Plan review as tabs of the right-hand dock ---- */
+.preview-dock__panel--files,
+.preview-dock__panel--plan {
+  overflow: hidden;
+}
+/* Inside the dock the plan fills the tab instead of its own grid column. */
+.plan-panel--docked {
+  grid-column: auto;
+  flex: 1;
+  min-height: 0;
+  border-left: 0;
+}
+.files-panel--docked {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: auto;
+  max-width: none;
+}
+/* The dock is narrow: the tree sits above the preview instead of beside it. */
+.files-panel--docked .files-panel__split {
+  flex-direction: column;
+}
+.files-panel--docked .files-panel__tree {
+  width: auto;
+  flex: 0 0 45%;
+  border-right: 0;
+  border-bottom: 1px solid var(--border);
+}
+.files-panel--docked .files-panel__preview {
+  flex: 1;
+  min-height: 0;
+}
+
 /* ---- Plan review panel (Plan mode: docked right column, resizable) ---- */
 .plan-panel {
   position: relative;

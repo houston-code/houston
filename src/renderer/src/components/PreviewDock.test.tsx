@@ -271,6 +271,81 @@ describe('PreviewDock tabs (Background tasks | Preview)', () => {
     expect(api.syncPreviewPanes).toHaveBeenLastCalledWith(expect.any(Array), false)
   })
 
+  it('adds Files and Plan review tabs when given, mounting each the first time it shows', () => {
+    const onTabChange = vi.fn()
+    const dock = (tab: 'preview' | 'files' | 'plan') => (
+      <PreviewDock
+        servers={[]}
+        occluded={false}
+        onResizeMouseDown={noop}
+        onClose={vi.fn()}
+        tab={tab}
+        onTabChange={onTabChange}
+        tasks={<p>tasks content</p>}
+        files={<p>files content</p>}
+        plan={<p>plan content</p>}
+      />
+    )
+    const { rerender } = render(dock('preview'))
+    expect(screen.getAllByRole('tab').map((t) => t.id)).toEqual([
+      'dock-tab-tasks',
+      'dock-tab-preview',
+      'dock-tab-files',
+      'dock-tab-plan'
+    ])
+    expect(screen.queryByText('files content')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Preview' }), { key: 'ArrowRight' })
+    expect(onTabChange).toHaveBeenLastCalledWith('files')
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Preview' }), { key: 'End' })
+    expect(onTabChange).toHaveBeenLastCalledWith('plan')
+    rerender(dock('files'))
+    expect(screen.getByText('files content')).toBeVisible()
+    expect(api.syncPreviewPanes).toHaveBeenLastCalledWith(expect.any(Array), false)
+    rerender(dock('plan'))
+    // Files stays mounted (its tree survives) but hidden.
+    expect(screen.getByText('files content')).not.toBeVisible()
+    expect(screen.getByText('plan content')).toBeVisible()
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Plan review' }), { key: 'ArrowRight' })
+    expect(onTabChange).toHaveBeenLastCalledWith('tasks')
+  })
+
+  it('leaves out the Files and Plan review tabs without their content', () => {
+    renderTabbed('preview')
+    expect(screen.queryByRole('tab', { name: 'Files' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: 'Plan review' })).toBeNull()
+  })
+
+  it('orders all five tabs, keeping Files mounted but Changes only while it shows', () => {
+    const dock = (tab: 'changes' | 'files') => (
+      <PreviewDock
+        servers={[]}
+        occluded={false}
+        onResizeMouseDown={noop}
+        onClose={vi.fn()}
+        tab={tab}
+        onTabChange={vi.fn()}
+        tasks={<p>tasks content</p>}
+        changes={<p>changes content</p>}
+        files={<p>files content</p>}
+        plan={<p>plan content</p>}
+      />
+    )
+    const { rerender } = render(dock('files'))
+    expect(screen.getAllByRole('tab').map((t) => t.id)).toEqual([
+      'dock-tab-tasks',
+      'dock-tab-preview',
+      'dock-tab-changes',
+      'dock-tab-files',
+      'dock-tab-plan'
+    ])
+    rerender(dock('changes'))
+    expect(screen.getByText('changes content')).toBeVisible()
+    expect(screen.getByText('files content')).not.toBeVisible()
+    rerender(dock('files'))
+    expect(screen.queryByText('changes content')).toBeNull()
+    expect(screen.getByText('files content')).toBeVisible()
+  })
+
   it('adds a Changes tab after Preview, rendering its content only while it shows', () => {
     const onTabChange = vi.fn()
     const { rerender } = render(
