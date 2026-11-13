@@ -232,22 +232,28 @@ export function registerShell(
   // would otherwise decode as two replacement characters.
   const outDecoder = new StringDecoder('utf8')
   const errDecoder = new StringDecoder('utf8')
-  child.stdout?.on('data', (c: Buffer) => {
-    const s = outDecoder.write(c)
+  const onOut = (s: string): void => {
+    if (!s) return
     shell.stdoutProduced += s.length
     shell.stdout = appendCapped(shell.stdout, s)
     shell.recent = appendRecent(shell.recent, s)
     sniff(s)
-  })
-  child.stderr?.on('data', (c: Buffer) => {
-    const s = errDecoder.write(c)
+  }
+  const onErr = (s: string): void => {
+    if (!s) return
     shell.stderrProduced += s.length
     shell.stderr = appendCapped(shell.stderr, s)
     shell.recent = appendRecent(shell.recent, s)
     sniff(s)
-  })
-  // Nothing more will be appended: give back the slack appendCapped let build up.
+  }
+  child.stdout?.on('data', (c: Buffer) => onOut(outDecoder.write(c)))
+  child.stderr?.on('data', (c: Buffer) => onErr(errDecoder.write(c)))
+  // Nothing more will be appended: flush any partial character the decoders still
+  // hold (as U+FFFD, rather than dropping it), then give back the slack
+  // appendCapped let build up.
   const settle = (): void => {
+    onOut(outDecoder.end())
+    onErr(errDecoder.end())
     shell.stdout = windowOf(shell.stdout)
     shell.stderr = windowOf(shell.stderr)
   }

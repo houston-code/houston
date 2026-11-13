@@ -60,6 +60,19 @@ describe('background shell registry', () => {
     expect(readShellOutput(id).stdout).toBe('café\n')
   })
 
+  it('keeps a trailing partial multibyte character the shell ended on', async () => {
+    // Exits mid-character (0xC3 without its continuation byte): the decoder held that
+    // byte back waiting for more, and nothing flushed it at close.
+    const child = node(
+      'process.stdout.write(Buffer.from([0x6f, 0x6b, 0xc3])); process.stderr.write(Buffer.from([0xe2, 0x82]))'
+    )
+    const id = registerShell('node partial', child)
+    await onClose(child)
+    const r = readShellOutput(id)
+    expect(r.stdout).toBe('ok�')
+    expect(r.stderr).toBe('�')
+  })
+
   it('peeks at a shell without hiding its output from the next read', async () => {
     const child = node('process.stdout.write("# pass 2\\n# fail 0\\n"); process.exit(0)')
     const id = registerShell('node test.mjs', child)
