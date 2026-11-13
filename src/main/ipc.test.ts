@@ -1033,3 +1033,43 @@ describe('app-icon badge on launch', () => {
     if (process.platform !== 'win32') expect(h.setBadgeCount).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('requests while startup is still running', () => {
+  const version = (): unknown => h.handlers.get(IPC.appGetVersion)!({ sender: {} })
+
+  it('holds a request until the startup work finishes, then answers it', async () => {
+    let finish!: () => void
+    const startup = new Promise<void>((resolve) => (finish = resolve))
+    registerIpc(startup)
+    // The handler exists at once: a window that is already loading never finds a
+    // channel unregistered.
+    let answered: unknown = 'pending'
+    const pending = Promise.resolve(version()).then((v) => (answered = v))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(answered).toBe('pending')
+    finish()
+    await pending
+    expect(typeof answered).toBe('string')
+  })
+
+  it('answers with no added wait once startup has finished', async () => {
+    const startup = Promise.resolve()
+    registerIpc(startup)
+    await startup
+    await Promise.resolve()
+    // A handler that returns a plain value returns it as such again, not a promise.
+    expect(version()).toEqual(expect.any(String))
+  })
+
+  it('still answers when the startup work failed', async () => {
+    const startup = Promise.reject(new Error('credential store unavailable'))
+    registerIpc(startup)
+    expect(await version()).toEqual(expect.any(String))
+  })
+
+  it('waits for nothing when no startup work is given', () => {
+    registerIpc()
+    expect(version()).toEqual(expect.any(String))
+  })
+})
