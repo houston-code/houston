@@ -1,7 +1,7 @@
-import { promises as fs } from 'node:fs'
+import { promises as fs, realpathSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { isAbsolute, join, relative, sep } from 'node:path'
 import { OFFLINE_FAIL_FAST_ENV } from '../sandbox'
 import type { EgressProxyEndpoints, SandboxRunOptions, SandboxRunResult } from '../sandbox'
 
@@ -31,6 +31,56 @@ export interface ShellSession {
 
 export function createShellSession(workspace: string): ShellSession {
   return { cwd: workspace, env: '' }
+}
+
+/** Whether a `relative()` result stays inside its base ('' is the base itself). */
+function staysInside(rel: string): boolean {
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+/**
+ * The shell's directory spelled from the project root: '' at the root itself, a
+ * relative path (`packages/api`) inside it, or null outside it. `pwd` can name the
+ * project differently than the workspace path does (through a symlink, or an 8.3
+ * short name on Windows), so the canonical paths decide when the spellings differ.
+ */
+export function cwdFromRoot(workspace: string, cwd: string): string | null {
+  const direct = relative(workspace, cwd)
+  if (staysInside(direct)) return direct
+  try {
+    const canonical = relative(realpathSync.native(workspace), realpathSync.native(cwd))
+    if (staysInside(canonical)) return canonical
+  } catch {
+    // a directory that no longer exists is not inside anything
+  }
+  return null
+}
+
+/**
+ * The shell's directory as the model is shown it, or null at the project root:
+ * written from the root inside the project, elsewhere in full, with `~` for home.
+ */
+export function shellCwdLabel(workspace: string, cwd: string, home: string = homedir()): string | null {
+  const fromRoot = cwdFromRoot(workspace, cwd)
+  if (fromRoot === '') return null
+  return fromRoot ?? homeRelative(cwd, home)
+}
+
+/**
+ * The run_shell line saying where the session's shell now sits, or null at the
+ * project root. A `cd` carries over to later commands but file tools keep resolving
+ * from the root, so the model is told whenever the two differ.
+ */
+export function shellCwdLine(workspace: string, cwd: string, home: string = homedir()): string | null {
+  const label = shellCwdLabel(workspace, cwd, home)
+  return label === null ? null : `[cwd: ${label}]`
+}
+
+/** `path` written from `~` when it is the home folder or under it, else as is. */
+function homeRelative(path: string, home: string): string {
+  if (!home) return path
+  if (path === home) return '~'
+  return path.startsWith(`${home}${sep}`) || path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
 }
 
 /** Escape a string for safe embedding inside a single-quoted bash literal. */

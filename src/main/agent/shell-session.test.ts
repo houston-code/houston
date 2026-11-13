@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, realpathSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, realpathSync, mkdirSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, sep } from 'node:path'
 import { spawn } from 'node:child_process'
 import { OFFLINE_FAIL_FAST_ENV, type SandboxRunOptions, type SandboxRunResult } from '../sandbox'
 import { resolveWindowsBash } from '../sandbox/windows'
@@ -9,7 +9,9 @@ import {
   applySessionResult,
   buildSessionCommand,
   createShellSession,
+  cwdFromRoot,
   runInSession,
+  shellCwdLine,
   singleQuote,
   type ShellSession
 } from './shell-session'
@@ -94,6 +96,50 @@ describe('applySessionResult', () => {
     const s: ShellSession = { cwd: '/old', env: 'declare -x A=1' }
     applySessionResult(s, { cwd: '', env: '' })
     expect(s).toEqual({ cwd: '/old', env: 'declare -x A=1' })
+  })
+})
+
+describe('cwdFromRoot', () => {
+  it('spells a directory inside the project from its root', () => {
+    expect(cwdFromRoot(ws, ws)).toBe('')
+    expect(cwdFromRoot(ws, join(ws, 'packages', 'api'))).toBe(join('packages', 'api'))
+  })
+
+  it('is null outside the project, including a sibling that shares its name as a prefix', () => {
+    expect(cwdFromRoot(ws, dirname(ws))).toBeNull()
+    expect(cwdFromRoot(ws, `${ws}-other`)).toBeNull()
+  })
+
+  it('sees through another spelling of the same directory', () => {
+    // `pwd` can name the project through a symlink (or, on Windows, an 8.3 short name).
+    mkdirSync(join(ws, 'real', 'sub'), { recursive: true })
+    const alias = join(ws, 'alias')
+    symlinkSync(join(ws, 'real'), alias, 'junction')
+    expect(cwdFromRoot(join(ws, 'real'), join(alias, 'sub'))).toBe('sub')
+    expect(cwdFromRoot(alias, join(ws, 'real'))).toBe('')
+  })
+})
+
+describe('shellCwdLine', () => {
+  const home = (): string => join(ws, 'home')
+
+  it('says nothing while the shell is at the project root', () => {
+    expect(shellCwdLine(ws, ws, home())).toBeNull()
+  })
+
+  it('names a directory inside the project from its root', () => {
+    expect(shellCwdLine(ws, join(ws, 'packages', 'api'), home())).toBe(`[cwd: ${join('packages', 'api')}]`)
+  })
+
+  it('writes a directory under the home folder from ~', () => {
+    expect(shellCwdLine(join(ws, 'proj'), join(home(), 'other'), home())).toBe(`[cwd: ~${sep}other]`)
+    expect(shellCwdLine(join(ws, 'proj'), home(), home())).toBe('[cwd: ~]')
+  })
+
+  it('spells any other directory in full', () => {
+    expect(shellCwdLine(join(ws, 'proj'), join(ws, 'elsewhere'), home())).toBe(`[cwd: ${join(ws, 'elsewhere')}]`)
+    // A sibling of home whose name starts with it is not under it.
+    expect(shellCwdLine(join(ws, 'proj'), `${home()}2`, home())).toBe(`[cwd: ${home()}2]`)
   })
 })
 
