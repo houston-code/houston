@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import {
-  collectMatchRangesAcross,
-  setFindHighlights,
-  clearFindHighlights,
-  scrollRangeIntoView
-} from '../lib/transcriptFind'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { findMatches, setFindHighlights, clearFindHighlights, scrollRangeIntoView } from '../lib/transcriptFind'
+
+/**
+ * How long typing must pause before the conversation is searched. Each search walks
+ * every text node of the transcript, which in a long chat is tens of thousands, so it
+ * runs once per pause rather than once per keystroke. Enter searches at once.
+ */
+export const FIND_DEBOUNCE_MS = 120
 
 /**
  * In-conversation find bar (⌘F). Highlights every match across the searchable
@@ -27,8 +29,14 @@ export function FindBar({
 }): JSX.Element {
   const [query, setQuery] = useState('')
   const [count, setCount] = useState(0)
+  const [capped, setCapped] = useState(false)
   const [active, setActive] = useState(0)
   const rangesRef = useRef<Range[]>([])
+  const activeRef = useRef(0)
+  /** The query the current matches are for: behind `query` while a search is waiting. */
+  const searchedRef = useRef('')
+  const [searched, setSearched] = useState('')
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Hand focus back to where it was (usually the message box) when the bar closes,
@@ -48,23 +56,48 @@ export function FindBar({
     inputRef.current?.select()
   }, [focusRequest])
 
-  // Recompute and repaint matches whenever the query changes.
+  const search = useCallback(
+    (q: string) => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = null
+      const found = findMatches(getRoots(), q)
+      rangesRef.current = found.ranges
+      searchedRef.current = q
+      setSearched(q)
+      activeRef.current = 0
+      setCount(found.ranges.length)
+      setCapped(found.capped)
+      setActive(0)
+      setFindHighlights(found.ranges, 0)
+      scrollRangeIntoView(found.ranges[0])
+    },
+    [getRoots]
+  )
+
+  // Recompute and repaint matches once typing pauses. Emptying the box clears at once.
   useEffect(() => {
-    const ranges = collectMatchRangesAcross(getRoots(), query)
-    rangesRef.current = ranges
-    setCount(ranges.length)
-    setActive(0)
-    setFindHighlights(ranges, 0)
-    scrollRangeIntoView(ranges[0])
-  }, [query, getRoots])
+    if (!query) {
+      search('')
+      return
+    }
+    timerRef.current = setTimeout(() => search(query), FIND_DEBOUNCE_MS)
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }, [query, search])
 
   // Clear the highlights when the bar unmounts.
   useEffect(() => () => clearFindHighlights(), [])
 
   const go = (dir: 1 | -1): void => {
+    // Typed and pressed Enter before the pause ran the search: run it now, then step,
+    // as if the results had already been there.
+    if (searchedRef.current !== query) search(query)
     const ranges = rangesRef.current
     if (ranges.length === 0) return
-    const next = (active + dir + ranges.length) % ranges.length
+    const next = (activeRef.current + dir + ranges.length) % ranges.length
+    activeRef.current = next
     setActive(next)
     setFindHighlights(ranges, next)
     scrollRangeIntoView(ranges[next])
@@ -80,7 +113,9 @@ export function FindBar({
     }
   }
 
-  const status = query ? (count > 0 ? `${active + 1}/${count}` : 'No results') : ''
+  // Describes the last search that ran, which is also what is highlighted: while the
+  // next one waits for typing to pause, it keeps showing the previous result.
+  const status = query && searched ? (count > 0 ? `${active + 1}/${count}${capped ? '+' : ''}` : 'No results') : ''
 
   return (
     <div className="find-bar" role="search">

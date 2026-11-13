@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { collectMatchRanges, collectMatchRangesAcross } from './transcriptFind'
+import { MAX_FIND_MATCHES, collectMatchRanges, collectMatchRangesAcross, findMatches } from './transcriptFind'
 
 function root(html: string): HTMLElement {
   const el = document.createElement('div')
@@ -64,5 +64,34 @@ describe('collectMatchRangesAcross', () => {
     const a = root('<p>hit</p>')
     expect(collectMatchRangesAcross([], 'hit')).toHaveLength(0)
     expect(collectMatchRangesAcross([a], '')).toHaveLength(0)
+  })
+})
+
+describe('findMatches', () => {
+  const el = (text: string): HTMLElement => {
+    const d = document.createElement('div')
+    d.textContent = text
+    return d
+  }
+
+  it('stops at the cap and reports that there were more', () => {
+    const { ranges, capped } = findMatches([el('ab '.repeat(MAX_FIND_MATCHES + 10))], 'ab')
+    expect(ranges).toHaveLength(MAX_FIND_MATCHES)
+    expect(capped).toBe(true)
+  })
+
+  it('does not report more when there are exactly as many as the cap', () => {
+    const { ranges, capped } = findMatches([el('ab '.repeat(MAX_FIND_MATCHES))], 'ab')
+    expect(ranges).toHaveLength(MAX_FIND_MATCHES)
+    expect(capped).toBe(false)
+  })
+
+  it('counts the cap across roots, in root order', () => {
+    const a = el('ab '.repeat(MAX_FIND_MATCHES - 1))
+    const b = el('ab ab ab')
+    const { ranges, capped } = findMatches([a, b], 'ab')
+    expect(ranges).toHaveLength(MAX_FIND_MATCHES)
+    expect(ranges[MAX_FIND_MATCHES - 1].startContainer.parentNode).toBe(b)
+    expect(capped).toBe(true)
   })
 })
