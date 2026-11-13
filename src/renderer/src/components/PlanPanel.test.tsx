@@ -64,6 +64,15 @@ describe('PlanPanel checks', () => {
 })
 
 describe('PlanPanel', () => {
+  it('has its own resize handle only when it is not a side-panel tab', () => {
+    const { unmount } = renderPanel()
+    expect(screen.getByRole('separator', { name: 'Resize plan panel' })).toBeInTheDocument()
+    unmount()
+    const { container } = renderPanel({ docked: true })
+    expect(screen.queryByRole('separator', { name: 'Resize plan panel' })).toBeNull()
+    expect(container.querySelector('.plan-panel--docked')).not.toBeNull()
+  })
+
   it('renders the title, the full freeform body as markdown, and file chips', () => {
     const { panel } = renderPanel()
     expect(screen.getByRole('heading', { name: 'Persist the composer draft' })).toBeTruthy()

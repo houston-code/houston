@@ -336,6 +336,13 @@ function fmtEvent(e: AgentEvent): string {
   if ('cost' in rest && typeof rest.cost === 'number') {
     rest.cost = Math.round(rest.cost * 1e6) / 1e6
   }
+  // A usage event's system-prompt estimate is measured on the prompt as sent, which
+  // holds this machine's workspace path, so its value varies by machine. The prompt
+  // itself is pinned (normalized) by each request's sha and length.
+  const withContext = rest as unknown as { context?: Record<string, unknown> }
+  if (e.type === 'usage' && typeof withContext.context?.system === 'number') {
+    withContext.context = { ...withContext.context, system: '<system prompt estimate>' }
+  }
   // A receipt's plan carries the wall-clock time the plan was accepted; pin the shape,
   // not the moment.
   if (e.type === 'receipt' && e.receipt.plan?.acceptedAt !== undefined) {

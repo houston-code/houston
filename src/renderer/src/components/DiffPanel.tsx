@@ -21,6 +21,7 @@ import {
 } from '../lib/diffComments'
 import { DiffView, lineKey, type DiffLayout, type DiffLineTarget } from './DiffView'
 import { Icon } from './Icon'
+import { CommitForm } from './CommitForm'
 
 /** Below this many files the list starts fully expanded; above it, collapsed. */
 const AUTO_EXPAND_LIMIT = 8
@@ -382,6 +383,7 @@ export function DiffPanel({
   running = false,
   onShip,
   creating = false,
+  commitForm = false,
   onSendComments
 }: {
   workspace: string | null
@@ -391,6 +393,11 @@ export function DiffPanel({
   running?: boolean
   onShip?: (action: ShipAction) => void
   creating?: boolean
+  /**
+   * Show the commit form (commit, push) above the ship action. It commits every
+   * uncommitted change, so it shows on the working-tree scope only.
+   */
+  commitForm?: boolean
   /** Send line comments to the agent as one message. Without it, lines take no comments. */
   onSendComments?: (comments: ReviewComment[]) => void
 }): JSX.Element {
@@ -673,6 +680,16 @@ export function DiffPanel({
             Send {comments.length} comment{comments.length === 1 ? '' : 's'} to the agent
           </button>
         </footer>
+      )}
+
+      {commitForm && workspace && scope === 'tree' && tree?.isRepo && (
+        <CommitForm
+          workspace={workspace}
+          conversationId={conversationId}
+          hasChanges={files.length > 0}
+          busy={creating}
+          onChanged={() => void load()}
+        />
       )}
 
       {onShip && shipAction && tree?.isRepo && files.length > 0 && (

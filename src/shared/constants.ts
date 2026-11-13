@@ -67,6 +67,8 @@ export const IPC = {
   updateCancelDownload: 'update:cancelDownload',
   /** Main → renderer: the native menu's "Settings…" item was chosen — open the modal. */
   menuOpenSettings: 'menu:openSettings',
+  /** Renderer → main: its listeners are attached, so held houston:// links can be delivered. */
+  deepLinkReady: 'deepLink:ready',
   /** Main → renderer: a native File-menu command was chosen (see MenuCommand). */
   menuCommand: 'menu:command',
   /** Renderer → main: UI state the native menu depends on (see MenuState). */
@@ -101,6 +103,8 @@ export const IPC = {
   /** Keep an interactive HTML visual for its sandboxed frame to load; returns its id. */
   visualRegisterHtml: 'visual:registerHtml',
   commandsList: 'commands:list',
+  /** A verification command inferred from the project's files (Settings > Agent Behavior). */
+  verifyInfer: 'verify:infer',
   /** List the workspace's skills (.houston/skills) as {name, description}, for /skills. */
   skillsList: 'skills:list',
   /** List the workspace's custom agents (.houston/agents) as {name, description}, for /agents. */
@@ -124,6 +128,16 @@ export const IPC = {
   /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
   folderTrustDecide: 'folderTrust:decide',
   workingTreeChanges: 'workingTree:changes',
+  /** Commit every change, from the Changes view's commit form. */
+  gitCommit: 'git:commit',
+  /** Push the current branch, from the Changes view's commit form. */
+  gitPush: 'git:push',
+  /** The current branch against its upstream (for the Push button). */
+  gitBranchSync: 'git:branchSync',
+  /** Ask the chat's model for a commit message for the uncommitted changes. */
+  gitSuggestMessage: 'git:suggestMessage',
+  /** The current branch's pull request, for the composer chip. */
+  gitPrStatus: 'git:prStatus',
   /** What a chat's latest turn, or all its turns, changed (the Changes view's scopes). */
   chatChanges: 'changes:chat',
   /** Revert one file, or one hunk, from the Changes view. */

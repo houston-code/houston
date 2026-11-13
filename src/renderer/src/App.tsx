@@ -83,6 +83,7 @@ import {
 import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
 import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH } from './lib/previewPanel'
 import { clampPlanWidth, PLAN_DEFAULT_WIDTH } from './lib/planPanel'
+import { afterPlan, forgetDockTab, readDockTab, rememberDockTab, type DockState } from './lib/dockLayout'
 import { usePreviewServers } from './hooks/usePreviewServers'
 import { ownedByChat } from './lib/chatScope'
 import { useChat } from './hooks/useChat'
@@ -90,6 +91,7 @@ import { useInputQueue } from './hooks/useInputQueue'
 import { queueBarLabel } from './lib/queueBar'
 import { deliverMidRunMessage } from './lib/midRunMessage'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
+import { usePrStatus } from './hooks/usePrStatus'
 import type { ShipAction } from '@shared/shipAction'
 import { saveComposerDraft } from './lib/composerDraft'
 import type { ForkPoint } from '@shared/conversation-io'
@@ -163,6 +165,7 @@ import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
 import { FindBar } from './components/FindBar'
 import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
+import { pageForWords } from './components/settings/pageIds'
 import type { WhatsNew } from '@shared/update'
 import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutRules } from './lib/ruleToast'
 
@@ -247,8 +250,9 @@ export default function App(): JSX.Element {
   // A settings search to open on (`/settings <words>`).
   const [settingsQuery, setSettingsQuery] = useState('')
   const [doctorOpen, setDoctorOpen] = useState(false)
+  // Bumped by `/context` to open the usage chip's panel.
+  const [usageOpenSignal, setUsageOpenSignal] = useState(0)
   const [issueOpen, setIssueOpen] = useState(false)
-  const [filesOpen, setFilesOpen] = useState(false)
   // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
   const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
   // The line to show in the previewed file, when a link named one.
@@ -329,10 +333,16 @@ export default function App(): JSX.Element {
   const [terminalMounted, setTerminalMounted] = useState(false)
   const [terminalHeight, setTerminalHeight] = useState(TERMINAL_DEFAULT_HEIGHT)
   const [previewOpen, setPreviewOpen] = useState(false)
-  // Which tab the right-hand dock shows: the live Preview or the Tasks list. Not
-  // persisted: the dock reopens on Preview, as it always has.
-  const [dockTab, setDockTab] = useState<DockTab>('preview')
-  // The Changes view is a tab of that dock.
+  // Which tab the right-hand dock shows (Tasks, Preview, Files, or a plan waiting for
+  // review). The last one is remembered for the next launch (see lib/dockLayout).
+  const [dockTab, setDockTabState] = useState<DockTab>('preview')
+  const setDockTab = useCallback((tab: DockTab) => {
+    setDockTabState(tab)
+    rememberDockTab(tab)
+  }, [])
+  // Files is a tab of the dock.
+  const filesOpen = previewOpen && dockTab === 'files'
+  // Changes is a tab of the dock too.
   const changesOpen = previewOpen && dockTab === 'changes'
   // The background shell whose page "Open preview" asked for, so the Preview tab
   // shows it even when more servers are running than it has panes for. Each request is a
@@ -433,7 +443,10 @@ export default function App(): JSX.Element {
         setTerminalMounted(true)
       }
       if (typeof s.previewWidth === 'number') setPreviewWidth(clampPreviewWidth(s.previewWidth))
-      if (s.previewOpen) setPreviewOpen(true)
+      if (s.previewOpen) {
+        setPreviewOpen(true)
+        setDockTabState(readDockTab())
+      }
       if (typeof s.planWidth === 'number') setPlanWidth(clampPlanWidth(s.planWidth))
       // Reopen the chat that was open at quit, as a click in the sidebar would. Skip it
       // if the user already opened one while this loaded. It does not wait for the
@@ -475,8 +488,17 @@ export default function App(): JSX.Element {
     })
   }, [])
 
-  // Open the Settings modal when chosen from the native app menu (macOS ⌘,).
-  useEffect(() => window.api.onOpenSettings(() => setSettingsOpen(true)), [])
+  // Open the Settings modal when chosen from the native app menu (macOS ⌘,), or from
+  // a houston://settings/<page> link, which names the page to show.
+  useEffect(
+    () =>
+      window.api.onOpenSettings((page) => {
+        const named = page ? pageForWords(page) : null
+        if (named) setSettingsSection(named)
+        setSettingsOpen(true)
+      }),
+    []
+  )
 
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
@@ -610,7 +632,9 @@ export default function App(): JSX.Element {
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
   // File paths in the transcript (tool rows, the receipt, relative links in replies)
-  // open in the Files panel's preview, at the line when one is known.
+  // open in the Files tab's preview, at the line when one is known. The tab is opened
+  // through a ref because showFiles is defined further down.
+  const showFilesRef = useRef<() => void>(() => undefined)
   const fileLinks = useMemo<FileLinks | null>(
     () =>
       workspace
@@ -619,7 +643,7 @@ export default function App(): JSX.Element {
             open: ({ path, line }) => {
               setFilesTarget(path)
               setFilesLine(line)
-              setFilesOpen(true)
+              showFilesRef.current()
             }
           }
         : null,
@@ -818,6 +842,8 @@ export default function App(): JSX.Element {
   // Uncommitted-change counts for the titlebar Changes badge (refreshes on run
   // completion / window focus).
   const workingTreeStats = useWorkingTreeStats(workspace, chat.running)
+  // The branch's pull request for the composer chip; gh is asked only for a GitHub remote.
+  const prStatus = usePrStatus(workspace, workingTreeStats.ship?.remote?.host === 'github', chat.running)
 
   // Load the workspace's custom slash commands (alongside the built-ins).
   useEffect(() => {
@@ -1486,6 +1512,18 @@ export default function App(): JSX.Element {
     [terminals, persistTerminal]
   )
 
+  // Settings > Tools' Install: a new tab with the install command typed in but not
+  // run, so the user sees exactly what will run and presses Enter themselves.
+  const typeInTerminal = useCallback(
+    async (command: string) => {
+      await terminals.addTab({ type: command, title: 'Install' })
+      setTerminalMounted(true)
+      setTerminalOpen(true)
+      void persistTerminal({ terminalOpen: true })
+    },
+    [terminals, persistTerminal]
+  )
+
   // Open a background task from the title-bar indicator: surface + focus its
   // terminal tab (mounting/showing the dock), or switch to the conversation it
   // belongs to — its own for a chat, the spawning run for a background shell.
@@ -1557,22 +1595,14 @@ export default function App(): JSX.Element {
         void persistPreview({ previewOpen: true })
       }
     },
-    [previewOpen, dockTab, persistPreview]
+    [previewOpen, dockTab, persistPreview, setDockTab]
   )
   const togglePreview = useCallback(() => toggleDockTab('preview'), [toggleDockTab])
   const toggleChanges = useCallback(() => toggleDockTab('changes'), [toggleDockTab])
-  // Open the dock on Changes (never closes it: palette, menu, composer bar, /changes).
-  const showChanges = useCallback(() => {
-    setDockTab('changes')
-    if (!previewOpen) {
-      setPreviewOpen(true)
-      void persistPreview({ previewOpen: true })
-    }
-  }, [previewOpen, persistPreview])
   // A dev server the agent started in this chat showed its address: open the Preview
   // once per chat (not persisted, so the next launch keeps the user's own choice).
   const autoOpenPreview = useCallback(() => {
-    setDockTab('preview')
+    setDockTabState('preview')
     setPreviewOpen(true)
   }, [])
   useAutoOpenPreview(allPreviewServers, currentId, settings?.previewAutoOpen !== false, autoOpenPreview)
@@ -1581,6 +1611,51 @@ export default function App(): JSX.Element {
     setPreviewOpen(false)
     void persistPreview({ previewOpen: false })
   }, [persistPreview])
+  // Open the dock on a tab (never closes it): Files from the palette or menu, a plan.
+  const showDockTab = useCallback(
+    (tab: DockTab) => {
+      setDockTab(tab)
+      if (!previewOpen) {
+        setPreviewOpen(true)
+        void persistPreview({ previewOpen: true })
+      }
+    },
+    [previewOpen, persistPreview, setDockTab]
+  )
+  const toggleFiles = useCallback(() => toggleDockTab('files'), [toggleDockTab])
+  // Open the dock on Changes (never closes it: palette, menu, composer bar, /changes).
+  const showChanges = useCallback(() => showDockTab('changes'), [showDockTab])
+
+  // Back to the first-launch layout: sidebar open at its default width, terminal,
+  // side panel and side chat closed, every panel at its default size, and no
+  // remembered side-panel tab.
+  const resetLayout = useCallback(() => {
+    setSidebarWidth(SIDEBAR_DEFAULT_WIDTH)
+    setSidebarCollapsed(false)
+    setTerminalOpen(false)
+    setTerminalHeight(TERMINAL_DEFAULT_HEIGHT)
+    setPreviewOpen(false)
+    setPreviewWidth(PREVIEW_DEFAULT_WIDTH)
+    setPlanWidth(PLAN_DEFAULT_WIDTH)
+    setSideChatOpen(false)
+    setDockTabState('preview')
+    forgetDockTab()
+    void (async () => {
+      const fresh = await window.api.saveSettings({
+        ...(await window.api.getSettings()),
+        sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+        sidebarCollapsed: false,
+        terminalOpen: false,
+        terminalHeight: TERMINAL_DEFAULT_HEIGHT,
+        previewOpen: false,
+        previewWidth: PREVIEW_DEFAULT_WIDTH,
+        planWidth: PLAN_DEFAULT_WIDTH
+      })
+      setSettings(fresh)
+    })()
+  }, [])
+  const showFiles = useCallback(() => showDockTab('files'), [showDockTab])
+  showFilesRef.current = showFiles
 
   // Drag the panel's left edge: update the width CSS variable live (no re-render of
   // the transcript while dragging), then commit on release. Dragging left grows the
@@ -1614,15 +1689,32 @@ export default function App(): JSX.Element {
   const pendingPlan = chat.pendingPlan
   // The panel shows whenever a plan is pending unless the user has dismissed it.
   const planPanelOpen = pendingPlan !== null && !planClosed
-  // The side chat shares the plan panel's column; a plan awaiting review takes it.
-  const sideChatVisible = sideChatOpen && currentId !== null && !planPanelOpen
+  // The side chat has the right-most column to itself; the plan is a dock tab.
+  const sideChatVisible = sideChatOpen && currentId !== null
 
-  // A newly presented plan (or a revision) re-opens the panel even if the previous
-  // one was dismissed. Keyed on the callId so re-opening is per-plan.
+  // A newly presented plan (or a revision) opens the dock on its review, even if the
+  // previous one was dismissed, remembering how the dock was so answering or
+  // dismissing the plan puts it back. Keyed on the callId so it happens once per plan.
   const pendingPlanCallId = pendingPlan?.callId
+  const dockBeforePlan = useRef<DockState | null>(null)
+  const dockNow = useRef<DockState>({ open: previewOpen, tab: dockTab })
+  dockNow.current = { open: previewOpen, tab: dockTab }
   useEffect(() => {
-    if (pendingPlanCallId) setPlanClosed(false)
+    if (!pendingPlanCallId) return
+    setPlanClosed(false)
+    if (dockNow.current.tab !== 'plan' || !dockNow.current.open) dockBeforePlan.current = dockNow.current
+    setDockTabState('plan')
+    setPreviewOpen(true)
   }, [pendingPlanCallId])
+  // The plan was answered or dismissed: leave the dock as it was before the plan.
+  useEffect(() => {
+    if (planPanelOpen) return
+    const next = afterPlan(dockNow.current, dockBeforePlan.current)
+    if (next === dockNow.current) return
+    dockBeforePlan.current = null
+    setDockTabState(next.tab)
+    setPreviewOpen(next.open)
+  }, [planPanelOpen])
 
   const persistPlan = useCallback(
     async (patch: Pick<Partial<AppSettings>, 'planWidth'>) => {
@@ -1661,9 +1753,13 @@ export default function App(): JSX.Element {
   // Re-open a dismissed plan panel from its transcript marker (pending plans only).
   const onOpenPlan = useCallback(
     (callId: string) => {
-      if (pendingPlan && pendingPlan.callId === callId) setPlanClosed(false)
+      if (!pendingPlan || pendingPlan.callId !== callId) return
+      if (dockTab !== 'plan' || !previewOpen) dockBeforePlan.current = { open: previewOpen, tab: dockTab }
+      setPlanClosed(false)
+      setDockTabState('plan')
+      setPreviewOpen(true)
     },
-    [pendingPlan]
+    [pendingPlan, dockTab, previewOpen]
   )
 
   const onResolvePlan = useCallback(
@@ -2185,9 +2281,16 @@ export default function App(): JSX.Element {
             u && (u.context > 0 || u.output > 0)
               ? `This chat: ${formatTokens(u.context)} context · ${formatTokens(u.output)} out` +
                   (u.cost > 0 ? ` · about ${formatUsd(u.cost)}` : '') +
-                  '. Hover the token count under the message box for a per-model breakdown.'
+                  '. Click the token count under the message box for a per-model breakdown.'
               : 'No usage yet in this chat.'
           )
+          return
+        }
+        case 'context': {
+          const u = chat.usage
+          if (!u || (u.context <= 0 && u.output <= 0)) chat.notify('No context yet: send a message first.')
+          // The usage chip under the message box opens on what fills the context.
+          else setUsageOpenSignal((n) => n + 1)
           return
         }
         case 'cwd':
@@ -2448,13 +2551,20 @@ export default function App(): JSX.Element {
         run: onboarding.startTour
       }
     )
+    items.push({
+      id: 'act-reset-layout',
+      title: 'Reset layout',
+      section: 'Actions',
+      keywords: 'panels dock sidebar terminal default restore window',
+      run: resetLayout
+    })
     if (workspace) {
       items.push({
         id: 'act-files',
         title: 'Browse project files',
         section: 'Actions',
         keywords: 'finder explorer tree folder directory',
-        run: () => setFilesOpen(true)
+        run: showFiles
       })
       items.push({
         id: 'act-changes',
@@ -2540,6 +2650,8 @@ export default function App(): JSX.Element {
     return items
   }, [
     mac,
+    resetLayout,
+    showFiles,
     showChanges,
     shortcuts,
     workspace,
@@ -2578,7 +2690,6 @@ export default function App(): JSX.Element {
     settings: settingsOpen,
     doctor: doctorOpen,
     issue: issueOpen,
-    files: filesOpen,
     scorecard: scorecardOpen,
     usage: usageOpen,
     help: helpOpen,
@@ -2616,7 +2727,8 @@ export default function App(): JSX.Element {
           else if (cmd.panel === 'preview') togglePreview()
           else if (cmd.panel === 'side-chat' && currentId) setSideChatOpen((o) => !o)
         } else if (cmd.type === 'show-changes' && workspace) showChanges()
-        else if (cmd.type === 'show-files' && workspace) setFilesOpen(true)
+        else if (cmd.type === 'show-files' && workspace) showFiles()
+        else if (cmd.type === 'reset-layout') resetLayout()
         else if (cmd.type === 'command-palette') {
           setPaletteSeed('')
           setPaletteOpen(true)
@@ -2632,6 +2744,8 @@ export default function App(): JSX.Element {
       }),
     [
       onNewChat,
+      resetLayout,
+      showFiles,
       showChanges,
       onChangeWorkspace,
       enterNewChat,
@@ -2667,6 +2781,10 @@ export default function App(): JSX.Element {
       }),
     [currentId, workspace, sidebarCollapsed, terminalOpen, previewOpen, dockTab, sideChatShown]
   )
+  // Every listener a houston:// link can reach (menu commands, chat open requests,
+  // Settings) is subscribed by the effects above, which React runs first, so links
+  // main held while this window loaded can be delivered now.
+  useEffect(() => window.api.deepLinksReady?.(), [])
 
   // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): ⌘N new chat,
   // ⇧⌘N new chat in another folder, ⌘K palette, ⌘1–9 / ⌃Tab switch chats, Shift+Tab
@@ -2746,7 +2864,6 @@ export default function App(): JSX.Element {
         else if (o.help) setHelpOpen(false)
         else if (o.find) setFindOpen(false)
         else if (o.settings) setSettingsOpen(false)
-        else if (o.files) setFilesOpen(false)
         else if (o.scorecard) setScorecardOpen(false)
         else if (o.usage) setUsageOpen(false)
         else if (o.doctor) setDoctorOpen(false)
@@ -2848,7 +2965,7 @@ export default function App(): JSX.Element {
           '--sidebar-w': `${sidebarCollapsed ? SIDEBAR_RAIL_WIDTH : sidebarWidth}px`,
           '--terminal-h': `${terminalHeight}px`,
           '--preview-w': `${previewOpen ? previewWidth : 0}px`,
-          '--plan-w': `${planPanelOpen || sideChatVisible ? planWidth : 0}px`
+          '--plan-w': `${sideChatVisible ? planWidth : 0}px`
         } as CSSProperties
       }
     >
@@ -2921,7 +3038,8 @@ export default function App(): JSX.Element {
           tasksOpen={previewOpen && dockTab === 'tasks'}
           onToggleTasks={toggleTasks}
           changes={workspace ? workingTreeStats : undefined}
-          onShowFiles={workspace ? () => setFilesOpen(true) : undefined}
+          onShowFiles={workspace ? toggleFiles : undefined}
+          filesOpen={filesOpen}
           onShowChanges={workspace ? toggleChanges : undefined}
           changesOpen={changesOpen}
           onTogglePreview={togglePreview}
@@ -3169,6 +3287,7 @@ export default function App(): JSX.Element {
             workspace={workspace}
             usage={chat.usage}
             subagentSpend={subagentSpendRows}
+            usageOpenSignal={usageOpenSignal}
             newChat={currentId === null}
             repoInfo={repoInfo}
             worktreeMode={worktreeMode}
@@ -3204,6 +3323,7 @@ export default function App(): JSX.Element {
             ultrathinkEffect={ultrathinkOnSend}
             lastUserMessage={lastUserText(chat.items)}
             changes={workspace ? workingTreeStats : undefined}
+            pr={workspace ? prStatus : null}
             onShowChanges={showChanges}
             onShip={canChat ? onShip : undefined}
             onCommand={onCommand}
@@ -3256,7 +3376,9 @@ export default function App(): JSX.Element {
             occluded={occludesPreview(overlays)}
             onResizeMouseDown={onPreviewResizeMouseDown}
             onClose={closeDock}
-            tab={dockTab}
+            // A tab whose content is gone (Files with no folder, a plan already
+            // answered) falls back to Preview rather than an empty panel.
+            tab={(dockTab === 'files' && !workspace) || (dockTab === 'plan' && !planPanelOpen) ? 'preview' : dockTab}
             onTabChange={setDockTab}
             focusServerId={previewFocus?.id ?? null}
             focusRequest={previewFocus}
@@ -3270,8 +3392,33 @@ export default function App(): JSX.Element {
                 running={chat.running}
                 onShip={canChat ? onShip : undefined}
                 creating={chat.running}
+                commitForm
                 onSendComments={canChat ? onSendReviewComments : undefined}
               />
+            }
+            files={
+              workspace ? (
+                <FilesPanel
+                  // A new "Show in Files" target (or line) remounts the tree to reveal it.
+                  key={`${workspace}:${filesTarget ?? ''}:${filesLine ?? ''}`}
+                  workspace={workspace}
+                  initialPath={filesTarget}
+                  initialLine={filesLine}
+                  onClose={closeDock}
+                  docked
+                />
+              ) : undefined
+            }
+            plan={
+              planPanelOpen && pendingPlan ? (
+                <PlanPanel
+                  plan={pendingPlan.plan}
+                  revising={pendingPlan.revising === true}
+                  onResolve={(decision) => onResolvePlan(pendingPlan.callId, decision)}
+                  onClose={() => setPlanClosed(true)}
+                  docked
+                />
+              ) : undefined
             }
             tasks={
               <TasksPanel
@@ -3309,15 +3456,6 @@ export default function App(): JSX.Element {
         />
       )}
 
-      {planPanelOpen && pendingPlan && (
-        <PlanPanel
-          plan={pendingPlan.plan}
-          revising={pendingPlan.revising === true}
-          onResolve={(decision) => onResolvePlan(pendingPlan.callId, decision)}
-          onClose={() => setPlanClosed(true)}
-          onResizeMouseDown={onPlanResizeMouseDown}
-        />
-      )}
 
       <Suspense fallback={null}>
         {settingsOpen && (
@@ -3340,24 +3478,16 @@ export default function App(): JSX.Element {
               setSettingsOpen(false)
               setDoctorOpen(true)
             }}
+            onTypeInTerminal={(command) => {
+              setSettingsOpen(false)
+              void typeInTerminal(command)
+            }}
           />
         )}
 
         {doctorOpen && <DoctorModal workspace={workspace} onClose={() => setDoctorOpen(false)} />}
         {issueOpen && <IssueReportModal onClose={() => setIssueOpen(false)} />}
 
-        {filesOpen && (
-          <FilesPanel
-            workspace={workspace}
-            initialPath={filesTarget}
-            initialLine={filesLine}
-            onClose={() => {
-              setFilesOpen(false)
-              setFilesTarget(undefined)
-              setFilesLine(undefined)
-            }}
-          />
-        )}
 
         {scorecardOpen && <Scorecard onClose={() => setScorecardOpen(false)} />}
         {usageOpen && (
@@ -3475,7 +3605,8 @@ export default function App(): JSX.Element {
             if (!rel) return 'That file is outside the project folder.'
             setViewer(null)
             setFilesTarget(rel)
-            setFilesOpen(true)
+            setFilesLine(undefined)
+            showFiles()
             return null
           }}
           onCopy={async (img) =>

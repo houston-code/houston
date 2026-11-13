@@ -59,6 +59,7 @@ import {
 } from './store'
 import { loadProjectConfig } from './agent/projectConfig'
 import { getIntegrations, languageServerIntegration } from './integrations'
+import { inferVerifyCommand } from './verifyInfer'
 import {
   detectEditors,
   openProjectInEditor,
@@ -151,6 +152,9 @@ import {
   isWorktreeDisposable
 } from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'
+import { branchSyncFor, commitAll, lookupPr, pushBranch, suggestCommitMessage } from './agent/gitActions'
+import { isKnownWorkspace } from './knownWorkspace'
+import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import { collectChatChanges, revertChange } from './agent/changes'
 import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import { initGitRepo } from './agent/gitInit'
@@ -275,7 +279,8 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
     cost: e.cost,
     ...(e.model ? { model: e.model } : {}),
     ...(e.cacheReadTokens ? { cacheReadTokens: e.cacheReadTokens } : {}),
-    ...(e.cacheWriteTokens ? { cacheWriteTokens: e.cacheWriteTokens } : {})
+    ...(e.cacheWriteTokens ? { cacheWriteTokens: e.cacheWriteTokens } : {}),
+    ...(e.context ? { contextParts: e.context } : {})
   })
   return mergeRunningTotals(e, total)
 }
@@ -880,6 +885,22 @@ export function registerIpc(ready?: Promise<unknown>): void {
     collectWorkingTreeChanges(typeof workspace === 'string' ? workspace : '')
   )
 
+  // The Changes view's commit form and the composer's PR chip run git and gh
+  // themselves, on the user's click, for a project folder the app already knows
+  // (see agent/gitActions.ts for the hardening).
+  const gitDeps = { knownWorkspace: isKnownWorkspace }
+  handle(IPC.gitCommit, (_event, workspace: unknown, message: unknown): Promise<GitActionResult> =>
+    commitAll(workspace, message, gitDeps)
+  )
+  handle(IPC.gitPush, (_event, workspace: unknown): Promise<GitActionResult> => pushBranch(workspace, gitDeps))
+  handle(IPC.gitBranchSync, (_event, workspace: unknown): Promise<BranchSync | null> =>
+    branchSyncFor(workspace, gitDeps)
+  )
+  handle(IPC.gitSuggestMessage, (_event, workspace: unknown, conversationId: unknown): Promise<GitActionResult> =>
+    suggestCommitMessage(workspace, conversationId, gitDeps)
+  )
+  handle(IPC.gitPrStatus, (_event, workspace: unknown): Promise<PrLookup> => lookupPr(workspace, gitDeps))
+
   // The Changes view's turn and chat scopes: what the chat's checkpoints say it
   // changed, against the files as they are now. Read-only.
   handle(IPC.chatChanges, async (_event, conversationId: unknown, scope: unknown): Promise<ChatChanges> =>
@@ -892,26 +913,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // working-tree scope only touches a project the app already knows; a chat's scopes
   // wait for its run to finish; and every revert re-checks that the file still holds
   // the diff the view showed (see agent/changes.ts).
-  const knownWorkspace = (workspace: string): boolean => {
-    let real: string
-    try {
-      real = realpathSync(workspace)
-    } catch {
-      return false
-    }
-    const candidates = [...(getSettings().recentWorkspaces ?? []), ...listConversations().map((c) => c.workspace)]
-    return candidates.some((c) => {
-      try {
-        return typeof c === 'string' && realpathSync(c) === real
-      } catch {
-        return false
-      }
-    })
-  }
   handle(IPC.changesRevert, async (_event, req: ChangeRevertRequest): Promise<ChangeRevertResult> =>
     revertChange(req, {
       runActive: (id) => activeRunForConversation(id) !== null,
-      knownWorkspace
+      knownWorkspace: isKnownWorkspace
     })
   )
 
@@ -1164,6 +1169,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     openProjectInEditor(editorId, dir)
   )
   handle(IPC.revealInFileManager, (_event, target: string) => revealInFileManager(target))
+  // Settings > Agent Behavior: a verification command suggested by the project's files.
+  handle(IPC.verifyInfer, (_event, workspace: unknown) =>
+    typeof workspace === 'string' && workspace ? inferVerifyCommand(workspace) : null
+  )
 
   // Conversations
   handle(IPC.conversationList, () => listConversations())

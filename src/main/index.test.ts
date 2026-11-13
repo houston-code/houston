@@ -18,9 +18,25 @@ const getUserDefault = vi.fn(() => undefined)
 const setUserDefault = vi.fn()
 const registerSchemesAsPrivileged = vi.fn()
 const appendSwitch = vi.fn()
+// The single-instance lock: true = this is the first window process on the profile.
+const requestSingleInstanceLock = vi.fn(() => true)
+const quit = vi.fn()
+const ipcOn = vi.fn()
 
 vi.mock('electron', () => ({
-  app: { setName, whenReady, on, getName: vi.fn(), getPath, commandLine: { appendSwitch } },
+  app: {
+    setName,
+    whenReady,
+    on,
+    quit,
+    requestSingleInstanceLock,
+    isPackaged: false,
+    isReady: () => false,
+    getName: vi.fn(),
+    getPath,
+    commandLine: { appendSwitch }
+  },
+  ipcMain: { on: ipcOn, handle: vi.fn() },
   shell: { openExternal: vi.fn() },
   systemPreferences: { getUserDefault, setUserDefault },
   protocol: { registerSchemesAsPrivileged },
@@ -106,5 +122,26 @@ describe('main entry app identity', () => {
       // The key is macOS-only; other platforms leave scrollbars untouched.
       expect(setUserDefault).not.toHaveBeenCalled()
     }
+  })
+
+  it('takes the single-instance lock and listens for links before whenReady', async () => {
+    await import('./index')
+
+    expect(requestSingleInstanceLock).toHaveBeenCalledTimes(1)
+    const events = on.mock.calls.map((c) => c[0])
+    expect(events).toContain('open-url')
+    expect(events).toContain('second-instance')
+    const openUrl = on.mock.calls.findIndex((c) => c[0] === 'open-url')
+    expect(on.mock.invocationCallOrder[openUrl]).toBeLessThan(whenReady.mock.invocationCallOrder[0])
+    expect(quit).not.toHaveBeenCalled()
+  })
+
+  it('quits without opening a window when another process holds the lock', async () => {
+    requestSingleInstanceLock.mockReturnValueOnce(false)
+    await import('./index')
+
+    expect(quit).toHaveBeenCalledTimes(1)
+    expect(whenReady).not.toHaveBeenCalled()
+    expect(on.mock.calls.map((c) => c[0])).not.toContain('open-url')
   })
 })

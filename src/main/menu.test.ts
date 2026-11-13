@@ -357,6 +357,7 @@ describe('Edit, View, and Go menus', () => {
       'Show Side Chat',
       'Show Changes',
       'Show Files',
+      'Reset Layout',
       'separator',
       'reload',
       'forceReload',

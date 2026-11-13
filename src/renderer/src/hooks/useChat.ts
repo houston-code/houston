@@ -182,7 +182,8 @@ export function useChat(conversationId: string | null = null): ChatController {
           output: e.outputTokens || prev?.output || 0,
           cost: e.cost || prev?.cost || 0,
           cacheRead: e.cacheReadTokens ?? prev?.cacheRead,
-          perModel: e.perModel ?? prev?.perModel
+          perModel: e.perModel ?? prev?.perModel,
+          ...(e.context ?? prev?.contextParts ? { contextParts: e.context ?? prev?.contextParts } : {})
         }))
         // ...and the round's own numbers go on the turn, for its details line.
         setItems((prev) => reduceEvent(prev, e))

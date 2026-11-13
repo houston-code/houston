@@ -24,6 +24,7 @@ import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
+import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import type { GitInitResult } from '@shared/git'
 import type { DoctorFacts } from '@shared/doctor'
@@ -65,6 +66,7 @@ import type {
   UpdateInstallFailed,
   WhatsNew
 } from '@shared/update'
+import type { VerifySuggestion } from '@shared/types'
 import type { ScheduleCreateRequest, SchedulePreview, ScheduleResult, ScheduleView } from '@shared/schedules'
 import type { ImportOutcome, ImportScan } from '@shared/importConfig'
 import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
@@ -188,6 +190,18 @@ const api = {
   /** All uncommitted working-tree changes (vs HEAD + untracked) for the Changes panel. */
   getWorkingTreeChanges: (workspace: string): Promise<WorkingTreeChanges> =>
     ipcRenderer.invoke(IPC.workingTreeChanges, workspace),
+  /** Stage and commit every change (the Changes view's commit form). */
+  gitCommit: (workspace: string, message: string): Promise<GitActionResult> =>
+    ipcRenderer.invoke(IPC.gitCommit, workspace, message),
+  /** Push the current branch, setting its upstream on a first push. */
+  gitPush: (workspace: string): Promise<GitActionResult> => ipcRenderer.invoke(IPC.gitPush, workspace),
+  /** The current branch against its upstream, or null outside a repository. */
+  gitBranchSync: (workspace: string): Promise<BranchSync | null> => ipcRenderer.invoke(IPC.gitBranchSync, workspace),
+  /** A commit message for the uncommitted changes, from the chat's model. */
+  gitSuggestMessage: (workspace: string, conversationId: string | null): Promise<GitActionResult> =>
+    ipcRenderer.invoke(IPC.gitSuggestMessage, workspace, conversationId),
+  /** The current branch's pull request (via gh), for the composer chip. */
+  gitPrStatus: (workspace: string): Promise<PrLookup> => ipcRenderer.invoke(IPC.gitPrStatus, workspace),
   /** What a chat's latest turn (`turn`) or all its turns (`chat`) changed, for the Changes view. */
   getChatChanges: (conversationId: string, scope: 'turn' | 'chat'): Promise<ChatChanges> =>
     ipcRenderer.invoke(IPC.chatChanges, conversationId, scope),
@@ -284,6 +298,8 @@ const api = {
   /** Reveal a folder in the OS file manager (Finder / Explorer). */
   revealInFileManager: (target: string): Promise<OpenResult> =>
     ipcRenderer.invoke(IPC.revealInFileManager, target),
+  /** A verification command inferred from the project's files, or null. */
+  inferVerifyCommand: (workspace: string): Promise<VerifySuggestion | null> => ipcRenderer.invoke(IPC.verifyInfer, workspace),
 
   // Conversations
   listConversations: (): Promise<ConversationMeta[]> => ipcRenderer.invoke(IPC.conversationList),
@@ -616,12 +632,18 @@ const api = {
   /** Report the UI state the native menu reflects (e.g. whether a chat is open). */
   setMenuState: (state: MenuState): void => ipcRenderer.send(IPC.menuState, state),
 
-  /** Subscribe to the native menu's "Settings…" item. Returns an unsubscribe fn. */
-  onOpenSettings: (cb: () => void): (() => void) => {
-    const listener = (): void => cb()
+  /**
+   * Subscribe to the native menu's "Settings…" item, and to houston://settings links,
+   * which name a page. Returns an unsubscribe fn.
+   */
+  onOpenSettings: (cb: (page?: string) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, page?: unknown): void =>
+      cb(typeof page === 'string' ? page : undefined)
     ipcRenderer.on(IPC.menuOpenSettings, listener)
     return () => ipcRenderer.removeListener(IPC.menuOpenSettings, listener)
   },
+  /** Tell main this window's listeners are attached, so held houston:// links can arrive. */
+  deepLinksReady: (): void => ipcRenderer.send(IPC.deepLinkReady),
 
   // Live preview dock (started dev servers; see main/preview.ts)
   /** List the dev servers detected from the agent's started background shells. */

@@ -136,7 +136,10 @@ Open source under the [Apache License 2.0](LICENSE).
   stop the leftover process. The panel never opens by itself.
 - **Integrated terminal and Files panel.** A resizable, multi-tab terminal panel runs
   full PTY sessions (interactive programs, colors, resize) next to the chat. The
-  Files panel browses the project like a file manager, with an in-app preview
+  Files tab of the right-hand dock browses the project like a file manager beside the
+  chat (the dock also holds Background tasks, Preview, and a waiting plan's review,
+  reopens on the tab used last, and **View > Reset Layout** restores the
+  first-launch layout), with an in-app preview
   (syntax-highlighted code, images) and an Open action that hands a file to its
   default app. File paths in the transcript (tool rows, the receipt, relative links
   in replies) open there too, at the line when one is known. Each chat's ⋯ menu also has **Open in**, which opens the chat's
@@ -150,7 +153,8 @@ Open source under the [Apache License 2.0](LICENSE).
   share one set of built-ins, among them `/new` (or `/clear`), `/compact` (summarize
   older turns to free up context now), `/plan` `/ask` `/auto` `/full` (switch
   approval mode), `/model`, `/reasoning`, `/review` (adversarial review), `/rewind`,
-  `/undo` and `/redo`, `/cost`, `/doctor` (check your setup), `/skills` and
+  `/undo` and `/redo`, `/cost`, `/context` (what fills the context), `/doctor`
+  (check your setup), `/skills` and
   `/agents` (list them), `/agent <name> <task>` (hand a task to one of your agents),
   and `/help`; see the [terminal table](#interactive-terminal) for the rest.
   Any Markdown file in `.houston/commands/` (or `~/.houston/commands/` for every
@@ -422,7 +426,8 @@ Open source under the [Apache License 2.0](LICENSE).
   Python. The formatters are **optional, not bundled**: install the ones you want on
   your `PATH` and Houston uses them when present (it silently skips a file when its
   formatter is missing). Settings → *Tools* → *Optional integrations*
-  shows which it detects. Runs in the same sandbox as `run_shell` (no network); off by
+  shows which it detects, with an **Install** button for each missing one that
+  opens the terminal with the install command typed in for you to run. Runs in the same sandbox as `run_shell` (no network); off by
   default.
 - **Code intelligence from language servers (optional).** When a language server is
   installed (`typescript-language-server` or `vtsls`, `pyright`/`basedpyright`,
@@ -555,6 +560,11 @@ Open source under the [Apache License 2.0](LICENSE).
   without opening the panel first. The button adapts to the repository: **Publish
   to GitHub** when there is no remote yet, **Push first commit** when nothing is
   committed, and **Commit & push** for a remote that isn't on GitHub.
+  The Changes panel also commits and pushes without an agent turn: a message box with
+  **Suggest message** (written by the chat's model), **Commit** (stages every change;
+  repository hooks don't run) and **Push** / **Publish branch**. When the branch has a
+  GitHub pull request, a chip above the message box shows its number, state and CI
+  checks (needs `gh` installed and signed in).
 - **Start a chat in its own worktree.** Every new chat in a git repo defaults to
   running in a fresh, isolated worktree on its own branch, so the agent's edits
   never touch your current checkout. Right after the folder picker in the control
@@ -952,6 +962,7 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/review` | adversarial review of your uncommitted changes |
 | `/init` | write or improve AGENTS.md, the project's instructions file |
 | `/cost` | session token + cost totals, per model |
+| `/context` | what fills the context now: instructions, tools, memories, conversation, tool results |
 | `/doctor` | check your setup: model, keys, sandbox, tools, MCP |
 | `/verbose`, `/output [n]` | show each tool's full output as it runs (remembered across sessions), or reprint one after the fact |
 | `/btw <question>` | ask the side chat a quick question (`/btw clear` starts it over) |
@@ -1089,6 +1100,11 @@ the interactive setup list shows them, and any endpoint added with
 `houston providers add`, after asking each one for its models, so a running
 server is one pick away. An unknown flag or a stray argument stops with an
 error and the usage rather than being ignored.
+
+`houston open [dir]` hands a folder (the current one by default) to the desktop
+app as a new chat, through a `houston://open` link. The app also opens
+`houston://chat/<id>` and `houston://settings/<page>` links; it asks before opening
+a folder it hasn't seen, and a link can never run a command or send a message.
 
 **Custom auth headers.** A provider or MCP server can carry custom HTTP headers
 (a gateway bearer token, attribution headers), and a stdio MCP server can carry

@@ -26,6 +26,7 @@ export type DesktopCommandAction =
   | { kind: 'btw'; question: string }
   | { kind: 'btw-clear' }
   | { kind: 'cost' }
+  | { kind: 'context' }
   | { kind: 'cwd' }
   | { kind: 'share' }
   /** No policy: report the current one. `invalid` is a word that named none. */
@@ -71,6 +72,8 @@ export function desktopCommandAction(name: string, args: string): DesktopCommand
       return arg.toLowerCase() === 'clear' ? { kind: 'btw-clear' } : { kind: 'btw', question: arg }
     case 'cost':
       return { kind: 'cost' }
+    case 'context':
+      return { kind: 'context' }
     case 'cwd':
       return { kind: 'cwd' }
     case 'share':

@@ -7,8 +7,10 @@ import { describeShell } from '../lib/taskLabel'
 
 /**
  * The right-hand dock. With `onTabChange` it has tabs: Tasks (the background-tasks
- * list, passed in as `tasks`), Preview, and Changes when `changes` is given; without,
- * it is Preview-only.
+ * list, passed in as `tasks`) and Preview always, plus Changes, Files and Plan review
+ * when their content is given; without, it is Preview-only. Changes renders only while
+ * it shows (it reads git); Files and Plan review are mounted the first time they show
+ * and then kept (hidden) so their state survives a switch.
  *
  * Preview: a resizable right-hand panel that shows the dev servers the
  * agent started (each one's loopback URL, auto-detected from its output) as live,
@@ -22,12 +24,17 @@ import { describeShell } from '../lib/taskLabel'
  * on top (`occluded`) so a preview never covers a modal; main keeps the view alive
  * but hidden. Unmounting (the dock closed) tears every pane down.
  */
-export type DockTab = 'preview' | 'tasks' | 'changes'
+export type DockTab = 'preview' | 'tasks' | 'changes' | 'files' | 'plan'
+
+/** Every tab in strip order: the title-bar buttons' order, then panels that open on their own. */
+export const DOCK_TABS: readonly DockTab[] = ['tasks', 'preview', 'changes', 'files', 'plan']
 
 const TAB_LABEL: Record<DockTab, string> = {
   tasks: 'Background tasks',
   preview: 'Preview',
-  changes: 'Changes'
+  changes: 'Changes',
+  files: 'Files',
+  plan: 'Plan review'
 }
 
 export function PreviewDock({
@@ -39,6 +46,8 @@ export function PreviewDock({
   onTabChange,
   tasks,
   changes,
+  files,
+  plan,
   taskCount = 0,
   focusServerId = null,
   focusRequest
@@ -56,6 +65,10 @@ export function PreviewDock({
   tasks?: ReactNode
   /** The Changes tab's content. Rendered only while that tab shows (it reads git). */
   changes?: ReactNode
+  /** The Files tab's content (the docked FilesPanel); no tab without it. */
+  files?: ReactNode
+  /** The Plan review tab's content (the docked PlanPanel); no tab without it. */
+  plan?: ReactNode
   /** Live background tasks, shown as a count on the Tasks tab. */
   taskCount?: number
   /** A server to keep on screen even past the pane cap (Tasks' "Open preview"). */
@@ -67,8 +80,14 @@ export function PreviewDock({
   // While Tasks is showing, Preview stays mounted (its pages and added URLs survive
   // the switch) but its native views are hidden, exactly as under an overlay.
   const previewVisible = tab === 'preview'
-  const tabRefs = useRef<Record<DockTab, HTMLButtonElement | null>>({ preview: null, tasks: null, changes: null })
-  const tabs: DockTab[] = changes !== undefined ? ['tasks', 'preview', 'changes'] : ['tasks', 'preview']
+  const tabRefs = useRef<Partial<Record<DockTab, HTMLButtonElement | null>>>({})
+  const content: Partial<Record<DockTab, ReactNode>> = { tasks, changes, files, plan }
+  const tabs = DOCK_TABS.filter((id) => id === 'tasks' || id === 'preview' || content[id] !== undefined)
+  // Files and Plan review stay mounted (hidden) once they have shown.
+  const [visited, setVisited] = useState<ReadonlySet<DockTab>>(() => new Set([tab]))
+  useEffect(() => {
+    setVisited((v) => (v.has(tab) ? v : new Set(v).add(tab)))
+  }, [tab])
   const [manualUrls, setManualUrls] = useState<string[]>([])
   const [draft, setDraft] = useState('')
   const [draftError, setDraftError] = useState(false)
@@ -416,17 +435,22 @@ export function PreviewDock({
           {tasks}
         </div>
       )}
-      {onTabChange && changes !== undefined && (
-        <div
-          className="preview-dock__panel preview-dock__panel--changes"
-          role="tabpanel"
-          id="dock-panel-changes"
-          aria-labelledby="dock-tab-changes"
-          hidden={tab !== 'changes'}
-        >
-          {tab === 'changes' && changes}
-        </div>
-      )}
+      {onTabChange &&
+        (['changes', 'files', 'plan'] as const)
+          .filter((id) => content[id] !== undefined)
+          .map((id) => (
+            <div
+              key={id}
+              className={`preview-dock__panel preview-dock__panel--${id}`}
+              role="tabpanel"
+              id={`dock-panel-${id}`}
+              aria-labelledby={`dock-tab-${id}`}
+              hidden={tab !== id}
+            >
+              {/* Changes reads git, so it renders only while it shows. */}
+              {(tab === id || (id !== 'changes' && visited.has(id))) && content[id]}
+            </div>
+          ))}
     </aside>
   )
 }

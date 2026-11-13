@@ -46,9 +46,13 @@ The full GUI:
 
 - a chat sidebar and diffs
 - a right-hand dock with a **Background tasks** list of background commands (stop
-  them, read their output, see which port each one holds) and the live **Preview**
-  (it opens by itself, once per chat, when the agent starts a dev server and its
-  address shows up; turn that off in Settings > Tools > Preview)
+  them, read their output, see which port each one holds), the live **Preview** (it
+  opens by itself, once per chat, when the agent starts a dev server and its address
+  shows up; turn that off in Settings > Tools > Preview), the **Changes** in the
+  project, its **Files**, and a waiting **Plan review**. It opens on the tab you used last.
+  A plan opens it on its review and puts it back as it was once you answer.
+  **View > Reset Layout** (or "Reset layout" in the command palette) closes it and the
+  terminal and side chat, and puts every panel back to its first-launch size
 - Settings
 
 **Chat status.** Each chat in the sidebar has a status dot:
@@ -106,6 +110,23 @@ sidebar lists every chat in all of them.
   open slightly offset from the window you're in.
 - On Windows and Linux, closing the last window quits Houston, and Houston asks first if
   work is still running. Closing any other window quits nothing.
+
+**Links.** The desktop app opens `houston://` links from a browser, another app, or
+the terminal. Only three kinds do anything:
+
+| Link | Opens |
+| --- | --- |
+| `houston://open?path=/path/to/folder` | a new chat in that folder |
+| `houston://chat/<chat id>` | that chat |
+| `houston://settings/<page>` | Settings at that page (`models`, `tools`, `permissions`, …); `houston://settings` alone opens the first page |
+
+- A link never runs a command, sends a message, or changes a setting.
+- Opening a folder Houston hasn't opened before (not a recent folder, and no chat in
+  it) asks first. Network paths are refused.
+- From a terminal, `houston open [dir]` (the standalone CLI) opens a folder, the current
+  one by default, in the desktop app.
+- Only one copy of the desktop app runs per profile. Launching it again brings the open
+  window forward and passes it the link.
 
 ### Interactive terminal
 
@@ -527,7 +548,7 @@ Both clients accept the same names, so a command learned in one works in the oth
 | `/skills`, `/agents` | list the workspace's skills and custom agents |
 | `/help` | list the available commands (in the desktop app, opens the command palette on them) |
 
-Also: `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`, `/cost`, `/cwd`, `/share`,
+Also: `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`, `/cost`, `/context`, `/cwd`, `/share`,
 and `/doctor`. The exact set depends on the client.
 
 **Settings commands.** `/settings`, `/login`, `/mcp`, `/hooks`, `/memory`, `/trust`, and
@@ -906,7 +927,12 @@ None are bundled; install the ones you want.
 `clangd`) replaces it.
 
 **What's installed:** Settings > Tools > **Optional integrations** and `/doctor` both
-show it.
+show it. There, each missing integration (`gh`, ripgrep, a formatter, or a language
+server) that a package manager on this machine can install has an **Install** button:
+it opens the terminal with the install command typed in (for example
+`brew install gh`, `winget install --id GitHub.cli -e`, or
+`npm install -g typescript-language-server typescript`) but not run. Check it and press
+Enter to run it.
 
 ### How servers run
 
@@ -1011,6 +1037,13 @@ the run works as usual at any point.
 the keep-going-while-productive switch, and the hard limit. If you had already set
 your own step count, it stays a hard stop until you turn the switch on.
 
+**Checking the work when it finishes.** Loop control also has an opt-in verification
+command that runs when the agent stops after changing files, with a failure sent back
+for a bounded fix-up. With a project open, Houston suggests one from the project's
+files under the field: the `typecheck` and `test` scripts in `package.json` (run with
+npm, pnpm, yarn, or bun by lockfile), `cargo test`, `go test ./...`, or `pytest`.
+**Use this command** fills the field; it doesn't turn verification on.
+
 ### Watching a running turn
 
 - **Desktop:** the status bar shows how long the turn has run and the output tokens
@@ -1098,6 +1131,29 @@ offer one button that fits the repository:
 
 Each one hands the work to the agent as a normal turn, so every git and network step
 goes through your approvals.
+
+### Committing and pushing yourself (desktop app)
+
+The Changes view also has a commit form, for when you'd rather not spend an agent turn:
+
+- **Commit message**, with **Suggest message**, which asks the chat's model (or your
+  default model in a new chat) to describe the uncommitted changes, the way a chat gets
+  its title. The diff goes to that model's provider. Edit the suggestion as you like.
+- **Commit** stages every change and commits it (`Cmd+Enter` / `Ctrl+Enter` in the
+  message box). The repository's own git hooks do not run.
+- **Push** sends the branch's new commits to its upstream; on a first push it reads
+  **Publish branch** and sets the upstream on the repository's remote.
+
+Houston refuses to commit or push when the repository's own git config names a program
+git would run for it (a signing program, an ssh command, a credential helper, or an
+include): use a terminal there. Your global git config (identity, signing, credentials)
+applies as usual. **Create PR** stays a hand-off to the agent.
+
+**Pull request chip.** When the chat's branch has a pull request on GitHub, a chip at
+the top of the message box shows its number, state (Open, Draft, Merged, Closed) and
+checks (passed, running, failing); click it to open the PR in your browser. It needs
+the GitHub CLI (`gh`) installed and signed in, and a GitHub remote. It refreshes when
+the window regains focus, when a turn ends, and every few minutes.
 
 ### Prompts Houston writes for you
 
@@ -1250,6 +1306,23 @@ bottom shows the git branch the chat's folder has checked out and the approval m
 **Watch the cached count** on a long session. Those tokens are real context, but they
 bill far below the base input rate, so a big number there is why a long conversation
 costs less than its token count suggests.
+
+### What fills the context (/context)
+
+`/context` shows what the most recent request sent to the model was made of:
+
+- **Houston's instructions:** the system prompt Houston writes
+- **Tool definitions:** the built-in tools and any MCP server tools offered
+- **Project instructions:** rules files such as `AGENTS.md`, and your own prompt addition
+- **Memories:** the index of saved memories
+- **Conversation:** your messages, the replies, tool calls and summaries
+- **Tool results:** file contents, command output and search results
+
+Each part is an estimate (about four characters per token), so treat the figures as
+approximate. The total is the size the provider measured, when it reports one, against
+the model's context window. In the desktop app, `/context` opens the panel behind the
+usage chip under the message box, and clicking the chip opens it too. Large tool
+results are usually what compaction trims first.
 
 ### Usage across chats (/usage)
 
@@ -1893,8 +1966,7 @@ to it.
 - **Continue in new chat** forks the chat with the exchange as a draft.
 
 **It keeps its place.** Each chat has one side chat, kept with the chat. Closing the
-panel, switching chats, a plan review taking over the panel, or restarting Houston
-never loses it, and an answer still coming in keeps going and shows up when you come
+panel, switching chats, or restarting Houston never loses it, and an answer still coming in keeps going and shows up when you come
 back. Before each follow-up it catches up on what the main chat said since its last
 answer. **New side chat** (the + in its header) clears it and starts over.
 
@@ -2707,8 +2779,9 @@ item. A shortcut you rebind in Settings shows up in the menus too.
   (⌘F).
 - **View** opens the **Command Palette…** (⌘K) and shows or hides the sidebar (⌘B),
   the terminal (⌃`), **Background Tasks**, **Preview**, and the **Side Chat**. Each
-  item reads **Show** or **Hide** by whether that panel is open. **Show Changes** and
-  **Show Files** open those views of the project folder. Zoom and full screen are
+  item reads **Show** or **Hide** by whether that panel is open. **Show Changes** opens
+  the project's uncommitted changes, **Show Files** opens the Files tab of the side
+  panel, and **Reset Layout** puts every panel back as it was on first launch. Zoom and full screen are
   below them.
 - **Go** moves to the **Previous Chat** (⌃⇧Tab) or **Next Chat** (⌃Tab), puts the
   cursor in the sidebar's search field (**Search Chats…**), and opens the model list

@@ -23,14 +23,17 @@ export function PlanPanel({
   revising,
   onResolve,
   onClose,
-  onResizeMouseDown
+  onResizeMouseDown,
+  docked = false
 }: {
   plan: PlanPayload
   /** True after "suggest changes" — awaiting the agent's revised plan. */
   revising: boolean
   onResolve: (decision: PlanDecision) => void
   onClose: () => void
-  onResizeMouseDown: (e: React.MouseEvent) => void
+  onResizeMouseDown?: (e: React.MouseEvent) => void
+  /** Shown as a tab of the right-hand side panel, which sizes it (no resizer of its own). */
+  docked?: boolean
 }): JSX.Element {
   const [editMode, setEditMode] = useState<PlanAcceptMode>('auto-edit')
   const [suggestOpen, setSuggestOpen] = useState(false)
@@ -140,19 +143,21 @@ export function PlanPanel({
 
   return (
     <aside
-      className="plan-panel"
+      className={`plan-panel${docked ? ' plan-panel--docked' : ''}`}
       aria-label="Plan review"
       tabIndex={-1}
       ref={rootRef}
       onKeyDown={onKeyDown}
     >
-      <div
-        className="plan-panel__resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize plan panel"
-        onMouseDown={onResizeMouseDown}
-      />
+      {!docked && (
+        <div
+          className="plan-panel__resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize plan panel"
+          onMouseDown={onResizeMouseDown}
+        />
+      )}
 
       <header className="plan-panel__head">
         <span className="plan-panel__badge" aria-hidden="true">

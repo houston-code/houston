@@ -468,6 +468,30 @@ describe('startRun', () => {
     expect(usage!.inputTokens).toBeGreaterThan(0)
   })
 
+  it('reports what fills the context with each main round, adding up to its estimate', async () => {
+    writeFileSync(join(ws, 'big.txt'), 'x'.repeat(8000))
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'big.txt' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'read it' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const rounds = r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]
+    expect(rounds).toHaveLength(2)
+    const [first, second] = rounds.map((u) => u.context!)
+    expect(first.system).toBeGreaterThan(1000)
+    expect(first.tools).toBeGreaterThan(1000)
+    expect(first.toolResults).toBe(0)
+    // The second request carries the file the first one read.
+    expect(second.toolResults).toBeGreaterThan(1900)
+    // With no usage from the provider, the measured size is the same estimate.
+    const sum = Object.values(second).reduce((n, v) => n + v, 0)
+    expect(Math.abs(sum - rounds[1].inputTokens)).toBeLessThan(20)
+  })
+
   it('runs a read tool then finishes (reads from the workspace)', async () => {
     writeFileSync(join(ws, 'note.txt'), 'the secret')
     const r = await run({

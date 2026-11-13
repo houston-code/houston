@@ -20,6 +20,7 @@ export function Titlebar({
   onToggleTasks,
   changes,
   onShowFiles,
+  filesOpen,
   onShowChanges,
   changesOpen,
   onTogglePreview,
@@ -45,7 +46,10 @@ export function Titlebar({
   onToggleTasks?: () => void
   /** Working-tree change counts; highlights the Changes button and shows a +/− badge. */
   changes?: { fileCount: number; added: number; removed: number }
+  /** Open or close the side panel's Files tab. */
   onShowFiles?: () => void
+  /** The side panel is open on its Files tab. */
+  filesOpen?: boolean
   /** Open or close the side panel's Changes tab. */
   onShowChanges?: () => void
   /** The side panel is open on its Changes tab. */
@@ -150,6 +154,7 @@ export function Titlebar({
                 className="titlebar__action"
                 onClick={onShowFiles}
                 aria-label="Files"
+                {...(filesOpen !== undefined ? { 'aria-pressed': filesOpen } : {})}
               >
                 <Icon name="folder" size={15} />
               </button>
