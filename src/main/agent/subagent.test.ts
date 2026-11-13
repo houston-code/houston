@@ -1010,6 +1010,42 @@ describe('local permission gate (gateLocal)', () => {
     expect(checkpointFileCount('gate-run-1')).toBe(0)
   })
 
+  it('stops the rest of its batch once the run is stopped during a call', async () => {
+    // Stop lands while the first write's prompt is up: the gate answers it as a
+    // refusal. The second write must neither run nor reach the gate (a new prompt
+    // nobody answers), and the agent ends as aborted.
+    const provider = scriptedProvider([
+      [
+        { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'one.txt', content: '1' } } },
+        { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'two.txt', content: '2' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'Done.' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    const controller = new AbortController()
+    const gated: string[] = []
+    const ends: string[] = []
+    await runSubAgent({
+      provider,
+      model: 'm',
+      workspace: ws,
+      prompt: 'write both',
+      signal: controller.signal,
+      writable: true,
+      roots: [ws],
+      gateLocal: async (_name, _kind, args) => {
+        gated.push(String(args.path))
+        controller.abort()
+        return 'Denied by the user.'
+      },
+      onEnd: (e) => ends.push(e.status)
+    })
+    expect(gated).toEqual(['one.txt'])
+    expect(existsSync(join(ws, 'one.txt'))).toBe(false)
+    expect(existsSync(join(ws, 'two.txt'))).toBe(false)
+    expect(ends).toEqual(['aborted'])
+  })
+
   it('without a gate, refuses a credential-file read and still runs ordinary reads', async () => {
     writeFileSync(join(ws, '.env'), 'APP_MODE=ungated-dotenv-marker')
     writeFileSync(join(ws, 'note.txt'), 'ordinary note')

@@ -2317,6 +2317,75 @@ describe('startRun', () => {
     expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('alpha\n')
   })
 
+  it('lets a re-read after compaction count again, so the edit that follows goes through', async () => {
+    // The read and its re-read happen in the same run, so the re-read used to be served
+    // from the run's read cache without re-recording the file: once compaction had
+    // folded the first read away, every edit was refused as unread, the agent re-read,
+    // and the loop went round until the stall detector stopped it.
+    writeFileSync(join(ws, 'notes.txt'), 'alpha\n')
+    const history: ChatMessage[] = []
+    for (let t = 0; t < 4; t++) {
+      history.push({ role: 'user', content: `old question ${t}` })
+      history.push({ role: 'assistant', content: `old answer ${t}` })
+    }
+    history.push({ role: 'user', content: 'edit notes.txt' })
+    const read = (id: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'read_file', arguments: { path: 'notes.txt' } }
+    })
+    const edit = (id: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'edit_file', arguments: { path: 'notes.txt', old_string: 'alpha', new_string: 'beta' } }
+    })
+    // Read first, then other work; then every send overflows until the head holding the read has been
+    // summarized; then edit (refused), re-read, and edit again.
+    let compacted = false
+    const after: ProviderStreamEvent[] = [edit('e1'), read('r2'), edit('e2')]
+    let sentRead = false
+    const padding = [0, 1, 2, 3, 4, 5]
+    for (const n of padding) writeFileSync(join(ws, `pad${n}.txt`), `pad ${n}\n`)
+    const provider: Provider = {
+      async *streamChat(req) {
+        if (req.maxTokens != null) {
+          compacted = true
+          yield { type: 'text', text: 'SUMMARY' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        if (!sentRead) {
+          sentRead = true
+          yield read('r1')
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        // Later work in the same turn, so the summarized head can reach past the read.
+        const pad = padding.shift()
+        if (pad !== undefined) {
+          yield { type: 'tool_call', call: { id: `p${pad}`, name: 'read_file', arguments: { path: `pad${pad}.txt` } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        if (!compacted) {
+          yield { type: 'error', message: 'prompt is too long: 212129 tokens > 200000 maximum' }
+          return
+        }
+        const step = after.shift()
+        if (step) {
+          yield step
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const r = await run({ conversationId: 'conv-reread-after-compaction', policy: 'full-auto', provider, messages: history })
+    expect(types(r)).toContain('compaction')
+    expect(r.messages.find((m) => m.toolCallId === 'e1')!.content).toMatch(/^Error: You have not read notes\.txt yet/)
+    expect(r.messages.find((m) => m.toolCallId === 'e2')!.content).toBe('Edited notes.txt (1 replacement).')
+    expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('beta\n')
+  })
+
   it('a user\'s mid-run "Always allow" cannot shadow a managed `ask` (stays gated)', async () => {
     // The user picks "Always allow" on the first write. Because the persisted allow is
     // spliced BELOW the managed guardrail, first-match-wins keeps hitting the admin
@@ -3499,6 +3568,65 @@ describe('one run per conversation', () => {
     )
     expect(events.some((e) => e.type === 'text')).toBe(true)
     expect(events.at(-1)).toMatchObject({ type: 'done' })
+  })
+
+  it('frees the conversation slot even when every save fails', async () => {
+    // A save that throws (a full disk, a permissions error) used to escape startRun's
+    // finally before the run's slot was freed: startRun rejected, and the chat stayed
+    // "already running" behind a dead run until a restart.
+    const conversationId = 'conv-save-fails'
+    writeFileSync(join(ws, 'a.txt'), 'A')
+    writeFileSync(join(ws, 'b.txt'), 'B')
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'a.txt' } } },
+        { type: 'tool_call', call: { id: 'r2', name: 'read_file', arguments: { path: 'b.txt' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'read both' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    let saves = 0
+    const failingSave = (): void => {
+      saves++
+      throw new Error('ENOSPC: no space left on device')
+    }
+    await expect(
+      startRun(
+        {
+          runId: 'run-save-fails-1',
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'read them' }]
+        },
+        () => {},
+        failingSave
+      )
+    ).resolves.toBeUndefined()
+    expect(saves).toBeGreaterThan(0)
+    expect(activeRunForConversation(conversationId)).toBeNull()
+
+    // The next run on the chat is accepted, not refused as already running.
+    h.provider = scripted([[{ type: 'text', text: 'again' }, { type: 'done', stopReason: 'end_turn' }]])
+    const events: AgentEvent[] = []
+    await startRun(
+      {
+        runId: 'run-save-fails-2',
+        conversationId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'again' }]
+      },
+      (e) => events.push(e),
+      failingSave
+    )
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ type: 'done' })
+    expect(activeRunForConversation(conversationId)).toBeNull()
   })
 
   it('counts live runs across conversations and clears them as they finish', async () => {
@@ -4782,6 +4910,50 @@ describe('writable subagent unconfined-shell gate', () => {
       | undefined
     expect(result?.ok).toBe(false)
     expect(result?.output).toContain('interrupted')
+  })
+
+  it("stops a subagent's batch on Stop: the next call neither asks nor runs", async () => {
+    // The first write's card is resolved by Stop; the subagent used to move on to the
+    // next call in its batch, raising a card nothing answered (so the run never ended).
+    h.settings.permissionRules = [{ action: 'ask', tool: 'write_file', match: '*' }]
+    try {
+      h.provider = scripted([
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'two writes', prompt: 'write both' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'one.txt', content: '1' } } },
+          { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'two.txt', content: '2' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'sub done' }, { type: 'done', stopReason: 'end_turn' }],
+        [{ type: 'text', text: 'main done' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+      const runId = 'run-stop-subagent-batch'
+      const events: AgentEvent[] = []
+      let cancelled = false
+      await startRun(
+        { runId, workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'full-auto', messages: [{ role: 'user', content: 'go' }] },
+        (e) => {
+          events.push(e)
+          if (e.type !== 'tool_approval') return
+          if (!cancelled) {
+            cancelled = true
+            setTimeout(() => cancelRun(runId), 0)
+          } else {
+            // A regression: answer it so the assertions below fail instead of hanging.
+            setTimeout(() => resolveApproval(runId, e.callId, 'allow'), 0)
+          }
+        }
+      )
+      expect(events.filter((e) => e.type === 'tool_approval')).toHaveLength(1)
+      expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
+      expect(existsSync(join(ws, 'one.txt'))).toBe(false)
+      expect(existsSync(join(ws, 'two.txt'))).toBe(false)
+    } finally {
+      h.settings.permissionRules = []
+    }
   })
 
   it("'always' grants the unconfined-shell consent, so the next command skips the prompt", async () => {
@@ -7379,6 +7551,70 @@ describe('egress hardening', () => {
       })
       expect(approvalCallIds(r)).toEqual([])
       expect(shellSawNetwork).toBe(false)
+    })
+
+    it('asks nothing when the run is stopped during a command that then fails for lack of network', async () => {
+      // Stop mid-command: the command reports the network failure as it unwinds, after
+      // cancelRun already cleared every prompt. A network card raised then would wait
+      // for an answer nobody gives, and the run would never end.
+      const runId = 'run-stop-net-shell'
+      h.probeTools = [
+        {
+          kind: 'shell',
+          summarize: () => 'npm install',
+          schema: {
+            name: 'needs_net_shell',
+            description: 'probe shell stopped mid-command',
+            parameters: { type: 'object', properties: {}, additionalProperties: false }
+          },
+          execute: async (_a, ctx) => {
+            await new Promise<void>((resolve) => {
+              if (ctx.signal?.aborted) resolve()
+              else ctx.signal?.addEventListener('abort', () => resolve(), { once: true })
+            })
+            ctx.recordEvidence?.({
+              kind: 'shell',
+              command: 'npm install',
+              background: false,
+              exitCode: 1,
+              timedOut: false,
+              output: 'npm error code ENOTFOUND',
+              blocked: 'network'
+            })
+            return `npm error code ENOTFOUND\n[exit code: 1]\n${NETWORK_BLOCKED_HINT}`
+          }
+        }
+      ]
+      h.provider = scripted([
+        [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+        [{ type: 'done', stopReason: 'end_turn' }]
+      ])
+      const events: AgentEvent[] = []
+      let cancelledAt = -1
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'install' }]
+        },
+        (e) => {
+          events.push(e)
+          if (e.type === 'tool_start' && e.callId === 'n1') {
+            setTimeout(() => {
+              cancelledAt = events.length
+              cancelRun(runId)
+            }, 0)
+          }
+          // Answer any card so a regression fails the assertions below instead of hanging.
+          if (e.type === 'tool_approval') setTimeout(() => resolveApproval(runId, e.callId, 'allow'), 0)
+        }
+      )
+      expect(cancelledAt).toBeGreaterThan(0)
+      expect(events.slice(cancelledAt).filter((e) => e.type === 'tool_approval')).toEqual([])
+      expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
     })
 
     it('asks after a command fails for lack of network; allowing turns network on and tells the agent to retry', async () => {
