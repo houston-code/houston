@@ -107,11 +107,11 @@ describe('runAndDrain', () => {
     // The flush run carries the combined user message and the newest send settings.
     const flushReq = h.startRun.mock.calls[1][0]
     expect(flushReq.runId).toBe(turnStart.runId)
-    expect(flushReq.messages).toEqual([{ role: 'user', content: 'A\n\nB' }])
+    expect(flushReq.messages).toEqual([{ role: 'user', content: 'A\n\nB', at: expect.any(String) }])
     expect(flushReq.model).toBe('m2')
     expect(flushReq.approvalPolicy).toBe('full-auto')
 
-    expect(h.setMessages).toHaveBeenCalledWith(cid, [{ role: 'user', content: 'A\n\nB' }], expect.objectContaining({ model: 'm2', approvalPolicy: 'full-auto' }))
+    expect(h.setMessages).toHaveBeenCalledWith(cid, [{ role: 'user', content: 'A\n\nB', at: expect.any(String) }], expect.objectContaining({ model: 'm2', approvalPolicy: 'full-auto' }))
     expect(sink.emitQueueChanged).toHaveBeenCalledWith(cid, [])
     expect(listQueue(cid)).toEqual([]) // drained
   })
@@ -131,7 +131,7 @@ describe('runAndDrain', () => {
     await settle()
     expect(h.startRun.mock.calls[1][0]).toMatchObject({ approvalPolicy: 'plan', reasoningEffort: 'low' })
     // Recorded in the same store write as the flushed message.
-    expect(h.setMessages).toHaveBeenCalledWith(cid, [{ role: 'user', content: 'A' }], {
+    expect(h.setMessages).toHaveBeenCalledWith(cid, [{ role: 'user', content: 'A', at: expect.any(String) }], {
       providerId: 'anthropic',
       model: 'm1',
       approvalPolicy: 'plan',
@@ -161,7 +161,7 @@ describe('runAndDrain', () => {
     expect(turnStart).toMatchObject({ userText: 'Create a GitHub pull request…', invokedAs })
     expect(h.setMessages).toHaveBeenCalledWith(
       cid,
-      [{ role: 'user', content: 'Create a GitHub pull request…', invokedAs }],
+      [{ role: 'user', content: 'Create a GitHub pull request…', invokedAs, at: expect.any(String) }],
       expect.objectContaining({ model: 'm1' })
     )
   })
@@ -301,7 +301,7 @@ describe('runAndDrain', () => {
       await runAndDrain(io(), cid, runReq(cid))
       await settle()
       expect(h.startRun).toHaveBeenCalledTimes(2)
-      expect(h.startRun.mock.calls[1][0].messages).toEqual([{ role: 'user', content: 'and the docs' }])
+      expect(h.startRun.mock.calls[1][0].messages).toEqual([{ role: 'user', content: 'and the docs', at: expect.any(String) }])
     })
   })
 })

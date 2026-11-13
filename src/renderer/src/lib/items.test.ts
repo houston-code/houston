@@ -13,6 +13,7 @@ import {
   rewindTargets,
   showsHandoff,
   systemNoteSummary,
+  turnStatsByReply,
   reduceEvent,
   type DisplayItem,
   type NoticeItem,
@@ -1169,5 +1170,71 @@ describe('reduceEvent — subagent records', () => {
     ])
     const tool = items.find((i) => i.kind === 'tool') as ToolItem
     expect(tool.records).toEqual([saved])
+  })
+})
+
+describe('message timestamps and turn details', () => {
+  it('rebuilds when each message was sent and what each turn cost', () => {
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'fix it', at: '2026-11-13T10:00:00.000Z' },
+      {
+        role: 'assistant',
+        content: '',
+        toolCalls: [{ id: 't', name: 'read_file', arguments: {} }],
+        model: 'model-a',
+        usage: { inputTokens: 1000, outputTokens: 100, cost: 0.01 },
+        at: '2026-11-13T10:00:05.000Z'
+      },
+      { role: 'tool', content: 'ok', toolCallId: 't', toolName: 'read_file' },
+      { role: 'user', content: 'and the docs', steered: true, at: '2026-11-13T10:00:06.000Z' },
+      {
+        role: 'assistant',
+        content: 'done',
+        model: 'model-a',
+        usage: { inputTokens: 1200, outputTokens: 50, cost: 0.02 },
+        at: '2026-11-13T10:00:09.000Z'
+      },
+      { role: 'user', content: 'thanks' },
+      { role: 'assistant', content: 'welcome' }
+    ]
+    const items = itemsFromMessages(messages)
+    const users = items.filter((i): i is UserItem => i.kind === 'user')
+    expect(users.map((u) => u.at)).toEqual(['2026-11-13T10:00:00.000Z', '2026-11-13T10:00:06.000Z', undefined])
+    // The steered message belongs to the turn it was steered into.
+    expect(users[0].turn).toEqual({ models: ['model-a'], inputTokens: 2200, outputTokens: 150, cost: 0.03 })
+    expect(users[1].turn).toBeUndefined()
+    // An older turn saved without details has none.
+    expect(users[2].turn).toBeUndefined()
+    const replies = items.filter((i) => i.kind === 'assistant')
+    expect(replies.map((r) => r.at)).toEqual(['2026-11-13T10:00:09.000Z', undefined])
+    const byReply = turnStatsByReply(items)
+    expect([...byReply.keys()]).toEqual([replies[0].id])
+    expect(byReply.get(replies[0].id)).toBe(users[0].turn)
+  })
+
+  it('folds live usage rounds into the turn, using the round numbers over the running totals', () => {
+    let items: DisplayItem[] = [{ kind: 'user', id: 'u', text: 'go' }]
+    items = reduceEvent(items, {
+      runId: 'r',
+      type: 'usage',
+      inputTokens: 9000,
+      outputTokens: 900,
+      cost: 1,
+      model: 'model-a',
+      round: { inputTokens: 100, outputTokens: 10, cost: 0.001 }
+    })
+    items = reduceEvent(items, { runId: 'r', type: 'text', delta: 'hi' })
+    items = reduceEvent(items, { runId: 'r', type: 'steered', text: 'also this' })
+    // A raw event (a replayed live buffer) carries the round's numbers at the top.
+    items = reduceEvent(items, { runId: 'r', type: 'usage', inputTokens: 50, outputTokens: 5, cost: 0, model: 'model-b' })
+    const user = items[0] as UserItem
+    expect(user.turn).toEqual({ models: ['model-a', 'model-b'], inputTokens: 150, outputTokens: 15, cost: 0.001 })
+    expect(items[1]).toMatchObject({ kind: 'assistant', at: expect.any(String) })
+    expect(items[2]).toMatchObject({ kind: 'user', steered: true, at: expect.any(String) })
+  })
+
+  it('ignores usage before any user message', () => {
+    const items: DisplayItem[] = []
+    expect(reduceEvent(items, { runId: 'r', type: 'usage', inputTokens: 1, outputTokens: 1, cost: 0 })).toBe(items)
   })
 })

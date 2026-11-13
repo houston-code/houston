@@ -117,7 +117,8 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
     role: 'user',
     content: text,
     ...(images?.length ? { images } : {}),
-    ...(invokedAs ? { invokedAs } : {})
+    ...(invokedAs ? { invokedAs } : {}),
+    at: new Date().toISOString()
   }
   const messages = [...conv.messages, userMessage]
   setMessages(conv.id, messages, {

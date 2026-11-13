@@ -154,6 +154,30 @@ export interface ChatMessage {
    * providers never see it.
    */
   unanswered?: UnansweredRun[]
+  /**
+   * When the message was written (ISO 8601): a user turn when it was sent, an
+   * assistant turn when the model finished it. Absent on messages saved before it was
+   * recorded. Display-only; providers never see it.
+   */
+  at?: string
+  /**
+   * Present on assistant turns: the model that actually served the reply (after a
+   * fallback hop, the backup). Display-only; providers never see it.
+   */
+  model?: string
+  /**
+   * Present on assistant turns: what the model round that wrote this message billed.
+   * Display-only; providers never see it.
+   */
+  usage?: MessageUsage
+}
+
+/** One model round's billed tokens and cost (see {@link ChatMessage.usage}). */
+export interface MessageUsage {
+  inputTokens: number
+  outputTokens: number
+  /** USD; 0 when the model's price isn't known. */
+  cost: number
 }
 
 /** Why one run ended without a reply (see {@link ChatMessage.unanswered}). */
@@ -1400,6 +1424,13 @@ export type AgentEvent =
        * loop event and on the TUI path, which tallies from the per-round numbers.
        */
       perModel?: ModelUsage[]
+      /**
+       * This round's own numbers, kept when the GUI IPC seam rewrites the top-level
+       * fields to the conversation's running totals, so the transcript can show what
+       * each turn spent. Absent on the raw loop event, whose top-level fields already
+       * are the round's.
+       */
+      round?: MessageUsage
     }
   /**
    * The tools this run offers the model, once they are assembled (built-ins and

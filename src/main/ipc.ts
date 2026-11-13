@@ -1311,7 +1311,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
       role: 'user',
       content: req.userText,
       ...(images.length ? { images } : {}),
-      ...(invokedAs ? { invokedAs } : {})
+      ...(invokedAs ? { invokedAs } : {}),
+      // When it was sent, for the transcript's timestamp.
+      at: new Date().toISOString()
     }
     // A resend of a message whose turn failed replaces it rather than repeating it.
     const messages = appendUserTurn(conv.messages, userMessage)

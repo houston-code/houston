@@ -196,6 +196,11 @@ describe('mergeRunningTotals', () => {
     expect(out).toMatchObject({ inputTokens: 100, outputTokens: 200, cost: 1.5, runId: 'r' })
   })
 
+  it("keeps the round's own numbers beside the running totals, for the transcript", () => {
+    const out = mergeRunningTotals(usage(), total)
+    expect(out).toMatchObject({ round: { inputTokens: 10, outputTokens: 20, cost: 0.05 } })
+  })
+
   it('passes non-usage events through unchanged', () => {
     const done: AgentEvent = { runId: 'r', type: 'done', stopReason: 'end_turn' }
     expect(mergeRunningTotals(done, total)).toBe(done)
