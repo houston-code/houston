@@ -18,9 +18,11 @@ import {
 import {
   ListRefresher,
   PendingRequests,
+  cancelledNotification,
   handleServerMessage,
   keepAliveDuring,
   kindOf,
+  mcpCancelledError,
   parseIncoming,
   type ElicitationWireResult,
   type JsonRpcIncoming,
@@ -180,20 +182,21 @@ export class McpHttpClient implements McpConnection {
   }
 
   /** Read a resource's contents by uri, flattened to text. */
-  async readResource(uri: string): Promise<string> {
-    const res = await this.rpc('resources/read', { uri }, CALL_TIMEOUT_MS)
+  async readResource(uri: string, signal?: AbortSignal): Promise<string> {
+    const res = await this.rpc('resources/read', { uri }, CALL_TIMEOUT_MS, { signal })
     return flattenMcpResourceContents(res) || '[no content]'
   }
 
   /** Fetch a prompt template by name, flattened to text. */
-  async getPrompt(name: string, args: Record<string, string>): Promise<string> {
-    const res = await this.rpc('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS)
+  async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string> {
+    const res = await this.rpc('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, { signal })
     return flattenMcpPromptMessages(res) || '[no content]'
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     const res = (await this.rpc('tools/call', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, {
-      progress: true
+      progress: true,
+      signal
     })) as {
       content?: unknown
       isError?: boolean
@@ -226,19 +229,28 @@ export class McpHttpClient implements McpConnection {
     method: string,
     params: unknown,
     timeoutMs: number,
-    opts: { progress?: boolean } = {}
+    opts: { progress?: boolean; signal?: AbortSignal } = {}
   ): Promise<unknown> {
     if (this.closed) throw new Error('MCP HTTP client is closed')
+    // Stopped before it went out: nothing to send, and nothing to cancel.
+    if (opts.signal?.aborted) throw mcpCancelledError(method)
     const id = this.nextId++
     // Ask for progress on long calls: a server that reports it keeps the call's
     // inactivity clock (see PendingRequests) from expiring mid-work.
     const sent = opts.progress
       ? { ...(params as Record<string, unknown>), _meta: { progressToken: id } }
       : params
-    const result = this.pending.wait(id, method, timeoutMs)
+    const result = this.pending.wait(id, method, timeoutMs, undefined, {
+      signal: opts.signal,
+      // Dropping the response stream is not a cancel under streamable HTTP: the server
+      // is told explicitly, on its own POST.
+      onCancel: () => {
+        if (!this.closed) void this.fireAndForget(cancelledNotification(id))
+      }
+    })
     const controller = new AbortController()
     // Stop the transfer once the request settles, whichever way: the response
-    // arrived (no need to drain the rest), it timed out, or the client closed.
+    // arrived (no need to drain the rest), it timed out, was cancelled, or the client closed.
     void result.catch(() => {}).finally(() => controller.abort())
     void this.performPost(id, method, { jsonrpc: '2.0', id, method, params: sent }, controller).catch(
       (e) => this.pending.reject(id, e as Error)

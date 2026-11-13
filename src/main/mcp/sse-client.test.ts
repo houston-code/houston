@@ -408,3 +408,90 @@ describe('SseEventBuffer', () => {
     }).toThrow(/larger than/)
   })
 })
+
+describe('McpSseClient cancellation', () => {
+  /**
+   * An SSE server that completes the handshake and then never answers a tools/call
+   * (with `hangPost`, never even acknowledges its POST), recording each message posted.
+   */
+  function hangingSseServer(
+    posts: Array<Record<string, unknown>>,
+    opts: { hangPost?: boolean } = {}
+  ): { connect: SseConnectFn; fetch: FetchFn } {
+    let emit: ((e: SseEvent) => void) | null = null
+    const connect: SseConnectFn = (_url, _headers, handlers) => {
+      emit = handlers.onEvent
+      queueMicrotask(() => emit?.({ event: 'endpoint', data: '/messages' }))
+      return { close: () => {} }
+    }
+    const fetch: FetchFn = (_url, init) => {
+      const req = JSON.parse(init.body as string) as Record<string, unknown> & { id?: number; method?: string }
+      posts.push(req)
+      if (req.method === 'tools/call') {
+        if (opts.hangPost) {
+          return new Promise<Response>((_resolve, reject) => {
+            init.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted.')))
+          })
+        }
+        return Promise.resolve(new Response('', { status: 202 }))
+      }
+      if (req.id !== undefined) {
+        const result = req.method === 'tools/list' ? { tools: [{ name: 'slow' }] } : {}
+        queueMicrotask(() => emit?.({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) }))
+      }
+      return Promise.resolve(new Response('', { status: 202 }))
+    }
+    return { connect, fetch }
+  }
+
+  async function settlesWithin<T>(p: Promise<T>, ms: number): Promise<{ settled: boolean; error?: unknown }> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<{ settled: boolean }>((resolve) => {
+      timer = setTimeout(() => resolve({ settled: false }), ms)
+    })
+    try {
+      return await Promise.race([
+        p.then(
+          () => ({ settled: true }),
+          (error: unknown) => ({ settled: true, error })
+        ),
+        late
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  for (const hangPost of [false, true]) {
+    it(`settles a hung tools/call as soon as its signal aborts, and tells the server (${hangPost ? 'POST never acknowledged' : 'answer never sent'})`, async () => {
+      const posts: Array<Record<string, unknown>> = []
+      const srv = hangingSseServer(posts, { hangPost })
+      const client = new McpSseClient(srv.connect, srv.fetch)
+      try {
+        await client.connect({ url: 'https://x/sse' })
+        const stop = new AbortController()
+        const call = client.callTool('slow', {}, stop.signal)
+        await new Promise((r) => setTimeout(r, 5))
+        const sent = posts.find((p) => p.method === 'tools/call')
+        expect(sent).toBeDefined()
+
+        const t0 = Date.now()
+        stop.abort()
+        const outcome = await settlesWithin(call, 1_000)
+        expect(outcome.settled).toBe(true)
+        expect(Date.now() - t0).toBeLessThan(100)
+        expect(outcome.error).toBeInstanceOf(Error)
+        expect((outcome.error as Error).message).toMatch(/cancel/i)
+        await vi.waitFor(() =>
+          expect(posts.find((p) => p.method === 'notifications/cancelled')).toMatchObject({
+            jsonrpc: '2.0',
+            params: { requestId: sent!.id, reason: expect.any(String) }
+          })
+        )
+        expect(client.isClosed).toBe(false)
+      } finally {
+        client.close()
+      }
+    })
+  }
+})

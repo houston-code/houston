@@ -18,9 +18,11 @@ import {
 import {
   ListRefresher,
   PendingRequests,
+  cancelledNotification,
   handleServerMessage,
   keepAliveDuring,
   kindOf,
+  mcpCancelledError,
   parseIncoming,
   type ElicitationWireResult,
   type McpListKind
@@ -301,9 +303,10 @@ export class McpSseClient implements McpConnection {
     }
   }
 
-  async callTool(name: string, args: Record<string, unknown>): Promise<string> {
+  async callTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
     const res = (await this.rpc('tools/call', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, {
-      progress: true
+      progress: true,
+      signal
     })) as {
       content?: unknown
       isError?: boolean
@@ -313,14 +316,14 @@ export class McpSseClient implements McpConnection {
   }
 
   /** Read a resource's contents by uri, flattened to text. */
-  async readResource(uri: string): Promise<string> {
-    const res = await this.rpc('resources/read', { uri }, CALL_TIMEOUT_MS)
+  async readResource(uri: string, signal?: AbortSignal): Promise<string> {
+    const res = await this.rpc('resources/read', { uri }, CALL_TIMEOUT_MS, { signal })
     return flattenMcpResourceContents(res) || '[no content]'
   }
 
   /** Fetch a prompt template by name, flattened to text. */
-  async getPrompt(name: string, args: Record<string, string>): Promise<string> {
-    const res = await this.rpc('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS)
+  async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string> {
+    const res = await this.rpc('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, { signal })
     return flattenMcpPromptMessages(res) || '[no content]'
   }
 
@@ -431,22 +434,30 @@ export class McpSseClient implements McpConnection {
     method: string,
     params: unknown,
     timeoutMs: number,
-    opts: { progress?: boolean } = {}
+    opts: { progress?: boolean; signal?: AbortSignal } = {}
   ): Promise<unknown> {
     if (this.closed) throw new Error('MCP SSE client is closed')
+    // Stopped before it went out: nothing to send, and nothing to cancel.
+    if (opts.signal?.aborted) throw mcpCancelledError(method)
     const id = this.nextId++
     // Ask for progress on long calls: a server that reports it keeps the call's
     // inactivity clock (see PendingRequests) from expiring mid-work.
     const sent = opts.progress
       ? { ...(params as Record<string, unknown>), _meta: { progressToken: id } }
       : params
-    const result = this.pending.wait(id, method, timeoutMs)
+    const result = this.pending.wait(id, method, timeoutMs, undefined, {
+      signal: opts.signal,
+      onCancel: () => {
+        if (!this.closed) void this.postMessage(cancelledNotification(id), INIT_TIMEOUT_MS).catch(() => {})
+      }
+    })
     // `result` can reject on its own timeout before this method returns it to the caller
     // (when the POST below hangs to that same deadline); handle it on a side-chain so
     // that brief window isn't reported as an unhandled rejection.
     void result.catch(() => {})
     try {
-      await this.postMessage({ jsonrpc: '2.0', id, method, params: sent }, timeoutMs)
+      // The run's Stop also abandons a POST the server has not acknowledged yet.
+      await this.postMessage({ jsonrpc: '2.0', id, method, params: sent }, timeoutMs, opts.signal)
     } catch (e) {
       this.pending.reject(id, e as Error)
     }
@@ -469,10 +480,12 @@ export class McpSseClient implements McpConnection {
    * whole call past its per-call timeout. The timer stays live across the body drain so
    * a stalled body can't slip past it either.
    */
-  private async postMessage(payload: unknown, timeoutMs = CALL_TIMEOUT_MS): Promise<void> {
+  private async postMessage(payload: unknown, timeoutMs = CALL_TIMEOUT_MS, signal?: AbortSignal): Promise<void> {
     if (!this.postUrl) throw new Error('MCP SSE endpoint not yet known')
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const onAbort = (): void => controller.abort()
+    signal?.addEventListener('abort', onAbort, { once: true })
     try {
       const res = await this.fetchFn(this.postUrl, {
         method: 'POST',
@@ -492,6 +505,7 @@ export class McpSseClient implements McpConnection {
       if (!res.ok) throw new Error(`MCP POST failed: HTTP ${res.status}`)
     } finally {
       clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
     }
   }
 

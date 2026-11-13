@@ -352,18 +352,113 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
   })
 }
 
+/**
+ * The user-facing line for a server that is down this turn. Plain words, one line: the
+ * server's own error text is stripped of control characters and capped, since it can
+ * be anything a broken or hostile server printed.
+ */
+export function mcpUnavailableNotice(s: McpServerStatus): string {
+  if (s.state === 'needs-auth') {
+    return `MCP server "${s.id}" needs you to sign in. Its tools are off for this turn. Sign in from Settings > MCP servers (desktop) or with /mcp login (terminal).`
+  }
+  // eslint-disable-next-line no-control-regex
+  const text = (s.error ?? '').replace(/[\u0000-\u001f\u007f-\u009f]+/g, ' ').trim()
+  let why: string
+  if (!text) why = 'it failed to start'
+  else if (/timed out/i.test(text)) why = 'timed out starting'
+  else {
+    const bare = text.replace(/^MCP (server )?/, '')
+    why = bare.length > MAX_NOTICE_REASON_CHARS ? `${bare.slice(0, MAX_NOTICE_REASON_CHARS - 1)}…` : bare
+  }
+  return `MCP server "${s.id}" isn't available (${why}). Its tools are off for this turn.`
+}
+
+const MAX_NOTICE_REASON_CHARS = 200
+
+/**
+ * What each notice scope (a conversation, else a run) was last told about each of its
+ * servers that is down, as `state + error`, so the notice repeats only when that
+ * changes. A server that comes back is forgotten, so a later failure is told again.
+ * Bounded: the oldest scope is dropped past the cap.
+ */
+const toldDown = new Map<string, Map<string, string>>()
+const MAX_NOTICE_SCOPES = 200
+
+function noticesFor(serverIds: Iterable<string>, key: string): string[] {
+  let told = toldDown.get(key)
+  const out: string[] = []
+  for (const id of serverIds) {
+    const s = statuses.get(id)
+    if (!s) continue
+    if (s.state === 'connected') {
+      told?.delete(id)
+      continue
+    }
+    const sig = `${s.state}\n${s.error ?? ''}`
+    if (told?.get(id) === sig) continue
+    if (!told) {
+      told = new Map()
+      toldDown.set(key, told)
+      while (toldDown.size > MAX_NOTICE_SCOPES) toldDown.delete(toldDown.keys().next().value as string)
+    }
+    told.set(id, sig)
+    out.push(mcpUnavailableNotice(s))
+  }
+  if (told && told.size === 0) toldDown.delete(key)
+  return out
+}
+
+/** What a run passes along with its servers. */
+export interface McpRunOptions {
+  /**
+   * The run's Stop. An aborted signal stops the wait for slow servers at once (the
+   * result is then empty); their connects carry on for the next run.
+   */
+  signal?: AbortSignal
+  /** Told, once per change per `noticeKey`, about each of this run's servers that is down. */
+  onNotice?: (message: string) => void
+  /** Who has been told: a conversation id, else the run's. Defaults to `owner`. */
+  noticeKey?: string
+}
+
+/** Settle with `p`, or as soon as `signal` aborts (true then), whichever is first. */
+function untilAborted(p: Promise<void>, signal: AbortSignal | undefined): Promise<boolean> {
+  if (!signal) return p.then(() => false)
+  if (signal.aborted) {
+    void p.catch(() => {})
+    return Promise.resolve(true)
+  }
+  return new Promise<boolean>((resolve, reject) => {
+    const onAbort = (): void => {
+      // Left to finish on its own; nobody waits for its failure.
+      void p.catch(() => {})
+      resolve(true)
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    p.then(
+      () => resolve(false),
+      (e: unknown) => reject(e)
+    ).finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
 /** Connect the configured servers (best effort) and return their tools as ToolDefs. */
 export async function getMcpToolDefs(
   configs: McpServerConfig[] | undefined,
   /** The run asking, when there is one: its servers stay open until {@link releaseMcpRun}. */
-  owner?: string
+  owner?: string,
+  opts: McpRunOptions = {}
 ): Promise<ToolDef[]> {
   const mine = new Set((configs ?? []).filter((c) => c.enabled && c.id && (c.command || c.url)).map((c) => c.id))
   if (owner !== undefined) liveRuns.set(owner, mine)
   // Reconcile even with no configs when connections are still open, so removing
   // (or disabling) every server actually closes them instead of leaking to quit.
   if (!configs?.length && connections.size === 0) return []
-  await ensureConnections(configs ?? [])
+  if (await untilAborted(ensureConnections(configs ?? []), opts.signal)) return []
+  const noticeKey = opts.noticeKey ?? owner
+  if (opts.onNotice && noticeKey !== undefined) {
+    for (const message of noticesFor(mine, noticeKey)) opts.onNotice(message)
+  }
 
   const defs: ToolDef[] = []
   // Only this run's servers: another live run's may be connected too, and are not
@@ -387,7 +482,7 @@ export async function getMcpToolDefs(
         // Resolve the live connection at call time so a reconnect (or removal)
         // between building the tool list and the call doesn't hit a stale client.
         execute: (args, ctx) =>
-          callLive(serverId, ctx, (client) => client.callTool(original, args), {
+          callLive(serverId, ctx, (client) => client.callTool(original, args, ctx?.signal), {
             envelope: `Result from MCP server "${serverId}":`,
             source: `MCP tool ${fullName}`
           })
@@ -436,7 +531,8 @@ async function callLive(
   try {
     out = capMcpOutput(await fn(live.client))
   } catch (e) {
-    if (!live.client.isClosed) throw e
+    // A stopped call is not a lost connection: no reconnect, no retry hint.
+    if (!live.client.isClosed || ctx?.signal?.aborted) throw e
     await ensureConnections(lastConfigs).catch(() => {})
     const revived = connections.get(serverId)
     const hint =
@@ -542,7 +638,7 @@ function resourceMetaTools(): ToolDef[] {
         const server = typeof args.server === 'string' ? args.server : ''
         const uri = typeof args.uri === 'string' ? args.uri : ''
         if (!server || !uri) return Promise.resolve('Both "server" and "uri" are required.')
-        return callLive(server, ctx, (client) => client.readResource(uri), {
+        return callLive(server, ctx, (client) => client.readResource(uri, ctx?.signal), {
           envelope: `Resource from MCP server "${server}":`,
           source: `MCP resource ${uri}`
         })
@@ -612,7 +708,7 @@ function promptMetaTools(): ToolDef[] {
         // Not fenced, unlike tool results and resources: a prompt template is the
         // server's own authored instructions, which the user opted into by configuring
         // the server, not third-party text it relays.
-        return callLive(server, ctx, (client) => client.getPrompt(name, promptArgs))
+        return callLive(server, ctx, (client) => client.getPrompt(name, promptArgs, ctx?.signal))
       }
     }
   ]
@@ -625,4 +721,5 @@ export function disconnectAllMcp(): void {
   statuses.clear()
   liveRuns.clear()
   recentFailures.clear()
+  toldDown.clear()
 }
