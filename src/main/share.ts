@@ -9,6 +9,7 @@ import {
 } from '@shared/share'
 import { openExternalSafely } from './safeExternal'
 import { log } from './logger'
+import { targetWindow } from './windows'
 
 /**
  * "Share Houston": one click hands the invite (see `@shared/share`) to the OS.
@@ -78,7 +79,7 @@ export function shareHoustonVia(target: ShareTarget): boolean {
  * email, since a menu click has no in-app popover to show.
  */
 export async function shareHoustonFromMenu(): Promise<void> {
-  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
+  const win = targetWindow() ?? null
   if (shareHouston(win) === 'sheet') return
   const options = {
     type: 'info' as const,

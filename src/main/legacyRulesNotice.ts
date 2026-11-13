@@ -17,7 +17,7 @@ import { getUserDataDir } from './userData'
 
 const FILE = 'notices.json'
 
-type NoticeKey = 'legacyRulesBannerAnswered' | 'legacyRulesTerminalShown'
+type NoticeKey = 'legacyRulesBannerAnswered' | 'legacyRulesTerminalShown' | 'importOfferAnswered'
 
 function noticesFile(): string {
   return join(getUserDataDir(), FILE)
@@ -64,4 +64,14 @@ export function takeLegacyRulesTerminalNotice(applies: () => boolean): boolean {
   if (!applies()) return false
   markNotice('legacyRulesTerminalShown')
   return true
+}
+
+/** Whether the one-time "import from other tools" offer was answered (Review or Not now). */
+export function isImportOfferAnswered(): boolean {
+  return readNotices().importOfferAnswered === true
+}
+
+/** Record that the import offer was answered, so it never shows again. */
+export function answerImportOffer(): void {
+  markNotice('importOfferAnswered')
 }

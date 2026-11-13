@@ -6,12 +6,14 @@
  * pages. Unlike `view_localhost`, which screenshots an offscreen window for the
  * *model*, this renders interactive pages for the *user*.
  *
- * Each pane is a `WebContentsView` overlaid on the main window and positioned to
- * match a placeholder the renderer measures in the DOM (the renderer owns layout;
+ * Each pane is a `WebContentsView` overlaid on the window whose dock shows it, and
+ * positioned to match a placeholder that window's renderer measures in the DOM (the renderer owns layout;
  * we only paint native views into the rectangles it reports). A native view always
  * paints above the window's HTML, so the renderer also tells us to hide the panes
  * whenever the dock is closed or a modal/overlay is on top — otherwise a preview
- * would obscure Settings or the command palette.
+ * would obscure Settings or the command palette. Every window has its own panes, so
+ * two windows can show different servers (or the same one) without fighting over a
+ * view.
  *
  * Security mirrors view_localhost exactly: the page is untrusted dev-server output,
  * so each view is sandboxed, context-isolated, has no Node integration, runs in a
@@ -33,8 +35,8 @@ interface Pane {
   url: string
 }
 
-const panes = new Map<string, Pane>()
-let host: BaseWindow | null = null
+/** Each window's panes, by pane id. */
+const panesByHost = new Map<BaseWindow, Map<string, Pane>>()
 
 /** The locked-down session the preview panes share (installed once). */
 const PREVIEW_PARTITION = 'preview-pane'
@@ -61,11 +63,6 @@ function roundBounds(b: PreviewPaneBounds): PreviewPaneBounds {
   }
 }
 
-/** Remember the window the panes overlay (the main window). */
-export function attachPreviewHost(window: BaseWindow): void {
-  host = window
-}
-
 function hostOf(rawUrl: string): string {
   try {
     return new URL(rawUrl).hostname
@@ -74,7 +71,7 @@ function hostOf(rawUrl: string): string {
   }
 }
 
-function createPane(spec: PreviewPaneSpec): Pane {
+function createPane(host: BaseWindow, spec: PreviewPaneSpec): Pane {
   const view = new WebContentsView({
     webPreferences: {
       session: previewSession(),
@@ -99,12 +96,12 @@ function createPane(spec: PreviewPaneSpec): Pane {
   void wc.loadURL(spec.url).catch(() => {
     /* the dev server may not be ready yet; the renderer offers a manual reload */
   })
-  host?.contentView.addChildView(view)
+  host.contentView.addChildView(view)
   return pane
 }
 
-function destroyPane(pane: Pane): void {
-  host?.contentView.removeChildView(pane.view)
+function destroyPane(host: BaseWindow, pane: Pane): void {
+  if (!host.isDestroyed()) host.contentView.removeChildView(pane.view)
   const wc = pane.view.webContents as { close?: () => void; isDestroyed?: () => boolean }
   if (wc && !wc.isDestroyed?.()) wc.close?.()
 }
@@ -115,18 +112,24 @@ function destroyPane(pane: Pane): void {
  * false` keeps the panes that exist (so they don't reload on every overlay toggle)
  * but hides them, and creates none; passing an empty `specs` tears them all down.
  */
-export function syncPreviewPanes(specs: PreviewPaneSpec[], visible: boolean): void {
-  if (!host) return
+export function syncPreviewPanes(host: BaseWindow | null, specs: PreviewPaneSpec[], visible: boolean): void {
+  if (!host || host.isDestroyed()) return
   // Defense in depth: only ever load loopback URLs, even if a renderer bug sends
   // something else. The per-view nav guard blocks *navigation* off loopback; this
   // also blocks the *initial* load.
   specs = specs.filter((s) => isLoopbackHost(hostOf(s.url)))
   const wanted = new Map(specs.map((s) => [s.id, s]))
+  let panes = panesByHost.get(host)
+  if (!panes) {
+    if (specs.length === 0) return
+    panes = new Map()
+    panesByHost.set(host, panes)
+  }
 
   // Drop panes the renderer no longer wants.
   for (const [id, pane] of panes) {
     if (!wanted.has(id)) {
-      destroyPane(pane)
+      destroyPane(host, pane)
       panes.delete(id)
     }
   }
@@ -138,7 +141,7 @@ export function syncPreviewPanes(specs: PreviewPaneSpec[], visible: boolean): vo
       // loading a dev server's page. The dock syncs again when it becomes visible (its
       // tab is chosen, the overlay over it closes), and the pane is created then.
       if (!visible) continue
-      pane = createPane(spec)
+      pane = createPane(host, spec)
       panes.set(spec.id, pane)
     } else if (pane.url !== spec.url) {
       // Same slot, different server URL — point the existing view at it.
@@ -148,18 +151,26 @@ export function syncPreviewPanes(specs: PreviewPaneSpec[], visible: boolean): vo
     pane.view.setVisible(visible)
     if (visible) pane.view.setBounds(roundBounds(spec.bounds))
   }
+  if (panes.size === 0) panesByHost.delete(host)
 }
 
-/** Reload one pane (the dock's per-pane refresh, e.g. after the server starts). */
-export function reloadPreviewPane(id: string): void {
-  const pane = panes.get(id)
+/** Reload one of a window's panes (the dock's per-pane refresh, e.g. after the server starts). */
+export function reloadPreviewPane(host: BaseWindow | null, id: string): void {
+  const pane = host ? panesByHost.get(host)?.get(id) : undefined
   if (pane && !pane.view.webContents.isDestroyed()) pane.view.webContents.reload()
 }
 
-/** Tear down every pane (dock closed, window closing, or app shutdown). */
+/** Tear down one window's panes (that window is closing). */
+export function destroyPreviewPanesOf(host: BaseWindow): void {
+  const panes = panesByHost.get(host)
+  if (!panes) return
+  for (const pane of panes.values()) destroyPane(host, pane)
+  panesByHost.delete(host)
+}
+
+/** Tear down every pane in every window (app shutdown). */
 export function destroyAllPreviewPanes(): void {
-  for (const pane of panes.values()) destroyPane(pane)
-  panes.clear()
+  for (const host of [...panesByHost.keys()]) destroyPreviewPanesOf(host)
 }
 
 /** Validate that a URL is loopback before the renderer hands it to the OS browser. */

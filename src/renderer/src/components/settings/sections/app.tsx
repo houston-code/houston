@@ -96,6 +96,28 @@ export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           access. Diagrams and images show either way. Off by default.
         </span>
       </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.toolOutputExpanded ?? false}
+          onChange={(e) => setSettings((s) => ({ ...s, toolOutputExpanded: e.target.checked }))}
+        />
+        <span>
+          Show tool output expanded. Each tool row in the chat opens with its output or diff in
+          view instead of collapsed to one line. Off by default.
+        </span>
+      </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.showReasoning ?? false}
+          onChange={(e) => setSettings((s) => ({ ...s, showReasoning: e.target.checked }))}
+        />
+        <span>
+          Always show reasoning. Keep the model&apos;s reasoning open above each reply instead of
+          folding it away once the reply starts. Off by default.
+        </span>
+      </label>
     </SettingsSection>
   )
 }
@@ -298,6 +320,8 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   density: 'density',
   codeTheme: 'code theme',
   htmlVisuals: 'interactive visuals',
+  toolOutputExpanded: 'tool output expanded',
+  showReasoning: 'always show reasoning',
   memoryEnabled: 'memory',
   keybindings: 'keyboard shortcuts',
   sandboxEgress: 'sandbox egress'

@@ -39,6 +39,7 @@ import {
   type ToolScopeEntry,
   retryProgress,
 } from '@shared/agent'
+import { throttleNotice } from '@shared/rateLimit'
 import type { McpServerConfig } from '@shared/types'
 import { SubagentTermLines } from '@shared/subagents'
 
@@ -1221,7 +1222,12 @@ export async function runHeadless(inputOpts: HeadlessOptions, deps: HeadlessDeps
           if (!opts.json && !e.ok) deps.err(`· ${e.name} failed\n`)
           break
         case 'retry':
-          if (!opts.json) deps.err(`· retrying (${retryProgress(e)})… ${e.message}\n`)
+          if (!opts.json)
+            deps.err(
+              e.throttle
+                ? `· ${throttleNotice(e.throttle, retryProgress(e))}\n`
+                : `· retrying (${retryProgress(e)})… ${e.message}\n`
+            )
           break
         case 'model_fallback':
           if (!opts.json) deps.err(`· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`)

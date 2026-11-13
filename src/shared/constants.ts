@@ -37,6 +37,14 @@ export const IPC = {
   legacyRulesNoticeStatus: 'app:legacyRulesNoticeStatus',
   /** Answer that notice: import ~/.claude/CLAUDE.md, or keep the rules separate. */
   legacyRulesNoticeDecide: 'app:legacyRulesNoticeDecide',
+  /** Find instruction files, MCP servers, skills and commands other tools keep. */
+  importScan: 'import:scan',
+  /** Copy the chosen finds into Houston's own locations. */
+  importApply: 'import:apply',
+  /** Whether to offer the one-time import notice. */
+  importOfferStatus: 'import:offerStatus',
+  /** Answer the one-time import notice. */
+  importOfferAnswer: 'import:offerAnswer',
   envKeyOffers: 'app:envKeyOffers',
   envKeyImport: 'app:envKeyImport',
   envKeyDismiss: 'app:envKeyDismiss',
@@ -113,6 +121,10 @@ export const IPC = {
   /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
   folderTrustDecide: 'folderTrust:decide',
   workingTreeChanges: 'workingTree:changes',
+  /** What a chat's latest turn, or all its turns, changed (the Changes view's scopes). */
+  chatChanges: 'changes:chat',
+  /** Revert one file, or one hunk, from the Changes view. */
+  changesRevert: 'changes:revert',
   // Settings
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',
@@ -166,6 +178,8 @@ export const IPC = {
   conversationReorder: 'conversation:reorder',
   /** Aggregate a local-only per-model loop scorecard over every persisted chat. */
   conversationScorecard: 'conversation:scorecard',
+  /** Spend and tokens per day and per project over every saved chat (local only). */
+  conversationUsageReport: 'conversation:usageReport',
   /** Main → renderer: a chat got a model-generated title (live sidebar/header update). */
   conversationTitleChanged: 'conversation:titleChanged',
   // Agent

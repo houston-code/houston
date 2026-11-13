@@ -24,6 +24,7 @@ import {
 import { McpServersSection } from './sections/mcp'
 import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
+import { ImportSection } from './sections/import'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import {
   AdditionalFoldersSection,
@@ -239,6 +240,18 @@ export const PAGES: SettingsPage[] = [
     ]
   },
   {
+    id: 'import',
+    label: PAGE_LABELS.import,
+    group: 'AI',
+    sections: [
+      {
+        id: 'import-other-tools',
+        Component: ImportSection,
+        keywords: ['migrate', 'copy', 'other tools', 'instructions', 'rules', 'mcp', 'skills', 'commands', 'mcp.json', 'switch']
+      }
+    ]
+  },
+  {
     id: 'general',
     label: PAGE_LABELS.general,
     group: 'App',
@@ -263,7 +276,7 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
         Component: AppearanceSection,
         keywords: [
           'theme',
@@ -279,7 +292,13 @@ export const PAGES: SettingsPage[] = [
           'code theme',
           'syntax',
           'accent',
-          'highlight color'
+          'highlight color',
+          'transcript',
+          'tool output',
+          'expand',
+          'collapse',
+          'reasoning',
+          'thinking'
         ]
       }
     ]

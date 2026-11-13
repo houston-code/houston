@@ -23,6 +23,7 @@ import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
+import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import type { GitInitResult } from '@shared/git'
 import type { DoctorFacts } from '@shared/doctor'
 import type { MemoryScope } from '@shared/memory'
@@ -51,6 +52,7 @@ import type {
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
 import type { Scorecard } from '@shared/scorecard'
+import type { UsageReport } from '@shared/usageReport'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type { ChatStatusMap } from '@shared/chatStatus'
@@ -62,6 +64,7 @@ import type {
   UpdateInstallFailed,
   WhatsNew
 } from '@shared/update'
+import type { ImportOutcome, ImportScan } from '@shared/importConfig'
 import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 
@@ -88,6 +91,15 @@ const api = {
   /** Answer that notice: import ~/.claude/CLAUDE.md into it, or keep the rules separate. */
   decideLegacyRulesNotice: (choice: LegacyRulesChoice): Promise<LegacyRulesDecideResult> =>
     ipcRenderer.invoke(IPC.legacyRulesNoticeDecide, choice),
+  /** Find instruction files, MCP servers, skills and commands other tools keep. */
+  scanImports: (workspace: string | null): Promise<ImportScan> => ipcRenderer.invoke(IPC.importScan, workspace),
+  /** Copy the chosen finds (by id) into Houston's own locations. */
+  applyImports: (workspace: string | null, ids: string[]): Promise<ImportOutcome> =>
+    ipcRenderer.invoke(IPC.importApply, workspace, ids),
+  /** Whether to show the one-time "import from other tools" offer. */
+  getImportOffer: (workspace: string | null): Promise<boolean> => ipcRenderer.invoke(IPC.importOfferStatus, workspace),
+  /** Answer that offer, so it never shows again. */
+  answerImportOffer: (): Promise<void> => ipcRenderer.invoke(IPC.importOfferAnswer),
   /**
    * API keys found in the app's environment for providers with no stored key: the
    * startup notice's list (`startup`, skipping "Not now" answers) or the Connect
@@ -168,6 +180,11 @@ const api = {
   /** All uncommitted working-tree changes (vs HEAD + untracked) for the Changes panel. */
   getWorkingTreeChanges: (workspace: string): Promise<WorkingTreeChanges> =>
     ipcRenderer.invoke(IPC.workingTreeChanges, workspace),
+  /** What a chat's latest turn (`turn`) or all its turns (`chat`) changed, for the Changes view. */
+  getChatChanges: (conversationId: string, scope: 'turn' | 'chat'): Promise<ChatChanges> =>
+    ipcRenderer.invoke(IPC.chatChanges, conversationId, scope),
+  /** Revert one file or hunk shown in the Changes view (after the user confirmed). */
+  revertChange: (req: ChangeRevertRequest): Promise<ChangeRevertResult> => ipcRenderer.invoke(IPC.changesRevert, req),
   /** Initialize a git repo in the workspace so its files show up in the Changes panel. */
   initGitRepo: (workspace: string): Promise<GitInitResult> =>
     ipcRenderer.invoke(IPC.gitInit, workspace),
@@ -258,6 +275,8 @@ const api = {
   /** Aggregate a local-only per-model loop scorecard over every persisted chat.
    *  Computed on-device from local files — nothing is ever transmitted. */
   getScorecard: (): Promise<Scorecard> => ipcRenderer.invoke(IPC.conversationScorecard),
+  /** Spend and tokens per day and per project over every saved chat (local only). */
+  getUsageReport: (): Promise<UsageReport> => ipcRenderer.invoke(IPC.conversationUsageReport),
   createConversation: (input: {
     workspace: string
     providerId: string

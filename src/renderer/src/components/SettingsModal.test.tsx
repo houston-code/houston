@@ -229,6 +229,7 @@ describe('SettingsModal', () => {
       'MCP Servers',
       'Hooks',
       'Memory',
+      'Import',
       'General',
       'Appearance',
       'Keyboard',

@@ -732,6 +732,16 @@ export interface AppSettings {
    */
   htmlVisuals?: boolean
   /**
+   * Show each tool row in the desktop transcript expanded (its output or diff in view)
+   * rather than collapsed to one line. Off by default.
+   */
+  toolOutputExpanded?: boolean
+  /**
+   * Keep the model's reasoning open under each reply in the desktop transcript, instead
+   * of behind its toggle once the reply starts. Off by default.
+   */
+  showReasoning?: boolean
+  /**
    * Cross-session memory: the agent sees the memories saved in earlier sessions and
    * can read them (docs/memory-design.md). On unless set to false.
    */
@@ -827,6 +837,12 @@ export interface AppSettings {
    * sidebar section. Absent = off (the usual recency / manual order).
    */
   sidebarUnreadFirst?: boolean
+  /**
+   * Split the chats outside any group into automatic sections by project folder or
+   * by date (Today, Yesterday, This week, Older). Pinned chats and the user's own
+   * groups stay as they are. Absent = no automatic sections.
+   */
+  sidebarGroupBy?: SidebarGroupBy
   /**
    * Whether a new chat at a git repository's root starts with "New worktree" on: the
    * chat then works on its own branch in a separate folder. Set when the user flips the
@@ -963,6 +979,9 @@ export interface EnvKeyOffer {
 /** Accent color presets (Settings > Appearance); 'default' is each theme's own. */
 export const ACCENT_COLORS = ['default', 'violet', 'green', 'orange', 'pink'] as const
 export type AccentColor = (typeof ACCENT_COLORS)[number]
+
+/** How the sidebar sorts chats outside any group into sections. */
+export type SidebarGroupBy = 'folder' | 'date'
 
 /** Result of answering that notice. `error` is set (and nothing is persisted) when the import write failed. */
 export interface LegacyRulesDecideResult {
