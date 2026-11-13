@@ -21,6 +21,7 @@ import {
   commitMessageRequest,
   lookupPr,
   pushBranch,
+  pushEnv,
   riskyRepoConfig,
   sanitizeCommitMessage,
   suggestCommitMessage
@@ -109,6 +110,31 @@ describe('commitAll', () => {
     },
     TIMEOUT
   )
+
+  maybe(
+    'refuses while a merge is in progress, instead of committing its conflict markers',
+    async () => {
+      const r = repo()
+      git(r, 'checkout', '-qb', 'other')
+      writeFileSync(join(r, 'a.txt'), 'other\n')
+      git(r, 'commit', '-qam', 'other')
+      git(r, 'checkout', '-q', 'main')
+      writeFileSync(join(r, 'a.txt'), 'mine\n')
+      git(r, 'commit', '-qam', 'mine')
+      const head = git(r, 'rev-parse', 'HEAD')
+      expect(() => execFileSync('git', ['-C', r, 'merge', '-q', 'other'], { stdio: 'ignore' })).toThrow()
+      const res = await commitAll(r, 'Merge', deps([r]))
+      expect(res).toMatchObject({ ok: false, error: /conflicts/ })
+      expect(git(r, 'rev-parse', 'HEAD')).toBe(head)
+      expect(git(r, 'ls-files', '-u')).not.toBe('')
+      // Conflicts resolved by hand but the merge not concluded: still refused.
+      writeFileSync(join(r, 'a.txt'), 'resolved\n')
+      git(r, 'add', 'a.txt')
+      expect(await commitAll(r, 'Merge', deps([r]))).toMatchObject({ ok: false, error: /in progress/ })
+      expect(git(r, 'rev-parse', 'HEAD')).toBe(head)
+    },
+    TIMEOUT
+  )
 })
 
 describe('pushBranch and branchSync', () => {
@@ -139,6 +165,43 @@ describe('pushBranch and branchSync', () => {
       git(r, 'remote', 'add', 'origin', join(r, 'nowhere'))
       git(r, 'config', 'core.sshCommand', 'touch pwned')
       expect(await pushBranch(r, deps([r]))).toMatchObject({ ok: false, error: /core\.sshcommand/ })
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'pushes a branch that tracks a differently named one to its own name',
+    async () => {
+      for (const pushDefault of ['simple', 'upstream']) {
+        const remote = tmp('ga-remote-')
+        execFileSync('git', ['init', '-q', '--bare', remote])
+        const r = repo()
+        git(r, 'remote', 'add', 'origin', remote)
+        git(r, 'push', '-q', 'origin', 'main')
+        git(r, 'fetch', '-q', 'origin')
+        git(r, 'config', 'push.default', pushDefault)
+        git(r, 'switch', '-q', '-c', 'feat', 'origin/main')
+        writeFileSync(join(r, 'a.txt'), 'feat\n')
+        git(r, 'commit', '-qam', 'Feat')
+        expect(await pushBranch(r, deps([r]))).toEqual({ ok: true, detail: 'origin/feat' })
+        const rgit = (...a: string[]): string => execFileSync('git', ['-C', remote, ...a], { encoding: 'utf8' }).trim()
+        expect(rgit('log', '-1', '--format=%s', 'feat')).toBe('Feat')
+        expect(rgit('log', '-1', '--format=%s', 'main')).toBe('init')
+        expect(await branchSync(r)).toMatchObject({ upstream: 'origin/feat', ahead: 0 })
+      }
+    },
+    TIMEOUT
+  )
+
+  maybe(
+    'makes ssh fail instead of prompting, unless the user set their own ssh command',
+    async () => {
+      const r = repo()
+      if (!process.env.GIT_SSH_COMMAND && !process.env.GIT_SSH) {
+        expect((await pushEnv(r)).GIT_SSH_COMMAND).toBe('ssh -oBatchMode=yes')
+      }
+      git(r, 'config', 'core.sshCommand', 'my-ssh')
+      expect((await pushEnv(r)).GIT_SSH_COMMAND).toBe(process.env.GIT_SSH_COMMAND)
     },
     TIMEOUT
   )
