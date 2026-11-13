@@ -248,6 +248,23 @@ describe('present_plan', () => {
   })
 })
 
+describe('reduceEvent — throttled retry', () => {
+  it('says the provider rate-limited the request rather than calling it a connection issue', () => {
+    const items = reduceEvent([], {
+      runId: 'r',
+      type: 'retry',
+      attempt: 2,
+      max: 6,
+      message: '429 rate_limit_error',
+      throttle: { waitMs: 20_000, remainingRequests: 0 }
+    })
+    expect(items[0]).toMatchObject({
+      kind: 'notice',
+      text: '⏳ Rate limited by the provider. Retrying in 20s (2/6). 0 requests left in this window.'
+    })
+  })
+})
+
 describe('reduceEvent — retry', () => {
   const retry = (attempt: number): AgentEvent => ({
     runId: 'r',

@@ -33,6 +33,7 @@ import { ElicitationCard } from './ElicitationCard'
 import { Receipt } from './Receipt'
 import { Markdown } from './Markdown'
 import { Icon, type IconName } from './Icon'
+import { TranscriptPrefsContext, useTranscriptPrefs, type TranscriptPrefs } from './transcriptPrefs'
 import { ContextMenu, selectionWithin, useContextMenu, type ContextMenuItem } from './ContextMenu'
 
 /** Visually hidden, but read by screen readers (for the live status region). */
@@ -404,6 +405,7 @@ const AssistantMessage = memo(function AssistantMessage({
 }): JSX.Element {
   const onMarkUnread =
     onMarkUnreadFrom && replyNumber !== undefined ? (): void => onMarkUnreadFrom(replyNumber) : undefined
+  const { showReasoning } = useTranscriptPrefs()
   const menu = useMessageMenu(text, () => [
     ...(!streaming && onMarkUnread ? [{ label: 'Mark unread from here', onSelect: onMarkUnread }] : []),
     ...(!streaming && onRetry ? [{ label: 'Retry', onSelect: onRetry }] : [])
@@ -412,7 +414,7 @@ const AssistantMessage = memo(function AssistantMessage({
     <div className="msg msg--assistant" ref={menu.ref} onContextMenu={menu.onContextMenu}>
       {menu.menu}
       {reasoning && (
-        <details className="reasoning" open={streaming && !text}>
+        <details className="reasoning" open={showReasoning || (streaming && !text)}>
           <summary className="reasoning__summary">💭 Reasoning</summary>
           <div className="reasoning__text">{reasoning}</div>
         </details>
@@ -510,7 +512,9 @@ export function Transcript({
   rewind,
   onMarkUnreadFrom,
   onRetryLast,
-  newFromId
+  newFromId,
+  toolsExpanded = false,
+  showReasoning = false
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
@@ -542,6 +546,10 @@ export function Transcript({
    * view opens scrolled to it instead of to the bottom.
    */
   newFromId?: string
+  /** Tool rows open with their output in view (the "Show tool output expanded" setting). */
+  toolsExpanded?: boolean
+  /** Reasoning stays open under each reply (the "Always show reasoning" setting). */
+  showReasoning?: boolean
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -651,6 +659,16 @@ export function Transcript({
   // Memoized so it isn't rebuilt when the Transcript re-renders for a non-content
   // reason (e.g. the scroll-to-bottom button toggling).
   const nodes = useMemo(() => groupItems(items), [items])
+
+  // Expand / collapse every tool row at once. Each press is a new numbered command, so
+  // pressing it again reaches rows the user has toggled since.
+  const [expandAll, setExpandAll] = useState<TranscriptPrefs['expandAll']>(null)
+  const allOpen = expandAll ? expandAll.open : toolsExpanded
+  const hasTools = useMemo(() => nodes.some((n) => n.kind === 'toolgroup'), [nodes])
+  const prefs = useMemo<TranscriptPrefs>(
+    () => ({ toolsExpanded, showReasoning, expandAll }),
+    [toolsExpanded, showReasoning, expandAll]
+  )
   // Each user message's rewind point, by item id.
   const targets = useMemo(() => new Map(rewindTargets(items).map((t) => [t.id, t])), [items])
   // Each turn's details, keyed by its last reply.
@@ -677,7 +695,28 @@ export function Transcript({
   }, [nodes])
 
   return (
+    <TranscriptPrefsContext.Provider value={prefs}>
     <div className="transcript-wrap">
+      {hasTools && (
+        <button
+          type="button"
+          className="transcript__tools-toggle"
+          onClick={() => setExpandAll((prev) => ({ open: !allOpen, seq: (prev?.seq ?? 0) + 1 }))}
+          title={allOpen ? 'Collapse every tool row' : 'Expand every tool row'}
+          aria-label={allOpen ? 'Collapse tools' : 'Expand tools'}
+        >
+          <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+            <path
+              d={allOpen ? 'M4.5 2.5 8 6l3.5-3.5M4.5 13.5 8 10l3.5 3.5' : 'M4.5 6 8 2.5 11.5 6M4.5 10 8 13.5l3.5-3.5'}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+      )}
       <div aria-live="polite" aria-atomic="true" style={SR_ONLY}>
         {liveStatus}
       </div>
@@ -783,5 +822,6 @@ export function Transcript({
         </button>
       )}
     </div>
+    </TranscriptPrefsContext.Provider>
   )
 }

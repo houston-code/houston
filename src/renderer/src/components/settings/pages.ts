@@ -22,7 +22,9 @@ import {
   LanguageServersSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
+import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
+import { ImportSection } from './sections/import'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import {
   AdditionalFoldersSection,
@@ -167,6 +169,23 @@ export const PAGES: SettingsPage[] = [
     ]
   },
   {
+    id: 'customize',
+    label: PAGE_LABELS.customize,
+    group: 'AI',
+    sections: [
+      {
+        id: 'customizations',
+        Component: CustomizeSection,
+        keywords: ['skills', 'commands', 'slash commands', 'agents', 'subagents', 'templates', 'extensions', 'disable', 'enable']
+      },
+      {
+        id: 'instruction-files',
+        Component: InstructionFilesSection,
+        keywords: ['rules', 'agents.md', 'claude.md', 'instructions', 'project rules', 'global rules']
+      }
+    ]
+  },
+  {
     id: 'mcp',
     label: PAGE_LABELS.mcp,
     group: 'AI',
@@ -221,6 +240,18 @@ export const PAGES: SettingsPage[] = [
     ]
   },
   {
+    id: 'import',
+    label: PAGE_LABELS.import,
+    group: 'AI',
+    sections: [
+      {
+        id: 'import-other-tools',
+        Component: ImportSection,
+        keywords: ['migrate', 'copy', 'other tools', 'instructions', 'rules', 'mcp', 'skills', 'commands', 'mcp.json', 'switch']
+      }
+    ]
+  },
+  {
     id: 'general',
     label: PAGE_LABELS.general,
     group: 'App',
@@ -245,9 +276,28 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'htmlVisuals'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
         Component: AppearanceSection,
-        keywords: ['theme', 'dark mode', 'light mode', 'colors', 'visuals', 'html']
+        keywords: [
+          'theme',
+          'dark mode',
+          'light mode',
+          'colors',
+          'visuals',
+          'html',
+          'font size',
+          'text size',
+          'density',
+          'compact',
+          'code theme',
+          'syntax',
+          'transcript',
+          'tool output',
+          'expand',
+          'collapse',
+          'reasoning',
+          'thinking'
+        ]
       }
     ]
   },

@@ -336,7 +336,7 @@ const canonical = (slug) => `${ORIGIN}/docs/${slug === "index" ? "" : slug}`;
 export const GROUPS = [
   {
     title: "Getting started",
-    slugs: ["getting-started-in-the-desktop-app", "what-houston-is", "clients", "models", "settings-and-keys"],
+    slugs: ["getting-started-in-the-desktop-app", "what-houston-is", "clients", "models", "settings-and-keys", "importing-from-other-tools"],
   },
   {
     title: "Working with the agent",
@@ -382,7 +382,7 @@ export const GROUPS = [
   },
   {
     title: "Extending Houston",
-    slugs: ["skills", "custom-subagents", "hooks", "plugins", "mcp-servers", "github-tools"],
+    slugs: ["customize-page", "skills", "custom-subagents", "hooks", "plugins", "mcp-servers", "github-tools"],
   },
   {
     title: "Reference",
