@@ -22,6 +22,7 @@ import {
   LanguageServersSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
+import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import {
@@ -163,6 +164,23 @@ export const PAGES: SettingsPage[] = [
         keys: ['diagnosticsOnSave'],
         Component: DiagnosticsSection,
         keywords: ['lint', 'eslint', 'errors', 'type check', 'problems']
+      }
+    ]
+  },
+  {
+    id: 'customize',
+    label: PAGE_LABELS.customize,
+    group: 'AI',
+    sections: [
+      {
+        id: 'customizations',
+        Component: CustomizeSection,
+        keywords: ['skills', 'commands', 'slash commands', 'agents', 'subagents', 'templates', 'extensions', 'disable', 'enable']
+      },
+      {
+        id: 'instruction-files',
+        Component: InstructionFilesSection,
+        keywords: ['rules', 'agents.md', 'claude.md', 'instructions', 'project rules', 'global rules']
       }
     ]
   },
