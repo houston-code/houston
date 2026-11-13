@@ -36,6 +36,24 @@ function type(value: string): HTMLTextAreaElement {
 // clean between tests to avoid one test's draft leaking into the next.
 beforeEach(() => localStorage.clear())
 
+describe('Composer tool buttons', () => {
+  it('explain themselves in a tooltip as well as their accessible name', () => {
+    render(<Composer {...baseProps()} />)
+    expect(screen.getByRole('button', { name: 'Add attachment' })).toHaveAttribute(
+      'title',
+      'Add a file, image or link'
+    )
+    expect(screen.getByRole('button', { name: 'Attach image' })).toHaveAttribute(
+      'title',
+      expect.stringContaining('paste or drop')
+    )
+    expect(screen.getByRole('button', { name: 'Reference a file' })).toHaveAttribute(
+      'title',
+      expect.stringContaining('type @')
+    )
+  })
+})
+
 describe('Composer', () => {
   it('runs a slash command (not a send) when idle', () => {
     const props = baseProps()

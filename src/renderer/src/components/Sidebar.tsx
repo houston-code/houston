@@ -49,6 +49,10 @@ export interface SidebarProps {
   onToggleCollapse: () => void
   /** The toggle's keyboard shortcut as displayed on this platform (e.g. ⌘B, Ctrl+B). */
   toggleShortcut?: string
+  /** The New chat shortcut as displayed on this platform (e.g. ⌘N), for its tooltip. */
+  newChatShortcut?: string
+  /** The Settings shortcut as displayed on this platform (e.g. ⌘,), for its tooltip. */
+  settingsShortcut?: string
   /**
    * Status of every conversation with something to show: a live run, the prompts
    * blocking it, or an unread mark. Drives each row's signal dot (needs input,
@@ -988,6 +992,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     if (props.focusSearchSignal) searchRef.current?.focus()
   }, [props.focusSearchSignal])
   const shortcut = props.toggleShortcut ? ` (${props.toggleShortcut})` : ''
+  const newChatTitle = `New chat${props.newChatShortcut ? ` (${props.newChatShortcut})` : ''}`
+  const settingsTitle = `Settings${props.settingsShortcut ? ` (${props.settingsShortcut})` : ''}`
   // A chat wants attention when it waits on the user or has something unseen.
   const wantsAttention = (id: string): boolean => {
     const st = props.chatStatus[id]
@@ -1037,7 +1043,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <button
           className="sidebar__rail-btn"
           onClick={props.onNew}
-          title="New chat"
+          title={newChatTitle}
           aria-label="New chat"
         >
           ＋
@@ -1047,7 +1053,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <button
           className="sidebar__rail-btn"
           onClick={props.onOpenSettings}
-          title="Settings"
+          title={settingsTitle}
           aria-label="Settings"
         >
           <Icon name="settings" size={16} />
@@ -1066,7 +1072,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
       >
         «
       </button>
-      <button className="btn btn--accent sidebar__new" onClick={props.onNew}>
+      <button className="btn btn--accent sidebar__new" onClick={props.onNew} title={newChatTitle}>
         ＋ New chat
       </button>
 
@@ -1123,7 +1129,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
         <button className="btn btn--sm sidebar__import" onClick={props.onImport}>
           <Icon name="import" /> Import chat
         </button>
-        <button className="btn btn--sm sidebar__settings" onClick={props.onOpenSettings}>
+        <button className="btn btn--sm sidebar__settings" onClick={props.onOpenSettings} title={settingsTitle}>
           <Icon name="settings" /> Settings
         </button>
       </div>

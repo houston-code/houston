@@ -8,6 +8,7 @@ import type {
   ElicitationField,
   ElicitationResult,
   PlanPayload,
+  ProviderWebSearchResult,
   QuestionOption,
   ToolSchema
 } from '@shared/agent'
@@ -24,7 +25,7 @@ import {
 import { isSafeGitRef } from '@shared/git'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { QUESTION_EMPTY_ANSWER } from '@shared/promptOutcome'
-import { getSearchProviderInfo } from '@shared/search'
+import { resolveSearchBackend } from '@shared/search'
 import {
   MAX_GALLERY_IMAGES,
   SHOW_IMAGES_NAME,
@@ -92,7 +93,7 @@ import {
   type CaptureInput,
   type LocalhostCapture
 } from './viewlocalhost'
-import { getSearchAdapter, NO_RESULTS } from './websearch'
+import { clampSearchResults, formatHits, getSearchAdapter, NO_RESULTS } from './websearch'
 import { resolveRipgrep, searchContents } from './search'
 import { FALLBACK_SKIP_DIRS, gitListFiles, hasHiddenSegment } from './fileScope'
 import { resolveAstGrep, searchStructural } from './astgrep'
@@ -187,6 +188,16 @@ export interface ToolContext {
   collectSecrets?: () => readonly string[]
   /** Active web-search provider id (selected in Settings; injected by the loop). */
   searchProvider?: string
+  /**
+   * The run's model provider's own server-side web search (injected by the loop when
+   * the active provider offers one). web_search uses it when no search-provider key is
+   * set, so the search is billed to the model key instead. `label` names the host in
+   * the result envelope.
+   */
+  nativeWebSearch?: {
+    label: string
+    search: (query: string, maxResults: number) => Promise<ProviderWebSearchResult>
+  }
   /**
    * Read flagged web content in isolation and report back what it says (injected by
    * the loop, which has the provider). The call gets no tools and no conversation
@@ -2690,7 +2701,7 @@ const webSearch: ToolDef = {
   schema: {
     name: 'web_search',
     description:
-      'Search the web and return the top results (title, URL, snippet) plus a short synthesized answer when the provider supplies one, inside an untrusted-content fence. Use for current information or docs you cannot find in the project. Network egress requires approval. Requires a search-provider API key set in Settings.',
+"Search the web and return the top results (title, URL, snippet) plus a short synthesized answer when the provider supplies one, inside an untrusted-content fence. Use for current information or docs you cannot find in the project. Network egress requires approval. Uses the search provider set in Settings, or the model provider's own web search when no search key is set and the model supports it.",
     parameters: objectSchema(
       {
         query: { type: 'string', description: 'The search query.' },
@@ -2703,21 +2714,37 @@ const webSearch: ToolDef = {
     const query = str(args, 'query')
     if (!query) throw new Error('query is required.')
     assertNoEgressSecret(query, ctx, 'search query')
-    const provider = getSearchProviderInfo(ctx.searchProvider)
-    const key = ctx.getSecret?.(provider.keyId)
-    if (!key) {
+    const backend = resolveSearchBackend({
+      selectedId: ctx.searchProvider,
+      getKey: (id) => ctx.getSecret?.(id),
+      modelSearchAvailable: ctx.nativeWebSearch !== undefined
+    })
+    if (backend.kind === 'none') {
+      const { label } = backend.provider
       // Without search a model tends to fetch article URLs it made up (several 404s in
       // a row), so the error says what to do instead, where the model reads it.
       throw new Error(
-        `No ${provider.label} API key set. Add a ${provider.label} API key in Settings to enable web_search. ` +
+        `No ${label} API key set, and the current model's provider has no built-in web search. ` +
+          `Add a ${label} API key in Settings to enable web_search. ` +
           "Until then, don't guess page URLs to fetch in its place: use web_fetch only on URLs the user gave you " +
           'or that appear in the project or in a page you already fetched, and tell the user which sources you actually read.'
       )
     }
-    const results = await getSearchAdapter(provider.id)(query, key, {
-      signal: ctx.signal,
-      maxResults: num(args, 'max_results')
-    })
+    const maxResults = clampSearchResults(num(args, 'max_results'))
+    let label: string
+    let results: string
+    if (backend.kind === 'keyed') {
+      label = backend.provider.label
+      results = await getSearchAdapter(backend.provider.id)(query, backend.key, {
+        signal: ctx.signal,
+        maxResults
+      })
+    } else {
+      const native = ctx.nativeWebSearch!
+      label = native.label
+      const found = await native.search(query, maxResults)
+      results = formatHits(found.hits, found.answer)
+    }
     if (results === NO_RESULTS) return results
     // Titles, snippets, and the synthesized answer all come from pages anyone can
     // publish (the answer is a summary of them), so the whole result is fenced. A high
@@ -2725,8 +2752,8 @@ const webSearch: ToolDef = {
     // a jumping-off point for web_fetch, which isolates any flagged page the agent then
     // reads, so a model call per search would buy little.
     return presentUntrustedInline({
-      envelope: `Web search results from ${provider.label}:`,
-      parts: [{ text: results, source: `${provider.label} web search` }],
+      envelope: `Web search results from ${label}:`,
+      parts: [{ text: results, source: `${label} web search` }],
       preamble: untrustedPreamble(
         'web search results',
         'Titles, snippets, and any synthesized answer are drawn from pages anyone can publish'

@@ -18,7 +18,8 @@ import {
 import type { ImageAttachment } from '@shared/images'
 import { cachedImageDataUrl } from '../lib/imageUrl'
 import type { PromptInvocation, PromptInvocationKind } from '@shared/promptInvocation'
-import { rewindTargets, type DisplayItem, type RewindItemTarget } from '../lib/items'
+import { rewindTargets, turnStatsByReply, type DisplayItem, type RewindItemTarget } from '../lib/items'
+import { fullTime, parseAt, relativeTime, turnStatsParts, useNow, type TurnStats } from '../lib/messageMeta'
 import type { RewindMode } from '@shared/rewind'
 import { Popover } from './Popover'
 import { groupItems } from '../lib/toolDisplay'
@@ -116,6 +117,37 @@ function rewindItems(target: RewindItemTarget, handlers: RewindHandlers): Contex
   ]
 }
 
+/** When a message was sent, relative, with the full date and time on hover. */
+function SentAt({ at }: { at: number }): JSX.Element {
+  const now = useNow()
+  return (
+    <time className="msg__time" dateTime={new Date(at).toISOString()} title={fullTime(at)}>
+      {relativeTime(at, now)}
+    </time>
+  )
+}
+
+/**
+ * The quiet line under a message: when it was sent and, under a turn's last reply,
+ * the models that answered and what the turn spent. Renders nothing when none of it
+ * is known (messages saved before it was recorded).
+ */
+function MessageMeta({ at, turn, align }: { at?: string; turn?: TurnStats; align: 'user' | 'assistant' }): JSX.Element | null {
+  const when = parseAt(at)
+  const parts = turn ? turnStatsParts(turn) : []
+  if (when === undefined && parts.length === 0) return null
+  return (
+    <div className={`msg__meta msg__meta--${align}`}>
+      {when !== undefined && <SentAt at={when} />}
+      {parts.map((p, i) => (
+        <span key={i} className="msg__meta-part">
+          {p}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 const INVOCATION_ICON: Record<PromptInvocationKind, IconName> = {
   command: 'terminal',
   action: 'gitBranch',
@@ -131,12 +163,14 @@ function InvokedBubble({
   text,
   invokedAs,
   actions,
-  menu
+  menu,
+  at
 }: {
   text: string
   invokedAs: PromptInvocation
   actions?: ReactNode
   menu: ReturnType<typeof useMessageMenu>
+  at?: string
 }): JSX.Element {
   const mono = invokedAs.kind === 'command'
   return (
@@ -157,6 +191,7 @@ function InvokedBubble({
           <div className="msg__prompt-text">{text}</div>
         </details>
       </div>
+      <MessageMeta at={at} align="user" />
     </div>
   )
 }
@@ -166,6 +201,8 @@ interface UserBubbleProps {
   images?: ImageAttachment[]
   isSummary?: boolean
   invokedAs?: PromptInvocation
+  /** When it was sent (ISO 8601), if known. */
+  at?: string
   /** This message's rewind point; with `rewind`, shows the rewind menu beside the copy button. */
   rewindTarget?: RewindItemTarget
   rewind?: RewindHandlers
@@ -183,6 +220,7 @@ function sameUserBubble(a: UserBubbleProps, b: UserBubbleProps): boolean {
     a.images === b.images &&
     a.isSummary === b.isSummary &&
     a.invokedAs === b.invokedAs &&
+    a.at === b.at &&
     a.rewind === b.rewind &&
     (ta === tb ||
       (ta !== undefined &&
@@ -200,6 +238,7 @@ const UserBubble = memo(function UserBubble({
   images,
   isSummary,
   invokedAs,
+  at,
   rewindTarget,
   rewind
 }: UserBubbleProps): JSX.Element {
@@ -222,7 +261,8 @@ const UserBubble = memo(function UserBubble({
       </div>
     )
   }
-  if (invokedAs && !images?.length) return <InvokedBubble text={text} invokedAs={invokedAs} actions={actions} menu={menu} />
+  if (invokedAs && !images?.length)
+    return <InvokedBubble text={text} invokedAs={invokedAs} actions={actions} menu={menu} at={at} />
   return (
     // A message steered into a running turn reads like any other: where it lands in
     // the transcript already shows it arrived mid-run.
@@ -240,6 +280,7 @@ const UserBubble = memo(function UserBubble({
         )}
         {text}
       </div>
+      <MessageMeta at={at} align="user" />
     </div>
   )
 }, sameUserBubble)
@@ -343,11 +384,17 @@ const AssistantMessage = memo(function AssistantMessage({
   reasoning,
   replyNumber,
   onMarkUnreadFrom,
-  onRetry
+  onRetry,
+  at,
+  turn
 }: {
   text: string
   streaming?: boolean
   reasoning?: string
+  /** When the reply was written (ISO 8601), if known. */
+  at?: string
+  /** On a turn's last reply: what the turn cost, if known. */
+  turn?: TurnStats
   /** This reply's position among the replies. */
   replyNumber?: number
   /** Mark the chat unread from a reply, by that position; absent hides the button. */
@@ -376,6 +423,7 @@ const AssistantMessage = memo(function AssistantMessage({
           {streaming && <span className="md-cursor" />}
         </div>
       )}
+      {!streaming && <MessageMeta at={at} turn={turn} align="assistant" />}
       {!streaming && text.trim() !== '' && <CopyButton text={text} />}
       {!streaming && onMarkUnread && (
         <button
@@ -605,6 +653,8 @@ export function Transcript({
   const nodes = useMemo(() => groupItems(items), [items])
   // Each user message's rewind point, by item id.
   const targets = useMemo(() => new Map(rewindTargets(items).map((t) => [t.id, t])), [items])
+  // Each turn's details, keyed by its last reply.
+  const turnStats = useMemo(() => turnStatsByReply(items), [items])
   // Each reply's position among the replies, by item id ("Mark unread from here").
   const replyNumbers = useMemo(() => {
     const out = new Map<string, number>()
@@ -644,6 +694,7 @@ export function Transcript({
                     images={node.item.images}
                     isSummary={node.item.isSummary}
                     invokedAs={node.item.invokedAs}
+                    at={node.item.at}
                     rewindTarget={target}
                     rewind={stableRewind}
                   />
@@ -660,6 +711,8 @@ export function Transcript({
                     replyNumber={n}
                     onMarkUnreadFrom={markUnreadFrom}
                     onRetry={node.item.id === lastReplyId ? retryLast : undefined}
+                    at={node.item.at}
+                    turn={turnStats.get(node.item.id)}
                   />
                 )
                 if (node.item.id !== newFromId) return reply

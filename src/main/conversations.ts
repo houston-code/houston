@@ -609,6 +609,12 @@ const searchCache = new Map<string, { stamp: string; haystack: string[]; chars: 
 let searchCacheChars = 0
 /** Total characters the search cache may hold (lowercased text, mostly one byte each). */
 export const MAX_SEARCH_CACHE_CHARS = 32_000_000
+let searchCacheBudget = MAX_SEARCH_CACHE_CHARS
+
+/** For tests: a smaller search cache (null restores the default). */
+export function _setSearchCacheBudget(chars: number | null): void {
+  searchCacheBudget = chars ?? MAX_SEARCH_CACHE_CHARS
+}
 /** How long after the last search the cache is kept. */
 export const SEARCH_CACHE_IDLE_MS = 60_000
 let searchCacheTimer: ReturnType<typeof setTimeout> | null = null
@@ -654,7 +660,7 @@ function haystackFor(id: string, stamp: string): string[] | null {
   searchCache.set(id, { stamp, haystack, chars })
   searchCacheChars += chars
   for (const oldest of searchCache.keys()) {
-    if (searchCacheChars <= MAX_SEARCH_CACHE_CHARS || oldest === id) break
+    if (searchCacheChars <= searchCacheBudget || oldest === id) break
     dropSearchEntry(oldest)
   }
   return haystack
@@ -896,6 +902,8 @@ export function mergeRunningTotals(e: AgentEvent, total: ConversationUsage | nul
   if (e.type !== 'usage' || !total) return e
   return {
     ...e,
+    // The round's own numbers, before they are replaced by the running totals.
+    round: { inputTokens: e.inputTokens, outputTokens: e.outputTokens, cost: e.cost },
     inputTokens: total.inputTokens,
     outputTokens: total.outputTokens,
     cost: total.cost,

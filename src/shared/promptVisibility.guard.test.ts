@@ -82,9 +82,10 @@ describe('prompt visibility guard', () => {
     // user appears to have written (how the Stop-hook and verify turns used to).
     const loop = readFileSync(join(SRC, 'main/agent/loop.ts'), 'utf8')
     const pushes = loop.match(/messages\.push\(\{\s*role: 'user'/g) ?? []
-    expect(pushes).toHaveLength(1) // the steer loop: `for (const { text: content } of steers) messages.push({ role: 'user', content, steered: true })`
+    // The steer loop: `for (const { text: content } of steers) messages.push({ role: 'user', content, steered: true, at: ... })`
+    expect(pushes).toHaveLength(1)
     expect(loop).toMatch(
-      /for \(const \{ text: content \} of steers\) messages\.push\(\{ role: 'user', content, steered: true \}\)/
+      /for \(const \{ text: content \} of steers\) messages\.push\(\{ role: 'user', content, steered: true, at: new Date\(\)\.toISOString\(\) \}\)/
     )
   })
 

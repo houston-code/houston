@@ -1278,6 +1278,7 @@ export function Composer({
               type="button"
               className={`composer__tool${attachOpen ? ' composer__tool--active' : ''}`}
               aria-label="Add attachment"
+              title="Add a file, image or link"
               aria-haspopup="menu"
               aria-expanded={attachOpen}
               aria-controls={attachOpen ? attachMenuId : undefined}
@@ -1291,6 +1292,7 @@ export function Composer({
                 type="button"
                 className="composer__tool"
                 aria-label="Attach image"
+                title="Attach an image (you can also paste or drop one here)"
                 disabled={disabled}
                 onClick={pickImages}
               >
@@ -1301,6 +1303,7 @@ export function Composer({
               type="button"
               className="composer__tool"
               aria-label="Reference a file"
+              title="Reference a file (or type @ in the message)"
               disabled={disabled}
               onClick={insertMention}
             >
