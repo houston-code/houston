@@ -63,7 +63,7 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, modelCapabilities } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import type { ModelUsage } from '@shared/agent'
@@ -107,6 +107,7 @@ import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
+import { formatElapsed } from '@shared/elapsed'
 
 /**
  * Interactive terminal mode: a stay-resident REPL you converse with directly in
@@ -770,18 +771,20 @@ export function spinnerFrame(
    * redrawn, so all of this costs no extra screen space and cannot tear the
    * transcript.
    */
-  opts: { draft?: string; queued?: number; mode?: string } = {}
+  opts: { draft?: string; queued?: number; mode?: string; status?: string } = {}
 ): string {
   const i = ((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
-  const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(`${elapsedSec}s`, 'dim')}`
+  const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(formatElapsed(elapsedSec * 1000), 'dim')}`
   // The approval mode, kept visible WHILE the turn runs: the composer's status line
   // is gone exactly when "how much is running without asking?" matters most.
   const mode = opts.mode ? paint(`  [${opts.mode}]`, 'dim') : ''
+  // The rest of the composer's status line (model, branch, context), already painted.
+  const status = opts.status ? `  ${opts.status}` : ''
   const queued = opts.queued ? paint(`  (${opts.queued} queued)`, 'cyan') : ''
   // The draft is shown verbatim so people can see what they typed; it is their own
   // keystrokes, and the decoder never lets a control character into it.
   const draft = opts.draft ? `  ${paint('›', 'green')} ${opts.draft}` : ''
-  return `${head}${mode}${queued}${draft}`
+  return `${head}${mode}${status}${queued}${draft}`
 }
 
 /** How many files an edit summary names before it collapses the rest to a count. */
@@ -822,6 +825,8 @@ export interface StatusState {
   cost: SessionCost
   /** Current context size in tokens (last turn's input tokens); 0 until a turn runs. */
   contextTokens: number
+  /** The checked-out git branch, or null outside a repository (or on a detached HEAD). */
+  branch?: string | null
 }
 
 /** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
@@ -845,18 +850,42 @@ export function shortCwd(cwd: string, home = process.env.HOME): string {
  * Truncated to `width` so it never wraps.
  */
 export function renderStatusLine(s: StatusState, width: number, paint: Painter): string {
-  const pct = contextPercent(s.contextTokens, contextWindowFor(s.model))
   const parts = [
     paint(`${s.providerId}/${s.model}`, 'cyan'),
     paint(s.policy, 'dim'),
-    paint(shortCwd(s.cwd), 'dim'),
-    formatUsd(s.cost.cost)
+    paint(shortCwd(s.cwd), 'dim')
   ]
+  if (s.branch) parts.push(paint(s.branch, 'magenta'))
+  parts.push(formatUsd(s.cost.cost))
+  const ctx = renderContextUsage(s.contextTokens, s.model, paint)
+  if (ctx) parts.push(ctx)
+  return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
+}
+
+/**
+ * How full the context window is: a mini bar and percent, or the token count when
+ * the model's window is unknown. Empty until a turn has run (nothing to measure).
+ */
+export function renderContextUsage(contextTokens: number, model: string, paint: Painter): string {
+  const pct = contextPercent(contextTokens, contextWindowFor(model))
   if (pct !== null) {
     const tone = pct >= 90 ? 'red' : pct >= 70 ? 'yellow' : 'green'
-    parts.push(`${paint(contextBar(pct), tone)} ${paint(`${pct}%`, tone)}`)
+    return `${paint(contextBar(pct), tone)} ${paint(`${pct}%`, tone)}`
   }
-  return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
+  return contextTokens > 0 ? paint(`${formatTokens(contextTokens)} tok context`, 'dim') : ''
+}
+
+/**
+ * The part of the status line the spinner carries while a turn runs: model, branch
+ * and context. The approval mode is already on that line, and the cost settles at
+ * the turn's end.
+ */
+export function renderRunStatus(s: Pick<StatusState, 'model' | 'branch' | 'contextTokens'>, paint: Painter): string {
+  const parts = s.model ? [paint(s.model, 'dim')] : []
+  if (s.branch) parts.push(paint(s.branch, 'magenta'))
+  const ctx = renderContextUsage(s.contextTokens, s.model, paint)
+  if (ctx) parts.push(ctx)
+  return parts.join(paint(' · ', 'dim'))
 }
 
 /** The status line shown before any provider is set up: no model, just the /login nudge. */
@@ -1686,8 +1715,46 @@ export const HELP_TEXT = [
   '  /<name>               run a custom command from .houston/commands',
   '  /exit, /quit          leave (or press Ctrl-D)',
   '',
-  'While a turn runs: Ctrl-C interrupts it. Answer approvals with y / n / a.'
+  'Keys:',
+  '  Enter                 send the message',
+  '  Shift-Enter, Ctrl-J   new line (Alt-Enter too; Shift-Enter where the terminal reports it)',
+  '  @ then Tab            complete a file or folder path into the message',
+  '  !command              run a shell command yourself; its output joins the chat',
+  '  #note                 save a standing instruction to AGENTS.md',
+  '  Shift-Tab             cycle the approval mode, also while a turn runs',
+  '  Up, Down              earlier messages (this folder)',
+  '  Ctrl-R                search earlier messages',
+  '  Ctrl-X Ctrl-E         edit the message in $VISUAL or $EDITOR',
+  '  Ctrl-L                clear the screen',
+  '  Ctrl-C                clear the message (twice to exit); Ctrl-D exits',
+  '  ultrathink            a word in the message: think harder for that turn',
+  '',
+  'While a turn runs: type and press Enter to steer it; Esc or Ctrl-C stops it.',
+  'Answer approvals with y / n / a.'
 ].join('\n')
+
+/** Short tips for keys and prefixes a new user would not find on their own. */
+export const STARTUP_TIPS = [
+  'type @ then Tab to complete a file path into your message',
+  '!command runs a shell command yourself; its output joins the chat',
+  '#note saves a standing instruction to AGENTS.md',
+  'Shift-Tab cycles the approval mode, even while a turn runs',
+  'Ctrl-R searches your earlier messages',
+  'Ctrl-X Ctrl-E edits your message in $VISUAL or $EDITOR',
+  'type while the agent works and press Enter to steer it',
+  'Shift-Enter or Ctrl-J starts a new line'
+]
+
+/**
+ * `count` consecutive tips starting at a seed-chosen place, so each launch shows a
+ * different pair and every tip comes around in turn.
+ */
+export function pickTips(seed: number, count = 2, tips: readonly string[] = STARTUP_TIPS): string[] {
+  if (!tips.length) return []
+  const start = ((Math.floor(seed) % tips.length) + tips.length) % tips.length
+  const n = Math.min(count, tips.length)
+  return Array.from({ length: n }, (_, i) => tips[(start + i) % tips.length])
+}
 
 /** Where /help's descriptions start: two spaces, then the command padded to 22. */
 const HELP_DESC_COLUMN = 24
@@ -1706,8 +1773,8 @@ export function wrapHelp(text: string, width: number, column = HELP_DESC_COLUMN)
     .split('\n')
     .map((line) => {
       if (visibleWidth(line) <= width) return line
-      // Not a command row, or a name so long it runs into the column: plain wrap.
-      if (!line.startsWith('  /') || line[column - 1] !== ' ') return wrapAnsi(line, width)
+      // Not a command or key row, or a name so long it runs into the column: plain wrap.
+      if (!line.startsWith('  ') || line[column - 1] !== ' ') return wrapAnsi(line, width)
       return wrapAnsi(line.slice(column), descWidth)
         .split('\n')
         .map((part, i) => (i === 0 ? line.slice(0, column) : pad) + part)
@@ -2328,6 +2395,11 @@ export interface TuiIo {
    */
   setMode?: (label: string) => void
   /**
+   * The rest of the status line (model, branch, context use), shown on the spinner
+   * line while a turn runs so it does not vanish with the composer.
+   */
+  setStatus?: (status: string) => void
+  /**
    * Present an arrow-key selectable picker (for approvals / `ask_user`). Resolves
    * with the committed value, a request to fall back to typing, or a cancel.
    * Optional — when absent (off-TTY / tests) the driver uses the typed prompt.
@@ -2517,6 +2589,8 @@ export interface TuiDeps {
     apply: (conversationId: string, turn: number, mode: RewindMode, text: string) => Promise<RewindResult>
     undo: (conversationId: string) => Promise<UndoRewindResult>
   }
+  /** The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch shown. */
+  gitBranch?: () => Promise<string | null>
   /** Everything different in the working tree, for /changes. */
   workingTree?: () => Promise<{
     isRepo: boolean
@@ -2926,7 +3000,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   const notifyEnabled = settings.desktopNotifications !== false
   // Show each tool's full output as it runs (/verbose). Off by default: the
   // transcript is a conversation, and most results are noise until they aren't.
-  let verbose = false
+  // Remembered across sessions once chosen.
+  let verbose = settings.tuiVerbose === true
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
   // What a run hands back unsent: steers it accepted but ended before reading
@@ -2947,6 +3022,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let contextTokens = 0
   // This session's landed edits (newest last), for `/diff last [n]`.
   let recentEdits: FileDiffPreview[][] = []
+  // The checked-out branch, re-read before each status line (a turn or `!git`
+  // may switch it).
+  let branch: string | null = null
+  const refreshBranch = async (): Promise<void> => {
+    if (!deps.gitBranch) return
+    try {
+      branch = await deps.gitBranch()
+    } catch {
+      branch = null
+    }
+  }
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
@@ -3109,7 +3195,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         'dim'
       )}\n` +
       `${paint(`  approval: ${APPROVAL_POLICY_LABEL[policy]}`, 'dim')}\n` +
-      `${paint('  /help for commands, Ctrl-D to exit', 'dim')}\n`
+      `${paint('  /help for commands and keys, Ctrl-D to exit', 'dim')}\n` +
+      // Seconds since the epoch: a different pair of tips on each launch.
+      pickTips(Math.floor(nowFn() / 1000))
+        .map((t) => `${paint(`  tip: ${t}`, 'dim')}\n`)
+        .join('')
   )
 
   for (;;) {
@@ -3141,11 +3231,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // A persistent status line above the composer: model, policy, cwd, cost, and
     // context-window fill — so live session state is always visible. Before a
     // provider is set up it shows a "no model" prompt pointing at /login instead.
+    await refreshBranch()
     deps.io.out(
       `${
         providerId && model
           ? renderStatusLine(
-              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens },
+              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens, branch },
               columns(),
               paint
             )
@@ -3421,6 +3512,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'verbose') {
         verbose = result.on ?? !verbose
+        deps.updateSettings?.({ tuiVerbose: verbose })
         deps.io.out(
           paint(
             verbose
@@ -4052,6 +4144,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
     flushStreamedText = flushMd
     // Liveness while the agent works (relabelled per event; erased on any output).
+    deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
 
     const send = (e: AgentEvent): void => {
@@ -4362,7 +4455,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // Current context size ≈ the last MAIN round's input tokens; feeds the
           // status line. Subagent usage events carry inputTokens: 0, so guard
           // against them resetting the meter to zero mid-turn.
-          if (e.inputTokens) contextTokens = e.inputTokens
+          if (e.inputTokens) {
+            contextTokens = e.inputTokens
+            deps.io.setStatus?.(renderRunStatus({ model: model ?? '', branch, contextTokens }, paint))
+          }
           break
         case 'error':
           // The run gave up mid-streak: say the retries are over, so the line above

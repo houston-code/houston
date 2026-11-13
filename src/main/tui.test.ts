@@ -84,6 +84,10 @@ import {
   homeRelative,
   renderStatusLine,
   renderEditSummary,
+  renderRunStatus,
+  renderContextUsage,
+  pickTips,
+  STARTUP_TIPS,
   spinnerFrame,
   renderCapabilityList,
   mediaTypeForImagePath,
@@ -1016,11 +1020,39 @@ describe('status line & progress', () => {
     expect(line.length).toBeLessThanOrEqual(20)
   })
 
+  it('shows the git branch when there is one', () => {
+    const base = { providerId: 'p', model: 'claude-opus-4-8', policy: 'ask' as const, cwd: '/p', cost: { inputTokens: 0, outputTokens: 0, cost: 0 }, contextTokens: 0 }
+    expect(renderStatusLine({ ...base, branch: 'feature/x' }, 120, paint)).toContain(' · feature/x · ')
+    expect(renderStatusLine({ ...base, branch: null }, 120, paint)).toBe(renderStatusLine(base, 120, paint))
+  })
+
+  it('shows context use as a token count when the model window is unknown', () => {
+    expect(renderContextUsage(12_300, 'some-unknown-model-xyz', paint)).toBe('12.3k tok context')
+    expect(renderContextUsage(0, 'some-unknown-model-xyz', paint)).toBe('')
+    expect(renderContextUsage(500_000, 'claude-opus-4-8', paint)).toContain('50%')
+  })
+
+  it('renderRunStatus carries the model, branch and context for the spinner line', () => {
+    expect(renderRunStatus({ model: 'claude-opus-4-8', branch: 'main', contextTokens: 500_000 }, paint)).toMatch(
+      /^claude-opus-4-8 · main · [▓░]+ 50%$/
+    )
+    expect(renderRunStatus({ model: 'm', branch: null, contextTokens: 0 }, paint)).toBe('m')
+  })
+
+  it('spinnerFrame puts the status after the mode and before the draft', () => {
+    const f = spinnerFrame(0, 'Working', 2, paint, { mode: 'ask', status: 'm · main', draft: 'hi' })
+    expect(f).toBe('⠋ Working 2s  [ask]  m · main  › hi')
+  })
+
   it('spinnerFrame cycles frames and shows the label + elapsed seconds', () => {
     expect(spinnerFrame(0, 'Thinking', 4, paint)).toBe('⠋ Thinking 4s')
     expect(spinnerFrame(1, 'Thinking', 4, paint)).toContain('⠙')
     // wraps around the frame set
     expect(spinnerFrame(10, 'x', 0, paint)).toContain('⠋')
+  })
+
+  it('spinnerFrame writes a long turn in minutes, as the desktop status bar does', () => {
+    expect(spinnerFrame(0, 'Working', 192, paint)).toBe('⠋ Working 3m 12s')
   })
 })
 
@@ -1096,6 +1128,7 @@ function fakeIo(inputs: Array<string | null>) {
   const interrupts: Array<() => void> = []
   const reads: Array<{ prompt: string; discardPending: boolean }> = []
   const spinner: string[] = [] // 'start:label' | 'label:x' | 'stop'
+  const statuses: string[] = [] // every setStatus, in order
   let clears = 0
   let idx = 0
   const io: TuiIo = {
@@ -1116,11 +1149,13 @@ function fakeIo(inputs: Array<string | null>) {
     cancelRead: () => {},
     startSpinner: (l) => spinner.push(`start:${l}`),
     setSpinnerLabel: (l) => spinner.push(`label:${l}`),
-    stopSpinner: () => spinner.push('stop')
+    stopSpinner: () => spinner.push('stop'),
+    setStatus: (st) => statuses.push(st)
   }
   return {
     io,
     out,
+    statuses,
     reads,
     spinner,
     clears: () => clears,
@@ -3960,6 +3995,82 @@ describe('attention signals', () => {
 
 // Tool output used to be unrecoverable: one 80-char line, forever, even though
 // the full text was already sitting in the persisted log.
+describe('startup tips', () => {
+  it('pickTips returns consecutive tips, rotating with the seed', () => {
+    expect(pickTips(0, 2, ['a', 'b', 'c'])).toEqual(['a', 'b'])
+    expect(pickTips(2, 2, ['a', 'b', 'c'])).toEqual(['c', 'a'])
+    expect(pickTips(4, 2, ['a', 'b', 'c'])).toEqual(['b', 'c'])
+    expect(pickTips(-1, 2, ['a', 'b', 'c'])).toEqual(['c', 'a'])
+    expect(pickTips(5, 3, ['a'])).toEqual(['a'])
+    expect(pickTips(5, 2, [])).toEqual([])
+  })
+
+  it('every tip comes around across launches', () => {
+    const seen = new Set<string>()
+    for (let i = 0; i < STARTUP_TIPS.length; i++) for (const t of pickTips(i)) seen.add(t)
+    expect(seen.size).toBe(STARTUP_TIPS.length)
+  })
+
+  it('the banner shows two tips and points /help at the keys', async () => {
+    const { d } = deps([])
+    d.now = () => 3_000 // seed 3
+    const t = fakeIo([null])
+    d.io = t.io
+    await runTui(opts, d)
+    const tips = t.text().split('\n').filter((l) => l.startsWith('  tip: '))
+    expect(tips).toEqual(pickTips(3).map((x) => `  tip: ${x}`))
+    expect(t.text()).toContain('/help for commands and keys')
+  })
+
+  it('/help lists the keys a new user would not find', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/help', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('Keys:')
+    for (const key of ['Shift-Enter', 'Ctrl-J', '@ then Tab', '!command', '#note', 'Shift-Tab', 'Ctrl-R', 'Ctrl-X Ctrl-E', 'steer']) {
+      expect(out).toContain(key)
+    }
+  })
+})
+
+describe('status line: branch and the running turn', () => {
+  it('shows the branch above the composer, re-read before each prompt', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const branches = ['main', 'feature/y']
+    d.gitBranch = async () => branches.shift() ?? null
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain(' · main · ')
+    expect(t.text()).toContain(' · feature/y · ')
+  })
+
+  it('a failing branch lookup just leaves the branch out', async () => {
+    const { d } = deps([])
+    d.gitBranch = async () => {
+      throw new Error('git missing')
+    }
+    const t = fakeIo([null])
+    d.io = t.io
+    await expect(runTui(opts, d)).resolves.toBe(0)
+  })
+
+  it('hands the status to the spinner line while a turn runs, and updates its context', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'usage', inputTokens: 500_000, outputTokens: 10, cost: 0 },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ], { selected: { providerId: 'anthropic', model: 'claude-opus-4-8' } })
+    d.gitBranch = async () => 'main'
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.statuses[0]).toBe('claude-opus-4-8 · main')
+    expect(t.statuses.at(-1)).toMatch(/^claude-opus-4-8 · main · [▓░]+ 50%$/)
+  })
+})
+
 describe('/verbose and /output', () => {
   const withTool: AgentEvent[] = [
     { runId: 'x', type: 'tool_start', callId: 'c1', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
@@ -3979,6 +4090,24 @@ describe('/verbose and /output', () => {
   it('/verbose opens it up for subsequent turns', async () => {
     const { d } = deps(withTool)
     const t = fakeIo(['/verbose', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('gamma')
+  })
+
+  it('/verbose is remembered for the next session', async () => {
+    const { d } = deps(withTool)
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (patch) => saved.push(patch)
+    const t = fakeIo(['/verbose', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toContainEqual({ tuiVerbose: true })
+  })
+
+  it('starts verbose when the saved setting says so', async () => {
+    const { d } = deps(withTool, { tuiVerbose: true })
+    const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('gamma')

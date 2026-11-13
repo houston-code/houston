@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { checklistView, type ChecklistFacts, type ChecklistStep } from '@shared/onboarding'
+import type { RecentFolder } from '../lib/recentFolders'
+import { RecentFolders } from './RecentFolders'
 
 /**
  * The welcome screen's get-started checklist. Each step ticks itself off from real
@@ -25,6 +27,10 @@ export interface GetStartedProps {
   onUseExample?: (task: string) => void
   onConnectModel: () => void
   onChooseFolder: () => void
+  /** Folders opened before, offered under the folder step while it is open. */
+  recentFolders?: readonly RecentFolder[]
+  /** Open one of `recentFolders`. */
+  onOpenFolder?: (path: string) => void
   /**
    * Focus step 1's button on mount. Set when the user backs out of the Connect panel,
    * which replaced this card while open: without it focus falls to the page body.
@@ -40,6 +46,8 @@ export function GetStarted({
   onUseExample,
   onConnectModel,
   onChooseFolder,
+  recentFolders = [],
+  onOpenFolder,
   focusModelStep = false
 }: GetStartedProps): JSX.Element {
   const view = checklistView(facts)
@@ -113,6 +121,9 @@ export function GetStarted({
                   </span>
                 )}
                 {redo?.summary && <span className="get-started__hint">{redo.summary}</span>}
+                {step.id === 'folder' && !done && onOpenFolder && (
+                  <RecentFolders folders={recentFolders} onOpen={onOpenFolder} title="Or reopen" />
+                )}
               </span>
               {act && !done && (
                 <button

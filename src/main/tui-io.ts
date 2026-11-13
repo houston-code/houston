@@ -18,6 +18,8 @@ import {
   DISABLE_BRACKETED_PASTE,
   ENABLE_FOCUS_REPORTING,
   DISABLE_FOCUS_REPORTING,
+  ENABLE_MODIFIED_KEYS,
+  DISABLE_MODIFIED_KEYS,
   type DecoderState
 } from './tui-keys'
 import { bellSequence, notifySequence, titleSequence, type TerminalSignal } from './tui-notify'
@@ -243,14 +245,20 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   let cancelTimer: (() => void) | null = null
   const drawSpinner = (): void => {
     if (spinnerLabel === null) return
-    rawWrite(
-      CLEAR_LINE +
-        spinnerFrame(tick++, spinnerLabel, Math.floor((now() - spinnerStart) / 1000), paint, {
-          ...(modeLabel ? { mode: modeLabel } : {}),
-          ...(draft ? { draft } : {}),
-          ...(queued.length ? { queued: queued.length } : {})
-        })
-    )
+    const frame = (status: string): string =>
+      spinnerFrame(tick, spinnerLabel ?? '', Math.floor((now() - spinnerStart) / 1000), paint, {
+        ...(modeLabel ? { mode: modeLabel } : {}),
+        ...(status ? { status } : {}),
+        ...(draft ? { draft } : {}),
+        ...(queued.length ? { queued: queued.length } : {})
+      })
+    // The status is the first thing to go when the line is full: a wrapped spinner
+    // line can't be erased in place, and the draft matters more than the status.
+    const width = (deps.columns?.() ?? process.stdout.columns ?? 80) - 1
+    let line = frame(statusLabel)
+    if (statusLabel && visibleWidth(line) > width) line = frame('')
+    tick++
+    rawWrite(CLEAR_LINE + line)
   }
   const startTimer = (): void => {
     if (!cancelTimer && spinnerLabel !== null) cancelTimer = schedule(drawSpinner, 100)
@@ -300,6 +308,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // The approval mode, shown on the spinner line so it stays visible while a turn
   // runs — the one time it matters most and the composer's status line is gone.
   let modeLabel = ''
+  // The rest of the status line, carried on the spinner line while a turn runs.
+  let statusLabel = ''
   let watching = false
   // Messages typed while the agent works, waiting for the turn to end. Kept here
   // (not in the driver) because the driver is blocked awaiting the run.
@@ -340,6 +350,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           return void interruptHandler?.()
         case 'focus':
           noteFocus(key.on)
+          break
+        case 'cycle-mode':
+          // Shift-Tab mid-run: the driver retargets the live run and calls setMode,
+          // which redraws this line with the new mode.
+          cycleModeHandler?.()
           break
         case 'char':
           draft += key.value
@@ -417,6 +432,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         // in a terminal we no longer own.
         rawWrite(DISABLE_FOCUS_REPORTING)
         rawWrite(DISABLE_BRACKETED_PASTE)
+        rawWrite(DISABLE_MODIFIED_KEYS)
         stdin.setRawMode(false)
       } catch {
         /* best-effort */
@@ -684,6 +700,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           // shows up in the user's shell as a bug we caused.
           if (vimOn) rawWrite(CURSOR_RESET)
           rawWrite(DISABLE_BRACKETED_PASTE)
+          rawWrite(DISABLE_MODIFIED_KEYS)
           for (const l of priorKeypress) stdin.on('keypress', l)
           stdin.setRawMode(false)
           rl.resume() // re-sync readline for the next (sub-prompt) read
@@ -698,6 +715,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         stdin.setRawMode(true)
         stdin.resume()
         rawWrite(ENABLE_BRACKETED_PASTE)
+        // Shift-Enter for a new line, on terminals that can report it.
+        rawWrite(ENABLE_MODIFIED_KEYS)
         stdin.on('data', onData)
       }
       const finish = (value: string | null, echo = false): void => {
@@ -900,6 +919,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     },
     setMode: (label) => {
       modeLabel = label
+      if (spinnerLabel !== null) drawSpinner()
+    },
+    setStatus: (status) => {
+      statusLabel = status
       if (spinnerLabel !== null) drawSpinner()
     },
     signal: (sig: TerminalSignal) => {
