@@ -25,6 +25,7 @@ import { Popover } from './Popover'
 import { groupItems } from '../lib/toolDisplay'
 import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
+import { useTransientFlag } from '../hooks/useTransientFlag'
 import { useStableCallback } from '../hooks/useStableCallback'
 import { ToolGroup } from './ToolGroup'
 import { QuestionCard } from './QuestionCard'
@@ -52,12 +53,10 @@ const SR_ONLY: CSSProperties = {
  * user turn tucks it to the left of the right-aligned bubble — see global.css).
  */
 function CopyButton({ text, className }: { text: string; className?: string }): JSX.Element {
-  const [copied, setCopied] = useState(false)
+  const [copied, showCopied] = useTransientFlag(1200)
   const copy = (): void => {
     void copyText(text).then((ok) => {
-      if (!ok) return
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1200)
+      if (ok) showCopied()
     })
   }
   return (
