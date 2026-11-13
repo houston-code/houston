@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -12,13 +12,17 @@ import {
   writeRewind,
   conversationMatches,
   searchableText,
+  searchConversations,
   createConversation,
   deleteConversation,
   forkConversation,
   importConversation,
   listConversations,
   reportChildToParent,
+  MAX_SEARCH_CACHE_CHARS,
+  SEARCH_CACHE_IDLE_MS,
   resetConversationListCache,
+  resetConversationSearchCache,
   resetConversationWriteCache,
   setCompaction,
   setPromptSnapshot,
@@ -826,6 +830,111 @@ describe('saving from the remembered write', () => {
     setMessages(c.id, [{ role: 'user', content: 'hi' }])
     addUsage(c.id, { inputTokens: 1, outputTokens: 1, cost: 1 })
     expect(statSync(file(c.id)).mode & 0o777).toBe(0o600)
+  })
+})
+
+describe('searchConversations cache', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+    resetConversationListCache()
+    resetConversationSearchCache()
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  const ids = (q: string): string[] => searchConversations(q).map((c) => c.id)
+  /** The answer a search gave before the cache: read every chat and test it. */
+  const reference = (q: string): string[] =>
+    listConversations()
+      .map((m) => getConversation(m.id)!)
+      .filter((c) => conversationMatches(c, q.trim().toLowerCase()))
+      .map((c) => c.id)
+
+  it('finds exactly what matching every chat from disk finds', () => {
+    const a = createConversation({ workspace: '/work/alpha', providerId: 'p', model: 'm' })
+    const b = createConversation({ workspace: '/work/beta', providerId: 'p', model: 'm' })
+    setMessages(a.id, [
+      { role: 'user', content: 'Fix the Parser crash' },
+      { role: 'assistant', content: 'The tokenizer drops a quote.' },
+      { role: 'tool', content: 'secret-tool-output', toolCallId: 't', toolName: 'read_file' }
+    ])
+    setMessages(b.id, [{ role: 'user', content: 'Speed up the build' }])
+    for (const q of ['parser', 'PARSER', 'tokenizer', 'beta', 'alpha', 'speed', 'secret-tool-output', 'crash the', 'nothing here', ' build ']) {
+      expect(ids(q), q).toEqual(reference(q))
+    }
+    // Text is never matched across the boundary between two messages.
+    expect(ids('crashthe')).toEqual([])
+  })
+
+  it('answers from the cache while files are unchanged, and re-reads one that changed', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    // A fixed title, so the words searched for appear only in the message.
+    organizeConversation(c.id, { title: 'Fixed' })
+    setMessages(c.id, [{ role: 'user', content: 'original words' }])
+    const when = 1_700_000_000
+    utimesSync(file(c.id), when, when)
+    expect(ids('original')).toEqual([c.id])
+    // Same stamp, new bytes: only a search that trusts the stamp still finds the old words.
+    const before = statSync(file(c.id))
+    writeFileSync(file(c.id), readFileSync(file(c.id), 'utf8').replaceAll('original', 'replaced'))
+    utimesSync(file(c.id), when, when)
+    expect(statSync(file(c.id)).size).toBe(before.size)
+    expect(ids('original')).toEqual([c.id])
+    // Once the stamp moves, the new text is what is searched.
+    utimesSync(file(c.id), when + 1, when + 1)
+    expect(ids('original')).toEqual([])
+    expect(ids('replaced')).toEqual([c.id])
+  })
+
+  it('sees this process\'s own writes and deletes at once', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    organizeConversation(c.id, { title: 'Fixed' })
+    setMessages(c.id, [{ role: 'user', content: 'first' }])
+    expect(ids('first')).toEqual([c.id])
+    setMessages(c.id, [{ role: 'user', content: 'second' }])
+    expect(ids('first')).toEqual([])
+    expect(ids('second')).toEqual([c.id])
+    deleteConversation(c.id)
+    expect(ids('second')).toEqual([])
+  })
+
+  it('lets go of the cache once searching has stopped, and searches correctly after', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      organizeConversation(c.id, { title: 'Fixed' })
+      setMessages(c.id, [{ role: 'user', content: 'original words' }])
+      const when = 1_700_000_000
+      utimesSync(file(c.id), when, when)
+      expect(ids('original')).toEqual([c.id])
+      // Change the text behind an unchanged stamp: a held cache would still find it.
+      writeFileSync(file(c.id), readFileSync(file(c.id), 'utf8').replaceAll('original', 'replaced'))
+      utimesSync(file(c.id), when, when)
+      vi.advanceTimersByTime(SEARCH_CACHE_IDLE_MS - 1)
+      expect(ids('original')).toEqual([c.id])
+      // A search restarts the wait; after a full idle spell the cache is gone.
+      vi.advanceTimersByTime(SEARCH_CACHE_IDLE_MS)
+      expect(ids('original')).toEqual([])
+      expect(ids('replaced')).toEqual([c.id])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('stays correct when the cache is over its size and has to evict', () => {
+    const chats = Array.from({ length: 3 }, (_, i) => {
+      const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      // Each chat alone is over half the cap, so caching a second evicts the first.
+      setMessages(c.id, [{ role: 'user', content: `chat${i} ${'x'.repeat(Math.ceil(MAX_SEARCH_CACHE_CHARS / 2) + 10)}` }])
+      return c
+    })
+    for (let round = 0; round < 2; round++) {
+      for (const [i, c] of chats.entries()) expect(ids(`chat${i}`)).toEqual([c.id])
+    }
   })
 })
 
