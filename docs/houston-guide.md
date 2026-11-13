@@ -412,6 +412,14 @@ Type `/` in the composer for the command menu. In the terminal it appears under 
 you're typing, filters as you go, and lists what each command does, including any
 this project defines in `.houston/commands`.
 
+In the desktop app, a bare `/` lists every command under headings (Chat, Modes,
+Review and undo, Extend, Setup, then your own). Typing more finds commands by any
+part of the name, an alias, a word of the description, or the letters in order:
+`/wind` finds `/rewind`, `/think` finds `/reasoning`, `/sandbox` finds `/doctor`.
+Commands that take something after the name show it beside the name, such as
+`/model [name]`. The command palette (⌘K) lists them too; start the search with `/`
+to see only commands, and `/help` opens it that way.
+
 Both clients accept the same names, so a command learned in one works in the other.
 
 ### Built-in commands
@@ -428,7 +436,7 @@ Both clients accept the same names, so a command learned in one works in the oth
 | `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/changes` (or `/diff`) | what's different in the working tree |
 | `/skills`, `/agents` | list the workspace's skills and custom agents |
-| `/help` | list the available commands |
+| `/help` | list the available commands (in the desktop app, opens the command palette on them) |
 
 Also: `/model`, `/reasoning`, `/fork`, `/btw`, `/resume`, `/cost`, `/cwd`, `/share`,
 and `/doctor`. The exact set depends on the client.

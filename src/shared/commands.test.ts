@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   agentInvocationPrompt,
   builtinCommands,
+  commandGroup,
   expandTemplate,
+  groupCommands,
   matchCommands,
   mergeCommands,
   parseAgentInvocation,
@@ -11,6 +13,8 @@ import {
   terminalOnlyNote,
   BUILTIN_COMMAND_CATALOG,
   COMMAND_ALIASES,
+  COMMAND_GROUPS,
+  CUSTOM_COMMAND_GROUP,
   type Command
 } from './commands'
 import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, parseApprovalPolicy } from './types'
@@ -78,6 +82,66 @@ describe('matchCommands', () => {
     expect(matchCommands(cmds, 're').map((c) => c.name)).toEqual(['review', 'refactor'])
     expect(matchCommands(cmds, 'N').map((c) => c.name)).toEqual(['new'])
     expect(matchCommands(cmds, '')).toHaveLength(3)
+  })
+})
+
+describe('matchCommands ranking', () => {
+  const gui = builtinCommands('gui')
+  const names = (q: string): string[] => matchCommands(gui, q).map((c) => c.name)
+
+  it('puts names that start with the query before names that only contain it', () => {
+    expect(names('re').slice(0, 6)).toEqual(['retry', 'redo', 'rewind', 'reasoning', 'resume', 'review'])
+  })
+
+  it('finds a command by a middle part of its name', () => {
+    expect(names('wind')).toEqual(['rewind'])
+  })
+
+  it('finds a command by an alias', () => {
+    expect(names('diff')[0]).toBe('changes')
+    expect(names('think')[0]).toBe('reasoning')
+  })
+
+  it('finds a command by a word in its description', () => {
+    expect(names('sandbox')).toContain('doctor')
+    expect(names('invite')).toEqual(['share'])
+  })
+
+  it('finds a command by its letters in order, after closer matches', () => {
+    expect(names('rsn')).toEqual(['reasoning'])
+    expect(names('cg')).toEqual(['changes'])
+  })
+
+  it('returns nothing for text no command answers', () => {
+    expect(names('zzzz')).toEqual([])
+  })
+})
+
+describe('command groups', () => {
+  it('gives every built-in command a known heading', () => {
+    for (const c of BUILTIN_COMMAND_CATALOG) {
+      expect(COMMAND_GROUPS, `/${c.name}`).toContain(c.group)
+    }
+  })
+
+  it('keeps terminal-only commands under their own heading, out of the desktop list', () => {
+    expect(builtinCommands('gui').map(commandGroup)).not.toContain('Terminal')
+  })
+
+  it('lists an unfiltered menu heading by heading, custom commands last', () => {
+    const custom: Command = { name: 'deploy', description: 'Ship it', template: 'Deploy $1' }
+    const listed = matchCommands(mergeCommands(builtinCommands('gui'), [custom]), '')
+    const headings = listed.map(commandGroup).filter((g, i, all) => g !== all[i - 1])
+    expect(headings).toEqual(['Chat', 'Modes', 'Review and undo', 'Extend', 'Setup', CUSTOM_COMMAND_GROUP])
+    expect(listed.at(-1)?.name).toBe('deploy')
+    expect(groupCommands(listed)).toEqual(listed)
+  })
+
+  it('carries the argument hint for commands that take one', () => {
+    const byName = Object.fromEntries(builtinCommands('gui').map((c) => [c.name, c]))
+    expect(byName.agent.args).toBe('<name> <task>')
+    expect(byName.model.args).toBe('[name]')
+    expect(byName.undo.args).toBeUndefined()
   })
 })
 
