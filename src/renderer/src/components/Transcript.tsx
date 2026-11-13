@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import {
   COMPACTION_SUMMARY_PREFIX,
   type ElicitationResult,
@@ -13,6 +13,7 @@ import { Popover } from './Popover'
 import { groupItems } from '../lib/toolDisplay'
 import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
+import { useStableCallback } from '../hooks/useStableCallback'
 import { ToolGroup } from './ToolGroup'
 import { QuestionCard } from './QuestionCard'
 import { ProposalCard, type ProposalHandlers } from './ProposalCard'
@@ -98,20 +99,49 @@ function InvokedBubble({
   )
 }
 
-function UserBubble({
-  text,
-  images,
-  isSummary,
-  invokedAs,
-  actions
-}: {
+interface UserBubbleProps {
   text: string
   images?: ImageAttachment[]
   isSummary?: boolean
   invokedAs?: PromptInvocation
-  /** Hover actions beside the copy button (the rewind menu). */
-  actions?: ReactNode
-}): JSX.Element {
+  /** This message's rewind point; with `rewind`, shows the rewind menu beside the copy button. */
+  rewindTarget?: RewindItemTarget
+  rewind?: RewindHandlers
+}
+
+/**
+ * Rewind targets are rebuilt as new objects whenever the item list changes, so a
+ * bubble compares the target by what it says rather than by identity.
+ */
+function sameUserBubble(a: UserBubbleProps, b: UserBubbleProps): boolean {
+  const ta = a.rewindTarget
+  const tb = b.rewindTarget
+  return (
+    a.text === b.text &&
+    a.images === b.images &&
+    a.isSummary === b.isSummary &&
+    a.invokedAs === b.invokedAs &&
+    a.rewind === b.rewind &&
+    (ta === tb ||
+      (ta !== undefined &&
+        tb !== undefined &&
+        ta.id === tb.id &&
+        ta.turn === tb.turn &&
+        ta.text === tb.text &&
+        ta.label === tb.label &&
+        ta.images === tb.images))
+  )
+}
+
+const UserBubble = memo(function UserBubble({
+  text,
+  images,
+  isSummary,
+  invokedAs,
+  rewindTarget,
+  rewind
+}: UserBubbleProps): JSX.Element {
+  const actions = rewindTarget && rewind ? <RewindMenu target={rewindTarget} handlers={rewind} /> : undefined
   // The compaction summary is model-authored markdown, not user input. Render it as
   // a labeled, full-width block with its body parsed as markdown rather than the
   // right-aligned plain-text bubble used for the user's own turns.
@@ -145,7 +175,7 @@ function UserBubble({
       </div>
     </div>
   )
-}
+}, sameUserBubble)
 
 /** The transcript's rewind hooks; absent hides the menu (a new chat, a read-only view). */
 export interface RewindHandlers {
@@ -259,18 +289,23 @@ function PlanMarker({
   return <div className={`plan-marker plan-marker--${status}`}>{body}</div>
 }
 
-function AssistantMessage({
+const AssistantMessage = memo(function AssistantMessage({
   text,
   streaming,
   reasoning,
-  onMarkUnread
+  replyNumber,
+  onMarkUnreadFrom
 }: {
   text: string
   streaming?: boolean
   reasoning?: string
-  /** Mark the chat unread from this reply; absent hides the button. */
-  onMarkUnread?: () => void
+  /** This reply's position among the replies. */
+  replyNumber?: number
+  /** Mark the chat unread from a reply, by that position; absent hides the button. */
+  onMarkUnreadFrom?: (replyNumber: number) => void
 }): JSX.Element {
+  const onMarkUnread =
+    onMarkUnreadFrom && replyNumber !== undefined ? (): void => onMarkUnreadFrom(replyNumber) : undefined
   return (
     <div className="msg msg--assistant">
       {reasoning && (
@@ -298,7 +333,7 @@ function AssistantMessage({
       )}
     </div>
   )
-}
+})
 
 /**
  * A missing-runtime notice with its fix: one click runs the install command in a
@@ -471,6 +506,22 @@ export function Transcript({
     setShowJump(false)
   }
 
+  // Rows are memoized, so the handlers they get must keep their identity across
+  // renders: the parent re-creates several of them on every render (and re-renders on
+  // every streamed update), which would otherwise re-render every row each time.
+  const approve = useStableCallback(onApprove)
+  const markUnreadFrom = useStableCallback(onMarkUnreadFrom)
+  const rewindTo = useStableCallback(rewind?.onRewind)
+  const rewindEdit = useStableCallback(rewind?.onEdit)
+  const rewindDisabled = rewind?.disabled
+  const stableRewind = useMemo<RewindHandlers | undefined>(
+    () =>
+      rewindTo && rewindEdit && rewindDisabled !== undefined
+        ? { disabled: rewindDisabled, onRewind: rewindTo, onEdit: rewindEdit }
+        : undefined,
+    [rewindTo, rewindEdit, rewindDisabled]
+  )
+
   // Memoized so it isn't rebuilt when the Transcript re-renders for a non-content
   // reason (e.g. the scroll-to-bottom button toggling).
   const nodes = useMemo(() => groupItems(items), [items])
@@ -507,7 +558,7 @@ export function Transcript({
           {nodes.map((node) => {
             switch (node.kind) {
               case 'user': {
-                const target = rewind ? targets.get(node.item.id) : undefined
+                const target = stableRewind ? targets.get(node.item.id) : undefined
                 return (
                   <UserBubble
                     key={node.id}
@@ -515,7 +566,8 @@ export function Transcript({
                     images={node.item.images}
                     isSummary={node.item.isSummary}
                     invokedAs={node.item.invokedAs}
-                    actions={target && rewind ? <RewindMenu target={target} handlers={rewind} /> : undefined}
+                    rewindTarget={target}
+                    rewind={stableRewind}
                   />
                 )
               }
@@ -527,7 +579,8 @@ export function Transcript({
                     text={node.item.text}
                     streaming={node.item.streaming}
                     reasoning={node.item.reasoning}
-                    {...(onMarkUnreadFrom && n !== undefined ? { onMarkUnread: () => onMarkUnreadFrom(n) } : {})}
+                    replyNumber={n}
+                    onMarkUnreadFrom={markUnreadFrom}
                   />
                 )
                 if (node.item.id !== newFromId) return reply
@@ -541,7 +594,7 @@ export function Transcript({
                 )
               }
               case 'toolgroup':
-                return <ToolGroup key={node.id} items={node.items} onApprove={onApprove} />
+                return <ToolGroup key={node.id} items={node.items} onApprove={approve} />
               case 'question':
                 return <QuestionCard key={node.id} item={node.item} onAnswer={onAnswer} />
               case 'proposal':
