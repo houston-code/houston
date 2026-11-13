@@ -97,6 +97,7 @@ import {
 import { killShell, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
+import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
 import type { DoctorFacts } from '@shared/doctor'
@@ -316,11 +317,32 @@ function emitTitleChanged(sender: WebContents, conversationId: string, title: st
   if (!sender.isDestroyed()) sender.send(IPC.conversationTitleChanged, { id: conversationId, title })
 }
 
+/**
+ * Wrap an event sink so streamed text and reasoning reach the windows merged per
+ * display frame rather than one IPC message and one render per token (see
+ * deltaCoalescer.ts). One coalescer per conversation, since an io outlives a run when
+ * queued follow-ups drain through it.
+ */
+function coalescedEmit(
+  emit: (conversationId: string, e: AgentEvent) => void
+): (conversationId: string, e: AgentEvent) => void {
+  const byConversation = new Map<string, DeltaCoalescer>()
+  return (conversationId, e) => {
+    let c = byConversation.get(conversationId)
+    if (!c) {
+      c = createDeltaCoalescer((ev) => emit(conversationId, ev))
+      byConversation.set(conversationId, c)
+    }
+    c.push(e)
+  }
+}
+
 /** Bind the run/queue orchestrator's output to a specific renderer. */
 function makeIo(sender: WebContents): DrainIO {
+  const coalesced = coalescedEmit((conversationId, e) => emitEvent(sender, conversationId, e))
   return {
     imageGallery: true,
-    emit: (conversationId, e) => emitEvent(sender, conversationId, e),
+    emit: coalesced,
     emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items),
     emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title)
   }
@@ -342,13 +364,13 @@ function makeBroadcastIo(): DrainIO {
   }
   return {
     imageGallery: true,
-    emit: (conversationId, e) => {
+    emit: coalescedEmit((conversationId, e) => {
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))
       const primary = BrowserWindow.getAllWindows()[0]?.webContents
       if (primary) maybeNotify(primary, conversationId, ev)
       attention?.noteEvent(conversationId, ev)
-    },
+    }),
     emitQueueChanged: (conversationId, items) =>
       toEach((wc) => wc.send(IPC.agentQueueChanged, { conversationId, items })),
     emitTitleChanged: (conversationId, title) =>
@@ -938,7 +960,11 @@ export function registerIpc(): void {
   // Conversations
   ipcMain.handle(IPC.conversationList, () => listConversations())
   ipcMain.handle(IPC.conversationSearch, (_event, query: string) => searchConversations(query))
-  ipcMain.handle(IPC.conversationGet, (_event, id: string) => getConversation(id))
+  ipcMain.handle(IPC.conversationGet, (_event, id: string) => {
+    // A window that loads the saved chat must first have every delta sent before it.
+    flushAllDeltas()
+    return getConversation(id)
+  })
   // Local-only per-model loop scorecard — aggregated on-device, never transmitted.
   ipcMain.handle(IPC.conversationScorecard, () => computeScorecard())
   ipcMain.handle(
@@ -1543,9 +1569,13 @@ export function registerIpc(): void {
   // mid-stream, running tools). The renderer replays this right after re-adopting so
   // a mid-turn re-open doesn't show an empty transcript — most visibly on a freshly
   // spawned session opened to watch its first turn stream. Empty if no live run.
-  ipcMain.handle(IPC.agentLiveTranscript, (_event, conversationId: string): AgentEvent[] =>
-    liveTranscriptForConversation(conversationId)
-  )
+  ipcMain.handle(IPC.agentLiveTranscript, (_event, conversationId: string): AgentEvent[] => {
+    // The replay holds every delta the loop has emitted, including any still being
+    // gathered for the windows: send those first, or the window that replays this and
+    // then receives them would show that text twice.
+    flushAllDeltas()
+    return liveTranscriptForConversation(conversationId)
+  })
 
   // Unread marks persist in userData; entries for chats deleted while the app was
   // closed (or by another process) are pruned on startup.
