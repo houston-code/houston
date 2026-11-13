@@ -254,7 +254,7 @@ vi.mock('../../providers', async (importActual) => {
     }
   }
 })
-vi.mock('../../mcp/manager', () => ({ getMcpToolDefs: async () => [] }))
+vi.mock('../../mcp/manager', () => ({ getMcpToolDefs: async () => [], releaseMcpRun: () => {} }))
 vi.mock('../managedPolicy', () => ({ loadManagedPolicy: async () => ({ permissionRules: [] }) }))
 // The real loader reads the developer's global rules file — machine state that
 // would make an eval pass or fail based on whose laptop it ran on.

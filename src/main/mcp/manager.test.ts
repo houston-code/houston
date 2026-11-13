@@ -43,6 +43,8 @@ vi.mock('./oauth', async (importOriginal) => ({
 
 import {
   _setMcpClientFactory,
+  MCP_RETRY_BACKOFF_MS,
+  releaseMcpRun,
   _setMcpHttpClientFactory,
   _setMcpSseClientFactory,
   disconnectAllMcp,
@@ -403,6 +405,127 @@ const tok = (over: Partial<McpOAuthTokens> = {}): McpOAuthTokens => ({
 })
 
 const webCfg = (): McpServerConfig => cfg({ id: 'web', transport: 'http', command: '', url: 'https://x/mcp' })
+
+describe('mcp manager: connecting several servers', () => {
+  /**
+   * A stdio server that answers each request after `delay(command)` ms and names its
+   * one tool after its command, so each configured server can be told apart and slowed.
+   */
+  function timedSpawn(delay: (command: string) => number, log: string[] = []): SpawnFn {
+    return ((command: string) => {
+      const stdout = new EventEmitter()
+      const stdin = Object.assign(new EventEmitter(), {
+        write(line: string): boolean {
+          const msg = JSON.parse(line.trim()) as { id?: number; method: string }
+          if (msg.id === undefined) return true
+          if (msg.method === 'initialize') log.push(`start ${command}`)
+          const result = msg.method === 'tools/list' ? { tools: [{ name: `tool-${command}` }] } : {}
+          setTimeout(() => {
+            if (msg.method === 'tools/list') log.push(`ready ${command}`)
+            stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+          }, delay(command))
+          return true
+        }
+      })
+      return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    }) as unknown as SpawnFn
+  }
+  const server = (id: string): McpServerConfig => cfg({ id, name: id, command: id })
+
+  it('starts every server before any has finished', async () => {
+    const log: string[] = []
+    useFactory(timedSpawn(() => 15, log))
+    await getMcpToolDefs([server('a'), server('b'), server('c')])
+    const firstReady = log.findIndex((l) => l.startsWith('ready'))
+    expect(log.slice(0, firstReady).sort()).toEqual(['start a', 'start b', 'start c'])
+  })
+
+  it('lists tools in config order whichever server answers first', async () => {
+    // The first configured server is the slowest.
+    useFactory(timedSpawn((command) => ({ a: 30, b: 1, c: 10 })[command] ?? 1))
+    const defs = await getMcpToolDefs([server('a'), server('b'), server('c')])
+    expect(defs.map((d) => d.schema.name)).toEqual([
+      mcpToolName('a', 'tool-a'),
+      mcpToolName('b', 'tool-b'),
+      mcpToolName('c', 'tool-c')
+    ])
+  })
+
+  it('a server that fails does not hold back or drop the others', async () => {
+    const ok = timedSpawn(() => 1)
+    const bad = failingSpawn()
+    created = []
+    _setMcpClientFactory(() => {
+      const c = new McpClient(((command: string, ...rest: unknown[]) =>
+        command === 'b' ? (bad as (...a: unknown[]) => unknown)(command, ...rest) : (ok as (...a: unknown[]) => unknown)(command, ...rest)) as unknown as SpawnFn)
+      created.push(c)
+      return c
+    })
+    const defs = await getMcpToolDefs([server('a'), server('b'), server('c')])
+    expect(defs.map((d) => d.schema.name)).toEqual([mcpToolName('a', 'tool-a'), mcpToolName('c', 'tool-c')])
+    expect(getMcpStatuses().find((s) => s.id === 'b')?.state).toBe('error')
+  })
+})
+
+describe('mcp manager: a server that keeps failing', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('is not retried on every run start, and is retried once the backoff has passed', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    useFactory(failingSpawn())
+    await getMcpToolDefs([cfg()])
+    await getMcpToolDefs([cfg()])
+    await getMcpToolDefs([cfg()])
+    expect(created).toHaveLength(1)
+    expect(getMcpStatuses()[0]).toMatchObject({ id: 'srv', state: 'error' })
+    vi.setSystemTime(Date.now() + MCP_RETRY_BACKOFF_MS + 1)
+    await getMcpToolDefs([cfg()])
+    expect(created).toHaveLength(2)
+  })
+
+  it('is retried at once when its configuration changes', async () => {
+    useFactory(failingSpawn())
+    await getMcpToolDefs([cfg()])
+    useFactory(okSpawn())
+    const defs = await getMcpToolDefs([cfg({ args: ['--fixed'] })])
+    expect(defs.map((d) => d.schema.name)).toEqual([mcpToolName('srv', 'echo')])
+  })
+})
+
+describe('mcp manager: servers shared between live runs', () => {
+  const server = (id: string): McpServerConfig => cfg({ id, name: id, command: id })
+  const noCtx = { workspace: '/tmp', allowNetwork: false } as ToolContext
+
+  it('keeps a live run\'s server open when a run in another folder starts without it', async () => {
+    useFactory(okSpawn())
+    const first = await getMcpToolDefs([server('shared'), server('proj-a')], 'run-1')
+    // A run elsewhere: the shared server, plus its own project server.
+    const second = await getMcpToolDefs([server('shared'), server('proj-b')], 'run-2')
+    const projA = created[1]
+    expect(projA.isClosed).toBe(false)
+    // Run 1 can still call its project server.
+    const call = first.find((d) => d.schema.name === mcpToolName('proj-a', 'echo'))!
+    expect(await call.execute({}, noCtx)).not.toContain('no longer connected')
+    // And run 2 is offered only its own servers, not run 1's.
+    expect(second.map((d) => d.schema.name)).toEqual([mcpToolName('shared', 'echo'), mcpToolName('proj-b', 'echo')])
+  })
+
+  it('closes a server once the run that wanted it has ended and another reconcile runs', async () => {
+    useFactory(okSpawn())
+    await getMcpToolDefs([server('proj-a')], 'run-1')
+    releaseMcpRun('run-1')
+    await getMcpToolDefs([server('proj-b')], 'run-2')
+    expect(created[0].isClosed).toBe(true)
+    expect(getMcpStatuses().map((s) => s.id)).toEqual(['proj-b'])
+  })
+
+  it('still closes a removed server when no run names itself', async () => {
+    useFactory(okSpawn())
+    await getMcpToolDefs([server('a')])
+    await getMcpToolDefs([])
+    expect(created[0].isClosed).toBe(true)
+  })
+})
 
 describe('mcp manager OAuth', () => {
   it('sends the stored bearer on connect', async () => {

@@ -198,104 +198,178 @@ function ensureConnections(configs: McpServerConfig[]): Promise<void> {
   return ensureLock
 }
 
+/**
+ * The servers each live run was started with, by run id. The connection map is shared
+ * by every chat, and a run's set of servers depends on its folder (a trusted project's
+ * own servers, a headless run's extras). Reconciling to one run's set alone closed the
+ * servers a run in another folder was still calling, mid-turn. A server is now closed
+ * only when no live run wants it.
+ */
+const liveRuns = new Map<string, Set<string>>()
+
+/** A run has ended: its servers no longer count as wanted (they close at the next reconcile). */
+export function releaseMcpRun(owner: string): void {
+  liveRuns.delete(owner)
+}
+
+/**
+ * How long a server that failed to connect is left alone before it is tried again with
+ * the same configuration. Every run start reconciles, so a server that hangs until its
+ * handshake times out would otherwise hold up the start of every turn for that long.
+ * A changed configuration (an edited command, a new token after signing in) is a
+ * different key and is tried at once.
+ */
+export const MCP_RETRY_BACKOFF_MS = 30_000
+const recentFailures = new Map<string, { key: string; at: number; outcome: Outcome }>()
+
+/** What became of one server in a reconcile, applied to the shared maps in config order. */
+type Outcome =
+  | { kind: 'reused'; status: McpServerStatus }
+  | { kind: 'connected'; key: string; client: McpConnection }
+  | { kind: 'failed'; status: McpServerStatus; warn: string }
+
+/** Bring one server's connection up to date. Touches no shared state but its own old client. */
+async function connectServer(c: McpServerConfig): Promise<Outcome> {
+  const existing = connections.get(c.id)
+  const transport = transportOf(c)
+  const staticHeaders = resolveHeaders(c)
+  const env = resolveEnv(c)
+  // OAuth sign-in supplies the bearer for remote servers; an explicit static
+  // Authorization header (the user's own token) takes precedence over it.
+  const useOAuth = transport !== 'stdio' && !hasAuthorizationHeader(staticHeaders)
+  let headers = useOAuth ? { ...staticHeaders, ...(await oauthBearer(c)) } : staticHeaders
+  let key = configKey(c, headers, env)
+  // Reuse only a live connection with the same config; reconnect if the config
+  // changed (including a refreshed/removed OAuth token) or the cached client has
+  // since died (so calls don't hang on it).
+  if (existing && existing.key === key && !existing.client.isClosed) {
+    return {
+      kind: 'reused',
+      status: {
+        id: c.id,
+        state: 'connected',
+        tools: existing.client.tools.length,
+        toolNames: existing.client.tools.map((t) => t.name)
+      }
+    }
+  }
+  if (existing) existing.client.close()
+  const failed = recentFailures.get(c.id)
+  if (failed && failed.key === key && Date.now() - failed.at < MCP_RETRY_BACKOFF_MS) return failed.outcome
+  recentFailures.delete(c.id)
+  const attemptedKey = key
+
+  const connectOnce = async (): Promise<McpConnection> => {
+    const client: McpConnection =
+      transport === 'http' ? createHttpClient() : transport === 'sse' ? createSseClient() : createClient()
+    const onElicit = serverElicit(c.id)
+    try {
+      if (transport === 'http') await (client as McpHttpClient).connect({ url: c.url ?? '', headers, onElicit })
+      else if (transport === 'sse') await (client as McpSseClient).connect({ url: c.url ?? '', headers, onElicit })
+      else await (client as McpClient).connect({ command: c.command, args: c.args, env, cwd: c.cwd, onElicit })
+      return client
+    } catch (e) {
+      client.close()
+      throw e
+    }
+  }
+
+  try {
+    let client: McpConnection
+    try {
+      client = await connectOnce()
+    } catch (e) {
+      // A 401 despite a stored refresh token usually means the access token
+      // outlived its expiry since the last refresh: re-mint once and retry.
+      if (!(e instanceof McpUnauthorizedError) || !useOAuth || !getMcpOAuth(c.id)?.refresh) throw e
+      headers = { ...staticHeaders, ...(await oauthBearer(c, true)) }
+      key = configKey(c, headers, env)
+      client = await connectOnce()
+    }
+    return { kind: 'connected', key, client }
+  } catch (e) {
+    const message = (e as Error).message
+    const outcome: Outcome =
+      e instanceof McpUnauthorizedError && transport !== 'stdio'
+        ? {
+            kind: 'failed',
+            status: { id: c.id, state: 'needs-auth', error: message },
+            warn: `MCP server "${c.id}" requires sign-in (HTTP 401). Sign in from Settings > MCP servers (desktop) or with /mcp login (terminal), or configure an Authorization header.`
+          }
+        : {
+            kind: 'failed',
+            status: { id: c.id, state: 'error', error: message },
+            warn: `MCP server "${c.id}" failed to connect: ${message}`
+          }
+    recentFailures.set(c.id, { key: attemptedKey, at: Date.now(), outcome })
+    return outcome
+  }
+}
+
 async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
   lastConfigs = configs
   const enabled = configs.filter((c) => c.enabled && c.id && (c.command || c.url))
   const wanted = new Set(enabled.map((c) => c.id))
+  // Servers another live run is using stay open even though this run did not ask for them.
+  const inUse = new Set(wanted)
+  for (const ids of liveRuns.values()) for (const id of ids) inUse.add(id)
 
   // Close connections for servers that are gone or disabled.
   for (const [id, conn] of connections) {
-    if (!wanted.has(id)) {
+    if (!inUse.has(id)) {
       conn.client.close()
       connections.delete(id)
     }
   }
   for (const id of statuses.keys()) {
-    if (!wanted.has(id)) statuses.delete(id)
+    if (!inUse.has(id)) statuses.delete(id)
   }
 
-  for (const c of enabled) {
-    const existing = connections.get(c.id)
-    const transport = transportOf(c)
-    const staticHeaders = resolveHeaders(c)
-    const env = resolveEnv(c)
-    // OAuth sign-in supplies the bearer for remote servers; an explicit static
-    // Authorization header (the user's own token) takes precedence over it.
-    const useOAuth = transport !== 'stdio' && !hasAuthorizationHeader(staticHeaders)
-    let headers = useOAuth ? { ...staticHeaders, ...(await oauthBearer(c)) } : staticHeaders
-    let key = configKey(c, headers, env)
-    // Reuse only a live connection with the same config; reconnect if the config
-    // changed (including a refreshed/removed OAuth token) or the cached client has
-    // since died (so calls don't hang on it).
-    if (existing && existing.key === key && !existing.client.isClosed) {
+  // Connect every server at once: a run waits for its slowest server, not for the sum
+  // of them (each start-up is a process spawn or a network handshake, with a timeout
+  // of 15 s or more if the server never answers). The results are applied below in
+  // config order, so the connection map, and with it the order of the tools sent to
+  // the model, comes out the same as connecting one at a time.
+  const outcomes = await Promise.all(enabled.map((c) => connectServer(c)))
+  enabled.forEach((c, i) => {
+    const o = outcomes[i]
+    if (o.kind === 'reused') {
+      statuses.set(c.id, o.status)
+    } else if (o.kind === 'connected') {
+      connections.set(c.id, { key: o.key, client: o.client })
       statuses.set(c.id, {
         id: c.id,
         state: 'connected',
-        tools: existing.client.tools.length,
-        toolNames: existing.client.tools.map((t) => t.name)
+        tools: o.client.tools.length,
+        toolNames: o.client.tools.map((t) => t.name)
       })
-      continue
-    }
-    if (existing) existing.client.close()
-
-    const connectOnce = async (): Promise<McpConnection> => {
-      const client: McpConnection =
-        transport === 'http' ? createHttpClient() : transport === 'sse' ? createSseClient() : createClient()
-      const onElicit = serverElicit(c.id)
-      try {
-        if (transport === 'http') await (client as McpHttpClient).connect({ url: c.url ?? '', headers, onElicit })
-        else if (transport === 'sse') await (client as McpSseClient).connect({ url: c.url ?? '', headers, onElicit })
-        else await (client as McpClient).connect({ command: c.command, args: c.args, env, cwd: c.cwd, onElicit })
-        return client
-      } catch (e) {
-        client.close()
-        throw e
-      }
-    }
-
-    try {
-      let client: McpConnection
-      try {
-        client = await connectOnce()
-      } catch (e) {
-        // A 401 despite a stored refresh token usually means the access token
-        // outlived its expiry since the last refresh: re-mint once and retry.
-        if (!(e instanceof McpUnauthorizedError) || !useOAuth || !getMcpOAuth(c.id)?.refresh) throw e
-        headers = { ...staticHeaders, ...(await oauthBearer(c, true)) }
-        key = configKey(c, headers, env)
-        client = await connectOnce()
-      }
-      connections.set(c.id, { key, client })
-      statuses.set(c.id, {
-        id: c.id,
-        state: 'connected',
-        tools: client.tools.length,
-        toolNames: client.tools.map((t) => t.name)
-      })
-    } catch (e) {
+    } else {
       connections.delete(c.id)
-      if (e instanceof McpUnauthorizedError && transport !== 'stdio') {
-        statuses.set(c.id, { id: c.id, state: 'needs-auth', error: (e as Error).message })
-        log.warn(
-          `MCP server "${c.id}" requires sign-in (HTTP 401). Sign in from Settings > MCP servers (desktop) or with /mcp login (terminal), or configure an Authorization header.`
-        )
-      } else {
-        statuses.set(c.id, { id: c.id, state: 'error', error: (e as Error).message })
-        log.warn(`MCP server "${c.id}" failed to connect: ${(e as Error).message}`)
-      }
+      // Warn once per failure, not again each time the backoff answers for it.
+      if (statuses.get(c.id)?.state !== o.status.state || statuses.get(c.id)?.error !== o.status.error) log.warn(o.warn)
+      statuses.set(c.id, o.status)
     }
-  }
+  })
 }
 
 /** Connect the configured servers (best effort) and return their tools as ToolDefs. */
-export async function getMcpToolDefs(configs: McpServerConfig[] | undefined): Promise<ToolDef[]> {
+export async function getMcpToolDefs(
+  configs: McpServerConfig[] | undefined,
+  /** The run asking, when there is one: its servers stay open until {@link releaseMcpRun}. */
+  owner?: string
+): Promise<ToolDef[]> {
+  const mine = new Set((configs ?? []).filter((c) => c.enabled && c.id && (c.command || c.url)).map((c) => c.id))
+  if (owner !== undefined) liveRuns.set(owner, mine)
   // Reconcile even with no configs when connections are still open, so removing
   // (or disabling) every server actually closes them instead of leaking to quit.
   if (!configs?.length && connections.size === 0) return []
   await ensureConnections(configs ?? [])
 
   const defs: ToolDef[] = []
-  for (const [serverId, conn] of connections) {
+  // Only this run's servers: another live run's may be connected too, and are not
+  // this run's to call.
+  const own = [...connections].filter(([id]) => mine.has(id))
+  for (const [serverId, conn] of own) {
     for (const t of conn.client.tools) {
       const fullName = mcpToolName(serverId, t.name)
       const original = t.name
@@ -324,10 +398,10 @@ export async function getMcpToolDefs(configs: McpServerConfig[] | undefined): Pr
   // If any connected server exposes resources or prompts, add meta-tools so the
   // agent can discover and fetch them. Listing is local + side-effect-free (kind
   // 'read'); fetching hits the external server, so it's gated like an MCP call.
-  if ([...connections.values()].some((c) => c.client.resources.length > 0)) {
+  if (own.some(([, c]) => c.client.resources.length > 0)) {
     defs.push(...resourceMetaTools())
   }
-  if ([...connections.values()].some((c) => c.client.prompts.length > 0)) {
+  if (own.some(([, c]) => c.client.prompts.length > 0)) {
     defs.push(...promptMetaTools())
   }
   return defs
@@ -549,4 +623,6 @@ export function disconnectAllMcp(): void {
   for (const conn of connections.values()) conn.client.close()
   connections.clear()
   statuses.clear()
+  liveRuns.clear()
+  recentFailures.clear()
 }

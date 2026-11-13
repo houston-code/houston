@@ -189,7 +189,7 @@ vi.mock('./retry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./retry')>()),
   retryDelayMs: () => 0
 }))
-vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs }))
+vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs, releaseMcpRun: () => {} }))
 // Partial mock of the tool registry so a test can install a *counting* probe under a
 // real builtin name (e.g. `read_file`, which the read cache's allowlist accepts) and
 // have the loop's `getTool` resolve to the probe instead of the real filesystem tool.

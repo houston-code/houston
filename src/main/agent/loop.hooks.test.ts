@@ -51,7 +51,7 @@ vi.mock('./managedPolicy', () => ({
   loadManagedPolicy: async () => ({ permissionRules: h.managedRules })
 }))
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
-vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => [] }))
+vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => [], releaseMcpRun: () => {} }))
 vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))
 vi.mock('./plugins', () => ({

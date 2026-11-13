@@ -83,7 +83,7 @@ vi.mock('../agentHost', () => ({
   collectSecrets: () => []
 }))
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
-vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => [] }))
+vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => [], releaseMcpRun: () => {} }))
 vi.mock('./managedPolicy', () => ({ loadManagedPolicy: async () => ({ permissionRules: [] }) }))
 // The real loader reads the user's global ~/.houston/AGENTS.md — machine state
 // that must not leak into goldens. Scenarios inject rules text via `h.rulesText`.
