@@ -469,6 +469,10 @@ Open source under the [Apache License 2.0](LICENSE).
   *Appearance*; *System* follows your OS appearance and switches live. The same
   page sets the chat text size (small, default, large), a compact density, and a
   code theme (default, high contrast, muted) for code blocks and diffs.
+- **How much detail the transcript shows.** Tool rows start collapsed to one line;
+  the **Expand tools** button at a chat's bottom right opens them all (and collapses them
+  again). Settings → *Appearance* can open tool output by default and keep the
+  model's reasoning in view.
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
   dropped connections) are retried with exponential backoff, shown inline as a
   "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A
@@ -498,7 +502,8 @@ Open source under the [Apache License 2.0](LICENSE).
   a chat yourself always wins; auto-titling never overwrites a title you set.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
-  and groups persist across restarts. **Resize** the sidebar by dragging its right
+  and groups persist across restarts. The filter menu can also split the rest by
+  project folder or by date (Today, Yesterday, This week, Older). **Resize** the sidebar by dragging its right
   edge (double-click to reset), or **collapse** it to a thin rail with the ⌘B
   shortcut or the « toggle; the chosen width and collapsed state are remembered.
 - **Long sessions stay in budget.** When a conversation grows too large, Houston

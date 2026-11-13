@@ -62,6 +62,11 @@ The full GUI:
 
 - **Read and unread.** A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read. The
   filter menu marks every chat read, or sorts the ones that want attention first.
+- **Grouping by folder or date.** Under **Group chats by** in the filter menu, choose
+  **Project folder** (a worktree chat goes under its repository) or **Date** (Today,
+  Yesterday, This week, Older) to split the chats outside your own groups into
+  sections. Pinned chats and your groups stay as they are, and each section collapses
+  on its own. **Your groups only** (the default) turns it off. The choice is remembered.
 - **Right-click menus.** Right-click a chat in the sidebar for the same actions as its
   ⋯ menu. Right-click a message to copy it (or just the text you selected) and for that
   message's own actions: rewind or edit one of yours, or mark unread from a reply.
@@ -655,6 +660,15 @@ conversation, not a log. To see more:
   always kept in the conversation.
 
 Very long output is capped, with a note saying how much was left out.
+
+In the desktop app:
+
+- **Expand tools / Collapse tools**, the round button at the bottom right of a chat
+  that has tool rows, opens or closes every tool row at once.
+- **Show tool output expanded** (Settings, Appearance) opens each tool row with its
+  output or diff in view. Off by default.
+- **Always show reasoning** (same place) keeps the model's reasoning open above each
+  reply instead of folding it away once the reply starts. Off by default.
 
 In the desktop app, file paths in the transcript open the file in the Files panel's
 preview: the file a tool row names (a read opens at the line it started from), a diff's
