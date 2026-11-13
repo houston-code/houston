@@ -121,6 +121,9 @@ import { UpdateBanner } from './components/UpdateBanner'
 import { useUpdateBanner } from './hooks/useUpdateBanner'
 import { GetStarted } from './components/GetStarted'
 import { StarterPrompts } from './components/StarterPrompts'
+import { RecentFolders } from './components/RecentFolders'
+import { recentFolders } from './lib/recentFolders'
+import { useFolderDrop } from './hooks/useFolderDrop'
 import { ConnectModel, providerShortName } from './components/ConnectModel'
 import { TipHost } from './components/TipHost'
 import { ImageViewer } from './components/ImageViewer'
@@ -850,10 +853,56 @@ export default function App(): JSX.Element {
     enterNewChat(workspace)
   }, [workspace, enterNewChat])
 
+  // The recents live in settings, which main updates when a folder opens; re-read just
+  // them so the welcome screen and the folder menu list the folder just opened.
+  const refreshRecentFolders = useCallback(async () => {
+    const fresh = await window.api.getSettings()
+    setSettings((s) => (s ? { ...s, recentWorkspaces: fresh.recentWorkspaces } : s))
+  }, [])
+
   const onChangeWorkspace = useCallback(async () => {
     const ws = await window.api.pickWorkspace()
-    if (ws) enterNewChat(ws)
-  }, [enterNewChat])
+    if (ws) {
+      enterNewChat(ws)
+      void refreshRecentFolders()
+    }
+  }, [enterNewChat, refreshRecentFolders])
+
+  // A short note for a folder that could not be opened (a vanished recent, a dropped file).
+  const [folderNotice, setFolderNotice] = useState<string | null>(null)
+  useEffect(() => {
+    if (!folderNotice) return
+    const t = setTimeout(() => setFolderNotice(null), 4000)
+    return () => clearTimeout(t)
+  }, [folderNotice])
+
+  // Open a folder by path: a recent from the welcome screen or folder menu, or the
+  // paths of a drop on the window (the first that is a folder wins). Main checks each.
+  const openFolderPaths = useCallback(
+    async (paths: string[], from: 'recent' | 'drop') => {
+      for (const path of paths) {
+        const ws = await window.api.openWorkspace(path)
+        if (ws) {
+          enterNewChat(ws)
+          void refreshRecentFolders()
+          return
+        }
+      }
+      void refreshRecentFolders()
+      setFolderNotice(
+        from === 'recent' ? 'That folder no longer exists.' : 'Drop a folder to open it as the project.'
+      )
+    },
+    [enterNewChat, refreshRecentFolders]
+  )
+  const onOpenRecentFolder = useCallback(
+    (path: string) => void openFolderPaths([path], 'recent'),
+    [openFolderPaths]
+  )
+  const folderDragOver = useFolderDrop(
+    (paths) => void openFolderPaths(paths, 'drop'),
+    window.api.pathForFile
+  )
 
   const onDeleteConversation = useCallback(
     async (id: string) => {
@@ -2702,6 +2751,8 @@ export default function App(): JSX.Element {
                 onUseExample={(task) => prefillComposer(task)}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
+                recentFolders={recentFolders(settings.recentWorkspaces, workspace)}
+                onOpenFolder={onOpenRecentFolder}
                 focusModelStep={connectBackedOut}
               />
             ) : (
@@ -2718,6 +2769,12 @@ export default function App(): JSX.Element {
                   <StarterPrompts prompts={starterPrompts(workspaceKind)} onPick={(task) => prefillComposer(task)} />
                 )}
                 {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
+                {currentId === null && (
+                  <RecentFolders
+                    folders={recentFolders(settings.recentWorkspaces, workspace)}
+                    onOpen={onOpenRecentFolder}
+                  />
+                )}
                 {workspace && !settings.selected && (
                   <p className="welcome__hint">Pick a model (set an API key in Settings first).</p>
                 )}
@@ -2873,6 +2930,7 @@ export default function App(): JSX.Element {
             onChangePolicy={onChangePolicy}
             onChangeReasoning={onChangeReasoning}
             onChangeWorkspace={onChangeWorkspace}
+            onOpenWorkspace={onOpenRecentFolder}
             onOpenSettings={() => setSettingsOpen(true)}
             sandbox={sandbox}
             {...(currentId && chatSettings && savedSettings && differsFromDefaults(chatSettings, savedSettings)
@@ -3075,6 +3133,16 @@ export default function App(): JSX.Element {
         )}
       </Suspense>
 
+      {folderDragOver && (
+        <div className="folder-drop" aria-hidden="true">
+          <span className="folder-drop__label">Drop a folder to open it as the project</span>
+        </div>
+      )}
+      {folderNotice && (
+        <div className="undo-toast" role="status">
+          <span>{folderNotice}</span>
+        </div>
+      )}
       {undoToast && (
         <div className="undo-toast" role="status">
           <span>{undoToast.text}</span>

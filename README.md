@@ -621,7 +621,8 @@ Grab the artifact for your platform:
    (paste an API key for Anthropic, OpenAI, or Gemini, which is tested before it is
    saved, or point at a local Ollama or LM Studio server, no key needed). Other
    providers and hosts are in **Settings**.
-3. Open a **project folder** (control bar, above the composer).
+3. Open a **project folder** (control bar, above the composer, which also lists recent
+   folders), or drag a folder onto the window.
 4. Choose a **model** and an **approval policy** (same control bar).
 5. Ask it to build or change something. **Take the tour** in the command palette
    (⌘K) or the Help menu replays the tips any time.

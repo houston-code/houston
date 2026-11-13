@@ -110,6 +110,42 @@ describe('ControlBar', () => {
     expect(props.onChangeWorkspace).toHaveBeenCalledOnce()
   })
 
+  it('opens a menu of recent folders plus Choose folder when there are recents', () => {
+    const props = baseProps()
+    const onOpenWorkspace = vi.fn()
+    const settings = {
+      ...props.settings,
+      recentWorkspaces: ['/home/me/projects/houston', '/home/me/projects/site', '/home/me/work/api']
+    }
+    render(
+      <ControlBar
+        {...props}
+        workspace="/home/me/projects/houston"
+        settings={settings}
+        onOpenWorkspace={onOpenWorkspace}
+      />
+    )
+    const wsButton = screen.getByTitle('Change project folder')
+    expect(wsButton).toHaveAttribute('aria-haspopup', 'menu')
+    fireEvent.click(wsButton)
+    expect(props.onChangeWorkspace).not.toHaveBeenCalled()
+    const menu = screen.getByRole('menu', { name: 'Project folder' })
+    // The open folder is not offered again.
+    const items = within(menu).getAllByRole('menuitem')
+    expect(items.map((i) => i.textContent)).toEqual([
+      'site…/me/projects/site',
+      'api…/me/work/api',
+      'Choose folder…'
+    ])
+    fireEvent.click(items[1])
+    expect(onOpenWorkspace).toHaveBeenCalledWith('/home/me/work/api')
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument()
+
+    fireEvent.click(wsButton)
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Choose folder…' }))
+    expect(props.onChangeWorkspace).toHaveBeenCalledOnce()
+  })
+
   it('shows only the folder name for a Windows workspace path', () => {
     render(<ControlBar {...baseProps()} workspace={'C:\\Users\\me\\projects\\houston'} />)
     const ws = screen.getByTitle('Change project folder')

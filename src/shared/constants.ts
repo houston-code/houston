@@ -65,6 +65,7 @@ export const IPC = {
   shareFromMenu: 'share:fromMenu',
   // Workspace
   workspacePick: 'workspace:pick',
+  workspaceOpen: 'workspace:open',
   directoryPick: 'directory:pick',
   workspaceListFiles: 'workspace:listFiles',
   /** One directory level for the Finder-like Files panel (lazy tree expansion). */
