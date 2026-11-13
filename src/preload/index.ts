@@ -55,6 +55,7 @@ import type { Scorecard } from '@shared/scorecard'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type { ChatStatusMap } from '@shared/chatStatus'
+import type { AttentionSound } from '@shared/notify'
 import type {
   UpdateCheckResult,
   UpdateDownloaded,
@@ -411,6 +412,12 @@ const api = {
   /** Mark every chat read. */
   markAllChatsRead: (): Promise<void> => ipcRenderer.invoke(IPC.chatMarkAllRead),
   /** Main asks to open a chat (its desktop notification was clicked). Returns an unsubscribe fn. */
+  /** Main asks for an attention sound (a turn ended or needs input while unfocused). */
+  onAttentionSound: (cb: (sound: AttentionSound) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, sound: AttentionSound): void => cb(sound)
+    ipcRenderer.on(IPC.attentionSound, listener)
+    return () => ipcRenderer.removeListener(IPC.attentionSound, listener)
+  },
   onChatOpenRequest: (cb: (conversationId: string) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, id: string): void => cb(id)
     ipcRenderer.on(IPC.chatOpenRequest, listener)
