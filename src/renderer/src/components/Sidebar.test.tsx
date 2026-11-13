@@ -470,6 +470,18 @@ describe('Sidebar — collapse / expand rail', () => {
     expect(screen.getByLabelText('Collapse sidebar')).toHaveAttribute('title', 'Collapse sidebar')
   })
 
+  it('names the New chat and Settings shortcuts in their tooltips, expanded and collapsed', () => {
+    const shortcuts = { newChatShortcut: '⌘N', settingsShortcut: '⌘,' }
+    const { rerender } = render(<Sidebar {...baseProps(shortcuts)} />)
+    expect(screen.getByRole('button', { name: /New chat/ })).toHaveAttribute('title', 'New chat (⌘N)')
+    expect(screen.getByRole('button', { name: /Settings/ })).toHaveAttribute('title', 'Settings (⌘,)')
+    rerender(<Sidebar {...baseProps({ ...shortcuts, collapsed: true })} />)
+    expect(screen.getByLabelText('New chat')).toHaveAttribute('title', 'New chat (⌘N)')
+    expect(screen.getByLabelText('Settings')).toHaveAttribute('title', 'Settings (⌘,)')
+    rerender(<Sidebar {...baseProps({ collapsed: true })} />)
+    expect(screen.getByLabelText('New chat')).toHaveAttribute('title', 'New chat')
+  })
+
   it('the rail still exposes New chat and Settings affordances', () => {
     const props = baseProps({ collapsed: true })
     render(<Sidebar {...props} />)
@@ -1417,5 +1429,34 @@ describe('Sidebar: a long chat title', () => {
     const long = 'Investigate why the background dev server keeps restarting after every save'
     render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: long })] })} />)
     expect(screen.getByText(long)).toHaveAttribute('title', long)
+  })
+})
+
+describe('Sidebar right-click menu', () => {
+  it('opens the same menu as ⋯ on right-click, at the pointer', () => {
+    const onFork = vi.fn()
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], onFork })} />)
+    const row = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    fireEvent.contextMenu(row, { clientX: 40, clientY: 60 })
+    const menu = screen.getByRole('menu', { name: 'Actions for Alpha' })
+    expect(menu.style.top).toBe('64px')
+    expect(menu.style.left).toBe('40px')
+    // Same items as the ⋯ menu.
+    const viaRightClick = within(menu)
+      .getAllByRole('menuitem')
+      .map((b) => b.textContent)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    openConvMenu('Alpha')
+    const viaButton = within(screen.getByRole('menu', { name: 'Actions for Alpha' }))
+      .getAllByRole('menuitem')
+      .map((b) => b.textContent)
+    expect(viaRightClick).toEqual(viaButton)
+  })
+
+  it('opens under ⋯ from the keyboard context-menu key, which has no pointer', () => {
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })} />)
+    const row = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    fireEvent.contextMenu(row, { clientX: 0, clientY: 0 })
+    expect(screen.getByRole('menu', { name: 'Actions for Alpha' })).toBeInTheDocument()
   })
 })

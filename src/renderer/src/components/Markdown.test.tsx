@@ -1,6 +1,7 @@
-import { render } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
 import { Markdown } from './Markdown'
+import { FileLinkContext } from './FileLink'
 
 describe('Markdown code blocks', () => {
   it('syntax-highlights a fenced block with a known language', () => {
@@ -40,3 +41,48 @@ describe('Markdown task lists', () => {
   })
 })
 
+
+describe('Markdown file links', () => {
+  const links = (open = vi.fn()) => ({ workspace: '/repo', open })
+
+  it('opens a relative link in the file preview, at its line', () => {
+    const open = vi.fn()
+    render(
+      <FileLinkContext.Provider value={links(open)}>
+        <Markdown text={'See [the README](README.md) and [greet](src/greet.js#L3).'} />
+      </FileLinkContext.Provider>
+    )
+    fireEvent.click(screen.getByRole('button', { name: 'the README' }))
+    expect(open).toHaveBeenLastCalledWith({ path: 'README.md' })
+    fireEvent.click(screen.getByRole('button', { name: 'greet' }))
+    expect(open).toHaveBeenLastCalledWith({ path: 'src/greet.js', line: 3 })
+  })
+
+  it('keeps web links opening externally', () => {
+    render(
+      <FileLinkContext.Provider value={links()}>
+        <Markdown text={'[site](https://example.com)'} />
+      </FileLinkContext.Provider>
+    )
+    const a = screen.getByRole('link', { name: 'site' })
+    expect(a).toHaveAttribute('href', 'https://example.com')
+    expect(a).toHaveAttribute('target', '_blank')
+  })
+
+  it('leaves links outside the project, and other schemes, as plain text', () => {
+    render(
+      <FileLinkContext.Provider value={links()}>
+        <Markdown text={'[up](../secret.txt) [js](javascript:alert(1)) [abs](/etc/passwd)'} />
+      </FileLinkContext.Provider>
+    )
+    expect(screen.queryAllByRole('button')).toHaveLength(0)
+    expect(screen.queryAllByRole('link')).toHaveLength(0)
+    expect(screen.getByText('up')).toBeInTheDocument()
+  })
+
+  it('leaves a relative link as plain text with no project open', () => {
+    render(<Markdown text={'[the README](README.md)'} />)
+    expect(screen.queryByRole('button')).toBeNull()
+    expect(screen.getByText('the README')).toBeInTheDocument()
+  })
+})

@@ -181,8 +181,15 @@ const BASELINE = LIVE && !RECORD ? loadBaseline() : null
  * unverifiable-dependency) and wait out that timeout. With a budget of only the
  * timeout itself, a run where every attempt did so would time the whole task out
  * and read as a regression, where the scorecard's slowest-call line says why.
+ *
+ * The turns around it get three times that timeout, not one: a model that hands
+ * part of the work to a subagent spends minutes on the delegated run alone. One
+ * attempt on shell-allow-rule-bypass once did, and the task finished its three
+ * attempts at 33 minutes against a 30-minute limit, failing a run it had scored
+ * 3/3. The limit is a guard against a hang, and the job's own timeout still bounds
+ * the whole run.
  */
-const LIVE_ATTEMPT_BUDGET_MS = DEFAULT_TIMEOUT_MS + 300_000
+const LIVE_ATTEMPT_BUDGET_MS = DEFAULT_TIMEOUT_MS * 4
 
 // ---- mocks (must precede the loop import) ----
 
@@ -764,9 +771,7 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
       ).not.toBe('regressed')
     },
     // A scripted task is a handful of local tool calls; a live one is real model
-    // latency over several turns, repeated for every attempt. A recording gets twice
-    // that: it grades nothing, so the limit is only a guard against a hang, and a task
-    // that outlives it keeps running beside the next one and can miss the baseline.
-    LIVE ? LIVE_ATTEMPT_BUDGET_MS * ATTEMPTS * (RECORD ? 2 : 1) : 60_000
+    // latency over several turns, repeated for every attempt.
+    LIVE ? LIVE_ATTEMPT_BUDGET_MS * ATTEMPTS : 60_000
   )
 })

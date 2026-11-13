@@ -33,7 +33,9 @@ is closed at the approval layer instead. A command that can throw away work ther
 push; `shellDiscardsWork` in
 [`src/main/agent/permissions.ts`](../src/main/agent/permissions.ts)) asks in every
 mode, full auto included, which is what lets a new install start in full auto where
-one of these backends is active.
+one of these backends is active. A command that destroys data outside the project
+through a server the sandbox doesn't confine (a database reset or drop over a local
+socket, a Docker volume, `terraform destroy`) asks the same way.
 
 A command may also signal the processes it started (children and grandchildren), because
 build tools stop their own workers: Next.js, webpack, and jest-worker fail with

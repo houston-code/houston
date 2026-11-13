@@ -133,17 +133,27 @@ export interface GitCapture {
  * separately (a larger buffer for whole-working-tree diffs), so callers can tell
  * "no changes" from "command failed" — used by the Changes panel.
  */
-export async function runGitCapture(args: string[], cwd: string): Promise<GitCapture> {
-  let hardening: string[]
+export async function runGitCapture(
+  args: string[],
+  cwd: string,
+  /**
+   * The hardening for `cwd`, already being worked out by the caller: several git
+   * commands in one operation share one probe instead of each starting its own `git
+   * config` process. Only for commands run moments apart, never across separate
+   * operations (the repository's config can change in between).
+   */
+  hardening?: Promise<string[]>
+): Promise<GitCapture> {
+  let hardeningArgs: string[]
   try {
-    hardening = await hardenedGitArgs(cwd)
+    hardeningArgs = await (hardening ?? hardenedGitArgs(cwd))
   } catch (e) {
     return { ok: false, code: null, stdout: '', stderr: (e as Error).message }
   }
   return new Promise((resolve) => {
     execFile(
       'git',
-      [...hardening, '--no-pager', ...args],
+      [...hardeningArgs, '--no-pager', ...args],
       { cwd, env: GIT_ENV, timeout: 15_000, maxBuffer: 16_000_000, windowsHide: true },
       (err, stdout, stderr) => {
         const code = !err ? 0 : typeof err.code === 'number' ? err.code : null

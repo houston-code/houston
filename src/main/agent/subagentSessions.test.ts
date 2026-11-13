@@ -4,7 +4,9 @@ import {
   getSubAgent,
   rememberSubAgent,
   resetSubAgentSessions,
-  updateSubAgentMessages
+  updateSubAgentMessages,
+  MAX_SUBAGENT_CONVERSATIONS,
+  forgetSubAgentSessions
 } from './subagentSessions'
 import type { ChatMessage } from '@shared/agent'
 
@@ -59,5 +61,30 @@ describe('subagent session registry', () => {
     rememberSubAgent('conv-a', { messages: msgs('overflow'), writable: false, model: 'm' })
     expect(getSubAgent('conv-a', first)?.messages[0].content).toBe('kept')
     expect(getSubAgent('conv-a', 'ag2')).toBeUndefined()
+  })
+})
+
+describe('subagent transcripts across conversations', () => {
+  const entry = { messages: [], writable: false, model: 'm' }
+
+  it('keeps the most recently used conversations and drops the rest', () => {
+    for (let i = 0; i <= MAX_SUBAGENT_CONVERSATIONS; i++) rememberSubAgent(`c${i}`, entry)
+    // c0 was the least recently used when the cap was passed.
+    expect(getSubAgent('c0', 'ag1')).toBeUndefined()
+    expect(getSubAgent(`c${MAX_SUBAGENT_CONVERSATIONS}`, 'ag1')).toBeDefined()
+  })
+
+  it('counts a resume as use, so an active conversation is not the one dropped', () => {
+    for (let i = 0; i < MAX_SUBAGENT_CONVERSATIONS; i++) rememberSubAgent(`k${i}`, entry)
+    expect(getSubAgent('k0', 'ag1')).toBeDefined()
+    rememberSubAgent('k-new', entry)
+    expect(getSubAgent('k0', 'ag1')).toBeDefined()
+    expect(getSubAgent('k1', 'ag1')).toBeUndefined()
+  })
+
+  it('forgets a deleted conversation', () => {
+    rememberSubAgent('gone', entry)
+    forgetSubAgentSessions('gone')
+    expect(getSubAgent('gone', 'ag1')).toBeUndefined()
   })
 })

@@ -35,6 +35,8 @@ import {
   resolveModelArg,
   keyableProviders,
   renderProviderMenu,
+  hostProviders,
+  isLocalUrl,
   summarizeModels,
   otherHostExamples,
   promptSetupFields,
@@ -82,6 +84,10 @@ import {
   shortCwd,
   homeRelative,
   renderStatusLine,
+  renderRunStatus,
+  renderContextUsage,
+  pickTips,
+  STARTUP_TIPS,
   spinnerFrame,
   renderCapabilityList,
   mediaTypeForImagePath,
@@ -1014,11 +1020,39 @@ describe('status line & progress', () => {
     expect(line.length).toBeLessThanOrEqual(20)
   })
 
+  it('shows the git branch when there is one', () => {
+    const base = { providerId: 'p', model: 'claude-opus-4-8', policy: 'ask' as const, cwd: '/p', cost: { inputTokens: 0, outputTokens: 0, cost: 0 }, contextTokens: 0 }
+    expect(renderStatusLine({ ...base, branch: 'feature/x' }, 120, paint)).toContain(' · feature/x · ')
+    expect(renderStatusLine({ ...base, branch: null }, 120, paint)).toBe(renderStatusLine(base, 120, paint))
+  })
+
+  it('shows context use as a token count when the model window is unknown', () => {
+    expect(renderContextUsage(12_300, 'some-unknown-model-xyz', paint)).toBe('12.3k tok context')
+    expect(renderContextUsage(0, 'some-unknown-model-xyz', paint)).toBe('')
+    expect(renderContextUsage(500_000, 'claude-opus-4-8', paint)).toContain('50%')
+  })
+
+  it('renderRunStatus carries the model, branch and context for the spinner line', () => {
+    expect(renderRunStatus({ model: 'claude-opus-4-8', branch: 'main', contextTokens: 500_000 }, paint)).toMatch(
+      /^claude-opus-4-8 · main · [▓░]+ 50%$/
+    )
+    expect(renderRunStatus({ model: 'm', branch: null, contextTokens: 0 }, paint)).toBe('m')
+  })
+
+  it('spinnerFrame puts the status after the mode and before the draft', () => {
+    const f = spinnerFrame(0, 'Working', 2, paint, { mode: 'ask', status: 'm · main', draft: 'hi' })
+    expect(f).toBe('⠋ Working 2s  [ask]  m · main  › hi')
+  })
+
   it('spinnerFrame cycles frames and shows the label + elapsed seconds', () => {
     expect(spinnerFrame(0, 'Thinking', 4, paint)).toBe('⠋ Thinking 4s')
     expect(spinnerFrame(1, 'Thinking', 4, paint)).toContain('⠙')
     // wraps around the frame set
     expect(spinnerFrame(10, 'x', 0, paint)).toContain('⠋')
+  })
+
+  it('spinnerFrame writes a long turn in minutes, as the desktop status bar does', () => {
+    expect(spinnerFrame(0, 'Working', 192, paint)).toBe('⠋ Working 3m 12s')
   })
 })
 
@@ -1094,6 +1128,7 @@ function fakeIo(inputs: Array<string | null>) {
   const interrupts: Array<() => void> = []
   const reads: Array<{ prompt: string; discardPending: boolean }> = []
   const spinner: string[] = [] // 'start:label' | 'label:x' | 'stop'
+  const statuses: string[] = [] // every setStatus, in order
   let clears = 0
   let idx = 0
   const io: TuiIo = {
@@ -1114,11 +1149,13 @@ function fakeIo(inputs: Array<string | null>) {
     cancelRead: () => {},
     startSpinner: (l) => spinner.push(`start:${l}`),
     setSpinnerLabel: (l) => spinner.push(`label:${l}`),
-    stopSpinner: () => spinner.push('stop')
+    stopSpinner: () => spinner.push('stop'),
+    setStatus: (st) => statuses.push(st)
   }
   return {
     io,
     out,
+    statuses,
     reads,
     spinner,
     clears: () => clears,
@@ -3171,6 +3208,42 @@ describe('/login helpers', () => {
     expect(out).toContain('Other host')
   })
 
+  it('isLocalUrl recognizes this machine only', () => {
+    expect(isLocalUrl('http://localhost:11434/v1')).toBe(true)
+    expect(isLocalUrl('http://127.0.0.1:1234/v1')).toBe(true)
+    expect(isLocalUrl('http://[::1]:8080/v1')).toBe(true)
+    expect(isLocalUrl('https://router.example.com/v1')).toBe(false)
+    expect(isLocalUrl('not a url')).toBe(false)
+    expect(isLocalUrl(undefined)).toBe(false)
+  })
+
+  it('renderProviderMenu lists hosts that need no key, with what probing found, before Other host', () => {
+    const s = settings({
+      providers: [
+        prov({ id: 'anthropic', label: 'Anthropic', requiresKey: true }),
+        prov({ id: 'ollama', label: 'Ollama (local)', requiresKey: false, builtIn: true, baseUrl: 'http://localhost:11434/v1' }),
+        prov({ id: 'lmstudio', label: 'LM Studio (local)', requiresKey: false, builtIn: true, baseUrl: 'http://localhost:1234/v1' }),
+        prov({ id: 'custom-1', label: 'My Router', requiresKey: false, baseUrl: 'https://router.example.com/v1' })
+      ]
+    })
+    const hosts = hostProviders(s)
+    expect(hosts.map((h) => h.id)).toEqual(['ollama', 'lmstudio', 'custom-1'])
+    const out = renderProviderMenu(keyableProviders(s), makePainter(false), {
+      firstRun: true,
+      hosts: [
+        { provider: hosts[0], probe: { ok: true, models: [{ id: 'qwen3' }, { id: 'llama3.2' }] } },
+        { provider: hosts[1], probe: { ok: false } },
+        { provider: hosts[2], probe: { ok: false } }
+      ]
+    })
+    const lines = out.split('\n')
+    expect(lines[0]).toContain('pick a local or added host')
+    expect(lines.find((l) => l.includes('2)'))).toMatch(/Ollama \(local\)\s+✓ running\s+qwen3, llama3\.2/)
+    expect(lines.find((l) => l.includes('3)'))).toContain('✗ not running')
+    expect(lines.find((l) => l.includes('4)'))).toContain('✗ no answer')
+    expect(lines.find((l) => l.includes('5)'))).toContain('Other host')
+  })
+
   it('summarizeModels caps the preview and collapses the rest to +N more', () => {
     const paint = makePainter(false)
     expect(summarizeModels([], paint)).toBe('no models yet')
@@ -3289,6 +3362,73 @@ describe('runTui — /login & keyless start', () => {
     // The selection is persisted so the next launch skips setup.
     expect(patches.some((p) => (p.selected as { providerId?: string } | null)?.providerId === 'anthropic')).toBe(true)
     expect(t.text()).toContain('Key saved for anthropic')
+  })
+
+  describe('local and added hosts', () => {
+    const withHosts = [
+      ...twoProviders,
+      prov({ id: 'ollama', label: 'Ollama (local)', requiresKey: false, builtIn: true, baseUrl: 'http://localhost:11434/v1' }),
+      prov({ id: 'custom-1', label: 'My Router', requiresKey: false, baseUrl: 'https://router.example.com/v1' })
+    ]
+
+    it('probes them, and picking a running one saves its models and starts on it', async () => {
+      const { d, rec, patches } = wizardDeps(
+        [{ runId: 'x', type: 'done', stopReason: 'end_turn' }],
+        { selected: null, providers: withHosts }
+      )
+      const probed: string[] = []
+      d.listModels = async (p) => {
+        probed.push(p.id)
+        if (p.id === 'ollama') return [{ id: 'qwen3' }, { id: 'llama3.2' }]
+        throw new Error('ECONNREFUSED')
+      }
+      const t = fakeIo(['3', 'hi', null])
+      d.io = t.io
+      expect(await runTui(opts, d)).toBe(0)
+      expect(probed).toEqual(['ollama', 'custom-1'])
+      expect(t.text()).toContain('✓ running')
+      expect(rec.runs[0]).toMatchObject({ providerId: 'ollama' })
+      const saved = patches.find((p) => p.providers)?.providers?.find((p) => p.id === 'ollama')
+      expect(saved?.models.map((m) => m.id)).toEqual(['qwen3', 'llama3.2'])
+      expect(patches.some((p) => (p.selected as { providerId?: string } | null)?.providerId === 'ollama')).toBe(true)
+      expect(t.text()).toContain('/model lists the others')
+    })
+
+    it('a local server that is not running gets a hint, and setup stays open for later', async () => {
+      const { d, rec } = wizardDeps([], { selected: null, providers: withHosts })
+      d.listModels = async () => {
+        throw new Error('ECONNREFUSED')
+      }
+      const t = fakeIo(['3', null])
+      d.io = t.io
+      expect(await runTui(opts, d)).toBe(0)
+      expect(t.text()).toContain("Ollama isn't answering at http://localhost:11434/v1")
+      expect(t.text()).toContain('No provider set up yet')
+      expect(rec.runs).toHaveLength(0)
+    })
+
+    it('an added endpoint that lists nothing can still be used by typing a model id', async () => {
+      const { d, rec } = wizardDeps(
+        [{ runId: 'x', type: 'done', stopReason: 'end_turn' }],
+        { selected: null, providers: withHosts }
+      )
+      d.listModels = async () => {
+        throw new Error('ECONNREFUSED')
+      }
+      const t = fakeIo(['4', 'my-model', 'hi', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain("My Router didn't answer")
+      expect(rec.runs[0]).toMatchObject({ providerId: 'custom-1', model: 'my-model' })
+    })
+
+    it('the key rows keep their numbers, and Other host follows the hosts', async () => {
+      const { d } = wizardDeps([], { selected: null, providers: withHosts })
+      const t = fakeIo(['5', '', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain('Add a host.')
+    })
   })
 
   it('skipping setup lands in a gated REPL, not the shell', async () => {
@@ -3872,6 +4012,31 @@ describe('version, update check, and /doctor', () => {
     expect(t.text()).toContain('seatbelt')
   })
 
+  // The probe reads the saved selection; a session started with --provider/--model
+  // runs on a model that selection never names, and /doctor called it "none".
+  it('/doctor counts the model this session runs on as active', async () => {
+    const { d } = deps(done, { selected: null })
+    const t = fakeIo(['/doctor', null])
+    d.io = t.io
+    d.doctor = async () => ({
+      version: '1',
+      nodeVersion: 'v22.11.0',
+      platform: 'darwin arm64',
+      cwd: '/w',
+      settingsPath: '/s.json',
+      sandbox: { backend: 'seatbelt', enforced: true },
+      providers: [{ id: 'anthropic', requiresKey: true, hasKey: true }],
+      active: null,
+      mcp: [],
+      binaries: [],
+      terminal: { tty: true, color: false, columns: 80, term: 'xterm' },
+      update: null
+    })
+    await runTui({ ...opts, providerId: 'anthropic', model: 'claude' }, d)
+    expect(t.text()).not.toContain('none selected')
+    expect(t.text()).toContain('anthropic / claude')
+  })
+
   it('/doctor reports rather than throws when the probe fails', async () => {
     const { d } = deps(done)
     const t = fakeIo(['/doctor', null])
@@ -3958,6 +4123,82 @@ describe('attention signals', () => {
 
 // Tool output used to be unrecoverable: one 80-char line, forever, even though
 // the full text was already sitting in the persisted log.
+describe('startup tips', () => {
+  it('pickTips returns consecutive tips, rotating with the seed', () => {
+    expect(pickTips(0, 2, ['a', 'b', 'c'])).toEqual(['a', 'b'])
+    expect(pickTips(2, 2, ['a', 'b', 'c'])).toEqual(['c', 'a'])
+    expect(pickTips(4, 2, ['a', 'b', 'c'])).toEqual(['b', 'c'])
+    expect(pickTips(-1, 2, ['a', 'b', 'c'])).toEqual(['c', 'a'])
+    expect(pickTips(5, 3, ['a'])).toEqual(['a'])
+    expect(pickTips(5, 2, [])).toEqual([])
+  })
+
+  it('every tip comes around across launches', () => {
+    const seen = new Set<string>()
+    for (let i = 0; i < STARTUP_TIPS.length; i++) for (const t of pickTips(i)) seen.add(t)
+    expect(seen.size).toBe(STARTUP_TIPS.length)
+  })
+
+  it('the banner shows two tips and points /help at the keys', async () => {
+    const { d } = deps([])
+    d.now = () => 3_000 // seed 3
+    const t = fakeIo([null])
+    d.io = t.io
+    await runTui(opts, d)
+    const tips = t.text().split('\n').filter((l) => l.startsWith('  tip: '))
+    expect(tips).toEqual(pickTips(3).map((x) => `  tip: ${x}`))
+    expect(t.text()).toContain('/help for commands and keys')
+  })
+
+  it('/help lists the keys a new user would not find', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/help', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain('Keys:')
+    for (const key of ['Shift-Enter', 'Ctrl-J', '@ then Tab', '!command', '#note', 'Shift-Tab', 'Ctrl-R', 'Ctrl-X Ctrl-E', 'steer']) {
+      expect(out).toContain(key)
+    }
+  })
+})
+
+describe('status line: branch and the running turn', () => {
+  it('shows the branch above the composer, re-read before each prompt', async () => {
+    const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const branches = ['main', 'feature/y']
+    d.gitBranch = async () => branches.shift() ?? null
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain(' · main · ')
+    expect(t.text()).toContain(' · feature/y · ')
+  })
+
+  it('a failing branch lookup just leaves the branch out', async () => {
+    const { d } = deps([])
+    d.gitBranch = async () => {
+      throw new Error('git missing')
+    }
+    const t = fakeIo([null])
+    d.io = t.io
+    await expect(runTui(opts, d)).resolves.toBe(0)
+  })
+
+  it('hands the status to the spinner line while a turn runs, and updates its context', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'usage', inputTokens: 500_000, outputTokens: 10, cost: 0 },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ], { selected: { providerId: 'anthropic', model: 'claude-opus-4-8' } })
+    d.gitBranch = async () => 'main'
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.statuses[0]).toBe('claude-opus-4-8 · main')
+    expect(t.statuses.at(-1)).toMatch(/^claude-opus-4-8 · main · [▓░]+ 50%$/)
+  })
+})
+
 describe('/verbose and /output', () => {
   const withTool: AgentEvent[] = [
     { runId: 'x', type: 'tool_start', callId: 'c1', name: 'run_shell', args: { command: 'ls' }, kind: 'shell' },
@@ -3977,6 +4218,24 @@ describe('/verbose and /output', () => {
   it('/verbose opens it up for subsequent turns', async () => {
     const { d } = deps(withTool)
     const t = fakeIo(['/verbose', 'go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('gamma')
+  })
+
+  it('/verbose is remembered for the next session', async () => {
+    const { d } = deps(withTool)
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (patch) => saved.push(patch)
+    const t = fakeIo(['/verbose', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(saved).toContainEqual({ tuiVerbose: true })
+  })
+
+  it('starts verbose when the saved setting says so', async () => {
+    const { d } = deps(withTool, { tuiVerbose: true })
+    const t = fakeIo(['go', null])
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('gamma')
