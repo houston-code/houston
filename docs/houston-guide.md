@@ -1253,6 +1253,20 @@ On any single tool call you can:
   names)
 - **always allow / always deny:** save a permission rule so the choice persists
 
+**Keys in the desktop app.** A waiting approval answers to `Y` (allow), `A` (allow for
+the run) and `N` (deny, with any reason typed in the box below), shown on the buttons.
+The keys work whenever you are not typing in a text box. When the prompt appears and
+the message box is empty and idle, the prompt takes the keyboard, and gives it back
+once answered. With several prompts waiting, the keys answer the first. The two
+"always" choices have no key, so a stray key press never saves a rule.
+
+**What was saved.** After "Always allow" or "Always deny", a note at the bottom of the
+window names each rule exactly as it was saved (a shell command is saved as its
+command prefixes, a web fetch as the site), with **Undo** to remove it again and
+**Permissions** to open Settings > Permissions. Undo removes the rule from your saved
+rules; the run already under way keeps using it until it ends. If an existing rule
+already covered the call, the note says so and nothing new is saved.
+
 **Reading the diff.** A file edit shows a real diff before you approve it: the changed
 part with a few lines of context (long untouched stretches are folded away with a
 note saying how many), line numbers in the gutter, the changed words picked out inside

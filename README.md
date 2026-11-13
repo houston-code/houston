@@ -337,7 +337,8 @@ Open source under the [Apache License 2.0](LICENSE).
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
   call you can approve once, deny, *allow for the run* (auto-approves that kind of
   tool for the rest of the conversation), or *always allow* / *always deny*, which
-  saves a permission rule so the choice sticks across future runs. File edits show
+  saves a permission rule so the choice sticks across future runs (the app names the
+  saved rule, with Undo). In the app, `Y`, `A` and `N` answer a waiting approval. File edits show
   an inline red/green **diff** so you can review exactly what changes before
   approving.
 - **Project guardrails.** A repo can ship a `.houston/settings.json` with its own

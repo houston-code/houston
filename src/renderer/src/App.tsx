@@ -18,7 +18,8 @@ import type {
   PlanDecision,
   ProposalState,
   ReasoningEffort,
-  RepoInfo
+  RepoInfo,
+  ToolApprovalDecision
 } from '@shared/agent'
 import { commandGroup, matchCommands, mergeCommands, builtinCommands, resolveCommand, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
@@ -146,6 +147,7 @@ import { CommandPalette } from './components/CommandPalette'
 import { FindBar } from './components/FindBar'
 import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
 import type { WhatsNew } from '@shared/update'
+import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutRules } from './lib/ruleToast'
 
 // These overlays aren't on the initial render path, so load them as separate
 // chunks fetched on first open instead of bloating the main bundle. SettingsModal
@@ -458,12 +460,55 @@ export default function App(): JSX.Element {
   // Where the open chat's unseen output starts (the "New" divider), set on open.
   const [newFrom, setNewFrom] = useState<{ conversationId: string; itemId: string } | null>(null)
   // A short confirmation with an Undo (marking a chat unread leaves it).
-  const [undoToast, setUndoToast] = useState<{ text: string; undo: () => void } | null>(null)
+  // Also names the permission rules an approval's "Always allow / deny" saved, with
+  // Undo (remove them) and a way to Settings > Permissions.
+  const [undoToast, setUndoToast] = useState<{
+    text: string
+    rules?: string[]
+    undo?: () => void
+    link?: { label: string; open: () => void }
+    ms?: number
+  } | null>(null)
   useEffect(() => {
     if (!undoToast) return
-    const t = setTimeout(() => setUndoToast(null), 6000)
+    const t = setTimeout(() => setUndoToast(null), undoToast.ms ?? 6000)
     return () => clearTimeout(t)
   }, [undoToast])
+
+  // Answer an approval. After "Always allow / deny", name the rule that was saved, with
+  // Undo and a way to the Permissions page.
+  const chatApprove = chat.approve
+  const onApproveTool = useCallback(
+    (callId: string, decision: ToolApprovalDecision, note?: string) => {
+      const since = Date.now()
+      chatApprove(callId, decision, note)
+      const action = ruleActionOf(decision)
+      if (!action) return
+      const openPermissions = (): void => {
+        setSettingsSection('permissions')
+        setSettingsOpen(true)
+      }
+      void waitForSavedRules(() => window.api.getSettings(), action, since).then(({ saved, settings: fresh }) => {
+        if (fresh) setSettings(fresh)
+        setUndoToast({
+          text: savedRulesText(saved, action),
+          rules: saved.map(describeRule),
+          ms: 10000,
+          link: { label: 'Permissions', open: openPermissions },
+          undo:
+            saved.length > 0
+              ? () => {
+                  void window.api.getSettings().then(async (current) => {
+                    const next = { ...current, permissionRules: withoutRules(current.permissionRules, saved) }
+                    setSettings(await window.api.saveSettings(next))
+                  })
+                }
+              : undefined
+        })
+      })
+    },
+    [chatApprove]
+  )
   // The running set only changes when a run starts or ends, not when a prompt comes
   // or goes, so key it by its members: the refresh below must not fire per prompt.
   const runningKey = Object.keys(chatStatus)
@@ -2730,7 +2775,7 @@ export default function App(): JSX.Element {
             // divider), not at the scroll position the last chat was left at.
             key={currentId ?? 'new'}
             items={chat.items}
-            onApprove={chat.approve}
+            onApprove={onApproveTool}
             onAnswer={chat.answerQuestion}
             onElicit={chat.answerElicitation}
             onOpenPlan={onOpenPlan}
@@ -3076,18 +3121,41 @@ export default function App(): JSX.Element {
       </Suspense>
 
       {undoToast && (
-        <div className="undo-toast" role="status">
-          <span>{undoToast.text}</span>
-          <button
-            type="button"
-            className="undo-toast__btn"
-            onClick={() => {
-              undoToast.undo()
-              setUndoToast(null)
-            }}
-          >
-            Undo
-          </button>
+        <div className={`undo-toast${undoToast.rules?.length ? ' undo-toast--rules' : ''}`} role="status">
+          <span className="undo-toast__text">{undoToast.text}</span>
+          {undoToast.rules && undoToast.rules.length > 0 && (
+            <ul className="undo-toast__rules">
+              {undoToast.rules.map((r, i) => (
+                <li key={i}>
+                  <code title={r}>{r}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+          {undoToast.undo && (
+            <button
+              type="button"
+              className="undo-toast__btn"
+              onClick={() => {
+                undoToast.undo?.()
+                setUndoToast(null)
+              }}
+            >
+              Undo
+            </button>
+          )}
+          {undoToast.link && (
+            <button
+              type="button"
+              className="undo-toast__btn"
+              onClick={() => {
+                undoToast.link?.open()
+                setUndoToast(null)
+              }}
+            >
+              {undoToast.link.label}
+            </button>
+          )}
         </div>
       )}
       <TipHost
