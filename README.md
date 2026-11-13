@@ -74,7 +74,8 @@ Open source under the [Apache License 2.0](LICENSE).
   language (`ts`, `tsx`, `py`, `rust`, …).
 - **Web search.** Pick a search provider and supply its API key (Settings →
   *Tools* → *Web search*) and the agent can `web_search` the web for current
-  information. Like `web_fetch`, it asks before it leaves the machine (once per chat
+  information. With no search key, models on the Claude API or OpenAI use their
+  provider's built-in web search instead, billed to your model key. Like `web_fetch`, it asks before it leaves the machine (once per chat
   in full auto, unless Settings → *Permissions* → *Web reads in full auto* lets it
   run without asking).
 - **See its own localhost.** After starting a dev server (a background
@@ -258,7 +259,9 @@ Open source under the [Apache License 2.0](LICENSE).
   change.
 - **MCP servers.** Connect Model Context Protocol servers in Settings: a local
   **stdio** process (with optional working directory and encrypted env vars) or a
-  remote **HTTP** (streamable) or **SSE** endpoint. Remote servers authenticate
+  remote **HTTP** (streamable) or **SSE** endpoint. Add one by hand, from a small
+  built-in catalog of well-known servers (reviewed before it's saved, and saved
+  switched off), or by pasting a standard `mcpServers` JSON object. Remote servers authenticate
   with a static bearer-token / custom header, or with **OAuth** for hosted
   services that require a sign-in: Houston discovers the authorization server,
   registers itself as a client, opens the browser to authorize, and stores +
@@ -339,7 +342,8 @@ Open source under the [Apache License 2.0](LICENSE).
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
   call you can approve once, deny, *allow for the run* (auto-approves that kind of
   tool for the rest of the conversation), or *always allow* / *always deny*, which
-  saves a permission rule so the choice sticks across future runs. File edits show
+  saves a permission rule so the choice sticks across future runs (the app names the
+  saved rule, with Undo). In the app, `Y`, `A` and `N` answer a waiting approval. File edits show
   an inline red/green **diff** so you can review exactly what changes before
   approving.
 - **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
@@ -428,7 +432,8 @@ Open source under the [Apache License 2.0](LICENSE).
   a rewind can't undo them.
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right
   now (Ready, Responding…, running a tool, or waiting for your approval, answer, or
-  plan review) and the active model.
+  plan review), how long the turn has run with its output tokens so far, and the
+  active model. A tool call that runs longer than a second shows its own time.
 - **Turn receipts.** A reply that ran checks or changed files ends with a
   **Recorded by Houston** line built from what actually executed, not from what the
   agent says: tests (with pass/fail counts for common runners), builds, installs,
@@ -452,8 +457,11 @@ Open source under the [Apache License 2.0](LICENSE).
   dropped connections) are retried with exponential backoff, shown inline as a
   "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A
   reply that drops partway through is discarded and started over, never shown
-  twice. If a turn still fails, a **Retry** button re-runs it without you
-  re-typing.
+  twice. If a turn still fails, a bar says why in plain words (a rejected key, a
+  rate limit, the provider down, no network, a missing model, a conversation too
+  long for the model) with the next step: **Retry** re-runs it without you
+  re-typing, or open the provider settings, run the doctor, or switch model. The
+  provider's own message stays one click away.
 - **Secure key storage.** API keys are encrypted with the OS credential store
   through Electron `safeStorage` (the Keychain on macOS, DPAPI on Windows, a desktop
   keyring such as GNOME Keyring or KWallet on Linux) and never leave the main process
@@ -569,7 +577,9 @@ Open source under the [Apache License 2.0](LICENSE).
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show
   none), so you can see how big and how expensive a conversation is getting. Open it
   for a per-model breakdown (subagents and reviews often run on a cheaper model)
-  with the prompt-cache split. The model, project folder, approval policy and
+  with the prompt-cache split. In the transcript, each message shows when it was sent,
+  and each turn's last reply names the model that answered and that turn's tokens and
+  cost. The model, project folder, approval policy and
   reasoning controls live there too, down by the composer, where you're typing.
 
 ## Install (prebuilt binaries)
@@ -623,7 +633,8 @@ Grab the artifact for your platform:
    (paste an API key for Anthropic, OpenAI, or Gemini, which is tested before it is
    saved, or point at a local Ollama or LM Studio server, no key needed). Other
    providers and hosts are in **Settings**.
-3. Open a **project folder** (control bar, above the composer).
+3. Open a **project folder** (control bar, above the composer, which also lists recent
+   folders), or drag a folder onto the window.
 4. Choose a **model** and an **approval policy** (same control bar).
 5. Ask it to build or change something. **Take the tour** in the command palette
    (⌘K) or the Help menu replays the tips any time.
@@ -853,11 +864,14 @@ an empty line to stop the current turn (the session stays open); `Ctrl-D` to exi
 
 The composer is a full line editor: **Tab** completes slash-command names and
 `@`-file mentions (fuzzy over the workspace), **Up/Down** and **Ctrl-R** recall and
-search previous prompts (history persists per project across restarts), `Ctrl-J` or
-`Alt-Enter` inserts a line break, a pasted block lands as one message, and `/vim`
-turns on vim keys. A line starting with `!` runs in your own shell, and `#` saves a
-standing instruction. The [guide](docs/houston-guide.md#the-terminal-composer) lists
-every key.
+search previous prompts (history persists per project across restarts), `Shift-Enter`
+(where the terminal reports it), `Ctrl-J` or `Alt-Enter` inserts a line break, a pasted
+block lands as one message, and `/vim` turns on vim keys. A line starting with `!` runs
+in your own shell, and `#` saves a standing instruction. The startup banner shows a
+couple of these as tips, `/help` lists them under **Keys**, and the
+[guide](docs/houston-guide.md#the-terminal-composer) lists every key. The status line
+above the composer carries the model, approval mode, folder, git branch, cost and
+context use; while a turn runs, the model, branch and context stay on the spinner line.
 
 Slash commands adjust the session without restarting (the desktop app accepts the
 same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
@@ -881,7 +895,7 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/init` | write or improve AGENTS.md, the project's instructions file |
 | `/cost` | session token + cost totals, per model |
 | `/doctor` | check your setup: model, keys, sandbox, tools, MCP |
-| `/verbose`, `/output [n]` | show each tool's full output as it runs, or reprint one after the fact |
+| `/verbose`, `/output [n]` | show each tool's full output as it runs (remembered across sessions), or reprint one after the fact |
 | `/btw <question>` | ask the side chat a quick question (`/btw clear` starts it over) |
 | `/spawned`, `/proposals` | open background sessions the agent started, or act on ones it proposed |
 | `/skills`, `/agents`, `/agent <name> <task>` | list the workspace's skills / custom agents, or hand a task to one |
@@ -981,7 +995,10 @@ Prefer npm's own linking? The package exposes a `houston` `bin`, so
 a `houston.cmd` shim) or invoke the bundle directly.
 
 **API keys.** The desktop app's keys live in the OS keychain (Electron
-`safeStorage`) and can't be read outside it, so the CLI resolves credentials in
+`safeStorage`) and can't be read outside it. The desktop app never uses an
+environment key on its own, but when it finds `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
+or `GEMINI_API_KEY` for a provider with no saved key it offers to check and save it
+(showing only the key's last four characters). The CLI resolves credentials in
 this order:
 
 1. Environment variables. The built-in providers use their conventional names
@@ -1283,7 +1300,8 @@ the agent loop and UI never depend on a specific provider.
   without asking in *full auto*, merges, closes, checkouts, and repository creation
   always ask, and MCP tool calls always ask. A shell command that can throw away
   work in the project (`git reset --hard`, a forced `git clean`, `rm -r` of source, a
-  forced or deleting push), and reading or changing a credential file (a `.env`, a
+  forced or deleting push) or wipe data outside it (a database reset or drop, Docker
+  volumes, `terraform destroy`), and reading or changing a credential file (a `.env`, a
   private key), ask in every mode, since the sandbox protects everything but the
   project itself and can read your whole filesystem.
   `view_localhost` is restricted to loopback addresses and loads untrusted page

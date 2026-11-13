@@ -161,7 +161,12 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
         // A forked context continues the spawning chat's history; the prompt is the
         // next user turn either way.
         const turn = spawnedTurn(prompt)
-        const userMessage: ChatMessage = { role: 'user', content: turn.text, invokedAs: turn.invokedAs }
+        const userMessage: ChatMessage = {
+          role: 'user',
+          content: turn.text,
+          invokedAs: turn.invokedAs,
+          at: new Date().toISOString()
+        }
         const seeded: ChatMessage[] = [...(input.history ?? []), userMessage]
         deps.seedMessages(conv.id, seeded)
 
