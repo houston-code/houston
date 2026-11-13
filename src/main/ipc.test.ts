@@ -218,6 +218,40 @@ describe('conversationDelete dialog', () => {
     expect(getConversation(conv.id)).toBeNull()
   })
 
+  it("stops the chat's live run and its background shells before deleting it", async () => {
+    const conv = createConversation({ workspace: '/repo', providerId: 'p', model: 'm' })
+    const { registerShell, peekShell } = await import('./agent/shells')
+    const { spawn } = await import('node:child_process')
+    const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'])
+    const shell = registerShell('npm run dev', child, conv.id)
+    const closed = new Promise<void>((resolve) => child.on('close', () => resolve()))
+    h.activeRun.mockImplementation((id) => (id === conv.id ? 'run-live' : null))
+    h.cancelRun.mockClear()
+    h.showMessageBox.mockResolvedValue({ response: 1 })
+    try {
+      expect((await del(conv.id)).deleted).toBe(true)
+    } finally {
+      h.activeRun.mockImplementation(() => null)
+    }
+    expect(h.cancelRun).toHaveBeenCalledWith('run-live')
+    await closed
+    expect(peekShell(shell)).toBeUndefined()
+  })
+
+  it('leaves the run and shells alone when the delete is cancelled', async () => {
+    const conv = createConversation({ workspace: '/repo', providerId: 'p', model: 'm' })
+    h.activeRun.mockImplementation((id) => (id === conv.id ? 'run-live' : null))
+    h.cancelRun.mockClear()
+    h.showMessageBox.mockResolvedValue({ response: 0 })
+    try {
+      expect((await del(conv.id)).deleted).toBe(false)
+    } finally {
+      h.activeRun.mockImplementation(() => null)
+    }
+    expect(h.cancelRun).not.toHaveBeenCalled()
+    deleteConversation(conv.id)
+  })
+
   it('touches nothing when a clean worktree delete is cancelled', async () => {
     const conv = createConversation({ workspace: wt.path, providerId: 'p', model: 'm', worktree: wt })
     h.isWorktreeDisposable.mockResolvedValue(true)

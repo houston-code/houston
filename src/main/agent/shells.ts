@@ -434,6 +434,27 @@ export function killShell(id: string): KillShellResult {
   return 'already-exited'
 }
 
+/**
+ * Stop every background shell a conversation started (running ones and the leftovers of
+ * exited ones) and drop them from the registry. For a chat being deleted: its dev
+ * servers must not keep their ports, or show in the Tasks list, after the chat is gone.
+ * Returns how many process groups were signalled.
+ */
+export function killShellsFor(conversationId: string): number {
+  let signalled = 0
+  for (const [id, s] of shells) {
+    if (s.conversationId !== conversationId) continue
+    if (s.running || hasLeftover(s)) {
+      killProcessTree(s.child)
+      signalled++
+    }
+    shells.delete(id)
+  }
+  if (signalled) persistLedger()
+  notifyShellsChanged()
+  return signalled
+}
+
 /** The process groups of every background shell this run of Houston started. */
 export function backgroundShellGroups(): Set<number> {
   const out = new Set<number>()

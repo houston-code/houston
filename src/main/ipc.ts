@@ -99,7 +99,7 @@ import {
   chatStatusSnapshot,
   onChatStatusChanged
 } from './agent/loop'
-import { killShell, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
+import { killShell, killShellsFor, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
@@ -1309,6 +1309,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
 
       const action = resolveDeleteAction(kind, response)
       if (!action.delete) return { deleted: false }
+      // Stop what the chat still has running before it goes: its live run (which would
+      // otherwise keep writing to a deleted chat) and its background shells (whose dev
+      // servers would keep their ports, inside a worktree about to be removed).
+      const liveRun = activeRunForConversation(id)
+      if (liveRun) cancelRun(liveRun)
+      killShellsFor(id)
       deleteConversation(id)
       // Drop the cached queue too: it went with the file, and must not linger in memory.
       forgetQueue(id)
