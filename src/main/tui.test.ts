@@ -6142,3 +6142,184 @@ describe('renderPlan readiness at the terminal width', () => {
     expect(rows[2]).toBe('    network.')
   })
 })
+
+describe('session commands', () => {
+  const done: AgentEvent[] = [
+    { runId: 'x', type: 'text', delta: 'Sure thing.' },
+    { runId: 'x', type: 'done', stopReason: 'end_turn' }
+  ]
+
+  function withStore() {
+    const fp = fakePersist()
+    const renamed: Array<[string, string]> = []
+    const removed: string[] = []
+    fp.persist.rename = (id, title) => {
+      renamed.push([id, title])
+      const c = fp.store.get(id)
+      if (c) c.title = title
+    }
+    fp.persist.remove = (id) => {
+      removed.push(id)
+      fp.store.delete(id)
+    }
+    return { ...fp, renamed, removed }
+  }
+
+  it('--continue replays the last exchanges so you can see where you left off', async () => {
+    const { d } = deps(done)
+    const fp = fakePersist([
+      {
+        id: 'c1',
+        title: 'Greet',
+        updatedAt: 1,
+        messages: [
+          { role: 'user', content: 'what does greet do?' },
+          { role: 'assistant', content: 'It greets.' }
+        ]
+      }
+    ])
+    d.persist = fp.persist
+    const t = fakeIo([null])
+    d.io = t.io
+    await runTui({ ...opts, continueSession: true }, d)
+    expect(t.text()).toContain('· where you left off:')
+    expect(t.text()).toContain('you › what does greet do?')
+    expect(t.text()).toContain('houston › It greets.')
+  })
+
+  it('/resume replays them too', async () => {
+    const { d } = deps(done)
+    const fp = fakePersist([
+      { id: 'c1', title: 'Greet', updatedAt: 1, messages: [{ role: 'user', content: 'hello there' }] }
+    ])
+    d.persist = fp.persist
+    const t = fakeIo(['/resume', '1', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('you › hello there')
+  })
+
+  it('names the session and how to resume it on the way out', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('This chat is saved. To come back to it:\n  houston --resume conv-1\n')
+    expect(t.text()).toContain('houston --continue')
+  })
+
+  it('says nothing about a session when none was saved', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    const t = fakeIo([null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).not.toContain('houston --resume')
+  })
+
+  it('/rename titles the chat, and bare /rename shows the title', async () => {
+    const { d } = deps(done)
+    const st = withStore()
+    d.persist = st.persist
+    const t = fakeIo(['hi', '/rename Greet fallback', '/rename', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(st.renamed).toEqual([['conv-1', 'Greet fallback']])
+    expect(t.text()).toContain('renamed to "Greet fallback"')
+    expect(t.text()).toContain('this chat is "Greet fallback"')
+  })
+
+  it('/rename before anything is saved says so', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    const t = fakeIo(['/rename x', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('nothing to rename yet')
+  })
+
+  it('/delete asks first, and keeps the chat unless you say yes', async () => {
+    const { d } = deps(done)
+    const st = withStore()
+    d.persist = st.persist
+    const t = fakeIo(['hi', '/delete', '', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.reads.some((r) => r.prompt.includes('This cannot be undone. [y/N]') && r.discardPending)).toBe(true)
+    expect(st.removed).toEqual([])
+    expect(t.text()).toContain('· kept')
+  })
+
+  it('/delete with a yes deletes it and starts a new chat', async () => {
+    const { d, rec } = deps(done)
+    const st = withStore()
+    d.persist = st.persist
+    const t = fakeIo(['hi', '/delete', 'y', 'again', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(st.removed).toEqual(['conv-1'])
+    expect(t.text()).toContain('this is a new chat')
+    // The next message starts fresh: no history from the deleted chat.
+    expect(rec.runs[1].messages).toEqual([{ role: 'user', content: 'again' }])
+  })
+
+  it('/export writes Markdown by default, and JSON on request', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    const written: Array<[string, string]> = []
+    d.writeExport = (path, content) => {
+      written.push([path, content])
+      return `/proj/${path}`
+    }
+    d.now = () => new Date(2026, 10, 13, 9, 5).getTime()
+    const t = fakeIo(['hi', '/export', '/export json out.json', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(written[0][0]).toBe('houston-new-chat-20261113-0905.md')
+    expect(written[0][1]).toContain('## You\n\nhi')
+    expect(written[1][0]).toBe('out.json')
+    expect(JSON.parse(written[1][1]).messages[0]).toEqual({ role: 'user', content: 'hi' })
+    expect(t.text()).toContain('exported 1 message(s) to /proj/out.json')
+  })
+
+  it('/export reports a failed write, and has nothing to do in an empty chat', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    d.writeExport = () => {
+      throw new Error('/proj/x.md already exists; give another path')
+    }
+    const t = fakeIo(['/export', 'hi', '/export x.md', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('nothing to export yet')
+    expect(t.text()).toContain("couldn't export: /proj/x.md already exists")
+  })
+
+  it('/permissions lists the saved rules and removes one by number', async () => {
+    const rules = [
+      { action: 'allow' as const, tool: 'run_shell', match: 'git status', exact: true },
+      { action: 'deny' as const, tool: 'web_fetch', match: 'https://evil.example/*' }
+    ]
+    const { d } = deps(done, { permissionRules: rules })
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (patch) => saved.push(patch)
+    const t = fakeIo(['/permissions', '/permissions remove 1', '/permissions remove 9', '/permissions nope', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('1. allow run_shell  git status')
+    expect(saved).toEqual([{ permissionRules: [rules[1]] }])
+    expect(t.text()).toContain('removed: allow run_shell git status (exact)')
+    expect(t.text()).toContain('no rule 9')
+    expect(t.text()).toContain('usage: /permissions')
+  })
+
+  it('/init runs the shared template as a turn', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['/init', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0].messages[0].content).toContain('AGENTS.md')
+    expect(rec.runs[0].messages[0].invokedAs?.label).toBe('/init')
+  })
+})

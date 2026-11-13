@@ -230,6 +230,7 @@ describe('SettingsModal', () => {
       'Hooks',
       'Scheduled Runs',
       'Memory',
+      'Import',
       'General',
       'Appearance',
       'Keyboard',

@@ -10,6 +10,7 @@ import type { TurnReceipt } from './evidence'
 import type { PlanReadiness } from './planReadiness'
 import type { SubagentRecord, SubagentStep } from './subagents'
 import type { TurnErrorCause } from './turnError'
+import type { ThrottleInfo } from './rateLimit'
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
@@ -1326,6 +1327,12 @@ export type AgentEvent =
       attempt: number
       max?: number
       message: string
+      /**
+       * Present when the provider throttled the request (429): the wait before the
+       * next attempt and any quota its headers reported, so clients can say "rate
+       * limited, retrying in 20s" instead of calling it a connection problem.
+       */
+      throttle?: ThrottleInfo
     }
   | {
       // A model turn failed transiently after part of it had streamed, and the loop

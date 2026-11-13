@@ -49,6 +49,7 @@ import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import { listModels } from './providers'
 import { runGitCapture } from './agent/gitRead'
+import { writeExportFile } from './tui-sessions'
 import {
   canPersistHeaderSecrets,
   canSetKey,
@@ -107,6 +108,8 @@ import {
   peekConversation,
   searchConversations,
   forkConversation,
+  organizeConversation,
+  deleteConversation,
   setGeneratedTitle,
   reportChildToParent,
   saveSideChat
@@ -565,6 +568,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
         const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd)
         return head.ok ? head.stdout.trim() || null : null
       },
+      writeExport: (path, content) => writeExportFile(tui.cwd, path, content),
       workingTree: async () => {
         const c = await collectWorkingTreeChanges(tui.cwd)
         return {
@@ -720,6 +724,10 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
           const forked = forkConversation(id)
           return forked ? { id: forked.id } : null
         },
+        // The desktop sidebar's rename: marks the title as chosen, so it is never
+        // replaced by a generated one.
+        rename: (id, title) => organizeConversation(id, { title }),
+        remove: (id) => deleteConversation(id),
         get: (id) => {
           const conv = getConversation(id)
           return conv

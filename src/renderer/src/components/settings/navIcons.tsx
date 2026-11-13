@@ -68,6 +68,12 @@ export const NAV_ICON: Record<TabId, JSX.Element> = {
       <path d="M6 1.5v5l1.5-1 1.5 1v-5" />
     </svg>
   ),
+  import: (
+    <svg {...svg}>
+      <path d="M8 1.5v8M5 6.5l3 3 3-3" />
+      <path d="M2.5 10.5v2a1 1 0 001 1h9a1 1 0 001-1v-2" />
+    </svg>
+  ),
   workspace: (
     <svg {...svg}>
       <path d="M1.5 4.5a1 1 0 011-1h3l1.5 1.5h5a1 1 0 011 1v6a1 1 0 01-1 1h-10a1 1 0 01-1-1z" />

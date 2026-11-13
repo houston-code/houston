@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   loadPromptHistory,
   appendPromptHistory,
+  searchPromptHistory,
   historyUp,
   historyDown
 } from './promptHistory'
@@ -64,5 +65,19 @@ describe('historyUp / historyDown', () => {
 
   it('Up is a no-op with no history', () => {
     expect(historyUp(0, 0)).toBe(0)
+  })
+})
+
+describe('searchPromptHistory', () => {
+  const history = ['fix the login bug', 'add tests for login', 'Refactor the parser', 'fix lint']
+  it('finds every word, any case, newest first', () => {
+    expect(searchPromptHistory(history, 'LOGIN')).toEqual(['add tests for login', 'fix the login bug'])
+    expect(searchPromptHistory(history, 'fix login')).toEqual(['fix the login bug'])
+  })
+  it('lists the newest with no query, up to the limit', () => {
+    expect(searchPromptHistory(history, '', 2)).toEqual(['fix lint', 'Refactor the parser'])
+  })
+  it('finds nothing that is not there', () => {
+    expect(searchPromptHistory(history, 'deploy')).toEqual([])
   })
 })

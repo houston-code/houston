@@ -1042,6 +1042,21 @@ describe('startRun', () => {
     expect(r.messages.find((m) => m.role === 'assistant')?.content).toBe('recovered')
   }, 20_000)
 
+  it('says a retry is a throttle when the provider rate-limited the request', async () => {
+    const r = await run({
+      turns: [
+        [{ type: 'error', message: '429 rate_limit_error', status: 429, retryAfterMs: 5000 }],
+        [{ type: 'error', message: 'The server had an error.', status: 500 }],
+        [{ type: 'text', text: 'recovered' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const retries = r.events.filter((e) => e.type === 'retry') as Extract<AgentEvent, { type: 'retry' }>[]
+    expect(retries).toHaveLength(2)
+    // The wait is the loop's own (stubbed to 0 here); the provider's ask rides along.
+    expect(retries[0].throttle).toEqual({ waitMs: 0, retryAfterMs: 5000 })
+    expect(retries[1].throttle).toBeUndefined()
+  })
+
   it('does not retry that same prose when no status came with it', async () => {
     // The counterpart: the status is what makes it retryable, so an adapter that can't
     // tell still gets the conservative answer.

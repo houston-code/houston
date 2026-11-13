@@ -1164,3 +1164,73 @@ export function clearCheckpoints(): void {
   dirtyRuns.clear()
   indexDirty = false
 }
+
+// ---- The Changes view's turn and chat scopes ----
+
+/** A file a chat's turns changed, with its content before the first of them. */
+export interface ChangeBase {
+  abs: string
+  /** Relative to the run's first root when inside it. */
+  display: string
+  roots: string[]
+  before: string | null
+  beforeBinary: boolean
+}
+
+/**
+ * The files the chat's latest turn (`turn`) or all its turns (`chat`) changed, each
+ * with its content before the earliest of those turns touched it. Runs a rewind cut
+ * from the chat are left out. `unavailable` counts runs that changed files but whose
+ * snapshots are gone (pruned), so the view can say its list may be incomplete.
+ */
+export async function conversationChangeBases(
+  conversationId: string,
+  scope: 'turn' | 'chat'
+): Promise<{ bases: ChangeBase[]; unavailable: number }> {
+  const chain = refreshChain(conversationId).filter((e) => !e.detached)
+  const entries = scope === 'turn' ? chain.slice(-1) : chain
+  const bases = new Map<string, ChangeBase>()
+  let unavailable = 0
+  for (const entry of entries) {
+    const cp = checkpoints.get(entry.runId) ?? (await loadRunIntoMemory(entry.runId))
+    if (!cp) {
+      if (entry.files) unavailable++
+      continue
+    }
+    for (const [abs, snap] of cp.files) {
+      if (bases.has(abs)) continue
+      bases.set(abs, {
+        abs,
+        display: displayPath(cp.roots, abs),
+        roots: cp.roots,
+        before: snap.before,
+        beforeBinary: snap.beforeBinary === true
+      })
+    }
+  }
+  return { bases: [...bases.values()], unavailable }
+}
+
+/**
+ * A changed file's current content for the Changes view, or null when it can't be
+ * vouched for (escapes its roots now, is a symlink, or is too large to compare).
+ */
+export function changeCurrentState(roots: string[], abs: string): Promise<{ content: string | null; binary: boolean } | null> {
+  return currentState(roots, abs)
+}
+
+/**
+ * Write a file the Changes view reverts: `content` (base64 when `binary`), or delete
+ * it when null. Containment is re-checked here and a symlink at the file is refused,
+ * as for a rewind.
+ */
+export async function writeChangeState(
+  roots: string[],
+  abs: string,
+  content: string | null,
+  binary = false
+): Promise<boolean> {
+  if (!(await currentState(roots, abs))) return false
+  await applyState(abs, content, binary, { noFollow: true })
+  return true
+}

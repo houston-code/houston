@@ -11,6 +11,7 @@ export const PAGE_LABELS = {
   hooks: 'Hooks',
   schedules: 'Scheduled Runs',
   memory: 'Memory',
+  import: 'Import',
   workspace: 'Workspace',
   general: 'General',
   appearance: 'Appearance',
