@@ -197,6 +197,7 @@ export const IPC = {
   conversationForkAt: 'conversation:fork-at',
   conversationSetSettings: 'conversation:setSettings',
   conversationCompact: 'conversation:compact',
+  conversationRecordShell: 'conversation:record-shell',
   conversationDelete: 'conversation:delete',
   conversationExport: 'conversation:export',
   conversationExportHtml: 'conversation:exportHtml',

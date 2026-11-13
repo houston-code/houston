@@ -105,6 +105,33 @@ describe('Composer', () => {
     expect(props.onSend).toHaveBeenCalledWith('こんにちは', undefined)
   })
 
+  it('runs a ! line in the terminal instead of sending it', () => {
+    const onShellEscape = vi.fn()
+    const props = baseProps({ onShellEscape })
+    render(<Composer {...props} />)
+    const input = type('!npm test')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onShellEscape).toHaveBeenCalledWith('npm test')
+    expect(props.onSend).not.toHaveBeenCalled()
+    expect(input.value).toBe('')
+  })
+
+  it('sends a ! line as a message when nothing runs it', () => {
+    const props = baseProps()
+    render(<Composer {...props} />)
+    fireEvent.keyDown(type('!npm test'), { key: 'Enter' })
+    expect(props.onSend).toHaveBeenCalledWith('!npm test', undefined)
+  })
+
+  it('sends a lone ! as ordinary text', () => {
+    const onShellEscape = vi.fn()
+    const props = baseProps({ onShellEscape })
+    render(<Composer {...props} />)
+    fireEvent.keyDown(type('!'), { key: 'Enter' })
+    expect(onShellEscape).not.toHaveBeenCalled()
+    expect(props.onSend).toHaveBeenCalledWith('!', undefined)
+  })
+
   it('answers a terminal-only command instead of sending it to the model', () => {
     const props = baseProps()
     render(<Composer {...props} />)

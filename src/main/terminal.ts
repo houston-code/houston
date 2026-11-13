@@ -4,6 +4,7 @@ import { existsSync, statSync } from 'node:fs'
 import * as pty from 'node-pty'
 import type { IPty } from 'node-pty'
 import { IPC } from '@shared/constants'
+import { SHELL_ESCAPE_MAX_CHARS, plainTerminalText } from '@shared/shellEscape'
 
 /**
  * Registry of interactive terminals backing the in-app terminal panel.
@@ -37,6 +38,20 @@ export interface TerminalSpawnOptions {
   rows?: number
   /** Override the login shell (defaults to $SHELL, then /bin/zsh). */
   shell?: string
+  /**
+   * Run this one command instead of an interactive session: the tab shows it live,
+   * and its exit reports the output as plain text (the composer's `!cmd`). The
+   * shell still starts interactive, so the user's aliases, PATH and version
+   * managers apply, as they would typing it at the prompt.
+   */
+  command?: string
+}
+
+/** What a terminal's exit reports. `output` only for a terminal that ran a command. */
+export interface TerminalExit {
+  id: string
+  exitCode: number
+  output?: string
 }
 
 interface Terminal {
@@ -47,6 +62,8 @@ interface Terminal {
   pending: string
   /** Scheduled flush handle (null when nothing is buffered). */
   flush: ReturnType<typeof setImmediate> | null
+  /** A command terminal's output so far (its tail, capped), or null for a shell. */
+  captured: string | null
 }
 
 const DEFAULT_COLS = 80
@@ -57,6 +74,18 @@ const terminals = new Map<string, Terminal>()
 function defaultShell(): string {
   if (process.platform === 'win32') return process.env.ComSpec || 'powershell.exe'
   return process.env.SHELL || '/bin/zsh'
+}
+
+/**
+ * The arguments that make `shell` run one command and exit. POSIX shells take it
+ * after `-i -c` (interactive, so the rc file that sets up PATH is read); Windows
+ * shells each have their own flag.
+ */
+export function commandArgs(shell: string, command: string): string[] {
+  const name = shell.split(/[\\/]/).pop()?.toLowerCase() ?? ''
+  if (name === 'cmd.exe' || name === 'cmd') return ['/d', '/s', '/c', command]
+  if (name.startsWith('powershell') || name.startsWith('pwsh')) return ['-NoLogo', '-Command', command]
+  return ['-i', '-c', command]
 }
 
 /** Resolve a usable working directory, falling back to home if the requested one
@@ -82,7 +111,9 @@ function flushTerminal(term: Terminal): void {
 export function createTerminal(sender: TerminalSender, opts: TerminalSpawnOptions = {}): string {
   const id = randomUUID().slice(0, 8)
   const cwd = resolveCwd(opts.cwd)
-  const child = pty.spawn(opts.shell || defaultShell(), [], {
+  const shell = opts.shell || defaultShell()
+  const command = opts.command?.trim() || null
+  const child = pty.spawn(shell, command ? commandArgs(shell, command) : [], {
     name: 'xterm-256color',
     cols: opts.cols ?? DEFAULT_COLS,
     rows: opts.rows ?? DEFAULT_ROWS,
@@ -91,10 +122,18 @@ export function createTerminal(sender: TerminalSender, opts: TerminalSpawnOption
     // programs emit the escape sequences xterm.js understands.
     env: { ...process.env, TERM: 'xterm-256color' }
   })
-  const term: Terminal = { id, pty: child, sender, pending: '', flush: null }
+  const term: Terminal = { id, pty: child, sender, pending: '', flush: null, captured: command ? '' : null }
 
   child.onData((chunk) => {
     term.pending += chunk
+    if (term.captured !== null) {
+      // Keep the tail: errors and summaries land last. Trimmed with headroom so a
+      // chatty build does not re-slice on every chunk.
+      term.captured += chunk
+      if (term.captured.length > SHELL_ESCAPE_MAX_CHARS * 2) {
+        term.captured = term.captured.slice(-SHELL_ESCAPE_MAX_CHARS)
+      }
+    }
     if (term.flush === null) term.flush = setImmediate(() => flushTerminal(term))
   })
   child.onExit(({ exitCode }) => {
@@ -104,7 +143,9 @@ export function createTerminal(sender: TerminalSender, opts: TerminalSpawnOption
       flushTerminal(term)
     }
     terminals.delete(id)
-    if (!sender.isDestroyed()) sender.send(IPC.terminalExit, { id, exitCode })
+    const exit: TerminalExit = { id, exitCode }
+    if (term.captured !== null) exit.output = plainTerminalText(term.captured.slice(-SHELL_ESCAPE_MAX_CHARS))
+    if (!sender.isDestroyed()) sender.send(IPC.terminalExit, exit)
   })
 
   terminals.set(id, term)

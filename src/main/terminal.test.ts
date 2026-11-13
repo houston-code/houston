@@ -34,7 +34,8 @@ import {
   killTerminal,
   killAllTerminals,
   killTerminalsOf,
-  terminalCount
+  terminalCount,
+  commandArgs
 } from './terminal'
 
 const nextTick = (): Promise<void> => new Promise((r) => setImmediate(r))
@@ -160,5 +161,49 @@ describe('terminal manager', () => {
     writeTerminal(c, 'x')
     expect(spawned[0].write).not.toHaveBeenCalled()
     expect(killTerminalsOf(closing)).toBe(0)
+  })
+})
+
+// The composer's `!cmd`: a tab that runs one command, and reports what it printed.
+describe('command terminals', () => {
+  it('runs the command in an interactive shell, so the rc file sets up PATH', () => {
+    createTerminal(fakeSender(), { command: 'npm test', shell: '/bin/zsh' })
+    const [file, args] = ptyMock.spawn.mock.calls[0]
+    expect(file).toBe('/bin/zsh')
+    expect(args).toEqual(['-i', '-c', 'npm test'])
+  })
+
+  it('passes the command the way each Windows shell takes it', () => {
+    expect(commandArgs('C:\\Windows\\System32\\cmd.exe', 'dir')).toEqual(['/d', '/s', '/c', 'dir'])
+    expect(commandArgs('powershell.exe', 'ls')).toEqual(['-NoLogo', '-Command', 'ls'])
+    expect(commandArgs('pwsh', 'ls')).toEqual(['-NoLogo', '-Command', 'ls'])
+  })
+
+  it('reports its output as plain text when it exits', async () => {
+    const sender = fakeSender()
+    const id = createTerminal(sender, { command: 'npm test', shell: '/bin/sh' })
+    spawned[0].emitData('\x1b[31m2 failed\x1b[0m\r\n')
+    spawned[0].emitExit(1)
+    await nextTick()
+    expect(sender.send).toHaveBeenCalledWith(IPC.terminalExit, { id, exitCode: 1, output: '2 failed\n' })
+  })
+
+  it('keeps the tail of a long run', async () => {
+    const sender = fakeSender()
+    createTerminal(sender, { command: 'yes', shell: '/bin/sh' })
+    spawned[0].emitData('x'.repeat(200_000))
+    spawned[0].emitData('END')
+    spawned[0].emitExit(0)
+    const exit = sender.send.mock.calls.find(([ch]) => ch === IPC.terminalExit)?.[1] as { output: string }
+    expect(exit.output.endsWith('END')).toBe(true)
+    expect(exit.output.length).toBeLessThanOrEqual(64 * 1024)
+  })
+
+  it('reports no output for an ordinary shell', () => {
+    const sender = fakeSender()
+    const id = createTerminal(sender, {})
+    expect(ptyMock.spawn.mock.calls[0][1]).toEqual([])
+    spawned[0].emitExit(0)
+    expect(sender.send).toHaveBeenCalledWith(IPC.terminalExit, { id, exitCode: 0 })
   })
 })

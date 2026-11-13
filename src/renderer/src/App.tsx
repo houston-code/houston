@@ -2044,6 +2044,49 @@ export default function App(): JSX.Element {
   const currentIdRef = useRef(currentId)
   currentIdRef.current = currentId
 
+  // `!cmd` from the composer: run it in a terminal tab of its own, as if typed there
+  // (the user's own shell, unsandboxed, like every terminal tab), then add the command
+  // and its output to the chat it was typed in, so the next message can act on it.
+  const shellEscapes = useRef(new Map<string, { conversationId: string | null; command: string }>())
+  const runShellEscape = useCallback(
+    async (command: string) => {
+      const conversationId = currentIdRef.current
+      let id: string
+      try {
+        id = await terminals.addTab({ command, title: `!${command.length > 24 ? `${command.slice(0, 23)}…` : command}` })
+      } catch (e) {
+        chat.notify(`Couldn't run it: ${(e as Error).message}`, 'error')
+        return
+      }
+      shellEscapes.current.set(id, { conversationId, command })
+      setTerminalMounted(true)
+      setTerminalOpen(true)
+      void persistTerminal({ terminalOpen: true })
+    },
+    [terminals, persistTerminal, chat]
+  )
+  useEffect(() => {
+    return window.api.onTerminalExit(({ id, exitCode, output }) => {
+      const run = shellEscapes.current.get(id)
+      if (!run) return
+      shellEscapes.current.delete(id)
+      if (!run.conversationId) {
+        chat.notify('Ran in the terminal. Its output is in the chat only once a chat has started.')
+        return
+      }
+      void window.api
+        .recordShellCommand(run.conversationId, run.command, output ?? '', exitCode)
+        .then((res) => {
+          if (res.ok) {
+            if (currentIdRef.current === run.conversationId) chat.reset(itemsFromMessages(res.messages))
+          } else if (res.reason === 'busy') {
+            chat.notify(`!${run.command} ran in the terminal, but the agent was working, so its output isn't in the chat.`)
+          }
+        })
+        .catch(() => {})
+    })
+  }, [chat])
+
   // The agent's open `ask_user` question, if it is waiting on one. While it is, the
   // run can't read a steer (it is blocked on the answer), so Enter answers it instead.
   const openQuestion = useMemo(() => {
@@ -3343,6 +3386,7 @@ export default function App(): JSX.Element {
             onShip={canChat ? onShip : undefined}
             onCommand={onCommand}
             onSend={onSend}
+            onShellEscape={runShellEscape}
             onInvoke={onInvoke}
             onSteer={onSteer}
             answering={openQuestion !== null}

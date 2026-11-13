@@ -53,7 +53,7 @@ describe('prompt visibility guard', () => {
   // Every `user`-role message built in the main process. Provider adapters are
   // skipped: they translate messages that already exist into a wire format.
   const USER_MESSAGE_SITES: Record<string, { count: number; why: string }> = {
-    'main/ipc.ts': { count: 1, why: 'the GUI send; carries the renderer-supplied invokedAs' },
+    'main/ipc.ts': { count: 2, why: 'the GUI send (carries the renderer-supplied invokedAs) and the composer !cmd record, tagged via shellEscapeTurn' },
     'main/agent/drain.ts': { count: 1, why: 'flushes queued input; a lone queued prompt keeps its invokedAs' },
     'main/tui.ts': { count: 2, why: 'the terminal turn (carries invokedAs) and the !shell escape record' },
     'main/spawnSession.ts': { count: 1, why: "a spawned session's brief, tagged via spawnedTurn" },
