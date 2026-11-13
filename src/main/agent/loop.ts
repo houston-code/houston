@@ -166,12 +166,15 @@ import { rewindInProgress } from './rewindLock'
 import {
   recordOriginal,
   recordResult,
+  runFileChanges,
+  checkpointFileCount,
   noteConversationRun,
   setRunTurn,
   turnFingerprint,
   writeTargets
 } from './checkpoints'
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
+import { detectTestEdits, isTestRelevantPath, testEditsNote } from './testTampering'
 import { peekShell } from './shells'
 import { gatherReadinessFacts, planReadiness, readinessNote } from './readiness'
 import { isSensitiveRead } from './sensitive-paths'
@@ -3164,6 +3167,8 @@ export async function startRun(
     // matches the checkpoint snapshot logic already in the loop.
     let filesModified = false
     let verifyPassesRun = 0
+    // Whether the model has been told this turn that its edits loosened a test (once).
+    let testEditsNoted = false
     const verifyMaxPasses = resolveVerifyMaxPasses(settings.verifyMaxPasses)
 
     // The request re-sent verbatim ahead of the tail while `cut` sits inside its turn,
@@ -3953,6 +3958,24 @@ export async function startRun(
             // Push the failure feedback as a system note so the model sees it next
             // turn and the transcript shows it as Houston's, not the user's; then loop.
             messages.push(systemNoteMessage(verifyFailureMessage(settings.verifyCommand!, result.output)))
+            persist(messages)
+            continue
+          }
+        }
+
+        // Edits that loosen a test (a deleted test, an added skip, fewer assertions, a
+        // test script that always passes), read from the turn's file snapshots against
+        // the files now. Re-read at every natural stop so the receipt shows where they
+        // ended up; the model is asked about them once, to restore them or say why.
+        if (stopReason === 'end_turn' && run.policy !== 'plan' && (filesModified || checkpointFileCount(runId) > 0)) {
+          const edits = detectTestEdits(await runFileChanges(runId, isTestRelevantPath)).map((e) => ({
+            ...e,
+            detail: redact(e.detail)
+          }))
+          run.evidence.setTestEdits(edits)
+          if (edits.length && !testEditsNoted) {
+            testEditsNoted = true
+            messages.push(systemNoteMessage(testEditsNote(edits)))
             persist(messages)
             continue
           }

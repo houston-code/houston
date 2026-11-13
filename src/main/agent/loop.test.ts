@@ -9468,6 +9468,66 @@ describe('turn receipt', () => {
     expect(receipt?.checks[0]).toMatchObject({ kind: 'test', ok: true, beforeLastWrite: true })
   })
 
+  const SUITE = "it('adds', () => {\n  expect(add(1, 2)).toBe(3)\n})\nit('rejects strings', () => {\n  expect(() => add('1', 2)).toThrow()\n})\n"
+  const notes = (r: { messages: ChatMessage[] }): string[] =>
+    r.messages.filter((m) => m.role === 'user' && m.content.startsWith(SYSTEM_NOTE_PREFIX)).map((m) => m.content)
+
+  it('asks once about a test the turn skipped, and lists it on the receipt', async () => {
+    writeFileSync(join(ws, 'add.test.ts'), SUITE)
+    const skipped = SUITE.replace("it('rejects strings'", "it.skip('rejects strings'")
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        call('r1', 'read_file', { path: 'add.test.ts' }),
+        call('w1', 'write_file', { path: 'add.test.ts', content: skipped }),
+        say('Fixed: all tests pass.'),
+        call('w2', 'write_file', { path: 'add.test.ts', content: skipped.replace('toBe(3)', 'toEqual(3)') }),
+        say('I skipped the string test because the user asked to drop string support.')
+      ]
+    })
+    const asked = notes(r).filter((n) => n.includes('changed tests in ways that can make a failing suite pass'))
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toContain("- add.test.ts: added it.skip('rejects strings', () => {")
+    expect(r.messages.at(-1)?.content).toContain('user asked to drop string support')
+    expect(r.messages.at(-1)?.receipt?.testEdits).toEqual([
+      { path: 'add.test.ts', kind: 'skip', detail: "added it.skip('rejects strings', () => {" }
+    ])
+    expect(types(r).slice(-2)).toEqual(['receipt', 'done'])
+  })
+
+  it('drops a test edit from the receipt once the turn puts the test back', async () => {
+    writeFileSync(join(ws, 'add.test.ts'), SUITE)
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        call('r1', 'read_file', { path: 'add.test.ts' }),
+        call('w1', 'write_file', { path: 'add.test.ts', content: SUITE.replace("it('adds'", "it.only('adds'") }),
+        say('Done.'),
+        call('w2', 'write_file', { path: 'add.test.ts', content: SUITE }),
+        say('Restored the test.')
+      ]
+    })
+    expect(notes(r).filter((n) => n.includes('changed tests'))).toHaveLength(1)
+    expect(r.messages.at(-1)?.receipt).not.toHaveProperty('testEdits')
+  })
+
+  it('says nothing about a turn that only adds tests', async () => {
+    writeFileSync(join(ws, 'add.test.ts'), SUITE)
+    const more = `${SUITE}it('adds zero', () => {\n  expect(add(0, 0)).toBe(0)\n})\n`
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        call('r1', 'read_file', { path: 'add.test.ts' }),
+        call('w1', 'write_file', { path: 'add.test.ts', content: more }),
+        call('w2', 'write_file', { path: 'sub.test.ts', content: "it.skip('subtracts', () => {})\n" }),
+        say('Added tests.')
+      ]
+    })
+    expect(notes(r).filter((n) => n.includes('changed tests'))).toEqual([])
+    expect(r.messages.at(-1)?.receipt?.filesChanged).toEqual(['add.test.ts', 'sub.test.ts'])
+    expect(r.messages.at(-1)?.receipt).not.toHaveProperty('testEdits')
+  })
+
   it("carries an accepted plan's progress across turns until it is complete", async () => {
     h.sandboxed = true
     h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '2 passed in 0.1s' } })]

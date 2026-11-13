@@ -767,6 +767,16 @@ receipt.
   down from 12, 1 skipped, up from 0)") and the receipt is highlighted the way it is
   for a failure, since a deleted test or an added skip can make a failing suite look
   green.
+- **Test edits to review.** Edits the agent's file tools made that loosen a test: a
+  deleted test file, an added skip or focus marker (`.skip(`, `.only(`, `xit(`,
+  `@pytest.mark.skip`, `t.Skip(`, `#[ignore]`), fewer assertions in a test file, a
+  `package.json` test script that now always passes (`|| true`, `--passWithNoTests`), or
+  a test runner config (vitest, jest, pytest) that changed which tests run. Houston
+  compares each file with how it was before the turn, so a test moved to another file
+  with its assertions isn't listed, and neither are new tests. When the agent is about
+  to finish with one of these, it's asked once to restore the test or to explain in its
+  reply why the change is right, and the receipt is highlighted. Changes made only
+  through shell commands (`rm`, `sed -i`) aren't seen, and Plan mode is skipped.
 
 ### Todo items it can't back
 
