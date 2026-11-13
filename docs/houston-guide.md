@@ -2605,6 +2605,14 @@ sidebar) or `Esc` returns to the chat.
 | **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (whether new chats start in a worktree, and additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |
 
+**Appearance** sets how the app looks, and every change shows at once:
+
+- **Color theme:** System (follows your OS), Dark, or Light.
+- **Chat text size:** Small, Default, or Large. Scales the whole chat, code included.
+- **Density:** Comfortable, or Compact for less space between messages.
+- **Code theme:** Default, High contrast, or Muted, for code blocks, the Files preview,
+  and diffs. Every theme keeps code readable in both light and dark.
+
 **Check for Updates…** is also in the app menu on macOS, and the Help menu on Windows
 and Linux.
 
