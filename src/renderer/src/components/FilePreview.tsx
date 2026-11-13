@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { FilePreview as FilePreviewData } from '@shared/files'
 import { humanSize, MAX_PREVIEW_TEXT_BYTES } from '@shared/files'
-import { imageDataUrl } from '@shared/images'
+import { cachedImageDataUrl } from '../lib/imageUrl'
 import { highlightFile } from '../lib/highlight'
 import { Markdown } from './Markdown'
 import { VisualsContext } from '../lib/visuals'
@@ -164,7 +164,7 @@ export function FilePreview({
           )
         ) : data.kind === 'image' ? (
           <div className="file-preview__image-wrap">
-            <img className="file-preview__image" src={imageDataUrl(data.image)} alt={path} />
+            <img className="file-preview__image" src={cachedImageDataUrl(data.image)} alt={path} />
           </div>
         ) : data.kind === 'too-large' ? (
           <p className="file-preview__note">

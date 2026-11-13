@@ -4,7 +4,8 @@ import {
   type ElicitationResult,
   type ToolApprovalDecision
 } from '@shared/agent'
-import { imageDataUrl, type ImageAttachment } from '@shared/images'
+import type { ImageAttachment } from '@shared/images'
+import { cachedImageDataUrl } from '../lib/imageUrl'
 import type { PromptInvocation, PromptInvocationKind } from '@shared/promptInvocation'
 import { rewindTargets, type DisplayItem, type RewindItemTarget } from '../lib/items'
 import type { RewindMode } from '@shared/rewind'
@@ -136,7 +137,7 @@ function UserBubble({
         {images && images.length > 0 && (
           <div className="bubble__images">
             {images.map((img, i) => (
-              <img key={i} className="bubble__image" src={imageDataUrl(img)} alt="attachment" />
+              <img key={i} className="bubble__image" src={cachedImageDataUrl(img)} alt="attachment" />
             ))}
           </div>
         )}

@@ -233,6 +233,10 @@ export interface RewindItemTarget {
   images?: ImageAttachment[]
 }
 
+
+/** Each user item's rewind text and label (see {@link rewindTargets}). */
+const turnWords = new WeakMap<DisplayItem, { text: string; label: string }>()
+
 /**
  * The user's messages the transcript can rewind to, oldest first, numbered the way
  * main numbers the stored log (`rewindableTurnIndices`): every user bubble except the
@@ -249,11 +253,18 @@ export function rewindTargets(items: DisplayItem[]): RewindItemTarget[] {
       ...(it.images ? { images: it.images } : {}),
       ...(it.invokedAs ? { invokedAs: it.invokedAs } : {})
     }
+    // The text and label depend only on the message, which never changes once shown;
+    // this runs on every transcript render, so they are worked out once per item.
+    let words = turnWords.get(it)
+    if (!words) {
+      words = { text: turnText(m), label: turnLabel(m) }
+      turnWords.set(it, words)
+    }
     out.push({
       id: it.id,
       turn: out.length,
-      text: turnText(m),
-      label: turnLabel(m),
+      text: words.text,
+      label: words.label,
       ...(it.images?.length ? { images: it.images } : {})
     })
   }
