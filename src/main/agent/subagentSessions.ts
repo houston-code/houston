@@ -38,7 +38,31 @@ interface ConversationSessions {
   sessions: Map<string, SubAgentSession>
 }
 
+/**
+ * Most conversations whose transcripts are kept. Each holds up to
+ * {@link MAX_SUBAGENT_SESSIONS} full message logs, and a long session touches many
+ * chats (and every conversation-less run gets its own key), so the conversations
+ * least recently used are dropped past this. Resuming one of their ids then gets the
+ * same "unknown id" answer as any expired id.
+ */
+export const MAX_SUBAGENT_CONVERSATIONS = 12
+
 const byConversation = new Map<string, ConversationSessions>()
+
+/** Mark a conversation as just used, and drop the least recently used past the cap. */
+function touchConversation(key: string, conv: ConversationSessions): void {
+  byConversation.delete(key)
+  byConversation.set(key, conv)
+  for (const oldest of byConversation.keys()) {
+    if (byConversation.size <= MAX_SUBAGENT_CONVERSATIONS) break
+    byConversation.delete(oldest)
+  }
+}
+
+/** Forget a conversation's transcripts (it was deleted). */
+export function forgetSubAgentSessions(conversationKey: string): void {
+  byConversation.delete(conversationKey)
+}
 
 /**
  * Store a completed dispatch's transcript and return the id the model can use to
@@ -49,11 +73,8 @@ export function rememberSubAgent(
   conversationKey: string,
   entry: Omit<SubAgentSession, 'id'>
 ): string {
-  let conv = byConversation.get(conversationKey)
-  if (!conv) {
-    conv = { counter: 0, sessions: new Map() }
-    byConversation.set(conversationKey, conv)
-  }
+  const conv = byConversation.get(conversationKey) ?? { counter: 0, sessions: new Map() }
+  touchConversation(conversationKey, conv)
   conv.counter += 1
   const id = `ag${conv.counter}`
   conv.sessions.set(id, { ...entry, id })
@@ -67,7 +88,10 @@ export function rememberSubAgent(
 
 /** Look up a stored transcript, or undefined for an unknown/evicted/expired id. */
 export function getSubAgent(conversationKey: string, id: string): SubAgentSession | undefined {
-  return byConversation.get(conversationKey)?.sessions.get(id)
+  const conv = byConversation.get(conversationKey)
+  const entry = conv?.sessions.get(id)
+  if (conv && entry) touchConversation(conversationKey, conv)
+  return entry
 }
 
 /**

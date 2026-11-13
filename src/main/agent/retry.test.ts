@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   abortableSleep,
   backoffDelayMs,
+  classifyProviderFailure,
   describeProviderError,
   isModelNotFoundError,
   isNetworkError,
@@ -549,5 +550,31 @@ describe('describeProviderError', () => {
     const out = describeProviderError(connectionError(new Error('x'.repeat(500))))
     expect(out.length).toBeLessThan(240)
     expect(out.endsWith('\u2026)')).toBe(true)
+  })
+})
+
+describe('classifyProviderFailure', () => {
+  it('reads the HTTP status first', () => {
+    expect(classifyProviderFailure(apiError(401, 'invalid x-api-key'))).toBe('auth')
+    expect(classifyProviderFailure(apiError(403, 'forbidden'))).toBe('auth')
+    expect(classifyProviderFailure(apiError(429, 'Too many requests'))).toBe('rate-limit')
+    expect(classifyProviderFailure(apiError(500, 'oops'))).toBe('provider-down')
+    expect(classifyProviderFailure(apiError(529, 'Overloaded'))).toBe('provider-down')
+  })
+
+  it('tells an exhausted quota from a rate limit, though both are 429s', () => {
+    expect(classifyProviderFailure(apiError(429, 'You exceeded your current quota'))).toBe('quota')
+  })
+
+  it('recognizes a network failure by its cause chain', () => {
+    const err = Object.assign(new Error('Connection error.'), {
+      cause: Object.assign(new Error('getaddrinfo ENOTFOUND api.example.com'), { code: 'ENOTFOUND' })
+    })
+    expect(classifyProviderFailure(err)).toBe('network')
+  })
+
+  it('leaves a failure it cannot place unnamed', () => {
+    expect(classifyProviderFailure(apiError(400, 'invalid request body'))).toBeUndefined()
+    expect(classifyProviderFailure(new Error('something odd'))).toBeUndefined()
   })
 })

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ApprovalPolicy } from '@shared/types'
 import type {
   AgentEvent,
+  ConversationError,
   ElicitationResult,
   PlanDecision,
   PlanPayload,
@@ -12,6 +13,7 @@ import type { ImageAttachment } from '@shared/images'
 import type { PromptInvocation } from '@shared/promptInvocation'
 import type { SessionUsage } from '@shared/usage'
 import { reduceEvent, type DisplayItem, type PlanStatus } from '../lib/items'
+import { meterOnEvent, startMeter, type RunMeter } from '../lib/runMeter'
 
 /**
  * A plan the agent has presented and is now blocking on, shown in the docked review
@@ -50,10 +52,14 @@ export interface ChatController {
   running: boolean
   /** The open conversation's persisted running token usage, or null. */
   usage: SessionUsage | null
+  /** The running turn's clock and output-token count, or null when no turn runs. */
+  meter: RunMeter | null
   /** The current/last turn's revertable file changes, or null. */
   checkpoint: Checkpoint | null
   /** True when the last finished run ended in an error (offer a retry). */
   errored: boolean
+  /** What the last failed run reported (its message and kind), or null. */
+  failure: ConversationError | null
   send: (params: SendParams) => Promise<void>
   /** Re-run the last turn after a failure, without re-sending the user message. */
   retry: (params: RetryParams) => Promise<void>
@@ -86,7 +92,7 @@ export interface ChatController {
    * Replace the transcript and (optionally) seed usage and the errored flag, e.g.
    * when switching conversations — `errored` restores the persisted Retry banner.
    */
-  reset: (items: DisplayItem[], usage?: SessionUsage | null, errored?: boolean) => void
+  reset: (items: DisplayItem[], usage?: SessionUsage | null, errored?: boolean, failure?: ConversationError | null) => void
   /**
    * Re-attach to a run already in flight in the main process — e.g. after
    * switching back to a conversation whose run kept going in the background.
@@ -100,9 +106,11 @@ export interface ChatController {
    * blocking that run; they're folded in so a prompt that was awaiting the user
    * re-renders its UI (the live events are one-shot and already fired). Both replay
    * through reduceEvent, which upserts by id/callId, so it's idempotent against the
-   * transcript just rebuilt from the log.
+   * transcript just rebuilt from the log. `startedAt` is when the run began (from the
+   * main process's chat status), so the status bar's clock counts from the turn's
+   * start rather than from the switch back.
    */
-  adopt: (runId: string, pendingPrompts?: AgentEvent[], liveTranscript?: AgentEvent[]) => void
+  adopt: (runId: string, pendingPrompts?: AgentEvent[], liveTranscript?: AgentEvent[], startedAt?: number) => void
   /** Append a transient notice to the transcript (e.g. slash-command feedback). */
   notify: (text: string, tone?: 'info' | 'error') => void
 }
@@ -122,8 +130,13 @@ export function useChat(conversationId: string | null = null): ChatController {
   const [items, setItems] = useState<DisplayItem[]>([])
   const [running, setRunning] = useState(false)
   const [usage, setUsage] = useState<SessionUsage | null>(null)
+  const [meter, setMeter] = useState<RunMeter | null>(null)
+  // The chat's cumulative output count as last seen, so a usage event (which carries
+  // running totals) can tell the meter how much this round added.
+  const outputSeenRef = useRef(0)
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null)
   const [errored, setErrored] = useState(false)
+  const [failure, setFailure] = useState<ConversationError | null>(null)
   const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null)
   const runIdRef = useRef<string | null>(null)
   // The open conversation, so we can adopt a main-initiated follow-up run (queued
@@ -140,7 +153,9 @@ export function useChat(conversationId: string | null = null): ChatController {
         if (e.conversationId !== convIdRef.current) return
         runIdRef.current = e.runId
         setRunning(true)
+        setMeter(startMeter(Date.now()))
         setErrored(false)
+        setFailure(null)
         setCheckpoint(null)
         setItems((prev) => [
           ...prev,
@@ -149,7 +164,8 @@ export function useChat(conversationId: string | null = null): ChatController {
             id: `u-${e.runId}`,
             text: e.userText,
             ...(e.images?.length ? { images: e.images } : {}),
-            ...(e.invokedAs ? { invokedAs: e.invokedAs } : {})
+            ...(e.invokedAs ? { invokedAs: e.invokedAs } : {}),
+            at: new Date().toISOString()
           }
         ])
         return
@@ -158,6 +174,9 @@ export function useChat(conversationId: string | null = null): ChatController {
       if (e.type === 'usage') {
         // The main process accumulates and persists; the event carries the
         // conversation's cumulative totals, so we set rather than sum.
+        const delta = e.outputTokens ? e.outputTokens - outputSeenRef.current : 0
+        if (e.outputTokens) outputSeenRef.current = e.outputTokens
+        setMeter((m) => (m ? meterOnEvent(m, e, delta) : m))
         setUsage((prev) => ({
           context: e.inputTokens || prev?.context || 0,
           output: e.outputTokens || prev?.output || 0,
@@ -165,6 +184,8 @@ export function useChat(conversationId: string | null = null): ChatController {
           cacheRead: e.cacheReadTokens ?? prev?.cacheRead,
           perModel: e.perModel ?? prev?.perModel
         }))
+        // ...and the round's own numbers go on the turn, for its details line.
+        setItems((prev) => reduceEvent(prev, e))
         return
       }
       // Track successful file writes so the turn's changes can be reverted.
@@ -199,11 +220,18 @@ export function useChat(conversationId: string | null = null): ChatController {
       }
       // A fresh plan (initial, or a revision after "suggest changes") opens/refreshes
       // the review panel; the previous one, if any, is superseded in the transcript.
+      if (e.type === 'text' || e.type === 'reasoning' || e.type === 'turn_discarded') {
+        setMeter((m) => (m ? meterOnEvent(m, e) : m))
+      }
       if (e.type === 'plan_ready') setPendingPlan({ callId: e.callId, plan: e.plan })
       setItems((prev) => reduceEvent(prev, e))
-      if (e.type === 'error') setErrored(true)
+      if (e.type === 'error') {
+        setErrored(true)
+        setFailure({ message: e.message, ...(e.cause ? { cause: e.cause } : {}) })
+      }
       if (e.type === 'done' || e.type === 'error') {
         setRunning(false)
+        setMeter(null)
         runIdRef.current = null
         // A run can only finish once its plan review is resolved (the tool unblocks
         // it), so a plan still pending here means the run ended some other way — drop
@@ -223,12 +251,15 @@ export function useChat(conversationId: string | null = null): ChatController {
         id: `u-${runId}`,
         text: params.userText,
         ...(params.images?.length ? { images: params.images } : {}),
-        ...(params.invokedAs ? { invokedAs: params.invokedAs } : {})
+        ...(params.invokedAs ? { invokedAs: params.invokedAs } : {}),
+        at: new Date().toISOString()
       }
     ])
     setRunning(true)
+    setMeter(startMeter(Date.now()))
     setCheckpoint(null)
     setErrored(false)
+    setFailure(null)
     try {
       const started = await window.api.startAgent({
         runId,
@@ -256,6 +287,7 @@ export function useChat(conversationId: string | null = null): ChatController {
       // A run that starts and then fails reports back via an `error` event instead.
       if (runIdRef.current === runId) {
         setRunning(false)
+        setMeter(null)
         runIdRef.current = null
         setErrored(true)
       }
@@ -266,12 +298,15 @@ export function useChat(conversationId: string | null = null): ChatController {
     const runId = crypto.randomUUID()
     runIdRef.current = runId
     setRunning(true)
+    setMeter(startMeter(Date.now()))
     setErrored(false)
+    setFailure(null)
     try {
       await window.api.retryAgent({ runId, ...params })
     } catch {
       if (runIdRef.current === runId) {
         setRunning(false)
+        setMeter(null)
         runIdRef.current = null
         setErrored(true)
       }
@@ -347,25 +382,38 @@ export function useChat(conversationId: string | null = null): ChatController {
   }, [checkpoint])
 
   const reset = useCallback(
-    (next: DisplayItem[], nextUsage: SessionUsage | null = null, nextErrored = false) => {
+    (
+      next: DisplayItem[],
+      nextUsage: SessionUsage | null = null,
+      nextErrored = false,
+      nextFailure: ConversationError | null = null
+    ) => {
       setItems(next)
       setRunning(false)
+      setMeter(null)
       setUsage(nextUsage)
+      outputSeenRef.current = nextUsage?.output ?? 0
       setCheckpoint(null)
       setPendingPlan(null)
       // Seed from the conversation's persisted failure so a reload restores the
       // "last turn failed" banner; a live run we adopt afterwards clears it.
       setErrored(nextErrored)
+      setFailure(nextErrored ? nextFailure : null)
       runIdRef.current = null
     },
     []
   )
 
   const adopt = useCallback(
-    (runId: string, pendingPrompts: AgentEvent[] = [], liveTranscript: AgentEvent[] = []) => {
+    (runId: string, pendingPrompts: AgentEvent[] = [], liveTranscript: AgentEvent[] = [], startedAt?: number) => {
       runIdRef.current = runId
       setRunning(true)
+      // The clock counts from the run's start. The token count can't recover rounds that
+      // finished while this chat wasn't open (only the chat's total was saved), so it
+      // starts from the open round's streamed text and grows from there.
+      setMeter(liveTranscript.reduce((m, ev) => meterOnEvent(m, ev), startMeter(startedAt ?? Date.now())))
       setErrored(false)
+      setFailure(null)
       // Replay, in order, the in-flight turn's streamed-but-unpersisted output
       // (liveTranscript) then the prompts still blocking the run (pendingPrompts, a
       // subset re-applied so it also drives the plan panel below). reduceEvent upserts
@@ -394,8 +442,10 @@ export function useChat(conversationId: string | null = null): ChatController {
     items,
     running,
     usage,
+    meter,
     checkpoint,
     errored,
+    failure,
     send,
     retry,
     cancel,

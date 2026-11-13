@@ -18,7 +18,8 @@ import type {
   PlanDecision,
   ProposalState,
   ReasoningEffort,
-  RepoInfo
+  RepoInfo,
+  ToolApprovalDecision
 } from '@shared/agent'
 import { commandGroup, matchCommands, mergeCommands, builtinCommands, resolveCommand, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
@@ -62,6 +63,8 @@ import { nextApprovalPolicy } from './lib/policyCycle'
 import { resolveShortcuts } from './lib/keybindingOverrides'
 import { modelPaletteItems, type PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
+import { playAttentionSound } from './lib/attentionSound'
+import { RunMeterText } from './components/RunMeterText'
 import { newGroupId } from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
 import { occludesPreview, ownsShiftTab, suppressesTips, type OverlayFlags } from './lib/overlays'
@@ -106,6 +109,7 @@ import type { DockTab } from './components/PreviewDock'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
 import { Transcript, type RewindHandlers } from './components/Transcript'
+import { FileLinkContext, type FileLinks } from './components/FileLink'
 import { RewindDialog } from './components/RewindDialog'
 import { RewindPicker } from './components/RewindPicker'
 import { rewindDoneText, rewindsConversation, type RewindMode, type RewindOutcome } from '@shared/rewind'
@@ -115,12 +119,16 @@ import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer, IDLE_ONLY_COMMANDS } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
+import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { useUpdateBanner } from './hooks/useUpdateBanner'
 import { GetStarted } from './components/GetStarted'
 import { StarterPrompts } from './components/StarterPrompts'
+import { RecentFolders } from './components/RecentFolders'
+import { recentFolders } from './lib/recentFolders'
+import { useFolderDrop } from './hooks/useFolderDrop'
 import { ConnectModel, providerShortName } from './components/ConnectModel'
 import { TipHost } from './components/TipHost'
 import { ImageViewer } from './components/ImageViewer'
@@ -142,10 +150,14 @@ import {
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
 import { Icon } from './components/Icon'
+import { StatusBarInfo } from './components/StatusBarInfo'
+import { TurnErrorBar } from './components/TurnErrorBar'
+import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
 import { FindBar } from './components/FindBar'
 import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
 import type { WhatsNew } from '@shared/update'
+import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutRules } from './lib/ruleToast'
 
 // These overlays aren't on the initial render path, so load them as separate
 // chunks fetched on first open instead of bloating the main bundle. SettingsModal
@@ -226,6 +238,8 @@ export default function App(): JSX.Element {
   const [filesOpen, setFilesOpen] = useState(false)
   // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
   const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
+  // The line to show in the previewed file, when a link named one.
+  const [filesLine, setFilesLine] = useState<number | undefined>(undefined)
   const [sideChatOpen, setSideChatOpen] = useState(false)
   // The open chat's decisions on its propose_session cards (keyed by call id).
   const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
@@ -458,12 +472,55 @@ export default function App(): JSX.Element {
   // Where the open chat's unseen output starts (the "New" divider), set on open.
   const [newFrom, setNewFrom] = useState<{ conversationId: string; itemId: string } | null>(null)
   // A short confirmation with an Undo (marking a chat unread leaves it).
-  const [undoToast, setUndoToast] = useState<{ text: string; undo: () => void } | null>(null)
+  // Also names the permission rules an approval's "Always allow / deny" saved, with
+  // Undo (remove them) and a way to Settings > Permissions.
+  const [undoToast, setUndoToast] = useState<{
+    text: string
+    rules?: string[]
+    undo?: () => void
+    link?: { label: string; open: () => void }
+    ms?: number
+  } | null>(null)
   useEffect(() => {
     if (!undoToast) return
-    const t = setTimeout(() => setUndoToast(null), 6000)
+    const t = setTimeout(() => setUndoToast(null), undoToast.ms ?? 6000)
     return () => clearTimeout(t)
   }, [undoToast])
+
+  // Answer an approval. After "Always allow / deny", name the rule that was saved, with
+  // Undo and a way to the Permissions page.
+  const chatApprove = chat.approve
+  const onApproveTool = useCallback(
+    (callId: string, decision: ToolApprovalDecision, note?: string) => {
+      const since = Date.now()
+      chatApprove(callId, decision, note)
+      const action = ruleActionOf(decision)
+      if (!action) return
+      const openPermissions = (): void => {
+        setSettingsSection('permissions')
+        setSettingsOpen(true)
+      }
+      void waitForSavedRules(() => window.api.getSettings(), action, since).then(({ saved, settings: fresh }) => {
+        if (fresh) setSettings(fresh)
+        setUndoToast({
+          text: savedRulesText(saved, action),
+          rules: saved.map(describeRule),
+          ms: 10000,
+          link: { label: 'Permissions', open: openPermissions },
+          undo:
+            saved.length > 0
+              ? () => {
+                  void window.api.getSettings().then(async (current) => {
+                    const next = { ...current, permissionRules: withoutRules(current.permissionRules, saved) }
+                    setSettings(await window.api.saveSettings(next))
+                  })
+                }
+              : undefined
+        })
+      })
+    },
+    [chatApprove]
+  )
   // The running set only changes when a run starts or ends, not when a prompt comes
   // or goes, so key it by its members: the refresh below must not fire per prompt.
   const runningKey = Object.keys(chatStatus)
@@ -528,6 +585,22 @@ export default function App(): JSX.Element {
     [conversations, currentId]
   )
   const workspace = currentConv?.workspace ?? lastWorkspace
+  // File paths in the transcript (tool rows, the receipt, relative links in replies)
+  // open in the Files panel's preview, at the line when one is known.
+  const fileLinks = useMemo<FileLinks | null>(
+    () =>
+      workspace
+        ? {
+            workspace,
+            open: ({ path, line }) => {
+              setFilesTarget(path)
+              setFilesLine(line)
+              setFilesOpen(true)
+            }
+          }
+        : null,
+    [workspace]
+  )
   // Whether the open folder is empty, so the setup checklist's step 3 can suggest a
   // first task that fits it (build something vs. explain the project).
   const [workspaceKind, setWorkspaceKind] = useState<FolderKind>('unknown')
@@ -793,7 +866,8 @@ export default function App(): JSX.Element {
         // Map through the shared helper so the persisted per-model breakdown and
         // cache split survive a reopen too — not just context/output/cost.
         conv.usage ? sessionUsageFromConversation(conv.usage) : null,
-        Boolean(conv.lastError)
+        Boolean(conv.lastError),
+        conv.lastError ?? null
       )
       // A run for this conversation is still in flight in the main process —
       // re-adopt it so the composer shows Stop and events/approvals reconnect.
@@ -801,7 +875,7 @@ export default function App(): JSX.Element {
       // isn't on disk yet (otherwise it vanishes on switch-back, most visibly on a
       // freshly spawned session); pendingPrompts re-renders any approval/question
       // still awaiting the user, so a run parked on a prompt isn't left wedged.
-      if (activeRunId) chat.adopt(activeRunId, pendingPrompts, liveTranscript)
+      if (activeRunId) chat.adopt(activeRunId, pendingPrompts, liveTranscript, chatStatusRef.current[id]?.startedAt)
       // Restore the revert/redo affordance for the conversation's latest turn — the
       // checkpoint state is built only from live events and lost on a reset/rebuild.
       chat.seedCheckpoint(checkpoint)
@@ -850,10 +924,56 @@ export default function App(): JSX.Element {
     enterNewChat(workspace)
   }, [workspace, enterNewChat])
 
+  // The recents live in settings, which main updates when a folder opens; re-read just
+  // them so the welcome screen and the folder menu list the folder just opened.
+  const refreshRecentFolders = useCallback(async () => {
+    const fresh = await window.api.getSettings()
+    setSettings((s) => (s ? { ...s, recentWorkspaces: fresh.recentWorkspaces } : s))
+  }, [])
+
   const onChangeWorkspace = useCallback(async () => {
     const ws = await window.api.pickWorkspace()
-    if (ws) enterNewChat(ws)
-  }, [enterNewChat])
+    if (ws) {
+      enterNewChat(ws)
+      void refreshRecentFolders()
+    }
+  }, [enterNewChat, refreshRecentFolders])
+
+  // A short note for a folder that could not be opened (a vanished recent, a dropped file).
+  const [folderNotice, setFolderNotice] = useState<string | null>(null)
+  useEffect(() => {
+    if (!folderNotice) return
+    const t = setTimeout(() => setFolderNotice(null), 4000)
+    return () => clearTimeout(t)
+  }, [folderNotice])
+
+  // Open a folder by path: a recent from the welcome screen or folder menu, or the
+  // paths of a drop on the window (the first that is a folder wins). Main checks each.
+  const openFolderPaths = useCallback(
+    async (paths: string[], from: 'recent' | 'drop') => {
+      for (const path of paths) {
+        const ws = await window.api.openWorkspace(path)
+        if (ws) {
+          enterNewChat(ws)
+          void refreshRecentFolders()
+          return
+        }
+      }
+      void refreshRecentFolders()
+      setFolderNotice(
+        from === 'recent' ? 'That folder no longer exists.' : 'Drop a folder to open it as the project.'
+      )
+    },
+    [enterNewChat, refreshRecentFolders]
+  )
+  const onOpenRecentFolder = useCallback(
+    (path: string) => void openFolderPaths([path], 'recent'),
+    [openFolderPaths]
+  )
+  const folderDragOver = useFolderDrop(
+    (paths) => void openFolderPaths(paths, 'drop'),
+    window.api.pathForFile
+  )
 
   const onDeleteConversation = useCallback(
     async (id: string) => {
@@ -971,6 +1091,10 @@ export default function App(): JSX.Element {
     () => window.api.onChatOpenRequest?.((id) => void selectConversation(id)),
     [selectConversation]
   )
+
+  // The main process decides when a sound is due (the setting is on, the window is
+  // not focused, and the event ends a turn or needs the user); this window plays it.
+  useEffect(() => window.api.onAttentionSound?.((sound) => void playAttentionSound(sound)), [])
 
   // Other chats waiting on the user, in sidebar recency order, for the titlebar's
   // "N need you" pill; each click opens the next one after the open chat.
@@ -1499,6 +1623,22 @@ export default function App(): JSX.Element {
     })
   }, [chat, settings, currentId])
 
+  // The failed-turn bar's next steps.
+  const onTurnErrorAction = useCallback(
+    (action: TurnErrorAction) => {
+      if (action === 'retry') onRetry()
+      else if (action === 'doctor') setDoctorOpen(true)
+      else if (action === 'switch-model') {
+        setPaletteSeed('model')
+        setPaletteOpen(true)
+      } else {
+        setSettingsSection('models')
+        setSettingsOpen(true)
+      }
+    },
+    [onRetry]
+  )
+
   const onReapply = useCallback(async () => {
     const expected = chat.checkpoint?.files ?? 0
     const n = await chat.reapplyCheckpoint()
@@ -1601,6 +1741,36 @@ export default function App(): JSX.Element {
       left ? 'error' : 'info'
     )
   }, [currentId, chat, selectConversation])
+
+  // Retry on the last reply: take the conversation back to just before the last
+  // message the user sent (the files are left as they are), then send it again, so
+  // the new reply replaces the old one. Same rewind the message menu does, without
+  // its confirmation: what goes away is only the reply being retried.
+  const lastTurn = useMemo(() => {
+    const targets = rewindTargets(chat.items)
+    const target = targets[targets.length - 1]
+    if (!target) return null
+    const item = chat.items.find((it) => it.id === target.id)
+    return item?.kind === 'user' ? { target, item } : null
+  }, [chat.items])
+  const onRetryLast = useCallback(async () => {
+    const id = currentId
+    if (!id || !lastTurn || chat.running) return
+    const { target, item } = lastTurn
+    let res
+    try {
+      res = await window.api.rewind(id, target.turn, 'conversation', target.text)
+    } catch {
+      res = { ok: false as const, error: "Couldn't retry this reply." }
+    }
+    if (!res.ok) {
+      chat.notify(res.error, 'error')
+      return
+    }
+    await selectConversation(id)
+    if (currentIdRef.current !== id) return
+    dispatch(item.text, item.images, item.invokedAs)
+  }, [currentId, lastTurn, chat, selectConversation, dispatch])
 
   const rewindHandlers = useMemo<RewindHandlers | undefined>(
     () =>
@@ -2586,6 +2756,8 @@ export default function App(): JSX.Element {
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         toggleShortcut={shortcutHint('toggle-sidebar', mac, shortcuts)}
+        newChatShortcut={shortcutHint('new-chat', mac, shortcuts)}
+        settingsShortcut={shortcutHint('open-settings', mac, shortcuts)}
         chatStatus={chatStatus}
         onSelect={selectConversation}
         onNew={onNewChat}
@@ -2702,6 +2874,8 @@ export default function App(): JSX.Element {
                 onUseExample={(task) => prefillComposer(task)}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
+                recentFolders={recentFolders(settings.recentWorkspaces, workspace)}
+                onOpenFolder={onOpenRecentFolder}
                 focusModelStep={connectBackedOut}
               />
             ) : (
@@ -2718,6 +2892,12 @@ export default function App(): JSX.Element {
                   <StarterPrompts prompts={starterPrompts(workspaceKind)} onPick={(task) => prefillComposer(task)} />
                 )}
                 {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
+                {currentId === null && (
+                  <RecentFolders
+                    folders={recentFolders(settings.recentWorkspaces, workspace)}
+                    onOpen={onOpenRecentFolder}
+                  />
+                )}
                 {workspace && !settings.selected && (
                   <p className="welcome__hint">Pick a model (set an API key in Settings first).</p>
                 )}
@@ -2725,12 +2905,13 @@ export default function App(): JSX.Element {
             )}
           </div>
         ) : (
+          <FileLinkContext.Provider value={fileLinks}>
           <Transcript
             // One per chat: a new chat opens at its latest message (or its "New"
             // divider), not at the scroll position the last chat was left at.
             key={currentId ?? 'new'}
             items={chat.items}
-            onApprove={chat.approve}
+            onApprove={onApproveTool}
             onAnswer={chat.answerQuestion}
             onElicit={chat.answerElicitation}
             onOpenPlan={onOpenPlan}
@@ -2738,11 +2919,13 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            {...(currentId && lastTurn && !chat.running ? { onRetryLast: () => void onRetryLast() } : {})}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
               : {})}
             {...(newFrom && newFrom.conversationId === currentId ? { newFromId: newFrom.itemId } : {})}
           />
+          </FileLinkContext.Provider>
         )}
 
         <TrustFolderBanner
@@ -2757,6 +2940,14 @@ export default function App(): JSX.Element {
 
         <GlobalRulesNotice onDecided={setSettings} />
 
+        <EnvKeyNotice
+          // A key stored with no model picked yet starts on that provider's default,
+          // as connecting one in the checklist does; otherwise the pick stays.
+          onImported={(fresh, providerId) =>
+            fresh.selected ? setSettings(fresh) : void onModelConnected(fresh, providerId)
+          }
+        />
+
         <GitInitBanner
           // Re-evaluate cleanly per workspace: a new folder gets its own banner state.
           key={workspace ?? 'none'}
@@ -2770,12 +2961,7 @@ export default function App(): JSX.Element {
         />
 
         {chat.errored && !chat.running && currentId && (
-          <div className="checkpoint-bar">
-            <span className="checkpoint-bar__label">The last turn failed.</span>
-            <button className="btn btn--sm" onClick={onRetry}>
-              <Icon name="refresh" /> Retry
-            </button>
-          </div>
+          <TurnErrorBar failure={chat.failure} onAction={onTurnErrorAction} />
         )}
 
         {chat.checkpoint && !chat.running && (
@@ -2873,6 +3059,7 @@ export default function App(): JSX.Element {
             onChangePolicy={onChangePolicy}
             onChangeReasoning={onChangeReasoning}
             onChangeWorkspace={onChangeWorkspace}
+            onOpenWorkspace={onOpenRecentFolder}
             onOpenSettings={() => setSettingsOpen(true)}
             sandbox={sandbox}
             {...(currentId && chatSettings && savedSettings && differsFromDefaults(chatSettings, savedSettings)
@@ -2922,11 +3109,16 @@ export default function App(): JSX.Element {
         <footer className="statusbar">
           <span className={`statusbar__dot${chat.running ? ' statusbar__dot--busy' : ''}`} />
           <span className="statusbar__state">{statusText(chat.items, chat.running)}</span>
+          <RunMeterText meter={chat.meter} />
           <TerminalChip
             tabCount={terminals.tabs.length}
             open={terminalOpen}
             shortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
             onShow={toggleTerminal}
+          />
+          <StatusBarInfo
+            branch={workspace ? workingTreeStats.branch : undefined}
+            policy={canChat ? settings.approvalPolicy : null}
           />
           {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
         </footer>
@@ -3022,9 +3214,11 @@ export default function App(): JSX.Element {
           <FilesPanel
             workspace={workspace}
             initialPath={filesTarget}
+            initialLine={filesLine}
             onClose={() => {
               setFilesOpen(false)
               setFilesTarget(undefined)
+              setFilesLine(undefined)
             }}
           />
         )}
@@ -3075,19 +3269,52 @@ export default function App(): JSX.Element {
         )}
       </Suspense>
 
-      {undoToast && (
+      {folderDragOver && (
+        <div className="folder-drop" aria-hidden="true">
+          <span className="folder-drop__label">Drop a folder to open it as the project</span>
+        </div>
+      )}
+      {folderNotice && (
         <div className="undo-toast" role="status">
-          <span>{undoToast.text}</span>
-          <button
-            type="button"
-            className="undo-toast__btn"
-            onClick={() => {
-              undoToast.undo()
-              setUndoToast(null)
-            }}
-          >
-            Undo
-          </button>
+          <span>{folderNotice}</span>
+        </div>
+      )}
+      {undoToast && (
+        <div className={`undo-toast${undoToast.rules?.length ? ' undo-toast--rules' : ''}`} role="status">
+          <span className="undo-toast__text">{undoToast.text}</span>
+          {undoToast.rules && undoToast.rules.length > 0 && (
+            <ul className="undo-toast__rules">
+              {undoToast.rules.map((r, i) => (
+                <li key={i}>
+                  <code title={r}>{r}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+          {undoToast.undo && (
+            <button
+              type="button"
+              className="undo-toast__btn"
+              onClick={() => {
+                undoToast.undo?.()
+                setUndoToast(null)
+              }}
+            >
+              Undo
+            </button>
+          )}
+          {undoToast.link && (
+            <button
+              type="button"
+              className="undo-toast__btn"
+              onClick={() => {
+                undoToast.link?.open()
+                setUndoToast(null)
+              }}
+            >
+              {undoToast.link.label}
+            </button>
+          )}
         </div>
       )}
       <TipHost

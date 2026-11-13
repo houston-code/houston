@@ -97,6 +97,35 @@ interface FlatOption {
   modelId: string
 }
 
+/** How many recently used models the Recent section shows. */
+const RECENT_SHOWN = 3
+
+/** One labelled block of the list: Recent, or one provider's models. */
+interface Section {
+  key: string
+  label: string
+  items: { provider: ProviderConfig; model: ModelOption }[]
+}
+
+/**
+ * The Recent section's entries: the last few models runs used, newest first, that the
+ * settings still list under a provider that can be called right now.
+ */
+export function recentEntries(
+  settings: Pick<AppSettings, 'providers' | 'recentModels'>,
+  limit = RECENT_SHOWN
+): Section['items'] {
+  const out: Section['items'] = []
+  for (const r of settings.recentModels ?? []) {
+    const provider = settings.providers.find((p) => p.id === r.providerId)
+    const model = provider?.models.find((m) => m.id === r.model)
+    if (!provider || !model || !isUsable(provider)) continue
+    out.push({ provider, model })
+    if (out.length >= limit) break
+  }
+  return out
+}
+
 /**
  * Model selector: a trigger plus a popover listbox with a search field. It's a popover
  * rather than a native <select> so it can open upward from the bottom-docked control bar,
@@ -150,9 +179,26 @@ export function ModelPicker({
       .filter((g) => g.models.length > 0)
   }, [groups, query])
 
+  // What the list shows: the Recent section (only while not searching), then each
+  // provider's models. A recent model is listed in both places.
+  const recent = useMemo(() => recentEntries(settings), [settings])
+  const sections = useMemo<Section[]>(() => {
+    const byProvider = visible.map(({ provider, models }) => ({
+      key: provider.id,
+      label: groupLabel(provider),
+      items: models.map((model) => ({ provider, model }))
+    }))
+    return !query.trim() && recent.length > 0
+      ? [{ key: 'recent', label: 'Recent', items: recent }, ...byProvider]
+      : byProvider
+  }, [visible, recent, query])
+
   const flat = useMemo<FlatOption[]>(
-    () => visible.flatMap(({ provider, models }) => models.map((m) => ({ providerId: provider.id, modelId: m.id }))),
-    [visible]
+    () =>
+      sections.flatMap(({ items }) =>
+        items.map(({ provider, model }) => ({ providerId: provider.id, modelId: model.id }))
+      ),
+    [sections]
   )
 
   const selectedKey = selected ? `${selected.providerId}::${selected.model}` : ''
@@ -214,9 +260,11 @@ export function ModelPicker({
     if (initialQuery) {
       setActive(0)
     } else {
-      const idx = groups.stocked
-        .flatMap(({ provider, models }) => models.map((m) => `${provider.id}::${m.id}`))
-        .indexOf(selectedKey)
+      // The unfiltered list, as it will show once the query clears: Recent first.
+      const idx = [
+        ...recent.map(({ provider, model }) => `${provider.id}::${model.id}`),
+        ...groups.stocked.flatMap(({ provider, models }) => models.map((m) => `${provider.id}::${m.id}`))
+      ].indexOf(selectedKey)
       setActive(idx >= 0 ? idx : 0)
     }
     setOpen(true)
@@ -299,10 +347,10 @@ export function ModelPicker({
           roving={false}
         >
           <div id={listId} role="listbox" aria-label="Model" className="model-menu__list">
-            {visible.map(({ provider, models }) => (
-              <div key={provider.id} role="group" aria-label={groupLabel(provider)}>
-                <div className="menu__label">{groupLabel(provider)}</div>
-                {models.map((m) => {
+            {sections.map(({ key: sectionKey, label, items }) => (
+              <div key={sectionKey} role="group" aria-label={label}>
+                <div className="menu__label">{label}</div>
+                {items.map(({ provider, model: m }) => {
                   idx += 1
                   const i = idx
                   const key = `${provider.id}::${m.id}`
@@ -312,8 +360,13 @@ export function ModelPicker({
                   const fresh = isNew(m, today)
                   const missing = !!m.unavailableAt
                   const name = modelName(provider.kind, m)
+                  const inRecent = sectionKey === 'recent'
+                  // The provider's own default is the model Houston recommends there.
+                  const recommended = provider.defaultModel === m.id
                   const spoken = [
                     name,
+                    inRecent && provider.label,
+                    recommended && 'recommended',
                     missing && `not found by ${provider.label}`,
                     win && `${win} context`,
                     ...chips.map((c) => c.spoken),
@@ -323,7 +376,7 @@ export function ModelPicker({
                     .join(', ')
                   return (
                     <button
-                      key={key}
+                      key={`${sectionKey}:${key}`}
                       id={optId(i)}
                       type="button"
                       tabIndex={-1}
@@ -341,6 +394,16 @@ export function ModelPicker({
                       </span>
                       <span className="model-menu__name">
                         {name}
+                        {inRecent && <span className="model-menu__provider">{provider.label}</span>}
+                        {recommended && (
+                          <span
+                            className="model-menu__recommended"
+                            aria-hidden="true"
+                            title={`The model Houston recommends for ${provider.label}`}
+                          >
+                            Recommended
+                          </span>
+                        )}
                         {fresh && (
                           <span className="model-menu__new" aria-hidden="true">
                             New
@@ -376,6 +439,18 @@ export function ModelPicker({
             {query.trim() && flat.length === 0 && (
               <div className="model-menu__empty">No models match &ldquo;{query.trim()}&rdquo;</div>
             )}
+          </div>
+          {/* What the badges mean, always at hand (the glyphs alone don't say). */}
+          <div className="model-menu__legend">
+            <span>
+              <span className="model-cap" aria-hidden="true">T</span> tools
+            </span>
+            <span>
+              <span className="model-cap" aria-hidden="true">V</span> images
+            </span>
+            <span>
+              <span className="model-cap" aria-hidden="true">R</span> reasoning
+            </span>
           </div>
           {!query.trim() && groups.empty.length > 0 && (
             <div className="model-menu__footnote">

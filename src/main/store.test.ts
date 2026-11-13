@@ -686,6 +686,30 @@ describe('setModelUnavailable — a model its provider answered "not found" for'
   })
 })
 
+describe('recent models', () => {
+  it('rememberModel fronts the model, dedupes, caps, and skips models the settings do not list', async () => {
+    const { rememberModel, getSettings, saveSettings, RECENT_MODEL_LIMIT } = await loadStore()
+    const providerId = getSettings().providers[0].id
+    const models = getSettings().providers[0].models.map((m) => m.id)
+    expect(models.length).toBeGreaterThan(1)
+    rememberModel({ providerId, model: models[0] })
+    rememberModel({ providerId, model: models[1] })
+    expect(rememberModel({ providerId, model: models[0] }).recentModels).toEqual([
+      { providerId, model: models[0] },
+      { providerId, model: models[1] }
+    ])
+    // Unknown provider or model, or junk from IPC, records nothing.
+    rememberModel({ providerId, model: 'not-a-listed-model' })
+    rememberModel({ providerId: 'nope', model: models[0] })
+    rememberModel({ providerId: 42, model: null })
+    expect(getSettings().recentModels).toHaveLength(2)
+    // A save carrying an older copy of the list (the renderer's) keeps main's list.
+    const stale = { ...getSettings(), recentModels: [] }
+    expect(saveSettings(stale).recentModels).toHaveLength(2)
+    expect(RECENT_MODEL_LIMIT).toBe(5)
+  })
+})
+
 describe('recent workspaces — existence pruning', () => {
   it('rememberWorkspace fronts the path, dedupes, and keeps live entries in order', async () => {
     const a = mkdtempSync(join(tmpdir(), 'ws-a-'))
@@ -714,6 +738,31 @@ describe('recent workspaces — existence pruning', () => {
       expect(rememberWorkspace(live).recentWorkspaces).toEqual([live])
     } finally {
       rmSync(live, { recursive: true, force: true })
+    }
+  })
+
+  it('openWorkspaceFolder opens only an existing directory and records it as most recent', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ws-open-'))
+    const other = mkdtempSync(join(tmpdir(), 'ws-other-'))
+    const file = join(dir, 'notes.txt')
+    writeFileSync(file, 'x')
+    try {
+      const { openWorkspaceFolder, rememberWorkspace, getSettings } = await loadStore()
+      rememberWorkspace(other)
+      expect(openWorkspaceFolder(dir)).toBe(dir)
+      expect(getSettings().recentWorkspaces).toEqual([dir, other])
+      // A dropped file, a relative path, a non-string and a missing folder all open nothing.
+      expect(openWorkspaceFolder(file)).toBeNull()
+      expect(openWorkspaceFolder('relative/dir')).toBeNull()
+      expect(openWorkspaceFolder(42)).toBeNull()
+      expect(openWorkspaceFolder('')).toBeNull()
+      rmSync(other, { recursive: true, force: true })
+      expect(openWorkspaceFolder(other)).toBeNull()
+      // ...and the vanished recent is pruned on the way.
+      expect(getSettings().recentWorkspaces).toEqual([dir])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      rmSync(other, { recursive: true, force: true })
     }
   })
 

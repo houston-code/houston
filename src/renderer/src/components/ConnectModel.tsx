@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
-import type { AppSettings, ProviderConfig } from '@shared/types'
+import type { AppSettings, EnvKeyOffer, ProviderConfig } from '@shared/types'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 
@@ -106,6 +106,22 @@ export function ConnectModel({ settings, onConnected, onBack, onMoreProviders }:
   const [unverified, setUnverified] = useState<string | null>(null)
   // The platform, when a save failed because the OS secure store is unusable.
   const [storageBlocked, setStorageBlocked] = useState<string | null>(null)
+
+  // Keys found in the app's environment for providers with no stored key (last four
+  // characters only). Offered beside the key box; nothing is stored until Use it.
+  const [envOffers, setEnvOffers] = useState<EnvKeyOffer[]>([])
+  useEffect(() => {
+    let live = true
+    Promise.resolve()
+      .then(() => window.api.getEnvKeyOffers?.('connect'))
+      .then((o) => {
+        if (live && Array.isArray(o)) setEnvOffers(o)
+      })
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [])
 
   // Local hosts found answering when the panel opened, with how many models each has.
   // A quiet look only: nothing is saved until the user picks the tile and connects.
@@ -257,6 +273,25 @@ export function ConnectModel({ settings, onConnected, onBack, onMoreProviders }:
     }
   }
 
+  /** Check and store the key from the environment, as if it had been pasted. */
+  const importFromEnv = async (): Promise<void> => {
+    setBusy(true)
+    setError(null)
+    setUnverified(null)
+    try {
+      const fresh = await window.api.importEnvKey(providerId)
+      setEnvOffers((o) => o.filter((x) => x.providerId !== providerId))
+      onConnected(fresh, providerId)
+    } catch (e) {
+      const platform = await secureStorageBlocked()
+      if (platform) setStorageBlocked(platform)
+      else setError(`That key didn't work: ${ipcErrorMessage(e)}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+  const envOffer = envOffers.find((o) => o.providerId === providerId)
+
   const saveAnyway = async (): Promise<void> => {
     if (unverified === null) return
     setBusy(true)
@@ -352,6 +387,21 @@ export function ConnectModel({ settings, onConnected, onBack, onMoreProviders }:
               ))}
             </select>
           </>
+        )}
+        {!showReady && !local && envOffer && !provider?.hasKey && (
+          <div className="connect-model__env" role="group" aria-label="Key from your environment">
+            <span className="connect-model__env-text">
+              <code>{envOffer.envVar}</code> holds a key ending in <code>{envOffer.last4}</code>.
+            </span>
+            <button
+              type="button"
+              className="btn btn--sm"
+              onClick={() => void importFromEnv()}
+              disabled={busy}
+            >
+              Use it
+            </button>
+          </div>
         )}
         {!showReady && !local && (
           <>

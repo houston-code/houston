@@ -47,6 +47,7 @@ export function Popover({
   role,
   ariaLabel,
   roving = true,
+  at,
   children
 }: {
   anchorRef: RefObject<HTMLElement | null>
@@ -63,6 +64,11 @@ export function Popover({
    * and tracks the active item itself (a filterable listbox) turns this off.
    */
   roving?: boolean
+  /**
+   * Open at this viewport point instead of under the trigger (a right-click menu).
+   * The trigger still receives focus back when the menu closes.
+   */
+  at?: { x: number; y: number }
   children: ReactNode
 }): JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null)
@@ -73,9 +79,17 @@ export function Popover({
   const rovingRef = useRef(roving)
   rovingRef.current = roving
 
+  const atX = at?.x
+  const atY = at?.y
   useLayoutEffect(() => {
-    const a = anchorRef.current?.getBoundingClientRect()
+    const point = atX !== undefined && atY !== undefined
+    const a = point
+      ? { top: atY, bottom: atY, left: atX, right: atX }
+      : anchorRef.current?.getBoundingClientRect()
     if (!a) return
+    // At a point, open toward whichever side has room: rightward unless it is near
+    // the window's right edge.
+    const side = point ? (atX > window.innerWidth - 260 ? 'right' : 'left') : align
     const spaceBelow = window.innerHeight - a.bottom
     const spaceAbove = a.top
     const openUp = spaceBelow < 280 && spaceAbove > spaceBelow
@@ -87,10 +101,10 @@ export function Popover({
       maxHeight,
       top: openUp ? 'auto' : a.bottom + gap,
       bottom: openUp ? window.innerHeight - a.top + gap : 'auto',
-      left: align === 'left' ? Math.max(8, Math.min(a.left, window.innerWidth - 8)) : 'auto',
-      right: align === 'right' ? Math.max(8, window.innerWidth - a.right) : 'auto'
+      left: side === 'left' ? Math.max(8, Math.min(a.left, window.innerWidth - 8)) : 'auto',
+      right: side === 'right' ? Math.max(8, window.innerWidth - a.right) : 'auto'
     })
-  }, [anchorRef, align, gap])
+  }, [anchorRef, align, gap, atX, atY])
 
   // Track how many popovers are open, for the app-level shortcut guard.
   useEffect(() => {

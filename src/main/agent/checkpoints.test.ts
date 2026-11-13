@@ -23,7 +23,8 @@ import {
   clearCheckpoints,
   flushCheckpoints,
   writeTargets,
-  conversationForLatestRun
+  conversationForLatestRun,
+  _setCheckpointMemoryBudget
 } from './checkpoints'
 import { setUserDataDir, resetUserDataDir } from '../userData'
 
@@ -678,5 +679,42 @@ describe('checkpoints', () => {
       expect(await restoreCheckpoint('run-ok')).toBe(1)
       expect(readFileSync(join(ws, 'keep', 'y.txt'), 'utf8')).toBe('original')
     })
+  })
+})
+
+describe('checkpoint memory budget', () => {
+  let dataDir: string
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'houston-cp-data-'))
+    setUserDataDir(dataDir)
+  })
+  afterEach(() => {
+    _setCheckpointMemoryBudget(null)
+    rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  it('evicts older runs past the budget, and still reverts them from disk', async () => {
+    // The budget is checked as each run's checkpoint is created; run-a's snapshots
+    // (45 characters) are already over it when run-b starts.
+    _setCheckpointMemoryBudget(40)
+    const a = join(ws, 'a.txt')
+    const b = join(ws, 'b.txt')
+    writeFileSync(a, 'a'.repeat(20))
+    writeFileSync(b, 'b'.repeat(20))
+    await recordOriginal('run-a', [ws], 'a.txt')
+    writeFileSync(a, 'A'.repeat(25))
+    await recordResult('run-a', [ws], 'a.txt')
+    await flushCheckpoints()
+    await recordOriginal('run-b', [ws], 'b.txt')
+    writeFileSync(b, 'B'.repeat(25))
+    await recordResult('run-b', [ws], 'b.txt')
+    // run-a was evicted from memory to admit run-b...
+    expect(checkpointFileCount('run-a')).toBe(0)
+    expect(checkpointFileCount('run-b')).toBe(1)
+    // ...and is read back from disk when it is needed.
+    expect(await restoreCheckpoint('run-a')).toBe(1)
+    expect(readFileSync(a, 'utf8')).toBe('a'.repeat(20))
+    expect(await restoreCheckpoint('run-b')).toBe(1)
+    expect(readFileSync(b, 'utf8')).toBe('b'.repeat(20))
   })
 })
