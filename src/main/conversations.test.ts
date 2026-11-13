@@ -548,6 +548,31 @@ describe('per-chat settings (persisted)', () => {
     expect(getConversation(c.id)?.approvalPolicy).toBeUndefined()
   })
 
+  it('setMessages records the turn\'s settings in the same write as the message', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm', approvalPolicy: 'ask' })
+    setMessages(c.id, [{ role: 'user', content: 'Fix the auth bug' }], {
+      providerId: 'q',
+      model: 'n',
+      reasoningEffort: 'medium',
+      approvalPolicy: 'bogus' as never
+    })
+    const saved = getConversation(c.id)
+    expect(saved).toMatchObject({ providerId: 'q', model: 'n', reasoningEffort: 'medium', title: 'Fix the auth bug' })
+    expect(saved?.messages).toHaveLength(1)
+    // An unknown value is dropped, as updateConversationMeta drops it.
+    expect(saved?.approvalPolicy).toBeUndefined()
+  })
+
+  it('writes compact JSON that an indented file from an earlier version reads the same as', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [{ role: 'user', content: 'hello' }])
+    const raw = readFileSync(file(c.id), 'utf8')
+    expect(raw).not.toContain('\n')
+    const before = getConversation(c.id)
+    writeFileSync(file(c.id), JSON.stringify(JSON.parse(raw), null, 2))
+    expect(getConversation(c.id)).toEqual(before)
+  })
+
   it('a hand-edited or newer file with unknown values reads back as using the defaults', () => {
     const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm', approvalPolicy: 'ask' })
     rewrite(c.id, { approvalPolicy: 'full-auto-plus', reasoningEffort: 42 })

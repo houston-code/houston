@@ -294,8 +294,12 @@ function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): 
 function maybeNotify(sender: WebContents, conversationId: string, e: AgentEvent): void {
   if (getSettings().desktopNotifications === false) return
   if (!notificationFor(e)) return
+  // Nothing is shown while the window is focused (notifyAgentEvent's own gate), so
+  // don't parse the chat file just to label a notification that won't appear.
+  const win = BrowserWindow.fromWebContents(sender)
+  if (win && !win.isDestroyed() && win.isFocused()) return
   const conv = peekConversation(conversationId)
-  notifyAgentEvent(e, BrowserWindow.fromWebContents(sender), {
+  notifyAgentEvent(e, win, {
     enabled: true,
     workspaceName: workspaceLabel(conv?.workspace),
     conversationId
@@ -1008,7 +1012,8 @@ export function registerIpc(): void {
   ipcMain.handle(
     IPC.conversationDelete,
     async (event, id: string): Promise<DeleteConversationResult> => {
-      const conv = getConversation(id)
+      // Only the title and worktree are needed: no attachment bytes.
+      const conv = peekConversation(id)
       const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
       const title = conv?.title ?? 'this chat'
       // A worktree another chat still runs in (a fork shares its source's) is never
@@ -1209,15 +1214,14 @@ export function registerIpc(): void {
     }
     // A resend of a message whose turn failed replaces it rather than repeating it.
     const messages = appendUserTurn(conv.messages, userMessage)
-    setMessages(conv.id, messages)
-
     // Validate the policy at the IPC boundary: an unknown value fails *open* downstream
     // (needsApproval auto-approves any non-'ask' policy; isBlockedByPlan stops guarding),
     // so coerce anything off the list to the most restrictive policy. Mirrors setRunPolicy.
     const approvalPolicy = isApprovalPolicy(req.approvalPolicy) ? req.approvalPolicy : 'plan'
     const reasoningEffort = isReasoningEffort(req.reasoningEffort) ? req.reasoningEffort : undefined
     // Record what this turn runs under as the chat's own settings.
-    updateConversationMeta(conv.id, {
+    // The new message and those settings go to disk in one write.
+    setMessages(conv.id, messages, {
       providerId: req.providerId,
       model: req.model,
       approvalPolicy,

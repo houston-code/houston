@@ -7,8 +7,7 @@ import { removeFromQueue, settleSteers, takeQueue } from './queue'
 import {
   getConversation,
   setConversationError,
-  setMessages,
-  updateConversationMeta
+  setMessages
 } from '../conversations'
 
 /** How the run orchestrator talks back to the renderer (provided by the IPC layer). */
@@ -121,8 +120,7 @@ export function drainQueue(io: DrainIO, conversationId: string, owner?: number):
     ...(invokedAs ? { invokedAs } : {})
   }
   const messages = [...conv.messages, userMessage]
-  setMessages(conv.id, messages)
-  updateConversationMeta(conv.id, {
+  setMessages(conv.id, messages, {
     providerId: taken.providerId,
     model: taken.model,
     approvalPolicy: taken.approvalPolicy,

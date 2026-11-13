@@ -111,7 +111,7 @@ describe('runAndDrain', () => {
     expect(flushReq.model).toBe('m2')
     expect(flushReq.approvalPolicy).toBe('full-auto')
 
-    expect(h.setMessages).toHaveBeenCalledWith(cid, [{ role: 'user', content: 'A\n\nB' }])
+    expect(h.setMessages).toHaveBeenCalledWith(cid, [{ role: 'user', content: 'A\n\nB' }], expect.objectContaining({ model: 'm2', approvalPolicy: 'full-auto' }))
     expect(sink.emitQueueChanged).toHaveBeenCalledWith(cid, [])
     expect(listQueue(cid)).toEqual([]) // drained
   })
@@ -130,12 +130,14 @@ describe('runAndDrain', () => {
     await runAndDrain(io(), cid, runReq(cid))
     await settle()
     expect(h.startRun.mock.calls[1][0]).toMatchObject({ approvalPolicy: 'plan', reasoningEffort: 'low' })
-    expect(h.updateConversationMeta).toHaveBeenCalledWith(cid, {
+    // Recorded in the same store write as the flushed message.
+    expect(h.setMessages).toHaveBeenCalledWith(cid, [{ role: 'user', content: 'A' }], {
       providerId: 'anthropic',
       model: 'm1',
       approvalPolicy: 'plan',
       reasoningEffort: 'low'
     })
+    expect(h.updateConversationMeta).not.toHaveBeenCalled()
   })
 
   it('keeps a lone queued first-party prompt tagged through the flush', async () => {
@@ -157,9 +159,11 @@ describe('runAndDrain', () => {
 
     const turnStart = sink.emit.mock.calls.map(([, e]) => e).find((e) => e.type === 'turn_start')
     expect(turnStart).toMatchObject({ userText: 'Create a GitHub pull request…', invokedAs })
-    expect(h.setMessages).toHaveBeenCalledWith(cid, [
-      { role: 'user', content: 'Create a GitHub pull request…', invokedAs }
-    ])
+    expect(h.setMessages).toHaveBeenCalledWith(
+      cid,
+      [{ role: 'user', content: 'Create a GitHub pull request…', invokedAs }],
+      expect.objectContaining({ model: 'm1' })
+    )
   })
 
   it('holds the queue on error (no flush, no turn_start)', async () => {

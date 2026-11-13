@@ -14,14 +14,14 @@ import {
 const h = vi.hoisted(() => ({
   getProvider: vi.fn(),
   createProvider: vi.fn(),
-  getConversation: vi.fn(),
+  peekConversation: vi.fn(),
   needsGeneratedTitle: vi.fn(),
   setGeneratedTitle: vi.fn()
 }))
 vi.mock('../agentHost', () => ({ getProvider: h.getProvider }))
 vi.mock('../providers', () => ({ createProvider: h.createProvider }))
 vi.mock('../conversations', () => ({
-  getConversation: h.getConversation,
+  peekConversation: h.peekConversation,
   needsGeneratedTitle: h.needsGeneratedTitle,
   setGeneratedTitle: h.setGeneratedTitle
 }))
@@ -262,7 +262,7 @@ describe('maybeGenerateTitle', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // A chat at turn start: only the user message is persisted so far.
-    h.getConversation.mockReturnValue({ id: 'c1', messages: [{ role: 'user', content: 'Add dark mode' }] })
+    h.peekConversation.mockReturnValue({ id: 'c1', messages: [{ role: 'user', content: 'Add dark mode' }] })
     h.needsGeneratedTitle.mockReturnValue(true)
     h.getProvider.mockReturnValue({ id: 'p', kind: 'openai-compatible', models: [] })
     h.setGeneratedTitle.mockReturnValue(true)
