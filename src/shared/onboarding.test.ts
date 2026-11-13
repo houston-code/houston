@@ -8,6 +8,7 @@ import {
   firstTaskExample,
   folderKind,
   pickTip,
+  projectFacts,
   relevantTips,
   restartTips,
   shouldShowChecklist,
@@ -228,5 +229,30 @@ describe('starterPrompts', () => {
         expect(p.task).not.toContain('\u2014')
       }
     }
+  })
+})
+
+describe('projectFacts', () => {
+  const ls = (...names: string[]) => names.map((name) => ({ name }))
+
+  it('names each stack its marker files show, once and in a fixed order', () => {
+    expect(projectFacts(ls('tsconfig.json', 'package.json', 'src', 'README.md'))?.stack).toEqual([
+      'Node.js',
+      'TypeScript'
+    ])
+    expect(projectFacts(ls('requirements.txt', 'pyproject.toml'))?.stack).toEqual(['Python'])
+    expect(projectFacts(ls('Cargo.toml', 'Dockerfile'))?.stack).toEqual(['Rust', 'Docker'])
+    expect(projectFacts(ls('App.csproj'))?.stack).toEqual(['.NET'])
+    expect(projectFacts(ls('notes.txt'))?.stack).toEqual([])
+  })
+
+  it('finds the instructions file the rules loader would read, AGENTS.md first', () => {
+    expect(projectFacts(ls('AGENTS.md', 'CLAUDE.md'))?.instructions).toBe('AGENTS.md')
+    expect(projectFacts(ls('CLAUDE.md'))?.instructions).toBe('CLAUDE.md')
+    expect(projectFacts(ls('agents.md', 'README.md'))?.instructions).toBeNull()
+  })
+
+  it('knows nothing about a folder it could not list', () => {
+    expect(projectFacts(null)).toBeNull()
   })
 })

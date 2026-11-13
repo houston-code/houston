@@ -2077,6 +2077,43 @@ body.is-resizing {
 .get-started__example:hover {
   text-decoration-style: solid;
 }
+/* What Houston knows about the open folder, on an empty new chat. */
+.project-card {
+  width: min(520px, calc(100% - 32px));
+  margin-top: 18px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  text-align: left;
+}
+.welcome .project-card p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.welcome .project-card__head {
+  color: var(--text);
+}
+.project-card__details {
+  color: var(--text-dim);
+}
+.welcome .project-card__line {
+  margin-top: 4px;
+}
+.project-card__ok {
+  color: var(--ok);
+}
+.project-card__action {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 /* ---- Onboarding: get-started checklist, connect-a-model, coachmarks ---- */
 .sr-only {

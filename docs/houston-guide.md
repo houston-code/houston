@@ -432,6 +432,7 @@ Both clients accept the same names, so a command learned in one works in the oth
 | `/plan`, `/ask`, `/auto`, `/full` | switch the approval mode: plan, ask every time, auto-approve edits, full auto |
 | `/approval` | show the current approval mode |
 | `/review` | run an adversarial review of your uncommitted changes and fix what it confirms |
+| `/init` | write or improve `AGENTS.md`, the project's instructions file |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
 | `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/changes` (or `/diff`) | what's different in the working tree |
@@ -921,7 +922,7 @@ goes through your approvals.
 
 ### Prompts Houston writes for you
 
-`/review`, `/agent`, the shipping buttons, and a session another chat handed off
+`/review`, `/init`, `/agent`, the shipping buttons, and a session another chat handed off
 each send the agent a detailed prompt. The chat shows what you did (for example
 "/review" or "Create PR") instead of that prompt. Open **Instructions sent to the
 agent** under it to read the exact text. The terminal prints a one-line summary in
@@ -2266,6 +2267,13 @@ this order:
 
 Use them for coding conventions, build and test commands, and house style. Houston
 treats them as conventions, not as authority to change tool or permission behavior.
+
+**Writing one.** `/init` has the agent look around the project (README, build files,
+tests, CI) and write a short `AGENTS.md` with the exact build and test commands, the
+layout, and the conventions it verified. If an `AGENTS.md` or `CLAUDE.md` exists, it
+improves that file instead of starting over. In the desktop app, an empty new chat in a
+project shows a small card with the folder, branch and detected stack, and either
+which rules file is read every run or a **Write one with /init** button.
 
 - **Imports.** Any rules file can pull in others with `@path` imports.
 - **Skipped folders.** In a git repository, subfolders the project's `.gitignore`

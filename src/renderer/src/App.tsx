@@ -20,10 +20,11 @@ import type {
   ReasoningEffort,
   RepoInfo
 } from '@shared/agent'
-import { commandGroup, matchCommands, mergeCommands, builtinCommands, type Command } from '@shared/commands'
+import { commandGroup, matchCommands, mergeCommands, builtinCommands, resolveCommand, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import {
   agentTurn,
+  commandTurn,
   proposalHereTurn,
   shipTurn,
   sideChatExchangeText,
@@ -100,6 +101,7 @@ import { KeyHints, keyHintList } from './components/KeyHints'
 import { activeTaskCount } from './components/BackgroundTasks'
 import { TerminalChip } from './components/TerminalChip'
 import { TasksPanel } from './components/TasksPanel'
+import { ProjectCard } from './components/ProjectCard'
 import type { DockTab } from './components/PreviewDock'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
@@ -130,7 +132,9 @@ import {
   checklistVisible,
   firstTaskExample,
   folderKind,
+  projectFacts,
   starterPrompts,
+  type ProjectFacts,
   PRE_SEND_TIP_DELAY_MS,
   relevantTips,
   type FolderKind,
@@ -527,20 +531,32 @@ export default function App(): JSX.Element {
   // Whether the open folder is empty, so the setup checklist's step 3 can suggest a
   // first task that fits it (build something vs. explain the project).
   const [workspaceKind, setWorkspaceKind] = useState<FolderKind>('unknown')
+  // The new-chat project card's facts (stack, instructions file). Re-read on returning
+  // to a new chat, so an AGENTS.md written by /init shows up.
+  const [workspaceFacts, setWorkspaceFacts] = useState<ProjectFacts | null>(null)
   useEffect(() => {
     let alive = true
     if (!workspace) {
       setWorkspaceKind('unknown')
+      setWorkspaceFacts(null)
       return
     }
     window.api
       .listWorkspaceDir(workspace, '')
-      .then((entries) => alive && setWorkspaceKind(folderKind(entries)))
-      .catch(() => alive && setWorkspaceKind('unknown'))
+      .then((entries) => {
+        if (!alive) return
+        setWorkspaceKind(folderKind(entries))
+        setWorkspaceFacts(projectFacts(entries))
+      })
+      .catch(() => {
+        if (!alive) return
+        setWorkspaceKind('unknown')
+        setWorkspaceFacts(null)
+      })
     return () => {
       alive = false
     }
-  }, [workspace])
+  }, [workspace, currentId])
 
   // Has this chat produced at least one file write that actually landed? A boolean
   // (any write), not a count, so rapid multi-file writes don't stack. `status: 'done'`
@@ -1655,6 +1671,13 @@ export default function App(): JSX.Element {
     [dispatch, sendAfterEdit]
   )
 
+  // The project card's "Write one with /init": the same turn as typing /init.
+  const runInitCommand = useCallback(() => {
+    const init = resolveCommand(commands, 'init')
+    const turn = init ? commandTurn(init, '', '/init') : null
+    if (turn) onInvoke(turn)
+  }, [commands, onInvoke])
+
   // Save a `#`-captured standing instruction to the workspace's (or every project's)
   // rules file — the files Houston already loads each run — and say where it landed.
   const onSaveMemory = useCallback(
@@ -2683,6 +2706,14 @@ export default function App(): JSX.Element {
               />
             ) : (
               <>
+                {canChat && currentId === null && workspace && workspaceKind === 'has-files' && workspaceFacts && (
+                  <ProjectCard
+                    name={baseName(repoInfo?.isRepo && repoInfo.root ? repoInfo.root : workspace)}
+                    branch={repoInfo?.isRepo ? repoInfo.currentBranch : null}
+                    facts={workspaceFacts}
+                    onGenerate={runInitCommand}
+                  />
+                )}
                 {canChat && currentId === null && (
                   <StarterPrompts prompts={starterPrompts(workspaceKind)} onPick={(task) => prefillComposer(task)} />
                 )}

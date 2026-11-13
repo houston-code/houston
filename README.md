@@ -876,6 +876,7 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
 | `/changes` (`/diff`) | summarize what is different in the working tree |
 | `/review` | adversarial review of your uncommitted changes |
+| `/init` | write or improve AGENTS.md, the project's instructions file |
 | `/cost` | session token + cost totals, per model |
 | `/doctor` | check your setup: model, keys, sandbox, tools, MCP |
 | `/verbose`, `/output [n]` | show each tool's full output as it runs, or reprint one after the fact |
