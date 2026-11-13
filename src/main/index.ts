@@ -322,7 +322,10 @@ app.on('window-all-closed', () => {
 // window is still alive) silently aborts them and drops queued input — confirm first. The
 // window-close path on Windows/Linux is covered by the close guard in
 // createWindow. (Headless uses `app.exit`, which skips before-quit.)
-app.on('before-quit', (e) => guardQuitWithLiveWork(e, targetWindow()))
+// Only the desktop app asks: a terminal client (-i, -p, --acp) has no window to ask in,
+// and a SIGHUP/SIGTERM from a closed terminal or an editor must quit it, not raise a
+// native dialog that leaves it running with no terminal.
+if (!acp && !tui && !headless) app.on('before-quit', (e) => guardQuitWithLiveWork(e, targetWindow()))
 
 /**
  * `app.exit` skips will-quit, so the terminal clients wait for queued credential writes
