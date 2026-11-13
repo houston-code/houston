@@ -1001,6 +1001,26 @@ quiet, and stopping a run yourself never pings you (you're obviously there).
 - **Desktop app:** the same setting is in the reasoning menu next to the model picker.
   Changing it while the agent works applies from its next step.
 
+### One turn at full depth (ultrathink)
+
+Type `ultrathink` anywhere in a message to run that one turn at the highest reasoning
+level (`xhigh`, or `high` on a model without that tier), whatever the chat is set to.
+Houston also tells the model you asked for deeper reasoning, so the request still
+reaches a model with no higher level to move to.
+
+- **One turn only.** The chat's own setting and your default are not changed, and the
+  next message runs at the chat's level again.
+- **While the agent works.** Sent mid-turn, it raises the rest of that turn.
+- **Using the word, not mentioning it.** A quoted "ultrathink", the word in code, or
+  the word inside a file name, path, or flag does nothing.
+- **What you see.** While the word is in your draft, a line under it says what it will
+  do: raise this turn, nothing new because the chat is already at the highest level,
+  or nothing to raise because the model has no reasoning level. In the terminal, the
+  word itself is also coloured when it will raise the turn.
+- **Cost.** A higher level uses more tokens and takes longer per step. With Claude
+  models, changing the level for a turn also means that turn's request does not reuse
+  the cached conversation.
+
 ## What a session cost (/cost)
 
 `/cost` breaks the session down by model:

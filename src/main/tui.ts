@@ -63,7 +63,8 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, modelCapabilities } from '@shared/usage'
+import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
@@ -2225,7 +2226,11 @@ export interface TuiIo {
    * `initial` opens the editor with that draft already typed (unsent text handed
    * back after an interrupt).
    */
-  readComposer?: (prompt: string | (() => string), initial?: string) => Promise<string | null>
+  readComposer?: (
+    prompt: string | (() => string),
+    initial?: string,
+    opts?: { ultrathinkEffect?: () => UltrathinkEffect }
+  ) => Promise<string | null>
   /**
    * Read a line without echoing it — for pasting an API key in the `/login` flow.
    * Resolves the typed value, or null on cancel (Ctrl-C) / EOF. Optional: off-TTY
@@ -3125,7 +3130,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       const draft = restoreDraft
       restoreDraft = ''
       if (draft) deps.io.out(paint('· not sent (the turn was interrupted): back in the prompt to edit or send\n', 'dim'))
-      const text = await deps.io.readComposer(() => composerPrompt(policy, paint), draft || undefined)
+      const text = await deps.io.readComposer(() => composerPrompt(policy, paint), draft || undefined, {
+        // Read on each redraw: what the keyword would do on this chat's model right now.
+        ultrathinkEffect: () =>
+          ultrathinkEffect(
+            effort,
+            activeModelReasons(deps, providerId, model) ?? (model ? modelCapabilities(model).reasoning : false)
+          )
+      })
       if (text === null) {
         resetComposer = consumeInterrupt() === 'reset'
       } else {

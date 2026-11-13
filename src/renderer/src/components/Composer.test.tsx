@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { ULTRATHINK_HINT, ULTRATHINK_HINT_ALREADY, ULTRATHINK_HINT_NONE } from '@shared/ultrathink'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Command } from '@shared/commands'
 import { Composer } from './Composer'
@@ -113,6 +114,27 @@ describe('Composer', () => {
 
     fireEvent.mouseDown(document.body)
     expect(screen.queryByText('Start a new chat')).not.toBeInTheDocument()
+  })
+
+  it('says the turn runs at the highest reasoning level while the draft carries the keyword', () => {
+    render(<Composer {...baseProps()} />)
+    const input = screen.getByRole('textbox', { name: 'Message' })
+    expect(screen.queryByText(ULTRATHINK_HINT)).toBeNull()
+    fireEvent.change(input, { target: { value: 'why does this deadlock? ultrathink' } })
+    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT)
+    // Talking about the word is not using it.
+    fireEvent.change(input, { target: { value: 'what does "ultrathink" do?' } })
+    expect(screen.queryByText(ULTRATHINK_HINT)).toBeNull()
+  })
+
+  it('words the hint by what the keyword will do on this model', () => {
+    const { rerender } = render(<Composer {...baseProps()} ultrathinkEffect="already" />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), { target: { value: 'ultrathink' } })
+    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT_ALREADY)
+    rerender(<Composer {...baseProps()} ultrathinkEffect="none" />)
+    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT_NONE)
+    rerender(<Composer {...baseProps()} ultrathinkEffect="raises" />)
+    expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT)
   })
 
   it('names the message field, whatever the placeholder says', () => {

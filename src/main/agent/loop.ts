@@ -50,7 +50,7 @@ import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
 import { hostPlatform, installHost } from './installHost'
-import { resolveContextWindow, turnCostUsd } from '@shared/usage'
+import { resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
 import {
   addPermissionRule,
   noteRuleUsed,
@@ -67,6 +67,14 @@ import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt, promptId } from './prompt'
 import { applyRunOverrides } from './run-overrides'
+import {
+  hasUltrathink,
+  ultrathinkAtTail,
+  ultrathinkEffect,
+  ULTRATHINK_EFFORT,
+  ULTRATHINK_NOTE,
+  ULTRATHINK_NOTICE
+} from '@shared/ultrathink'
 import { loadProjectRules } from './rules'
 import { loadProjectConfig, mergeProjectMcpServers, mergeRunMcpServers } from './projectConfig'
 import { scopeRefusalText, scopeVerdict, toolOffered } from './toolScope'
@@ -483,6 +491,16 @@ interface RunState {
    * for runs without one, which read the saved default each model turn instead.
    */
   effort?: ReasoningEffort
+  /**
+   * The turn carries the `ultrathink` keyword (in the message it started from, or in a
+   * steer since): every model request left in it runs at {@link ULTRATHINK_EFFORT},
+   * whatever the chat's own effort. Ends with the run; nothing is saved.
+   */
+  ultrathink: boolean
+  /** The model has been told about {@link RunState.ultrathink} (see ULTRATHINK_NOTE). */
+  ultrathinkNoted: boolean
+  /** The user has been told (or it was decided there is nothing to tell) this run. */
+  ultrathinkAnnounced: boolean
   /**
    * The events emitted since the message log was last persisted — the in-flight
    * turn's streamed output (assistant text, running tools, prompts) that isn't on
@@ -1144,6 +1162,7 @@ export async function startRun(
   // counts as decided, so full-auto doesn't pause on the consent. Not recorded on the
   // conversation: it is a property of this invocation, and the next one passes it again.
   const seededShellNetwork = req.allowShellNetwork === true
+  const ultrathinkTail = ultrathinkAtTail(req.messages)
   const run: RunState = {
     abort,
     steering: [],
@@ -1167,6 +1186,9 @@ export async function startRun(
     policy: req.approvalPolicy,
     announcedPolicy: req.approvalPolicy,
     ...(isReasoningEffort(req.reasoningEffort) ? { effort: req.reasoningEffort } : {}),
+    ultrathink: ultrathinkTail.on,
+    ultrathinkNoted: ultrathinkTail.noted,
+    ultrathinkAnnounced: false,
     transcript: [],
     evidence: new EvidenceLedger(),
     ...(owner !== undefined ? { owner } : {})
@@ -3279,6 +3301,17 @@ export async function startRun(
         // invariant that the buffer holds only events not yet persisted (send() has
         // already delivered it live either way).
         for (const { text, id } of steers) emit({ type: 'steered', text, ...(id ? { id } : {}) })
+        // The keyword in a steer raises the rest of the turn.
+        if (steers.some((st) => hasUltrathink(st.text))) run.ultrathink = true
+        persist(messages)
+      }
+
+      // A turn carrying the `ultrathink` keyword: tell the model once, after the message
+      // that carries it, so a model with no higher effort tier to move to still gets the
+      // request. The effort itself is raised where each model request is built.
+      if (run.ultrathink && !run.ultrathinkNoted) {
+        run.ultrathinkNoted = true
+        messages.push(systemNoteMessage(ULTRATHINK_NOTE))
         persist(messages)
       }
 
@@ -3394,10 +3427,23 @@ export async function startRun(
       // default is read live. Everything else stays snapshotted so a run's behavior is
       // otherwise stable. A per-run override (headless --effort) still wins.
       const live = getSettings()
-      const { reasoningEffort, reasoningSummary, verbosity } = applyRunOverrides(
+      const turnSettings = applyRunOverrides(
         run.effort !== undefined ? { ...live, reasoningEffort: run.effort } : live,
         req.overrides
       )
+      const { reasoningSummary, verbosity } = turnSettings
+      // The keyword outranks the chat's effort and a run's own override alike: it is the
+      // most specific thing the user said about this turn.
+      const reasoningEffort = run.ultrathink ? ULTRATHINK_EFFORT : turnSettings.reasoningEffort
+      // Said once, and only where the keyword changed something: not on a model that
+      // cannot reason, nor in a chat already at the top.
+      if (run.ultrathink && !run.ultrathinkAnnounced) {
+        run.ultrathinkAnnounced = true
+        const reasons = resolveCapabilities(route.model, { reasoning: route.reasoningCapable }).reasoning
+        if (ultrathinkEffect(turnSettings.reasoningEffort, reasons) === 'raises') {
+          emit({ type: 'notice', message: ULTRATHINK_NOTICE })
+        }
+      }
 
       let assistantText = ''
       let toolCalls: ToolCall[] = []

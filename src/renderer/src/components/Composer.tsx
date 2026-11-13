@@ -58,6 +58,7 @@ import {
 } from '@shared/composerContext'
 import { workingTreeToText, type WorkingTreeChanges } from '@shared/workingTree'
 import type { ShipAction } from '@shared/shipAction'
+import { hasUltrathink, ultrathinkHint, type UltrathinkEffect } from '@shared/ultrathink'
 
 /** Read an image File into a base64 ImageAttachment, or null if unsupported. */
 function readImageFile(file: File): Promise<ImageAttachment | null> {
@@ -167,6 +168,7 @@ export function Composer({
   workspace,
   commands,
   vision = true,
+  ultrathinkEffect,
   lastUserMessage,
   changes,
   onShowChanges,
@@ -199,6 +201,11 @@ export function Composer({
   commands: Command[]
   /** Whether the selected model accepts image inputs; gates the paste/drop affordance. */
   vision?: boolean
+  /**
+   * What the `ultrathink` keyword does on the chat's model at its reasoning level:
+   * picks the hint under the draft. Unset reads as raising the turn.
+   */
+  ultrathinkEffect?: UltrathinkEffect
   /** Text of the most recent user turn — recalled into the field on Esc Esc (empty field). */
   lastUserMessage?: string
   /** Working-tree change counts; drives the top Create-PR bar (omit to hide it). */
@@ -270,6 +277,8 @@ export function Composer({
   const [linkUrl, setLinkUrl] = useState('')
   // A transient one-line status under the field (e.g. "No uncommitted changes").
   const [notice, setNotice] = useState<string | null>(null)
+  // The keyword raises this turn's reasoning; say so while it is in the draft.
+  const ultrathink = hasUltrathink(text)
   const ref = useRef<HTMLTextAreaElement>(null)
   // Ids tying the textarea to its open suggestion list for screen readers.
   const menuId = useId()
@@ -1195,6 +1204,11 @@ export function Composer({
           onPaste={onPaste}
         />
         {notice && <div className="composer__notice">{notice}</div>}
+        {ultrathink && (
+          <div className="composer__notice" role="status">
+            {ultrathinkHint(ultrathinkEffect ?? 'raises')}
+          </div>
+        )}
         <div className="composer__bar">
           <div className="composer__bar-left">
             <button

@@ -1,6 +1,7 @@
 import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
 import { spinnerFrame, type TuiIo, type Painter } from './tui'
 import { visibleWidth } from './tui-wrap'
+import { findUltrathink, ultrathinkHint, type KeywordRange, type UltrathinkEffect } from '@shared/ultrathink'
 import {
   initialPickerState,
   reducePicker,
@@ -134,6 +135,33 @@ export function resolveColor(env: NodeJS.ProcessEnv, isTTY: boolean): boolean {
   const force = env.FORCE_COLOR
   if (force !== undefined && force !== '0' && force !== 'false') return true
   return isTTY
+}
+
+/** Per-read options for the composer. */
+export interface ComposerReadOptions {
+  /**
+   * What the `ultrathink` keyword would do to a turn sent now (see ultrathinkEffect).
+   * A thunk, read on each redraw. Absent reads as raising the turn.
+   */
+  ultrathinkEffect?: () => UltrathinkEffect
+}
+
+/**
+ * Ranges over the whole draft (lines joined by a newline) as per-line ranges, for the
+ * editor to colour. A range never spans lines, since the keyword holds no newline.
+ */
+export function marksByLine(lines: readonly string[], ranges: readonly KeywordRange[]): KeywordRange[][] {
+  const out: KeywordRange[][] = lines.map(() => [])
+  let offset = 0
+  lines.forEach((line, i) => {
+    for (const r of ranges) {
+      if (r.start >= offset && r.end <= offset + line.length) {
+        out[i].push({ start: r.start - offset, end: r.end - offset })
+      }
+    }
+    offset += line.length + 1
+  })
+  return out
 }
 
 export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
@@ -554,7 +582,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    * manual check). The decoder (tui-keys.ts) and editor (tui-editor.ts) are pure
    * and separately unit-tested.
    */
-  const readComposer = (prompt: string | (() => string), initial?: string): Promise<string | null> => {
+  const readComposer = (
+    prompt: string | (() => string),
+    initial?: string,
+    opts?: ComposerReadOptions
+  ): Promise<string | null> => {
     const promptNow = (): string => (typeof prompt === 'string' ? prompt : prompt())
     if (closed) return Promise.resolve(null)
     // No TTY / no raw mode → the readline path still works (tests, pipes). It can't
@@ -583,7 +615,15 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const view = (withMenu = true): ReturnType<typeof renderEditor> => {
         // The line under the cursor drives the menu: typing `/` shows what you can
         // run, without having to already know its name.
-        const below = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '') ?? []) : []
+        const menu = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '') ?? []) : []
+        // The `ultrathink` keyword in the draft: say what it will do to this turn, and
+        // colour the word where it will raise the turn's reasoning. The hint only where
+        // it fits on one row: a wrapped row would desync the redraw region.
+        const uses = withMenu ? findUltrathink(state.lines.join('\n')) : []
+        const effect = uses.length ? (opts?.ultrathinkEffect?.() ?? 'raises') : null
+        const hint = effect ? ultrathinkHint(effect) : ''
+        const below = hint && hint.length <= width() ? [...menu, paint(hint, 'dim')] : menu
+        const marks = effect === 'raises' ? marksByLine(state.lines, uses) : undefined
         return renderEditor(state, {
           // The mode marker rides in front of the prompt, so which mode you are in
           // is answered where you are already looking.
@@ -591,7 +631,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           width: width(),
           paint,
           continuation: paint('… ', 'dim'),
-          ...(below.length ? { below } : {})
+          ...(below.length ? { below } : {}),
+          ...(marks ? { marks } : {})
         })
       }
 

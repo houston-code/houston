@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
+import { ULTRATHINK_HINT, ULTRATHINK_HINT_ALREADY, ULTRATHINK_HINT_NONE } from '@shared/ultrathink'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
-import { resolveColor, createTerminalIo, pickerPhysicalRows, type ReadlineLike } from './tui-io'
+import { resolveColor, createTerminalIo, marksByLine, pickerPhysicalRows, type ReadlineLike } from './tui-io'
 
 describe('resolveColor', () => {
   it('requires a TTY by default', () => {
@@ -385,6 +386,43 @@ describe('readComposer (raw-mode composer)', () => {
     const finalEcho = out.slice(out.lastIndexOf('\x1b[0J') + '\x1b[0J'.length)
     expect(finalEcho).toContain('/changes')
     expect(finalEcho).not.toContain('What is different')
+  })
+
+  it('shows the ultrathink hint under the draft, and keeps it out of the scrollback', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('fix it, ultrathink')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('fix it, ultrathink')
+    const out = t.text()
+    expect(out).toContain(ULTRATHINK_HINT)
+    const finalEcho = out.slice(out.lastIndexOf('\x1b[0J') + '\x1b[0J'.length)
+    expect(finalEcho).toContain('fix it, ultrathink')
+    expect(finalEcho).not.toContain(ULTRATHINK_HINT)
+  })
+
+  it('words the hint by what the keyword will do, read fresh on each draw', async () => {
+    const t = harness()
+    let effect: 'already' | 'none' = 'already'
+    const read = t.io.readComposer!('> ', undefined, { ultrathinkEffect: () => effect })
+    t.stdin.push('ultrathink')
+    effect = 'none'
+    t.stdin.push('!')
+    t.stdin.push('\r')
+    await read
+    const out = t.text()
+    expect(out).toContain(ULTRATHINK_HINT_ALREADY)
+    expect(out).toContain(ULTRATHINK_HINT_NONE)
+    expect(out).not.toContain(ULTRATHINK_HINT)
+  })
+
+  it('shows no ultrathink hint for a draft that only mentions the word', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('open ultrathink.ts')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('open ultrathink.ts')
+    expect(t.text()).not.toContain(ULTRATHINK_HINT)
   })
 
   it('submits a typed line on Enter', async () => {
@@ -920,5 +958,21 @@ describe('the live command menu', () => {
     const read = t.io.readComposer!('> ')
     t.stdin.push('plain\r')
     await expect(read).resolves.toBe('plain')
+  })
+})
+
+describe('marksByLine', () => {
+  it('maps ranges over the joined draft onto the line that holds them', () => {
+    const lines = ['fix it', 'ultrathink please', 'and ultrathink']
+    const text = lines.join('\n')
+    const ranges = [
+      { start: text.indexOf('ultrathink'), end: text.indexOf('ultrathink') + 10 },
+      { start: text.lastIndexOf('ultrathink'), end: text.lastIndexOf('ultrathink') + 10 }
+    ]
+    expect(marksByLine(lines, ranges)).toEqual([[], [{ start: 0, end: 10 }], [{ start: 4, end: 14 }]])
+  })
+
+  it('gives every line an entry when nothing is marked', () => {
+    expect(marksByLine(['a', 'b'], [])).toEqual([[], []])
   })
 })

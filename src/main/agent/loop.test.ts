@@ -18,6 +18,7 @@ import type {
 import {
   MAX_APPROVAL_NOTE,
   SYSTEM_NOTE_PREFIX,
+  systemNoteMessage,
   MAX_STEER_TEXT,
   MAX_PENDING_STEERS,
   MAX_UNANSWERED_RUNS
@@ -39,6 +40,7 @@ import { checkEgressHost, type EgressRunScope } from './egress'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { MAX_PROVIDER_RETRIES } from './retry'
+import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
 import { idleTimeoutFetch } from '../providers/idle-fetch'
@@ -2281,6 +2283,163 @@ describe('startRun', () => {
       h.settings = original
     }
   })
+  // The `ultrathink` keyword: one turn at the highest effort, and the model told once.
+  describe('the ultrathink keyword', () => {
+    const twoTurns = (seen: unknown[], afterFirst: () => void = () => {}): Provider => ({
+      async *streamChat(req) {
+        seen.push(req.reasoningEffort)
+        if (seen.length === 1) {
+          afterFirst()
+          yield { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'x.txt' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    })
+    const notes = (r: RunResult): ChatMessage[] => r.messages.filter((m) => m.content.includes(ULTRATHINK_NOTE))
+    const notices = (r: RunResult): AgentEvent[] =>
+      r.events.filter((e) => e.type === 'notice' && e.message === ULTRATHINK_NOTICE)
+
+    it('runs every request of the turn at the highest effort and tells the model once', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      const before = h.settings
+      const r = await run({
+        provider: twoTurns(seen),
+        model: 'claude-opus-4-8',
+        reasoningEffort: 'low',
+        userText: 'why is this slow? ultrathink'
+      })
+      expect(seen).toEqual(['xhigh', 'xhigh'])
+      expect(notes(r)).toHaveLength(1)
+      expect(notices(r)).toHaveLength(1)
+      // The note follows the message that carries the keyword, as a note from Houston.
+      expect(r.messages[0].content).toBe('why is this slow? ultrathink')
+      expect(r.messages[1].content.startsWith(SYSTEM_NOTE_PREFIX)).toBe(true)
+      expect(r.messages[1].content).toContain(ULTRATHINK_NOTE)
+      // Nothing saved: the chat's effort and the default are as they were.
+      expect(h.settings).toBe(before)
+    })
+
+    it('does not announce a raise on a model that cannot reason, but still asks', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      const r = await run({ provider: twoTurns(seen), model: 'plain-model', reasoningEffort: 'low', userText: 'ultrathink' })
+      // The provider adapter drops an effort its model cannot take; the note still goes.
+      expect(seen).toEqual(['xhigh', 'xhigh'])
+      expect(notes(r)).toHaveLength(1)
+      expect(notices(r)).toHaveLength(0)
+    })
+
+    it('does not announce a raise in a chat already at the highest level', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      const r = await run({
+        provider: twoTurns(seen),
+        model: 'claude-opus-4-8',
+        reasoningEffort: 'xhigh',
+        userText: 'ultrathink'
+      })
+      expect(seen).toEqual(['xhigh', 'xhigh'])
+      expect(notes(r)).toHaveLength(1)
+      expect(notices(r)).toHaveLength(0)
+    })
+
+    it('raises a turn whose reasoning is off', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      await run({ provider: twoTurns(seen), reasoningEffort: 'off', userText: 'ultrathink about the lock order' })
+      expect(seen).toEqual(['xhigh', 'xhigh'])
+    })
+
+    it('outranks an effort passed for the run', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      await run({ provider: twoTurns(seen), overrides: { reasoningEffort: 'low' }, userText: 'ultrathink: plan it' })
+      expect(seen).toEqual(['xhigh', 'xhigh'])
+    })
+
+    it('leaves a turn without the keyword alone', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      const r = await run({ provider: twoTurns(seen), reasoningEffort: 'low', userText: 'think hard about this' })
+      expect(seen).toEqual(['low', 'low'])
+      expect(notes(r)).toHaveLength(0)
+      expect(notices(r)).toHaveLength(0)
+    })
+
+    it('leaves a turn that only mentions the keyword alone', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      const r = await run({
+        provider: twoTurns(seen),
+        reasoningEffort: 'low',
+        userText: 'what does "ultrathink" do, and where is src/shared/ultrathink.ts used?'
+      })
+      expect(seen).toEqual(['low', 'low'])
+      expect(notes(r)).toHaveLength(0)
+    })
+
+    it('does not carry into the next turn', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const first: unknown[] = []
+      const r = await run({ provider: twoTurns(first), reasoningEffort: 'low', userText: 'ultrathink' })
+      const second: unknown[] = []
+      await run({
+        provider: twoTurns(second),
+        reasoningEffort: 'low',
+        messages: [...r.messages, { role: 'user', content: 'thanks, now rename it' }]
+      })
+      expect(second).toEqual(['low', 'low'])
+    })
+
+    it('keeps the boost on a retried turn without telling the model twice', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      const r = await run({
+        provider: twoTurns(seen),
+        model: 'claude-opus-4-8',
+        reasoningEffort: 'low',
+        messages: [
+          { role: 'user', content: 'ultrathink about the cache' },
+          systemNoteMessage(ULTRATHINK_NOTE)
+        ]
+      })
+      expect(seen).toEqual(['xhigh', 'xhigh'])
+      expect(notes(r)).toHaveLength(1)
+      // The retry is a new run for the user, so they are told again; the model is not.
+      expect(notices(r)).toHaveLength(1)
+    })
+
+    it('raises the rest of the turn when the keyword arrives in a steer', async () => {
+      writeFileSync(join(ws, 'x.txt'), 'hi')
+      const seen: unknown[] = []
+      const runId = 'run-ultrathink-steer'
+      let messages: ChatMessage[] = []
+      h.provider = twoTurns(seen, () => steerRun(runId, 'actually, ultrathink this one'))
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          reasoningEffort: 'low',
+          messages: [{ role: 'user', content: 'go' }]
+        },
+        () => {},
+        (m) => {
+          messages = m
+        }
+      )
+      expect(seen).toEqual(['low', 'xhigh'])
+      const steer = messages.findIndex((m) => m.steered)
+      expect(messages[steer + 1].content).toContain(ULTRATHINK_NOTE)
+    })
+  })
+
   // A chat that keeps its own effort: its run is sent that effort, a change made in
   // another chat (or to the default) never reaches it, and its own change does.
   describe('a chat\'s own reasoning effort', () => {
