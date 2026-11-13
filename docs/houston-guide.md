@@ -1570,7 +1570,9 @@ that exact command does (the "Always allow" choice on the prompt saves one).
 
 An existing install keeps the mode it last used. The desktop app and the terminal
 start in the same saved mode. `--approval` or `--full-auto` overrides it for one
-terminal session, and a headless run starts in plan unless told otherwise.
+terminal session (`--approval` takes `plan`, `ask`, `auto-edit`, or `full-auto`; any
+other value stops with a usage error), and a headless run starts in plan unless told
+otherwise.
 
 ### Approving a call
 
@@ -1988,7 +1990,8 @@ to it.
 
 - **Open it** from the titlebar (or the command palette). In the terminal,
   `/btw <question>` asks the same side chat (shared with the desktop panel), and
-  `/btw clear` starts it over.
+  `/btw clear` starts it over. Ctrl-C or Esc stops an answer you no longer want to
+  wait for.
 - **What it can do:** it sees the chat so far and can read the project, but it can't
   edit files, run commands, or reach the network.
 - **Works mid-turn.** You can use it while the main chat's turn is still running.
