@@ -58,6 +58,12 @@ export interface SandboxRunOptions {
   timeoutMs?: number
   signal?: AbortSignal
   env?: NodeJS.ProcessEnv
+  /**
+   * Observes stdout and stderr as they arrive, decoded as UTF-8, for a live view.
+   * It only watches: what the run captures and returns is unchanged, and an error it
+   * throws is ignored.
+   */
+  onOutput?: (chunk: string) => void
 }
 
 export interface SandboxRunResult {

@@ -112,6 +112,8 @@ export async function runInSession(opts: {
   egressProxy?: EgressProxyEndpoints
   timeoutMs?: number
   signal?: AbortSignal
+  /** Watches the command's output as it arrives (see SandboxRunOptions.onOutput). */
+  onOutput?: (chunk: string) => void
   run: SandboxRunner
   fileOps?: Pick<typeof fs, 'readFile' | 'writeFile' | 'rm'>
   /** Whether a path is an existing directory (default: a real stat). */
@@ -155,7 +157,8 @@ export async function runInSession(opts: {
     allowNetwork: opts.allowNetwork,
     egressProxy: opts.egressProxy,
     timeoutMs: opts.timeoutMs,
-    signal: opts.signal
+    signal: opts.signal,
+    ...(opts.onOutput ? { onOutput: opts.onOutput } : {})
   })
 
   const read = async (p: string): Promise<string> => {

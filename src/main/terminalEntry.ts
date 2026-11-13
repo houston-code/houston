@@ -63,11 +63,13 @@ import { log } from './logger'
 import {
   runTui,
   makePainter,
+  resolveTheme,
   mediaTypeForImagePath,
   type BackgroundSession,
   type ResumeEntry,
   type TuiOptions
 } from './tui'
+import { detectTerminalBackground } from './tui-background'
 import type { DoctorFacts } from './tui-doctor'
 import { gatherDoctorFacts } from './doctor'
 import { saveMemory } from './memory'
@@ -509,6 +511,12 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       /* no custom commands — the built-ins still list */
     })
 
+  // A light terminal with no saved theme starts on the light theme. Asked before the
+  // composer starts reading the keyboard, so the terminal's reply never lands in it.
+  if (tui.color && !resolveTheme(getSettings().tuiTheme ?? '')) {
+    const bg = await detectTerminalBackground({ input: process.stdin, output: process.stdout }, process.env)
+    if (bg === 'light') tui.detectedTheme = 'light'
+  }
   // Typing `@` lists matching files under the composer, as `/` lists commands.
   const mentionMenu = makeMentionMenu((q) => findFiles(tui.cwd, q), paint as never)
 

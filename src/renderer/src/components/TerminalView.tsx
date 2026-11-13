@@ -71,13 +71,14 @@ export function TerminalView({ id, active }: { id: string; active: boolean }): J
     const ro = new ResizeObserver(() => safeFit())
     ro.observe(host)
 
-    // Track theme changes (data-theme flips on documentElement).
+    // Track theme changes (data-theme and the appearance attributes on documentElement).
     const themeObserver = new MutationObserver(() => {
       term.options.theme = themeFromCss()
     })
     themeObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['data-theme']
+      // The accent sets the cursor, and the code theme the background.
+      attributeFilter: ['data-theme', 'data-accent', 'data-code-theme']
     })
 
     return () => {

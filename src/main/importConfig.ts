@@ -7,7 +7,7 @@ import { mcpServersFromJson } from '@shared/mcpJson'
 import { parseFrontmatter } from '@shared/frontmatter'
 import { parseProjectMcpServers, PROJECT_CONFIG } from './agent/projectConfig'
 import { COMMANDS_DIR, USER_COMMANDS_DIR } from './agent/commands'
-import { SKILLS_DIR } from './agent/skills'
+import { SKILLS_DIR, USER_SKILLS_DIR } from './agent/skills'
 import { GLOBAL_RULES_HEADING, globalRulesFile, importLegacyRules, legacyRulesFile, legacyRulesNoticeApplies, readTextOrNull, rulesWriteTarget } from './globalRules'
 import { writeFileAtomicSync } from './atomic-write'
 import { withFileLock } from './fileLock'
@@ -50,6 +50,8 @@ const PROJECT_MCP = ['.mcp.json', join('.cursor', 'mcp.json'), join('.vscode', '
 const USER_COMMANDS = [join('.claude', 'commands'), join('.codex', 'prompts')]
 /** Project custom command folders, copied into `.houston/commands`. */
 const PROJECT_COMMANDS = [join('.claude', 'commands')]
+/** Home-folder skill folders, copied into `~/.houston/skills`. */
+const USER_SKILLS = [join('.claude', 'skills')]
 /** Project skill folders, copied into `.houston/skills`. */
 const PROJECT_SKILLS = [join('.claude', 'skills')]
 
@@ -486,52 +488,65 @@ export async function skillFiles(dir: string): Promise<string[] | null> {
 }
 
 async function findSkills(ctx: Ctx, out: Found[]): Promise<void> {
-  const ws = ctx.workspace
-  if (!ws) return
-  const claimed = new Map<string, string>()
-  for (const rel of PROJECT_SKILLS) {
-    const root = join(ws, rel)
-    let entries
-    try {
-      entries = await fs.readdir(root, { withFileTypes: true })
-    } catch {
-      continue
-    }
-    entries.sort((a, b) => a.name.localeCompare(b.name))
-    for (const e of entries.slice(0, MAX_PER_DIR)) {
-      if (!e.isDirectory() || !NAME.test(e.name)) continue
-      const src = join(root, e.name)
-      if (!resolvesInside(ws, src)) continue
-      const files = await skillFiles(src)
-      if (!files) continue
-      const text = (await readSource(join(src, 'SKILL.md'), ws, MAX_TEXT_BYTES)) ?? ''
-      const target = join(ws, SKILLS_DIR, e.name)
-      const earlier = claimed.get(e.name)
-      const there = await exists(target)
-      if (!earlier) claimed.set(e.name, shown(ctx, src))
-      const status = there || earlier ? 'present' : 'new'
-      out.push({
-        id: `skill:project:${shown(ctx, src)}`,
-        kind: 'skill',
-        scope: 'project',
-        name: parseFrontmatter(text).data.name || e.name,
-        source: shown(ctx, src),
-        target: shown(ctx, target),
-        detail: describe(text),
-        status,
-        ...(status === 'present'
-          ? { note: earlier ? `Also found in ${earlier}` : `Houston already has a skill folder named ${e.name}` }
-          : {}),
-        apply: async () => {
-          const parent = await dirInside(ws, SKILLS_DIR)
-          const dest = join(parent, e.name)
-          await fs.mkdir(dest) // fails if it appeared since the scan: never merge into one
-          for (const f of files) {
-            await fs.mkdir(dirname(join(dest, f)), { recursive: true })
-            await fs.copyFile(join(src, f), join(dest, f), fsConstants.COPYFILE_EXCL)
+  const groups: Array<{ scope: ImportScope; dirs: string[]; root: string; targetRel: string }> = [
+    { scope: 'user', dirs: USER_SKILLS.map((d) => join(ctx.home, d)), root: ctx.home, targetRel: USER_SKILLS_DIR }
+  ]
+  if (ctx.workspace) {
+    groups.push({
+      scope: 'project',
+      dirs: PROJECT_SKILLS.map((d) => join(ctx.workspace as string, d)),
+      root: ctx.workspace,
+      targetRel: SKILLS_DIR
+    })
+  }
+  for (const g of groups) {
+    const claimed = new Map<string, string>()
+    for (const root of g.dirs) {
+      let entries
+      try {
+        entries = await fs.readdir(root, { withFileTypes: true })
+      } catch {
+        continue
+      }
+      entries.sort((a, b) => a.name.localeCompare(b.name))
+      for (const e of entries.slice(0, MAX_PER_DIR)) {
+        if (!e.isDirectory() || !NAME.test(e.name)) continue
+        const src = join(root, e.name)
+        // A project's skill folder that links outside the project is left behind.
+        if (g.scope === 'project' && !resolvesInside(g.root, src)) continue
+        const files = await skillFiles(src)
+        if (!files) continue
+        const text = (await readSource(join(src, 'SKILL.md'), g.scope === 'project' ? g.root : null, MAX_TEXT_BYTES)) ?? ''
+        const target = join(g.root, g.targetRel, e.name)
+        const earlier = claimed.get(e.name)
+        const there = await exists(target)
+        if (!earlier) claimed.set(e.name, shown(ctx, src))
+        const status = there || earlier ? 'present' : 'new'
+        out.push({
+          id: `skill:${g.scope}:${shown(ctx, src)}`,
+          kind: 'skill',
+          scope: g.scope,
+          name: parseFrontmatter(text).data.name || e.name,
+          source: shown(ctx, src),
+          target: shown(ctx, target),
+          detail: describe(text),
+          status,
+          ...(status === 'present'
+            ? { note: earlier ? `Also found in ${earlier}` : `Houston already has a skill folder named ${e.name}` }
+            : {}),
+          apply: async () => {
+            const parent =
+              g.scope === 'project' ? await dirInside(g.root, g.targetRel) : join(g.root, g.targetRel)
+            await fs.mkdir(parent, { recursive: true })
+            const dest = join(parent, e.name)
+            await fs.mkdir(dest) // fails if it appeared since the scan: never merge into one
+            for (const f of files) {
+              await fs.mkdir(dirname(join(dest, f)), { recursive: true })
+              await fs.copyFile(join(src, f), join(dest, f), fsConstants.COPYFILE_EXCL)
+            }
           }
-        }
-      })
+        })
+      }
     }
   }
 }

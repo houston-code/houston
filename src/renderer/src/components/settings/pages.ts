@@ -19,9 +19,11 @@ import {
   FormatOnSaveSection,
   HooksSection,
   IntegrationsSection,
-  LanguageServersSection
+  LanguageServersSection,
+  PreviewSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
+import { ScheduledRunsSection } from './sections/schedules'
 import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
 import { ImportSection } from './sections/import'
@@ -165,6 +167,12 @@ export const PAGES: SettingsPage[] = [
         keys: ['diagnosticsOnSave'],
         Component: DiagnosticsSection,
         keywords: ['lint', 'eslint', 'errors', 'type check', 'problems']
+      },
+      {
+        id: 'preview',
+        keys: ['previewAutoOpen'],
+        Component: PreviewSection,
+        keywords: ['dev server', 'localhost', 'browser', 'auto open', 'panel', 'web app']
       }
     ]
   },
@@ -218,6 +226,18 @@ export const PAGES: SettingsPage[] = [
         id: 'project-hooks',
         Component: ProjectHooksSection,
         keywords: ['project', 'repository', 'trusted', 'settings.json']
+      }
+    ]
+  },
+  {
+    id: 'schedules',
+    label: PAGE_LABELS.schedules,
+    group: 'AI',
+    sections: [
+      {
+        id: 'scheduled-runs',
+        Component: ScheduledRunsSection,
+        keywords: ['schedule', 'cron', 'recurring', 'timer', 'automation', 'background', 'daily', 'weekly', 'run later']
       }
     ]
   },
@@ -276,9 +296,30 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'htmlVisuals'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
         Component: AppearanceSection,
-        keywords: ['theme', 'dark mode', 'light mode', 'colors', 'visuals', 'html', 'font size', 'text size', 'density', 'compact', 'code theme', 'syntax']
+        keywords: [
+          'theme',
+          'dark mode',
+          'light mode',
+          'colors',
+          'visuals',
+          'html',
+          'font size',
+          'text size',
+          'density',
+          'compact',
+          'code theme',
+          'syntax',
+          'accent',
+          'highlight color',
+          'transcript',
+          'tool output',
+          'expand',
+          'collapse',
+          'reasoning',
+          'thinking'
+        ]
       }
     ]
   },

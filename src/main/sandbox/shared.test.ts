@@ -552,6 +552,30 @@ describe('runWithBackend — honest sandboxed flag', () => {
     expect(spawn.calls[0].options.stdio).toEqual(['ignore', 'pipe', 'pipe'])
   })
 
+  it('lets a watcher see output as it arrives, whole characters, without changing the result', async () => {
+    const child = makeFakeChild()
+    const seen: string[] = []
+    const p = runWithBackend(
+      fakeBackend(true),
+      baseOpts({
+        onOutput: (c) => {
+          seen.push(c)
+          if (c.includes('boom')) throw new Error('watcher failed')
+        }
+      }),
+      { spawn: fakeSpawn(child), signalTree: vi.fn(), drainMs: 20 }
+    )
+    const euro = Buffer.from('€', 'utf8')
+    child.stdout.emit('data', Buffer.concat([Buffer.from('cost '), euro.subarray(0, 1)]))
+    child.stdout.emit('data', euro.subarray(1))
+    child.stderr.emit('data', Buffer.from('boom\n'))
+    child.emit('close', 0)
+    const result = await p
+    expect(seen).toEqual(['cost ', '€', 'boom\n'])
+    expect(result.stdout).toBe('cost €')
+    expect(result.stderr).toBe('boom\n')
+  })
+
   it('adds the offline fail-fast env only when a confining backend blocks the network', () => {
     const envFor = (sandboxed: boolean, allowNetwork: boolean): NodeJS.ProcessEnv => {
       const spawn = fakeSpawn(makeFakeChild())

@@ -688,6 +688,59 @@ describe('Transcript: staying at the latest message', () => {
   })
 })
 
+describe('transcript detail preferences', () => {
+  const doneTool = (id: string, output: string): ToolItem =>
+    toolItem({ id, name: 'run_shell', status: 'done', args: { command: `echo ${id}` }, output })
+  const items = (): DisplayItem[] => [
+    userItem(),
+    doneTool('t1', 'first output'),
+    assistantItem({ id: 'a1', text: 'between' }),
+    doneTool('t2', 'second output')
+  ]
+  const render_ = (props: Partial<{ toolsExpanded: boolean; showReasoning: boolean }>, list = items()) =>
+    render(<Transcript items={list} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} {...props} />)
+
+  it('keeps tool rows collapsed by default, with a control to expand and collapse them all', () => {
+    render_({})
+    expect(screen.queryByText('first output')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand tools' }))
+    expect(screen.getByText('first output')).toBeInTheDocument()
+    expect(screen.getByText('second output')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse tools' }))
+    expect(screen.queryByText('first output')).toBeNull()
+  })
+
+  it('reaches a row the user toggled since the last command', () => {
+    const { container } = render_({})
+    fireEvent.click(screen.getByRole('button', { name: 'Expand tools' }))
+    fireEvent.click(container.querySelectorAll('.tool-row__head')[0])
+    expect(screen.queryByText('first output')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse tools' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand tools' }))
+    expect(screen.getByText('first output')).toBeInTheDocument()
+  })
+
+  it('opens tool rows from the start with the setting on', () => {
+    render_({ toolsExpanded: true })
+    expect(screen.getByText('first output')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collapse tools' })).toBeInTheDocument()
+  })
+
+  it('has no control in a chat without tool rows', () => {
+    render_({}, [userItem(), assistantItem()])
+    expect(screen.queryByRole('button', { name: /tools$/ })).toBeNull()
+  })
+
+  it('folds reasoning away by default once the reply starts, and keeps it open with the setting', () => {
+    const list = [userItem(), assistantItem({ text: 'answer', reasoning: 'thinking hard' })]
+    const { container, unmount } = render_({}, list)
+    expect(container.querySelector('details.reasoning')).not.toHaveAttribute('open')
+    unmount()
+    const again = render_({ showReasoning: true }, list)
+    expect(again.container.querySelector('details.reasoning')).toHaveAttribute('open')
+  })
+})
+
 describe('message right-click menus and Retry', () => {
   it('offers copy and the rewind choices on a user message', async () => {
     const handlers = { disabled: false, onRewind: vi.fn(), onEdit: vi.fn() }
@@ -749,6 +802,27 @@ describe('message right-click menus and Retry', () => {
     expect(onRetryLast).toHaveBeenCalledTimes(2)
   })
 
+  it('offers Fork from here in the right-click menus of a user message and a reply', () => {
+    const onFork = vi.fn()
+    const onForkFrom = vi.fn()
+    render(
+      <Transcript
+        items={[userItem({ id: 'u1', text: 'fix the bug' }), assistantItem({ id: 'a1', text: 'done it' })]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        rewind={{ disabled: false, onRewind: vi.fn(), onEdit: vi.fn(), onFork }}
+        onForkFrom={onForkFrom}
+      />
+    )
+    fireEvent.contextMenu(screen.getByText('fix the bug'), { clientX: 10, clientY: 10 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Fork from here' }))
+    expect(onFork).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }))
+    fireEvent.contextMenu(screen.getByText('done it'), { clientX: 10, clientY: 10 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Fork from here' }))
+    expect(onForkFrom).toHaveBeenCalledWith(0)
+  })
+
   it('shows no Retry without a handler (a run is going)', () => {
     renderTranscript([userItem(), assistantItem()])
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
@@ -799,5 +873,45 @@ describe('message timestamps and turn details', () => {
       assistantItem({ streaming: true, at: new Date().toISOString() })
     ])
     expect(container.querySelector('.msg--assistant .msg__meta')).toBeNull()
+  })
+})
+
+describe('fork from a message', () => {
+  it('forks through a reply by its position among the replies', () => {
+    const onForkFrom = vi.fn()
+    render(
+      <Transcript
+        items={[userItem({ id: 'u1' }), assistantItem({ id: 'a1', text: 'one' }), userItem({ id: 'u2', text: 'again' }), assistantItem({ id: 'a2', text: 'two' })]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        onForkFrom={onForkFrom}
+      />
+    )
+    const buttons = screen.getAllByRole('button', { name: 'Fork from here' })
+    expect(buttons).toHaveLength(2)
+    fireEvent.click(buttons[1])
+    expect(onForkFrom).toHaveBeenCalledWith(1)
+  })
+
+  it('offers Fork from here in a user message menu, with that message as the target', () => {
+    const handlers = { disabled: false, onRewind: vi.fn(), onEdit: vi.fn(), onFork: vi.fn() }
+    render(
+      <Transcript
+        items={[userItem({ id: 'u1', text: 'first' }), assistantItem(), userItem({ id: 'u2', text: 'second' }), assistantItem({ id: 'a2' })]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        rewind={handlers}
+      />
+    )
+    fireEvent.click(screen.getAllByRole('button', { name: 'Rewind to this message' })[1])
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Fork from here' }))
+    expect(handlers.onFork).toHaveBeenCalledWith(expect.objectContaining({ id: 'u2', turn: 1, text: 'second' }))
+  })
+
+  it('shows no fork action without a handler', () => {
+    renderTranscript([userItem(), assistantItem()])
+    expect(screen.queryByRole('button', { name: 'Fork from here' })).toBeNull()
   })
 })

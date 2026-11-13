@@ -85,7 +85,7 @@ describe('Help menu', () => {
     // role 'help' is what gives macOS its native menu search field.
     expect(help.role).toBe('help')
     expect(template.filter((m) => m.role === 'help')).toHaveLength(1)
-    expect(itemLabels(help).slice(0, 8)).toEqual([
+    expect(itemLabels(help).slice(0, 9)).toEqual([
       'Keyboard Shortcuts',
       'Take the Tour…',
       '',
@@ -93,7 +93,8 @@ describe('Help menu', () => {
       'Houston Website',
       'Houston on GitHub',
       '',
-      'Report an Issue'
+      'Open Logs',
+      'Report an Issue…'
     ])
   })
 
@@ -107,8 +108,18 @@ describe('Help menu', () => {
       'Houston Website',
       'Houston on GitHub',
       '',
-      'Report an Issue'
+      'Open Logs',
+      'Report an Issue…'
     ])
+  })
+
+  it.each([true, false])('Report an Issue… asks the window to show what it will send first (isMac=%s)', (isMac) => {
+    const help = appMenuTemplate(isMac).at(-1)!
+    const item = (help.submenu as { label?: string; click?: () => void }[]).find(
+      (i) => i.label === 'Report an Issue…'
+    )!
+    item.click!()
+    expect(sentCommands.at(-1)).toEqual({ type: 'report-issue' })
   })
 
   it.each([true, false])('Take the Tour… asks the renderer to replay the tips (isMac=%s)', (isMac) => {

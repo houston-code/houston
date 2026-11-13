@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 import { useFocusTrap } from '../lib/useFocusTrap'
-import { useApplyAppearance, useApplyTheme } from '../hooks/useApplyTheme'
+import { useApplyAccent, useApplyAppearance, useApplyTheme } from '../hooks/useApplyTheme'
 import type { AppSettings, PermissionPolicyView } from '@shared/types'
 import { PAGES, PAGE_GROUPS, pageById, type TabId } from './settings/pages'
 import { NAV_ICON } from './settings/navIcons'
@@ -135,6 +135,7 @@ export function SettingsModal({
 
   // Apply the chosen theme at once, as the rest of the app will once it saves.
   useApplyTheme(settings.theme ?? 'system')
+  useApplyAccent(settings.accentColor)
   useApplyAppearance({
     chatFontSize: settings.chatFontSize,
     density: settings.density,

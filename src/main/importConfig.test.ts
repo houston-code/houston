@@ -226,6 +226,27 @@ describe('importSelected', () => {
     expect(readFileSync(join(ws, '.houston/commands/fix.md'), 'utf8')).toBe('Fix it')
   })
 
+  it('finds home-folder skills and copies them into ~/.houston/skills, never over one there', async () => {
+    put(home, '.claude/skills/review/SKILL.md', '---\nname: review\ndescription: Review a diff\n---\nSteps')
+    put(home, '.claude/skills/review/ref/a.md', 'A')
+    put(home, '.claude/skills/lint/SKILL.md', 'Lint')
+    put(home, '.houston/skills/lint/SKILL.md', 'mine')
+    const scan = await scanImportables(deps())
+    const byId = Object.fromEntries(scan.candidates.map((c) => [c.id, c]))
+    expect(byId['skill:user:~/.claude/skills/review']).toMatchObject({
+      scope: 'user',
+      name: 'review',
+      target: '~/.houston/skills/review',
+      status: 'new'
+    })
+    expect(byId['skill:user:~/.claude/skills/lint']).toMatchObject({ status: 'present' })
+    const outcome = await importSelected(['skill:user:~/.claude/skills/review'], deps())
+    expect(outcome.failed).toEqual([])
+    expect(readFileSync(join(home, '.houston/skills/review/SKILL.md'), 'utf8')).toContain('Steps')
+    expect(readFileSync(join(home, '.houston/skills/review/ref/a.md'), 'utf8')).toBe('A')
+    expect(readFileSync(join(home, '.houston/skills/lint/SKILL.md'), 'utf8')).toBe('mine')
+  })
+
   it('refuses to copy into a project .houston folder that links outside the project', async () => {
     const elsewhere = mkdtempSync(join(tmpdir(), 'houston-impout-'))
     try {

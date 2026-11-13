@@ -153,6 +153,23 @@ export function forkTitle(title: string): string {
  * cleared so the fork lands in the default list rather than duplicating a pin.
  * Pure (no fs/electron) so it's unit-testable.
  */
+/**
+ * Where a "Fork from here" cuts a chat: after one of its replies (the `n`th, 0-based,
+ * counted as the transcript counts them), or just before one of the user's messages
+ * (rewind turn `n`, whose text must still read `text`, so a stale view can't fork
+ * from the wrong place).
+ */
+export type ForkPoint = { kind: 'reply'; n: number } | { kind: 'turn'; n: number; text: string }
+
+/** Whether `v` is a well-formed {@link ForkPoint} (it crosses the IPC boundary). */
+export function isForkPoint(v: unknown): v is ForkPoint {
+  if (!v || typeof v !== 'object') return false
+  const p = v as Record<string, unknown>
+  if (typeof p.n !== 'number' || !Number.isInteger(p.n) || p.n < 0) return false
+  if (p.kind === 'reply') return true
+  return p.kind === 'turn' && typeof p.text === 'string'
+}
+
 export function forkConversationData(src: Conversation, id: string, now: number): Conversation {
   const fork: Conversation = {
     ...src,
