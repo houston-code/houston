@@ -11,7 +11,7 @@ import { buildAppMenu } from './menu'
 import { killAllShells } from './agent/shells'
 import { lspManager } from './agent/lsp/manager'
 import { startShellLedger } from './agent/shellLedger'
-import { attachPreviewHost, destroyAllPreviewPanes } from './preview'
+import { destroyAllPreviewPanes, destroyPreviewPanesOf } from './preview'
 import { killAllTerminals } from './terminal'
 import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
@@ -27,6 +27,7 @@ import { registerPrivilegedSchemes } from './schemes'
 import { wireDeepLinks } from './deepLinkHost'
 import { isAllowedChatFrameUrl } from './visualRender'
 import { appWindows, destroyHelperWindows } from './helperWindows'
+import { chatWindows, isPrimaryWindow, registerAppWindow, targetWindow } from './windows'
 import { wireImageDownscale } from './imageDownscale'
 import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation } from './quit-confirm'
 import { parseHeadlessArgs } from './headless'
@@ -94,18 +95,20 @@ wireMockupCapture()
 // Images go to the model scaled down; the transcript keeps the originals.
 wireImageDownscale()
 
-let mainWindow: BrowserWindow | null = null
-
-function createWindow(): void {
-  // Fill the primary display's work area on a fresh install; restore the user's
-  // saved bounds once they've resized or moved the window (see window-state.ts).
+/**
+ * Open a chat window. The first one fills the primary display's work area on a fresh
+ * install, or restores the user's saved bounds once they've resized or moved it (see
+ * window-state.ts). Only the primary window (the oldest one open) saves its bounds, so
+ * a second window never overwrites where the main one reopens.
+ */
+function createWindow(): BrowserWindow {
   const bounds = pickStartupBounds(
     loadWindowState(),
     screen.getPrimaryDisplay().workArea,
     screen.getAllDisplays().map((d) => d.workArea)
   )
 
-  mainWindow = new BrowserWindow({
+  const win = new BrowserWindow({
     ...bounds,
     minWidth: 720,
     minHeight: 560,
@@ -120,28 +123,31 @@ function createWindow(): void {
       nodeIntegration: false
     }
   })
+  registerAppWindow(win)
 
-  mainWindow.on('ready-to-show', () => mainWindow?.show())
+  win.on('ready-to-show', () => win.show())
 
-  // The live Preview dock overlays native WebContentsViews on this window; point
-  // the manager at it, and tear every pane down when the window goes away so the
-  // views (and their dev-server connections) don't leak.
-  attachPreviewHost(mainWindow)
-  mainWindow.on('closed', () => {
-    destroyAllPreviewPanes()
+  // The live Preview dock overlays native WebContentsViews on this window; tear its
+  // panes down when the window goes away so the views (and their dev-server
+  // connections) don't leak.
+  win.on('closed', () => {
+    destroyPreviewPanesOf(win)
     // Hidden helpers (captures, the diagram renderer) would otherwise keep Windows and
     // Linux from quitting now that the app's last window is gone.
-    destroyHelperWindows()
+    if (chatWindows().length === 0) destroyHelperWindows()
   })
 
-  // On Windows/Linux, closing the window quits the app (window-all-closed →
-  // app.quit()), so the live-run confirmation has to happen here — while the
-  // window still exists to host the dialog. `before-quit` fires only afterward,
-  // once the window is destroyed, which is too late. macOS intentionally has no
-  // close guard: closing the window there doesn't quit (the run keeps running and
-  // the window reopens from the dock), so ⌘Q is handled by before-quit instead.
+  // On Windows/Linux, closing the last window quits the app (window-all-closed →
+  // app.quit()), so the live-run confirmation has to happen here, while the window
+  // still exists to host the dialog. `before-quit` fires only afterward, once the
+  // window is destroyed, which is too late. Closing one of several windows quits
+  // nothing, so it doesn't ask. macOS intentionally has no close guard: closing the
+  // window there doesn't quit (the run keeps running and the window reopens from the
+  // dock), so ⌘Q is handled by before-quit instead.
   if (process.platform !== 'darwin') {
-    mainWindow.on('close', (e) => guardQuitWithLiveWork(e, mainWindow ?? undefined))
+    win.on('close', (e) => {
+      if (chatWindows().every((w) => w === win || w.isDestroyed())) guardQuitWithLiveWork(e, win)
+    })
   }
 
   // Remember the window's position and size after the user resizes or moves it,
@@ -149,20 +155,19 @@ function createWindow(): void {
   // Debounced to coalesce the stream of events a drag produces into one write.
   let saveTimer: ReturnType<typeof setTimeout> | null = null
   const rememberBounds = (): void => {
-    if (!mainWindow || mainWindow.isFullScreen()) return
+    if (win.isDestroyed() || win.isFullScreen() || !isPrimaryWindow(win)) return
     if (saveTimer) clearTimeout(saveTimer)
-    const win = mainWindow
     saveTimer = setTimeout(() => {
       if (!win.isDestroyed()) saveWindowState(win.getBounds())
     }, 400)
   }
-  mainWindow.on('resize', rememberBounds)
-  mainWindow.on('move', rememberBounds)
+  win.on('resize', rememberBounds)
+  win.on('move', rememberBounds)
 
   // Open external links in the user's browser, never in-app — and only http(s)/
   // mailto, so a crafted link in rendered content (markdown, terminal output)
   // can't route a dangerous scheme (file:, custom app URLs) to openExternal.
-  mainWindow.webContents.setWindowOpenHandler((details) => {
+  win.webContents.setWindowOpenHandler((details) => {
     openExternalSafely(details.url)
     return { action: 'deny' }
   })
@@ -183,24 +188,25 @@ function createWindow(): void {
     e.preventDefault()
     openExternalSafely(url)
   }
-  mainWindow.webContents.on('will-navigate', guardNavigation)
-  mainWindow.webContents.on('will-redirect', guardNavigation)
+  win.webContents.on('will-navigate', guardNavigation)
+  win.webContents.on('will-redirect', guardNavigation)
   // The chat's only frames are interactive HTML visuals (sandboxed, see
   // visualRender.ts): a frame may load its own document and nothing else, so model
   // HTML can't navigate itself to a web page and pull it into the chat.
-  mainWindow.webContents.on('will-frame-navigate', (e) => {
+  win.webContents.on('will-frame-navigate', (e) => {
     if (!e.isMainFrame && !isAllowedChatFrameUrl(e.url)) e.preventDefault()
   })
   // WebRTC is the one way out a page's CSP doesn't cover. The app UI never uses it,
   // so keep it off non-proxied UDP (with no proxy, off entirely) for this window and
   // its frames; the HTML visual runtime also removes the constructors.
-  mainWindow.webContents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp')
+  win.webContents.setWebRTCIPHandlingPolicy('disable_non_proxied_udp')
 
   if (devUrl) {
-    void mainWindow.loadURL(devUrl)
+    void win.loadURL(devUrl)
   } else {
-    void mainWindow.loadFile(indexFile)
+    void win.loadFile(indexFile)
   }
+  return win
 }
 
 // Agent Client Protocol mode: `Houston --acp`. An ACP-capable editor launches the
@@ -309,9 +315,7 @@ app.on('window-all-closed', () => {
 // window is still alive) silently aborts them and drops queued input — confirm first. The
 // window-close path on Windows/Linux is covered by the close guard in
 // createWindow. (Headless uses `app.exit`, which skips before-quit.)
-app.on('before-quit', (e) =>
-  guardQuitWithLiveWork(e, BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? undefined)
-)
+app.on('before-quit', (e) => guardQuitWithLiveWork(e, targetWindow()))
 
 /**
  * `app.exit` skips will-quit, so the terminal clients wait for queued credential writes

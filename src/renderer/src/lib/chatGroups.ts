@@ -4,9 +4,15 @@
  * under "Ungrouped". Pure logic so it can be unit-tested; the Sidebar renders it.
  */
 import type { ConversationMeta } from '@shared/agent'
-import type { ChatGroup } from '@shared/types'
+import type { ChatGroup, SidebarGroupBy } from '@shared/types'
+import { baseName, shortenPath } from './paths'
 
-export type SectionKind = 'pinned' | 'group' | 'ungrouped'
+/**
+ * 'auto' is one of the automatic sections (a project folder, or a date range) the
+ * chats outside any group are split into when the sidebar groups by folder or date.
+ * It behaves like Ungrouped: dropping a chat there takes it out of its group.
+ */
+export type SectionKind = 'pinned' | 'group' | 'ungrouped' | 'auto'
 
 export interface SidebarSection {
   kind: SectionKind
@@ -110,7 +116,9 @@ export function buildSidebarSections(
    * When given, chats it flags (or whose spawned chats it flags) float to the top of
    * their section, keeping the usual order within each half.
    */
-  wantsAttention?: (id: string) => boolean
+  wantsAttention?: (id: string) => boolean,
+  /** Split the ungrouped chats by project folder or date, as of `now` (ms). */
+  autoGroup?: { by: SidebarGroupBy; now: number }
 ): SidebarSection[] {
   const groupById = new Map(groups.map((g) => [g.id, g]))
   const pinned: ConversationMeta[] = []
@@ -185,7 +193,18 @@ export function buildSidebarSections(
     })
   }
 
-  if (ungrouped.length > 0) {
+  if (ungrouped.length > 0 && autoGroup) {
+    for (const auto of autoSections(ungrouped, autoGroup.by, autoGroup.now, recency)) {
+      sections.push({
+        kind: 'auto',
+        id: auto.id,
+        name: auto.name,
+        collapsed: collapsedSections[auto.id] ?? false,
+        conversations: auto.conversations.sort(order),
+        children
+      })
+    }
+  } else if (ungrouped.length > 0) {
     sections.push({
       kind: 'ungrouped',
       id: 'ungrouped',
@@ -244,4 +263,82 @@ export function dropIndexForY(rects: { top: number; height: number }[], clientY:
     if (clientY < r.top + r.height / 2) return i
   }
   return rects.length
+}
+
+/** The project folder a chat belongs to: its repository for a worktree chat, else its workspace. */
+export function chatFolder(c: ConversationMeta): string {
+  return c.worktree?.repoRoot || c.workspace || ''
+}
+
+/** The date ranges the sidebar groups by, newest first. */
+export const DATE_BUCKETS = [
+  { id: 'auto:date:today', name: 'Today' },
+  { id: 'auto:date:yesterday', name: 'Yesterday' },
+  { id: 'auto:date:week', name: 'This week' },
+  { id: 'auto:date:older', name: 'Older' }
+] as const
+
+/**
+ * Which date range a time falls in, by the local calendar: today, yesterday, the five
+ * days before that (this week, meaning the last seven days), or older.
+ */
+export function dateBucket(at: number, now: number): (typeof DATE_BUCKETS)[number]['id'] {
+  const day = new Date(now)
+  day.setHours(0, 0, 0, 0)
+  const today = day.getTime()
+  day.setDate(day.getDate() - 1)
+  const yesterday = day.getTime()
+  day.setDate(day.getDate() - 5)
+  const week = day.getTime()
+  if (at >= today) return 'auto:date:today'
+  if (at >= yesterday) return 'auto:date:yesterday'
+  if (at >= week) return 'auto:date:week'
+  return 'auto:date:older'
+}
+
+/**
+ * Split chats into automatic sections. By folder: one section per project folder,
+ * named for it (with its parent folders when two share a name), the most recently
+ * active first. By date: Today, Yesterday, This week, Older, skipping empty ones. A
+ * chat's date is its latest activity, its spawned chats included. Pure.
+ */
+export function autoSections(
+  chats: ConversationMeta[],
+  by: SidebarGroupBy,
+  now: number,
+  recency: (c: ConversationMeta) => number = (c) => c.updatedAt
+): { id: string; name: string; conversations: ConversationMeta[] }[] {
+  if (by === 'date') {
+    const buckets = new Map<string, ConversationMeta[]>()
+    for (const c of chats) {
+      const id = dateBucket(recency(c), now)
+      buckets.set(id, [...(buckets.get(id) ?? []), c])
+    }
+    return DATE_BUCKETS.filter((b) => buckets.has(b.id)).map((b) => ({
+      id: b.id,
+      name: b.name,
+      conversations: buckets.get(b.id)!
+    }))
+  }
+  const byFolder = new Map<string, ConversationMeta[]>()
+  for (const c of chats) {
+    const folder = chatFolder(c)
+    byFolder.set(folder, [...(byFolder.get(folder) ?? []), c])
+  }
+  const names = new Map<string, number>()
+  for (const folder of byFolder.keys()) {
+    const name = folder ? baseName(folder) : ''
+    names.set(name, (names.get(name) ?? 0) + 1)
+  }
+  const latest = (list: ConversationMeta[]): number => Math.max(...list.map(recency))
+  return [...byFolder]
+    .sort(([, a], [, b]) => latest(b) - latest(a))
+    .map(([folder, conversations]) => {
+      const name = folder ? baseName(folder) : 'No folder'
+      return {
+        id: `auto:folder:${folder}`,
+        name: folder && (names.get(name) ?? 0) > 1 ? shortenPath(folder, 2) : name,
+        conversations
+      }
+    })
 }

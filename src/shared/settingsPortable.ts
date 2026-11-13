@@ -50,6 +50,8 @@ export const PREFERENCE_DEFAULTS = {
   density: 'comfortable',
   codeTheme: 'default',
   htmlVisuals: false,
+  toolOutputExpanded: false,
+  showReasoning: false,
   memoryEnabled: true,
   keybindings: {},
   sandboxEgress: undefined
@@ -147,6 +149,8 @@ const CHECKS: Record<Exclude<PreferenceKey, 'permissionRules' | 'hooks'>, (v: un
   density: (v) => v === 'comfortable' || v === 'compact',
   codeTheme: (v) => v === 'default' || v === 'contrast' || v === 'muted',
   htmlVisuals: (v) => typeof v === 'boolean',
+  toolOutputExpanded: (v) => typeof v === 'boolean',
+  showReasoning: (v) => typeof v === 'boolean',
   memoryEnabled: (v) => typeof v === 'boolean',
   keybindings: (v) => isObject(v) && Object.values(v).every((b) => b === null || typeof b === 'string'),
   sandboxEgress: (v) =>
