@@ -493,8 +493,23 @@ safe subset in place. In the desktop app:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
 **Terminal-only commands.** `/vim`, `/verbose`, `/output`, `/spawned`, `/proposals`,
-`/image`, and `/exit`. Typed in the desktop app, they tell you where the app does the
-same thing instead of being sent to the model.
+`/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`. Typed in the
+desktop app, they tell you where the app does the same thing instead of being sent to
+the model.
+
+**Terminal sessions.**
+
+- `/rename <title>` gives the chat a title (the desktop sidebar shows it too).
+- `/export [md|json] [path]` writes the chat to a file in the working folder: Markdown
+  by default (your messages, the replies, each tool call, and tool output cut to 40
+  lines), or JSON with every message as saved. Without a path it is named after the
+  chat and the time. It never overwrites a file.
+- `/delete` deletes the chat after asking, then starts a new one.
+- `/permissions` lists your saved permission rules, numbered; `/permissions remove <n>`
+  deletes one. Rules in a project's `.houston/settings.json` are edited in that file.
+- Resuming a chat (`/resume`, `--continue`, `--resume <id>`) replays its last three
+  exchanges, so you can see where you left off.
+- Leaving prints the `houston --resume <id>` command that reopens the chat.
 
 ### Terminal themes
 

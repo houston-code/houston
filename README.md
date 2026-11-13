@@ -887,6 +887,10 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/resume [query]` | list (or search by title) and reopen a saved session |
 | `/fork` | branch the current session into a copy, leaving the original intact |
+| `/rename <title>` | give this chat a title |
+| `/export [md\|json] [path]` | write this chat to a Markdown (default) or JSON file in the working folder |
+| `/delete` | delete this chat, after asking |
+| `/permissions [remove n]` | list the saved permission rules, or remove one |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
 | `/changes` (`/diff`) | summarize what is different in the working tree |
 | `/review` | adversarial review of your uncommitted changes |
@@ -911,8 +915,9 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 Each session is saved as an ordinary conversation, so it survives restarts and
 shows up in the desktop app's sidebar: one history across both clients. `/resume`
 lists recent sessions for the current folder and reopens one where you left off,
-with the model, reasoning effort, and approval mode it was using; `/clear` starts a
-fresh one.
+with the model, reasoning effort, and approval mode it was using, and replays its
+last few exchanges; `/clear` starts a fresh one. Leaving prints the session id and
+the `houston --resume <id>` command that reopens it.
 
 Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
 (default: your default approval mode, shared with the desktop app), `--full-auto`, and `--continue` /

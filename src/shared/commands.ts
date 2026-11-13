@@ -299,6 +299,16 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['gui', 'tui']
   },
   { name: 'fork', group: 'Chat', description: 'Branch the current session into a copy', clients: ['gui', 'tui'] },
+  { name: 'rename', group: 'Chat', args: '<title>', description: 'Give this chat a title', clients: ['tui'] },
+  {
+    name: 'export', group: 'Chat', args: '[md|json] [path]',
+    description: 'Write this chat to a Markdown or JSON file', clients: ['tui']
+  },
+  { name: 'delete', group: 'Chat', description: 'Delete this chat (asks first)', clients: ['tui'] },
+  {
+    name: 'permissions', group: 'Setup', args: '[remove n]',
+    description: 'List the saved permission rules, or remove one', clients: ['tui']
+  },
   { name: 'cost', group: 'Setup', description: 'Session token and cost totals', clients: ['gui', 'tui'] },
   {
     name: 'skills', group: 'Extend',
@@ -376,6 +386,10 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
   proposals: 'in the app, proposed sessions appear as cards in the chat, with Start and Dismiss',
   image: 'in the app, attach an image with the + button, or paste or drop it into the message box',
+  rename: "in the app, rename a chat from its More actions menu in the sidebar",
+  export: "in the app, export a chat from its More actions menu in the sidebar, or the File menu",
+  delete: "in the app, delete a chat from its More actions menu in the sidebar",
+  permissions: 'in the app, saved rules are under Settings > Permissions',
   exit: 'close the window to leave',
   quit: 'close the window to leave'
 }
