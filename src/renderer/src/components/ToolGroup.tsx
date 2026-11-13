@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
-import { imageDataUrl } from '@shared/images'
+import { cachedImageDataUrl } from '../lib/imageUrl'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
 import { RENDER_MOCKUP_NAME, parseMockupArgsSafe, parseVariantListSafe } from '@shared/mockup'
 import { parseTodosSafe, type Todo } from '@shared/todos'
@@ -89,11 +89,25 @@ function previewsFor(item: ToolItem): FileDiffPreview[] | null {
   if (item.preview && item.preview.length > 0) return item.preview
   const a = item.args
   if (!a) return null
+  // A row needs its diff on every render (the header shows the +/- stat even while
+  // collapsed), and a reopened chat has a fallback row for every edit in it. A call's
+  // arguments never change once the row exists, so the diff is computed once per row.
+  const cached = fallbackPreviews.get(a)
+  if (cached !== undefined) return cached
+  const built = fallbackPreviewsOf(item.name, a)
+  fallbackPreviews.set(a, built)
+  return built
+}
+
+/** The fallback diff for a row with no shipped preview, keyed by its arguments object. */
+const fallbackPreviews = new WeakMap<Record<string, unknown>, FileDiffPreview[] | null>()
+
+function fallbackPreviewsOf(name: string, a: Record<string, unknown>): FileDiffPreview[] | null {
   const path = typeof a.path === 'string' ? a.path : ''
-  if (item.name === 'edit_file' && typeof a.old_string === 'string' && typeof a.new_string === 'string') {
+  if (name === 'edit_file' && typeof a.old_string === 'string' && typeof a.new_string === 'string') {
     return [{ path, diff: diffLines(a.old_string, a.new_string) }]
   }
-  if (item.name === 'write_file' && typeof a.content === 'string') {
+  if (name === 'write_file' && typeof a.content === 'string') {
     return [{ path, diff: diffLines('', a.content) }]
   }
   return null
@@ -432,11 +446,11 @@ function ToolRow({
       {!isGallery && item.images && item.images.length > 0 && (
         <div className="tool-row__images">
           {item.images.map((img, i, all) => {
-            const src = imageDataUrl(img)
+            const src = cachedImageDataUrl(img)
             const label = all.length > 1 ? `Image ${i + 1}` : 'Image'
             const openAll = (): void => {
               const set: ViewerImage[] = all.map((a, j) => ({
-                src: imageDataUrl(a),
+                src: cachedImageDataUrl(a),
                 label: all.length > 1 ? `Image ${j + 1}` : 'Image'
               }))
               viewer?.open(set, i)

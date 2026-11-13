@@ -36,11 +36,11 @@ import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
 import {
   MAX_ATTACHMENTS,
   exceedsImageSizeLimit,
-  imageDataUrl,
   isSupportedImageType,
   SUPPORTED_IMAGE_TYPES,
   type ImageAttachment
 } from '@shared/images'
+import { cachedImageDataUrl } from '../lib/imageUrl'
 import {
   buildMessageWithContext,
   formatDiffContext,
@@ -1045,7 +1045,7 @@ export function Composer({
           <div className="composer__attachments">
             {images.map((img, i) => (
               <div key={`img-${i}`} className="attachment">
-                <img className="attachment__thumb" src={imageDataUrl(img)} alt="attachment" />
+                <img className="attachment__thumb" src={cachedImageDataUrl(img)} alt="attachment" />
                 <button
                   className="attachment__remove"
                   title="Remove"

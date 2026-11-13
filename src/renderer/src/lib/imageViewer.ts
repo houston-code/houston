@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react'
-import { imageDataUrl, type ImageAttachment } from '@shared/images'
+import type { ImageAttachment } from '@shared/images'
+import { cachedImageDataUrl } from './imageUrl'
 import { fileNameOf, galleryFiles, type GalleryArgs } from '@shared/gallery'
 import type { MockupArgs, MockupVariant } from '@shared/mockup'
 
@@ -47,11 +48,11 @@ export function galleryViewerImages(gallery: GalleryArgs, images: ImageAttachmen
   if (!images || images.length !== galleryFiles(gallery).length) return []
   let nextCompare = gallery.images.length
   return gallery.images.map((g, i) => ({
-    src: imageDataUrl(images[i]),
+    src: cachedImageDataUrl(images[i]),
     label: g.label,
     ...(g.caption ? { caption: g.caption } : {}),
     path: g.path,
-    ...(g.compareWith ? { compare: { src: imageDataUrl(images[nextCompare++]), label: fileNameOf(g.compareWith) } } : {})
+    ...(g.compareWith ? { compare: { src: cachedImageDataUrl(images[nextCompare++]), label: fileNameOf(g.compareWith) } } : {})
   }))
 }
 
@@ -68,7 +69,7 @@ export function variantViewerImages(
 ): ViewerImage[] {
   if (!images || images.length !== variants.length) return []
   return variants.map((v, i) => ({
-    src: imageDataUrl(images[i]),
+    src: cachedImageDataUrl(images[i]),
     label: v.label,
     caption: `${subject} at ${v.width}×${v.height}, ${v.colorScheme} color scheme.`
   }))
