@@ -90,6 +90,14 @@ export const IPC = {
   skillsList: 'skills:list',
   /** List the workspace's custom agents (.houston/agents) as {name, description}, for /agents. */
   agentsList: 'agents:list',
+  /** Settings > Customize: skills, commands and agents in both places, plus loaded instruction files. */
+  customizeList: 'customize:list',
+  customizeCreate: 'customize:create',
+  customizeSetEnabled: 'customize:setEnabled',
+  customizeOpen: 'customize:open',
+  /** Move a skill, command or agent to the system trash. */
+  customizeDelete: 'customize:delete',
+  customizeOpenInstruction: 'customize:openInstruction',
   gitRepoInfo: 'git:repoInfo',
   gitInit: 'git:init',
   /** Whether the user opted out of the first-write git-init prompt for a folder. */

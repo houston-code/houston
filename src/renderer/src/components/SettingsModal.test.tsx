@@ -225,6 +225,7 @@ describe('SettingsModal', () => {
       'Providers & Models',
       'Agent Behavior',
       'Tools',
+      'Customize',
       'MCP Servers',
       'Hooks',
       'Memory',
