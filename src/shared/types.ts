@@ -736,6 +736,12 @@ export interface AppSettings {
    */
   htmlVisuals?: boolean
   /**
+   * After each turn, ask the chat's model for one short suggested next message and show
+   * it as ghost text in the empty message box (Tab accepts). Costs a small extra model
+   * call per turn, so off by default.
+   */
+  suggestNextPrompt?: boolean
+  /**
    * Show each tool row in the desktop transcript expanded (its output or diff in view)
    * rather than collapsed to one line. Off by default.
    */

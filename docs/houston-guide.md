@@ -81,6 +81,11 @@ The full GUI:
   the full date and time). Under a turn's last reply, a quiet line names the model that
   answered and what the turn spent: tokens in and out, and the cost when the model's
   price is known. Messages saved by older versions show none of this.
+- **Suggested next message.** Off by default. Turn on **Suggest a next message when a
+  turn ends** (Settings, Agent) and, after each turn, the chat's own model writes one
+  short follow-up, shown faintly in the empty message box. `Tab` puts it in the box to
+  send or change. Each suggestion is a small extra request to the model (the same kind
+  as the one that names a chat), billed like any other.
 - **Message box.** `Ctrl+R` searches the messages you sent before (type to filter,
   `Ctrl+R` or the arrows for an older match, `Enter` to put it in the box). A very large
   paste (40 lines or more, or about 4,000 characters) folds into a **Pasted text** chip

@@ -427,7 +427,10 @@ function makeIo(sender: WebContents): DrainIO {
     liveShellOutput: true,
     emit: coalesced,
     emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items),
-    emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title)
+    emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title),
+    emitSuggestion: (conversationId, text) => {
+      if (!sender.isDestroyed()) sender.send(IPC.conversationSuggestion, { id: conversationId, text })
+    }
   }
 }
 

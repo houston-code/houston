@@ -67,6 +67,7 @@ describe('prompt visibility guard', () => {
     'main/agent/subagent.ts': { count: 2, why: "a subagent's own transcript, never shown as the user's" },
     'main/agent/title.ts': { count: 1, why: 'the title-generation request, never persisted' },
     'main/agent/gitActions.ts': { count: 1, why: 'the commit-message suggestion request, never persisted' },
+    'main/agent/suggest.ts': { count: 1, why: 'the suggested-next-message request, never persisted' },
     'main/agent/untrusted.ts': { count: 2, why: 'the isolated reader request and its return type, never persisted' },
     'main/agent/workingMemory.ts': { count: 1, why: 'the pinned-memory block, spliced into requests only' },
     'shared/agent.ts': { count: 1, why: 'systemNoteMessage, the one constructor for loop-injected notes' }

@@ -1066,6 +1066,30 @@ describe('Composer + attachment menu notices', () => {
   })
 })
 
+describe('Composer suggested next message', () => {
+  it('shows the suggestion as ghost text in the empty box, and Tab puts it in', () => {
+    render(<Composer {...baseProps({ suggestion: 'now add tests' })} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(input.placeholder).toContain('now add tests')
+    fireEvent.keyDown(input, { key: 'Tab' })
+    expect(input.value).toBe('now add tests')
+  })
+
+  it('leaves Tab alone with text in the box, while running, or with no suggestion', () => {
+    const { unmount } = render(<Composer {...baseProps({ suggestion: 'now add tests' })} />)
+    const input = type('my own')
+    fireEvent.keyDown(input, { key: 'Tab' })
+    expect(input.value).toBe('my own')
+    unmount()
+    localStorage.clear() // the unmount saved the draft; start the next box empty
+    render(<Composer {...baseProps({ suggestion: 'now add tests', running: true })} />)
+    const running = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(running.placeholder).not.toContain('now add tests')
+    fireEvent.keyDown(running, { key: 'Tab' })
+    expect(running.value).toBe('')
+  })
+})
+
 describe('Composer power features', () => {
   it('folds a very large paste into a chip that is sent as pasted, and can be expanded', () => {
     const props = baseProps()

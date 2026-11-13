@@ -373,6 +373,12 @@ const api = {
     ipcRenderer.on(IPC.conversationTitleChanged, listener)
     return () => ipcRenderer.removeListener(IPC.conversationTitleChanged, listener)
   },
+  /** Subscribe to suggested next messages (sent after a turn when that setting is on). */
+  onConversationSuggestion: (cb: (payload: { id: string; text: string }) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, payload: { id: string; text: string }): void => cb(payload)
+    ipcRenderer.on(IPC.conversationSuggestion, listener)
+    return () => ipcRenderer.removeListener(IPC.conversationSuggestion, listener)
+  },
 
   // Agent
   /** Resolves with `queuedBehind` when a live run was already going and the message was queued. */

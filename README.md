@@ -509,6 +509,9 @@ Open source under the [Apache License 2.0](LICENSE).
   **Fork** a chat from its ⋯ menu to branch off a copy and explore a different
   direction without disturbing the original, or **Fork from here** on one message to
   branch off at that point.
+- **Suggested next message (opt-in).** With it turned on in Settings → *Agent*, the
+  chat's model suggests one short follow-up after each turn, shown faintly in the
+  empty message box; Tab uses it. It costs a small extra request per turn.
 - **Auto-named chats.** A new chat shows the first message as a placeholder, then,
   as soon as the first turn starts, the conversation's own model writes a short,
   specific title to replace it, usually within seconds (the new title appears in the

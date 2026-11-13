@@ -12,12 +12,15 @@ const h = vi.hoisted(() => ({
   setMessages: vi.fn(),
   setConversationError: vi.fn(),
   updateConversationMeta: vi.fn(),
-  maybeGenerateTitle: vi.fn(() => Promise.resolve())
+  maybeGenerateTitle: vi.fn(() => Promise.resolve()),
+  maybeSuggestNext: vi.fn((_opts: { conversationId: string; onSuggestion: (t: string) => void }) => Promise.resolve())
 }))
 vi.mock('./loop', () => ({ startRun: h.startRun }))
 // Auto-titling has its own tests (title.test.ts); here we only assert drain wires it
 // up at turn start (plus a natural-completion fallback), so stub it out rather than reaching the provider/store.
 vi.mock('./title', () => ({ maybeGenerateTitle: h.maybeGenerateTitle }))
+// The suggestion call has its own tests (suggest.test.ts); here only when drain asks.
+vi.mock('./suggest', () => ({ maybeSuggestNext: h.maybeSuggestNext }))
 vi.mock('../conversations', () => ({
   getConversation: h.getConversation,
   setMessages: h.setMessages,
@@ -302,6 +305,42 @@ describe('runAndDrain', () => {
       await settle()
       expect(h.startRun).toHaveBeenCalledTimes(2)
       expect(h.startRun.mock.calls[1][0].messages).toEqual([{ role: 'user', content: 'and the docs', at: expect.any(String) }])
+    })
+  })
+
+  describe('suggested next message', () => {
+    const withSuggestions = () => ({ ...io(), emitSuggestion: vi.fn() })
+
+    it('asks for one after a natural finish with nothing queued, and passes it on', async () => {
+      const cid = 'conv-suggest'
+      endRunsWith({ done: 'end_turn' })
+      const sink = withSuggestions()
+      h.maybeSuggestNext.mockImplementationOnce(async (opts) => {
+        opts.onSuggestion('now add tests')
+      })
+      await runAndDrain(sink, cid, runReq(cid))
+      await settle()
+      expect(h.maybeSuggestNext).toHaveBeenCalledWith(
+        expect.objectContaining({ conversationId: cid, providerId: 'anthropic', model: 'claude' })
+      )
+      expect(sink.emitSuggestion).toHaveBeenCalledWith(cid, 'now add tests')
+    })
+
+    it('asks for none when a queued message goes next, after an error, or for a client that shows none', async () => {
+      const queued = 'conv-suggest-queued'
+      addToQueue({ conversationId: queued, userText: 'A', providerId: 'anthropic', model: 'm1', approvalPolicy: 'ask' })
+      endRunsWith({ done: 'end_turn' })
+      await runAndDrain(withSuggestions(), queued, runReq(queued))
+      await settle()
+      // Only after the drained follow-up, never with a message waiting to go next.
+      expect(h.maybeSuggestNext.mock.calls.filter(([o]) => o.conversationId === queued)).toHaveLength(1)
+      h.maybeSuggestNext.mockClear()
+      endRunsWith({ error: 'boom' })
+      await runAndDrain(withSuggestions(), 'conv-suggest-error', runReq('conv-suggest-error'))
+      endRunsWith({ done: 'end_turn' })
+      await runAndDrain(io(), 'conv-suggest-plain', runReq('conv-suggest-plain'))
+      await settle()
+      expect(h.maybeSuggestNext).not.toHaveBeenCalled()
     })
   })
 })

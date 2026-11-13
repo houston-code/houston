@@ -481,6 +481,18 @@ export default function App(): JSX.Element {
     })
   }, [])
 
+  // A suggested next message (the "Suggest a next message" setting), for the chat whose
+  // turn just ended. It is offered in that chat's empty box until the next turn starts.
+  const [suggestion, setSuggestion] = useState<{ id: string; text: string } | null>(null)
+  useEffect(() => {
+    return window.api.onConversationSuggestion?.(({ id, text }) => {
+      if (typeof id === 'string' && typeof text === 'string') setSuggestion({ id, text })
+    })
+  }, [])
+  useEffect(() => {
+    if (chat.running) setSuggestion(null)
+  }, [chat.running])
+
   // Pull any one-shot "What's new" staged after an upgrade-and-relaunch.
   useEffect(() => {
     void window.api.getWhatsNew().then((wn) => {
@@ -3315,6 +3327,9 @@ export default function App(): JSX.Element {
             conversationId={currentId}
             disabled={!canChat}
             disabledReason={disabledReason}
+            {...(suggestion && suggestion.id === currentId && !chat.running && settings?.suggestNextPrompt === true
+              ? { suggestion: suggestion.text }
+              : {})}
             running={chat.running}
             attention={awaitingFirstTask}
             workspace={workspace}
