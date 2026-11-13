@@ -1,4 +1,4 @@
-import type { ChatMessage } from '@shared/agent'
+import { COMPACTION_SUMMARY_PREFIX, type ChatMessage } from '@shared/agent'
 import { formatTodoList, parseTodosSafe, type Todo } from '@shared/todos'
 import { parsePatch } from './apply-patch'
 
@@ -91,9 +91,14 @@ function clip(text: string, max: number): string {
   return `${text.slice(0, max).trimEnd()}…`
 }
 
-/** Index of the first user turn (the original task), or -1 when there is none. */
+/**
+ * Index of the first user turn (the original task), or -1 when there is none. The
+ * summary `/compact` writes into the log rides a `user` message but is Houston's
+ * text, not a task, so it is skipped: after a `/compact` the task is the first
+ * request the user wrote that the log still holds verbatim.
+ */
 export function originalTaskIndex(messages: ChatMessage[]): number {
-  return messages.findIndex((m) => m.role === 'user')
+  return messages.findIndex((m) => m.role === 'user' && !m.content.startsWith(COMPACTION_SUMMARY_PREFIX))
 }
 
 /** The first user turn's text — the original task. Empty when there is none. */

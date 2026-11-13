@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatMessage } from '@shared/agent'
+import { systemNoteMessage, type ChatMessage } from '@shared/agent'
 import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
+import { APPROVAL_DENIED, denialText } from '@shared/promptOutcome'
 import {
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_WINDOW_FRACTION,
@@ -10,6 +11,7 @@ import {
   EVICT_KEEP_RECENT_TURNS,
   EVICT_MIN_BYTES,
   SUMMARY_MAX_TOKENS,
+  buildAnchorMessages,
   buildSummaryMessages,
   buildSummaryRequestMessages,
   compactionAnchor,
@@ -320,6 +322,58 @@ describe('compactionAnchor', () => {
     const msgs = conversation(3)
     expect(compactionAnchor(msgs, 4, 8)).toBeUndefined()
     expect(compactionAnchor(msgs, 0, 8)).toBeUndefined()
+  })
+})
+
+describe('buildAnchorMessages', () => {
+  const STEER = 'actually, use pnpm, not npm'
+  /** One turn: the request, a steer after the first iteration, a note after the second. */
+  const steeredTurn = (): ChatMessage[] => [
+    { role: 'user', content: 'set up the project with npm' }, // 0: turnStart
+    { role: 'assistant', content: '', toolCalls: [{ id: 'a', name: 'list_dir', arguments: {} }] },
+    { role: 'tool', content: 'ok', toolCallId: 'a', toolName: 'list_dir' },
+    { role: 'user', content: STEER, steered: true }, // 3: the user's mid-run correction
+    { role: 'assistant', content: '', toolCalls: [{ id: 'b', name: 'list_dir', arguments: {} }] },
+    { role: 'tool', content: 'ok', toolCallId: 'b', toolName: 'list_dir' },
+    systemNoteMessage('keep going'), // 6: Houston's words, not the user's
+    { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'list_dir', arguments: {} }] }, // 7
+    { role: 'tool', content: 'ok', toolCallId: 'c', toolName: 'list_dir' },
+    { role: 'user', content: 'and add a README', steered: true }, // 9
+    { role: 'assistant', content: '', toolCalls: [{ id: 'd', name: 'list_dir', arguments: {} }] }, // 10
+    { role: 'tool', content: 'ok', toolCallId: 'd', toolName: 'list_dir' }
+  ]
+
+  it('re-sends a steer from before an in-turn cut verbatim in the built window', () => {
+    const msgs = steeredTurn()
+    const cut = 7
+    const anchor = compactionAnchor(msgs, cut, 0)
+    expect(anchor).toBe(0)
+    const window = [...buildSummaryMessages('S'), ...buildAnchorMessages(msgs, anchor, cut), ...msgs.slice(cut)]
+
+    // The steer is the user's own words: it rides verbatim, after the request it amends.
+    const anchored = window[2]
+    expect(anchored.role).toBe('user')
+    expect(anchored.content).toBe(`set up the project with npm\n\n${STEER}`)
+    // Houston's note is left to the summary; the steer after the cut stays in the tail once.
+    expect(window.some((m) => m.content.includes('keep going'))).toBe(false)
+    expect(window.filter((m) => m.content.includes('and add a README'))).toHaveLength(1)
+    // Still one user message ahead of the tail, so roles keep alternating.
+    expect(window.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'assistant', 'tool', 'user', 'assistant', 'tool'])
+  })
+
+  it('re-sends the request alone when no steer came before the cut, and nothing without an anchor', () => {
+    const msgs = steeredTurn()
+    expect(buildAnchorMessages(msgs, 0, 3)).toEqual([msgs[0]])
+    expect(buildAnchorMessages(msgs, 0, 3)[0]).toBe(msgs[0]) // the request itself, untouched
+    expect(buildAnchorMessages(msgs, undefined, 7)).toEqual([])
+  })
+
+  it('carries every steer before the cut, in order, without touching the log', () => {
+    const msgs = steeredTurn()
+    const before = JSON.stringify(msgs)
+    const [anchored] = buildAnchorMessages(msgs, 0, 10)
+    expect(anchored.content).toBe(`set up the project with npm\n\n${STEER}\n\nand add a README`)
+    expect(JSON.stringify(msgs)).toBe(before)
   })
 })
 
@@ -687,6 +741,43 @@ describe('evictStaleToolResults', () => {
     expect(stubbed.map((m) => m.toolCallId)).toEqual(['r0', 'r1'])
     // The newest iterations stay verbatim.
     expect(out.slice(-2 * EVICT_KEEP_RECENT_ITERATIONS)).toEqual(msgs.slice(-2 * EVICT_KEEP_RECENT_ITERATIONS))
+  })
+
+  it('never stubs a stale result that carries the user\'s own words', () => {
+    // The plan the user edited before accepting, their answer to a question, and the
+    // guidance they gave with a denial. The calls stay in the window either way, so a
+    // stub would leave the model's own plan or question standing without the reply.
+    const edited =
+      'The user ACCEPTED the plan but EDITED it first, and switched off Plan mode. Carry out EXACTLY the following edited plan:\n\n' +
+      '- Install dependencies with pnpm, not npm.\n'.repeat(80)
+    const answer = 'Use pnpm workspaces; keep the lockfile at the root. '.repeat(60)
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'q0' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'p', name: 'present_plan', arguments: { plan: '- npm install\n'.repeat(200) } }] },
+      { role: 'tool', content: edited, toolCallId: 'p', toolName: 'present_plan' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'q', name: 'ask_user', arguments: { question: 'Which package manager?' } }] },
+      { role: 'tool', content: answer, toolCallId: 'q', toolName: 'ask_user' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 's', name: 'run_shell', arguments: { command: 'npm i' } }] },
+      {
+        role: 'tool',
+        content: denialText(`${APPROVAL_DENIED} Do not retry this command.`, 'n'.repeat(2000)),
+        toolCallId: 's',
+        toolName: 'run_shell'
+      },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'r', name: 'read_file', arguments: { path: 'big.ts' } }] },
+      { role: 'tool', content: 'z'.repeat(EVICT_MIN_BYTES + 500), toolCallId: 'r', toolName: 'read_file' },
+      { role: 'assistant', content: 'a0' }
+    ]
+    for (let t = 1; t <= EVICT_KEEP_RECENT_TURNS; t++) {
+      msgs.push({ role: 'user', content: `q${t}` }, { role: 'assistant', content: `a${t}` })
+    }
+    for (const i of [2, 4, 6]) expect(Buffer.byteLength(msgs[i].content)).toBeGreaterThanOrEqual(EVICT_MIN_BYTES)
+
+    const out = evictStaleToolResults(msgs)
+    expect(out[8].content.startsWith('[earlier read_file result on big.ts')).toBe(true) // stale, so it goes
+    expect(out.slice(0, 8)).toEqual(msgs.slice(0, 8)) // the user's words stay verbatim
+    // …and they never move the eviction watermark on their own.
+    expect(hasEvictableToolResults(msgs, 0, 8)).toBe(false)
   })
 
   it('stubs exactly what lies before an explicit boundary', () => {
