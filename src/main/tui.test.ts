@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import type { FileDiffPreview } from '@shared/diff'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
@@ -82,6 +83,7 @@ import {
   shortCwd,
   homeRelative,
   renderStatusLine,
+  renderEditSummary,
   spinnerFrame,
   renderCapabilityList,
   mediaTypeForImagePath,
@@ -5158,6 +5160,90 @@ describe('/rewind', () => {
     other.io = t.io
     await runTui(opts, other)
     expect(t.text()).toContain('rewind is unavailable here')
+  })
+})
+
+describe('edits that land without a prompt', () => {
+  const paintNo = makePainter(false)
+  const preview = (path: string, adds: number, dels: number, extra: Partial<FileDiffPreview> = {}): FileDiffPreview => ({
+    path,
+    diff: [
+      ...Array.from({ length: dels }, (_, i) => ({ type: 'del' as const, text: `old ${i}` })),
+      ...Array.from({ length: adds }, (_, i) => ({ type: 'add' as const, text: `new ${i}` }))
+    ],
+    ...extra
+  })
+
+  it('renderEditSummary names each file with its +/- counts and the command to see the diff', () => {
+    expect(renderEditSummary([preview('src/a.ts', 3, 1)], paintNo)).toBe('  ✎ src/a.ts +3 -1  · /diff last shows the diff')
+    expect(renderEditSummary([preview('src/new.ts', 4, 0, { created: true })], paintNo)).toContain('src/new.ts (new) +4')
+    expect(renderEditSummary([preview('old.ts', 0, 9, { deleted: true })], paintNo)).toContain('old.ts (deleted) -9')
+    expect(renderEditSummary([preview('b.ts', 60, 2, { truncated: true })], paintNo)).toContain('b.ts +60… -2…')
+    expect(renderEditSummary([preview('n.ts', 1, 1, { renamedFrom: 'm.ts' })], paintNo)).toContain('m.ts → n.ts')
+  })
+
+  it('collapses files past the third into a count', () => {
+    const line = renderEditSummary(['a', 'b', 'c', 'd', 'e'].map((f) => preview(f, 1, 0)), paintNo)
+    expect(line).toContain('a +1, b +1, c +1, and 2 more files')
+  })
+
+  const write = (callId: string, ok = true): AgentEvent[] => [
+    {
+      runId: 'x',
+      type: 'tool_start',
+      callId,
+      name: 'edit_file',
+      args: { path: 'src/a.ts' },
+      kind: 'write',
+      preview: [preview('src/a.ts', 2, 1)]
+    },
+    { runId: 'x', type: 'tool_result', callId, name: 'edit_file', ok, output: ok ? 'Edited src/a.ts' : 'no match' }
+  ]
+
+  it('prints the summary after an auto-approved write', async () => {
+    const { d } = deps([...write('c1'), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('✎ src/a.ts +2 -1  · /diff last shows the diff')
+  })
+
+  it('stays quiet for a write approved at a prompt (its diff was already shown), and a failed one', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'edit_file', kind: 'write', summary: 'Edit src/a.ts', args: {} } as AgentEvent,
+      ...write('c1'),
+      ...write('c2', false),
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).not.toContain('✎')
+  })
+
+  it('/diff last shows the diff of the last edit, and /diff last n reaches back', async () => {
+    const { d } = deps([...write('c1'), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', '/diff last', '/diff last 3', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('new 1')
+    expect(t.text()).toContain('only 1 edit so far this session')
+  })
+
+  it('/diff last says so before any edit', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/diff last', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('no edits yet this session')
+  })
+
+  it('parses /diff last [n], leaving plain /diff and /changes as the working-tree summary', () => {
+    expect(parseSlashCommand('/diff', settings())).toEqual({ kind: 'changes' })
+    expect(parseSlashCommand('/changes', settings())).toEqual({ kind: 'changes' })
+    expect(parseSlashCommand('/diff last', settings())).toEqual({ kind: 'changes', last: 1 })
+    expect(parseSlashCommand('/diff last 3', settings())).toEqual({ kind: 'changes', last: 3 })
+    expect(parseSlashCommand('/changes last 0', settings())).toEqual({ kind: 'changes', last: 1 })
   })
 })
 

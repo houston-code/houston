@@ -514,7 +514,7 @@ long as it needs to be.
 | `Ctrl-J`, `Alt-Enter` | insert a line break |
 | `Up` / `Down` | move between lines, then step through past messages |
 | `Ctrl-R` | search past messages (type to filter, `Ctrl-R` again for older, `Enter` to accept, `Esc` to cancel) |
-| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`) |
+| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`). Typing `@` already lists the matching files under the message, as `/` lists commands |
 | `Ctrl-A` / `Ctrl-E` | start / end of line |
 | `Alt-B` / `Alt-F` | move a word |
 | `Ctrl-W` | delete the word before the cursor |
@@ -897,7 +897,12 @@ A single reply also has an output limit.
 | `/undo` | puts back the files the last turn changed |
 | `/redo` | re-applies them |
 | `/changes` (or `/diff`) | summarizes everything different in the working tree: each file with its status and lines gained and lost, plus a total |
+| `/diff last [n]` | *terminal:* shows the diff of this session's last edit, or the one `n` edits back |
 
+- **Edits you didn't approve one by one still show up.** In the terminal, an edit that
+  lands without a prompt (auto-edit, full auto, or a saved rule) prints one line naming
+  each file with its lines added and removed, like `✎ src/app.ts +12 -3`, and
+  `/diff last` shows the whole diff.
 - **Nothing to set up.** Houston snapshots every write before it happens.
 - **Best with auto-approve modes**, where edits land without a prompt: "that was
   wrong, put it back" is one word rather than a hand revert.

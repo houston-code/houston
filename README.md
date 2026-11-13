@@ -847,10 +847,13 @@ switch to `auto-edit` and carry it out, or keep planning. While the agent works,
 spinner with an elapsed timer shows it's alive (labelled with the current
 activity), and what you type steers the running turn. Press `Esc` (or `Ctrl-C`) on
 an empty line to stop the current turn (the session stays open); `Ctrl-D` to exit.
-`Shift-Tab` cycles the approval mode, even mid-run.
+`Shift-Tab` cycles the approval mode, even mid-run. An edit that lands without a
+prompt prints one line with each file's added and removed lines (`/diff last` shows
+the diff).
 
-The composer is a full line editor: **Tab** completes slash-command names and
-`@`-file mentions (fuzzy over the workspace), **Up/Down** and **Ctrl-R** recall and
+The composer is a full line editor: typing `/` or `@` lists matching commands or
+files under it, **Tab** completes slash-command names and `@`-file mentions (fuzzy
+over the workspace), **Up/Down** and **Ctrl-R** recall and
 search previous prompts (history persists per project across restarts), `Ctrl-J` or
 `Alt-Enter` inserts a line break, a pasted block lands as one message, and `/vim`
 turns on vim keys. A line starting with `!` runs in your own shell, and `#` saves a
@@ -874,7 +877,7 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/resume [query]` | list (or search by title) and reopen a saved session |
 | `/fork` | branch the current session into a copy, leaving the original intact |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
-| `/changes` (`/diff`) | summarize what is different in the working tree |
+| `/changes` (`/diff`) | summarize what is different in the working tree; `/diff last [n]` shows the diff of this session's last edit (or `n` back) |
 | `/review` | adversarial review of your uncommitted changes |
 | `/init` | write or improve AGENTS.md, the project's instructions file |
 | `/cost` | session token + cost totals, per model |

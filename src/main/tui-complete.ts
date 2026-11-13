@@ -118,3 +118,51 @@ export function renderCommandMenu(
   }
   return rows
 }
+
+/** Render the `@` mention rows: matching paths, capped like the command menu. */
+export function renderMentionMenu(
+  files: string[],
+  paint: (s: string, ...styles: string[]) => string
+): string[] {
+  if (!files.length) return [paint('  (no matching file)', 'dim')]
+  const shown = files.slice(0, MENU_LIMIT)
+  const rows = shown.map((f) => `  ${paint(`@${f}`, 'cyan')}`)
+  if (files.length > shown.length) rows.push(paint(`  … ${files.length - shown.length} more`, 'dim'))
+  rows.push(paint('  Tab completes', 'dim'))
+  return rows
+}
+
+/**
+ * The live `@` dropdown: matching files under the composer as the mention is typed,
+ * as `/` shows commands. The lookup is async, so the first draw for a new query shows
+ * the last rows (or none) and `redraw` repaints once the files are in. Only the newest
+ * query's answer is kept; a slow lookup for an older one is dropped.
+ */
+export function makeMentionMenu(
+  finder: FileFinder,
+  paint: (s: string, ...styles: string[]) => string
+): (line: string, redraw: () => void) => string[] | null {
+  let shown: { query: string; rows: string[] } | null = null
+  let wanted: string | null = null
+  return (line, redraw) => {
+    const q = mentionQuery(line)
+    if (q === null) {
+      wanted = null
+      return null
+    }
+    if (shown?.query === q) return shown.rows
+    if (wanted !== q) {
+      wanted = q
+      finder(q)
+        .then((files) => {
+          if (wanted !== q) return
+          shown = { query: q, rows: renderMentionMenu(files, paint) }
+          redraw()
+        })
+        .catch(() => {
+          /* no files to offer: the menu stays as it was, Tab still works */
+        })
+    }
+    return shown?.rows ?? []
+  }
+}

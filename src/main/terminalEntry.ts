@@ -89,6 +89,7 @@ import {
   makeCompleter,
   commandMenu,
   renderCommandMenu,
+  makeMentionMenu,
   COMMANDS,
   type CommandSpec
 } from './tui-complete'
@@ -481,10 +482,14 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       /* no custom commands — the built-ins still list */
     })
 
+  // Typing `@` lists matching files under the composer, as `/` lists commands.
+  const mentionMenu = makeMentionMenu((q) => findFiles(tui.cwd, q), paint as never)
+
   const io = createTerminalIo({
-    menuFor: (line) => {
+    menuFor: (line, redraw) => {
       const matches = commandMenu(line, menuCommands)
-      return matches ? renderCommandMenu(matches, paint as never) : []
+      if (matches) return renderCommandMenu(matches, paint as never)
+      return mentionMenu(line, redraw) ?? []
     },
     paint,
     // Read live: an entry submitted this session must be recallable on the next

@@ -31,7 +31,7 @@ import { providerKeyUrl } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { formatReceiptLines, receiptHasFailure } from '@shared/evidence'
 import { formatReadinessLines, planVerifySteps, readinessOk } from '@shared/planReadiness'
-import type { FileDiffPreview } from '@shared/diff'
+import { diffStat, type FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
   mergeCommands,
@@ -784,6 +784,36 @@ export function spinnerFrame(
   return `${head}${mode}${queued}${draft}`
 }
 
+/** How many files an edit summary names before it collapses the rest to a count. */
+const EDIT_SUMMARY_FILES = 3
+
+/**
+ * One line for a write that landed without an approval prompt (auto-edit, full auto,
+ * or a saved rule), so the edit is not invisible: each file with its added and
+ * removed line counts, and the command that shows the diff.
+ */
+export function renderEditSummary(preview: FileDiffPreview[], paint: Painter): string {
+  const files = preview.slice(0, EDIT_SUMMARY_FILES).map((f) => {
+    const { added, removed } = diffStat(f.diff)
+    const more = f.truncated ? '…' : ''
+    const name = f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path
+    const tag = f.created ? paint(' (new)', 'dim') : f.deleted ? paint(' (deleted)', 'dim') : ''
+    const counts = [
+      added || !removed ? paint(`+${added}${more}`, 'green') : '',
+      removed ? paint(`-${removed}${more}`, 'red') : ''
+    ]
+      .filter(Boolean)
+      .join(' ')
+    return `${name}${tag} ${counts}`
+  })
+  const rest = preview.length - EDIT_SUMMARY_FILES
+  if (rest > 0) files.push(paint(`and ${rest} more file${rest === 1 ? '' : 's'}`, 'dim'))
+  return `  ${paint('✎', 'cyan')} ${files.join(paint(', ', 'dim'))}  ${paint('· /diff last shows the diff', 'dim')}`
+}
+
+/** How many of this session's edits `/diff last <n>` can reach back to. */
+const RECENT_EDITS = 20
+
 export interface StatusState {
   providerId: string
   model: string
@@ -1364,8 +1394,11 @@ export type SlashResult =
    * (/rewind undo). Without `turn` the driver lists the messages and asks.
    */
   | { kind: 'rewind'; undo: boolean; turn?: number; mode?: RewindMode }
-  /** Summarize everything different in the working tree (/changes). */
-  | { kind: 'changes' }
+  /**
+   * Summarize everything different in the working tree (/changes), or with `last`,
+   * show the diff of an edit this session made (`/diff last [n]`, n edits back).
+   */
+  | { kind: 'changes'; last?: number }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
   /** Reprint a past tool result in full (/output [n]). */
@@ -1484,8 +1517,11 @@ export function parseSlashCommand(
     case 'redo':
       return { kind: 'undo', redo: true }
     case 'changes':
-    case 'diff':
-      return { kind: 'changes' }
+    case 'diff': {
+      const m = /^last(?:\s+(\d+))?$/i.exec(arg.trim())
+      if (!m) return { kind: 'changes' }
+      return { kind: 'changes', last: Math.max(1, Number(m[2] ?? m[1] ?? 1) || 1) }
+    }
     case 'verbose': {
       const a = arg.trim().toLowerCase()
       if (a === 'on') return { kind: 'verbose', on: true }
@@ -1636,6 +1672,7 @@ export const HELP_TEXT = [
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
+  "  /diff last [n]        show the diff of this session's last edit (n edits back)",
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
@@ -2908,6 +2945,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let pendingImages: ImageAttachment[] = []
   // Estimated current context size (last turn's input tokens), for the status line.
   let contextTokens = 0
+  // This session's landed edits (newest last), for `/diff last [n]`.
+  let recentEdits: FileDiffPreview[][] = []
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
@@ -3572,6 +3611,33 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         )
         continue
       }
+      if (result.kind === 'changes' && result.last !== undefined) {
+        const edit = recentEdits[recentEdits.length - result.last]
+        if (!edit) {
+          deps.io.out(
+            paint(
+              recentEdits.length
+                ? `· only ${recentEdits.length} edit${recentEdits.length === 1 ? '' : 's'} so far this session\n`
+                : '· no edits yet this session (/changes shows the working tree)\n',
+              'dim'
+            )
+          )
+          continue
+        }
+        const html = deps.highlightHtml
+        const view = renderPreviewView(
+          edit,
+          paint,
+          html
+            ? (lang, code) => {
+                const h = html(lang, code)
+                return h ? htmlToAnsi(h, paint) : code
+              }
+            : undefined
+        )
+        if (view) deps.io.out(`${view}\n`)
+        continue
+      }
       if (result.kind === 'changes') {
         if (!deps.workingTree) {
           deps.io.out(paint('· working-tree changes are unavailable here\n', 'dim'))
@@ -3938,6 +4004,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Args captured at tool_start, so a write approval can show the actual diff
     // (the approval event itself only carries a human summary).
     const toolArgs = new Map<string, Record<string, unknown>>()
+    // A write's diff, from its tool_start, until its result says whether it landed.
+    const writePreviews = new Map<string, FileDiffPreview[]>()
+    // Writes the user approved at a prompt, where the diff was already on screen.
+    const promptedWrites = new Set<string>()
     // todo_write calls whose list we already drew, so their summary line is dropped.
     const todoCalls = new Set<string>()
     // Review findings print once per status change (line mode can't update in place).
@@ -4038,6 +4108,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // A question or a plan prints itself as the prompt that follows; a "· ask_user"
           // line in front of it is only the wire name.
           if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) break
+          if (e.kind === 'write' && e.preview?.length) writePreviews.set(e.callId, e.preview)
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
           break
         }
@@ -4073,6 +4144,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           const line = renderToolResult(e.name, e.ok, e.output, paint, { verbose, width: columns() })
           if (line) deps.io.out(`${line}\n`)
           toolArgs.delete(e.callId)
+          const preview = writePreviews.get(e.callId)
+          writePreviews.delete(e.callId)
+          if (preview && e.ok) {
+            recentEdits = [...recentEdits, preview].slice(-RECENT_EDITS)
+            // An approved write showed its diff in the prompt; one that ran without
+            // asking gets the summary, so no edit lands unseen.
+            if (!promptedWrites.has(e.callId)) deps.io.out(`${renderEditSummary(preview, paint)}\n`)
+          }
+          promptedWrites.delete(e.callId)
           break
         }
         case 'tool_progress':
@@ -4113,6 +4193,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\n· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`, 'yellow'))
           break
         case 'tool_approval':
+          if (e.kind === 'write') promptedWrites.add(e.callId)
           enqueue(async () => {
             // Context (name, kind, unsandboxed warning) + the diff for a write.
             deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select })}\n`)
