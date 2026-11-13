@@ -32,6 +32,7 @@ import { chatWindows, isPrimaryWindow, registerAppWindow, setWindowOpener, targe
 import { wireImageDownscale } from './imageDownscale'
 import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation } from './quit-confirm'
 import { parseHeadlessArgs } from './headless'
+import { drainStdio } from './stdioDrain'
 import { parseTuiArgs } from './tui'
 import { runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from './terminalEntry'
 import { activeBackendId, isSandboxed } from './sandbox'
@@ -326,13 +327,16 @@ app.on('before-quit', (e) => guardQuitWithLiveWork(e, targetWindow()))
  */
 async function flushBeforeExit(code: number): Promise<number> {
   flushRuleUsage()
+  let exitCode = code
   try {
     await flushSecrets()
-    return code
   } catch {
     // flushSecrets already logged it.
-    return code === 0 ? 1 : code
+    exitCode = code === 0 ? 1 : code
   }
+  // app.exit drops output still queued for a pipe (asynchronous on macOS).
+  await drainStdio()
+  return exitCode
 }
 
 // Don't leave the agent's background shells or terminals running after the app exits.
