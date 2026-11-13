@@ -27,6 +27,7 @@ import {
   type ToolApprovalDecision,
   retryProgress,
 } from '@shared/agent'
+import { throttleNotice } from '@shared/rateLimit'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
 import { invocationText } from '@shared/promptInvocation'
@@ -1199,7 +1200,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           notice(`Compacted ${e.summarized} earlier messages to free up context.`)
           break
         case 'retry':
-          notice(`Retrying (${retryProgress(e)}): ${e.message}`, 'warning')
+          notice(e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `Retrying (${retryProgress(e)}): ${e.message}`, 'warning')
           break
         case 'model_fallback':
           notice(`${e.from} is unavailable, falling back to ${e.to}: ${e.reason}`, 'warning')

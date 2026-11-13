@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { parseFrontmatter } from '@shared/frontmatter'
+import { isDisabledFlag, parseFrontmatter } from '@shared/frontmatter'
 import { mergeCommands, type Command } from '@shared/commands'
 
 /**
@@ -60,6 +60,8 @@ async function loadFrom(dir: string): Promise<Command[]> {
     // Frontmatter is optional: without it, the first line is still the description,
     // exactly as before, so existing command files keep working untouched.
     const { data, body } = parseFrontmatter(raw)
+    // Switched off (Settings > Customize writes `disabled: true`): kept on disk, not offered.
+    if (isDisabledFlag(data.disabled)) continue
     const described = typeof data.description === 'string' ? data.description.trim() : ''
     // `body` is the whole file when there is no frontmatter, so it is always the
     // template. Falling back to `raw` would paste the frontmatter block into the

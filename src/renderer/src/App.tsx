@@ -12,7 +12,7 @@ import { ultrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
-import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel } from '@shared/types'
+import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel, SidebarGroupBy } from '@shared/types'
 import type {
   ConversationMeta,
   PlanDecision,
@@ -46,7 +46,7 @@ import {
   planNewChatWorkspace,
   suggestBranch
 } from './lib/worktree'
-import { useApplyTheme } from './hooks/useApplyTheme'
+import { useApplyAppearance, useApplyTheme } from './hooks/useApplyTheme'
 import { useChatStatus } from './hooks/useChatStatus'
 import { useWindowFocused } from './hooks/useWindowFocused'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
@@ -121,6 +121,7 @@ import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer, IDLE_ONLY_COMMANDS } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
+import { ImportNotice } from './components/ImportNotice'
 import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
@@ -179,6 +180,9 @@ const FilesPanel = lazy(() =>
 )
 const Scorecard = lazy(() =>
   import('./components/Scorecard').then((m) => ({ default: m.Scorecard }))
+)
+const UsagePanel = lazy(() =>
+  import('./components/UsagePanel').then((m) => ({ default: m.UsagePanel }))
 )
 const TerminalDock = lazy(() =>
   import('./components/TerminalDock').then((m) => ({ default: m.TerminalDock }))
@@ -245,6 +249,7 @@ export default function App(): JSX.Element {
   // The open chat's decisions on its propose_session cards (keyed by call id).
   const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
   const [scorecardOpen, setScorecardOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   // Rewind (see components/RewindDialog): the Esc Esc picker, the confirmation for a
   // chosen message, an edit-and-resend in progress, the text to put in the composer,
@@ -465,6 +470,11 @@ export default function App(): JSX.Element {
 
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
+  useApplyAppearance({
+    chatFontSize: settings?.chatFontSize,
+    density: settings?.density,
+    codeTheme: settings?.codeTheme
+  })
 
   // Live status of every conversation with a run (running, blocking prompts), used
   // to mark chats in the sidebar, including ones running in the background.
@@ -1121,6 +1131,13 @@ export default function App(): JSX.Element {
     setSettings(await window.api.saveSettings({ ...current, newChatWorktree: on }))
   }, [])
 
+  // The usage drawer's cost reminder writes the same setting as Settings > Agent Behavior.
+  const onChangeCostCeiling = useCallback(async (usd: number) => {
+    const current = await window.api.getSettings()
+    if ((current.costCeilingUsd ?? 0) === usd) return
+    setSettings(await window.api.saveSettings({ ...current, costCeilingUsd: usd }))
+  }, [])
+
   const onToggleUnreadFirst = useCallback(async () => {
     const current = await window.api.getSettings()
     const fresh = await window.api.saveSettings({
@@ -1128,6 +1145,14 @@ export default function App(): JSX.Element {
       sidebarUnreadFirst: !current.sidebarUnreadFirst
     })
     setSettings(fresh)
+  }, [])
+
+  const onSetSidebarGroupBy = useCallback(async (by: SidebarGroupBy | undefined) => {
+    const current = await window.api.getSettings()
+    const next = { ...current }
+    if (by) next.sidebarGroupBy = by
+    else delete next.sidebarGroupBy
+    setSettings(await window.api.saveSettings(next))
   }, [])
 
   const onSetArchived = useCallback(
@@ -2194,6 +2219,7 @@ export default function App(): JSX.Element {
         if (turn) onInvoke(turn)
         else chat.notify('Usage: /agent <name> <task>. The name matches a file in .houston/agents', 'error')
       } else if (cmd.name === 'doctor') setDoctorOpen(true)
+      else if (cmd.name === 'usage') setUsageOpen(true)
       else if (cmd.name === 'rewind') {
         if (currentId) setRewindPickerOpen(true)
         else chat.notify('Nothing to rewind yet: send a message first.')
@@ -2341,6 +2367,13 @@ export default function App(): JSX.Element {
         // action shouldn't outrank the actual model list for that query.
         keywords: 'stats cost tokens usage metrics loop tools',
         run: () => setScorecardOpen(true)
+      },
+      {
+        id: 'act-usage',
+        title: 'Show usage and spend',
+        section: 'Actions',
+        keywords: 'cost spend tokens usage per day per project budget limit reminder',
+        run: () => setUsageOpen(true)
       },
       {
         id: 'act-help',
@@ -2495,6 +2528,7 @@ export default function App(): JSX.Element {
     doctor: doctorOpen,
     files: filesOpen,
     scorecard: scorecardOpen,
+    usage: usageOpen,
     help: helpOpen,
     viewer: viewer !== null,
     palette: paletteOpen,
@@ -2661,6 +2695,7 @@ export default function App(): JSX.Element {
         else if (o.settings) setSettingsOpen(false)
         else if (o.files) setFilesOpen(false)
         else if (o.scorecard) setScorecardOpen(false)
+        else if (o.usage) setUsageOpen(false)
         else if (o.doctor) setDoctorOpen(false)
         else if (chat.running) chat.cancel()
       }
@@ -2792,6 +2827,8 @@ export default function App(): JSX.Element {
         onMarkAllRead={onMarkAllRead}
         unreadFirst={settings.sidebarUnreadFirst ?? false}
         onToggleUnreadFirst={onToggleUnreadFirst}
+        {...(settings.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {})}
+        onSetGroupBy={(by) => void onSetSidebarGroupBy(by)}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         statusCounts={statusCounts}
@@ -2938,6 +2975,8 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            toolsExpanded={settings?.toolOutputExpanded === true}
+            showReasoning={settings?.showReasoning === true}
             {...(currentId && lastTurn && !chat.running ? { onRetryLast: () => void onRetryLast() } : {})}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
@@ -2958,6 +2997,15 @@ export default function App(): JSX.Element {
         />
 
         <GlobalRulesNotice onDecided={setSettings} />
+
+        <ImportNotice
+          workspace={workspace}
+          onReview={() => {
+            setSettingsSection('import')
+            setSettingsQuery('')
+            setSettingsOpen(true)
+          }}
+        />
 
         <EnvKeyNotice
           // A key stored with no model picked yet starts on that provider's default,
@@ -3255,6 +3303,13 @@ export default function App(): JSX.Element {
         )}
 
         {scorecardOpen && <Scorecard onClose={() => setScorecardOpen(false)} />}
+        {usageOpen && (
+          <UsagePanel
+            costCeilingUsd={savedSettings?.costCeilingUsd ?? 0}
+            onChangeCostCeiling={(usd) => void onChangeCostCeiling(usd)}
+            onClose={() => setUsageOpen(false)}
+          />
+        )}
 
         {whatsNew && <WhatsNewModal info={whatsNew} onClose={() => setWhatsNew(null)} />}
 

@@ -137,6 +137,9 @@ Open source under the [Apache License 2.0](LICENSE).
   default app. File paths in the transcript (tool rows, the receipt, relative links
   in replies) open there too, at the line when one is known. Each chat's ⋯ menu also has **Open in**, which opens the chat's
   folder in a detected editor or reveals it in the file manager.
+- **Message box extras.** `Ctrl+R` searches the messages you sent before, a very
+  large paste folds into a chip you can expand, and any file dropped on the box
+  attaches (text inlined, binary files such as PDFs by name).
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message, with no need to paste or describe where things live.
 - **Slash commands.** Type `/` for a command menu. The desktop app and the terminal
@@ -252,7 +255,11 @@ Open source under the [Apache License 2.0](LICENSE).
   `model:` pins the agent to a
   (usually cheaper) sibling model from the current provider. Add a
   `.houston/skills/<name>/SKILL.md` to register a skill: its description is
-  surfaced to the agent, which reads the full instructions on demand.
+  surfaced to the agent, which reads the full instructions on demand. Agents,
+  skills, and custom commands in `~/.houston/` work in every project (a project's
+  own wins a name clash). **Settings > Customize** lists them all, creates new
+  ones from a template, opens them in your editor, switches them off and on, and
+  moves them to the trash, and shows the instruction files Houston loads.
 - **Explains itself.** Ask how Houston works (its slash commands, approval modes,
   hooks, MCP servers, skills, sandboxing, and more) and the agent answers from a
   built-in guide instead of guessing. The guide lives in
@@ -456,7 +463,13 @@ Open source under the [Apache License 2.0](LICENSE).
   moves in on open and restores on close, Tab stays inside, Esc closes), and all
   animations honor the OS *reduce motion* setting.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
-  *Appearance*; *System* follows your OS appearance and switches live.
+  *Appearance*; *System* follows your OS appearance and switches live. The same
+  page sets the chat text size (small, default, large), a compact density, and a
+  code theme (default, high contrast, muted) for code blocks and diffs.
+- **How much detail the transcript shows.** Tool rows start collapsed to one line;
+  the **Expand tools** button at a chat's bottom right opens them all (and collapses them
+  again). Settings → *Appearance* can open tool output by default and keep the
+  model's reasoning in view.
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
   dropped connections) are retried with exponential backoff, shown inline as a
   "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A
@@ -486,7 +499,8 @@ Open source under the [Apache License 2.0](LICENSE).
   a chat yourself always wins; auto-titling never overwrites a title you set.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
-  and groups persist across restarts. **Resize** the sidebar by dragging its right
+  and groups persist across restarts. The filter menu can also split the rest by
+  project folder or by date (Today, Yesterday, This week, Older). **Resize** the sidebar by dragging its right
   edge (double-click to reset), or **collapse** it to a thin rail with the ⌘B
   shortcut or the « toggle; the chosen width and collapsed state are remembered.
 - **Long sessions stay in budget.** When a conversation grows too large, Houston
@@ -582,6 +596,12 @@ Open source under the [Apache License 2.0](LICENSE).
   absolute), to split or share common rules across files. To reuse an existing
   global rules file such as `~/.claude/CLAUDE.md`, add `@~/.claude/CLAUDE.md` to
   `~/.houston/AGENTS.md`; Houston offers to do this once when it finds one.
+- **Import from other tools.** Settings > Import lists the instruction files, MCP
+  servers, skills, and custom commands other coding tools keep in your home folder
+  and the open project (for example a `.mcp.json` or `.claude/commands` in the
+  project), and copies the ones you pick into Houston's own locations. Originals
+  are never changed, nothing Houston already has is overwritten, and imported MCP
+  servers start switched off. Houston offers this once when it first finds any.
 - **Token usage & cost at a glance.** The control bar above the composer shows how
   full the context is (a small bar and "used/maximum") and the chat's **estimated
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show
@@ -591,6 +611,11 @@ Open source under the [Apache License 2.0](LICENSE).
   message shows when it was sent, and each turn's last reply names the model that
   answered and that turn's tokens and cost. The model, project folder, approval policy and
   reasoning controls live there too, down by the composer, where you're typing.
+- **Usage across chats.** `/usage` opens spend and tokens per day (last 30 days)
+  and per project, summed from the chats saved on your computer (nothing leaves
+  it), with the per-turn cost reminder beside them. When a provider rate-limits a
+  request, the retry notice says so, how long Houston waits, and the remaining
+  quota the provider reported.
 
 ## Install (prebuilt binaries)
 
@@ -870,15 +895,18 @@ switch to `auto-edit` and carry it out, or keep planning. While the agent works,
 spinner with an elapsed timer shows it's alive (labelled with the current
 activity), and what you type steers the running turn. Press `Esc` (or `Ctrl-C`) on
 an empty line to stop the current turn (the session stays open); `Ctrl-D` to exit.
-`Shift-Tab` cycles the approval mode, even mid-run.
+`Shift-Tab` cycles the approval mode, even mid-run. An edit that lands without a
+prompt prints one line with each file's added and removed lines (`/diff last` shows
+the diff).
 
-The composer is a full line editor: **Tab** completes slash-command names and
-`@`-file mentions (fuzzy over the workspace), **Up/Down** and **Ctrl-R** recall and
-search previous prompts (history persists per project across restarts), `Shift-Enter`
-(where the terminal reports it), `Ctrl-J` or `Alt-Enter` inserts a line break, a pasted
-block lands as one message, and `/vim` turns on vim keys. A line starting with `!` runs
-in your own shell, and `#` saves a standing instruction. The startup banner shows a
-couple of these as tips, `/help` lists them under **Keys**, and the
+The composer is a full line editor: typing `/` or `@` lists matching commands or
+files under it, **Tab** completes slash-command names and `@`-file mentions (fuzzy
+over the workspace), **Up/Down** and **Ctrl-R** recall and search previous prompts
+(history persists per project across restarts), `Shift-Enter` (where the terminal
+reports it), `Ctrl-J` or `Alt-Enter` inserts a line break, a pasted block lands as one
+message, and `/vim` turns on vim keys. A line starting with `!` runs in your own shell,
+and `#` saves a standing instruction. The startup banner shows a couple of these as
+tips, `/help` lists them under **Keys**, and the
 [guide](docs/houston-guide.md#the-terminal-composer) lists every key. The status line
 above the composer carries the model, approval mode, folder, git branch, cost and
 context use; while a turn runs, the model, branch and context stay on the spinner line.
@@ -899,8 +927,12 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/resume [query]` | list (or search by title) and reopen a saved session |
 | `/fork` | branch the current session into a copy, leaving the original intact |
+| `/rename <title>` | give this chat a title |
+| `/export [md\|json] [path]` | write this chat to a Markdown (default) or JSON file in the working folder |
+| `/delete` | delete this chat, after asking |
+| `/permissions [remove n]` | list the saved permission rules, or remove one |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
-| `/changes` (`/diff`) | summarize what is different in the working tree |
+| `/changes` (`/diff`) | summarize what is different in the working tree; `/diff last [n]` shows the diff of this session's last edit (or `n` back) |
 | `/review` | adversarial review of your uncommitted changes |
 | `/init` | write or improve AGENTS.md, the project's instructions file |
 | `/cost` | session token + cost totals, per model |
@@ -923,8 +955,9 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 Each session is saved as an ordinary conversation, so it survives restarts and
 shows up in the desktop app's sidebar: one history across both clients. `/resume`
 lists recent sessions for the current folder and reopens one where you left off,
-with the model, reasoning effort, and approval mode it was using; `/clear` starts a
-fresh one.
+with the model, reasoning effort, and approval mode it was using, and replays its
+last few exchanges; `/clear` starts a fresh one. Leaving prints the session id and
+the `houston --resume <id>` command that reopens it.
 
 Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
 (default: your default approval mode, shared with the desktop app), `--full-auto`, and `--continue` /

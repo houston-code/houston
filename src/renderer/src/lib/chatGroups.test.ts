@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { ConversationMeta } from '@shared/agent'
 import type { ChatGroup } from '@shared/types'
-import { buildSidebarSections, descendantsOf, dropIndexForY, nestSpawned, newGroupId, reorderedIds } from './chatGroups'
+import {
+  autoSections,
+  buildSidebarSections,
+  dateBucket,
+  descendantsOf,
+  dropIndexForY,
+  nestSpawned,
+  newGroupId,
+  reorderedIds
+} from './chatGroups'
 
 function conv(id: string, updatedAt: number, extra: Partial<ConversationMeta> = {}): ConversationMeta {
   return {
@@ -249,5 +258,80 @@ describe('buildSidebarSections: attention first', () => {
     const convs = [at('a', 2), at('b', 1)]
     const [section] = buildSidebarSections(convs, [])
     expect(section.conversations.map((c) => c.id)).toEqual(['a', 'b'])
+  })
+})
+
+describe('automatic sections', () => {
+  // Local noon on 15 March 2026; the buckets follow the local calendar.
+  const now = new Date(2026, 2, 15, 12).getTime()
+  const at = (day: number, hour = 9): number => new Date(2026, 2, day, hour).getTime()
+
+  it('puts a time in Today, Yesterday, This week or Older by the local calendar', () => {
+    expect(dateBucket(at(15, 0), now)).toBe('auto:date:today')
+    expect(dateBucket(at(14, 23), now)).toBe('auto:date:yesterday')
+    expect(dateBucket(at(14, 0), now)).toBe('auto:date:yesterday')
+    expect(dateBucket(at(9, 0), now)).toBe('auto:date:week')
+    expect(dateBucket(at(8, 23), now)).toBe('auto:date:older')
+  })
+
+  it('groups by date newest first and skips empty ranges', () => {
+    const sections = autoSections([conv('old', at(1)), conv('t', at(15)), conv('w', at(10))], 'date', now)
+    expect(sections.map((s) => [s.name, s.conversations.map((c) => c.id)])).toEqual([
+      ['Today', ['t']],
+      ['This week', ['w']],
+      ['Older', ['old']]
+    ])
+  })
+
+  it('groups by project folder, a worktree chat under its repository, most recent first', () => {
+    const sections = autoSections(
+      [
+        conv('a', 1, { workspace: '/code/site' }),
+        conv('b', 5, { workspace: '/wt/feat', worktree: { repoRoot: '/code/app', branch: 'f' } as never }),
+        conv('c', 3, { workspace: '/code/app' })
+      ],
+      'folder',
+      now
+    )
+    expect(sections.map((s) => [s.id, s.name, s.conversations.map((c) => c.id)])).toEqual([
+      ['auto:folder:/code/app', 'app', ['b', 'c']],
+      ['auto:folder:/code/site', 'site', ['a']]
+    ])
+  })
+
+  it('tells apart two folders with the same name, and names a chat with no folder', () => {
+    const sections = autoSections(
+      [conv('a', 2, { workspace: '/one/app' }), conv('b', 1, { workspace: '/two/app' }), conv('c', 0, { workspace: '' })],
+      'folder',
+      now
+    )
+    expect(sections.map((s) => s.name)).toEqual(['/one/app', '/two/app', 'No folder'])
+    const deep = autoSections(
+      [conv('a', 2, { workspace: '/home/me/one/app' }), conv('b', 1, { workspace: '/home/me/two/app' })],
+      'folder',
+      now
+    )
+    expect(deep.map((s) => s.name)).toEqual(['…/one/app', '…/two/app'])
+  })
+
+  it('splits only the ungrouped chats: pinned chats and groups stay put, collapse is remembered by id', () => {
+    const sections = buildSidebarSections(
+      [
+        conv('p', at(15), { pinned: true }),
+        conv('g', at(15), { groupId: 'g1' }),
+        conv('t', at(15)),
+        conv('o', at(1))
+      ],
+      [{ id: 'g1', name: 'Mine' }],
+      { 'auto:date:older': true },
+      undefined,
+      { by: 'date', now }
+    )
+    expect(sections.map((s) => [s.kind, s.name, s.collapsed, s.conversations.map((c) => c.id)])).toEqual([
+      ['pinned', 'Pinned', false, ['p']],
+      ['group', 'Mine', false, ['g']],
+      ['auto', 'Today', false, ['t']],
+      ['auto', 'Older', true, ['o']]
+    ])
   })
 })
