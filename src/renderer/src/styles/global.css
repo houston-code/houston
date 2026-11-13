@@ -5779,6 +5779,95 @@ body.is-resizing .preview-dock__resizer::after {
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* ---- Line comments on diffs (Changes view) ---- */
+.diff__line--commentable {
+  cursor: pointer;
+}
+.diff__line--commentable:hover {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* The line number doubles as the "comment on this line" button. */
+.diff__no--btn {
+  appearance: none;
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.diff__no--btn:hover,
+.diff__no--btn:focus-visible {
+  opacity: 1;
+  color: var(--accent);
+  outline: none;
+  text-decoration: underline;
+}
+.diff__no--btn:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+/* Comments sit under their line in the UI font, set apart from the code. */
+.diff-comments {
+  padding: 6px 8px 6px calc(var(--diff-gutter, 3ch) + 2ch);
+  font-family: var(--font, system-ui, sans-serif);
+  white-space: normal;
+}
+.diff-comment {
+  margin: 0 0 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.diff-comment__body {
+  margin: 0 0 4px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-comment__input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 6px 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg-input, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.diff-comment__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.diff-comment__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.diff-comment__link {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.diff-comment__link:hover,
+.diff-comment__link:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+.changes-file__comments {
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
 /* Side by side: each row holds the old line and the new one in two columns. */
 .diff--split .diff__row {
   display: grid;

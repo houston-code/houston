@@ -112,4 +112,26 @@ describe('DiffView', () => {
     ])
     expect(container.querySelectorAll('.diff__line--empty')).toHaveLength(1)
   })
+
+  it('opens a comment from a line click or its number, and shows what goes under a line', () => {
+    const clicks: unknown[] = []
+    const { container } = render(
+      <DiffView
+        diff={diffLines('a\nb\n', 'a\nc\n')}
+        path="f.ts"
+        onLineClick={(t) => clicks.push(t)}
+        renderBelow={(key) => (key === 'new:2' ? <p>note under c</p> : null)}
+      />
+    )
+    screen.getByRole('button', { name: 'Comment on removed line 2 of f.ts' }).click()
+    ;(container.querySelector('.diff__line--add') as HTMLElement).click()
+    expect(clicks).toEqual([
+      { side: 'old', line: 2, text: 'b' },
+      { side: 'new', line: 2, text: 'c' }
+    ])
+    expect(screen.getByText('note under c')).toBeInTheDocument()
+    // Without onLineClick the numbers stay plain text.
+    const { container: plain } = render(<DiffView diff={diffLines('a', 'b')} />)
+    expect(plain.querySelector('button')).toBeNull()
+  })
 })
