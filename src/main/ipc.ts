@@ -37,7 +37,7 @@ import {
   type ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
-import { parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
+import { isForkPoint, parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDataUrl } from '@shared/images'
 import { sanitizeInvocation } from '@shared/promptInvocation'
@@ -104,6 +104,7 @@ import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
+import { issueReportText, openIssueReport, revealLogs } from './issueReport'
 import type { DoctorFacts } from '@shared/doctor'
 import { saveMemory } from './memory'
 import { handleMemoryRequest } from './memoryIpc'
@@ -153,6 +154,7 @@ import {
   conversationExists,
   createConversation,
   forkConversation,
+  forkConversationAt,
   deleteConversation,
   otherConversationsInWorktree,
   importConversation,
@@ -185,6 +187,7 @@ import {
   type UndoRewindResult
 } from '@shared/rewind'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
+import { registerScheduleIpc } from './scheduleIpc'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 
 /** A preferences export is a few KB; anything past this is not one. */
@@ -407,6 +410,7 @@ function makeIo(sender: WebContents): DrainIO {
   const coalesced = coalescedEmit((conversationId, e) => emitEvent(sender, conversationId, e))
   return {
     imageGallery: true,
+    liveShellOutput: true,
     emit: coalesced,
     emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items),
     emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title)
@@ -429,6 +433,7 @@ function makeBroadcastIo(): DrainIO {
   }
   return {
     imageGallery: true,
+    liveShellOutput: true,
     emit: coalescedEmit((conversationId, e) => {
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))
@@ -596,6 +601,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
   setSchedulerBackend(scheduler)
   // Its catch-up run needs the provider keys, so not before the credential store is ready.
   afterReady(() => scheduler.start())
+  // Settings > Scheduled runs: list, create, pause/resume, run now, delete.
+  registerScheduleIpc(handle, scheduler)
 
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.
@@ -608,6 +615,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
     const cwd = typeof workspace === 'string' ? workspace : ''
     return gatherDoctorFacts(cwd, { version: APP_VERSION, update: null })
   })
+  // Help → Open Logs, and the text Report an Issue shows before it opens GitHub.
+  // Opening rebuilds the text in main rather than taking it from the renderer, so the
+  // URL can only ever carry what issueReportBody allows.
+  handle(IPC.logsReveal, () => revealLogs())
+  handle(IPC.issueReportPreview, (): string => issueReportText())
+  handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
   ipcMain.handle(
     IPC.sandboxStatus,
@@ -1203,6 +1216,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     return meta
   })
   handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
+  // "Fork from here" on a message: the point is checked here, at the IPC boundary.
+  handle(IPC.conversationForkAt, (_event, id: string, point: unknown) =>
+    typeof id === 'string' && isForkPoint(point) ? forkConversationAt(id, point) : null
+  )
   handle(
     IPC.conversationCompact,
     (_event, id: string, providerId: string, model: string) =>

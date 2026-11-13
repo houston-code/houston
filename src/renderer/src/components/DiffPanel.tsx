@@ -8,8 +8,18 @@ import {
   type ChatChanges
 } from '@shared/changes'
 import { chooseShipAction, type ShipAction } from '@shared/shipAction'
+import type { ReviewComment } from '@shared/promptInvocation'
 import { useInitGitRepo } from '../hooks/useInitGitRepo'
-import { DiffView, type DiffLayout } from './DiffView'
+import {
+  commentPlace,
+  draftKey,
+  getDrafts,
+  newCommentId,
+  setDrafts,
+  sortComments,
+  type DraftComment
+} from '../lib/diffComments'
+import { DiffView, lineKey, type DiffLayout, type DiffLineTarget } from './DiffView'
 import { Icon } from './Icon'
 
 /** Below this many files the list starts fully expanded; above it, collapsed. */
@@ -89,6 +99,86 @@ function ConfirmBar({
   )
 }
 
+/** The box for writing (or editing) one line comment. Cmd/Ctrl+Enter saves, Esc cancels. */
+function CommentEditor({
+  initial,
+  label,
+  onSave,
+  onCancel
+}: {
+  initial: string
+  label: string
+  onSave: (body: string) => void
+  onCancel: () => void
+}): JSX.Element {
+  const [body, setBody] = useState(initial)
+  const ref = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => ref.current?.focus(), [])
+  const save = (): void => {
+    if (body.trim()) onSave(body.trim())
+  }
+  return (
+    <div className="diff-comment diff-comment--editing">
+      <textarea
+        ref={ref}
+        className="diff-comment__input"
+        value={body}
+        rows={2}
+        aria-label={label}
+        placeholder="Comment for the agent"
+        onChange={(e) => setBody(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault()
+            save()
+          } else if (e.key === 'Escape') {
+            e.preventDefault()
+            e.stopPropagation()
+            onCancel()
+          }
+        }}
+      />
+      <div className="diff-comment__actions">
+        <button type="button" className="btn btn--sm btn--accent" onClick={save} disabled={!body.trim()}>
+          Save comment
+        </button>
+        <button type="button" className="btn btn--sm" onClick={onCancel}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** A saved comment under its line, with Edit and Delete. */
+function CommentCard({ comment, onEdit, onDelete }: { comment: DraftComment; onEdit: () => void; onDelete: () => void }): JSX.Element {
+  return (
+    <div className="diff-comment">
+      <p className="diff-comment__body">{comment.body}</p>
+      <div className="diff-comment__actions">
+        <button type="button" className="diff-comment__link" onClick={onEdit}>
+          Edit
+        </button>
+        <button type="button" className="diff-comment__link" onClick={onDelete}>
+          Delete
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** The view's comment state and actions, handed to each file. */
+interface CommentsApi {
+  list: DraftComment[]
+  /** The line whose editor is open (its {@link commentPlace}), or a comment id being edited. */
+  editing: string | null
+  open: (path: string, t: DiffLineTarget) => void
+  save: (path: string, t: DiffLineTarget | null, body: string, id?: string) => void
+  edit: (id: string) => void
+  remove: (id: string) => void
+  cancel: () => void
+}
+
 function FileSection({
   file,
   scope,
@@ -96,7 +186,8 @@ function FileSection({
   layout,
   canRevert,
   onRevert,
-  onOpen
+  onOpen,
+  comments
 }: {
   file: FileDiff
   scope: ChangesScope
@@ -106,6 +197,8 @@ function FileSection({
   canRevert: boolean
   onRevert: (file: FileDiff, hunk?: number) => Promise<void>
   onOpen?: (file: FileDiff) => void
+  /** Line comments, when the view takes them. */
+  comments?: CommentsApi
 }): JSX.Element {
   const [open, setOpen] = useState(defaultOpen)
   // Which revert is waiting for confirmation: the whole file (-1) or a hunk index.
@@ -121,6 +214,50 @@ function FileSection({
       setConfirm(null)
     }
   }
+  // Comments on this file, by line, and what to show under a line.
+  const mine = comments ? comments.list.filter((c) => c.path === file.path) : []
+  const targets = useRef(new Map<string, DiffLineTarget>())
+  const renderBelow = comments
+    ? (key: string): JSX.Element | null => {
+        const here = mine.filter((c) => lineKey(c) === key)
+        const place = `${file.path}\u0000${key}`
+        const t = targets.current.get(key) ?? null
+        const lineLabel = `Comment on ${file.path} line ${key.split(':')[1]}`
+        if (here.length === 0 && comments.editing !== place) return null
+        return (
+          <div className="diff-comments">
+            {here.map((c) =>
+              comments.editing === c.id ? (
+                <CommentEditor
+                  key={c.id}
+                  initial={c.body}
+                  label={lineLabel}
+                  onSave={(body) => comments.save(file.path, null, body, c.id)}
+                  onCancel={comments.cancel}
+                />
+              ) : (
+                <CommentCard key={c.id} comment={c} onEdit={() => comments.edit(c.id)} onDelete={() => comments.remove(c.id)} />
+              )
+            )}
+            {comments.editing === place && t && (
+              <CommentEditor
+                initial=""
+                label={lineLabel}
+                onSave={(body) => comments.save(file.path, t, body)}
+                onCancel={comments.cancel}
+              />
+            )}
+          </div>
+        )
+      }
+    : undefined
+  const onLineClick = comments
+    ? (t: DiffLineTarget): void => {
+        targets.current.set(lineKey(t), t)
+        comments.open(file.path, t)
+      }
+    : undefined
+
   const confirmBar = (hunk?: number): JSX.Element => (
     <ConfirmBar
       question={revertQuestion(file, scope, hunk)}
@@ -146,6 +283,11 @@ function FileSection({
             {file.path}
           </span>
           <span className="tool-row__spacer" />
+          {mine.length > 0 && (
+            <span className="changes-file__comments" aria-label={`${mine.length} comment${mine.length === 1 ? '' : 's'}`}>
+              {mine.length} comment{mine.length === 1 ? '' : 's'}
+            </span>
+          )}
           {(file.added > 0 || file.removed > 0) && (
             <span className="diff-stat">
               <span className="diff-stat__add">+{file.added}</span>
@@ -199,7 +341,14 @@ function FileSection({
                   )}
                 </div>
                 {confirm === i && confirmBar(i)}
-                <DiffView diff={h.lines} path={file.path} start={hunkStart(h)} layout={layout} />
+                <DiffView
+                  diff={h.lines}
+                  path={file.path}
+                  start={hunkStart(h)}
+                  layout={layout}
+                  onLineClick={onLineClick}
+                  renderBelow={renderBelow}
+                />
               </div>
             ))
           )}
@@ -232,7 +381,8 @@ export function DiffPanel({
   conversationId = null,
   running = false,
   onShip,
-  creating = false
+  creating = false,
+  onSendComments
 }: {
   workspace: string | null
   /** The open chat, for the turn and chat scopes; null in a new chat. */
@@ -241,6 +391,8 @@ export function DiffPanel({
   running?: boolean
   onShip?: (action: ShipAction) => void
   creating?: boolean
+  /** Send line comments to the agent as one message. Without it, lines take no comments. */
+  onSendComments?: (comments: ReviewComment[]) => void
 }): JSX.Element {
   const [storedScope, setStoredScope] = useState<ChangesScope>(() =>
     readPref(STORE_SCOPE, ['turn', 'chat', 'tree'] as const, 'tree')
@@ -252,6 +404,48 @@ export function DiffPanel({
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const { initializing, initError, initRepo } = useInitGitRepo(workspace)
+
+  // Line comments waiting to be sent, kept per chat across the view closing.
+  const commentsKey = draftKey(conversationId, workspace)
+  const [comments, setCommentList] = useState<DraftComment[]>(() => getDrafts(commentsKey))
+  const [editing, setEditing] = useState<string | null>(null)
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
+  const updateComments = useCallback(
+    (next: DraftComment[]) => {
+      const sorted = sortComments(next)
+      setDrafts(commentsKey, sorted)
+      setCommentList(sorted)
+    },
+    [commentsKey]
+  )
+  const commentsApi: CommentsApi | undefined = onSendComments
+    ? {
+        list: comments,
+        editing,
+        open: (path, t) => {
+          // A line that already has a comment opens it for editing instead of a second one.
+          const existing = comments.find((c) => commentPlace(c) === commentPlace({ path, ...t }))
+          setEditing(existing ? existing.id : commentPlace({ path, ...t }))
+        },
+        save: (path, t, body, id) => {
+          if (id) updateComments(comments.map((c) => (c.id === id ? { ...c, body } : c)))
+          else if (t) updateComments([...comments, { id: newCommentId(), path, side: t.side, line: t.line, code: t.text, body }])
+          setEditing(null)
+        },
+        edit: (id) => setEditing(id),
+        remove: (id) => {
+          updateComments(comments.filter((c) => c.id !== id))
+          setEditing(null)
+        },
+        cancel: () => setEditing(null)
+      }
+    : undefined
+  const sendComments = (): void => {
+    if (!onSendComments || comments.length === 0) return
+    onSendComments(comments.map(({ path, side, line, code, body }) => ({ path, side, line, code, body })))
+    updateComments([])
+    setEditing(null)
+  }
 
   const load = useCallback(async (): Promise<void> => {
     if (!workspace) {
@@ -427,6 +621,7 @@ export function DiffPanel({
                 canRevert={!running && !f.binary}
                 onRevert={onRevert}
                 onOpen={onOpen}
+                comments={commentsApi}
               />
             ))}
             {tree?.truncated && <p className="changes-panel__empty">Some untracked files were omitted.</p>}
@@ -439,6 +634,46 @@ export function DiffPanel({
           </p>
         )}
       </div>
+
+      {onSendComments && comments.length > 0 && (
+        <footer className="changes-panel__foot changes-view__comments">
+          <span className="changes-panel__foot-hint">
+            {comments.length} comment{comments.length === 1 ? '' : 's'} on{' '}
+            {new Set(comments.map((c) => c.path)).size} file
+            {new Set(comments.map((c) => c.path)).size === 1 ? '' : 's'}
+          </span>
+          {confirmDiscard ? (
+            <>
+              <button
+                type="button"
+                className="btn btn--sm btn--danger"
+                onClick={() => {
+                  updateComments([])
+                  setConfirmDiscard(false)
+                }}
+              >
+                Discard all
+              </button>
+              <button type="button" className="btn btn--sm" onClick={() => setConfirmDiscard(false)}>
+                Keep
+              </button>
+            </>
+          ) : (
+            <button type="button" className="btn btn--sm" onClick={() => setConfirmDiscard(true)}>
+              Discard
+            </button>
+          )}
+          <button
+            type="button"
+            className="btn btn--sm btn--accent"
+            onClick={sendComments}
+            disabled={creating}
+            title={creating ? 'Wait for the current run to finish' : 'Send every comment to the agent as one message'}
+          >
+            Send {comments.length} comment{comments.length === 1 ? '' : 's'} to the agent
+          </button>
+        </footer>
+      )}
 
       {onShip && shipAction && tree?.isRepo && files.length > 0 && (
         <footer className="changes-panel__foot">

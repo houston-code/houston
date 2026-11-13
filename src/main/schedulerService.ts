@@ -70,6 +70,18 @@ export interface SchedulerServiceDeps {
 }
 
 export interface SchedulerService extends SchedulerBackend {
+  /**
+   * Pause or resume a schedule. A paused one keeps its place in the store but never
+   * fires (nor catches up); resuming takes its next occurrence from now, so the
+   * occurrences missed while paused don't all fire at once. Null for an unknown id.
+   */
+  setPaused(id: string, paused: boolean): ScheduledRunInfo | null
+  /**
+   * Fire one occurrence now, outside the schedule (its next planned run is
+   * unchanged). Resolves once the session has started; rejects when the id is
+   * unknown or the session can't start, recording that on the schedule.
+   */
+  runNow(id: string): Promise<void>
   /** Arm timers (and catch up overdue occurrences). Idempotent. */
   start(): void
   /** Disarm timers (schedule data stays on disk). */
@@ -230,6 +242,7 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
     }
     if (!started) return
     const times = schedules
+      .filter((s) => !s.paused)
       .map((s) => s.nextRunAt)
       .filter((t): t is number => t !== null)
     // Wake at the earliest known occurrence, and at least every POLL_MS regardless, to
@@ -251,7 +264,7 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
       reload()
       const claimed: ScheduledRunInfo[] = []
       for (const s of schedules) {
-        if (s.nextRunAt === null || s.nextRunAt > at) continue
+        if (s.paused || s.nextRunAt === null || s.nextRunAt > at) continue
         const spec = specOf(s)
         // Advance BEFORE firing so a fire that throws synchronously can't wedge the
         // schedule into refiring the same occurrence forever.
@@ -332,6 +345,47 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
       })
       if (removed) arm()
       return removed
+    },
+
+    setPaused(id: string, paused: boolean): ScheduledRunInfo | null {
+      const updated = locked(() => {
+        reload()
+        const s = schedules.find((x) => x.id === id)
+        if (!s) return null
+        if (paused) {
+          s.paused = true
+        } else if (s.paused) {
+          delete s.paused
+          // Pick up from now: what came due while paused is skipped, not fired in a burst.
+          const spec = specOf(s)
+          const at = now()
+          if (spec && s.nextRunAt !== null && s.nextRunAt <= at) s.nextRunAt = nextOccurrence(spec, new Date(at))
+        }
+        save()
+        return { ...s }
+      })
+      if (updated) arm()
+      return updated
+    },
+
+    async runNow(id: string): Promise<void> {
+      const target = locked(() => {
+        reload()
+        const s = schedules.find((x) => x.id === id)
+        if (!s) return null
+        s.lastFiredAt = now()
+        save()
+        return { ...s }
+      })
+      if (!target) throw new Error('That scheduled run no longer exists.')
+      try {
+        await deps.fire(target)
+        recordResult(id, { lastResult: 'ok' })
+      } catch (e) {
+        const lastError = e instanceof Error ? e.message : String(e)
+        recordResult(id, { lastResult: 'error', lastError })
+        throw new Error(lastError, { cause: e })
+      }
     },
 
     start(): void {

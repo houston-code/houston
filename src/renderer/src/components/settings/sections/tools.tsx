@@ -317,3 +317,27 @@ export function DiagnosticsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
     </SettingsSection>
   )
 }
+
+/** Whether the Preview panel opens by itself when the agent starts a dev server. */
+export function PreviewSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
+  const { settings, setSettings } = ctx
+  return (
+    <SettingsSection title="Preview">
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.previewAutoOpen !== false}
+          onChange={(e) => {
+            const on = e.target.checked
+            setSettings((s) => ({ ...s, previewAutoOpen: on }))
+          }}
+        />
+        <span>
+          Open the Preview panel when the agent starts a dev server and its address shows up,
+          once per chat. The Preview button in the title bar opens it any time. On by default.
+        </span>
+      </label>
+    </SettingsSection>
+  )
+}
+

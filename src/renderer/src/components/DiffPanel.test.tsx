@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { WorkingTreeChanges } from '@shared/workingTree'
 import { fileDiffSignature, type ChatChanges } from '@shared/changes'
 import { DiffPanel, revertQuestion } from './DiffPanel'
+import { clearAllDrafts } from '../lib/diffComments'
 
 /** Install a fake `window.api` whose getWorkingTreeChanges resolves to `data`. */
 function installApi(data: WorkingTreeChanges, chat: ChatChanges = { files: [], added: 0, removed: 0, unavailable: 0 }) {
@@ -63,7 +64,10 @@ const sampleChanges: WorkingTreeChanges = {
 }
 
 describe('DiffPanel', () => {
-  beforeEach(() => localStorage.clear())
+  beforeEach(() => {
+    localStorage.clear()
+    clearAllDrafts()
+  })
 
   it('lists changed files with the working-tree scope label and totals', async () => {
     installApi(sampleChanges)
@@ -278,5 +282,81 @@ describe('DiffPanel', () => {
     expect(revertQuestion(f[0], 'turn')).toBe('Put src/foo.ts back as it was before this turn?')
     expect(revertQuestion(f[0], 'chat')).toBe('Put src/foo.ts back as it was before this chat?')
     expect(revertQuestion(f[0], 'tree', 0)).toBe('Undo this change in src/foo.ts?')
+  })
+
+  it('collects line comments and sends them as one message', async () => {
+    installApi(sampleChanges)
+    const onSendComments = vi.fn()
+    render(<DiffPanel workspace="/repo" conversationId="c1" onSendComments={onSendComments} />)
+    // The line number is the keyboard way in; a click on the line works too.
+    fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 1 of src/foo.ts' }))
+    const box = screen.getByLabelText('Comment on src/foo.ts line 1')
+    expect(document.activeElement).toBe(box)
+    fireEvent.change(box, { target: { value: 'Name this constant.' } })
+    fireEvent.keyDown(box, { key: 'Enter', metaKey: true })
+    expect(screen.getByText('Name this constant.')).toBeInTheDocument()
+    expect(screen.getByText('1 comment on 1 file')).toBeInTheDocument()
+
+    // A removed line can take a comment too.
+    fireEvent.click(screen.getByRole('button', { name: 'Comment on removed line 1 of src/foo.ts' }))
+    fireEvent.change(screen.getByLabelText('Comment on src/foo.ts line 1'), { target: { value: 'Why drop 2?' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send 2 comments to the agent' }))
+    expect(onSendComments).toHaveBeenCalledWith([
+      { path: 'src/foo.ts', side: 'old', line: 1, code: 'const b = 2', body: 'Why drop 2?' },
+      { path: 'src/foo.ts', side: 'new', line: 1, code: 'const b = 3', body: 'Name this constant.' }
+    ])
+    // Sent comments are cleared.
+    expect(screen.queryByText('Name this constant.')).not.toBeInTheDocument()
+  })
+
+  it('keeps unsent comments when the view closes, and edits or deletes them', async () => {
+    installApi(sampleChanges)
+    const { unmount } = render(<DiffPanel workspace="/repo" conversationId="c1" onSendComments={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 2 of new.txt' }))
+    fireEvent.change(screen.getByLabelText('Comment on new.txt line 2'), { target: { value: 'Say goodbye too' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+    unmount()
+    render(<DiffPanel workspace="/repo" conversationId="c1" onSendComments={vi.fn()} />)
+    expect(await screen.findByText('Say goodbye too')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }))
+    const box = screen.getByLabelText('Comment on new.txt line 2')
+    fireEvent.change(box, { target: { value: 'Say goodbye as well' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+    expect(screen.getByText('Say goodbye as well')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Delete' }))
+    expect(screen.queryByText('Say goodbye as well')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Send .* to the agent/ })).not.toBeInTheDocument()
+  })
+
+  it('asks before discarding every comment, and cancels an open editor with Esc', async () => {
+    installApi(sampleChanges)
+    render(<DiffPanel workspace="/repo" conversationId="c1" onSendComments={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 1 of src/foo.ts' }))
+    fireEvent.keyDown(screen.getByLabelText('Comment on src/foo.ts line 1'), { key: 'Escape' })
+    expect(screen.queryByLabelText('Comment on src/foo.ts line 1')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Comment on line 1 of src/foo.ts' }))
+    fireEvent.change(screen.getByLabelText('Comment on src/foo.ts line 1'), { target: { value: 'x' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Keep' }))
+    expect(screen.getByText('x')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Discard' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Discard all' }))
+    expect(screen.queryByText('1 comment on 1 file')).not.toBeInTheDocument()
+  })
+
+  it('takes no comments without a way to send them, and holds sending while a run is busy', async () => {
+    installApi(sampleChanges)
+    const { unmount } = render(<DiffPanel workspace="/repo" />)
+    await screen.findByText('src/foo.ts')
+    expect(screen.queryByRole('button', { name: 'Comment on line 1 of src/foo.ts' })).not.toBeInTheDocument()
+    unmount()
+    render(<DiffPanel workspace="/repo" conversationId="c2" onSendComments={vi.fn()} creating />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Comment on line 1 of src/foo.ts' }))
+    fireEvent.change(screen.getByLabelText('Comment on src/foo.ts line 1'), { target: { value: 'later' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save comment' }))
+    expect(screen.getByRole('button', { name: 'Send 1 comment to the agent' })).toBeDisabled()
   })
 })
