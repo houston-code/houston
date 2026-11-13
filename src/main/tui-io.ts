@@ -221,6 +221,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   }
 
   let pending: ((line: string | null) => void) | null = null
+  /** The open raw-mode composer, while one is: whether nothing is typed, and how to close it. */
+  let openComposer: { empty: () => boolean; close: () => void } | null = null
   // The AbortController for the outstanding rl.question, so cancelRead / EOF can
   // actually cancel it. Without this, node:readline keeps the abandoned question
   // callback registered; the NEXT read then collides with it — the next prompt
@@ -741,6 +743,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (done) return
         done = true
         pending = null
+        openComposer = null
         eraseRegion()
         // Leave the submitted message in the scrollback, exactly as readline did:
         // just the prompt and text, not the command menu that was open under it.
@@ -756,6 +759,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // Register with the same settle mechanism readLine uses, so an interface
       // close (EOF / dropped terminal) or a cancelRead resolves this read.
       pending = (line) => finish(line)
+      openComposer = {
+        empty: () => state.lines.every((l) => l.length === 0),
+        close: () => finish(null)
+      }
 
       /** Tab: ask the injected completer about the token under the cursor. */
       const runComplete = async (): Promise<void> => {
@@ -916,6 +923,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     readLine: plainRead,
     readComposer,
     readSecret,
+    yieldComposer: () => {
+      if (!openComposer || !openComposer.empty()) return false
+      openComposer.close()
+      return true
+    },
     /**
      * Write an attention signal. The title is ambient and always set; the bell and
      * notification only fire when the terminal has told us it lost focus — a bell

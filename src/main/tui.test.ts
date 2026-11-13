@@ -13,6 +13,7 @@ import type {
   ElicitationResult,
   PlanDecision
 } from '@shared/agent'
+import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
 import { limitNoticeText } from '@shared/runEnd'
@@ -6564,5 +6565,94 @@ describe('session commands', () => {
     await runTui(opts, d)
     expect(rec.runs[0].messages[0].content).toContain('AGENTS.md')
     expect(rec.runs[0].messages[0].invokedAs?.label).toBe('/init')
+  })
+})
+
+describe('waking at an idle composer', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  /** A composer whose second read stays open until the driver yields it (or a test resolves it). */
+  function wakeIo(opts: { draftTyped?: boolean } = {}) {
+    const out: string[] = []
+    let reads = 0
+    let open: ((v: string | null) => void) | null = null
+    const io: TuiIo = {
+      out: (s) => out.push(s),
+      clearLine: () => {},
+      readLine: async () => null,
+      readComposer: () => {
+        reads++
+        if (reads === 1) return Promise.resolve('start the build')
+        if (reads === 2) return new Promise((resolve) => (open = resolve))
+        return Promise.resolve(null)
+      },
+      yieldComposer: () => {
+        if (!open || opts.draftTyped) return false
+        const r = open
+        open = null
+        r(null)
+        return true
+      },
+      onInterrupt: () => {},
+      cancelRead: () => {}
+    }
+    return { io, text: () => out.join(''), isOpen: () => open !== null, submit: (v: string | null) => open?.(v) }
+  }
+
+  it('runs a turn on the news when the composer is idle and empty', async () => {
+    const { d, rec } = deps(done)
+    const t = wakeIo()
+    d.io = t.io
+    d.persist = fakePersist().persist
+    let tryWake: ((id: string) => boolean) | null = null
+    const taken: string[] = []
+    d.wake = {
+      register: (fn) => {
+        tryWake = fn
+      },
+      take: (id) => {
+        taken.push(id)
+        return `${SYSTEM_NOTE_PREFIX} Background work you started finished while the chat was idle.`
+      }
+    }
+    const done$ = runTui(opts, d)
+    await vi.waitFor(() => expect(t.isOpen()).toBe(true))
+    expect(tryWake!('some-other-chat')).toBe(false)
+    expect(tryWake!('conv-1')).toBe(true)
+    await done$
+    expect(taken).toEqual(['conv-1'])
+    expect(rec.runs).toHaveLength(2)
+    expect(rec.runs[1].messages.at(-1)?.content.startsWith(SYSTEM_NOTE_PREFIX)).toBe(true)
+    expect(t.text()).toContain('background work finished')
+  })
+
+  it('leaves a typed draft alone: no wake, the news waits for the next turn', async () => {
+    const { d, rec } = deps(done)
+    const t = wakeIo({ draftTyped: true })
+    d.io = t.io
+    d.persist = fakePersist().persist
+    let tryWake: ((id: string) => boolean) | null = null
+    d.wake = { register: (fn) => (tryWake = fn), take: () => 'unused' }
+    const done$ = runTui(opts, d)
+    await vi.waitFor(() => expect(t.isOpen()).toBe(true))
+    expect(tryWake!('conv-1')).toBe(false)
+    t.submit('my own message')
+    await done$
+    expect(rec.runs).toHaveLength(2)
+    expect(rec.runs[1].messages.at(-1)?.content).toBe('my own message')
+  })
+
+  it('goes back to the composer when the news was already taken', async () => {
+    const { d, rec } = deps(done)
+    const t = wakeIo()
+    d.io = t.io
+    d.persist = fakePersist().persist
+    let tryWake: ((id: string) => boolean) | null = null
+    d.wake = { register: (fn) => (tryWake = fn), take: () => null }
+    const done$ = runTui(opts, d)
+    await vi.waitFor(() => expect(t.isOpen()).toBe(true))
+    expect(tryWake!('conv-1')).toBe(true)
+    await done$
+    expect(rec.runs).toHaveLength(1)
   })
 })

@@ -247,7 +247,7 @@ export function buildSystemPrompt(
     ? `\n- edit_file's old_string must match exactly one place, so include enough surrounding lines to make it unique.${editUses.length ? ` Use ${editUses.join(' and ')}.` : ''} A failed edit returns an error, so don't re-read a file just to confirm an edit landed.`
     : ''
   const shellLine = offers('run_shell')
-    ? `\n- Shell commands must not wait for input: pass non-interactive flags (-y, --yes, --no-input) and never open an editor or pager.${offers('read_shell_output', 'kill_shell') ? ' Run dev servers, watchers, and other open-ended commands with background:true, then use read_shell_output and kill_shell.' : ''}`
+    ? `\n- Shell commands must not wait for input: pass non-interactive flags (-y, --yes, --no-input) and never open an editor or pager.${offers('read_shell_output', 'kill_shell') ? ' Run dev servers, watchers, and other open-ended commands with background:true, then use read_shell_output and kill_shell. You are told when one exits, so do not poll.' : ''}`
     : ''
   const githubLine = tools.some((n) => n.startsWith('gh_'))
     ? `\n- Use the gh_* tools for GitHub (pull requests, issues, CI runs, creating a repo)${offers('run_shell') ? ' rather than gh in run_shell: they carry their own network approval, so they work even when the shell has no network' : ''}.`

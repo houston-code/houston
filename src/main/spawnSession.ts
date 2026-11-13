@@ -3,6 +3,7 @@ import type { ApprovalPolicy } from '@shared/types'
 import type { ChatMessage, ConversationWorktree, ReasoningEffort, SpawnedFrom } from '@shared/agent'
 import { spawnedTurn } from '@shared/promptInvocation'
 import type { SpawnBackend, SpawnSessionInput, SpawnSessionResult } from './agent/spawn'
+import { noteChildReport } from './agent/backgroundEvents'
 
 /**
  * Shell-side implementation of the agent's `spawn_session` tool — the runtime
@@ -198,6 +199,8 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
             .then(() => {
               try {
                 report(parentId, conv.id)
+                // Flag it for the parent's running turn, or wake the parent if idle.
+                noteChildReport(parentId)
               } catch {
                 // A store failure only loses the note; the child's chat still has it all.
               }

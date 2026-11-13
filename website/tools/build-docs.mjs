@@ -374,6 +374,7 @@ export const GROUPS = [
     title: "Sessions and automation",
     slugs: [
       "context-worktrees-and-history",
+      "background-work-wakes-the-chat",
       "spawn-separate-sessions",
       "proposed-sessions",
       "watching-work-you-sent-off",

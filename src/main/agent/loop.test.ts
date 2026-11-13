@@ -72,6 +72,15 @@ import {
 import { resetSpawnBackend, setSpawnBackend, type SpawnSessionInput } from './spawn'
 import { resetSubAgentSessions } from './subagentSessions'
 import {
+  MAX_CONSECUTIVE_WAKES,
+  hasBackgroundNews,
+  pushBackgroundEvent,
+  resetBackgroundEventsForTest,
+  setWakeHost,
+  wakeBlocker,
+  type BackgroundEvent
+} from './backgroundEvents'
+import {
   resetSchedulerBackend,
   setSchedulerBackend,
   type ScheduledRunInfo,
@@ -10648,5 +10657,82 @@ describe('MCP servers in a run (real manager, fake server)', () => {
     expect(notices(second)).toEqual([])
     const elsewhere = await run({ conversationId: 'conv-mcp-other', turns: turn() })
     expect(notices(elsewhere)).toHaveLength(1)
+  })
+})
+
+describe('background news delivery', () => {
+  const exitEvent = (shellId: string): BackgroundEvent => ({
+    kind: 'shell_exit',
+    shellId,
+    command: 'npm test',
+    exitCode: 1,
+    tail: 'FAIL 3 tests',
+    at: Date.now()
+  })
+  beforeEach(() => resetBackgroundEventsForTest())
+  afterEach(() => resetBackgroundEventsForTest())
+
+  it("tells the model at turn start, just before the user's message", async () => {
+    pushBackgroundEvent('conv-bg-start', exitEvent('aa11'), { wake: false })
+    const r = await run({
+      conversationId: 'conv-bg-start',
+      userText: 'how did it go?',
+      turns: [[{ type: 'text', text: 'it failed' }, { type: 'done', stopReason: 'end_turn' }]]
+    })
+    const i = r.messages.findIndex((m) => m.content.includes('background shell aa11'))
+    expect(i).toBeGreaterThanOrEqual(0)
+    expect(r.messages[i]!.content.startsWith(SYSTEM_NOTE_PREFIX)).toBe(true)
+    expect(r.messages[i + 1]!.content).toBe('how did it go?')
+    expect(r.events.some((e) => e.type === 'notice' && e.message.includes('shell aa11 exited (code 1)'))).toBe(true)
+    expect(hasBackgroundNews('conv-bg-start')).toBe(false)
+  })
+
+  it('tells the model mid-run, at the next step after the news arrives', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'hi')
+    let call = 0
+    const provider: Provider = {
+      async *streamChat() {
+        call++
+        if (call === 1) {
+          // Arrives while the first request streams: delivered at the next step.
+          pushBackgroundEvent('conv-bg-mid', exitEvent('bb22'), { wake: true })
+          yield { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const r = await run({ conversationId: 'conv-bg-mid', provider })
+    const toolAt = r.messages.findIndex((m) => m.role === 'tool')
+    const noteAt = r.messages.findIndex((m) => m.content.includes('background shell bb22'))
+    expect(noteAt).toBeGreaterThan(toolAt)
+    expect(r.messages.at(-1)!.role).toBe('assistant')
+  })
+
+  it('counts wake turns toward the streak and holds waking after a failed turn', async () => {
+    setWakeHost({ enabled: () => true, start: () => true })
+    for (let i = 0; i < MAX_CONSECUTIVE_WAKES; i++) {
+      await startRun(
+        { runId: `wake-${i}`, conversationId: 'conv-bg-streak', workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'ask', messages: [{ role: 'user', content: 'x' }], wake: true },
+        () => {}
+      )
+    }
+    expect(wakeBlocker('conv-bg-streak')).toBe('streak')
+    h.provider = scripted([[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]])
+    await run({ conversationId: 'conv-bg-streak' })
+    expect(wakeBlocker('conv-bg-streak')).toBeNull()
+    h.provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat() {
+        throw new Error('provider down')
+      }
+    }
+    await startRun(
+      { runId: 'fail-1', conversationId: 'conv-bg-streak', workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'ask', messages: [{ role: 'user', content: 'x' }] },
+      () => {}
+    )
+    expect(wakeBlocker('conv-bg-streak')).toBe('held')
   })
 })
