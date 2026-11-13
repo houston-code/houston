@@ -3112,6 +3112,16 @@ body.is-resizing {
 .msg__mark-unread {
   left: 26px;
 }
+/* Fork from here sits after the reply's other hover buttons. */
+.msg__fork {
+  left: 26px;
+}
+.msg__mark-unread + .msg__fork {
+  left: 52px;
+}
+.msg__fork:focus-visible {
+  opacity: 1;
+}
 .msg__mark-unread:focus-visible {
   opacity: 1;
 }
@@ -3125,6 +3135,13 @@ body.is-resizing {
 }
 .msg__mark-unread + .msg__retry {
   left: 52px;
+}
+/* With Fork from here before it, Retry moves one slot further along. */
+.msg__fork + .msg__retry {
+  left: 52px;
+}
+.msg__mark-unread + .msg__fork + .msg__retry {
+  left: 78px;
 }
 .msg__retry:focus-visible {
   opacity: 1;

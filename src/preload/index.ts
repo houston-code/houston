@@ -19,6 +19,7 @@ import type {
   PermissionTestResult,
   SandboxStatus
 } from '@shared/types'
+import type { ForkPoint } from '@shared/conversation-io'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
@@ -310,6 +311,9 @@ const api = {
     ipcRenderer.invoke(IPC.conversationSetSettings, id, patch),
   forkConversation: (id: string): Promise<Conversation | null> =>
     ipcRenderer.invoke(IPC.conversationFork, id),
+  /** Fork a chat from one of its messages (see ForkPoint). Null when that message is gone. */
+  forkConversationAt: (id: string, point: ForkPoint): Promise<Conversation | null> =>
+    ipcRenderer.invoke(IPC.conversationForkAt, id, point),
   compactConversation: (
     id: string,
     providerId: string,

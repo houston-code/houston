@@ -37,7 +37,7 @@ import {
   type ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
-import { parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
+import { isForkPoint, parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDataUrl } from '@shared/images'
 import { sanitizeInvocation } from '@shared/promptInvocation'
@@ -154,6 +154,7 @@ import {
   conversationExists,
   createConversation,
   forkConversation,
+  forkConversationAt,
   deleteConversation,
   otherConversationsInWorktree,
   importConversation,
@@ -1215,6 +1216,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     return meta
   })
   handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
+  // "Fork from here" on a message: the point is checked here, at the IPC boundary.
+  handle(IPC.conversationForkAt, (_event, id: string, point: unknown) =>
+    typeof id === 'string' && isForkPoint(point) ? forkConversationAt(id, point) : null
+  )
   handle(
     IPC.conversationCompact,
     (_event, id: string, providerId: string, model: string) =>
