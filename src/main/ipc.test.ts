@@ -819,9 +819,9 @@ describe('agentStart / agentRetry approval-policy validation', () => {
       })
     await send('r1', 'start the dev server') // the run fails before answering (drain is a spy)
     await send('r2', 'start the dev server')
-    expect(getConversation(id)?.messages).toEqual([{ role: 'user', content: 'start the dev server' }])
+    expect(getConversation(id)?.messages).toEqual([{ role: 'user', content: 'start the dev server', at: expect.any(String) }])
     const sent = h.runAndDrain.mock.calls[1][2] as { messages: unknown[] }
-    expect(sent.messages).toEqual([{ role: 'user', content: 'start the dev server' }])
+    expect(sent.messages).toEqual([{ role: 'user', content: 'start the dev server', at: expect.any(String) }])
     // A different message is still appended.
     await send('r3', 'use port 4000')
     expect(getConversation(id)?.messages).toHaveLength(2)
@@ -1081,5 +1081,57 @@ describe('requests while startup is still running', () => {
   it('waits for nothing when no startup work is given', () => {
     registerIpc()
     expect(version()).toEqual(expect.any(String))
+  })
+})
+
+/**
+ * Keys found in the app's environment are offered, never used on their own: the
+ * offer carries only the last four characters, and storing one refuses anything but
+ * an offered provider whose variable still holds a key and that has no key stored.
+ */
+describe('environment key offers', () => {
+  registerIpc()
+  const call = (channel: string, ...args: unknown[]): unknown => h.handlers.get(channel)!({ sender: {} }, ...args)
+  const KEY = 'sk-ant-test-0123456789abcd'
+  const saved = process.env.ANTHROPIC_API_KEY
+
+  beforeEach(() => {
+    configureHasKey(() => false)
+    process.env.ANTHROPIC_API_KEY = KEY
+  })
+  afterEach(() => {
+    if (saved === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = saved
+  })
+
+  it('offers the key by its last four characters only', () => {
+    const offers = call(IPC.envKeyOffers, 'connect') as { providerId: string; last4: string }[]
+    const anthropic = offers.find((o) => o.providerId === 'anthropic')
+    expect(anthropic).toMatchObject({ envVar: 'ANTHROPIC_API_KEY', last4: 'abcd' })
+    expect(JSON.stringify(offers)).not.toContain(KEY)
+  })
+
+  it('offers nothing for a provider that already has a key', () => {
+    configureHasKey((id) => id === 'anthropic')
+    const offers = call(IPC.envKeyOffers, 'connect') as { providerId: string }[]
+    expect(offers.some((o) => o.providerId === 'anthropic')).toBe(false)
+  })
+
+  it('refuses to store a malformed request, a missing variable, or over a stored key', async () => {
+    await expect(call(IPC.envKeyImport, 42)).rejects.toThrow('Invalid provider')
+    await expect(call(IPC.envKeyImport, 'openrouter')).rejects.toThrow('no longer in the environment')
+    configureHasKey((id) => id === 'anthropic')
+    await expect(call(IPC.envKeyImport, 'anthropic')).rejects.toThrow('already saved')
+    delete process.env.ANTHROPIC_API_KEY
+    configureHasKey(() => false)
+    await expect(call(IPC.envKeyImport, 'anthropic')).rejects.toThrow('no longer in the environment')
+  })
+
+  it('stops offering at startup after Not now, but still offers in the Connect panel', () => {
+    call(IPC.envKeyDismiss, ['anthropic', 7, 'not-a-provider'])
+    const startup = call(IPC.envKeyOffers, 'startup') as { providerId: string }[]
+    expect(startup.some((o) => o.providerId === 'anthropic')).toBe(false)
+    const connect = call(IPC.envKeyOffers, 'connect') as { providerId: string }[]
+    expect(connect.some((o) => o.providerId === 'anthropic')).toBe(true)
   })
 })

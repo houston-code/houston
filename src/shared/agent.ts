@@ -9,6 +9,7 @@ import type { PromptInvocation } from './promptInvocation'
 import type { TurnReceipt } from './evidence'
 import type { PlanReadiness } from './planReadiness'
 import type { SubagentRecord, SubagentStep } from './subagents'
+import type { TurnErrorCause } from './turnError'
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
@@ -154,6 +155,30 @@ export interface ChatMessage {
    * providers never see it.
    */
   unanswered?: UnansweredRun[]
+  /**
+   * When the message was written (ISO 8601): a user turn when it was sent, an
+   * assistant turn when the model finished it. Absent on messages saved before it was
+   * recorded. Display-only; providers never see it.
+   */
+  at?: string
+  /**
+   * Present on assistant turns: the model that actually served the reply (after a
+   * fallback hop, the backup). Display-only; providers never see it.
+   */
+  model?: string
+  /**
+   * Present on assistant turns: what the model round that wrote this message billed.
+   * Display-only; providers never see it.
+   */
+  usage?: MessageUsage
+}
+
+/** One model round's billed tokens and cost (see {@link ChatMessage.usage}). */
+export interface MessageUsage {
+  inputTokens: number
+  outputTokens: number
+  /** USD; 0 when the model's price isn't known. */
+  cost: number
 }
 
 /** Why one run ended without a reply (see {@link ChatMessage.unanswered}). */
@@ -276,8 +301,32 @@ export interface ChatRequest {
   signal?: AbortSignal
 }
 
+/** One search through the model provider's own server-side web-search tool. */
+export interface ProviderWebSearchRequest {
+  /** The model that runs the search (the run's current model). */
+  model: string
+  query: string
+  /** Most hits to return (already clamped to 1 to 10 by the caller). */
+  maxResults: number
+  signal?: AbortSignal
+}
+
+/** What a provider-run search found, normalized across providers. */
+export interface ProviderWebSearchResult {
+  /** The model's short summary of the results, when it wrote one. */
+  answer?: string
+  hits: Array<{ title?: string; url?: string; content?: string }>
+}
+
 export interface Provider {
   streamChat(req: ChatRequest): AsyncGenerator<ProviderStreamEvent>
+  /**
+   * Search the web with the provider's own server-side search tool, billed to the
+   * model key the provider already holds. Present only on hosts whose API offers
+   * one (the Claude API, OpenAI's Responses API); web_search falls back to it when
+   * no search-provider key is set.
+   */
+  webSearch?(req: ProviderWebSearchRequest): Promise<ProviderWebSearchResult>
 }
 
 // ---- Agent run protocol (main <-> renderer) ----
@@ -513,6 +562,8 @@ export interface ConversationUsage {
  */
 export interface ConversationError {
   message: string
+  /** The failure's kind, when the loop named one (see the `error` event). */
+  cause?: TurnErrorCause
 }
 
 /**
@@ -1376,6 +1427,13 @@ export type AgentEvent =
        * loop event and on the TUI path, which tallies from the per-round numbers.
        */
       perModel?: ModelUsage[]
+      /**
+       * This round's own numbers, kept when the GUI IPC seam rewrites the top-level
+       * fields to the conversation's running totals, so the transcript can show what
+       * each turn spent. Absent on the raw loop event, whose top-level fields already
+       * are the round's.
+       */
+      round?: MessageUsage
     }
   /**
    * The tools this run offers the model, once they are assembled (built-ins and
@@ -1394,6 +1452,12 @@ export type AgentEvent =
        * holding its own copy of settings re-reads them so its picker shows the flag.
        */
       modelUnavailable?: { providerId: string; model: string }
+      /**
+       * What kind of failure this was, when the loop can tell (bad key, rate limit,
+       * provider down, network, ...), so a client can explain it in plain words and
+       * offer the next step. The message stays the raw account.
+       */
+      cause?: TurnErrorCause
     }
 
 

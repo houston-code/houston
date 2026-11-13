@@ -14,6 +14,7 @@ import { anthropicMaxTokens, anthropicThinking } from './reasoning'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
 import { idleTimeoutFetch } from './idle-fetch'
+import { anthropicWebSearch, isFirstPartyAnthropic, type AnthropicCreateClient } from './native-search'
 
 /**
  * Beta header that turns on interleaved thinking for legacy budget-thinking
@@ -516,7 +517,14 @@ export function createAnthropicProvider(
         })
     ))
 
-  return createMessagesProvider(getClient)
+  const provider = createMessagesProvider(getClient)
+  // The server-side search tool is documented for the first-party API only; a proxy
+  // base URL may not pass it through, so web_search keeps needing its own key there.
+  if (!isFirstPartyAnthropic(baseURL)) return provider
+  return {
+    ...provider,
+    webSearch: async (req) => anthropicWebSearch((await getClient()) as unknown as AnthropicCreateClient, req)
+  }
 }
 
 /** Fetch the live model list from the Anthropic API. */

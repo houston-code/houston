@@ -109,7 +109,7 @@ describe('createSpawnBackend', () => {
     expect(calls.created[0].worktree).toBeUndefined()
 
     // The prompt becomes the first user message.
-    expect(calls.seeded[0].messages).toEqual([{ role: 'user', content: baseInput.prompt, invokedAs: HANDOFF }])
+    expect(calls.seeded[0].messages).toEqual([{ role: 'user', content: baseInput.prompt, invokedAs: HANDOFF, at: expect.any(String) }])
 
     // Background run inherits provider/model/policy and carries the same seed.
     expect(calls.runs).toHaveLength(1)
@@ -119,7 +119,7 @@ describe('createSpawnBackend', () => {
       providerId: 'anthropic',
       model: 'claude-opus-4-8',
       approvalPolicy: 'ask',
-      messages: [{ role: 'user', content: baseInput.prompt, invokedAs: HANDOFF }]
+      messages: [{ role: 'user', content: baseInput.prompt, invokedAs: HANDOFF, at: expect.any(String) }]
     })
     expect(calls.runs[0].req.runId).toBeTruthy()
 
