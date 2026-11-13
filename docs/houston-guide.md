@@ -1032,7 +1032,23 @@ steps, either:
   run)
 
 and it hasn't been caught looping. Going back over calls it already made doesn't
-count.
+count, and neither does an edit that puts a file back to a version it already had.
+
+### Getting caught in a loop
+
+Houston watches for an agent that is going in circles:
+
+- making the same call again and again, or re-reading the same files with nothing
+  changed in between
+- hitting the same error over and over, including an edit that keeps missing
+- rerunning a command (a test suite, a build) that keeps failing the same way while
+  it tweaks things in between
+- editing a file back and forth between the same versions
+
+The first time, it tells the agent to change approach. If the loop continues, the
+turn ends: the agent gets one last step with tools off to tell you what it tried and
+what keeps going wrong, and the transcript notes that it stopped for repeating
+itself.
 
 This continues up to a **hard limit** (200 steps by default), so a big job such as
 scaffolding a new project, or a long debugging session, finishes in one go. Stopping

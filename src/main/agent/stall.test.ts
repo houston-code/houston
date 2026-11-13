@@ -3,7 +3,9 @@ import type { ToolCall } from '@shared/agent'
 import {
   StallDetector,
   callSignature,
+  commandFailureOf,
   errorSignature,
+  failedCallKey,
   resolveStallThresholds,
   DEFAULT_STALL_THRESHOLDS,
   type StallThresholds
@@ -173,5 +175,123 @@ describe('StallDetector — healthy runs', () => {
       const r = d.observe({ calls: [call('read_file', { path: `f${i}` })], errors: [] })
       expect(r.kind).toBe('ok')
     }
+  })
+})
+
+describe('commandFailureOf', () => {
+  it('reads a non-zero exit from run_shell output', () => {
+    const f = commandFailureOf(call('run_shell', { command: 'npm test' }), 'FAIL a.test.ts\n[exit code: 1]')
+    expect(f).toMatchObject({ command: 'npm test', exitCode: 1 })
+  })
+  it('ignores a pass, a kill, a background start, and other tools', () => {
+    expect(commandFailureOf(call('run_shell', { command: 'ls' }), 'a\n[exit code: 0]')).toBeNull()
+    expect(commandFailureOf(call('run_shell', { command: 'sleep 9' }), '[exit code: killed]')).toBeNull()
+    expect(commandFailureOf(call('run_shell', { command: 'dev', background: true }), '[exit code: 1]')).toBeNull()
+    expect(commandFailureOf(call('read_file', { path: 'a' }), '[exit code: 1]')).toBeNull()
+  })
+})
+
+describe('errorSignature: failed edits', () => {
+  it('collapses retries whose closest-match hint shifts', () => {
+    const a = failedCallKey(
+      call('edit_file', { path: 'src/a.ts' }),
+      'Error: old_string was not found in the file. The closest match is line 11 (90% similar):\n11 | x'
+    )
+    const b = failedCallKey(
+      call('edit_file', { path: 'src/a.ts' }),
+      'Error: old_string was not found in the file. The closest match is lines 11-12 (95% similar):\n11 | y'
+    )
+    const other = failedCallKey(
+      call('edit_file', { path: 'src/b.ts' }),
+      'Error: old_string was not found in the file. The closest match is line 3 (80% similar):\n3 | z'
+    )
+    expect(errorSignature(a)).toBe(errorSignature(b))
+    expect(errorSignature(a)).not.toBe(errorSignature(other))
+  })
+})
+
+describe('StallDetector: windowed loops', () => {
+  const testFail = (out = 'FAIL sum.test.ts > adds\nexpected 3, got 4\nDuration 1.2s'): {
+    command: string
+    exitCode: number
+    output: string
+  } => ({ command: 'npm test', exitCode: 1, output: `${out}\n[exit code: 1]` })
+
+  it('nudges when a command keeps failing the same way between edits', () => {
+    const d = new StallDetector()
+    const results: string[] = []
+    for (let i = 0; i < 3; i++) {
+      results.push(d.observe({ calls: [call('edit_file', { path: 'a.ts', n: i })], errors: [], changed: true }).kind)
+      results.push(
+        d.observe({
+          calls: [call('run_shell', { command: 'npm test' })],
+          errors: [],
+          changed: true,
+          // Timings differ run to run; the failure is the same.
+          commandFailures: [testFail(`FAIL sum.test.ts > adds\nexpected 3, got 4\nDuration ${i + 1}.0s`)]
+        }).kind
+      )
+    }
+    expect(results.slice(0, 5)).toEqual(['ok', 'ok', 'ok', 'ok', 'ok'])
+    expect(results[5]).toBe('nudge')
+  })
+
+  it('does not nudge when the failure changes between runs (progress)', () => {
+    const d = new StallDetector()
+    for (let i = 0; i < 6; i++) {
+      d.observe({ calls: [call('edit_file', { path: 'a.ts', n: i })], errors: [], changed: true })
+      const r = d.observe({
+        calls: [call('run_shell', { command: 'npm test' })],
+        errors: [],
+        changed: true,
+        commandFailures: [testFail(`Tests ${6 - i} failed`)]
+      })
+      expect(r.kind).toBe('ok')
+    }
+  })
+
+  it('catches an A/B/A/B re-read with nothing changed', () => {
+    const d = new StallDetector()
+    const a = call('read_file', { path: 'a.ts' })
+    const b = call('read_file', { path: 'b.ts' })
+    const kinds = [a, b, a, b, a].map((c) => d.observe({ calls: [c], errors: [], reads: [c], changed: false }).kind)
+    expect(kinds).toEqual(['ok', 'ok', 'ok', 'ok', 'nudge'])
+  })
+
+  it('does not count re-reads separated by a change', () => {
+    const d = new StallDetector()
+    const a = call('read_file', { path: 'a.ts' })
+    for (let i = 0; i < 6; i++) {
+      expect(d.observe({ calls: [a], errors: [], reads: [a], changed: false }).kind).toBe('ok')
+      expect(d.observe({ calls: [call('edit_file', { path: 'a.ts', n: i })], errors: [], changed: true }).kind).toBe('ok')
+    }
+  })
+
+  it('catches the same error coming back with other calls in between', () => {
+    const d = new StallDetector()
+    const err = failedCallKey(call('edit_file', { path: 'a.ts' }), 'Error: old_string was not found in the file.')
+    const kinds = [0, 1, 2, 3, 4].map((i) =>
+      d.observe({ calls: [call('edit_file', { path: 'a.ts', n: i })], errors: i % 2 === 0 ? [err] : [] }).kind
+    )
+    expect(kinds).toEqual(['ok', 'ok', 'ok', 'ok', 'nudge'])
+  })
+
+  it('nudges when a file keeps going back to an earlier version', () => {
+    const d = new StallDetector()
+    const edit = (i: number, reverts: string[] = []): string =>
+      d.observe({ calls: [call('edit_file', { path: 'a.ts', n: i })], errors: [], changed: true, reverts }).kind
+    expect(edit(0)).toBe('ok')
+    expect(edit(1, ['a.ts'])).toBe('ok') // one undo is normal
+    expect(edit(2)).toBe('ok')
+    expect(edit(3, ['a.ts'])).toBe('nudge')
+  })
+
+  it('stops when the loop persists after the nudge', () => {
+    const d = new StallDetector()
+    const a = call('read_file', { path: 'a.ts' })
+    const b = call('read_file', { path: 'b.ts' })
+    const seq = [a, b, a, b, a, b, a, b, a, b].map((c) => d.observe({ calls: [c], errors: [], reads: [c] }).kind)
+    expect(seq).toContain('nudge')
+    expect(seq.at(-1)).toBe('stop')
   })
 })
