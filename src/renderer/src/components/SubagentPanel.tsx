@@ -15,6 +15,7 @@ import {
   type SubagentStep
 } from '@shared/subagents'
 import { deniedPromptText, stoppedPromptText } from '@shared/promptOutcome'
+import { useTransientFlag } from '../hooks/useTransientFlag'
 import { copyText } from '../lib/clipboard'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { useTick } from '../hooks/useTick'
@@ -503,7 +504,7 @@ export function SubagentTranscript({
     return all
   }, [tree])
   const node = nodes.find((n) => n.record.id === selected) ?? nodes[0]
-  const [copied, setCopied] = useState(false)
+  const [copied, showCopied] = useTransientFlag(1500)
   if (!node) return <></>
   const r = node.record
   const report = r.report !== undefined ? splitSubagentReport(r.report).report.trim() : ''
@@ -519,8 +520,7 @@ export function SubagentTranscript({
   ].filter(Boolean)
   const copy = async (): Promise<void> => {
     await copyText(recordToMarkdown(node))
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1500)
+    showCopied()
   }
   return (
     <div className="drawer-overlay" onClick={onClose}>
