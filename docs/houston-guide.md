@@ -2829,7 +2829,7 @@ What it looks for, and where a copy goes:
 | Instruction files | the project (`GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.clinerules`, `.github/copilot-instructions.md`) | the end of the project's `AGENTS.md` |
 | MCP servers | your home folder (for example `~/.cursor/mcp.json`, `~/.claude.json`) | Settings > MCP Servers, switched off |
 | MCP servers | the project (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`) | the project's `.houston/settings.json` |
-| Skills | the project (`.claude/skills/<name>/`) | `.houston/skills/<name>/` |
+| Skills | your home folder (`~/.claude/skills/<name>/`) or the project (`.claude/skills/<name>/`) | `~/.houston/skills/<name>/` or `.houston/skills/<name>/` |
 | Custom commands | your home folder (`~/.claude/commands`, `~/.codex/prompts`) or the project (`.claude/commands`) | `~/.houston/commands` or `.houston/commands` |
 
 `~/.claude/CLAUDE.md` is imported the way its own notice does it: one
