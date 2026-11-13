@@ -136,6 +136,58 @@ describe('diffLines', () => {
   })
 })
 
+describe('diffLines against the reference LCS', () => {
+  // The table-of-rows implementation this replaced, kept here as the oracle: the diff
+  // is shipped in approval events and saved previews, so its tie-breaks must not move.
+  function reference(a: string[], b: string[]): Array<{ type: string; text: string }> {
+    const m = a.length
+    const n = b.length
+    const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+    for (let i = m - 1; i >= 0; i--) {
+      for (let j = n - 1; j >= 0; j--) {
+        lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1])
+      }
+    }
+    const out: Array<{ type: string; text: string }> = []
+    let i = 0
+    let j = 0
+    while (i < m && j < n) {
+      if (a[i] === b[j]) {
+        out.push({ type: 'ctx', text: a[i] })
+        i++
+        j++
+      } else if (lcs[i + 1][j] >= lcs[i][j + 1]) out.push({ type: 'del', text: a[i++] })
+      else out.push({ type: 'add', text: b[j++] })
+    }
+    while (i < m) out.push({ type: 'del', text: a[i++] })
+    while (j < n) out.push({ type: 'add', text: b[j++] })
+    return out
+  }
+
+  it('produces the same lines for scattered edits with repeated lines', () => {
+    let seed = 7
+    const rnd = (): number => ((seed = (seed * 1664525 + 1013904223) >>> 0), seed / 2 ** 32)
+    for (let round = 0; round < 40; round++) {
+      // A small alphabet forces many equal lines, which is where tie-breaks show.
+      const line = (): string => `l${Math.floor(rnd() * 6)}`
+      const a = Array.from({ length: 1 + Math.floor(rnd() * 60) }, line)
+      const b = a.flatMap((l) => (rnd() < 0.2 ? [] : rnd() < 0.2 ? [l, line()] : [l]))
+      // Distinct first and last lines keep the head/tail peel from hiding the middle.
+      const got = diffLines(['HEAD-A', ...a, 'TAIL-A'].join('\n'), ['HEAD-B', ...b, 'TAIL-B'].join('\n'))
+      expect(got).toEqual(reference(['HEAD-A', ...a, 'TAIL-A'], ['HEAD-B', ...b, 'TAIL-B']))
+    }
+  })
+
+  it('handles the largest table the LCS path accepts', () => {
+    const a = Array.from({ length: 2000 }, (_, i) => `old ${i}`)
+    const b = Array.from({ length: 2000 }, (_, i) => (i % 2 ? `old ${i}` : `new ${i}`))
+    const d = diffLines(a.join('\n'), b.join('\n'))
+    expect(d.filter((l) => l.type === 'ctx')).toHaveLength(1000)
+    expect(d.filter((l) => l.type === 'del')).toHaveLength(1000)
+    expect(d.filter((l) => l.type === 'add')).toHaveLength(1000)
+  })
+})
+
 describe('diffStat', () => {
   it('counts additions and removals', () => {
     expect(diffStat(diffLines('a\nb\nc', 'a\nB\nc'))).toEqual({ added: 1, removed: 1 })
