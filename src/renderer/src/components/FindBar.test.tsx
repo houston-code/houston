@@ -1,6 +1,7 @@
-import { render, screen, fireEvent } from '@testing-library/react'
-import { describe, expect, it, vi, afterEach } from 'vitest'
-import { FindBar } from './FindBar'
+import { act, render, screen, fireEvent } from '@testing-library/react'
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
+import { FIND_DEBOUNCE_MS, FindBar } from './FindBar'
+import { MAX_FIND_MATCHES } from '../lib/transcriptFind'
 
 function transcript(html: string): HTMLElement {
   const el = document.createElement('div')
@@ -10,15 +11,28 @@ function transcript(html: string): HTMLElement {
   return el
 }
 
+beforeEach(() => {
+  vi.useFakeTimers()
+})
+
 afterEach(() => {
+  vi.useRealTimers()
   document.body.innerHTML = ''
 })
+
+/** Type a query and let the pause before the search pass. */
+function typeQuery(input: HTMLElement, value: string): void {
+  fireEvent.change(input, { target: { value } })
+  act(() => {
+    vi.advanceTimersByTime(FIND_DEBOUNCE_MS)
+  })
+}
 
 describe('FindBar', () => {
   it('reports the match count as the query changes', () => {
     const root = transcript('<p>alpha beta alpha gamma alpha</p>')
     render(<FindBar getRoots={() => [root]} onClose={() => {}} />)
-    fireEvent.change(screen.getByLabelText('Find in conversation'), { target: { value: 'alpha' } })
+    typeQuery(screen.getByLabelText('Find in conversation'), 'alpha')
     expect(screen.getByText('1/3')).toBeInTheDocument()
   })
 
@@ -29,7 +43,7 @@ describe('FindBar', () => {
     panel.innerHTML = '<div>alpha in the plan</div><ol><li>and alpha again</li></ol>'
     document.body.appendChild(panel)
     render(<FindBar getRoots={() => [t, panel]} onClose={() => {}} />)
-    fireEvent.change(screen.getByLabelText('Find in conversation'), { target: { value: 'alpha' } })
+    typeQuery(screen.getByLabelText('Find in conversation'), 'alpha')
     // 1 in the transcript + 2 in the panel.
     expect(screen.getByText('1/3')).toBeInTheDocument()
   })
@@ -37,7 +51,7 @@ describe('FindBar', () => {
   it('shows "No results" when nothing matches', () => {
     const root = transcript('<p>nothing here</p>')
     render(<FindBar getRoots={() => [root]} onClose={() => {}} />)
-    fireEvent.change(screen.getByLabelText('Find in conversation'), { target: { value: 'zzz' } })
+    typeQuery(screen.getByLabelText('Find in conversation'), 'zzz')
     expect(screen.getByText('No results')).toBeInTheDocument()
   })
 
@@ -45,7 +59,7 @@ describe('FindBar', () => {
     const root = transcript('<p>x x x</p>')
     render(<FindBar getRoots={() => [root]} onClose={() => {}} />)
     const input = screen.getByLabelText('Find in conversation')
-    fireEvent.change(input, { target: { value: 'x' } })
+    typeQuery(input, 'x')
     expect(screen.getByText('1/3')).toBeInTheDocument()
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(screen.getByText('2/3')).toBeInTheDocument()
@@ -59,7 +73,7 @@ describe('FindBar', () => {
   it('navigates with the next/previous buttons', () => {
     const root = transcript('<p>y y</p>')
     render(<FindBar getRoots={() => [root]} onClose={() => {}} />)
-    fireEvent.change(screen.getByLabelText('Find in conversation'), { target: { value: 'y' } })
+    typeQuery(screen.getByLabelText('Find in conversation'), 'y')
     fireEvent.click(screen.getByLabelText('Next match'))
     expect(screen.getByText('2/2')).toBeInTheDocument()
   })
@@ -87,7 +101,7 @@ describe('FindBar focus', () => {
     const root = transcript('<p>alpha</p>')
     const { rerender } = render(<FindBar getRoots={() => [root]} onClose={() => {}} focusRequest={1} />)
     const input = screen.getByLabelText('Find in conversation') as HTMLInputElement
-    fireEvent.change(input, { target: { value: 'alpha' } })
+    typeQuery(input, 'alpha')
     // The user clicked back into the transcript, then pressed ⌘F again.
     input.blur()
     expect(document.activeElement).not.toBe(input)
@@ -105,5 +119,34 @@ describe('FindBar focus', () => {
     expect(document.activeElement).toBe(screen.getByLabelText('Find in conversation'))
     unmount()
     expect(document.activeElement).toBe(composer)
+  })
+
+  it('searches once typing pauses, not on every keystroke', () => {
+    const root = transcript('<p>alpha beta</p>')
+    render(<FindBar getRoots={() => [root]} onClose={() => {}} />)
+    const input = screen.getByLabelText('Find in conversation')
+    for (const q of ['a', 'al', 'alp']) fireEvent.change(input, { target: { value: q } })
+    // Nothing searched yet: no stale "No results" for a query still being typed.
+    expect(screen.queryByText('No results')).toBeNull()
+    act(() => {
+      vi.advanceTimersByTime(FIND_DEBOUNCE_MS)
+    })
+    expect(screen.getByText('1/1')).toBeInTheDocument()
+  })
+
+  it('runs a waiting search at once on Enter, then steps from its first match', () => {
+    const root = transcript('<p>x x x</p>')
+    render(<FindBar getRoots={() => [root]} onClose={() => {}} />)
+    const input = screen.getByLabelText('Find in conversation')
+    fireEvent.change(input, { target: { value: 'x' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByText('2/3')).toBeInTheDocument()
+  })
+
+  it('counts at most the cap, and says there were more', () => {
+    const root = transcript(`<p>${'x '.repeat(MAX_FIND_MATCHES + 5)}</p>`)
+    render(<FindBar getRoots={() => [root]} onClose={() => {}} />)
+    typeQuery(screen.getByLabelText('Find in conversation'), 'x')
+    expect(screen.getByText(`1/${MAX_FIND_MATCHES}+`)).toBeInTheDocument()
   })
 })

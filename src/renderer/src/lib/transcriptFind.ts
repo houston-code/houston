@@ -12,7 +12,7 @@ const ALL = 'houston-find'
 const ACTIVE = 'houston-find-active'
 
 interface HighlightCtor {
-  new (...ranges: Range[]): unknown
+  new (...ranges: Range[]): { add?: (range: Range) => unknown }
 }
 interface HighlightRegistry {
   set(name: string, highlight: unknown): void
@@ -49,11 +49,22 @@ function isInCollapsedDetails(node: Node): boolean {
   return false
 }
 
-/** All non-overlapping, case-insensitive match ranges of `query` within `root`, in document order. */
-export function collectMatchRanges(root: HTMLElement, query: string): Range[] {
+/**
+ * Most matches find collects and highlights. A one-letter query in a long chat matches
+ * tens of thousands of times: each match is a live Range the browser must keep up to
+ * date on every later DOM change, and painting them all costs far more than the count
+ * is worth. Past this, the count reads "2000+" and stepping covers the first 2,000.
+ */
+export const MAX_FIND_MATCHES = 2000
+
+/**
+ * All non-overlapping, case-insensitive match ranges of `query` within `root`, in
+ * document order, stopping once `limit` have been found.
+ */
+export function collectMatchRanges(root: HTMLElement, query: string, limit = Infinity): Range[] {
   const ranges: Range[] = []
   const needle = query.toLowerCase()
-  if (!needle) return ranges
+  if (!needle || limit <= 0) return ranges
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
     // Skip text hidden inside a collapsed <details> so it can't produce a match the
     // user can't see or scroll to (e.g. the plan panel's collapsed file list).
@@ -67,6 +78,7 @@ export function collectMatchRanges(root: HTMLElement, query: string): Range[] {
       r.setStart(node, i)
       r.setEnd(node, i + needle.length)
       ranges.push(r)
+      if (ranges.length >= limit) return ranges
       i = hay.indexOf(needle, i + needle.length)
     }
   }
@@ -74,8 +86,25 @@ export function collectMatchRanges(root: HTMLElement, query: string): Range[] {
 }
 
 /** Match ranges of `query` across several roots (e.g. the transcript and the plan panel), concatenated in root order. */
-export function collectMatchRangesAcross(roots: HTMLElement[], query: string): Range[] {
-  return roots.flatMap((root) => collectMatchRanges(root, query))
+export function collectMatchRangesAcross(roots: HTMLElement[], query: string, limit = Infinity): Range[] {
+  const ranges: Range[] = []
+  for (const root of roots) {
+    if (ranges.length >= limit) break
+    ranges.push(...collectMatchRanges(root, query, limit - ranges.length))
+  }
+  return ranges
+}
+
+/**
+ * What find shows for `query`: up to {@link MAX_FIND_MATCHES} matches across `roots`,
+ * and whether there were more than that.
+ */
+export function findMatches(roots: HTMLElement[], query: string): { ranges: Range[]; capped: boolean } {
+  // One past the cap tells "exactly 2,000" from "more than 2,000".
+  const ranges = collectMatchRangesAcross(roots, query, MAX_FIND_MATCHES + 1)
+  const capped = ranges.length > MAX_FIND_MATCHES
+  if (capped) ranges.length = MAX_FIND_MATCHES
+  return { ranges, capped }
 }
 
 /** Paint `ranges` (all matches) plus the one at `activeIndex` (emphasised). No-op without the Highlight API. */
@@ -88,7 +117,11 @@ export function setFindHighlights(ranges: Range[], activeIndex: number): void {
     reg.delete(ACTIVE)
     return
   }
-  reg.set(ALL, new Ctor(...ranges))
+  // Added one by one rather than spread into the constructor: a spread passes every
+  // range as an argument, and enough of them overflow the call stack.
+  const all = new Ctor()
+  if (typeof all.add === 'function') for (const r of ranges) all.add(r)
+  reg.set(ALL, typeof all.add === 'function' ? all : new Ctor(...ranges))
   const active = ranges[activeIndex]
   if (active) reg.set(ACTIVE, new Ctor(active))
   else reg.delete(ACTIVE)
