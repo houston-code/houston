@@ -131,6 +131,7 @@ import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
+import { registerCustomizeIpc } from './customizeIpc'
 import {
   getRepoInfo,
   createWorktree,
@@ -138,6 +139,8 @@ import {
   isWorktreeDisposable
 } from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'
+import { collectChatChanges, revertChange } from './agent/changes'
+import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import { initGitRepo } from './agent/gitInit'
 import { realpathSync } from 'node:fs'
 import {
@@ -154,6 +157,7 @@ import {
   organizeConversation,
   reorderConversations,
   computeScorecard,
+  computeUsageReport,
   addUsage,
   mergeRunningTotals,
   setMessages,
@@ -826,6 +830,41 @@ export function registerIpc(ready?: Promise<unknown>): void {
     collectWorkingTreeChanges(typeof workspace === 'string' ? workspace : '')
   )
 
+  // The Changes view's turn and chat scopes: what the chat's checkpoints say it
+  // changed, against the files as they are now. Read-only.
+  handle(IPC.chatChanges, async (_event, conversationId: unknown, scope: unknown): Promise<ChatChanges> =>
+    typeof conversationId === 'string' && (scope === 'turn' || scope === 'chat')
+      ? collectChatChanges(conversationId, scope)
+      : { files: [], added: 0, removed: 0, unavailable: 0 }
+  )
+
+  // Revert one file or hunk from the Changes view (the user confirmed it there). The
+  // working-tree scope only touches a project the app already knows; a chat's scopes
+  // wait for its run to finish; and every revert re-checks that the file still holds
+  // the diff the view showed (see agent/changes.ts).
+  const knownWorkspace = (workspace: string): boolean => {
+    let real: string
+    try {
+      real = realpathSync(workspace)
+    } catch {
+      return false
+    }
+    const candidates = [...(getSettings().recentWorkspaces ?? []), ...listConversations().map((c) => c.workspace)]
+    return candidates.some((c) => {
+      try {
+        return typeof c === 'string' && realpathSync(c) === real
+      } catch {
+        return false
+      }
+    })
+  }
+  handle(IPC.changesRevert, async (_event, req: ChangeRevertRequest): Promise<ChangeRevertResult> =>
+    revertChange(req, {
+      runActive: (id) => activeRunForConversation(id) !== null,
+      knownWorkspace
+    })
+  )
+
   // Initialize a git repo in the workspace so a non-git project's files become
   // visible/reviewable in the Changes panel (the "Initialize git repository" action).
   handle(IPC.gitInit, async (_event, workspace: string) =>
@@ -898,6 +937,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return []
     }
   })
+
+  // Settings > Customize (create, switch off, open, trash; instruction files).
+  registerCustomizeIpc(handle)
 
   handle(IPC.settingsGet, () => getSettings())
 
@@ -1083,6 +1125,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
   })
   // Local-only per-model loop scorecard — aggregated on-device, never transmitted.
   handle(IPC.conversationScorecard, () => computeScorecard())
+  // Local-only spend and tokens per day and per project, for the usage view.
+  handle(IPC.conversationUsageReport, () => computeUsageReport())
   handle(
     IPC.conversationCreate,
     async (

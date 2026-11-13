@@ -10,6 +10,8 @@ describe('dockLayout', () => {
     expect(readDockTab()).toBe('files')
     rememberDockTab('plan')
     expect(readDockTab()).toBe('files')
+    rememberDockTab('changes')
+    expect(readDockTab()).toBe('changes')
     forgetDockTab()
     expect(readDockTab()).toBe('preview')
     localStorage.setItem('houston.dockTab', 'bogus')

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import type { FileDiffPreview } from '@shared/diff'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
@@ -84,6 +85,7 @@ import {
   shortCwd,
   homeRelative,
   renderStatusLine,
+  renderEditSummary,
   renderRunStatus,
   renderContextUsage,
   pickTips,
@@ -5420,6 +5422,90 @@ describe('/rewind', () => {
   })
 })
 
+describe('edits that land without a prompt', () => {
+  const paintNo = makePainter(false)
+  const preview = (path: string, adds: number, dels: number, extra: Partial<FileDiffPreview> = {}): FileDiffPreview => ({
+    path,
+    diff: [
+      ...Array.from({ length: dels }, (_, i) => ({ type: 'del' as const, text: `old ${i}` })),
+      ...Array.from({ length: adds }, (_, i) => ({ type: 'add' as const, text: `new ${i}` }))
+    ],
+    ...extra
+  })
+
+  it('renderEditSummary names each file with its +/- counts and the command to see the diff', () => {
+    expect(renderEditSummary([preview('src/a.ts', 3, 1)], paintNo)).toBe('  ✎ src/a.ts +3 -1  · /diff last shows the diff')
+    expect(renderEditSummary([preview('src/new.ts', 4, 0, { created: true })], paintNo)).toContain('src/new.ts (new) +4')
+    expect(renderEditSummary([preview('old.ts', 0, 9, { deleted: true })], paintNo)).toContain('old.ts (deleted) -9')
+    expect(renderEditSummary([preview('b.ts', 60, 2, { truncated: true })], paintNo)).toContain('b.ts +60… -2…')
+    expect(renderEditSummary([preview('n.ts', 1, 1, { renamedFrom: 'm.ts' })], paintNo)).toContain('m.ts → n.ts')
+  })
+
+  it('collapses files past the third into a count', () => {
+    const line = renderEditSummary(['a', 'b', 'c', 'd', 'e'].map((f) => preview(f, 1, 0)), paintNo)
+    expect(line).toContain('a +1, b +1, c +1, and 2 more files')
+  })
+
+  const write = (callId: string, ok = true): AgentEvent[] => [
+    {
+      runId: 'x',
+      type: 'tool_start',
+      callId,
+      name: 'edit_file',
+      args: { path: 'src/a.ts' },
+      kind: 'write',
+      preview: [preview('src/a.ts', 2, 1)]
+    },
+    { runId: 'x', type: 'tool_result', callId, name: 'edit_file', ok, output: ok ? 'Edited src/a.ts' : 'no match' }
+  ]
+
+  it('prints the summary after an auto-approved write', async () => {
+    const { d } = deps([...write('c1'), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('✎ src/a.ts +2 -1  · /diff last shows the diff')
+  })
+
+  it('stays quiet for a write approved at a prompt (its diff was already shown), and a failed one', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'edit_file', kind: 'write', summary: 'Edit src/a.ts', args: {} } as AgentEvent,
+      ...write('c1'),
+      ...write('c2', false),
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).not.toContain('✎')
+  })
+
+  it('/diff last shows the diff of the last edit, and /diff last n reaches back', async () => {
+    const { d } = deps([...write('c1'), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', '/diff last', '/diff last 3', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('new 1')
+    expect(t.text()).toContain('only 1 edit so far this session')
+  })
+
+  it('/diff last says so before any edit', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/diff last', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('no edits yet this session')
+  })
+
+  it('parses /diff last [n], leaving plain /diff and /changes as the working-tree summary', () => {
+    expect(parseSlashCommand('/diff', settings())).toEqual({ kind: 'changes' })
+    expect(parseSlashCommand('/changes', settings())).toEqual({ kind: 'changes' })
+    expect(parseSlashCommand('/diff last', settings())).toEqual({ kind: 'changes', last: 1 })
+    expect(parseSlashCommand('/diff last 3', settings())).toEqual({ kind: 'changes', last: 3 })
+    expect(parseSlashCommand('/changes last 0', settings())).toEqual({ kind: 'changes', last: 1 })
+  })
+})
+
 describe('/undo, /redo and /changes', () => {
   const paintNo = makePainter(false)
   const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
@@ -6054,5 +6140,186 @@ describe('renderPlan readiness at the terminal width', () => {
     expect(rows[0]).toBe('  ! npm packages: Not installed yet. Installing needs')
     expect(rows[1]).toBe('    network. Shell commands run offline until you allow')
     expect(rows[2]).toBe('    network.')
+  })
+})
+
+describe('session commands', () => {
+  const done: AgentEvent[] = [
+    { runId: 'x', type: 'text', delta: 'Sure thing.' },
+    { runId: 'x', type: 'done', stopReason: 'end_turn' }
+  ]
+
+  function withStore() {
+    const fp = fakePersist()
+    const renamed: Array<[string, string]> = []
+    const removed: string[] = []
+    fp.persist.rename = (id, title) => {
+      renamed.push([id, title])
+      const c = fp.store.get(id)
+      if (c) c.title = title
+    }
+    fp.persist.remove = (id) => {
+      removed.push(id)
+      fp.store.delete(id)
+    }
+    return { ...fp, renamed, removed }
+  }
+
+  it('--continue replays the last exchanges so you can see where you left off', async () => {
+    const { d } = deps(done)
+    const fp = fakePersist([
+      {
+        id: 'c1',
+        title: 'Greet',
+        updatedAt: 1,
+        messages: [
+          { role: 'user', content: 'what does greet do?' },
+          { role: 'assistant', content: 'It greets.' }
+        ]
+      }
+    ])
+    d.persist = fp.persist
+    const t = fakeIo([null])
+    d.io = t.io
+    await runTui({ ...opts, continueSession: true }, d)
+    expect(t.text()).toContain('· where you left off:')
+    expect(t.text()).toContain('you › what does greet do?')
+    expect(t.text()).toContain('houston › It greets.')
+  })
+
+  it('/resume replays them too', async () => {
+    const { d } = deps(done)
+    const fp = fakePersist([
+      { id: 'c1', title: 'Greet', updatedAt: 1, messages: [{ role: 'user', content: 'hello there' }] }
+    ])
+    d.persist = fp.persist
+    const t = fakeIo(['/resume', '1', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('you › hello there')
+  })
+
+  it('names the session and how to resume it on the way out', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('This chat is saved. To come back to it:\n  houston --resume conv-1\n')
+    expect(t.text()).toContain('houston --continue')
+  })
+
+  it('says nothing about a session when none was saved', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    const t = fakeIo([null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).not.toContain('houston --resume')
+  })
+
+  it('/rename titles the chat, and bare /rename shows the title', async () => {
+    const { d } = deps(done)
+    const st = withStore()
+    d.persist = st.persist
+    const t = fakeIo(['hi', '/rename Greet fallback', '/rename', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(st.renamed).toEqual([['conv-1', 'Greet fallback']])
+    expect(t.text()).toContain('renamed to "Greet fallback"')
+    expect(t.text()).toContain('this chat is "Greet fallback"')
+  })
+
+  it('/rename before anything is saved says so', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    const t = fakeIo(['/rename x', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('nothing to rename yet')
+  })
+
+  it('/delete asks first, and keeps the chat unless you say yes', async () => {
+    const { d } = deps(done)
+    const st = withStore()
+    d.persist = st.persist
+    const t = fakeIo(['hi', '/delete', '', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.reads.some((r) => r.prompt.includes('This cannot be undone. [y/N]') && r.discardPending)).toBe(true)
+    expect(st.removed).toEqual([])
+    expect(t.text()).toContain('· kept')
+  })
+
+  it('/delete with a yes deletes it and starts a new chat', async () => {
+    const { d, rec } = deps(done)
+    const st = withStore()
+    d.persist = st.persist
+    const t = fakeIo(['hi', '/delete', 'y', 'again', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(st.removed).toEqual(['conv-1'])
+    expect(t.text()).toContain('this is a new chat')
+    // The next message starts fresh: no history from the deleted chat.
+    expect(rec.runs[1].messages).toEqual([{ role: 'user', content: 'again' }])
+  })
+
+  it('/export writes Markdown by default, and JSON on request', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    const written: Array<[string, string]> = []
+    d.writeExport = (path, content) => {
+      written.push([path, content])
+      return `/proj/${path}`
+    }
+    d.now = () => new Date(2026, 10, 13, 9, 5).getTime()
+    const t = fakeIo(['hi', '/export', '/export json out.json', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(written[0][0]).toBe('houston-new-chat-20261113-0905.md')
+    expect(written[0][1]).toContain('## You\n\nhi')
+    expect(written[1][0]).toBe('out.json')
+    expect(JSON.parse(written[1][1]).messages[0]).toEqual({ role: 'user', content: 'hi' })
+    expect(t.text()).toContain('exported 1 message(s) to /proj/out.json')
+  })
+
+  it('/export reports a failed write, and has nothing to do in an empty chat', async () => {
+    const { d } = deps(done)
+    d.persist = withStore().persist
+    d.writeExport = () => {
+      throw new Error('/proj/x.md already exists; give another path')
+    }
+    const t = fakeIo(['/export', 'hi', '/export x.md', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('nothing to export yet')
+    expect(t.text()).toContain("couldn't export: /proj/x.md already exists")
+  })
+
+  it('/permissions lists the saved rules and removes one by number', async () => {
+    const rules = [
+      { action: 'allow' as const, tool: 'run_shell', match: 'git status', exact: true },
+      { action: 'deny' as const, tool: 'web_fetch', match: 'https://evil.example/*' }
+    ]
+    const { d } = deps(done, { permissionRules: rules })
+    const saved: Array<Partial<AppSettings>> = []
+    d.updateSettings = (patch) => saved.push(patch)
+    const t = fakeIo(['/permissions', '/permissions remove 1', '/permissions remove 9', '/permissions nope', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('1. allow run_shell  git status')
+    expect(saved).toEqual([{ permissionRules: [rules[1]] }])
+    expect(t.text()).toContain('removed: allow run_shell git status (exact)')
+    expect(t.text()).toContain('no rule 9')
+    expect(t.text()).toContain('usage: /permissions')
+  })
+
+  it('/init runs the shared template as a turn', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['/init', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0].messages[0].content).toContain('AGENTS.md')
+    expect(rec.runs[0].messages[0].invokedAs?.label).toBe('/init')
   })
 })

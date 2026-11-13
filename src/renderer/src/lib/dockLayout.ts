@@ -6,7 +6,7 @@ import type { DockTab } from '../components/PreviewDock'
  * is never remembered, since it only exists while a plan waits for an answer.
  */
 const KEY = 'houston.dockTab'
-const REMEMBERED: readonly DockTab[] = ['tasks', 'preview', 'files']
+const REMEMBERED: readonly DockTab[] = ['tasks', 'preview', 'changes', 'files']
 
 export function readDockTab(): DockTab {
   try {

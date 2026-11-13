@@ -315,6 +315,77 @@ describe('PreviewDock tabs (Background tasks | Preview)', () => {
     expect(screen.queryByRole('tab', { name: 'Plan review' })).toBeNull()
   })
 
+  it('orders all five tabs, keeping Files mounted but Changes only while it shows', () => {
+    const dock = (tab: 'changes' | 'files') => (
+      <PreviewDock
+        servers={[]}
+        occluded={false}
+        onResizeMouseDown={noop}
+        onClose={vi.fn()}
+        tab={tab}
+        onTabChange={vi.fn()}
+        tasks={<p>tasks content</p>}
+        changes={<p>changes content</p>}
+        files={<p>files content</p>}
+        plan={<p>plan content</p>}
+      />
+    )
+    const { rerender } = render(dock('files'))
+    expect(screen.getAllByRole('tab').map((t) => t.id)).toEqual([
+      'dock-tab-tasks',
+      'dock-tab-preview',
+      'dock-tab-changes',
+      'dock-tab-files',
+      'dock-tab-plan'
+    ])
+    rerender(dock('changes'))
+    expect(screen.getByText('changes content')).toBeVisible()
+    expect(screen.getByText('files content')).not.toBeVisible()
+    rerender(dock('files'))
+    expect(screen.queryByText('changes content')).toBeNull()
+    expect(screen.getByText('files content')).toBeVisible()
+  })
+
+  it('adds a Changes tab after Preview, rendering its content only while it shows', () => {
+    const onTabChange = vi.fn()
+    const { rerender } = render(
+      <PreviewDock
+        servers={[]}
+        occluded={false}
+        onResizeMouseDown={noop}
+        onClose={vi.fn()}
+        tab="preview"
+        onTabChange={onTabChange}
+        tasks={<p>tasks content</p>}
+        changes={<p>changes content</p>}
+      />
+    )
+    expect(screen.getAllByRole('tab').map((t) => t.id)).toEqual(['dock-tab-tasks', 'dock-tab-preview', 'dock-tab-changes'])
+    expect(screen.queryByText('changes content')).toBeNull()
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Preview' }), { key: 'ArrowRight' })
+    expect(onTabChange).toHaveBeenLastCalledWith('changes')
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Preview' }), { key: 'End' })
+    expect(onTabChange).toHaveBeenLastCalledWith('changes')
+    rerender(
+      <PreviewDock
+        servers={[]}
+        occluded={false}
+        onResizeMouseDown={noop}
+        onClose={vi.fn()}
+        tab="changes"
+        onTabChange={onTabChange}
+        tasks={<p>tasks content</p>}
+        changes={<p>changes content</p>}
+      />
+    )
+    expect(screen.getByText('changes content')).toBeVisible()
+    expect(screen.getByRole('tab', { name: 'Changes' })).toHaveAttribute('aria-selected', 'true')
+    // The native preview pages are hidden behind the Changes tab, as behind Tasks.
+    expect(api.syncPreviewPanes).toHaveBeenLastCalledWith(expect.any(Array), false)
+    fireEvent.keyDown(screen.getByRole('tab', { name: 'Changes' }), { key: 'ArrowRight' })
+    expect(onTabChange).toHaveBeenLastCalledWith('tasks')
+  })
+
   it('labels the close button for the whole panel', () => {
     renderTabbed('preview')
     expect(screen.getByLabelText('Hide side panel')).toBeInTheDocument()

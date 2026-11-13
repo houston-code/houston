@@ -44,7 +44,7 @@ import {
   planNewChatWorkspace,
   suggestBranch
 } from './lib/worktree'
-import { useApplyTheme } from './hooks/useApplyTheme'
+import { useApplyAppearance, useApplyTheme } from './hooks/useApplyTheme'
 import { useChatStatus } from './hooks/useChatStatus'
 import { useWindowFocused } from './hooks/useWindowFocused'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
@@ -179,6 +179,9 @@ const FilesPanel = lazy(() =>
 const Scorecard = lazy(() =>
   import('./components/Scorecard').then((m) => ({ default: m.Scorecard }))
 )
+const UsagePanel = lazy(() =>
+  import('./components/UsagePanel').then((m) => ({ default: m.UsagePanel }))
+)
 const TerminalDock = lazy(() =>
   import('./components/TerminalDock').then((m) => ({ default: m.TerminalDock }))
 )
@@ -235,7 +238,6 @@ export default function App(): JSX.Element {
   // A settings search to open on (`/settings <words>`).
   const [settingsQuery, setSettingsQuery] = useState('')
   const [doctorOpen, setDoctorOpen] = useState(false)
-  const [changesOpen, setChangesOpen] = useState(false)
   // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
   const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
   // The line to show in the previewed file, when a link named one.
@@ -244,6 +246,7 @@ export default function App(): JSX.Element {
   // The open chat's decisions on its propose_session cards (keyed by call id).
   const [proposalStates, setProposalStates] = useState<Record<string, ProposalState>>({})
   const [scorecardOpen, setScorecardOpen] = useState(false)
+  const [usageOpen, setUsageOpen] = useState(false)
   const [helpOpen, setHelpOpen] = useState(false)
   // Rewind (see components/RewindDialog): the Esc Esc picker, the confirmation for a
   // chosen message, an edit-and-resend in progress, the text to put in the composer,
@@ -324,6 +327,8 @@ export default function App(): JSX.Element {
   }, [])
   // Files is a tab of the dock.
   const filesOpen = previewOpen && dockTab === 'files'
+  // Changes is a tab of the dock too.
+  const changesOpen = previewOpen && dockTab === 'changes'
   // The background shell whose page "Open preview" asked for, so the Preview tab
   // shows it even when more servers are running than it has panes for. Each request is a
   // fresh object so asking again for the same server reopens a pane the user closed.
@@ -471,6 +476,11 @@ export default function App(): JSX.Element {
 
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
+  useApplyAppearance({
+    chatFontSize: settings?.chatFontSize,
+    density: settings?.density,
+    codeTheme: settings?.codeTheme
+  })
 
   // Live status of every conversation with a run (running, blocking prompts), used
   // to mark chats in the sidebar, including ones running in the background.
@@ -1129,6 +1139,13 @@ export default function App(): JSX.Element {
     setSettings(await window.api.saveSettings({ ...current, newChatWorktree: on }))
   }, [])
 
+  // The usage drawer's cost reminder writes the same setting as Settings > Agent Behavior.
+  const onChangeCostCeiling = useCallback(async (usd: number) => {
+    const current = await window.api.getSettings()
+    if ((current.costCeilingUsd ?? 0) === usd) return
+    setSettings(await window.api.saveSettings({ ...current, costCeilingUsd: usd }))
+  }, [])
+
   const onToggleUnreadFirst = useCallback(async () => {
     const current = await window.api.getSettings()
     const fresh = await window.api.saveSettings({
@@ -1514,6 +1531,7 @@ export default function App(): JSX.Element {
     [previewOpen, dockTab, persistPreview, setDockTab]
   )
   const togglePreview = useCallback(() => toggleDockTab('preview'), [toggleDockTab])
+  const toggleChanges = useCallback(() => toggleDockTab('changes'), [toggleDockTab])
   const toggleTasks = useCallback(() => toggleDockTab('tasks'), [toggleDockTab])
   const closeDock = useCallback(() => {
     setPreviewOpen(false)
@@ -1531,6 +1549,8 @@ export default function App(): JSX.Element {
     [previewOpen, persistPreview, setDockTab]
   )
   const toggleFiles = useCallback(() => toggleDockTab('files'), [toggleDockTab])
+  // Open the dock on Changes (never closes it: palette, menu, composer bar, /changes).
+  const showChanges = useCallback(() => showDockTab('changes'), [showDockTab])
 
   // Back to the first-launch layout: sidebar open at its default width, terminal,
   // side panel and side chat closed, every panel at its default size, and no
@@ -2049,7 +2069,6 @@ export default function App(): JSX.Element {
   // agent's tools and approval gate rather than the renderer touching git.
   const onShip = useCallback(
     (action: ShipAction) => {
-      setChangesOpen(false)
       onInvoke(shipTurn(action))
     },
     [onInvoke]
@@ -2136,7 +2155,7 @@ export default function App(): JSX.Element {
           return
         }
         case 'changes':
-          setChangesOpen(true)
+          showChanges()
           return
         case 'undo':
           if (chat.running) chat.notify('/undo can run once this turn ends.')
@@ -2222,6 +2241,7 @@ export default function App(): JSX.Element {
     },
     [
       settings,
+      showChanges,
       chat,
       currentId,
       workspace,
@@ -2251,6 +2271,7 @@ export default function App(): JSX.Element {
         if (turn) onInvoke(turn)
         else chat.notify('Usage: /agent <name> <task>. The name matches a file in .houston/agents', 'error')
       } else if (cmd.name === 'doctor') setDoctorOpen(true)
+      else if (cmd.name === 'usage') setUsageOpen(true)
       else if (cmd.name === 'rewind') {
         if (currentId) setRewindPickerOpen(true)
         else chat.notify('Nothing to rewind yet: send a message first.')
@@ -2400,6 +2421,13 @@ export default function App(): JSX.Element {
         run: () => setScorecardOpen(true)
       },
       {
+        id: 'act-usage',
+        title: 'Show usage and spend',
+        section: 'Actions',
+        keywords: 'cost spend tokens usage per day per project budget limit reminder',
+        run: () => setUsageOpen(true)
+      },
+      {
         id: 'act-help',
         title: 'Keyboard shortcuts',
         section: 'Actions',
@@ -2441,7 +2469,7 @@ export default function App(): JSX.Element {
         title: 'Show working-tree changes',
         section: 'Actions',
         keywords: 'diff git pr',
-        run: () => setChangesOpen(true)
+        run: showChanges
       })
     }
     if (currentId) {
@@ -2522,6 +2550,7 @@ export default function App(): JSX.Element {
     mac,
     resetLayout,
     showFiles,
+    showChanges,
     shortcuts,
     workspace,
     currentId,
@@ -2558,8 +2587,8 @@ export default function App(): JSX.Element {
   const overlays: OverlayFlags = {
     settings: settingsOpen,
     doctor: doctorOpen,
-    changes: changesOpen,
     scorecard: scorecardOpen,
+    usage: usageOpen,
     help: helpOpen,
     viewer: viewer !== null,
     palette: paletteOpen,
@@ -2593,7 +2622,7 @@ export default function App(): JSX.Element {
           else if (cmd.panel === 'tasks') toggleTasks()
           else if (cmd.panel === 'preview') togglePreview()
           else if (cmd.panel === 'side-chat' && currentId) setSideChatOpen((o) => !o)
-        } else if (cmd.type === 'show-changes' && workspace) setChangesOpen(true)
+        } else if (cmd.type === 'show-changes' && workspace) showChanges()
         else if (cmd.type === 'show-files' && workspace) showFiles()
         else if (cmd.type === 'reset-layout') resetLayout()
         else if (cmd.type === 'command-palette') {
@@ -2613,6 +2642,7 @@ export default function App(): JSX.Element {
       onNewChat,
       resetLayout,
       showFiles,
+      showChanges,
       onChangeWorkspace,
       enterNewChat,
       onImportConversation,
@@ -2726,8 +2756,8 @@ export default function App(): JSX.Element {
         else if (o.help) setHelpOpen(false)
         else if (o.find) setFindOpen(false)
         else if (o.settings) setSettingsOpen(false)
-        else if (o.changes) setChangesOpen(false)
         else if (o.scorecard) setScorecardOpen(false)
+        else if (o.usage) setUsageOpen(false)
         else if (o.doctor) setDoctorOpen(false)
         else if (chat.running) chat.cancel()
       }
@@ -2899,7 +2929,8 @@ export default function App(): JSX.Element {
           changes={workspace ? workingTreeStats : undefined}
           onShowFiles={workspace ? toggleFiles : undefined}
           filesOpen={filesOpen}
-          onShowChanges={workspace ? () => setChangesOpen(true) : undefined}
+          onShowChanges={workspace ? toggleChanges : undefined}
+          changesOpen={changesOpen}
           onTogglePreview={togglePreview}
           previewOpen={previewOpen && dockTab === 'preview'}
           previewCount={previewableCount}
@@ -3167,7 +3198,7 @@ export default function App(): JSX.Element {
             ultrathinkEffect={ultrathinkOnSend}
             lastUserMessage={lastUserText(chat.items)}
             changes={workspace ? workingTreeStats : undefined}
-            onShowChanges={() => setChangesOpen(true)}
+            onShowChanges={showChanges}
             onShip={canChat ? onShip : undefined}
             onCommand={onCommand}
             onSend={onSend}
@@ -3226,6 +3257,17 @@ export default function App(): JSX.Element {
             focusServerId={previewFocus?.id ?? null}
             focusRequest={previewFocus}
             taskCount={activeTaskCount(backgroundTasks)}
+            changes={
+              <DiffPanel
+                // A fresh view per chat and folder: its scope data belongs to them.
+                key={`${currentId ?? ''}:${workspace ?? ''}`}
+                workspace={workspace}
+                conversationId={currentId}
+                running={chat.running}
+                onShip={canChat ? onShip : undefined}
+                creating={chat.running}
+              />
+            }
             files={
               workspace ? (
                 <FilesPanel
@@ -3315,13 +3357,11 @@ export default function App(): JSX.Element {
 
 
         {scorecardOpen && <Scorecard onClose={() => setScorecardOpen(false)} />}
-
-        {changesOpen && (
-          <DiffPanel
-            workspace={workspace}
-            onClose={() => setChangesOpen(false)}
-            onShip={canChat ? onShip : undefined}
-            creating={chat.running}
+        {usageOpen && (
+          <UsagePanel
+            costCeilingUsd={savedSettings?.costCeilingUsd ?? 0}
+            onChangeCostCeiling={(usd) => void onChangeCostCeiling(usd)}
+            onClose={() => setUsageOpen(false)}
           />
         )}
 

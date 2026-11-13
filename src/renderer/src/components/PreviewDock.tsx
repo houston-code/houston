@@ -7,10 +7,10 @@ import { describeShell } from '../lib/taskLabel'
 
 /**
  * The right-hand dock. With `onTabChange` it has tabs: Tasks (the background-tasks
- * list, passed in as `tasks`) and Preview always, plus Files and Plan review when
- * their content is given; without, it is Preview-only. A tab other than Preview is
- * mounted the first time it shows and then kept (hidden) so its state survives a
- * switch.
+ * list, passed in as `tasks`) and Preview always, plus Changes, Files and Plan review
+ * when their content is given; without, it is Preview-only. Changes renders only while
+ * it shows (it reads git); Files and Plan review are mounted the first time they show
+ * and then kept (hidden) so their state survives a switch.
  *
  * Preview: a resizable right-hand panel that shows the dev servers the
  * agent started (each one's loopback URL, auto-detected from its output) as live,
@@ -24,14 +24,15 @@ import { describeShell } from '../lib/taskLabel'
  * on top (`occluded`) so a preview never covers a modal; main keeps the view alive
  * but hidden. Unmounting (the dock closed) tears every pane down.
  */
-export type DockTab = 'preview' | 'tasks' | 'files' | 'plan'
+export type DockTab = 'preview' | 'tasks' | 'changes' | 'files' | 'plan'
 
 /** Every tab in strip order: the title-bar buttons' order, then panels that open on their own. */
-export const DOCK_TABS: readonly DockTab[] = ['tasks', 'preview', 'files', 'plan']
+export const DOCK_TABS: readonly DockTab[] = ['tasks', 'preview', 'changes', 'files', 'plan']
 
 const TAB_LABEL: Record<DockTab, string> = {
   tasks: 'Background tasks',
   preview: 'Preview',
+  changes: 'Changes',
   files: 'Files',
   plan: 'Plan review'
 }
@@ -44,6 +45,7 @@ export function PreviewDock({
   tab = 'preview',
   onTabChange,
   tasks,
+  changes,
   files,
   plan,
   taskCount = 0,
@@ -61,6 +63,8 @@ export function PreviewDock({
   onTabChange?: (tab: DockTab) => void
   /** The Tasks tab's content (the TasksPanel). */
   tasks?: ReactNode
+  /** The Changes tab's content. Rendered only while that tab shows (it reads git). */
+  changes?: ReactNode
   /** The Files tab's content (the docked FilesPanel); no tab without it. */
   files?: ReactNode
   /** The Plan review tab's content (the docked PlanPanel); no tab without it. */
@@ -77,9 +81,9 @@ export function PreviewDock({
   // the switch) but its native views are hidden, exactly as under an overlay.
   const previewVisible = tab === 'preview'
   const tabRefs = useRef<Partial<Record<DockTab, HTMLButtonElement | null>>>({})
-  const content: Partial<Record<DockTab, ReactNode>> = { tasks, files, plan }
+  const content: Partial<Record<DockTab, ReactNode>> = { tasks, changes, files, plan }
   const tabs = DOCK_TABS.filter((id) => id === 'tasks' || id === 'preview' || content[id] !== undefined)
-  // Tabs that have shown at least once stay mounted (hidden) after.
+  // Files and Plan review stay mounted (hidden) once they have shown.
   const [visited, setVisited] = useState<ReadonlySet<DockTab>>(() => new Set([tab]))
   useEffect(() => {
     setVisited((v) => (v.has(tab) ? v : new Set(v).add(tab)))
@@ -432,7 +436,7 @@ export function PreviewDock({
         </div>
       )}
       {onTabChange &&
-        (['files', 'plan'] as const)
+        (['changes', 'files', 'plan'] as const)
           .filter((id) => content[id] !== undefined)
           .map((id) => (
             <div
@@ -443,7 +447,8 @@ export function PreviewDock({
               aria-labelledby={`dock-tab-${id}`}
               hidden={tab !== id}
             >
-              {(tab === id || visited.has(id)) && content[id]}
+              {/* Changes reads git, so it renders only while it shows. */}
+              {(tab === id || (id !== 'changes' && visited.has(id))) && content[id]}
             </div>
           ))}
     </aside>
