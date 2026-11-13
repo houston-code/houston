@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -417,6 +419,42 @@ describe('fresh-install approval mode', () => {
     store.configureFreshInstallApprovalPolicy(() => 'full-auto')
     expect(store.getSettings().approvalPolicy).toBe('ask')
   })
+
+  it('keeps the bytes of a settings file that fails to parse before the first save replaces it', async () => {
+    // A hand edit with a trailing comma: everything the user configured is in here.
+    const original = '{"schemaVersion": 3, "permissionRules": [{"tool": "shell", "action": "deny"},]}'
+    writeFileSync(join(state.userData, 'settings.json'), original, 'utf8')
+    const store = await loadStore()
+    store.getSettings()
+    store.updateSettings({ approvalPolicy: 'ask' })
+    const copies = readdirSync(state.userData).filter((f) => f.startsWith('settings.json.corrupt-'))
+    expect(copies).toHaveLength(1)
+    const copy = join(state.userData, copies[0])
+    expect(readFileSync(copy, 'utf8')).toBe(original)
+    if (process.platform !== 'win32') expect(statSync(copy).mode & 0o777).toBe(0o600)
+    // The live file is now the saved defaults, so later loads don't copy it again.
+    JSON.parse(readFileSync(join(state.userData, 'settings.json'), 'utf8'))
+    store.getSettings()
+    expect(readdirSync(state.userData).filter((f) => f.startsWith('settings.json.corrupt-'))).toHaveLength(1)
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'moves a settings file it cannot read aside rather than saving over it',
+    async () => {
+      const path = join(state.userData, 'settings.json')
+      const original = JSON.stringify({ schemaVersion: SETTINGS_SCHEMA_VERSION, approvalPolicy: 'full-auto' })
+      writeFileSync(path, original, 'utf8')
+      chmodSync(path, 0o000) // e.g. left owned by root after a sudo run
+      const store = await loadStore()
+      store.getSettings()
+      store.updateSettings({ approvalPolicy: 'ask' })
+      const copies = readdirSync(state.userData).filter((f) => f.startsWith('settings.json.corrupt-'))
+      expect(copies).toHaveLength(1)
+      const copy = join(state.userData, copies[0])
+      chmodSync(copy, 0o600)
+      expect(readFileSync(copy, 'utf8')).toBe(original)
+    }
+  )
 
   it('falls back to ask when nothing configured it', async () => {
     const store = await loadStore()

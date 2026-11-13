@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import {
@@ -111,10 +111,18 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
+/**
+ * A lock held this long is abandoned whoever it names: the critical section is a few
+ * milliseconds of file work, and a crashed holder's pid can be reused by a live
+ * process, which would otherwise keep the lock looking held forever.
+ */
+const STALE_LOCK_MS = 10_000
+
 /** Whether a lock file names a process that no longer exists (it died holding it). */
 function lockIsStale(lock: string): boolean {
   let pid: number
   try {
+    if (Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) return true
     pid = Number(readFileSync(lock, 'utf8').trim())
   } catch {
     return false // gone already, or unreadable: let the next attempt find out
@@ -269,7 +277,10 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
         // Advance BEFORE firing so a fire that throws synchronously can't wedge the
         // schedule into refiring the same occurrence forever.
         s.lastFiredAt = at
-        s.nextRunAt = spec ? nextOccurrence(spec, new Date(at)) : null
+        // A 'once' is spent after this fire. Re-deriving it would re-read its local-time
+        // spec in the current zone, which after a time-zone change can name a later
+        // instant and fire it a second time.
+        s.nextRunAt = spec && spec.kind !== 'once' ? nextOccurrence(spec, new Date(at)) : null
         claimed.push({ ...s })
       }
       if (claimed.length > 0) {

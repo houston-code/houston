@@ -21,6 +21,19 @@ vi.mock('./userData', () => ({
   getUserDataDir: () => state.userData
 }))
 
+// Paths whose reads fail with this code, standing in for a file held open on Windows
+// (antivirus, another Houston) or one left unreadable after a sudo run.
+const readFailures = vi.hoisted(() => new Map<string, string>())
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const readFileSync = ((path: unknown, ...rest: unknown[]) => {
+    const code = typeof path === 'string' ? readFailures.get(path) : undefined
+    if (code) throw Object.assign(new Error(`${code}: resource busy or locked`), { code })
+    return (actual.readFileSync as (...a: unknown[]) => unknown)(path, ...rest)
+  }) as typeof actual.readFileSync
+  return { ...actual, default: { ...actual, readFileSync }, readFileSync }
+})
+
 // Store-issued ids are randomUUID()s; fixtures use fixed UUIDs so they pass the id guard.
 const ID_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const ID_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
@@ -135,6 +148,25 @@ describe('corrupt JSON', () => {
     const ids = listConversations().map((c) => c.id)
     expect(ids).toEqual([ID_B])
   })
+})
+
+describe('a file that cannot be read right now', () => {
+  afterEach(() => readFailures.clear())
+
+  it.each(['EBUSY', 'EPERM', 'EACCES', 'EMFILE'])(
+    'leaves it in place on %s and lists it again once readable',
+    async (code) => {
+      writeRaw(ID_A, JSON.stringify(legacyConv(ID_A)))
+      readFailures.set(convPath(ID_A), code)
+      const { listConversations } = await import('./conversations')
+      expect(listConversations()).toEqual([])
+      // Before: any read error quarantined the healthy chat for good.
+      expect(existsSync(`${convPath(ID_A)}.corrupt`)).toBe(false)
+      expect(existsSync(convPath(ID_A))).toBe(true)
+      readFailures.clear()
+      expect(listConversations().map((c) => c.id)).toEqual([ID_A])
+    }
+  )
 })
 
 describe('wrong-shape files', () => {
