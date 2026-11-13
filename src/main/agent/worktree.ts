@@ -58,6 +58,7 @@ const EMPTY_REPO: RepoInfo = {
   currentBranch: null,
   unborn: false,
   branches: [],
+  defaultBranch: null,
   isLinkedWorktreeRoot: false,
   exists: false
 }
@@ -160,7 +161,24 @@ export async function getRepoInfo(
   } catch {
     // best-effort — an empty list just means no base suggestions
   }
-  return { isRepo: true, root, currentBranch, unborn, branches, isLinkedWorktreeRoot, exists: true }
+  let originHead = ''
+  try {
+    originHead = (await exec(['symbolic-ref', '-q', '--short', 'refs/remotes/origin/HEAD'], workspace)).trim()
+  } catch {
+    // no origin, or origin/HEAD was never set: fall back to the conventional names
+  }
+  const defaultBranch = pickDefaultBranch(originHead, branches)
+  return { isRepo: true, root, currentBranch, unborn, branches, defaultBranch, isLinkedWorktreeRoot, exists: true }
+}
+
+/**
+ * The local branch that is the repo's mainline: the one `origin/HEAD` points at
+ * (`origin/main` → `main`), else `main`, else `master`, and only when it exists
+ * locally (the base picker lists local branches). null when none does. Pure.
+ */
+export function pickDefaultBranch(originHead: string, branches: string[]): string | null {
+  const fromOrigin = originHead.startsWith('origin/') ? originHead.slice('origin/'.length) : ''
+  return [fromOrigin, 'main', 'master'].find((b) => b && branches.includes(b)) ?? null
 }
 
 /** Append the worktrees-ignore line to `<repoRoot>/.git/info/exclude` if absent. Best-effort. */
