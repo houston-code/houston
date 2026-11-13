@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs'
+import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { writeFileAtomicSync } from './atomic-write'
 import { externalizeMedia, hydrateMedia, pruneMedia } from './conversationMedia'
@@ -194,6 +194,9 @@ function write(conv: Conversation): void {
   // and indentation more than doubled a chat full of nested subagent records, all of
   // it re-serialised on every save.
   writeFileAtomicSync(path, JSON.stringify(toWrite), 0o600)
+  // This process's own write: drop the cached metadata now rather than lean on the
+  // file's stamp, which a filesystem with coarse timestamps could repeat.
+  metaCache.delete(conv.id)
   pruneMedia(media, refs)
 }
 
@@ -306,15 +309,62 @@ export function importConversation(
   return conv
 }
 
+/**
+ * Each chat's list metadata, as of the file it was last read from. Listing used to read
+ * and parse every chat in full (megabytes of messages each) to return a few fields, on
+ * the main thread, several times a turn; with this, a list is one directory read, one
+ * stat per chat, and a parse of only the chats whose file changed.
+ *
+ * An entry is trusted only while its file's stamp (inode, mtime, size) is unchanged.
+ * Every writer, in this process or another (the terminal client, a headless run),
+ * replaces the file by rename, which changes the inode, so a write anywhere is seen on
+ * the next list without any other signal.
+ */
+const metaCache = new Map<string, { stamp: string; meta: ConversationMeta }>()
+
+/** A chat file's identity on disk, or null when it is gone. */
+function fileStamp(path: string): string | null {
+  try {
+    const st = statSync(path)
+    return `${st.ino}:${st.mtimeMs}:${st.size}`
+  } catch {
+    return null
+  }
+}
+
+/** For tests: forget every cached chat's metadata. */
+export function resetConversationListCache(): void {
+  metaCache.clear()
+}
+
 export function listConversations(): ConversationMeta[] {
   const files = readdirSync(dir()).filter((f) => f.endsWith('.json'))
   const metas: ConversationMeta[] = []
+  const seen = new Set<string>()
   for (const f of files) {
-    const conv = read(f.replace(/\.json$/, ''))
-    if (conv) {
-      metas.push(toMeta(conv))
+    const id = f.replace(/\.json$/, '')
+    if (!isConversationId(id)) continue
+    // Stamp first, read second: if the file is replaced in between, the entry holds
+    // newer metadata under an older stamp and is simply read again next time.
+    const stamp = fileStamp(filePath(id))
+    if (stamp === null) continue
+    seen.add(id)
+    const cached = metaCache.get(id)
+    if (cached && cached.stamp === stamp) {
+      metas.push({ ...cached.meta })
+      continue
     }
+    const conv = read(id)
+    if (!conv) {
+      metaCache.delete(id)
+      continue
+    }
+    const meta = toMeta(conv)
+    metaCache.set(id, { stamp, meta })
+    metas.push({ ...meta })
   }
+  // Chats deleted since the last list (here or by another process).
+  for (const id of metaCache.keys()) if (!seen.has(id)) metaCache.delete(id)
   return metas.sort((a, b) => b.updatedAt - a.updatedAt)
 }
 
@@ -396,6 +446,7 @@ export function deleteConversation(id: string): void {
   if (!isConversationId(id)) return
   const path = filePath(id)
   if (existsSync(path)) rmSync(path)
+  metaCache.delete(id)
   rmSync(mediaDir(id), { recursive: true, force: true })
   // Drop any in-memory "Allow for run" consent so a future conversation can't inherit it.
   clearConversationOverride(id)
