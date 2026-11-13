@@ -12,7 +12,7 @@ import { ultrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
-import type { AppSettings, ApprovalPolicy, ChatGroup, SelectedModel } from '@shared/types'
+import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel } from '@shared/types'
 import type {
   ConversationMeta,
   PlanDecision,
@@ -258,6 +258,18 @@ export default function App(): JSX.Element {
   }, [])
   // Worktree setup for a not-yet-started chat (shown inline in the control bar).
   const [repoInfo, setRepoInfo] = useState<RepoInfo | null>(null)
+  // Whether shell commands run confined on this host, for the control bar's badge.
+  const [sandbox, setSandbox] = useState<SandboxStatus | null>(null)
+  useEffect(() => {
+    let live = true
+    void window.api
+      .getSandboxStatus()
+      .then((s) => live && setSandbox(s))
+      .catch(() => undefined)
+    return () => {
+      live = false
+    }
+  }, [])
   const [worktreeMode, setWorktreeMode] = useState(true)
   const [branchName, setBranchName] = useState('')
   const [baseBranch, setBaseBranch] = useState('')
@@ -2782,6 +2794,7 @@ export default function App(): JSX.Element {
             onChangeReasoning={onChangeReasoning}
             onChangeWorkspace={onChangeWorkspace}
             onOpenSettings={() => setSettingsOpen(true)}
+            sandbox={sandbox}
             {...(currentId && chatSettings && savedSettings && differsFromDefaults(chatSettings, savedSettings)
               ? { onMakeDefault: () => void onMakeChatSettingsDefault() }
               : {})}

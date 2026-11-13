@@ -25,6 +25,8 @@ export const IPC = {
   appGetVersion: 'app:getVersion',
   /** Gather the /doctor health facts (sandbox, provider keys, MCP, binaries). */
   doctorFacts: 'app:doctorFacts',
+  /** Whether an OS sandbox confines shell commands on this host. */
+  sandboxStatus: 'app:sandboxStatus',
   /** Save a `#`-captured standing instruction to AGENTS.md (project or global). */
   memorySave: 'app:memorySave',
   /** A Memory settings page action (list, edit, delete, restore, pin, other repositories). */

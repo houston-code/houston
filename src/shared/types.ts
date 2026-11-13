@@ -240,6 +240,22 @@ export const APPROVAL_POLICY_LABEL: Record<ApprovalPolicy, string> = {
   'full-auto': 'Full auto'
 }
 
+/** What each approval policy lets the agent do without asking, in one line. */
+export const APPROVAL_POLICY_HINT: Record<ApprovalPolicy, string> = {
+  plan: 'The agent researches and proposes a plan; nothing is written or run.',
+  ask: 'Asks before every shell command and file write.',
+  'auto-edit': 'Reads and edits files in the workspace without asking; asks before shell commands.',
+  'full-auto': 'Runs everything without asking, still confined to the workspace sandbox.'
+}
+
+/** Whether this host has an OS sandbox that actually confines shell commands. */
+export interface SandboxStatus {
+  /** The sandbox backend's id (for example `seatbelt` or `bubblewrap`). */
+  backend: string
+  /** True when commands really run confined; false when there is nothing to confine them. */
+  enforced: boolean
+}
+
 /**
  * The approval policy a typed word names: an id (`auto-edit`), or the short command
  * names both clients accept (`/auto`, `/full`). Case-insensitive; null when it names

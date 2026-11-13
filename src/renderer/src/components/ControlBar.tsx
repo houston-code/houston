@@ -1,6 +1,14 @@
-import { APPROVAL_POLICY_LABEL, type AppSettings, type ApprovalPolicy, type SelectedModel } from '@shared/types'
+import {
+  APPROVAL_POLICIES,
+  APPROVAL_POLICY_HINT,
+  APPROVAL_POLICY_LABEL,
+  type AppSettings,
+  type ApprovalPolicy,
+  type SandboxStatus,
+  type SelectedModel
+} from '@shared/types'
 import type { SubagentSpend } from '@shared/subagents'
-import type { ConversationWorktree, ReasoningEffort, RepoInfo } from '@shared/agent'
+import { REASONING_EFFORTS, type ConversationWorktree, type ReasoningEffort, type RepoInfo } from '@shared/agent'
 import {
   contextPercent,
   resolveCapabilities,
@@ -14,6 +22,7 @@ import { branchNameError, canCreateWorktree } from '../lib/worktree'
 import { baseName } from '../lib/paths'
 import { ModelPicker } from './ModelPicker'
 import { CostBreakdown } from './CostBreakdown'
+import { ChoiceMenu, type Choice } from './ChoiceMenu'
 
 /** Approval-policy names, shared with the terminal so both clients say the same thing. */
 export const POLICY_LABEL = APPROVAL_POLICY_LABEL
@@ -28,6 +37,21 @@ const REASONING_LABEL: Record<ReasoningEffort, string> = {
   high: 'Think: high',
   xhigh: 'Think: xhigh'
 }
+
+/** What each effort level trades, shown under its name in the picker. */
+const REASONING_HINT: Record<ReasoningEffort, string> = {
+  off: 'No extra thinking. Fastest and cheapest; best for simple edits and questions.',
+  low: 'A little thinking. Quick, for routine changes.',
+  medium: 'Balanced speed and care.',
+  high: 'Thinks carefully before acting. Slower and costs more; best for real work.',
+  xhigh: 'Maximum effort, for the hardest problems. Slowest and most expensive.'
+}
+
+const POLICY_CHOICES: Choice<ApprovalPolicy>[] = APPROVAL_POLICIES.map((p) => ({
+  value: p,
+  label: APPROVAL_POLICY_LABEL[p],
+  hint: APPROVAL_POLICY_HINT[p]
+}))
 
 /**
  * The model / project / mode controls, plus token usage. Lives in a compact bar
@@ -53,6 +77,7 @@ export function ControlBar({
   onChangeWorkspace,
   onOpenSettings,
   onMakeDefault,
+  sandbox = null,
   subagentSpend = []
 }: {
   settings: AppSettings
@@ -86,6 +111,8 @@ export function ControlBar({
    * new chats. Set only while they differ from the defaults; the button hides otherwise.
    */
   onMakeDefault?: () => void
+  /** Whether shell commands run confined on this host; null until known (no badge). */
+  sandbox?: SandboxStatus | null
 }): JSX.Element {
   const provider = settings.providers.find((p) => p.id === selected?.providerId)
   const needsKey = provider?.requiresKey && !provider.hasKey
@@ -121,6 +148,14 @@ export function ControlBar({
   // In an open chat these controls change that chat only; on the new-chat screen
   // they set what new chats start with. Said in each tooltip.
   const scope = newChat ? ' (for new chats)' : ' (this chat only)'
+  const reasoningChoices: Choice<ReasoningEffort>[] = REASONING_EFFORTS.map((r) => ({
+    value: r,
+    label: r === 'off' && alwaysThinks ? 'Think: minimal' : REASONING_LABEL[r],
+    hint:
+      r === 'off' && alwaysThinks
+        ? 'This model always reasons; this runs it at its lowest effort with the reasoning hidden.'
+        : REASONING_HINT[r]
+  }))
 
   return (
     <div className="control-bar">
@@ -231,12 +266,12 @@ export function ControlBar({
       <div className="control-bar__group">
         <ModelPicker settings={settings} selected={selected} onSelect={onSelectModel} />
 
-        <select
-          className="control control--select"
+        <ChoiceMenu
           value={settings.reasoningEffort ?? DEFAULT_REASONING_EFFORT}
+          choices={reasoningChoices}
           disabled={!hasReasoning}
-          aria-label="Reasoning effort"
-          onChange={(e) => onChangeReasoning(e.target.value as ReasoningEffort)}
+          ariaLabel="Reasoning effort"
+          onChange={onChangeReasoning}
           title={
             !hasReasoning
               ? 'The selected model has no reasoning mode'
@@ -244,28 +279,31 @@ export function ControlBar({
                 ? `This model always reasons. Minimal runs it at the lowest effort with its reasoning hidden${scope}.`
                 : `How hard the model should think before answering${scope}`
           }
-        >
-          {(Object.keys(REASONING_LABEL) as ReasoningEffort[]).map((r) => (
-            <option key={r} value={r}>
-              {r === 'off' && alwaysThinks ? 'Think: minimal' : REASONING_LABEL[r]}
-            </option>
-          ))}
-        </select>
+        />
 
-        <select
-          className="control control--select"
+        <ChoiceMenu
           value={settings.approvalPolicy}
-          aria-label="Approval mode"
-          data-tour="approval"
-          onChange={(e) => onChangePolicy(e.target.value as ApprovalPolicy)}
+          choices={POLICY_CHOICES}
+          ariaLabel="Approval mode"
+          tourId="approval"
+          onChange={onChangePolicy}
           title={`How much the agent may do without asking${scope}`}
-        >
-          {(Object.keys(POLICY_LABEL) as ApprovalPolicy[]).map((p) => (
-            <option key={p} value={p}>
-              {POLICY_LABEL[p]}
-            </option>
-          ))}
-        </select>
+        />
+
+        {sandbox && (
+          <span
+            className={`control control--sandbox${sandbox.enforced ? '' : ' control--sandbox-off'}`}
+            role="status"
+            title={
+              sandbox.enforced
+                ? `Shell commands run inside the operating system sandbox (${sandbox.backend}): they can write only to this project and reach only allowed sites.`
+                : 'This computer has no sandbox Houston can use, so shell commands are not confined. Houston asks before running them.'
+            }
+          >
+            <Icon name={sandbox.enforced ? 'shield' : 'warning'} size={13} className="control__icon" />
+            <span className="control__text">{sandbox.enforced ? 'Sandboxed' : 'No sandbox'}</span>
+          </span>
+        )}
 
         {onMakeDefault && (
           <button

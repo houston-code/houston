@@ -14,16 +14,17 @@ test('model picker opens upward, fully on-screen, in advanced-first order', asyn
     await expect(page.locator('.app')).toBeVisible()
 
     // The trigger's title is a dynamic tooltip (the selected model name), so match on
-    // its stable listbox-combobox role instead.
-    const trigger = page.locator('[role="combobox"][aria-haspopup="listbox"]')
+    // its listbox-combobox role plus its own class: the reasoning and approval pickers
+    // beside it are listbox comboboxes too.
+    const trigger = page.locator('[role="combobox"][aria-haspopup="listbox"].control--model')
     await expect(trigger).toBeVisible()
     await trigger.click()
-    await expect(page.locator('[role="listbox"]')).toBeVisible()
+    await expect(page.locator('.model-menu [role="listbox"]')).toBeVisible()
 
     const info = await page.evaluate(() => {
       // The popover (search field + list) is what scrolls and what must stay on-screen.
       const menu = document.querySelector('.model-menu') as HTMLElement
-      const trig = document.querySelector('[role="combobox"][aria-haspopup="listbox"]') as HTMLElement
+      const trig = document.querySelector('[role="combobox"][aria-haspopup="listbox"].control--model') as HTMLElement
       const opts = Array.from(menu.querySelectorAll('[role="option"]')) as HTMLElement[]
       return {
         innerHeight: window.innerHeight,

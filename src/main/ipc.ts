@@ -10,10 +10,12 @@ import type {
   FolderTrustStatus,
   LegacyRulesDecideResult,
   MenuState,
-  PermissionRule
+  PermissionRule,
+  SandboxStatus
 } from '@shared/types'
 import { isApprovalPolicy } from '@shared/types'
 import { cleanupPermissionRules } from './agent/permissions'
+import { activeBackendId, isSandboxed } from './sandbox'
 import { describePermissionPolicy, defaultPolicyDeps, testPermission } from './permissionPolicy'
 import { getRuleUsage } from './ruleUsage'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
@@ -507,6 +509,11 @@ export function registerIpc(): void {
     const cwd = typeof workspace === 'string' ? workspace : ''
     return gatherDoctorFacts(cwd, { version: APP_VERSION, update: null })
   })
+  // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
+  ipcMain.handle(
+    IPC.sandboxStatus,
+    (): SandboxStatus => ({ backend: activeBackendId(), enforced: isSandboxed() })
+  )
   // `#`-capture: save a standing instruction to the workspace's AGENTS.md (project)
   // or ~/.houston/AGENTS.md (global), the files Houston already loads every run.
   // Returns the path written, or null when the input is malformed. Text is capped

@@ -274,6 +274,11 @@ list, and pick a model.
 
 A chat's model, reasoning effort, and approval mode belong to that chat.
 
+In the desktop app, the reasoning and approval pickers above the message box list
+every option with a line saying what it does. Next to them a badge reads
+**Sandboxed** when shell commands run confined by the operating system, or
+**No sandbox** when this computer has none Houston can use.
+
 - Changing one in a chat changes that chat only. Other chats, including ones running
   at the same time, keep theirs.
 - Reopening a chat (or resuming it with `/resume`) brings back the settings it was

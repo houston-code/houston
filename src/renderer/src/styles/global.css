@@ -1467,6 +1467,64 @@ body.is-resizing {
   background-size: 4px 4px, 4px 4px;
   background-repeat: no-repeat;
 }
+/* A choice menu's trigger sizes to its label like the native select it replaced. */
+.control--choice {
+  cursor: pointer;
+}
+.control--choice:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+/* Read-only badge saying whether shell commands run confined. */
+.control--sandbox {
+  cursor: default;
+  color: var(--text-dim);
+}
+.control--sandbox-off {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.choice-menu {
+  width: min(360px, calc(100vw - 16px));
+}
+.choice-menu__list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.choice-menu__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  white-space: normal;
+  padding: 7px 9px;
+}
+.choice-menu__item.is-selected {
+  background: var(--bg-hover);
+}
+.choice-menu__check {
+  flex: none;
+  width: 12px;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.choice-menu__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.choice-menu__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.choice-menu__hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
 .control--warn {
   border-color: var(--warn);
   color: var(--warn);

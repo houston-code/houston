@@ -340,15 +340,19 @@ describe('ControlBar reasoning control', () => {
 
   it('labels off as minimal on a Claude model that always reasons', () => {
     render(<ControlBar {...withModel('claude-opus-5-5')} />)
-    const select = screen.getByRole('combobox', { name: 'Reasoning effort' })
-    expect(within(select).getByRole('option', { name: 'Think: minimal' })).toBeInTheDocument()
-    expect(select.getAttribute('title')).toMatch(/always reasons/)
+    const picker = screen.getByRole('combobox', { name: 'Reasoning effort' })
+    expect(picker.getAttribute('title')).toMatch(/always reasons/)
+    fireEvent.click(picker)
+    const list = screen.getByRole('listbox', { name: 'Reasoning effort' })
+    expect(within(list).getByRole('option', { name: /^Think: minimal/ })).toBeInTheDocument()
+    expect(within(list).queryByRole('option', { name: /^Think: off/ })).toBeNull()
   })
 
   it('keeps "Think: off" on a model that can stop reasoning', () => {
     render(<ControlBar {...withModel('claude-opus-4-8')} />)
-    const select = screen.getByRole('combobox', { name: 'Reasoning effort' })
-    expect(within(select).getByRole('option', { name: 'Think: off' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('combobox', { name: 'Reasoning effort' }))
+    const list = screen.getByRole('listbox', { name: 'Reasoning effort' })
+    expect(within(list).getByRole('option', { name: /^Think: off/ })).toBeInTheDocument()
   })
 
   it('offers "Use for new chats" only when given the action, and calls it', () => {
@@ -377,6 +381,49 @@ describe('ControlBar reasoning control', () => {
       'title',
       expect.stringContaining('(for new chats)')
     )
+  })
+})
+
+describe('ControlBar mode and effort pickers', () => {
+  it('explains every approval mode in the menu and reports the one picked', () => {
+    const props = baseProps()
+    render(<ControlBar {...props} />)
+    const picker = screen.getByRole('combobox', { name: 'Approval mode' })
+    expect(picker).toHaveTextContent('Ask every time')
+    fireEvent.click(picker)
+    const list = screen.getByRole('listbox', { name: 'Approval mode' })
+    const options = within(list).getAllByRole('option')
+    expect(options).toHaveLength(4)
+    expect(within(list).getByRole('option', { selected: true })).toHaveTextContent('Ask every time')
+    expect(list).toHaveTextContent('nothing is written or run')
+    expect(list).toHaveTextContent('still confined to the workspace sandbox')
+    fireEvent.click(within(list).getByRole('option', { name: /^Full auto/ }))
+    expect(props.onChangePolicy).toHaveBeenCalledWith('full-auto')
+    expect(screen.queryByRole('listbox', { name: 'Approval mode' })).toBeNull()
+  })
+
+  it('explains each effort level and reports the one picked', () => {
+    const props = baseProps()
+    props.settings.providers[0].models = [{ id: 'claude-opus-4-8' }]
+    props.selected = { providerId: 'anthropic', model: 'claude-opus-4-8' }
+    render(<ControlBar {...props} />)
+    fireEvent.click(screen.getByRole('combobox', { name: 'Reasoning effort' }))
+    const list = screen.getByRole('listbox', { name: 'Reasoning effort' })
+    expect(within(list).getAllByRole('option')).toHaveLength(5)
+    expect(list).toHaveTextContent('Fastest and cheapest')
+    fireEvent.click(within(list).getByRole('option', { name: /^Think: low/ }))
+    expect(props.onChangeReasoning).toHaveBeenCalledWith('low')
+  })
+
+  it('shows whether shell commands are sandboxed, and nothing until that is known', () => {
+    const { rerender } = render(<ControlBar {...baseProps()} />)
+    expect(screen.queryByRole('status')).toBeNull()
+    rerender(<ControlBar {...baseProps()} sandbox={{ backend: 'seatbelt', enforced: true }} />)
+    expect(screen.getByRole('status')).toHaveTextContent('Sandboxed')
+    expect(screen.getByRole('status').getAttribute('title')).toMatch(/seatbelt/)
+    rerender(<ControlBar {...baseProps()} sandbox={{ backend: 'none', enforced: false }} />)
+    expect(screen.getByRole('status')).toHaveTextContent('No sandbox')
+    expect(screen.getByRole('status').getAttribute('title')).toMatch(/asks before running/)
   })
 })
 
