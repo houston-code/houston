@@ -1599,7 +1599,16 @@ export async function startRun(
     // boundary, so they are NEVER auto-run for an opened repo — only when the user
     // has explicitly opted into project plugins for a trusted project. See
     // plugins.ts for the trust boundary.
-    const plugins = await loadPluginsIfEnabled(workspace, settings.projectPlugins)
+    // A plugin failure goes to houston.log and shows once per distinct failure as a
+    // run notice; never to stderr, which would draw over the terminal UI.
+    const pluginWarningsShown = new Set<string>()
+    const plugins = await loadPluginsIfEnabled(workspace, settings.projectPlugins, (msg) => {
+      const safe = scrubError(msg)
+      log.warn(safe)
+      if (pluginWarningsShown.has(safe)) return
+      pluginWarningsShown.add(safe)
+      emit({ type: 'notice', message: safe })
+    })
     const agentsByName = new Map(agents.map((a) => [a.name, a]))
     const capabilities = buildCapabilities(
       agents,

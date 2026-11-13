@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
+import { log } from '../logger'
 
 /**
  * Local plugins: small JS files in `.houston/plugins/*.js` that register
@@ -41,7 +42,13 @@ import vm from 'node:vm'
  *     a trust boundary), but it removes the easy footguns and documents intent.
  *  3. Every hook invocation is wrapped in try/catch and a wall-clock timeout, so
  *     a throwing or slow plugin degrades to a logged warning instead of stalling
- *     or crashing the agent loop.
+ *     or crashing the agent loop. The synchronous part of each call runs under a
+ *     `vm` watchdog (`runInContext` with `timeout`), so a busy loop or runaway
+ *     regex is terminated at the budget instead of freezing the main process; an
+ *     async listener's later continuations run outside the watchdog and are only
+ *     bounded by the promise timeout (they are abandoned, not interrupted).
+ *  4. Warnings go to the file logger (and, from the loop, to a run notice), never
+ *     to stderr, which would draw over the terminal UI.
  *
  * If you need a plugin that can block tools or reach the network, that's a larger
  * design question (sandboxing, capability grants, approval UX) — out of scope
@@ -132,8 +139,10 @@ export class PluginHost {
     // the loop relies on, and one plugin can't see another's edits.
     const frozen = freezeDeep(structuredCopy(payload))
     for (const reg of listeners) {
+      const started = Date.now()
       try {
-        await withTimeout(Promise.resolve(reg.fn(frozen)), HOOK_TIMEOUT_MS)
+        const result = callUnderWatchdog(reg.fn, frozen, HOOK_TIMEOUT_MS)
+        await withTimeout(Promise.resolve(result), Math.max(0, HOOK_TIMEOUT_MS - (Date.now() - started)))
       } catch (e) {
         this.warn(`[plugin:${reg.plugin}] ${event} failed: ${errMessage(e)}`)
       }
@@ -141,8 +150,42 @@ export class PluginHost {
   }
 }
 
+/**
+ * A dedicated context whose only job is to host the watchdog call. The listener
+ * and payload are injected as globals for the duration of one synchronous
+ * `runInContext`, which V8 terminates when `timeout` elapses. That interrupts any
+ * JS running on the thread during the call, including a listener compiled in a
+ * plugin's own context or in the main realm.
+ */
+const watchdogContext = vm.createContext(Object.create(null))
+const watchdogScript = new vm.Script('__houstonListener(__houstonPayload)', {
+  filename: 'houston-plugin-watchdog'
+})
+
+/**
+ * Call `fn(payload)` with its synchronous part bounded by `timeoutMs`. Returns
+ * whatever the listener returns (a promise for an async listener). Throws the
+ * listener's own error, or a "timed out" error when the watchdog fired.
+ */
+function callUnderWatchdog(fn: Listener, payload: unknown, timeoutMs: number): unknown {
+  const ctx = watchdogContext as Record<string, unknown>
+  ctx.__houstonListener = fn
+  ctx.__houstonPayload = payload
+  try {
+    return watchdogScript.runInContext(watchdogContext, { timeout: Math.max(1, timeoutMs) })
+  } catch (e) {
+    if ((e as { code?: unknown } | null)?.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') {
+      throw new Error(`timed out after ${timeoutMs}ms`, { cause: e })
+    }
+    throw e
+  } finally {
+    ctx.__houstonListener = undefined
+    ctx.__houstonPayload = undefined
+  }
+}
+
 function defaultWarn(msg: string): void {
-  console.warn(msg)
+  log.warn(msg)
 }
 
 function errMessage(e: unknown): string {

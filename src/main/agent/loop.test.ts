@@ -123,6 +123,10 @@ const h = vi.hoisted(() => ({
   // A plugin event whose emit throws, standing in for an error nothing in the loop
   // handles. Null (the default) never throws.
   pluginThrowOn: null as string | null,
+  // A plugin event on which the host reports a listener failure through the warn
+  // callback the loop passed in (twice, to exercise the once-per-error dedupe).
+  pluginWarnOn: null as string | null,
+  pluginWarn: null as ((msg: string) => void) | null,
   // Known secret values the tool-result redactor should strip; set per test.
   secrets: [] as string[],
   // Models the mock provider config lists, for dispatch/review model-override tests.
@@ -246,13 +250,23 @@ vi.mock('./plugins', () => {
     emit: async (event: string, payload: unknown) => {
       h.pluginEvents.push({ event, payload })
       if (h.pluginThrowOn === event) throw new Error(`unhandled failure in ${event}`)
+      if (h.pluginWarnOn === event) {
+        h.pluginWarn?.(`[plugin:spin.js] ${event} failed: timed out after 1000ms`)
+        h.pluginWarn?.(`[plugin:spin.js] ${event} failed: timed out after 1000ms`)
+      }
     }
   }
   const emptyHost = { has: () => false, size: 0, emit: async () => {} }
   return {
     loadPlugins: async () => recordingHost,
-    loadPluginsIfEnabled: async (_ws: string, enabled: boolean | undefined) =>
-      enabled === true ? recordingHost : emptyHost
+    loadPluginsIfEnabled: async (
+      _ws: string,
+      enabled: boolean | undefined,
+      warn?: (msg: string) => void
+    ) => {
+      h.pluginWarn = warn ?? null
+      return enabled === true ? recordingHost : emptyHost
+    }
   }
 })
 
@@ -314,6 +328,8 @@ beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-loop-'))
   h.pluginEvents = []
   h.pluginThrowOn = null
+  h.pluginWarnOn = null
+  h.pluginWarn = null
   h.addedRules = []
   h.usedRules = []
   h.unavailableCalls = []
@@ -4074,6 +4090,35 @@ describe('ask_user', () => {
     expect(start?.payload).toMatchObject({ tool: 'read_file', input: { path: 'note.txt' } })
     const toolResult = h.pluginEvents.find((e) => e.event === 'onToolResult')
     expect(toolResult?.payload).toMatchObject({ tool: 'read_file', ok: true })
+  })
+
+  it('surfaces a plugin failure as one run notice instead of writing to stderr', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'hi')
+    h.pluginWarnOn = 'onToolStart'
+    const stderr = vi.spyOn(process.stderr, 'write')
+    const consoleWarn = vi.spyOn(console, 'warn')
+    try {
+      const r = await run({
+        policy: 'full-auto',
+        userText: 'read the note',
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const notices = r.events.filter(
+        (e) => e.type === 'notice' && (e as { message: string }).message.includes('spin.js')
+      )
+      expect(notices).toHaveLength(1)
+      expect(consoleWarn).not.toHaveBeenCalled()
+      expect(stderr.mock.calls.some((c) => String(c[0]).includes('spin.js'))).toBe(false)
+    } finally {
+      stderr.mockRestore()
+      consoleWarn.mockRestore()
+    }
   })
 
   it('does not run workspace plugins when projectPlugins is off (default)', async () => {

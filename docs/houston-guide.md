@@ -2253,6 +2253,10 @@ logging, metrics, or notifications:
 - **Observe only.** A plugin can't block or change a call; use a PreToolUse shell hook
   for that.
 - **Can't break a run.** A plugin that throws or runs slowly is caught and ignored.
+  Each hook call gets 1 second: synchronous code still running then (a busy loop, a
+  runaway regex) is stopped, so a stuck plugin can't freeze the app or the terminal.
+- **Failures are reported, not printed.** A plugin error is written to `houston.log`
+  and shown once as a notice in the chat.
 
 ## MCP servers
 
