@@ -190,6 +190,8 @@ export const IPC = {
   chatMarkAllRead: 'chat:markAllRead',
   /** Main → renderer: open this chat (its desktop notification was clicked). */
   chatOpenRequest: 'chat:openRequest',
+  /** main → renderer: play an attention sound (the window is not focused). */
+  attentionSound: 'attention:sound',
   agentEvent: 'agent:event',
   // Session proposals (propose_session cards)
   /** Renderer → main: start a proposed session as its own chat. */

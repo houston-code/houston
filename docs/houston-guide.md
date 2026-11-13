@@ -997,6 +997,15 @@ quiet, and stopping a run yourself never pings you (you're obviously there).
 - Notifications use the terminal's own channel, so they need no extra tools. Not every
   terminal supports them; the bell works everywhere.
 
+**In the desktop app**, a native notification fires for the same events while
+Houston isn't the focused window, and clicking it opens that chat. Settings >
+General > Notifications can also **play a sound**: a short rising chime when a turn
+finishes (or fails), and a soft double knock when the agent needs your input (an
+approval, a question, a plan to review, or a server's form). Sounds are off by
+default, play only while Houston isn't the focused window, and work independently of
+notifications. Turning the setting on plays the chime once so you know what to
+expect.
+
 ## How hard the model thinks (/reasoning)
 
 | Command | Does |

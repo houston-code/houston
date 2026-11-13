@@ -286,7 +286,9 @@ Open source under the [Apache License 2.0](LICENSE).
   opens/merges a pull request while the window isn't focused, and clicking it
   brings the app back. PR events also show inline in the transcript: a notice
   banner when `gh_pr_create` opens a PR and when a `gh_pr_view` shows it merged.
-  On by default; toggle it in Settings → *General*.
+  On by default; toggle it in Settings → *General*. An optional, off-by-default
+  setting there also plays a short sound when a turn finishes or the agent needs
+  your input while the window isn't focused.
 - **Rich transcript.** Replies render as full **Markdown**: headings, lists,
   tables, blockquotes, and syntax-styled code blocks with one-click copy. Tool
   activity collapses into a compact, grouped list (one tidy row per call,

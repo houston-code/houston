@@ -773,6 +773,11 @@ export interface AppSettings {
    * unread replies. On by default.
    */
   appBadge?: boolean
+  /**
+   * Play a short sound when a turn finishes and when the agent needs input (approval,
+   * question, plan) while Houston isn't the focused window. Off by default.
+   */
+  attentionSounds?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
   /**

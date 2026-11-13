@@ -110,7 +110,8 @@ import type { MemoryResponse } from '@shared/memoryTypes'
 import { decideLegacyRulesNotice, legacyRulesNoticeApplies } from './globalRules'
 import { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } from './legacyRulesNotice'
 import { MAX_MEMORY_NOTE } from '@shared/memory'
-import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
+import { notifyAgentEvent, workspaceLabel } from './notifications'
+import { attentionSignals } from '@shared/notify'
 import {
   restoreCheckpoint,
   reapplyCheckpoint,
@@ -289,19 +290,22 @@ function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): 
 }
 
 /**
- * Fire a native desktop notification for a notable agent event (turn finished,
- * approval/question needed, error) when Houston isn't focused. Cheap gates first —
- * the setting being off, or an event that never notifies — so streaming deltas
- * don't pay for the conversation lookup. Every agent event flows through emitEvent,
- * so this also covers queued follow-up runs.
+ * Pull the user back for a notable agent event while Houston isn't focused: a native
+ * desktop notification (turn finished, approval/question needed, error, PR) and,
+ * when the user turned them on, an attention sound (turn ended, input needed). Cheap
+ * gates first (the settings being off, or an event that never signals) so streaming
+ * deltas don't pay for the conversation lookup. Every agent event flows through
+ * emitEvent, so this also covers queued follow-up runs.
  */
 function maybeNotify(sender: WebContents, conversationId: string, e: AgentEvent): void {
-  if (getSettings().desktopNotifications === false) return
-  if (!notificationFor(e)) return
-  // Nothing is shown while the window is focused (notifyAgentEvent's own gate), so
+  const signals = attentionSignals(e, getSettings())
+  if (!signals) return
+  // Nothing is signalled while the window is focused (the user is watching), so
   // don't parse the chat file just to label a notification that won't appear.
   const win = BrowserWindow.fromWebContents(sender)
   if (win && !win.isDestroyed() && win.isFocused()) return
+  if (signals.sound && !sender.isDestroyed()) sender.send(IPC.attentionSound, signals.sound)
+  if (!signals.notify) return
   const conv = peekConversation(conversationId)
   notifyAgentEvent(e, win, {
     enabled: true,
