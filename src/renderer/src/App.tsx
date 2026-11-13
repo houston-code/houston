@@ -12,7 +12,7 @@ import { ultrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
-import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel } from '@shared/types'
+import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel, SidebarGroupBy } from '@shared/types'
 import type {
   ConversationMeta,
   PlanDecision,
@@ -119,6 +119,7 @@ import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer, IDLE_ONLY_COMMANDS } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
+import { ImportNotice } from './components/ImportNotice'
 import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
@@ -1154,6 +1155,14 @@ export default function App(): JSX.Element {
       sidebarUnreadFirst: !current.sidebarUnreadFirst
     })
     setSettings(fresh)
+  }, [])
+
+  const onSetSidebarGroupBy = useCallback(async (by: SidebarGroupBy | undefined) => {
+    const current = await window.api.getSettings()
+    const next = { ...current }
+    if (by) next.sidebarGroupBy = by
+    else delete next.sidebarGroupBy
+    setSettings(await window.api.saveSettings(next))
   }, [])
 
   const onSetArchived = useCallback(
@@ -2822,6 +2831,8 @@ export default function App(): JSX.Element {
         onMarkAllRead={onMarkAllRead}
         unreadFirst={settings.sidebarUnreadFirst ?? false}
         onToggleUnreadFirst={onToggleUnreadFirst}
+        {...(settings.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {})}
+        onSetGroupBy={(by) => void onSetSidebarGroupBy(by)}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
         statusCounts={statusCounts}
@@ -2968,6 +2979,8 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            toolsExpanded={settings?.toolOutputExpanded === true}
+            showReasoning={settings?.showReasoning === true}
             {...(currentId && lastTurn && !chat.running ? { onRetryLast: () => void onRetryLast() } : {})}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
@@ -2988,6 +3001,15 @@ export default function App(): JSX.Element {
         />
 
         <GlobalRulesNotice onDecided={setSettings} />
+
+        <ImportNotice
+          workspace={workspace}
+          onReview={() => {
+            setSettingsSection('import')
+            setSettingsQuery('')
+            setSettingsOpen(true)
+          }}
+        />
 
         <EnvKeyNotice
           // A key stored with no model picked yet starts on that provider's default,

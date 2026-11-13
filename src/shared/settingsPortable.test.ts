@@ -136,6 +136,8 @@ describe('import checks per preference', () => {
     ['codeTheme', 'muted', 'neon'],
     ['htmlVisuals', true, {}],
     ['suggestNextPrompt', true, 'yes'],
+    ['toolOutputExpanded', true, 'open'],
+    ['showReasoning', false, 1],
     ['memoryEnabled', false, 'yes'],
     ['keybindings', { 'open-settings': 'Mod+,', 'toggle-sidebar': null }, { 'open-settings': 5 }],
     ['sandboxEgress', { mode: 'allowlist', allow: ['corp.example'], deny: [] }, { mode: 'open' }]
