@@ -79,6 +79,58 @@ export type SseConnectFn = (
 export type FetchFn = (url: string, init: RequestInit) => Promise<Response>
 
 /**
+ * Largest single message (one SSE event, or one line of a stdio server) accepted from
+ * an MCP server, in characters. A server that sends more without ending the message is
+ * treated as broken rather than buffered without limit.
+ */
+export const MAX_MCP_MESSAGE_CHARS = 64 * 1024 * 1024
+
+/**
+ * Collects a streamed SSE body and returns each event once it is complete.
+ *
+ * Re-parsing the whole buffer on every network chunk re-scanned a large event from the
+ * start each time (quadratic: a 20 MB result took seconds). This keeps the chunks apart
+ * and only joins and parses them when one could have ended an event, which a blank
+ * line does; the last few characters of the previous chunk are checked too, since the
+ * blank line can be split across two chunks.
+ */
+export class SseEventBuffer {
+  private chunks: string[] = []
+  private chars = 0
+  /** The end of what is buffered: enough to spot a blank line split across chunks. */
+  private tail = ''
+
+  /** Add decoded text; returns the events it completed. Throws past the message cap. */
+  push(text: string): SseEvent[] {
+    if (!text) return []
+    const probe = this.tail + text
+    this.tail = probe.slice(-3)
+    this.chunks.push(text)
+    this.chars += text.length
+    if (!/\r?\n\r?\n/.test(probe)) {
+      if (this.chars > MAX_MCP_MESSAGE_CHARS) {
+        throw new Error(`MCP server sent an event larger than ${MAX_MCP_MESSAGE_CHARS / 1024 / 1024} MB`)
+      }
+      return []
+    }
+    const { events, rest } = parseSseEvents(this.chunks.join(''))
+    this.chunks = rest ? [rest] : []
+    this.chars = rest.length
+    this.tail = rest.slice(-3)
+    return events
+  }
+
+  /** The stream ended: return what is left as a final event, if anything. */
+  finish(text = ''): SseEvent[] {
+    const rest = this.chunks.join('') + text
+    this.chunks = []
+    this.chars = 0
+    this.tail = ''
+    return rest.trim() ? parseSseEvents(`${rest}\n\n`).events : []
+  }
+}
+
+/**
  * Parse a raw SSE event-stream chunk-buffer into discrete events. Returns the
  * complete events and the unterminated remainder (kept for the next chunk).
  * Events are separated by a blank line; `event:`/`data:` lines accumulate.
@@ -129,14 +181,11 @@ export const openEventSourceStream: SseConnectFn = (url, headers, { onEvent, onE
       }
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
-      let buffer = ''
+      const buffer = new SseEventBuffer()
       for (;;) {
         const { value, done } = await reader.read()
         if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const { events, rest } = parseSseEvents(buffer)
-        buffer = rest
-        for (const e of events) onEvent(e)
+        for (const e of buffer.push(decoder.decode(value, { stream: true }))) onEvent(e)
       }
       if (!cancelled) onError(new Error('SSE stream closed'))
     } catch (err) {

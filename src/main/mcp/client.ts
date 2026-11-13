@@ -1,6 +1,7 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { StringDecoder } from 'node:string_decoder'
+import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
 import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
 import { sanitizeChildEnv } from '../childEnv'
 import {
@@ -168,7 +169,9 @@ export class McpClient {
   private child?: ChildProcessWithoutNullStreams
   private nextId = 1
   private readonly pending = new PendingRequests()
-  private buffer = ''
+  /** The unfinished line so far, in pieces: joined once its newline arrives. */
+  private partial: string[] = []
+  private partialChars = 0
   private readonly decoder = new StringDecoder('utf8')
   /** The end of what the server wrote to stderr, to say why it exited. */
   private stderrTail = ''
@@ -317,12 +320,31 @@ export class McpClient {
   private onData(chunk: Buffer): void {
     // Decoded as a stream: a multibyte character split across two pipe chunks would
     // otherwise decode as two replacement characters, corrupting the message text.
-    this.buffer += this.decoder.write(chunk)
+    const text = this.decoder.write(chunk)
+    // Only the new text is searched for a newline, and a long line's pieces are joined
+    // once, when it ends. Appending to one buffer and searching it from the start on
+    // every chunk made a large message cost time proportional to its size squared.
+    let from = 0
     let nl: number
-    while ((nl = this.buffer.indexOf('\n')) >= 0) {
-      const line = this.buffer.slice(0, nl).trim()
-      this.buffer = this.buffer.slice(nl + 1)
+    while ((nl = text.indexOf('\n', from)) >= 0) {
+      const piece = text.slice(from, nl)
+      const line = (this.partial.length ? this.partial.join('') + piece : piece).trim()
+      this.partial = []
+      this.partialChars = 0
+      from = nl + 1
       if (line) this.handleLine(line)
+    }
+    if (from < text.length) {
+      const rest = text.slice(from)
+      this.partial.push(rest)
+      this.partialChars += rest.length
+      if (this.partialChars > MAX_MCP_MESSAGE_CHARS) {
+        // A server that never ends its message is broken; don't buffer it without limit.
+        this.partial = []
+        this.partialChars = 0
+        this.failAll(`MCP server sent a message larger than ${MAX_MCP_MESSAGE_CHARS / 1024 / 1024} MB`)
+        this.close()
+      }
     }
   }
 

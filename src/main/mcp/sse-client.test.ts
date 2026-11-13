@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { version as PKG_VERSION } from '../../../package.json'
 import {
   McpSseClient,
+  MAX_MCP_MESSAGE_CHARS,
+  SseEventBuffer,
   parseSseEvents,
   type FetchFn,
   type SseConnectFn,
@@ -367,5 +369,42 @@ describe('McpSseClient protocol-version negotiation', () => {
     const client = new McpSseClient(s.connect, s.fetch)
     await expect(client.connect({ url: 'https://x/sse' })).rejects.toThrow(McpUnsupportedProtocolError)
     expect(s.posts.map((p) => p.body.method)).toEqual(['initialize'])
+  })
+})
+
+describe('SseEventBuffer', () => {
+  const stream = [
+    'event: endpoint\r\ndata: /messages?s=1\r\n\r\n',
+    `data: {"big":"${'y'.repeat(5000)}"}\n\n`,
+    ': a comment\n\n',
+    'data: line1\ndata: line2\n\n',
+    'event: custom\n\n',
+    'data: {"tail":true}'
+  ].join('')
+
+  it('returns the same events as parsing the whole stream, however it is chunked', () => {
+    const whole = parseSseEvents(`${stream}\n\n`).events
+    let seed = 4
+    const rnd = (): number => ((seed = (seed * 1664525 + 1013904223) >>> 0), seed / 2 ** 32)
+    for (let round = 0; round < 50; round++) {
+      const buf = new SseEventBuffer()
+      const got = []
+      for (let i = 0; i < stream.length; ) {
+        // Small pieces, so blank lines are often split between two of them.
+        const n = 1 + Math.floor(rnd() * (round % 2 ? 4 : 300))
+        got.push(...buf.push(stream.slice(i, i + n)))
+        i += n
+      }
+      got.push(...buf.finish())
+      expect(got).toEqual(whole)
+    }
+  })
+
+  it('throws instead of buffering an event past the cap', () => {
+    const buf = new SseEventBuffer()
+    const block = 'a'.repeat(1024 * 1024)
+    expect(() => {
+      for (let i = 0; i <= MAX_MCP_MESSAGE_CHARS / block.length; i++) buf.push(block)
+    }).toThrow(/larger than/)
   })
 })

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { version as PKG_VERSION } from '../../../package.json'
+import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
 import { McpClient, type SpawnFn } from './client'
 import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
 
@@ -291,6 +292,73 @@ describe('McpClient (fake stdio server)', () => {
     await client.connect({ command: 'fake' })
     expect(await client.callTool('echo', {})).toBe('café')
     client.close()
+  })
+
+  /** A fake server whose every reply is cut into pieces by `split`, which may also batch several lines. */
+  function choppedServer(callText: string, split: (bytes: Buffer) => Buffer[]): { client: McpClient; killed: () => boolean } {
+    const stdout = new EventEmitter()
+    let killed = false
+    const stdin = Object.assign(new EventEmitter(), {
+      write(line: string): boolean {
+        const msg = JSON.parse(line.trim()) as { id?: number; method: string }
+        if (msg.id === undefined) return true
+        const result =
+          msg.method === 'tools/list'
+            ? { tools: [{ name: 'echo' }] }
+            : msg.method === 'tools/call'
+              ? { content: [{ type: 'text', text: callText }] }
+              : {}
+        // A notification first, then the reply, so one chunk can carry the end of one
+        // line and the start of the next.
+        const bytes = Buffer.from(
+          `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/message', params: {} })}\n${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`
+        )
+        queueMicrotask(() => {
+          for (const piece of split(bytes)) stdout.emit('data', piece)
+        })
+        return true
+      }
+    })
+    const child = Object.assign(new EventEmitter(), {
+      stdout,
+      stdin,
+      stderr: new EventEmitter(),
+      kill: () => {
+        killed = true
+      }
+    })
+    return { client: new McpClient((() => child) as unknown as SpawnFn), killed: () => killed }
+  }
+
+  it('reads replies cut at random points, including inside a character and across lines', async () => {
+    let seed = 9
+    const rnd = (): number => ((seed = (seed * 1664525 + 1013904223) >>> 0), seed / 2 ** 32)
+    const text = `naïve café ✓ 世界 ${'x'.repeat(3000)}`
+    const { client } = choppedServer(text, (bytes) => {
+      const out: Buffer[] = []
+      for (let i = 0; i < bytes.length; ) {
+        const n = 1 + Math.floor(rnd() * 40)
+        out.push(bytes.subarray(i, i + n))
+        i += n
+      }
+      return out
+    })
+    await client.connect({ command: 'fake' })
+    expect(await client.callTool('echo', {})).toBe(text)
+    expect(await client.callTool('echo', {})).toBe(text)
+    client.close()
+  })
+
+  it('drops a server that sends a message past the size cap instead of buffering it', async () => {
+    const { client, killed } = choppedServer('ok', (bytes) => [bytes])
+    await client.connect({ command: 'fake' })
+    const call = client.callTool('echo', {})
+    // The server starts a message and never ends it.
+    const stdout = (client as unknown as { child: { stdout: EventEmitter } }).child.stdout
+    const block = Buffer.alloc(1024 * 1024, 'a')
+    for (let i = 0; i <= MAX_MCP_MESSAGE_CHARS / block.length; i++) stdout.emit('data', block)
+    await expect(call).rejects.toThrow(/larger than/)
+    expect(killed()).toBe(true)
   })
 
   it('treats a broken stdin pipe like the server exiting instead of throwing', async () => {

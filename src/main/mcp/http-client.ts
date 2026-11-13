@@ -26,7 +26,7 @@ import {
   type JsonRpcIncoming,
   type McpListKind
 } from './protocol'
-import { parseSseEvents } from './sse-client'
+import { SseEventBuffer, type SseEvent } from './sse-client'
 
 /**
  * A minimal MCP client over the **streamable HTTP** transport (the remote
@@ -333,8 +333,8 @@ export class McpHttpClient implements McpConnection {
   private async readEventStream(body: ReadableStream<Uint8Array>): Promise<void> {
     const reader = body.getReader()
     const decoder = new TextDecoder()
-    let buffer = ''
-    const emit = (events: ReturnType<typeof parseSseEvents>['events']): void => {
+    const buffer = new SseEventBuffer()
+    const emit = (events: SseEvent[]): void => {
       for (const e of events) {
         if (!e.data.trim()) continue
         try {
@@ -349,15 +349,11 @@ export class McpHttpClient implements McpConnection {
       for (;;) {
         const { value, done } = await reader.read()
         if (done) break
-        buffer += decoder.decode(value, { stream: true })
-        const { events, rest } = parseSseEvents(buffer)
-        buffer = rest
-        emit(events)
+        emit(buffer.push(decoder.decode(value, { stream: true })))
       }
       // Some servers end the stream without a trailing blank line; flush the
       // remainder as a final event so that response isn't dropped.
-      buffer += decoder.decode()
-      if (buffer.trim()) emit(parseSseEvents(`${buffer}\n\n`).events)
+      emit(buffer.finish(decoder.decode()))
     } catch {
       // Aborted (request settled / client closed) or the network dropped; any
       // still-pending request is settled by its own timers.

@@ -32,10 +32,28 @@ export function encodeMessage(msg: JsonRpcMessage): Buffer {
  */
 export class MessageDecoder {
   private buf: Buffer = Buffer.alloc(0)
+  /**
+   * Chunks of a message body still arriving, kept apart until the body is complete:
+   * concatenating every chunk onto the buffer copied it all again each time, so a
+   * large message cost time proportional to its size squared.
+   */
+  private more: Buffer[] = []
+  private moreBytes = 0
+  /** Total bytes the message being received needs, once its header is read; 0 before. */
+  private need = 0
 
   /** Append a chunk and return every message it completed. Throws on a malformed frame. */
   push(chunk: Buffer): JsonRpcMessage[] {
-    this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk
+    if (this.need && this.buf.length + this.moreBytes + chunk.length < this.need) {
+      this.more.push(chunk)
+      this.moreBytes += chunk.length
+      return []
+    }
+    const parts = [this.buf, ...this.more, chunk].filter((b) => b.length)
+    this.buf = parts.length === 1 ? parts[0] : Buffer.concat(parts)
+    this.more = []
+    this.moreBytes = 0
+    this.need = 0
     const out: JsonRpcMessage[] = []
     for (;;) {
       const headerEnd = this.buf.indexOf('\r\n\r\n')
@@ -49,7 +67,10 @@ export class MessageDecoder {
       const len = Number(m[1])
       if (len > MAX_MESSAGE_BYTES) throw new Error(`LSP message too large (${len} bytes)`)
       const start = headerEnd + 4
-      if (this.buf.length < start + len) return out
+      if (this.buf.length < start + len) {
+        this.need = start + len
+        return out
+      }
       const body = this.buf.subarray(start, start + len).toString('utf8')
       this.buf = this.buf.subarray(start + len)
       out.push(JSON.parse(body) as JsonRpcMessage)
