@@ -36,6 +36,13 @@ import { resolveInRoots } from './tools'
  */
 export const MAX_PREVIEW_DIFF_LINES = 400
 
+/**
+ * A preview that cannot model an edit shows no diff and discards the reason, so it
+ * skips the "closest region" search a failed match runs to word its error (up to
+ * hundreds of milliseconds on a large file). The tool itself still reports it.
+ */
+const PREVIEW_ONLY = { showCandidate: false } as const
+
 /** Current contents of a file, or null when it does not exist / cannot be read. */
 async function readOrNull(abs: string): Promise<string | null> {
   try {
@@ -101,7 +108,7 @@ export async function previewWrite(
         const abs = resolveInRoots(roots, path)
         const before = await readOrNull(abs)
         if (before === null) return null
-        const { content } = resolveEdit(before, str(args, 'old_string'), str(args, 'new_string'), args.replace_all === true)
+        const { content } = resolveEdit(before, str(args, 'old_string'), str(args, 'new_string'), args.replace_all === true, PREVIEW_ONLY)
         return [previewOf(path, before, content)]
       }
 
@@ -119,7 +126,7 @@ export async function previewWrite(
         for (const raw of edits) {
           if (raw === null || typeof raw !== 'object') return null
           const e = raw as Record<string, unknown>
-          after = resolveEdit(after, str(e, 'old_string'), str(e, 'new_string'), e.replace_all === true).content
+          after = resolveEdit(after, str(e, 'old_string'), str(e, 'new_string'), e.replace_all === true, PREVIEW_ONLY).content
         }
         return [previewOf(path, before, after)]
       }
@@ -167,7 +174,7 @@ export async function previewWrite(
           const before = await readOrNull(resolveInRoots(roots, op.path))
           if (before === null) return null
           let after = before
-          for (const hunk of op.hunks) after = resolveEdit(after, hunk.oldText, hunk.newText).content
+          for (const hunk of op.hunks) after = resolveEdit(after, hunk.oldText, hunk.newText, false, PREVIEW_ONLY).content
           if (op.moveTo && op.moveTo !== op.path) {
             // A move is one change to the reader ("this file became that file"), not
             // a delete plus an unrelated add, so it is previewed as the destination

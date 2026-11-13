@@ -160,11 +160,17 @@ function diffMiddle(a: string[], b: string[]): DiffLine[] {
     ]
   }
 
-  // lcs[i][j] = length of the LCS of a[i:] and b[j:].
-  const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
+  // lcs[i * w + j] = length of the LCS of a[i:] and b[j:]. One flat typed array rather
+  // than an array of rows: the table is up to 2001 x 2001 cells, and as nested arrays
+  // of numbers it cost tens of megabytes of heap per diff. An LCS is at most
+  // MAX_LCS_LINES long, so 16 bits hold every cell.
+  const w = n + 1
+  const lcs = new Uint16Array((m + 1) * w)
   for (let i = m - 1; i >= 0; i--) {
+    const row = i * w
+    const below = row + w
     for (let j = n - 1; j >= 0; j--) {
-      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1])
+      lcs[row + j] = a[i] === b[j] ? lcs[below + j + 1] + 1 : Math.max(lcs[below + j], lcs[row + j + 1])
     }
   }
 
@@ -176,7 +182,7 @@ function diffMiddle(a: string[], b: string[]): DiffLine[] {
       out.push({ type: 'ctx', text: a[i] })
       i++
       j++
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+    } else if (lcs[(i + 1) * w + j] >= lcs[i * w + j + 1]) {
       out.push({ type: 'del', text: a[i] })
       i++
     } else {
