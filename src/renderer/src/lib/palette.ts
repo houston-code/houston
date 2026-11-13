@@ -31,6 +31,16 @@ export interface PaletteItem {
 export function filterPalette(items: PaletteItem[], query: string): PaletteItem[] {
   const tokens = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (tokens.length === 0) return items
+  // A query that starts with a slash asks for slash commands only: "/" lists them
+  // all, "/re" narrows by name or description.
+  if (tokens[0].startsWith('/')) {
+    const rest = [tokens[0].slice(1), ...tokens.slice(1)].filter(Boolean)
+    return items.filter((it) => {
+      if (!it.title.startsWith('/')) return false
+      const hay = `${it.title} ${it.subtitle ?? ''} ${it.keywords ?? ''}`.toLowerCase()
+      return rest.every((t) => hay.includes(t))
+    })
+  }
   return items.filter((it) => {
     const hay = `${it.title} ${it.subtitle ?? ''} ${it.keywords ?? ''} ${it.section}`.toLowerCase()
     return tokens.every((t) => hay.includes(t))

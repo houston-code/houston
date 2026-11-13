@@ -20,7 +20,7 @@ import type {
   ReasoningEffort,
   RepoInfo
 } from '@shared/agent'
-import { mergeCommands, builtinCommands, type Command } from '@shared/commands'
+import { commandGroup, matchCommands, mergeCommands, builtinCommands, type Command } from '@shared/commands'
 import type { ImageAttachment } from '@shared/images'
 import {
   agentTurn,
@@ -108,7 +108,7 @@ import { rewindDoneText, rewindsConversation, type RewindMode, type RewindOutcom
 import { PlanPanel } from './components/PlanPanel'
 import { SideChatPanel } from './components/SideChatPanel'
 import type { ProposalHandlers } from './components/ProposalCard'
-import { Composer } from './components/Composer'
+import { Composer, IDLE_ONLY_COMMANDS } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
@@ -1964,10 +1964,10 @@ export default function App(): JSX.Element {
         else chat.notify('Nothing to rewind yet: send a message first.')
       }
       else if (cmd.name === 'help') {
-        chat.notify(
-          'Commands: ' + BUILTIN_COMMANDS.map((c) => `/${c.name}`).join('  ') +
-            (commands.length > BUILTIN_COMMANDS.length ? '  (+ custom from .houston/commands)' : '')
-        )
+        // Every command with what it does, searchable and runnable: the palette
+        // filtered to slash commands.
+        setPaletteSeed('/')
+        setPaletteOpen(true)
       } else if (POLICY_COMMANDS[cmd.name]) {
         const policy = POLICY_COMMANDS[cmd.name]
         void onChangePolicy(policy)
@@ -2019,6 +2019,16 @@ export default function App(): JSX.Element {
 
   // The command palette's flat, searchable item list: app actions, approval modes,
   // the available models, and every chat as a switch target.
+  // Run a slash command picked in the palette. Read through a ref so the item list
+  // isn't rebuilt on every streamed update just because the chat state changed.
+  const runPaletteCommandRef = useRef<(c: Command, runsNow: boolean) => void>(() => undefined)
+  runPaletteCommandRef.current = (c, runsNow) => {
+    if (!runsNow) prefillComposer(`/${c.name} `)
+    else if (chat.running && IDLE_ONLY_COMMANDS.has(c.name)) {
+      chat.notify(`/${c.name} can't run while the agent is working. Run it once this turn ends.`)
+    } else onCommand(c, '')
+  }
+
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = []
     items.push(
@@ -2184,6 +2194,20 @@ export default function App(): JSX.Element {
     items.push(
       ...modelPaletteItems(settings?.providers ?? [], settings?.selected, (sel) => void onSelectModel(sel))
     )
+    for (const c of matchCommands(commands, '')) {
+      if (c.name === 'help') continue
+      // A command that takes something after its name, or turns into a prompt, goes
+      // into the message box to be completed and sent; a plain action runs now.
+      const runsNow = !c.template && !c.args
+      items.push({
+        id: `cmd-${c.name}`,
+        title: `/${c.name}${c.args ? ` ${c.args}` : ''}`,
+        subtitle: c.description,
+        section: 'Slash commands',
+        keywords: `command ${commandGroup(c)}`,
+        run: () => runPaletteCommandRef.current(c, runsNow)
+      })
+    }
     for (const c of conversations) {
       if (c.id === currentId) continue
       items.push({
@@ -2208,6 +2232,7 @@ export default function App(): JSX.Element {
     settings?.providers,
     settings?.selected,
     conversations,
+    commands,
     onNewChat,
     toggleSidebar,
     toggleTerminal,

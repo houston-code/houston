@@ -5718,6 +5718,20 @@ body:has(.coachmark) .get-started {
   color: var(--accent);
   margin-right: 8px;
 }
+/* What may follow a command's name: quieter than the name it belongs to. */
+.mention-item__args {
+  color: var(--text-dim);
+}
+.mention-menu__heading {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  padding: 7px 9px 2px;
+}
+.mention-menu__heading:first-child {
+  padding-top: 3px;
+}
 /* A command's description is prose, not code: the UI face, not the menu's mono. */
 .mention-item__desc {
   font-family: var(--font);

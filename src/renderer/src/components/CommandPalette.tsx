@@ -73,7 +73,7 @@ export function CommandPalette({
         <input
           className="command-palette__input"
           type="text"
-          placeholder="Type a command or search chats…"
+          placeholder="Type a command, / for slash commands, or search chats…"
           value={query}
           autoFocus
           role="combobox"

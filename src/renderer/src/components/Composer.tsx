@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useCallback,
   useEffect,
   useId,
@@ -24,6 +25,7 @@ import {
 } from '../lib/promptHistory'
 import {
   expandTemplate,
+  commandGroup,
   matchCommands,
   parseSlashCommand,
 
@@ -89,7 +91,7 @@ function readImageFile(file: File): Promise<ImageAttachment | null> {
  * Built-in commands that can't run while a turn is in flight. /compact rewrites the
  * conversation history the running turn is reading and appending to.
  */
-const IDLE_ONLY_COMMANDS = new Set(['compact', 'rewind'])
+export const IDLE_ONLY_COMMANDS = new Set(['compact', 'rewind'])
 
 /** Max gap between the two Esc presses that recalls the last message. */
 const DOUBLE_ESC_MS = 500
@@ -664,6 +666,11 @@ export function Composer({
   )
   // Commands run mid-turn too (see submit), so the menu shows while running as well.
   const showCmdMenu = !cmdDismissed && cmdMatches.length > 0
+  // Keep the highlighted command in view as the arrows move through a long list.
+  useEffect(() => {
+    if (!showCmdMenu) return
+    document.getElementById(`${cmdMenuId}-${cmdIndex}`)?.scrollIntoView?.({ block: 'nearest' })
+  }, [showCmdMenu, cmdIndex, cmdMenuId])
 
   // Query workspace files for the active @-mention (debounced).
   useEffect(() => {
@@ -1093,22 +1100,39 @@ export function Composer({
         )}
         {showCmdMenu && (
           <ul className="mention-menu" id={cmdMenuId} role="listbox" aria-label="Commands">
-            {cmdMatches.map((cmd, i) => (
-              <li
-                key={cmd.name}
-                id={`${cmdMenuId}-${i}`}
-                role="option"
-                aria-selected={i === cmdIndex}
-                className={`mention-item ${i === cmdIndex ? 'mention-item--active' : ''}`}
-                onMouseDown={(e) => {
-                  e.preventDefault()
-                  chooseCommand(cmd)
-                }}
-              >
-                <span className="mention-item__name">/{cmd.name}</span>
-                <span className="mention-item__desc">{cmd.description}</span>
-              </li>
-            ))}
+            {cmdMatches.map((cmd, i) => {
+              // Nothing typed yet: the whole list, under headings. A filtered list is
+              // ranked by match, so headings would only break it up.
+              const heading =
+                cmdPrefix === '' && (i === 0 || commandGroup(cmdMatches[i - 1]) !== commandGroup(cmd))
+                  ? commandGroup(cmd)
+                  : null
+              return (
+                <Fragment key={cmd.name}>
+                  {heading && (
+                    <li role="presentation" className="mention-menu__heading">
+                      {heading}
+                    </li>
+                  )}
+                  <li
+                    id={`${cmdMenuId}-${i}`}
+                    role="option"
+                    aria-selected={i === cmdIndex}
+                    className={`mention-item ${i === cmdIndex ? 'mention-item--active' : ''}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault()
+                      chooseCommand(cmd)
+                    }}
+                  >
+                    <span className="mention-item__name">
+                      /{cmd.name}
+                      {cmd.args && <span className="mention-item__args"> {cmd.args}</span>}
+                    </span>
+                    <span className="mention-item__desc">{cmd.description}</span>
+                  </li>
+                </Fragment>
+              )
+            })}
           </ul>
         )}
         {showMentionMenu && (

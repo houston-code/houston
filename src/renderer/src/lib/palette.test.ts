@@ -42,6 +42,30 @@ describe('filterPalette', () => {
   })
 })
 
+describe('filterPalette slash queries', () => {
+  const withCommands: PaletteItem[] = [
+    ...items,
+    item({ id: 'chat-2', title: 'Tidy src/app', section: 'Switch chat', subtitle: 'web/ui' }),
+    item({ id: 'cmd-review', title: '/review', section: 'Slash commands', subtitle: 'Adversarial review of your uncommitted changes' }),
+    item({ id: 'cmd-rewind', title: '/rewind', section: 'Slash commands', subtitle: 'Rewind to an earlier message' }),
+    item({ id: 'cmd-model', title: '/model [name]', section: 'Slash commands', subtitle: 'List or switch the active model' })
+  ]
+
+  it('lists only slash commands for a bare slash, even when other rows contain one', () => {
+    expect(filterPalette(withCommands, '/').map((i) => i.id)).toEqual(['cmd-review', 'cmd-rewind', 'cmd-model'])
+  })
+
+  it('narrows slash commands by name or description', () => {
+    expect(filterPalette(withCommands, '/re').map((i) => i.id)).toEqual(['cmd-review', 'cmd-rewind'])
+    expect(filterPalette(withCommands, '/switch').map((i) => i.id)).toEqual(['cmd-model'])
+    expect(filterPalette(withCommands, '/re message').map((i) => i.id)).toEqual(['cmd-rewind'])
+  })
+
+  it('still finds slash commands from a plain query', () => {
+    expect(filterPalette(withCommands, 'adversarial').map((i) => i.id)).toEqual(['cmd-review'])
+  })
+})
+
 describe('modelPaletteItems', () => {
   const provider = (over: Partial<ProviderConfig> & Pick<ProviderConfig, 'id' | 'kind'>): ProviderConfig =>
     ({ label: over.id, models: [], requiresKey: true, hasKey: true, ...over }) as ProviderConfig

@@ -289,6 +289,54 @@ describe('Composer', () => {
   })
 })
 
+describe('Composer slash menu', () => {
+  const grouped: Command[] = [
+    { name: 'new', description: 'Start a new chat', group: 'Chat' },
+    { name: 'model', description: 'List or switch the active model', group: 'Modes', args: '[name]' },
+    { name: 'rewind', description: 'Rewind to an earlier message', group: 'Review and undo' },
+    { name: 'deploy', description: 'Ship it', template: 'Deploy $1' }
+  ]
+
+  it('lists every command under headings when only a slash is typed', () => {
+    render(<Composer {...baseProps({ commands: grouped })} />)
+    type('/')
+    const menu = screen.getByRole('listbox', { name: 'Commands' })
+    expect(within(menu).getAllByRole('option')).toHaveLength(4)
+    expect([...menu.querySelectorAll('.mention-menu__heading')].map((h) => h.textContent)).toEqual([
+      'Chat',
+      'Modes',
+      'Review and undo',
+      'Custom'
+    ])
+  })
+
+  it('shows what may follow a command beside its name', () => {
+    render(<Composer {...baseProps({ commands: grouped })} />)
+    type('/')
+    const model = screen.getAllByRole('option').find((o) => o.textContent?.startsWith('/model'))
+    expect(model?.querySelector('.mention-item__name')?.textContent).toBe('/model [name]')
+  })
+
+  it('finds a command by part of its name or description, without headings', () => {
+    render(<Composer {...baseProps({ commands: grouped })} />)
+    type('/wind')
+    const menu = screen.getByRole('listbox', { name: 'Commands' })
+    expect(within(menu).getAllByRole('option').map((o) => o.textContent)).toEqual([
+      '/rewindRewind to an earlier message'
+    ])
+    expect(menu.querySelector('.mention-menu__heading')).toBeNull()
+    type('/switch')
+    expect(within(screen.getByRole('listbox', { name: 'Commands' })).getByRole('option')).toHaveTextContent('/model')
+  })
+
+  it('completes the highlighted match with Tab even when it was not a prefix match', () => {
+    render(<Composer {...baseProps({ commands: grouped })} />)
+    const input = type('/wind')
+    fireEvent.keyDown(input, { key: 'Tab' })
+    expect(input.value).toBe('/rewind ')
+  })
+})
+
 describe('Composer slash-command templates', () => {
   it('runs an autoRun template command immediately instead of expanding it', () => {
     const review: Command = {

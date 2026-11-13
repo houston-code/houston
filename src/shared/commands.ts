@@ -15,7 +15,17 @@ export interface Command {
    * work" — the expanded prompt is sent as a normal turn, not previewed.
    */
   autoRun?: boolean
+  /** Menu heading the command is listed under; custom commands have none. */
+  group?: CommandGroup
+  /** What may follow the name, shown dimmed beside it (for example `[name]`). */
+  args?: string
 }
+
+/** Menu headings, in the order the menu shows them. Custom commands come last. */
+export const COMMAND_GROUPS = ['Chat', 'Modes', 'Review and undo', 'Extend', 'Setup', 'Terminal'] as const
+export type CommandGroup = (typeof COMMAND_GROUPS)[number]
+/** Heading for a workspace's own commands (`.houston/commands`). */
+export const CUSTOM_COMMAND_GROUP = 'Custom'
 
 /** Parse a leading slash command from composer text: "/name the rest" → {name, args}. */
 export function parseSlashCommand(text: string): { name: string; args: string } | null {
@@ -46,10 +56,60 @@ export function expandTemplate(template: string, args: string): string {
   return args ? `${out.trimEnd()}\n\n${args}` : out
 }
 
-/** Commands whose name starts with the typed prefix (case-insensitive). */
-export function matchCommands(commands: Command[], prefix: string): Command[] {
-  const p = prefix.toLowerCase()
-  return commands.filter((c) => c.name.toLowerCase().startsWith(p))
+/** The heading a command is listed under. */
+export function commandGroup(cmd: Command): string {
+  return cmd.group ?? CUSTOM_COMMAND_GROUP
+}
+
+/** The commands ordered by menu heading (stable within one), for an unfiltered menu. */
+export function groupCommands(commands: Command[]): Command[] {
+  const order: string[] = [...COMMAND_GROUPS, CUSTOM_COMMAND_GROUP]
+  return commands
+    .map((c, i) => ({ c, i, g: order.indexOf(commandGroup(c)) }))
+    .sort((a, b) => a.g - b.g || a.i - b.i)
+    .map((x) => x.c)
+}
+
+/** True when every character of `needle` appears in `hay` in order. */
+function isSubsequence(needle: string, hay: string): boolean {
+  let i = 0
+  for (const ch of hay) if (ch === needle[i]) i++
+  return i === needle.length
+}
+
+/**
+ * How well a command answers what was typed after the slash; lower is better, null
+ * is no match. A name that starts with it comes first, then an alias that does,
+ * then a name containing it, then a word of the description starting with it (so
+ * `/perm` finds `/approval`), then the letters appearing in order in the name.
+ */
+function commandRank(cmd: Command, q: string): number | null {
+  const name = cmd.name.toLowerCase()
+  if (name.startsWith(q)) return 0
+  for (const [alias, target] of Object.entries(COMMAND_ALIASES)) {
+    if (target === cmd.name && alias.startsWith(q)) return 1
+  }
+  if (name.includes(q)) return 2
+  if (q.length >= 3) {
+    const words = cmd.description.toLowerCase().split(/[^a-z0-9]+/)
+    if (words.some((w) => w.startsWith(q))) return 3
+  }
+  if (q.length >= 2 && isSubsequence(q, name)) return 4
+  return null
+}
+
+/**
+ * The commands that answer what was typed after the slash (case-insensitive), best
+ * first. Nothing typed lists every command under its menu heading.
+ */
+export function matchCommands(commands: Command[], query: string): Command[] {
+  const q = query.toLowerCase()
+  if (!q) return groupCommands(commands)
+  return commands
+    .map((c, i) => ({ c, i, rank: commandRank(c, q) }))
+    .filter((x): x is { c: Command; i: number; rank: number } => x.rank !== null)
+    .sort((a, b) => a.rank - b.rank || a.i - b.i)
+    .map((x) => x.c)
 }
 
 /**
@@ -158,119 +218,119 @@ export interface BuiltinCommand extends Command {
  * `mergeCommands`; the rest are actions handled by each client.
  */
 export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
-  { name: 'new', description: 'Start a new chat', clients: ['gui', 'tui'] },
-  { name: 'clear', description: 'Start a new chat (alias for /new)', clients: ['gui', 'tui'] },
-  { name: 'compact', description: 'Summarize older turns to free up context now', clients: ['gui', 'tui'] },
+  { name: 'new', group: 'Chat', description: 'Start a new chat', clients: ['gui', 'tui'] },
+  { name: 'clear', group: 'Chat', description: 'Start a new chat (alias for /new)', clients: ['gui', 'tui'] },
+  { name: 'compact', group: 'Chat', description: 'Summarize older turns to free up context now', clients: ['gui', 'tui'] },
   {
-    name: 'retry',
+    name: 'retry', group: 'Chat',
     description: 'Run your last message again after a turn that failed',
     clients: ['gui', 'tui']
   },
   {
-    name: 'plan',
+    name: 'plan', group: 'Modes',
     description: 'Plan mode: read-only (research & propose, no edits/commands)',
     clients: ['gui', 'tui']
   },
-  { name: 'ask', description: 'Approval: ask before every edit and command', clients: ['gui', 'tui'] },
-  { name: 'auto', description: 'Approval: auto-approve edits, ask for commands', clients: ['gui', 'tui'] },
-  { name: 'full', description: 'Approval: full auto (sandboxed)', clients: ['gui', 'tui'] },
-  { name: 'model', description: 'List or switch the active model', clients: ['gui', 'tui'] },
-  { name: 'login', description: 'Set or update an API key (also: /providers)', clients: ['gui', 'tui'] },
-  { name: 'settings', description: 'Show a summary of your current settings', clients: ['gui', 'tui'] },
-  { name: 'undo', description: "Revert the files the last turn changed", clients: ['gui', 'tui'] },
-  { name: 'redo', description: 'Put back what /undo reverted', clients: ['gui', 'tui'] },
+  { name: 'ask', group: 'Modes', description: 'Approval: ask before every edit and command', clients: ['gui', 'tui'] },
+  { name: 'auto', group: 'Modes', description: 'Approval: auto-approve edits, ask for commands', clients: ['gui', 'tui'] },
+  { name: 'full', group: 'Modes', description: 'Approval: full auto (sandboxed)', clients: ['gui', 'tui'] },
+  { name: 'model', group: 'Modes', args: '[name]', description: 'List or switch the active model', clients: ['gui', 'tui'] },
+  { name: 'login', group: 'Setup', description: 'Set or update an API key (also: /providers)', clients: ['gui', 'tui'] },
+  { name: 'settings', group: 'Setup', args: '[page]', description: 'Show a summary of your current settings', clients: ['gui', 'tui'] },
+  { name: 'undo', group: 'Review and undo', description: "Revert the files the last turn changed", clients: ['gui', 'tui'] },
+  { name: 'redo', group: 'Review and undo', description: 'Put back what /undo reverted', clients: ['gui', 'tui'] },
   {
-    name: 'rewind',
+    name: 'rewind', group: 'Review and undo',
     description: 'Rewind to an earlier message: the conversation, the code, or both',
     clients: ['gui', 'tui']
   },
   {
-    name: 'changes',
+    name: 'changes', group: 'Review and undo',
     description: 'What is different in the working tree (also /diff)',
     clients: ['gui', 'tui']
   },
   {
-    name: 'reasoning',
+    name: 'reasoning', group: 'Modes', args: '[level]',
     description: 'Show or set thinking effort (off | low | medium | high | xhigh)',
     clients: ['gui', 'tui']
   },
   {
-    name: 'doctor',
+    name: 'doctor', group: 'Setup',
     description: 'Check your setup: model, sandbox, tools, MCP',
     clients: ['gui', 'tui']
   },
   {
-    name: 'vim',
+    name: 'vim', group: 'Terminal', args: '[on|off]',
     description: 'Vim keys in the composer (/vim [on|off])',
     clients: ['tui']
   },
   {
-    name: 'verbose',
+    name: 'verbose', group: 'Terminal',
     description: "Show each tool's full output as it runs",
     clients: ['tui']
   },
   {
-    name: 'output',
+    name: 'output', group: 'Terminal', args: '[n]',
     description: 'Reprint a tool result in full (/output [n])',
     clients: ['tui']
   },
-  { name: 'approval', description: 'Show or set the approval policy', clients: ['gui', 'tui'] },
-  { name: 'resume', description: 'Reopen (or search) a saved session', clients: ['gui', 'tui'] },
+  { name: 'approval', group: 'Modes', args: '[mode]', description: 'Show or set the approval policy', clients: ['gui', 'tui'] },
+  { name: 'resume', group: 'Chat', args: '[search]', description: 'Reopen (or search) a saved session', clients: ['gui', 'tui'] },
   {
-    name: 'spawned',
+    name: 'spawned', group: 'Terminal',
     description: 'List the background sessions the agent started, and open one',
     clients: ['tui']
   },
   {
-    name: 'proposals',
+    name: 'proposals', group: 'Terminal',
     description: 'List the sessions the agent proposed, and start, ask here, or dismiss one',
     clients: ['tui']
   },
   {
-    name: 'btw',
+    name: 'btw', group: 'Chat', args: '[question]',
     description: 'Ask a quick side question; the answer stays out of this chat',
     clients: ['gui', 'tui']
   },
-  { name: 'fork', description: 'Branch the current session into a copy', clients: ['gui', 'tui'] },
-  { name: 'cost', description: 'Session token and cost totals', clients: ['gui', 'tui'] },
+  { name: 'fork', group: 'Chat', description: 'Branch the current session into a copy', clients: ['gui', 'tui'] },
+  { name: 'cost', group: 'Setup', description: 'Session token and cost totals', clients: ['gui', 'tui'] },
   {
-    name: 'skills',
+    name: 'skills', group: 'Extend',
     description: 'List the workspace skills (.houston/skills)',
     clients: ['gui', 'tui']
   },
   {
-    name: 'agents',
+    name: 'agents', group: 'Extend',
     description: 'List the workspace agents (.houston/agents)',
     clients: ['gui', 'tui']
   },
   {
-    name: 'agent',
+    name: 'agent', group: 'Extend', args: '<name> <task>',
     description: 'Hand a task to one of your .houston/agents (/agent <name> <task>)',
     clients: ['gui', 'tui']
   },
-  { name: 'mcp', description: 'List MCP servers (add, remove, login, logout)', clients: ['gui', 'tui'] },
+  { name: 'mcp', group: 'Extend', description: 'List MCP servers (add, remove, login, logout)', clients: ['gui', 'tui'] },
   {
-    name: 'trust',
+    name: 'trust', group: 'Setup',
     description: "Show this folder's project-config trust (/trust forget re-decides)",
     clients: ['gui', 'tui']
   },
-  { name: 'hooks', description: 'List configured hooks', clients: ['gui', 'tui'] },
-  { name: 'memory', description: 'Review saved memories (show, edit, pin, forget, on, off)', clients: ['gui', 'tui'] },
-  { name: 'theme', description: 'List or switch the color theme', clients: ['gui', 'tui'] },
-  { name: 'image', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
-  { name: 'cwd', description: 'Show the working directory', clients: ['gui', 'tui'] },
-  { name: 'share', description: 'Copy an invite to Houston to share with a friend', clients: ['gui', 'tui'] },
-  { name: 'help', description: 'List the available slash commands', clients: ['gui', 'tui'] },
+  { name: 'hooks', group: 'Extend', description: 'List configured hooks', clients: ['gui', 'tui'] },
+  { name: 'memory', group: 'Extend', description: 'Review saved memories (show, edit, pin, forget, on, off)', clients: ['gui', 'tui'] },
+  { name: 'theme', group: 'Setup', args: '[name]', description: 'List or switch the color theme', clients: ['gui', 'tui'] },
+  { name: 'image', group: 'Terminal', args: '[path]', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
+  { name: 'cwd', group: 'Setup', description: 'Show the working directory', clients: ['gui', 'tui'] },
+  { name: 'share', group: 'Chat', description: 'Copy an invite to Houston to share with a friend', clients: ['gui', 'tui'] },
+  { name: 'help', group: 'Setup', description: 'List the available slash commands', clients: ['gui', 'tui'] },
   {
-    name: 'review',
+    name: 'review', group: 'Review and undo',
     description: 'Adversarial review of your uncommitted changes',
     clients: ['gui', 'tui'],
     // Runs immediately on submit rather than expanding into the composer.
     autoRun: true,
     template: REVIEW_TEMPLATE
   },
-  { name: 'exit', description: 'Leave', clients: ['tui'] },
-  { name: 'quit', description: 'Leave', clients: ['tui'] }
+  { name: 'exit', group: 'Terminal', description: 'Leave', clients: ['tui'] },
+  { name: 'quit', group: 'Terminal', description: 'Leave', clients: ['tui'] }
 ]
 
 /** Strip the catalog-only `clients` tag, yielding a plain `Command`. */
@@ -278,6 +338,8 @@ function toCommand(c: BuiltinCommand): Command {
   const cmd: Command = { name: c.name, description: c.description }
   if (c.template !== undefined) cmd.template = c.template
   if (c.autoRun !== undefined) cmd.autoRun = c.autoRun
+  if (c.group !== undefined) cmd.group = c.group
+  if (c.args !== undefined) cmd.args = c.args
   return cmd
 }
 
