@@ -374,6 +374,9 @@ export function isModelNotFoundError(err: unknown, model: string): boolean {
 export function classifyProviderFailure(err: unknown): TurnErrorCause | undefined {
   if (isQuotaExhaustedError(err)) return 'quota'
   const status = (err as { status?: unknown })?.status
+  // 402 Payment Required: the account can't pay for the request (OpenRouter's "requires
+  // more credits"). Never retried, since waiting adds no credit.
+  if (status === 402) return 'quota'
   if (status === 401 || status === 403) return 'auth'
   if (status === 429) return 'rate-limit'
   if (typeof status === 'number' && status >= 500) return 'provider-down'

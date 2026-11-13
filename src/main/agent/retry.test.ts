@@ -635,6 +635,12 @@ describe('classifyProviderFailure', () => {
     expect(classifyProviderFailure(apiError(429, 'You exceeded your current quota'))).toBe('quota')
   })
 
+  it('reads a 402 Payment Required as out of credit, and does not retry it', () => {
+    const err = apiError(402, 'This request requires more credits, or fewer max_tokens.')
+    expect(classifyProviderFailure(err)).toBe('quota')
+    expect(isRetryableError(err)).toBe(false)
+  })
+
   it('recognizes a network failure by its cause chain', () => {
     const err = Object.assign(new Error('Connection error.'), {
       cause: Object.assign(new Error('getaddrinfo ENOTFOUND api.example.com'), { code: 'ENOTFOUND' })
