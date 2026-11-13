@@ -788,6 +788,8 @@ export interface AppSettings {
    * it. Absent = emacs.
    */
   tuiEditor?: 'emacs' | 'vim'
+  /** The terminal's /verbose: show each tool's output as it runs. Absent = off. */
+  tuiVerbose?: boolean
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /**

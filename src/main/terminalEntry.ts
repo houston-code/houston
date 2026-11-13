@@ -47,6 +47,7 @@ import {
 } from './agent/checkpoints'
 import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
+import { runGitCapture } from './agent/gitRead'
 import {
   canPersistHeaderSecrets,
   canSetKey,
@@ -525,6 +526,12 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
         preview: (conversationId, turn, mode, text) => previewRewind(conversationId, turn, mode, text),
         apply: (conversationId, turn, mode, text) => rewindConversation(conversationId, turn, mode, text),
         undo: (conversationId) => undoRewind(conversationId)
+      },
+      // symbolic-ref names the branch (even an unborn one) and fails on a detached
+      // HEAD or outside a repository, where the status line shows no branch.
+      gitBranch: async () => {
+        const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd)
+        return head.ok ? head.stdout.trim() || null : null
       },
       workingTree: async () => {
         const c = await collectWorkingTreeChanges(tui.cwd)

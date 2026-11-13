@@ -853,11 +853,14 @@ an empty line to stop the current turn (the session stays open); `Ctrl-D` to exi
 
 The composer is a full line editor: **Tab** completes slash-command names and
 `@`-file mentions (fuzzy over the workspace), **Up/Down** and **Ctrl-R** recall and
-search previous prompts (history persists per project across restarts), `Ctrl-J` or
-`Alt-Enter` inserts a line break, a pasted block lands as one message, and `/vim`
-turns on vim keys. A line starting with `!` runs in your own shell, and `#` saves a
-standing instruction. The [guide](docs/houston-guide.md#the-terminal-composer) lists
-every key.
+search previous prompts (history persists per project across restarts), `Shift-Enter`
+(where the terminal reports it), `Ctrl-J` or `Alt-Enter` inserts a line break, a pasted
+block lands as one message, and `/vim` turns on vim keys. A line starting with `!` runs
+in your own shell, and `#` saves a standing instruction. The startup banner shows a
+couple of these as tips, `/help` lists them under **Keys**, and the
+[guide](docs/houston-guide.md#the-terminal-composer) lists every key. The status line
+above the composer carries the model, approval mode, folder, git branch, cost and
+context use; while a turn runs, the model, branch and context stay on the spinner line.
 
 Slash commands adjust the session without restarting (the desktop app accepts the
 same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
@@ -881,7 +884,7 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/init` | write or improve AGENTS.md, the project's instructions file |
 | `/cost` | session token + cost totals, per model |
 | `/doctor` | check your setup: model, keys, sandbox, tools, MCP |
-| `/verbose`, `/output [n]` | show each tool's full output as it runs, or reprint one after the fact |
+| `/verbose`, `/output [n]` | show each tool's full output as it runs (remembered across sessions), or reprint one after the fact |
 | `/btw <question>` | ask the side chat a quick question (`/btw clear` starts it over) |
 | `/spawned`, `/proposals` | open background sessions the agent started, or act on ones it proposed |
 | `/skills`, `/agents`, `/agent <name> <task>` | list the workspace's skills / custom agents, or hand a task to one |
