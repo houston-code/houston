@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SecureStorageStatus } from '@shared/secureStorage'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
@@ -87,6 +87,16 @@ const api = {
     ipcRenderer.invoke(IPC.legacyRulesNoticeDecide, choice),
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.workspacePick),
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directoryPick),
+  /** Open a folder by path (a recent, or one dropped on the window); null if it isn't one. */
+  openWorkspace: (path: string): Promise<string | null> => ipcRenderer.invoke(IPC.workspaceOpen, path),
+  /** The file-system path behind a dropped File, or '' when it has none. */
+  pathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC.workspaceListFiles, workspace, query),
   /** One directory level for the Files panel — a folder's immediate children (lazy tree). */

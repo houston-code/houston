@@ -48,6 +48,7 @@ import {
   getSettings,
   saveSettings,
   rememberWorkspace,
+  openWorkspaceFolder,
   workspacePickerStartDir,
   getProvider,
   isGitInitDismissed,
@@ -660,6 +661,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     rememberWorkspace(dir)
     return dir
   })
+
+  // Open a folder by path (a recent folder, or one dropped on the window). Main checks
+  // it is an existing directory; anything else (a dropped file, a vanished recent) is null.
+  handle(IPC.workspaceOpen, (_event, path: unknown): string | null => openWorkspaceFolder(path))
 
   // Pick a directory without recording it as a recent workspace (used to add an
   // extra allowed root in Settings).

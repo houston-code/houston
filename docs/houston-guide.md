@@ -2510,7 +2510,8 @@ On first launch, the welcome screen shows a three-step **Get started** checklist
    marks the ones already running, without saving anything. **More providers** opens
    Settings > Providers & Models for OpenRouter, Bedrock, Vertex, Azure, other hosts,
    and custom endpoints.
-2. **Open a project folder.**
+2. **Open a project folder.** Choose one, reopen a recent folder listed under the step,
+   or drag a folder from your file manager onto the window.
 3. **Send a first task.** When only this step is left, the cursor moves into the
    message box (which glows) and the step suggests a task: "Explain how this project is
    organized." for a folder with files, or "Build a simple to-do list web page in this
@@ -2520,7 +2521,14 @@ Each step ticks itself off from the app's real state, and the checklist goes awa
 good once the first task is sent. After that, every empty new chat shows a row of
 starter tasks suited to the folder (for a project: explain it, find a bug, add tests,
 suggest improvements; for an empty folder: small things to build). Clicking one puts
-the task in the message box to edit or send.
+the task in the message box to edit or send. Below them, **Recent folders** lists the
+last few project folders you opened; click one to start a new chat there.
+
+**Switching folders.** The folder button in the control bar opens a short menu of
+recent folders plus **Choose folder…** (with no recents yet it opens the folder picker
+straight away). You can also drag a folder onto the window from anywhere outside the
+message box to start a new chat in it; images dropped on the message box are still
+attached to your message. File > Open Recent lists the same folders.
 
 **Changing your mind.** While the checklist is open, each finished step shows what it
 set and has a **Change** button, so you can switch model, provider, or folder before
