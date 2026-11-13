@@ -98,13 +98,23 @@ export function normalizeRelPath(path: string): string {
   return path.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/^\/+/, '').replace(/\/+$/, '')
 }
 
+/** A ref that is never attached: the docked panel has no focus trap. */
+const NO_TRAP = { current: null }
+
 export function FilesPanel({
   workspace,
   onClose,
-  initialPath
+  initialPath,
+  docked = false
 }: {
   workspace: string | null
   onClose: () => void
+  /**
+   * Shown as a tab of the right-hand side panel rather than a modal drawer: no
+   * backdrop or focus trap, no close button of its own (the side panel has one), and
+   * the tree above the preview to fit the narrower column.
+   */
+  docked?: boolean
   /** A workspace-relative file to reveal on open: its folders expanded, the file selected and previewed. */
   initialPath?: string
 }): JSX.Element {
@@ -118,10 +128,11 @@ export function FilesPanel({
   // Filter mode: a non-empty query shows flat fuzzy-search results instead of the tree.
   const [filter, setFilter] = useState('')
   const [results, setResults] = useState<string[] | null>(null)
-  // A modal drawer: focus starts in the filter field (type to find a file), Tab stays
-  // inside, Esc closes, and focus returns to whatever opened it.
+  // As a modal drawer: focus starts in the filter field (type to find a file), Tab
+  // stays inside, Esc closes, and focus returns to whatever opened it. Docked, the
+  // panel sits beside the chat and leaves focus alone.
   const panelRef = useRef<HTMLElement>(null)
-  useFocusTrap(panelRef, onClose)
+  useFocusTrap(docked ? NO_TRAP : panelRef, onClose)
 
   const reload = useCallback(async () => {
     if (!workspace) {
@@ -222,6 +233,126 @@ export function FilesPanel({
 
   const root = childrenByDir['']
 
+  const content = (
+    <>
+      <header className="changes-panel__head">
+        <div className="changes-panel__titles">
+          <h2 className="changes-panel__title">Files</h2>
+          <p className="changes-panel__scope">
+            {workspace
+              ? `Every file in ${baseName(workspace)}. Click a folder to expand it, or a file to preview it.`
+              : 'Files in this project.'}
+          </p>
+        </div>
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => void reload()}
+          disabled={loadingRoot || !workspace}
+          title="Refresh"
+          aria-label="Refresh"
+        >
+          <Icon name="refresh" />
+        </button>
+        {!docked && (
+          <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        )}
+      </header>
+
+      <div className="files-panel__split">
+        <div className="files-panel__tree">
+          {workspace && (
+            <div className="files-panel__filter">
+              <Icon name="filter" className="files-panel__filter-icon" />
+              <input
+                type="text"
+                className="files-panel__filter-input"
+                placeholder="Filter files…"
+                value={filter}
+                onChange={(e) => setFilter(e.target.value)}
+                aria-label="Filter files"
+                data-autofocus
+              />
+              {filter && (
+                <button
+                  type="button"
+                  className="files-panel__filter-clear"
+                  onClick={() => setFilter('')}
+                  aria-label="Clear filter"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="files-panel__tree-body" role="tree" aria-label="Project files">
+            {error ? (
+              <p className="changes-panel__empty">Couldn’t read files: {error}</p>
+            ) : !workspace ? (
+              <p className="changes-panel__empty">Open a chat in a project to browse its files.</p>
+            ) : results ? (
+              results.length === 0 ? (
+                <p className="changes-panel__empty">No files match “{filter.trim()}”.</p>
+              ) : (
+                results.map((p) => (
+                  <div
+                    key={p}
+                    className="files-row"
+                    role="treeitem"
+                    aria-selected={p === selected}
+                  >
+                    <button
+                      type="button"
+                      className={`files-row__btn${p === selected ? ' files-row__btn--selected' : ''}`}
+                      onClick={() => setSelected(p)}
+                      title={p}
+                    >
+                      <span className="files-row__chevron" />
+                      <Icon name="file" className="files-row__icon" />
+                      <span className="files-row__name files-row__name--path">{p}</span>
+                    </button>
+                  </div>
+                ))
+              )
+            ) : !root ? (
+              <p className="changes-panel__empty">Loading…</p>
+            ) : root.length === 0 ? (
+              <p className="changes-panel__empty">This folder is empty.</p>
+            ) : (
+              root.map((e) => (
+                <TreeRow
+                  key={e.path}
+                  entry={e}
+                  depth={0}
+                  expanded={expanded}
+                  selected={selected}
+                  childrenByDir={childrenByDir}
+                  onToggle={onToggle}
+                  onSelect={onSelect}
+                />
+              ))
+            )}
+          </div>
+        </div>
+
+        <div className="files-panel__preview">
+          <FilePreview workspace={workspace ?? ''} path={selected} onOpen={onOpen} />
+        </div>
+      </div>
+    </>
+  )
+
+  if (docked) {
+    return (
+      <section ref={panelRef} className="files-panel files-panel--docked" aria-label="Files">
+        {content}
+      </section>
+    )
+  }
+
   return (
     <div className="drawer-overlay" onClick={onClose}>
       <aside
@@ -233,111 +364,7 @@ export function FilesPanel({
         aria-label="Files"
         tabIndex={-1}
       >
-        <header className="changes-panel__head">
-          <div className="changes-panel__titles">
-            <h2 className="changes-panel__title">Files</h2>
-            <p className="changes-panel__scope">
-              {workspace
-                ? `Every file in ${baseName(workspace)}. Click a folder to expand it, or a file to preview it.`
-                : 'Files in this project.'}
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn btn--sm"
-            onClick={() => void reload()}
-            disabled={loadingRoot || !workspace}
-            title="Refresh"
-            aria-label="Refresh"
-          >
-            <Icon name="refresh" />
-          </button>
-          <button type="button" className="btn btn--sm" onClick={onClose} aria-label="Close">
-            ✕
-          </button>
-        </header>
-
-        <div className="files-panel__split">
-          <div className="files-panel__tree">
-            {workspace && (
-              <div className="files-panel__filter">
-                <Icon name="filter" className="files-panel__filter-icon" />
-                <input
-                  type="text"
-                  className="files-panel__filter-input"
-                  placeholder="Filter files…"
-                  value={filter}
-                  onChange={(e) => setFilter(e.target.value)}
-                  aria-label="Filter files"
-                  data-autofocus
-                />
-                {filter && (
-                  <button
-                    type="button"
-                    className="files-panel__filter-clear"
-                    onClick={() => setFilter('')}
-                    aria-label="Clear filter"
-                  >
-                    ✕
-                  </button>
-                )}
-              </div>
-            )}
-
-            <div className="files-panel__tree-body" role="tree" aria-label="Project files">
-              {error ? (
-                <p className="changes-panel__empty">Couldn’t read files: {error}</p>
-              ) : !workspace ? (
-                <p className="changes-panel__empty">Open a chat in a project to browse its files.</p>
-              ) : results ? (
-                results.length === 0 ? (
-                  <p className="changes-panel__empty">No files match “{filter.trim()}”.</p>
-                ) : (
-                  results.map((p) => (
-                    <div
-                      key={p}
-                      className="files-row"
-                      role="treeitem"
-                      aria-selected={p === selected}
-                    >
-                      <button
-                        type="button"
-                        className={`files-row__btn${p === selected ? ' files-row__btn--selected' : ''}`}
-                        onClick={() => setSelected(p)}
-                        title={p}
-                      >
-                        <span className="files-row__chevron" />
-                        <Icon name="file" className="files-row__icon" />
-                        <span className="files-row__name files-row__name--path">{p}</span>
-                      </button>
-                    </div>
-                  ))
-                )
-              ) : !root ? (
-                <p className="changes-panel__empty">Loading…</p>
-              ) : root.length === 0 ? (
-                <p className="changes-panel__empty">This folder is empty.</p>
-              ) : (
-                root.map((e) => (
-                  <TreeRow
-                    key={e.path}
-                    entry={e}
-                    depth={0}
-                    expanded={expanded}
-                    selected={selected}
-                    childrenByDir={childrenByDir}
-                    onToggle={onToggle}
-                    onSelect={onSelect}
-                  />
-                ))
-              )}
-            </div>
-          </div>
-
-          <div className="files-panel__preview">
-            <FilePreview workspace={workspace ?? ''} path={selected} onOpen={onOpen} />
-          </div>
-        </div>
+        {content}
       </aside>
     </div>
   )

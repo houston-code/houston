@@ -349,7 +349,8 @@ function viewMenu(ctx: MenuContext): MenuItemConstructorOptions {
       panelItem(ctx, 'tasks', 'Background Tasks'),
       panelItem(ctx, 'preview', 'Preview'),
       { ...panelItem(ctx, 'side-chat', 'Side Chat'), enabled: ctx.hasConversation },
-      // Changes and Files are dialogs over a folder, not panels: always "Show".
+      // Changes is a dialog over a folder, not a panel: always "Show". Files opens as
+      // a tab of the side panel.
       {
         label: 'Show Changes',
         enabled: ctx.hasWorkspace === true,
@@ -360,6 +361,7 @@ function viewMenu(ctx: MenuContext): MenuItemConstructorOptions {
         enabled: ctx.hasWorkspace === true,
         click: () => sendMenuCommand({ type: 'show-files' })
       },
+      { label: 'Reset Layout', click: () => sendMenuCommand({ type: 'reset-layout' }) },
       { type: 'separator' },
       { role: 'reload' },
       { role: 'forceReload' },

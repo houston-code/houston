@@ -6,8 +6,11 @@ import { copyText } from '../lib/clipboard'
 import { describeShell } from '../lib/taskLabel'
 
 /**
- * The right-hand dock. With `onTabChange` it has two tabs, Preview and Tasks (the
- * background-tasks list, passed in as `tasks`); without, it is Preview-only.
+ * The right-hand dock. With `onTabChange` it has tabs: Tasks (the background-tasks
+ * list, passed in as `tasks`) and Preview always, plus Files and Plan review when
+ * their content is given; without, it is Preview-only. A tab other than Preview is
+ * mounted the first time it shows and then kept (hidden) so its state survives a
+ * switch.
  *
  * Preview: a resizable right-hand panel that shows the dev servers the
  * agent started (each one's loopback URL, auto-detected from its output) as live,
@@ -21,7 +24,17 @@ import { describeShell } from '../lib/taskLabel'
  * on top (`occluded`) so a preview never covers a modal; main keeps the view alive
  * but hidden. Unmounting (the dock closed) tears every pane down.
  */
-export type DockTab = 'preview' | 'tasks'
+export type DockTab = 'preview' | 'tasks' | 'files' | 'plan'
+
+/** Every tab in strip order: the title-bar buttons' order, then panels that open on their own. */
+export const DOCK_TABS: readonly DockTab[] = ['tasks', 'preview', 'files', 'plan']
+
+const TAB_LABEL: Record<DockTab, string> = {
+  tasks: 'Background tasks',
+  preview: 'Preview',
+  files: 'Files',
+  plan: 'Plan review'
+}
 
 export function PreviewDock({
   servers,
@@ -31,6 +44,8 @@ export function PreviewDock({
   tab = 'preview',
   onTabChange,
   tasks,
+  files,
+  plan,
   taskCount = 0,
   focusServerId = null,
   focusRequest
@@ -46,6 +61,10 @@ export function PreviewDock({
   onTabChange?: (tab: DockTab) => void
   /** The Tasks tab's content (the TasksPanel). */
   tasks?: ReactNode
+  /** The Files tab's content (the docked FilesPanel); no tab without it. */
+  files?: ReactNode
+  /** The Plan review tab's content (the docked PlanPanel); no tab without it. */
+  plan?: ReactNode
   /** Live background tasks, shown as a count on the Tasks tab. */
   taskCount?: number
   /** A server to keep on screen even past the pane cap (Tasks' "Open preview"). */
@@ -57,7 +76,14 @@ export function PreviewDock({
   // While Tasks is showing, Preview stays mounted (its pages and added URLs survive
   // the switch) but its native views are hidden, exactly as under an overlay.
   const previewVisible = tab === 'preview'
-  const tabRefs = useRef<Record<DockTab, HTMLButtonElement | null>>({ preview: null, tasks: null })
+  const tabRefs = useRef<Partial<Record<DockTab, HTMLButtonElement | null>>>({})
+  const content: Partial<Record<DockTab, ReactNode>> = { tasks, files, plan }
+  const tabs = DOCK_TABS.filter((id) => id === 'tasks' || id === 'preview' || content[id] !== undefined)
+  // Tabs that have shown at least once stay mounted (hidden) after.
+  const [visited, setVisited] = useState<ReadonlySet<DockTab>>(() => new Set([tab]))
+  useEffect(() => {
+    setVisited((v) => (v.has(tab) ? v : new Set(v).add(tab)))
+  }, [tab])
   const [manualUrls, setManualUrls] = useState<string[]>([])
   const [draft, setDraft] = useState('')
   const [draftError, setDraftError] = useState(false)
@@ -176,7 +202,7 @@ export function PreviewDock({
       <header className="preview-dock__header">
         {onTabChange ? (
           <div className="dock-tabs" role="tablist" aria-label="Side panel">
-            {(['tasks', 'preview'] as const).map((id) => (
+            {tabs.map((id, idx) => (
               <button
                 key={id}
                 ref={(el) => {
@@ -196,13 +222,18 @@ export function PreviewDock({
                   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End')
                     return
                   e.preventDefault()
-                  const next: DockTab =
-                    e.key === 'Home' ? 'tasks' : e.key === 'End' ? 'preview' : id === 'preview' ? 'tasks' : 'preview'
+                  const n = tabs.length
+                  const next =
+                    e.key === 'Home'
+                      ? tabs[0]
+                      : e.key === 'End'
+                        ? tabs[n - 1]
+                        : tabs[(idx + (e.key === 'ArrowRight' ? 1 : n - 1)) % n]
                   onTabChange(next)
                   tabRefs.current[next]?.focus()
                 }}
               >
-                {id === 'preview' ? 'Preview' : 'Background tasks'}
+                {TAB_LABEL[id]}
                 {id === 'tasks' && taskCount > 0 && (
                   <span className="dock-tabs__count" aria-label={`${taskCount} running`}>
                     {taskCount}
@@ -400,6 +431,21 @@ export function PreviewDock({
           {tasks}
         </div>
       )}
+      {onTabChange &&
+        (['files', 'plan'] as const)
+          .filter((id) => content[id] !== undefined)
+          .map((id) => (
+            <div
+              key={id}
+              className={`preview-dock__panel preview-dock__panel--${id}`}
+              role="tabpanel"
+              id={`dock-panel-${id}`}
+              aria-labelledby={`dock-tab-${id}`}
+              hidden={tab !== id}
+            >
+              {(tab === id || visited.has(id)) && content[id]}
+            </div>
+          ))}
     </aside>
   )
 }

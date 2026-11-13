@@ -554,6 +554,8 @@ export type MenuCommand =
   /** View → Show Changes / Show Files: open that dialog. */
   | { type: 'show-changes' }
   | { type: 'show-files' }
+  /** View → Reset Layout: back to the first-launch panel layout. */
+  | { type: 'reset-layout' }
   | { type: 'command-palette' }
   /** Edit → Find in Chat…: open the find bar. */
   | { type: 'find-in-chat' }

@@ -5,7 +5,6 @@ const none: OverlayFlags = {
   settings: false,
   doctor: false,
   changes: false,
-  files: false,
   scorecard: false,
   help: false,
   viewer: false,
@@ -21,7 +20,6 @@ const MODALS: (keyof OverlayFlags)[] = [
   'settings',
   'doctor',
   'changes',
-  'files',
   'scorecard',
   'help',
   'viewer',
@@ -44,10 +42,9 @@ describe('overlays', () => {
     expect(suppressesTips(only(key))).toBe(true)
   })
 
-  it('hides the preview under the Files and Scorecard drawers and the Doctor modal', () => {
-    // These three were missing from the old hand-written list, so the native preview
-    // pane painted over them.
-    expect(occludesPreview(only('files'))).toBe(true)
+  it('hides the preview under the Scorecard drawer and the Doctor modal', () => {
+    // These were missing from the old hand-written list, so the native preview pane
+    // painted over them. (Files, also once missing, is now a tab of the same dock.)
     expect(occludesPreview(only('scorecard'))).toBe(true)
     expect(occludesPreview(only('doctor'))).toBe(true)
   })

@@ -10,7 +10,6 @@ export interface OverlayFlags {
   settings: boolean
   doctor: boolean
   changes: boolean
-  files: boolean
   scorecard: boolean
   help: boolean
   /** The full-size image viewer (opened from a gallery or a tool-card screenshot). */
@@ -31,7 +30,6 @@ export function modalOpen(f: OverlayFlags): boolean {
     f.settings ||
     f.doctor ||
     f.changes ||
-    f.files ||
     f.scorecard ||
     f.help ||
     f.viewer ||

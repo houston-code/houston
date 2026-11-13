@@ -131,7 +131,10 @@ Open source under the [Apache License 2.0](LICENSE).
   stop the leftover process. The panel never opens by itself.
 - **Integrated terminal and Files panel.** A resizable, multi-tab terminal panel runs
   full PTY sessions (interactive programs, colors, resize) next to the chat. The
-  Files panel browses the project like a file manager, with an in-app preview
+  Files tab of the right-hand dock browses the project like a file manager beside the
+  chat (the dock also holds Background tasks, Preview, and a waiting plan's review,
+  reopens on the tab used last, and **View > Reset Layout** restores the
+  first-launch layout), with an in-app preview
   (syntax-highlighted code, images) and an Open action that hands a file to its
   default app. Each chat's ⋯ menu also has **Open in**, which opens the chat's
   folder in a detected editor or reveals it in the file manager.
