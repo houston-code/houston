@@ -272,6 +272,7 @@ import {
   type CommandFailure
 } from './stall'
 import { RevertTracker } from './revertTracker'
+import { workingTreeFingerprint } from './workingTree'
 import {
   MAX_OUTPUT_CONTINUATIONS,
   continuationNote,
@@ -3159,10 +3160,17 @@ export async function startRun(
 
     // End-of-run verification gate (opt-in). Tracks whether this run modified any
     // files (so we don't verify a read-only turn) and how many verification passes
-    // have already run (bounded self-correction). A run_shell edit can also change
-    // files, but keying off write-kind tool calls is the reliable, cheap signal and
-    // matches the checkpoint snapshot logic already in the loop.
+    // have already run (bounded self-correction). A write-kind tool call arms it
+    // directly. A run_shell edit (sed -i, a heredoc, git apply, a codegen script) arms
+    // it too: when the gate is configured, the working tree is fingerprinted at run
+    // start, and at a natural stop after a successful foreground shell command it is
+    // fingerprinted again; a difference means the shell changed files. Outside a git
+    // repo there is no fingerprint, so only write-kind calls arm it there.
     let filesModified = false
+    const verifyGateConfigured =
+      settings.verifyOnStop === true && (settings.verifyCommand ?? '').trim() !== ''
+    const treeAtStart = verifyGateConfigured ? await workingTreeFingerprint(workspace) : null
+    let shellMayHaveEdited = false
     let verifyPassesRun = 0
     const verifyMaxPasses = resolveVerifyMaxPasses(settings.verifyMaxPasses)
 
@@ -3912,6 +3920,20 @@ export async function startRun(
         // run it. On failure, feed the output back and continue the loop for a
         // BOUNDED number of extra passes so the model can self-correct; once the
         // pass budget is spent we accept done regardless (never an infinite loop).
+        // Only a shell command can have changed files without arming the gate already:
+        // compare the working tree with its run-start fingerprint. Plan mode runs
+        // nothing, and shouldVerify refuses it below, so it's skipped here too.
+        if (
+          stopReason === 'end_turn' &&
+          !filesModified &&
+          shellMayHaveEdited &&
+          treeAtStart !== null &&
+          run.policy !== 'plan'
+        ) {
+          shellMayHaveEdited = false
+          const treeNow = await workingTreeFingerprint(workspace)
+          if (treeNow !== null && treeNow !== treeAtStart) filesModified = true
+        }
         if (
           stopReason === 'end_turn' &&
           shouldVerify({
@@ -4089,9 +4111,10 @@ export async function startRun(
         // happens inside the detector) for repeated-error tracking, and note any
         // successful workspace-mutating (write/shell) call so a run that's actually
         // editing/running things doesn't count as "no progress". The verification
-        // gate is armed more narrowly — only an actual file write (kind 'write')
-        // should trigger it, so a read-only shell command (ls/git log) never queues
-        // a verify pass.
+        // gate is armed more narrowly: a file write (kind 'write'), or a successful
+        // shell command that actually changed the working tree (checked at the
+        // natural stop), so a read-only shell command (ls/git log) never queues a
+        // verify pass.
         if (r.call.name === 'run_shell') announceMissingRuntime(output)
         // A file read now is usually edited next: if its language server is already
         // running, open the file there in the background so post-edit diagnostics have a
@@ -4116,6 +4139,11 @@ export async function startRun(
         // A memory save is a write to Houston's own store, not the project: it doesn't
         // arm the verification gate.
         if (r.ok && kind === 'write' && !MEMORY_WRITE_TOOL_NAMES.includes(r.call.name)) filesModified = true
+        // A foreground shell command that exited 0 may have edited files; the natural
+        // stop checks the working tree to tell (see treeAtStart).
+        if (r.ok && !failure && r.call.name === 'run_shell' && r.call.arguments.background !== true) {
+          shellMayHaveEdited = true
+        }
         // A write that only put a file back to an earlier version isn't progress.
         if (r.ok && PROGRESS_TOOLS.has(r.call.name) && !revertCalls.has(r.call.id)) writeIterations.add(iter)
         if (r.ok && isDiscoveryTool(r.call.name, kind)) {

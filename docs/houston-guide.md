@@ -1071,7 +1071,11 @@ your own step count, it stays a hard stop until you turn the switch on.
 
 **Checking the work when it finishes.** Loop control also has an opt-in verification
 command that runs when the agent stops after changing files, with a failure sent back
-for a bounded fix-up. With a project open, Houston suggests one from the project's
+for a bounded fix-up. Changes made through shell commands count too (a `sed -i`, a
+heredoc, `git apply`, a code generator): in a git repository, Houston compares the
+working tree at the end of the turn with how it was when the turn started, so a
+read-only command like `ls` or `git log` doesn't trigger a check. Outside a git
+repository, only the agent's own file edits do. With a project open, Houston suggests one from the project's
 files under the field: the `typecheck` and `test` scripts in `package.json` (run with
 npm, pnpm, yarn, or bun by lockfile), `cargo test`, `go test ./...`, or `pytest`.
 **Use this command** fills the field; it doesn't turn verification on.

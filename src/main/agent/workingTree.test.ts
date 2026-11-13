@@ -9,7 +9,8 @@ import {
   collectWorkingTreeStats,
   ghHostsFile,
   knownGithubHosts,
-  sumNumstat
+  sumNumstat,
+  workingTreeFingerprint
 } from './workingTree'
 
 // Real git in a temp dir: the branch label and diff base depend on how git resolves
@@ -45,6 +46,45 @@ describe('collectWorkingTreeChanges (real git)', () => {
     git(repo, '-c', 'commit.gpgsign=false', 'commit', '-m', 'init')
     return repo
   }
+
+  maybe('fingerprints the working tree: stable when untouched, changed by any edit', async () => {
+    const repo = initRepo()
+    const outside = mkdtempSync(join(tmpdir(), 'wtf-'))
+    try {
+      const clean = await workingTreeFingerprint(repo)
+      expect(clean).not.toBeNull()
+      expect(await workingTreeFingerprint(repo)).toBe(clean)
+
+      // Editing a tracked file changes it.
+      writeFileSync(join(repo, 'README.md'), '# edited\n')
+      const dirty = await workingTreeFingerprint(repo)
+      expect(dirty).not.toBe(clean)
+
+      // A further edit to an already-dirty file changes it again, though the
+      // status listing stays the same.
+      writeFileSync(join(repo, 'README.md'), '# edited again, longer\n')
+      const dirtier = await workingTreeFingerprint(repo)
+      expect(dirtier).not.toBe(dirty)
+
+      // A new untracked file changes it; an ignored one doesn't.
+      writeFileSync(join(repo, '.gitignore'), 'ignored.txt\n')
+      const withIgnoreFile = await workingTreeFingerprint(repo)
+      expect(withIgnoreFile).not.toBe(dirtier)
+      writeFileSync(join(repo, 'ignored.txt'), 'x\n')
+      expect(await workingTreeFingerprint(repo)).toBe(withIgnoreFile)
+
+      // Committing everything changes it (HEAD moved, tree is clean again).
+      git(repo, 'add', '-A')
+      git(repo, '-c', 'commit.gpgsign=false', 'commit', '-m', 'more')
+      expect(await workingTreeFingerprint(repo)).not.toBe(withIgnoreFile)
+
+      // Outside a repo there is no fingerprint.
+      expect(await workingTreeFingerprint(outside)).toBeNull()
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+      rmSync(outside, { recursive: true, force: true })
+    }
+  }, TIMEOUT)
 
   maybe('names the unborn branch of a repo with no commits', async () => {
     const repo = initUnborn('master')

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { join } from 'node:path'
 import type {
   AgentEvent,
@@ -6866,6 +6867,78 @@ describe('loop control — verification gate', () => {
     // This is the only loop test that actually executes run_shell, so it spawns a
     // real PTY. That startup can brush past the 5s default under CI load — give it
     // generous headroom rather than let it flake.
+  }, 20_000)
+
+  /** Make `ws` a git repo with one committed file, so shell edits show in the tree. */
+  function gitRepoWithTrackedFile(): void {
+    const git = (...args: string[]): void => {
+      execFileSync('git', args, { cwd: ws, stdio: 'ignore' })
+    }
+    git('init', '-q')
+    git('config', 'user.email', 'test@example.com')
+    git('config', 'user.name', 'Test')
+    git('config', 'commit.gpgsign', 'false')
+    writeFileSync(join(ws, 'tracked.txt'), 'v1\n')
+    git('add', 'tracked.txt')
+    git('commit', '-q', '-m', 'init')
+  }
+
+  /** A run whose only tool call is one run_shell command, then a natural stop. */
+  function shellOnlyRun(command: string): ReturnType<typeof run> {
+    return run({
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'ran a command' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+  }
+
+  it('a shell command that edits a tracked file arms the gate', async () => {
+    gitRepoWithTrackedFile()
+    h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+    const r = await withSettings(
+      { verifyOnStop: true, verifyCommand: 'npm run typecheck', verifyMaxPasses: 1 },
+      () => shellOnlyRun("printf 'v2\\n' > tracked.txt")
+    )
+    const shellResult = r.events.find((e) => e.type === 'tool_result' && e.name === 'run_shell') as
+      | { ok: boolean }
+      | undefined
+    expect(shellResult?.ok).toBe(true)
+    expect(readFileSync(join(ws, 'tracked.txt'), 'utf8')).toBe('v2\n')
+    expect(h.verifyRuns).toHaveLength(1)
+    expect(r.events.some((e) => e.type === 'verification')).toBe(true)
+  }, 20_000)
+
+  it('a shell command that creates a new file in a repo arms the gate', async () => {
+    gitRepoWithTrackedFile()
+    h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+    await withSettings(
+      { verifyOnStop: true, verifyCommand: 'npm run typecheck', verifyMaxPasses: 1 },
+      () => shellOnlyRun("printf 'gen\\n' > generated.txt")
+    )
+    expect(existsSync(join(ws, 'generated.txt'))).toBe(true)
+    expect(h.verifyRuns).toHaveLength(1)
+  }, 20_000)
+
+  it('a read-only shell command in a repo leaves the gate unarmed', async () => {
+    gitRepoWithTrackedFile()
+    // An existing uncommitted edit from before the run must not count either.
+    writeFileSync(join(ws, 'tracked.txt'), 'dirty before the run\n')
+    h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+    const r = await withSettings(
+      { verifyOnStop: true, verifyCommand: 'npm run typecheck', verifyMaxPasses: 1 },
+      () => shellOnlyRun('ls && cat tracked.txt')
+    )
+    const shellResult = r.events.find((e) => e.type === 'tool_result' && e.name === 'run_shell') as
+      | { ok: boolean }
+      | undefined
+    expect(shellResult?.ok).toBe(true)
+    expect(h.verifyRuns).toHaveLength(0)
   }, 20_000)
 })
 

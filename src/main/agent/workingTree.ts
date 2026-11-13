@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { realpathSync, statSync, readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -94,6 +95,51 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
     ship,
     ...(truncated ? { truncated: true } : {})
   }
+}
+
+/** Cap on how many changed paths a fingerprint stats, so a huge dirty tree stays cheap. */
+const MAX_FINGERPRINT_PATHS = 5_000
+
+/**
+ * A cheap fingerprint of the working tree's uncommitted state: HEAD's commit, the
+ * `git status` listing (tracked changes and untracked, non-ignored files), and the
+ * size and modification time of every listed path. Two fingerprints differ when a
+ * command edited, created, deleted, staged, or committed a file between them,
+ * including a further edit to a file that was already dirty. Ignored files don't
+ * count. Null outside a git work tree or when git fails, so a caller can't mistake
+ * "unknown" for "unchanged".
+ *
+ * Read-only and hardened (see {@link runGitCapture}); never throws.
+ */
+export async function workingTreeFingerprint(workspace: string): Promise<string | null> {
+  const root = await workTreeRoot(workspace)
+  if (!root) return null
+  const [head, status] = await Promise.all([
+    runGitCapture(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], root),
+    runGitCapture(['status', '--porcelain=v1', '-z', '--untracked-files=all'], root)
+  ])
+  if (!status.ok) return null
+  const hash = createHash('sha256')
+  hash.update(head.ok ? head.stdout.trim() : 'unborn')
+  hash.update('\0')
+  hash.update(status.stdout)
+  const parts = status.stdout.split('\0')
+  let statted = 0
+  for (let i = 0; i < parts.length && statted < MAX_FINGERPRINT_PATHS; i++) {
+    const entry = parts[i]
+    if (entry.length < 4) continue
+    // A rename or copy record is followed by its source path as one more field.
+    if (entry[0] === 'R' || entry[0] === 'C') i++
+    const rel = entry.slice(3)
+    statted++
+    try {
+      const st = statSync(join(root, rel))
+      hash.update(`\0${rel}\0${st.size}\0${st.mtimeMs}`)
+    } catch {
+      hash.update(`\0${rel}\0missing`)
+    }
+  }
+  return hash.digest('hex')
 }
 
 /** The workspace's real path when it is inside a git work tree, else null. */
