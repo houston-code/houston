@@ -27,6 +27,7 @@ export const DEEP_LINK_SETTINGS_PAGES = [
   'customize',
   'mcp',
   'hooks',
+  'schedules',
   'memory',
   'import',
   'workspace',
