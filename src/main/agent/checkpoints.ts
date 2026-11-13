@@ -1054,6 +1054,30 @@ async function currentState(roots: string[], abs: string): Promise<FileState | n
   return capped ? null : { content, binary }
 }
 
+/**
+ * The text files a run changed whose display path passes `want`, each with its content
+ * before the run first touched it and as it stands now (null: absent). Files that are
+ * binary, too large, or that the guard can't vouch for now (see {@link currentState})
+ * are left out. Only a write tool's targets are here: a file a shell command changed
+ * without one is not.
+ */
+export async function runFileChanges(
+  runId: string,
+  want: (display: string) => boolean
+): Promise<{ path: string; before: string | null; after: string | null }[]> {
+  const cp = checkpoints.get(runId) ?? (await loadRunIntoMemory(runId))
+  if (!cp) return []
+  const out: { path: string; before: string | null; after: string | null }[] = []
+  for (const [abs, snap] of cp.files) {
+    const display = displayPath(cp.roots, abs)
+    if (snap.beforeBinary || !want(display)) continue
+    const now = await currentState(cp.roots, abs)
+    if (!now || now.binary) continue
+    out.push({ path: display, before: snap.before, after: now.content })
+  }
+  return out
+}
+
 /** The files one run's rewind put back, so undoing the rewind re-applies exactly those. */
 export interface RevertedRun {
   runId: string

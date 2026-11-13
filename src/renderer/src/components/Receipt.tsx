@@ -7,6 +7,7 @@ import {
   planCheckText,
   receiptHasFailure,
   receiptSummary,
+  testEditText,
   RECEIPT_TITLE,
   type PlanProgress,
   type ReceiptCheck,
@@ -56,6 +57,19 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
           </ul>
         )}
         {receipt.plan && !receipt.plan.complete && <PlanSection plan={receipt.plan} />}
+        {receipt.testEdits && receipt.testEdits.length > 0 && (
+          <div className="receipt__gaps">
+            <span className="receipt__label">Test edits to review</span>
+            <ul>
+              {receipt.testEdits.map((t, i) => (
+                <li key={i}>{testEditText(t)}</li>
+              ))}
+            </ul>
+            {(receipt.testEditsOmitted ?? 0) > 0 && (
+              <p className="receipt__note">And {receipt.testEditsOmitted} more.</p>
+            )}
+          </div>
+        )}
         {receipt.todoGaps && receipt.todoGaps.length > 0 && (
           <div className="receipt__gaps">
             <span className="receipt__label">Marked done with nothing recorded</span>
