@@ -225,6 +225,36 @@ describe('useChat', () => {
     expect(result.current.usage).toEqual({ context: 1000, output: 350, cost: 0.02 })
   })
 
+  it("keeps a run meter: clock from the turn's start, tokens from the reply so far", async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+    act(() =>
+      result.current.reset([], { context: 100, output: 1000, cost: 0 })
+    )
+    expect(result.current.meter).toBeNull()
+    const before = Date.now()
+    const runId = await sendAndGetRunId(result, api)
+    expect(result.current.meter?.startedAt).toBeGreaterThanOrEqual(before)
+    emit({ runId, type: 'text', delta: 'x'.repeat(80) })
+    expect(result.current.meter?.streamedChars).toBe(80)
+    // The usage event carries the chat's running total; the meter takes the growth.
+    emit({ runId, type: 'usage', inputTokens: 200, outputTokens: 1025, cost: 0 })
+    expect(result.current.meter).toMatchObject({ reported: 25, streamedChars: 0 })
+    emit({ runId, type: 'usage', inputTokens: 300, outputTokens: 1060, cost: 0 })
+    expect(result.current.meter?.reported).toBe(60)
+    emit({ runId, type: 'done', stopReason: 'end_turn' })
+    expect(result.current.meter).toBeNull()
+  })
+
+  it('starts an adopted run\'s clock at the time the run began', () => {
+    installApi()
+    const { result } = renderHook(() => useChat())
+    act(() =>
+      result.current.adopt('run-x', [], [{ runId: 'run-x', type: 'text', delta: 'y'.repeat(40) }], 12_345)
+    )
+    expect(result.current.meter).toEqual({ startedAt: 12_345, reported: 0, streamedChars: 40 })
+  })
+
   it('stops running on done and flags errors on error', async () => {
     const { api, emit } = installApi()
     const { result } = renderHook(() => useChat())
@@ -240,6 +270,22 @@ describe('useChat', () => {
     emit({ runId: runId2, type: 'error', message: 'kaboom' })
     expect(result.current.running).toBe(false)
     expect(result.current.errored).toBe(true)
+  })
+
+  it('keeps what the failed run reported, and seeds it from a saved failure on reset', async () => {
+    const { api, emit } = installApi()
+    const { result } = renderHook(() => useChat())
+    const runId = await sendAndGetRunId(result, api)
+    emit({ runId, type: 'error', message: '429 slow down', cause: 'rate-limit' })
+    expect(result.current.failure).toEqual({ message: '429 slow down', cause: 'rate-limit' })
+    await act(async () => {
+      await result.current.retry({ ...SEND })
+    })
+    expect(result.current.failure).toBeNull()
+    act(() => result.current.reset([], null, true, { message: 'saved', cause: 'network' }))
+    expect(result.current.failure).toEqual({ message: 'saved', cause: 'network' })
+    act(() => result.current.reset([], null, false, { message: 'ignored' }))
+    expect(result.current.failure).toBeNull()
   })
 
   it('retry re-runs the turn with a fresh runId, adds no user item, and clears errored', async () => {

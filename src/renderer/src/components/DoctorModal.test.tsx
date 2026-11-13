@@ -39,7 +39,7 @@ describe('DoctorModal', () => {
     expect(screen.getByText('Sandbox')).toBeInTheDocument()
   })
 
-  it('surfaces a problem and its fix', async () => {
+  it('surfaces a problem and a fix that points at the desktop app, not a terminal command', async () => {
     installApi(
       facts({
         providers: [{ id: 'openai', requiresKey: true, hasKey: false }],
@@ -49,21 +49,20 @@ describe('DoctorModal', () => {
     render(<DoctorModal workspace={null} onClose={vi.fn()} />)
     // A provider with no key is a warning that names the fix; no active model is a fail.
     await waitFor(() => expect(screen.getByText(/problem/)).toBeInTheDocument())
-    expect(screen.getByText(/run \/login and pick openai/)).toBeInTheDocument()
+    expect(screen.getByText(/add a key for openai in Settings > Providers & Models/)).toBeInTheDocument()
+    expect(screen.getByText(/pick one in the model menu above the message box/)).toBeInTheDocument()
+    expect(screen.queryByText(/\/login/)).toBeNull()
   })
 
-  it('counts an env var shadowing a stored key as a warning', async () => {
+  it('does not warn about an environment key, which the desktop app never reads', async () => {
     installApi(
       facts({
         providers: [{ id: 'anthropic', requiresKey: true, hasKey: true, shadowedByEnv: 'ANTHROPIC_API_KEY' }]
       })
     )
     render(<DoctorModal workspace={null} onClose={vi.fn()} />)
-    // The env var appears in both the detail and its fix — that it's surfaced at all
-    // is the point (it's the cause of "I changed my key and nothing happened").
-    await waitFor(() => expect(screen.getAllByText(/ANTHROPIC_API_KEY/).length).toBeGreaterThan(0))
-    expect(screen.getByText(/unset ANTHROPIC_API_KEY/)).toBeInTheDocument()
-    expect(screen.getByText(/worth knowing/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('Everything looks healthy.')).toBeInTheDocument())
+    expect(screen.queryByText(/ANTHROPIC_API_KEY/)).toBeNull()
   })
 
   it('closes on the button and the backdrop', async () => {

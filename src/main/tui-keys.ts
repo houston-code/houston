@@ -87,6 +87,16 @@ export const DISABLE_BRACKETED_PASTE = '\x1b[?2004l'
  */
 export const ENABLE_FOCUS_REPORTING = '\x1b[?1004h'
 export const DISABLE_FOCUS_REPORTING = '\x1b[?1004l'
+
+/**
+ * Ask the terminal to report modified keys it would otherwise send as the plain key
+ * (xterm's modifyOtherKeys, level 1). The one the composer needs is Shift-Enter:
+ * without it a terminal sends a bare CR, indistinguishable from Enter. Level 1 leaves
+ * every key with a conventional meaning (Ctrl-letters, Alt-letters) as it was, and a
+ * terminal that does not know the sequence ignores it.
+ */
+export const ENABLE_MODIFIED_KEYS = '\x1b[>4;1m'
+export const DISABLE_MODIFIED_KEYS = '\x1b[>4;0m'
 /** What the terminal sends for focus / blur under mode 1004. */
 export const FOCUS_IN = '\x1b[I'
 export const FOCUS_OUT = '\x1b[O'
@@ -191,8 +201,28 @@ function partialTail(buf: string, marker: string): number {
   return 0
 }
 
+/**
+ * Enter as a terminal reports it with modifiers: xterm's modifyOtherKeys form
+ * (`CSI 27;<mod>;13~`) or the CSI-u form (`CSI 13;<mod>u`). Any modifier (Shift,
+ * Alt, Ctrl) means "new line"; the unmodified report is Enter. Null when the
+ * sequence is not Enter at all.
+ */
+function modifiedEnter(params: string, final: string): EditorKey | null {
+  let mod: string | undefined
+  if (final === '~') mod = /^27;([0-9]+);13$/.exec(params)?.[1]
+  else if (final === 'u') {
+    const m = /^13(?:;([0-9]+))?$/.exec(params)
+    if (!m) return null
+    mod = m[1] ?? '1'
+  }
+  if (mod === undefined) return null
+  return Number(mod) > 1 ? { type: 'newline' } : { type: 'enter' }
+}
+
 /** CSI final-byte lookup for the cursor/edit keys the composer cares about. */
 function csiKey(params: string, final: string): EditorKey | null {
+  const enter = modifiedEnter(params, final)
+  if (enter) return enter
   // Modified keys arrive as `1;<mod><final>`: 5 = Ctrl, 3 = Alt. Both mean word-wise.
   const mod = /^1;([0-9]+)$/.exec(params)?.[1]
   const wordwise = mod === '5' || mod === '3'

@@ -110,3 +110,49 @@ describe('buildDoctorReport — update row', () => {
     expect(row.fix).toBe('brew upgrade houston')
   })
 })
+
+describe('buildDoctorReport — fix hints follow the client', () => {
+  const fixOf = (f: DoctorFacts, label: string, client: 'terminal' | 'desktop'): string | undefined =>
+    buildDoctorReport(f, client)
+      .groups.flatMap((g) => g.checks)
+      .find((c) => c.label === label)?.fix
+
+  it('points the terminal at slash commands and the desktop at its Settings and menus', () => {
+    const noKey = facts({ providers: [{ id: 'openai', requiresKey: true, hasKey: false }] })
+    expect(fixOf(noKey, 'openai', 'terminal')).toBe('run /login and pick openai')
+    expect(fixOf(noKey, 'openai', 'desktop')).toBe('add a key for openai in Settings > Providers & Models')
+
+    const none = facts({ providers: [] })
+    expect(fixOf(none, 'providers', 'desktop')).toBe('connect one in Settings > Providers & Models')
+
+    const noModel = facts({ active: null })
+    expect(fixOf(noModel, 'active model', 'terminal')).toBe('run /login, or /model <id>')
+    expect(fixOf(noModel, 'active model', 'desktop')).toBe('pick one in the model menu above the message box')
+
+    const mcp = facts({ mcp: [{ id: 'linear', state: 'needs-auth' }] })
+    expect(fixOf(mcp, 'linear', 'terminal')).toBe('/mcp login linear')
+    expect(fixOf(mcp, 'linear', 'desktop')).toBe('sign in from Settings > MCP Servers')
+  })
+
+  it('never mentions /login or another slash command to the desktop', () => {
+    const broken = facts({
+      providers: [{ id: 'openai', requiresKey: true, hasKey: false }],
+      active: null,
+      mcp: [{ id: 'linear', state: 'needs-auth' }]
+    })
+    const fixes = buildDoctorReport(broken, 'desktop')
+      .groups.flatMap((g) => g.checks)
+      .map((c) => c.fix ?? '')
+    expect(fixes.some((f) => f.includes('/'))).toBe(false)
+  })
+
+  it('skips the environment-key warning on the desktop, which never reads keys from the environment', () => {
+    const shadowed = facts({ providers: [{ id: 'anthropic', requiresKey: true, hasKey: true, shadowedByEnv: 'ANTHROPIC_API_KEY' }] })
+    const check = (client: 'terminal' | 'desktop') =>
+      buildDoctorReport(shadowed, client)
+        .groups.flatMap((g) => g.checks)
+        .find((c) => c.label === 'anthropic')
+    expect(check('terminal')?.status).toBe('warn')
+    expect(check('desktop')).toMatchObject({ status: 'ok', detail: 'key set' })
+  })
+})

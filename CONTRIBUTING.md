@@ -174,6 +174,10 @@ the file the same way you'd commit a golden:
 HOUSTON_EVAL_MODEL=claude-opus-4-8 npm run eval:baseline
 ```
 
+Without a local key, dispatch the Task evals (live) workflow with `record` checked (and the
+`provider` and `model` to record). It runs the same command with the repository's key and
+uploads the baseline as the `eval-baseline` artifact for you to review and commit.
+
 The scheduled run scores `claude-haiku-5-5`, not the provider's `defaultModel`. A
 model that sometimes fails is what makes a regression visible, and Haiku solves most
 but not all of the harder tasks, at a small fraction of a larger model's cost.
@@ -191,6 +195,10 @@ default three, because a live model that reds the scheduled run on noise is a jo
 everyone learns to ignore. Two flakes is a real drop and fails. A task scoring
 *above* its baseline is reported as `improved`, which means the baseline is stale
 and worth re-recording.
+
+A recording is also refused when any failed attempt ended in a run error (the
+provider refused the call, the account ran out of credit) rather than a result:
+that is not a score, and a task frozen at 0 can never regress.
 
 A baseline where **every** task scored 0 is refused, both when recording it and
 when loading it. Nothing passing is almost always a misconfiguration (an empty or

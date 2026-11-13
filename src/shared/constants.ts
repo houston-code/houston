@@ -37,6 +37,9 @@ export const IPC = {
   legacyRulesNoticeStatus: 'app:legacyRulesNoticeStatus',
   /** Answer that notice: import ~/.claude/CLAUDE.md, or keep the rules separate. */
   legacyRulesNoticeDecide: 'app:legacyRulesNoticeDecide',
+  envKeyOffers: 'app:envKeyOffers',
+  envKeyImport: 'app:envKeyImport',
+  envKeyDismiss: 'app:envKeyDismiss',
   // Updates
   updateCheck: 'update:check',
   updateWhatsNew: 'update:whatsNew',
@@ -67,6 +70,7 @@ export const IPC = {
   shareFromMenu: 'share:fromMenu',
   // Workspace
   workspacePick: 'workspace:pick',
+  workspaceOpen: 'workspace:open',
   directoryPick: 'directory:pick',
   workspaceListFiles: 'workspace:listFiles',
   /** One directory level for the Finder-like Files panel (lazy tree expansion). */
