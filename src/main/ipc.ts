@@ -876,6 +876,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
         currentBranch: null,
         unborn: false,
         branches: [],
+        defaultBranch: null,
         isLinkedWorktreeRoot: false,
         exists: false
       }

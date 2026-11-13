@@ -11,6 +11,7 @@ const repo: RepoInfo = {
   currentBranch: 'main',
   unborn: false,
   branches: ['main', 'develop'],
+  defaultBranch: null,
   isLinkedWorktreeRoot: false,
   exists: true
 }

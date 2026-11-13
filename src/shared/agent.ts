@@ -380,6 +380,12 @@ export interface RepoInfo {
   /** Local branch names, newest-committed first, for picking a base. */
   branches: string[]
   /**
+   * The repo's mainline as a local branch: the one `origin/HEAD` names, else `main`
+   * or `master`. Always one of `branches`; null when none of them exists locally.
+   * New worktrees start from it, not from whatever the main checkout has out.
+   */
+  defaultBranch: string | null
+  /**
    * True when the queried path is itself the root of a linked (non-main)
    * worktree — e.g. a per-chat checkout inherited from a previously-open chat.
    * False for the main root, for any subdirectory, and for non-repos, so the

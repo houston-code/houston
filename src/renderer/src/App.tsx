@@ -42,6 +42,7 @@ import {
   branchNameError,
   canCreateWorktree,
   defaultBaseBranch,
+  newChatFolder,
   initialWorktreeMode,
   planNewChatWorkspace,
   suggestBranch
@@ -983,8 +984,8 @@ export default function App(): JSX.Element {
   // new-chat screen, where the setup checklist and the composer's folder button ask
   // for one.
   const onNewChat = useCallback(() => {
-    enterNewChat(workspace)
-  }, [workspace, enterNewChat])
+    enterNewChat(currentConv ? newChatFolder(currentConv) : workspace)
+  }, [currentConv, workspace, enterNewChat])
 
   // The recents live in settings, which main updates when a folder opens; re-read just
   // them so the welcome screen and the folder menu list the folder just opened.
@@ -1147,7 +1148,7 @@ export default function App(): JSX.Element {
       void window.api.setChatUnread(id, unread, fromReply)
       if (unread && id === currentId) {
         const meta = conversations.find((c) => c.id === id)
-        const ws = meta?.workspace ?? workspace
+        const ws = meta ? newChatFolder(meta) : workspace
         if (ws) enterNewChat(ws)
         else setCurrentId(null)
         setUndoToast({
