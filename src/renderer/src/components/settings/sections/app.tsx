@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { AccentColor, AppSettings } from '@shared/types'
+import type { AccentColor, AppSettings, ChatFontSize, CodeTheme, Density } from '@shared/types'
 import { LICENSE_URL, PRIVACY_URL } from '@shared/legal'
 import { updateErrorHint, type UpdateCheckResult } from '@shared/update'
 import {
@@ -13,13 +13,14 @@ import {
 import { SettingsSection } from '../fields'
 import { KeyboardTab } from '../KeyboardTab'
 import type { SettingsCtx } from '../context'
+import { playAttentionSound } from '../../../lib/attentionSound'
 
 export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
   return (
     <SettingsSection
       title="Appearance"
-      desc="Choose how Houston looks; System follows your OS setting."
+      desc="Choose how Houston looks; System follows your OS setting. Text size, density and code theme apply to the chat, code blocks and diffs."
     >
       <label className="field">
         <span>Color theme</span>
@@ -32,6 +33,40 @@ export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           <option value="system">System</option>
           <option value="dark">Dark</option>
           <option value="light">Light</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>Chat text size</span>
+        <select
+          value={settings.chatFontSize ?? 'default'}
+          onChange={(e) =>
+            setSettings((s) => ({ ...s, chatFontSize: e.target.value as ChatFontSize }))
+          }
+        >
+          <option value="small">Small</option>
+          <option value="default">Default</option>
+          <option value="large">Large</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>Density</span>
+        <select
+          value={settings.density ?? 'comfortable'}
+          onChange={(e) => setSettings((s) => ({ ...s, density: e.target.value as Density }))}
+        >
+          <option value="comfortable">Comfortable</option>
+          <option value="compact">Compact: less space between messages</option>
+        </select>
+      </label>
+      <label className="field">
+        <span>Code theme</span>
+        <select
+          value={settings.codeTheme ?? 'default'}
+          onChange={(e) => setSettings((s) => ({ ...s, codeTheme: e.target.value as CodeTheme }))}
+        >
+          <option value="default">Default</option>
+          <option value="contrast">High contrast</option>
+          <option value="muted">Muted</option>
         </select>
       </label>
       <label className="field">
@@ -93,6 +128,23 @@ export function NotificationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
           Show a count on the app icon of chats that need your input, failed, or have
           replies you haven’t seen (the Dock on macOS, a dot on the taskbar button on
           Windows). On by default.
+        </span>
+      </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.attentionSounds ?? false}
+          onChange={(e) => {
+            const on = e.target.checked
+            setSettings((s) => ({ ...s, attentionSounds: on }))
+            // Let the user hear what they just turned on.
+            if (on) playAttentionSound('done')
+          }}
+        />
+        <span>
+          Play a short sound when the agent finishes a turn or needs your input (approval,
+          a question, or a plan to review) while Houston isn’t the focused window. Off by
+          default.
         </span>
       </label>
     </SettingsSection>
@@ -239,8 +291,12 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   diagnosticsOnSave: 'diagnostics on save',
   desktopNotifications: 'notifications',
   appBadge: 'app icon badge',
+  attentionSounds: 'sounds',
   theme: 'theme',
   accentColor: 'accent color',
+  chatFontSize: 'chat text size',
+  density: 'density',
+  codeTheme: 'code theme',
   htmlVisuals: 'interactive visuals',
   memoryEnabled: 'memory',
   keybindings: 'keyboard shortcuts',

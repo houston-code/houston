@@ -22,6 +22,7 @@ import {
   LanguageServersSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
+import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import {
@@ -167,6 +168,23 @@ export const PAGES: SettingsPage[] = [
     ]
   },
   {
+    id: 'customize',
+    label: PAGE_LABELS.customize,
+    group: 'AI',
+    sections: [
+      {
+        id: 'customizations',
+        Component: CustomizeSection,
+        keywords: ['skills', 'commands', 'slash commands', 'agents', 'subagents', 'templates', 'extensions', 'disable', 'enable']
+      },
+      {
+        id: 'instruction-files',
+        Component: InstructionFilesSection,
+        keywords: ['rules', 'agents.md', 'claude.md', 'instructions', 'project rules', 'global rules']
+      }
+    ]
+  },
+  {
     id: 'mcp',
     label: PAGE_LABELS.mcp,
     group: 'AI',
@@ -227,9 +245,9 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'notifications',
-        keys: ['desktopNotifications', 'appBadge'],
+        keys: ['desktopNotifications', 'appBadge', 'attentionSounds'],
         Component: NotificationsSection,
-        keywords: ['alerts', 'desktop notifications', 'sound', 'bell', 'badge', 'dock', 'taskbar', 'unread']
+        keywords: ['alerts', 'desktop notifications', 'sound', 'sounds', 'chime', 'audio', 'bell', 'badge', 'dock', 'taskbar', 'unread']
       },
       {
         id: 'preferences',
@@ -245,9 +263,24 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'accentColor', 'htmlVisuals'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals'],
         Component: AppearanceSection,
-        keywords: ['theme', 'dark mode', 'light mode', 'colors', 'visuals', 'html', 'accent', 'highlight color']
+        keywords: [
+          'theme',
+          'dark mode',
+          'light mode',
+          'colors',
+          'visuals',
+          'html',
+          'font size',
+          'text size',
+          'density',
+          'compact',
+          'code theme',
+          'syntax',
+          'accent',
+          'highlight color'
+        ]
       }
     ]
   },

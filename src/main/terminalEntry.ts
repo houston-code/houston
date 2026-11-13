@@ -47,6 +47,7 @@ import {
 } from './agent/checkpoints'
 import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
+import { listModels } from './providers'
 import { runGitCapture } from './agent/gitRead'
 import {
   canPersistHeaderSecrets,
@@ -92,6 +93,7 @@ import {
   makeCompleter,
   commandMenu,
   renderCommandMenu,
+  makeMentionMenu,
   COMMANDS,
   type CommandSpec
 } from './tui-complete'
@@ -402,6 +404,28 @@ function runUserShell(
  * common to every client; the terminal adds its own `terminal` group (tty, color,
  * width) that the desktop app has no analogue for.
  */
+/** How long the setup menu waits for a host to list its models. */
+const HOST_PROBE_MS = 2500
+
+/** Reject with a timeout when `p` takes longer than `ms`; a late result is dropped. */
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  p.catch(() => {}) // a late rejection after the timeout won the race is not an error
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('timed out')), ms)
+    timer.unref?.()
+    p.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e: unknown) => {
+        clearTimeout(timer)
+        reject(e instanceof Error ? e : new Error(String(e)))
+      }
+    )
+  })
+}
+
 function probeDoctor(
   cwd: string,
   version: string,
@@ -490,11 +514,14 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
     const bg = await detectTerminalBackground({ input: process.stdin, output: process.stdout }, process.env)
     if (bg === 'light') tui.detectedTheme = 'light'
   }
+  // Typing `@` lists matching files under the composer, as `/` lists commands.
+  const mentionMenu = makeMentionMenu((q) => findFiles(tui.cwd, q), paint as never)
 
   const io = createTerminalIo({
-    menuFor: (line) => {
+    menuFor: (line, redraw) => {
       const matches = commandMenu(line, menuCommands)
-      return matches ? renderCommandMenu(matches, paint as never) : []
+      if (matches) return renderCommandMenu(matches, paint as never)
+      return mentionMenu(line, redraw) ?? []
     },
     paint,
     // Read live: an entry submitted this session must be recallable on the next
@@ -536,6 +563,10 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
         apply: (conversationId, turn, mode, text) => rewindConversation(conversationId, turn, mode, text),
         undo: (conversationId) => undoRewind(conversationId)
       },
+      // The setup menu's probe of local servers and added endpoints: a host that
+      // doesn't answer quickly is reported as not running rather than holding up
+      // the menu (the SDK's own retries can take far longer).
+      listModels: (provider) => withTimeout(listModels(provider), HOST_PROBE_MS),
       // symbolic-ref names the branch (even an unborn one) and fails on a detached
       // HEAD or outside a repository, where the status line shows no branch.
       gitBranch: async () => {

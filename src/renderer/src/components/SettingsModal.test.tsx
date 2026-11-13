@@ -225,6 +225,7 @@ describe('SettingsModal', () => {
       'Providers & Models',
       'Agent Behavior',
       'Tools',
+      'Customize',
       'MCP Servers',
       'Hooks',
       'Memory',
@@ -1683,5 +1684,31 @@ describe('SettingsModal accent color', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Accent color' }), { target: { value: 'violet' } })
     expect(document.documentElement.getAttribute('data-accent')).toBe('violet')
     await waitFor(() => expect(api.saveSettings.mock.calls.at(-1)?.[0]).toMatchObject({ accentColor: 'violet' }))
+  })
+})
+
+describe('SettingsModal appearance options', () => {
+  afterEach(() => {
+    for (const a of ['data-chat-size', 'data-density', 'data-code-theme']) document.documentElement.removeAttribute(a)
+  })
+
+  it('previews and saves chat text size, density and code theme', async () => {
+    const api = installApi()
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Chat text size' }), { target: { value: 'large' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Density' }), { target: { value: 'compact' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Code theme' }), { target: { value: 'contrast' } })
+    const root = document.documentElement
+    expect(root.getAttribute('data-chat-size')).toBe('large')
+    expect(root.getAttribute('data-density')).toBe('compact')
+    expect(root.getAttribute('data-code-theme')).toBe('contrast')
+    await waitFor(() =>
+      expect(api.saveSettings.mock.calls.at(-1)?.[0]).toMatchObject({
+        chatFontSize: 'large',
+        density: 'compact',
+        codeTheme: 'contrast'
+      })
+    )
   })
 })

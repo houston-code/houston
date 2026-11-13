@@ -79,6 +79,48 @@ describe.each(['default', 'violet', 'green', 'orange', 'pink'])('%s accent', (ac
   })
 })
 
+// Each code theme overrides the tokens and the code surface for both palettes; the
+// panel surfaces (--bg, --bg-elevated) stay the base theme's.
+describe.each([
+  ['contrast', 'dark', ':root', ":root:not([data-theme='light'])[data-code-theme='contrast']"],
+  ['contrast', 'light', ":root[data-theme='light']", ":root[data-theme='light'][data-code-theme='contrast']"],
+  ['muted', 'dark', ':root', ":root:not([data-theme='light'])[data-code-theme='muted']"],
+  ['muted', 'light', ":root[data-theme='light']", ":root[data-theme='light'][data-code-theme='muted']"]
+])('%s code theme, %s syntax tokens', (_name, _theme, base, override) => {
+  const vars = { ...themeVars(':root'), ...themeVars(base), ...themeVars(override) }
+
+  it('overrides every token and the code surface', () => {
+    const own = themeVars(override)
+    for (const token of TOKENS) expect(own[`--syn-${token}`], `--syn-${token}`).toBeDefined()
+    expect(own['--bg-code']).toBeDefined()
+  })
+
+  it.each(TOKENS)('--syn-%s clears 4.5:1 on every code surface', (token) => {
+    const fg = vars[`--syn-${token}`]
+    for (const surface of SURFACES) {
+      expect(contrast(fg, vars[surface]), `--syn-${token} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+})
+
+describe('appearance defaults', () => {
+  it('leave the transcript and diffs exactly as before when no option is set', () => {
+    const vars = (() => {
+      const start = css.indexOf(':root {\n  --chat-zoom')
+      const body = css.slice(start, css.indexOf('\n}', start))
+      return Object.fromEntries([...body.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]))
+    })()
+    expect(vars).toMatchObject({
+      '--chat-zoom': '1',
+      '--chat-row-gap': '18px',
+      '--msg-turn-gap': '10px',
+      '--msg-line-height': '1.65',
+      '--diff-add-bg': 'rgba(74, 222, 128, 0.13)',
+      '--diff-del-bg': 'rgba(255, 107, 107, 0.13)'
+    })
+  })
+})
+
 describe('titlebar count badge', () => {
   it('fills with --accent-fill, the accent shade white text is checked against', () => {
     const start = css.indexOf('.titlebar__badge {')
