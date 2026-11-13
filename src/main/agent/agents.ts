@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { parseFrontmatter } from '@shared/frontmatter'
+import { isDisabledFlag, parseFrontmatter } from '@shared/frontmatter'
 
 /**
  * Custom subagents defined in `.houston/agents/*.md`. Each file is a specialized
@@ -16,6 +17,8 @@ import { parseFrontmatter } from '@shared/frontmatter'
  */
 
 export const AGENTS_DIR = '.houston/agents'
+/** Agents available in every project, under the home folder (`~/.houston/agents`). */
+export const USER_AGENTS_DIR = join('.houston', 'agents')
 const MAX_AGENTS = 50
 const MAX_PROMPT_CHARS = 16_000
 
@@ -88,13 +91,16 @@ function parseBool(value: string | undefined): boolean {
   return value !== undefined && /^(true|yes|on|1)$/i.test(value.trim())
 }
 
-export async function loadAgents(workspace: string): Promise<CustomAgent[]> {
+/** Read one folder of agent files. Missing folder: no agents. */
+async function loadAgentsFrom(dir: string): Promise<CustomAgent[]> {
   let entries
   try {
-    entries = await fs.readdir(join(workspace, AGENTS_DIR), { withFileTypes: true })
+    entries = await fs.readdir(dir, { withFileTypes: true })
   } catch {
     return []
   }
+  // Sorted before the cap, so which agents survive it doesn't depend on readdir order.
+  entries.sort((a, b) => a.name.localeCompare(b.name))
 
   const agents: CustomAgent[] = []
   for (const e of entries) {
@@ -104,12 +110,14 @@ export async function loadAgents(workspace: string): Promise<CustomAgent[]> {
     if (!/^[\w-]+$/.test(name)) continue
     let raw: string
     try {
-      raw = (await fs.readFile(join(workspace, AGENTS_DIR, e.name), 'utf8')).trim()
+      raw = (await fs.readFile(join(dir, e.name), 'utf8')).trim()
     } catch {
       continue
     }
     if (!raw) continue
     const { data, body } = parseFrontmatter(raw)
+    // Switched off (Settings > Customize writes `disabled: true`): kept on disk, not offered.
+    if (isDisabledFlag(data.disabled)) continue
     const systemPrompt = (body || raw).slice(0, MAX_PROMPT_CHARS)
     if (!systemPrompt) continue
     const tools = parseTools(data.tools)
@@ -125,6 +133,25 @@ export async function loadAgents(workspace: string): Promise<CustomAgent[]> {
       ...(model ? { model } : {}),
       ...(maxTurns ? { maxTurns } : {})
     })
+  }
+  return agents
+}
+
+/**
+ * The workspace's agents (`.houston/agents`), plus the user's own from
+ * `~/.houston/agents`. The workspace wins a name clash, as it does for commands and
+ * skills: a project's own definition is the one its contributors mean.
+ */
+export async function loadAgents(workspace: string, home: string = homedir()): Promise<CustomAgent[]> {
+  const [project, user] = await Promise.all([
+    loadAgentsFrom(join(workspace, AGENTS_DIR)),
+    loadAgentsFrom(join(home, USER_AGENTS_DIR))
+  ])
+  const taken = new Set(project.map((a) => a.name))
+  const agents = [...project]
+  for (const a of user) {
+    if (agents.length >= MAX_AGENTS) break
+    if (!taken.has(a.name)) agents.push(a)
   }
   agents.sort((a, b) => a.name.localeCompare(b.name))
   return agents

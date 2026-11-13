@@ -114,10 +114,12 @@ export interface TerminalIoDeps {
   /** Input stream. Defaults to process.stdin; a fake TTY in tests. */
   stdin?: NodeJS.ReadStream
   /**
-   * Rows to show under the composer for the current line — the live command menu.
-   * Called on every redraw, so it must be cheap and synchronous.
+   * Rows to show under the composer for the current line: the live command menu,
+   * or the files matching an `@` mention. Called on every redraw, so it must be
+   * cheap and synchronous; work that isn't (a file lookup) calls `redraw` when it
+   * has rows to show.
    */
-  menuFor?: (line: string) => string[]
+  menuFor?: (line: string, redraw: () => void) => string[]
   /**
    * Which key set the composer answers to, read fresh on each read so `/vim` takes
    * effect on the next prompt rather than the next launch. Absent = emacs.
@@ -635,7 +637,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       const view = (withMenu = true): ReturnType<typeof renderEditor> => {
         // The line under the cursor drives the menu: typing `/` shows what you can
         // run, without having to already know its name.
-        const menu = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '') ?? []) : []
+        const menu = withMenu ? (deps.menuFor?.(state.lines[state.row] ?? '', redrawMenu) ?? []) : []
         // The `ultrathink` keyword in the draft: say what it will do to this turn, and
         // colour the word where it will raise the turn's reasoning. The hint only where
         // it fits on one row: a wrapped row would desync the redraw region.
@@ -685,6 +687,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         rawWrite(s)
         drawn = true
         prevCursorRow = v.cursorRow
+      }
+      // A menu whose rows arrived late (an `@` file lookup): repaint, unless the read
+      // is over or the region is not on screen (handed to $EDITOR).
+      const redrawMenu = (): void => {
+        if (!done && drawn) draw()
       }
       const teardown = (): void => {
         try {
@@ -753,7 +760,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
           let next = state
           for (let i = 0; i < back; i++) next = reduceEditor(next, { type: 'backspace' }).state
           state = reduceEditor(next, { type: 'char', value: insert }).state
-        } else if (hits.length > 1 && !(deps.menuFor?.(state.lines[state.row] ?? '') ?? []).length) {
+        } else if (hits.length > 1 && !(deps.menuFor?.(state.lines[state.row] ?? '', redrawMenu) ?? []).length) {
           // Ambiguous and nothing more to insert: show the candidates above the
           // composer, unless the live menu under it already lists them (a slash
           // command). Printing them there too left a copy in the scrollback on

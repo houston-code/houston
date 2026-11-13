@@ -1,7 +1,8 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { TurnReceipt } from '@shared/evidence'
 import { Receipt } from './Receipt'
+import { FileLinkContext } from './FileLink'
 
 const receipt = (over: Partial<TurnReceipt> = {}): TurnReceipt => ({
   v: 1,
@@ -101,5 +102,19 @@ describe('Receipt plan progress', () => {
     expect(screen.getByText('Plan: Todo app')).toBeInTheDocument()
     expect(screen.getByText('not run yet')).toBeInTheDocument()
     expect(screen.getByText('Files not changed yet: web/App.jsx.')).toBeInTheDocument()
+  })
+})
+
+describe('Receipt file links', () => {
+  it('opens a changed file in the preview', () => {
+    const open = vi.fn()
+    render(
+      <FileLinkContext.Provider value={{ workspace: '/repo', open }}>
+        <Receipt receipt={receipt()} />
+      </FileLinkContext.Provider>
+    )
+    fireEvent.click(screen.getByText('What ran'))
+    fireEvent.click(screen.getByRole('button', { name: 'backend/main.py' }))
+    expect(open).toHaveBeenCalledWith({ path: 'backend/main.py' })
   })
 })
