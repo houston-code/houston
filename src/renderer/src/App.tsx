@@ -2738,6 +2738,8 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            toolsExpanded={settings?.toolOutputExpanded === true}
+            showReasoning={settings?.showReasoning === true}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
               : {})}

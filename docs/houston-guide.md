@@ -566,6 +566,15 @@ conversation, not a log. To see more:
 
 Very long output is capped, with a note saying how much was left out.
 
+In the desktop app:
+
+- **Expand tools / Collapse tools**, the round button at the bottom right of a chat
+  that has tool rows, opens or closes every tool row at once.
+- **Show tool output expanded** (Settings, Appearance) opens each tool row with its
+  output or diff in view. Off by default.
+- **Always show reasoning** (same place) keeps the model's reasoning open above each
+  reply instead of folding it away once the reply starts. Off by default.
+
 ## What actually ran (the receipt)
 
 A turn that ran checks or changed files ends with a line marked **Recorded by

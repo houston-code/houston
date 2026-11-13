@@ -12,6 +12,7 @@ import { isSubagentTool } from '@shared/subagents'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
+import { toolRowStartsOpen, useTranscriptPrefs, type TranscriptPrefs } from './transcriptPrefs'
 import { SubagentBody, SubagentChips, SubagentTranscript } from './SubagentPanel'
 import { ImageGallery } from './ImageGallery'
 import {
@@ -291,14 +292,21 @@ const ToolRow = memo(function ToolRow({
   const records = item.records
   // Open the diff/output by default while a change is awaiting approval, and a
   // subagent's steps while it runs.
-  const [open, setOpen] = useState(awaiting || (isAgent && running))
+  // The transcript's detail settings and its Expand/Collapse tools control decide
+  // where the rest start.
+  const prefs = useTranscriptPrefs()
+  const [open, setOpen] = useState(() =>
+    toolRowStartsOpen(prefs, { awaiting, agentRunning: isAgent && running })
+  )
   const wasRunning = useRef(running)
   useEffect(() => {
     if (!isAgent) return
     if (running && !wasRunning.current) setOpen(true)
-    if (!running && wasRunning.current) setOpen(false)
+    // A finished subagent folds to its summary, unless tool output is kept open.
+    if (!running && wasRunning.current && !prefs.toolsExpanded && !prefs.expandAll?.open) setOpen(false)
     wasRunning.current = running
-  }, [isAgent, running])
+  }, [isAgent, running, prefs.toolsExpanded, prefs.expandAll])
+  useFollowExpandAll(prefs, setOpen, awaiting)
   // A review's agents, opened from the row in the transcript drawer.
   const [agentsOpen, setAgentsOpen] = useState(false)
   // Guidance to send with a denial ("no, use staging instead").
@@ -601,6 +609,23 @@ function combinedStatus(items: ToolItem[]): ToolItem['status'] {
   return 'done'
 }
 
+/**
+ * Follow the transcript's Expand all / Collapse all: each new command opens or closes
+ * the row. A command given before the row existed already chose its starting state,
+ * so only later ones apply. A row awaiting approval never collapses, since its card
+ * holds the buttons the run is waiting on.
+ */
+function useFollowExpandAll(prefs: TranscriptPrefs, setOpen: (open: boolean) => void, awaiting: boolean): void {
+  const seen = useRef(prefs.expandAll?.seq)
+  const cmd = prefs.expandAll
+  useEffect(() => {
+    if (!cmd || cmd.seq === seen.current) return
+    seen.current = cmd.seq
+    if (!cmd.open && awaiting) return
+    setOpen(cmd.open)
+  }, [cmd, setOpen, awaiting])
+}
+
 /** Whether two item lists hold the same item objects in the same order. */
 function sameItems(a: ToolItem[], b: ToolItem[]): boolean {
   return a.length === b.length && a.every((it, i) => it === b[i])
@@ -608,7 +633,9 @@ function sameItems(a: ToolItem[], b: ToolItem[]): boolean {
 
 /** A fold of consecutive reads: one "Read N files" row that expands to the list. */
 const ReadAggregateRow = memo(function ReadAggregateRow({ items }: { items: ToolItem[] }): JSX.Element {
-  const [open, setOpen] = useState(false)
+  const prefs = useTranscriptPrefs()
+  const [open, setOpen] = useState(() => toolRowStartsOpen(prefs, { awaiting: false, agentRunning: false }))
+  useFollowExpandAll(prefs, setOpen, false)
   const status = combinedStatus(items)
   return (
     <div className={`tool-row tool-row--${status}`}>
