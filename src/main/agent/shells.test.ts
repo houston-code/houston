@@ -10,6 +10,7 @@ import {
   appendCapped,
   backgroundShellGroups,
   killShell,
+  killShellsFor,
   listPreviewServers,
   listShells,
   onShellsChanged,
@@ -25,6 +26,28 @@ const onClose = (child: ChildProcess): Promise<void> =>
   new Promise((resolve) => child.on('close', () => resolve()))
 
 const node = (code: string): ChildProcess => spawn(process.execPath, ['-e', code])
+
+describe('killShellsFor', () => {
+  it("stops a conversation's running shells and leaves other chats' alone", async () => {
+    const mine = node('setInterval(() => {}, 1000)')
+    const theirs = node('setInterval(() => {}, 1000)')
+    const a = registerShell('node mine', mine, 'conv-gone')
+    const b = registerShell('node theirs', theirs, 'conv-kept')
+    const closed = onClose(mine)
+    expect(killShellsFor('conv-gone')).toBe(1)
+    await closed
+    expect(peekShell(a)).toBeUndefined()
+    expect(listShells().some((s) => s.id === a)).toBe(false)
+    expect(peekShell(b)?.running).toBe(true)
+    const closedB = onClose(theirs)
+    killShell(b)
+    await closedB
+  })
+
+  it('does nothing for a conversation with no shells', () => {
+    expect(killShellsFor('conv-none')).toBe(0)
+  })
+})
 
 describe('background shell registry', () => {
   it('captures stdout/stderr and the exit code of a finished shell', async () => {
