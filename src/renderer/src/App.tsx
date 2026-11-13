@@ -1602,6 +1602,36 @@ export default function App(): JSX.Element {
     )
   }, [currentId, chat, selectConversation])
 
+  // Retry on the last reply: take the conversation back to just before the last
+  // message the user sent (the files are left as they are), then send it again, so
+  // the new reply replaces the old one. Same rewind the message menu does, without
+  // its confirmation: what goes away is only the reply being retried.
+  const lastTurn = useMemo(() => {
+    const targets = rewindTargets(chat.items)
+    const target = targets[targets.length - 1]
+    if (!target) return null
+    const item = chat.items.find((it) => it.id === target.id)
+    return item?.kind === 'user' ? { target, item } : null
+  }, [chat.items])
+  const onRetryLast = useCallback(async () => {
+    const id = currentId
+    if (!id || !lastTurn || chat.running) return
+    const { target, item } = lastTurn
+    let res
+    try {
+      res = await window.api.rewind(id, target.turn, 'conversation', target.text)
+    } catch {
+      res = { ok: false as const, error: "Couldn't retry this reply." }
+    }
+    if (!res.ok) {
+      chat.notify(res.error, 'error')
+      return
+    }
+    await selectConversation(id)
+    if (currentIdRef.current !== id) return
+    dispatch(item.text, item.images, item.invokedAs)
+  }, [currentId, lastTurn, chat, selectConversation, dispatch])
+
   const rewindHandlers = useMemo<RewindHandlers | undefined>(
     () =>
       currentId
@@ -2738,6 +2768,7 @@ export default function App(): JSX.Element {
             proposals={proposalHandlers}
             onOpenConversation={onOpenLinkedConversation}
             rewind={rewindHandlers}
+            {...(currentId && lastTurn && !chat.running ? { onRetryLast: () => void onRetryLast() } : {})}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
               : {})}

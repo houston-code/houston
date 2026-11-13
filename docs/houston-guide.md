@@ -60,6 +60,9 @@ The full GUI:
 
 - **Read and unread.** A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read. The
   filter menu marks every chat read, or sorts the ones that want attention first.
+- **Right-click menus.** Right-click a chat in the sidebar for the same actions as its
+  ⋯ menu. Right-click a message to copy it (or just the text you selected) and for that
+  message's own actions: rewind or edit one of yours, or mark unread from a reply.
 - **Picking up where you left off.** A reply's hover actions include **Mark unread from
   here**, and reopening an unread chat lands on a "New" divider above the first reply
   you haven't seen.
@@ -941,7 +944,8 @@ goes back:
 
 ### In the desktop app
 
-- Hover one of your messages and click the rewind button for these choices.
+- Hover one of your messages and click the rewind button for these choices, or
+  right-click the message.
 - Or press `Esc` twice in an empty composer (or type `/rewind`) to pick the message
   from a list.
 - A confirmation shows how many messages and files are affected before anything
@@ -951,6 +955,10 @@ goes back:
 - **Edit and resend** (same menu) puts a message in the composer for editing. Sending
   it rewinds to that message first (conversation and code by default, or conversation
   only), then sends the new text, so the agent re-runs from there.
+- **Retry** on the last reply (its hover button, or right-click it) sends your last
+  message again for a new reply, even after a turn that succeeded. The old reply is
+  rewound out of the conversation first (conversation only: files the turn changed stay
+  as they are), so the new reply replaces it.
 
 ### In the terminal
 
