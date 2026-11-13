@@ -39,6 +39,7 @@ import {
 import { checkEgressHost, type EgressRunScope } from './egress'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
+import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import Anthropic from '@anthropic-ai/sdk'
@@ -3119,6 +3120,47 @@ describe('prompt-cache-aware window assembly', () => {
     const prev = shape(sends[n - 1])
     expect(shape(sends[n]).slice(0, prev.length)).toEqual(prev)
   })
+
+  it.each([
+    ['asks a model that calls tools in silence for a status update', false, true],
+    ['leaves a model that narrates its tool calls alone', true, false]
+  ])('%s', async (_name, narrate, expectCheckIn) => {
+    // A different listing every turn, so no stall check trips: only the silence counts.
+    const sends: ChatMessage[][] = []
+    let turn = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        turn++
+        if (turn > SILENT_ITERATION_LIMIT + 2) {
+          yield { type: 'text', text: 'done' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        if (narrate) yield { type: 'text', text: `checking pattern ${turn}` }
+        yield { type: 'tool_call', call: { id: `g${turn}`, name: 'list_dir', arguments: { path: `missing-${turn}` } } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const extra = { stallDetection: true, maxIterations: 60 }
+    const saved = { ...h.settings }
+    Object.assign(h.settings, extra)
+    try {
+      await run({ provider, messages: [{ role: 'user', content: 'look around' }], policy: 'full-auto' })
+    } finally {
+      for (const k of Object.keys(extra)) delete h.settings[k]
+      Object.assign(h.settings, saved)
+    }
+    const n = sends.findIndex((w) => w.some((m) => m.content.includes(SILENT_CHECK_IN)))
+    if (expectCheckIn) {
+      // Sent once the limit's worth of silent turns ran, and the run carried on to its answer.
+      expect(n).toBe(SILENT_ITERATION_LIMIT)
+      expect(sends).toHaveLength(SILENT_ITERATION_LIMIT + 3)
+    } else {
+      expect(n).toBe(-1)
+    }
+    // Two dozen full iterations: slower than one test's default allowance under a loaded suite.
+  }, 30_000)
 
   it('pins nothing on the very first turn (nothing has been compacted away yet)', async () => {
     const sends: ChatMessage[][] = []
