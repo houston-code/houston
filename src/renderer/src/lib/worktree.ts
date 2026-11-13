@@ -40,6 +40,14 @@ export function planNewChatWorkspace(info: RepoInfo, workspace: string): NewChat
 }
 
 /**
+ * Whether a new chat's "New worktree" toggle starts on: where the planner would turn
+ * it on (a repo root with commits), unless the user has said they don't want it.
+ */
+export function initialWorktreeMode(planDefault: boolean, preference: boolean | undefined): boolean {
+  return planDefault && preference !== false
+}
+
+/**
  * Whether a new worktree can be branched at all: needs some commit to start from,
  * i.e. a born current branch (or detached HEAD) or another branch with commits.
  */

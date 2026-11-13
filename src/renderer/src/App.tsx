@@ -38,6 +38,7 @@ import {
   branchNameError,
   canCreateWorktree,
   defaultBaseBranch,
+  initialWorktreeMode,
   planNewChatWorkspace,
   suggestBranch
 } from './lib/worktree'
@@ -623,7 +624,7 @@ export default function App(): JSX.Element {
         return
       }
       setRepoInfo(info)
-      setWorktreeMode(plan.worktreeDefault)
+      setWorktreeMode(initialWorktreeMode(plan.worktreeDefault, savedSettingsRef.current?.newChatWorktree))
       setBranchName(suggestBranch())
       setBaseBranch(defaultBaseBranch(info))
     })
@@ -966,6 +967,14 @@ export default function App(): JSX.Element {
     const next = waitingIds[0]
     if (next) void selectConversation(next)
   }, [waitingIds, selectConversation])
+  // Flipping "New worktree" sets it for this chat and remembers it for the next one.
+  const onToggleWorktree = useCallback(async (on: boolean) => {
+    setWorktreeMode(on)
+    const current = await window.api.getSettings()
+    if (current.newChatWorktree === on) return
+    setSettings(await window.api.saveSettings({ ...current, newChatWorktree: on }))
+  }, [])
+
   const onToggleUnreadFirst = useCallback(async () => {
     const current = await window.api.getSettings()
     const fresh = await window.api.saveSettings({
@@ -2786,7 +2795,7 @@ export default function App(): JSX.Element {
             branchName={branchName}
             baseBranch={baseBranch}
             currentWorktree={currentConv?.worktree}
-            onToggleWorktree={setWorktreeMode}
+            onToggleWorktree={onToggleWorktree}
             onChangeBranchName={setBranchName}
             onChangeBaseBranch={setBaseBranch}
             onSelectModel={onSelectModel}

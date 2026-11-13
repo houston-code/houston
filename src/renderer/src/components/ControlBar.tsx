@@ -324,6 +324,14 @@ export function ControlBar({
         </button>
       )}
 
+      {worktreeOn && settings.newChatWorktree === undefined && (
+        <p className="control-bar__note" role="note">
+          This chat will work on its own branch in a separate folder, so your checkout stays as
+          it is. Untick &ldquo;New worktree&rdquo; to work in the folder directly. Houston
+          remembers your choice.
+        </p>
+      )}
+
       {usage && (usage.context > 0 || usage.output > 0) && (
         <CostBreakdown
           usage={usage}
