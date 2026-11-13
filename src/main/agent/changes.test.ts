@@ -15,6 +15,9 @@ try {
   gitOk = false
 }
 const maybe = gitOk ? it : it.skip
+// Windows can't name a file with ':' or '*', so a pathspec-shaped file name can't
+// exist there to be reverted.
+const maybeWithPosixNames = process.platform === 'win32' ? it.skip : maybe
 const TIMEOUT = 30_000
 
 const dirs: string[] = []
@@ -91,7 +94,7 @@ describe('revertChange, working tree', () => {
     TIMEOUT
   )
 
-  maybe(
+  maybeWithPosixNames(
     'unstages and deletes a newly added file, treating pathspec magic as a plain name',
     async () => {
       const ws = repo()
