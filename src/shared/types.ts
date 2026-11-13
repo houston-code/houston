@@ -732,6 +732,16 @@ export interface AppSettings {
    */
   htmlVisuals?: boolean
   /**
+   * Show each tool row in the desktop transcript expanded (its output or diff in view)
+   * rather than collapsed to one line. Off by default.
+   */
+  toolOutputExpanded?: boolean
+  /**
+   * Keep the model's reasoning open under each reply in the desktop transcript, instead
+   * of behind its toggle once the reply starts. Off by default.
+   */
+  showReasoning?: boolean
+  /**
    * Cross-session memory: the agent sees the memories saved in earlier sessions and
    * can read them (docs/memory-design.md). On unless set to false.
    */

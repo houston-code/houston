@@ -2792,6 +2792,35 @@ body.is-resizing {
   overflow-clip-margin: 40px;
 }
 
+/* Expand / collapse every tool row: a quiet round button in the transcript's
+   bottom-right margin, above the jump-to-bottom button, shown only when the chat
+   has tool rows. */
+.transcript__tools-toggle {
+  position: absolute;
+  bottom: 58px;
+  right: 22px;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+}
+.transcript__tools-toggle:hover,
+.transcript__tools-toggle:focus-visible {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 /* ---- Messages ---- */
 .msg {
   position: relative;

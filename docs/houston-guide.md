@@ -654,6 +654,15 @@ conversation, not a log. To see more:
 
 Very long output is capped, with a note saying how much was left out.
 
+In the desktop app:
+
+- **Expand tools / Collapse tools**, the round button at the bottom right of a chat
+  that has tool rows, opens or closes every tool row at once.
+- **Show tool output expanded** (Settings, Appearance) opens each tool row with its
+  output or diff in view. Off by default.
+- **Always show reasoning** (same place) keeps the model's reasoning open above each
+  reply instead of folding it away once the reply starts. Off by default.
+
 In the desktop app, file paths in the transcript open the file in the Files panel's
 preview: the file a tool row names (a read opens at the line it started from), a diff's
 file header, a file the receipt lists as changed, and a relative link in a reply
