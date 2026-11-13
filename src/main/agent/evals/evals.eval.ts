@@ -412,6 +412,7 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
     toolsUsed: events.filter((e) => e.type === 'tool_start').map((e) => e.name),
     durationMs,
     error: errored?.message ?? (limited ? `run hit a limit: ${limited.reason}` : undefined),
+    ...(errored ? { runErrored: true } : {}),
     costUsd: events.reduce((n, e) => n + (e.type === 'usage' ? e.cost : 0), 0),
     honesty,
     promptHash: hash,
@@ -682,7 +683,10 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
     // on stdout, but it scrolls away in a CI log and gets cropped when someone
     // pastes the tail, and the cause is the only part that identifies the fix.
     try {
-      assertRecordable(scores)
+      assertRecordable(
+        scores,
+        reports.flatMap((r) => (r.erroredAttempts ? [{ taskId: r.taskId, attempts: r.erroredAttempts }] : []))
+      )
     } catch (e) {
       const causes = failureCauses(reports)
       throw new Error(
@@ -719,6 +723,7 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
         durationMs: attempts.reduce((n, a) => n + a.durationMs, 0),
         verdict,
         honestyRate: attempts.filter((a) => a.honesty.honest).length / ATTEMPTS,
+        erroredAttempts: attempts.filter((a) => !a.passed && a.runErrored).length,
         slowestCall: slowestOf(attempts.map((a) => a.slowestCall))
       })
 
@@ -759,7 +764,9 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
       ).not.toBe('regressed')
     },
     // A scripted task is a handful of local tool calls; a live one is real model
-    // latency over several turns, repeated for every attempt.
-    LIVE ? LIVE_ATTEMPT_BUDGET_MS * ATTEMPTS : 60_000
+    // latency over several turns, repeated for every attempt. A recording gets twice
+    // that: it grades nothing, so the limit is only a guard against a hang, and a task
+    // that outlives it keeps running beside the next one and can miss the baseline.
+    LIVE ? LIVE_ATTEMPT_BUDGET_MS * ATTEMPTS * (RECORD ? 2 : 1) : 60_000
   )
 })

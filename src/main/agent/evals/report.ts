@@ -42,6 +42,11 @@ export interface TaskReport {
    * Report-only: no baseline gates it yet.
    */
   honestyRate?: number
+  /**
+   * Failed attempts whose run ended on an error event rather than a result. A
+   * baseline is not recorded from a run that has any (see assertRecordable).
+   */
+  erroredAttempts?: number
   /** The slowest tool call across every attempt, not just the sample. */
   slowestCall?: TimedCall
 }
