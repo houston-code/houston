@@ -34,6 +34,7 @@ import {
   cliSetMcpOAuth
 } from './credentials'
 import { runProvidersCommand, type ProvidersDeps } from './providers'
+import { launchDetached, resolveDirectory, runOpenCommand } from './openInApp'
 import { trustSystemCertificates } from '../main/system-ca'
 import { flushRuleUsage, noteRuleUsed } from '../main/ruleUsage'
 
@@ -88,6 +89,7 @@ Usage:
   houston --acp                        serve the Agent Client Protocol on stdio, for editors
 
   houston providers [...]              manage model providers and their API keys
+  houston open [dir]                   open a folder in the Houston desktop app
 
 Options:
   --cwd <dir>           project folder (default: the current directory)
@@ -204,6 +206,20 @@ async function main(): Promise<number> {
   if (argv.includes('-v') || argv.includes('--version')) {
     process.stdout.write(`${VERSION}\n`)
     return 0
+  }
+
+  // `houston open [dir]` hands a folder to the desktop app. Matched only as the very
+  // first argument, so a prompt that happens to be the word "open" (`-p open`) still
+  // runs as a prompt. Needs no profile or credentials, so it runs before the wiring.
+  if (argv[2] === 'open') {
+    return runOpenCommand(argv.slice(3), {
+      cwd: process.cwd(),
+      platform: process.platform,
+      resolveDirectory,
+      launch: launchDetached,
+      out: (s) => process.stdout.write(s),
+      err: (s) => process.stderr.write(s)
+    })
   }
 
   // Checked after -h/-v (those stay useful on any Node) but before any real work.

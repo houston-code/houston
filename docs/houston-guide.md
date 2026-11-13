@@ -72,6 +72,23 @@ The full GUI:
   pill in the title bar opens the next chat waiting on you, and clicking a desktop
   notification opens the chat it's about.
 
+**Links.** The desktop app opens `houston://` links from a browser, another app, or
+the terminal. Only three kinds do anything:
+
+| Link | Opens |
+| --- | --- |
+| `houston://open?path=/path/to/folder` | a new chat in that folder |
+| `houston://chat/<chat id>` | that chat |
+| `houston://settings/<page>` | Settings at that page (`models`, `tools`, `permissions`, …); `houston://settings` alone opens the first page |
+
+- A link never runs a command, sends a message, or changes a setting.
+- Opening a folder Houston hasn't opened before (not a recent folder, and no chat in
+  it) asks first. Network paths are refused.
+- From a terminal, `houston open [dir]` (the standalone CLI) opens a folder, the current
+  one by default, in the desktop app.
+- Only one copy of the desktop app runs per profile. Launching it again brings the open
+  window forward and passes it the link.
+
 ### Interactive terminal
 
 `houston -i` keeps a chat open in your terminal.
