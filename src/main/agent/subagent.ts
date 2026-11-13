@@ -8,8 +8,8 @@ import {
   type TokenUsage,
   type ToolCall
 } from '@shared/agent'
-import { getTool, type ToolContext, type ToolKind } from './tools'
-import { FileReadTracker } from './readCache'
+import { getTool, resolveInRoots, type ToolContext, type ToolKind } from './tools'
+import { FileReadTracker, pathsSeenInHistory } from './readCache'
 import { coerceToolArgs, validateToolArgs, validationError } from './argValidation'
 import {
   MAX_OUTPUT_CONTINUATIONS,
@@ -44,7 +44,12 @@ import {
   shouldLand
 } from './budget'
 import { StallDetector, callSignature, resolveStallThresholds, type StallThresholds } from './stall'
-import { estimateTokens, evictStaleToolResults } from './compaction'
+import {
+  elideStaleToolArguments,
+  estimateTokens,
+  evictStaleToolResults,
+  isContextOverflowError
+} from './compaction'
 import { previewWrite } from './writePreview'
 
 /**
@@ -323,11 +328,12 @@ export interface SubAgentOptions {
    */
   priorMessages?: ChatMessage[]
   /**
-   * Called with the complete message log when the run ends cleanly (final answer,
-   * or step limit — both leave every tool call paired with its result). The caller
-   * stores it to make the agent resumable. NOT called after an abort or provider
-   * error, whose transcript may end mid-tool-call and can't be replayed into a
-   * provider request.
+   * Called with the complete message log when the run ends with a report: a final
+   * answer, a step or loop limit, or a provider error (a context overflow included)
+   * after the agent has taken at least one step. Each leaves every tool call paired
+   * with its result, since a failed turn's output is never kept. The caller stores it
+   * to make the agent resumable. NOT called after an abort, or when the provider fails
+   * before the first step (nothing worth resuming).
    */
   onTranscript?: (messages: ChatMessage[]) => void
   /**
@@ -392,6 +398,17 @@ export function subagentLandingReminder(stepsLeft: number): string {
 /** Share of the context window at which stale tool results are stubbed out of the request. */
 const SUBAGENT_EVICT_AT = 0.6
 
+/**
+ * After a request overflows the context window, tool results and tool-call arguments
+ * of at least this many bytes are stubbed out of everything before the last iteration.
+ * Low, since what overflows a long subagent run is mostly many mid-sized results and
+ * written file contents; anything smaller costs about what its stub would.
+ */
+const OVERFLOW_STUB_MIN_BYTES = 256
+
+/** The note on a report cut short because the agent's history outgrew the context window. */
+const CONTEXT_LIMIT_NOTE = "[subagent stopped at the model's context limit; this is what it had]"
+
 /** Run a subagent loop to completion and return its final report text. */
 export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const { provider, model, workspace, prompt, signal } = opts
@@ -429,14 +446,15 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   // read can't leave the machine, its file writes stay contained to `roots`, and the
   // web tools mask credentials on the way out (see collectSecrets).
   const roots = opts.roots ?? [workspace]
+  // The subagent's own record of what it has read: it must read a file before
+  // changing it, like the main agent, and what the parent read doesn't count.
+  const fileTracker = new FileReadTracker()
   const toolCtx: ToolContext = {
     workspace,
     roots,
     allowNetwork: false,
     signal,
-    // The subagent's own record of what it has read: it must read a file before
-    // changing it, like the main agent, and what the parent read doesn't count.
-    fileTracker: new FileReadTracker(),
+    fileTracker,
     ...(opts.shellSession ? { shellSession: opts.shellSession } : {}),
     ...(opts.gitGuard ? { gitGuard: opts.gitGuard } : {}),
     ...(opts.askGitGuard ? { askGitGuard: opts.askGitGuard } : {}),
@@ -557,13 +575,71 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     opts.onProgress?.(`step ${iter + 1} · ${labelFor(call)}`)
   }
 
-  // The request window: the transcript, with stale large tool results stubbed once it
-  // nears the model's context window. The transcript itself (and so a resume) keeps them.
+  // Set once a request overflows the context window: tool results and large tool-call
+  // arguments before this index are stubbed in every later request too (see
+  // shrinkHistory), so the history doesn't grow straight back past the window.
+  let shrunkBefore = 0
+  const shrunk = (keepFrom: number): ChatMessage[] => {
+    if (keepFrom <= 0) return messages
+    const params = { keepFrom, minBytes: OVERFLOW_STUB_MIN_BYTES }
+    return elideStaleToolArguments(evictStaleToolResults(messages, params), params)
+  }
+
+  // The request window: the transcript, shrunk after an overflow, with stale large tool
+  // results stubbed once it nears the model's context window. The transcript itself (and
+  // so a resume) keeps everything.
   const toolTokens = Math.ceil(JSON.stringify(tools).length / 4)
   const requestMessages = (): ChatMessage[] => {
-    if (!opts.contextWindow) return messages
-    const size = estimateTokens(system, messages) + toolTokens
-    return size > opts.contextWindow * SUBAGENT_EVICT_AT ? evictStaleToolResults(messages) : messages
+    const window = shrunk(shrunkBefore)
+    if (!opts.contextWindow) return window
+    const size = estimateTokens(system, window) + toolTokens
+    return size > opts.contextWindow * SUBAGENT_EVICT_AT ? evictStaleToolResults(window) : window
+  }
+
+  // After a context overflow: stub every tool result and large tool-call argument before
+  // the last iteration (the newest assistant turn that called tools), keeping that
+  // iteration and everything the agent said. Returns whether that shrinks the request.
+  // A read whose result is now stubbed no longer counts as seen, as in the main loop,
+  // so the agent reads a file again before it edits it.
+  const shrinkHistory = (): boolean => {
+    let from = 0
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant' && messages[i].toolCalls?.length) {
+        from = i
+        break
+      }
+    }
+    if (from <= shrunkBefore) return false
+    if (estimateTokens(system, shrunk(from)) >= estimateTokens(system, shrunk(shrunkBefore))) return false
+    shrunkBefore = from
+    fileTracker.retainOnly(
+      pathsSeenInHistory(
+        messages.slice(from),
+        (rel) => resolveInRoots(roots, rel),
+        (patch) => writeTargets('apply_patch', { patch }).map((t) => t.path)
+      )
+    )
+    return true
+  }
+
+  // A provider failure that ends the run. Once the agent has taken a step, what it has
+  // is kept: its last text goes back with a note saying why it stopped, and the
+  // transcript is saved (every tool call is answered, since a failed turn's output is
+  // never kept) so the caller can resume it. Never a clean finish.
+  const failed = (e: unknown): string => {
+    const message = (e as Error).message
+    const report = lastText.trim()
+    let text: string
+    if (isContextOverflowError(e)) {
+      text = report
+        ? `${report}\n\n${CONTEXT_LIMIT_NOTE}`
+        : "[subagent reached the model's context limit without a final answer]"
+    } else {
+      text = report
+        ? `${report}\n\n[subagent stopped by a model error (${message}); this is what it had]`
+        : `[subagent error: ${message}]`
+    }
+    return turnsTaken > 0 ? finish(text, 'error') : stop(text, 'error')
   }
 
   for (let iter = 0; iter < budget.maxIterations; iter++) {
@@ -596,53 +672,65 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
     // function-call thought signatures), kept on the transcript like the main loop
     // does: some models reject the next request of a tool loop without it.
     let reasoning: ReasoningBlock[] = []
-    try {
-      // One turn of the subagent's own loop, retried on a transient failure, including
-      // one that drops partway through the stream. Retrying the whole turn is safe here
-      // even though the parent run streams: a subagent's text and tool calls are
-      // accumulated and only acted on once the stream ends, so a failed attempt has
-      // shown the user nothing to retract (the main loop's `turn_discarded`) and run no
-      // tool. Reset the accumulators per attempt or a retry would append to the dead
-      // one's remains. There is no fallback hop: a subagent runs on the model it was
-      // dispatched with.
-      await withProviderRetry(
-        async () => {
-          text = ''
-          calls = []
-          stopReason = 'end_turn'
-          reasoning = []
-          for await (const ev of provider.streamChat({
-            model,
-            system,
-            messages: requestMessages(),
-            tools,
-            ...(outputCapRaised ? raisedOutputCap(model) : {}),
-            ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
-            signal
-          })) {
-            if (ev.type !== 'error') reached = true
-            if (ev.type === 'text') text += ev.text
-            else if (ev.type === 'tool_call') calls.push(ev.call)
-            else if (ev.type === 'done') {
-              stopReason = ev.stopReason
-              if (ev.usage) opts.onUsage?.(ev.usage)
-              if (ev.reasoning?.length) reasoning = ev.reasoning
-            } else if (ev.type === 'error') throw providerStreamError(ev)
+    // A request too big for the context window gets one retry per step, with the
+    // history shrunk (see shrinkHistory); retrying it unchanged could never succeed.
+    let retriedSmaller = false
+    for (;;) {
+      try {
+        // One turn of the subagent's own loop, retried on a transient failure, including
+        // one that drops partway through the stream. Retrying the whole turn is safe here
+        // even though the parent run streams: a subagent's text and tool calls are
+        // accumulated and only acted on once the stream ends, so a failed attempt has
+        // shown the user nothing to retract (the main loop's `turn_discarded`) and run no
+        // tool. Reset the accumulators per attempt or a retry would append to the dead
+        // one's remains. There is no fallback hop: a subagent runs on the model it was
+        // dispatched with.
+        await withProviderRetry(
+          async () => {
+            text = ''
+            calls = []
+            stopReason = 'end_turn'
+            reasoning = []
+            for await (const ev of provider.streamChat({
+              model,
+              system,
+              messages: requestMessages(),
+              tools,
+              ...(outputCapRaised ? raisedOutputCap(model) : {}),
+              ...(opts.explicitCacheControl ? { explicitCacheControl: true } : {}),
+              signal
+            })) {
+              if (ev.type !== 'error') reached = true
+              if (ev.type === 'text') text += ev.text
+              else if (ev.type === 'tool_call') calls.push(ev.call)
+              else if (ev.type === 'done') {
+                stopReason = ev.stopReason
+                if (ev.usage) opts.onUsage?.(ev.usage)
+                if (ev.reasoning?.length) reasoning = ev.reasoning
+              } else if (ev.type === 'error') throw providerStreamError(ev)
+            }
+          },
+          {
+            signal,
+            reachable: () => reached || (opts.reachable?.() ?? false),
+            // Otherwise a subagent riding out a blip is indistinguishable from a hung one.
+            onRetry: (n) => {
+              opts.onProgress?.(`step ${iter + 1} · retrying (${n})`)
+              notice(iter, `The model request failed; retrying (${n})`)
+            }
           }
-        },
-        {
-          signal,
-          reachable: () => reached || (opts.reachable?.() ?? false),
-          // Otherwise a subagent riding out a blip is indistinguishable from a hung one.
-          onRetry: (n) => {
-            opts.onProgress?.(`step ${iter + 1} · retrying (${n})`)
-            notice(iter, `The model request failed; retrying (${n})`)
-          }
+        )
+        break
+      } catch (e) {
+        if (signal.aborted) return stop(lastText.trim() || '[subagent aborted]', 'aborted')
+        if (!retriedSmaller && isContextOverflowError(e) && shrinkHistory()) {
+          retriedSmaller = true
+          opts.onProgress?.(`step ${iter + 1} · trimming older tool output to fit the context window`)
+          notice(iter, "The request was too large for the model's context window; trimmed older tool output and retrying")
+          continue
         }
-      )
-    } catch (e) {
-      if (signal.aborted) return stop(lastText.trim() || '[subagent aborted]', 'aborted')
-      return stop(`[subagent error: ${(e as Error).message}]`, 'error')
+        return failed(e)
+      }
     }
     turnsTaken = iter + 1
 
