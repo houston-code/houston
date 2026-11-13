@@ -545,12 +545,14 @@ the model.
 ### Terminal themes
 
 `/theme` lists the terminal's palettes, and `/theme <name>` switches. Your choice is
-remembered.
+remembered. Until you pick one, Houston asks the terminal for its background color
+when it starts (or reads `COLORFGBG`) and uses `light` on a light background; a
+terminal that doesn't answer gets `default`.
 
 | Theme | For |
 | --- | --- |
 | `dark` | bright foregrounds for a dark background |
-| `light` | readable on white (which a dark theme's bright yellow isn't) |
+| `light` | readable on white: darker yellow and teal instead of colors that wash out |
 | `colorblind` | maps a diff's red and green to orange and blue, for the most common form of color blindness |
 | `mono` | no color at all |
 | `default` | the default palette |
@@ -2750,6 +2752,9 @@ sidebar) or `Esc` returns to the chat.
 - **Density:** Comfortable, or Compact for less space between messages.
 - **Code theme:** Default, High contrast, or Muted, for code blocks, the Files preview,
   and diffs. Every theme keeps code readable in both light and dark.
+- **Accent color:** Default (blue in dark, indigo in light), Violet, Green, Orange, or
+  Pink. It colors buttons, links, the selected chat, and your messages in light mode,
+  with a shade for each of light and dark that keeps text readable.
 
 **Check for Updates…** is also in the app menu on macOS, and the Help menu on Windows
 and Linux.

@@ -470,8 +470,10 @@ Open source under the [Apache License 2.0](LICENSE).
   animations honor the OS *reduce motion* setting.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
   *Appearance*; *System* follows your OS appearance and switches live. The same
-  page sets the chat text size (small, default, large), a compact density, and a
-  code theme (default, high contrast, muted) for code blocks and diffs.
+  page sets the chat text size (small, default, large), a compact density, a code
+  theme (default, high contrast, muted) for code blocks and diffs, and an accent
+  color (blue, violet, green, orange, pink). The terminal client picks its light
+  palette on a light terminal until you choose one with `/theme`.
 - **How much detail the transcript shows.** Tool rows start collapsed to one line;
   the **Expand tools** button at a chat's bottom right opens them all (and collapses them
   again). Settings → *Appearance* can open tool output by default and keep the

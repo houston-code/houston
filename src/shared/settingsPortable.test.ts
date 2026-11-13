@@ -131,6 +131,7 @@ describe('import checks per preference', () => {
     ['appBadge', false, 'yes'],
     ['attentionSounds', true, 'loud'],
     ['theme', 'dark', 'sepia'],
+    ['accentColor', 'green', 'chartreuse'],
     ['chatFontSize', 'large', 'huge'],
     ['density', 'compact', 'tight'],
     ['codeTheme', 'muted', 'neon'],

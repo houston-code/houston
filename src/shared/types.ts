@@ -798,6 +798,8 @@ export interface AppSettings {
   attentionSounds?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
+  /** Accent color preset. Absent = 'default' (the theme's own accent). */
+  accentColor?: AccentColor
   /** Text size in the chat transcript. Absent = 'default'. */
   chatFontSize?: ChatFontSize
   /** Spacing in the chat transcript. Absent = 'comfortable'. */
@@ -975,6 +977,10 @@ export interface EnvKeyOffer {
   envVar: string
   last4: string
 }
+
+/** Accent color presets (Settings > Appearance); 'default' is each theme's own. */
+export const ACCENT_COLORS = ['default', 'violet', 'green', 'orange', 'pink'] as const
+export type AccentColor = (typeof ACCENT_COLORS)[number]
 
 /** How the sidebar sorts chats outside any group into sections. */
 export type SidebarGroupBy = 'folder' | 'date'

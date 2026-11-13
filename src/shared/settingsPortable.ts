@@ -1,5 +1,5 @@
 import type { AppSettings, Hook, PermissionRule } from './types'
-import { APPROVAL_POLICIES, HOOK_EVENTS } from './types'
+import { ACCENT_COLORS, APPROVAL_POLICIES, HOOK_EVENTS } from './types'
 import {
   DEFAULT_ITERATION_CEILING,
   DEFAULT_MAX_ITERATIONS,
@@ -46,6 +46,7 @@ export const PREFERENCE_DEFAULTS = {
   appBadge: true,
   attentionSounds: false,
   theme: 'system',
+  accentColor: 'default',
   chatFontSize: 'default',
   density: 'comfortable',
   codeTheme: 'default',
@@ -145,6 +146,7 @@ const CHECKS: Record<Exclude<PreferenceKey, 'permissionRules' | 'hooks'>, (v: un
   appBadge: (v) => typeof v === 'boolean',
   attentionSounds: (v) => typeof v === 'boolean',
   theme: (v) => v === 'system' || v === 'dark' || v === 'light',
+  accentColor: (v) => typeof v === 'string' && (ACCENT_COLORS as readonly string[]).includes(v),
   chatFontSize: (v) => v === 'small' || v === 'default' || v === 'large',
   density: (v) => v === 'comfortable' || v === 'compact',
   codeTheme: (v) => v === 'default' || v === 'contrast' || v === 'muted',

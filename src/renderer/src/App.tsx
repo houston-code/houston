@@ -44,7 +44,7 @@ import {
   planNewChatWorkspace,
   suggestBranch
 } from './lib/worktree'
-import { useApplyAppearance, useApplyTheme } from './hooks/useApplyTheme'
+import { useApplyAccent, useApplyAppearance, useApplyTheme } from './hooks/useApplyTheme'
 import { useChatStatus } from './hooks/useChatStatus'
 import { useWindowFocused } from './hooks/useWindowFocused'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
@@ -472,6 +472,7 @@ export default function App(): JSX.Element {
 
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
+  useApplyAccent(settings?.accentColor)
   useApplyAppearance({
     chatFontSize: settings?.chatFontSize,
     density: settings?.density,

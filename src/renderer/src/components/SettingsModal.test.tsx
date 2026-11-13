@@ -1676,6 +1676,19 @@ describe('SettingsModal: web search key', () => {
   })
 })
 
+describe('SettingsModal accent color', () => {
+  afterEach(() => document.documentElement.removeAttribute('data-accent'))
+
+  it('previews the accent on the document root and saves it', async () => {
+    const api = installApi()
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Accent color' }), { target: { value: 'violet' } })
+    expect(document.documentElement.getAttribute('data-accent')).toBe('violet')
+    await waitFor(() => expect(api.saveSettings.mock.calls.at(-1)?.[0]).toMatchObject({ accentColor: 'violet' }))
+  })
+})
+
 describe('SettingsModal appearance options', () => {
   afterEach(() => {
     for (const a of ['data-chat-size', 'data-density', 'data-code-theme']) document.documentElement.removeAttribute(a)

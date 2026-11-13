@@ -289,7 +289,7 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
         Component: AppearanceSection,
         keywords: [
           'theme',
@@ -304,6 +304,8 @@ export const PAGES: SettingsPage[] = [
           'compact',
           'code theme',
           'syntax',
+          'accent',
+          'highlight color',
           'transcript',
           'tool output',
           'expand',
