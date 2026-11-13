@@ -6,6 +6,7 @@ import { IPC } from '@shared/constants'
 import type { MenuCommand } from '@shared/types'
 import { createDeepLinkRouter, type DeepLinkRouter } from './deepLinks'
 import { appWindows } from './helperWindows'
+import { windowShowing } from './windows'
 import { getSettings, rememberWorkspace } from './store'
 import { conversationExists, listConversations } from './conversations'
 import { log } from './logger'
@@ -72,7 +73,17 @@ export function wireDeepLinks(opts: {
       const cmd: MenuCommand = { type: 'new-chat-in-workspace', workspace: dir }
       send(IPC.menuCommand, cmd)
     },
-    openChat: (id) => send(IPC.chatOpenRequest, id),
+    // A window already showing that chat comes forward; otherwise the target window opens it.
+    openChat: (id) => {
+      const showing = windowShowing(id)
+      if (showing && !showing.isDestroyed()) {
+        if (showing.isMinimized()) showing.restore()
+        showing.show()
+        showing.focus()
+        return
+      }
+      send(IPC.chatOpenRequest, id)
+    },
     openSettings: (page) => send(IPC.menuOpenSettings, page),
     resolveDirectory,
     isKnownFolder,
