@@ -2931,6 +2931,163 @@ describe('run_shell other-checkout hint', () => {
   })
 })
 
+describe("the shell's working directory", () => {
+  // run_shell's `cd` lasts for the turn, while file tools always resolve from the
+  // project root. A model that cd'd and then reused a shell-relative path got a bare
+  // ENOENT, so results say where the shell is and a miss names the path that exists.
+  const api = join('packages', 'api')
+  const NOTE = '[note: file tools resolve paths from the project root'
+  const shellIn = (dir: string): void => {
+    ctx = { ...ctx, shellSession: { cwd: dir, env: '' } }
+  }
+  /** The call's error message (a call that succeeds fails the test). */
+  const failure = (name: string, args: Record<string, unknown>): Promise<string> =>
+    run(name, args).then(
+      (out) => {
+        throw new Error(`${name} succeeded: ${out}`)
+      },
+      (e: Error) => e.message
+    )
+
+  beforeEach(() => {
+    mkdirSync(join(workspace, api, 'src'), { recursive: true })
+    writeFileSync(join(workspace, api, 'src', 'index.ts'), 'export const x = 1\n')
+  })
+
+  describe('in run_shell results', () => {
+    it.skipIf(!backendSupportsSession())('is named after a cd until the shell is back at the root', { timeout: 30_000 }, async () => {
+      ctx = { ...ctx, shellSession: createShellSession(workspace) }
+      expect(await run('run_shell', { command: 'echo hi' })).not.toContain('[cwd:')
+      expect(await run('run_shell', { command: 'cd packages/api' })).toContain(`[exit code: 0]\n[cwd: ${api}]`)
+      // Every later result repeats it while the shell stays there.
+      expect(await run('run_shell', { command: 'echo still' })).toContain(`[cwd: ${api}]`)
+      expect(await run('run_shell', { command: 'cd ../..' })).not.toContain('[cwd:')
+    })
+
+    it.skipIf(!backendSupportsSession() || process.platform === 'win32')(
+      'is spelled in full outside the project',
+      { timeout: 30_000 },
+      async () => {
+        ctx = { ...ctx, shellSession: createShellSession(workspace) }
+        expect(await run('run_shell', { command: 'cd /' })).toContain('[cwd: /]')
+      }
+    )
+  })
+
+  describe('in file tool misses', () => {
+    it.skipIf(!backendSupportsSession())('points read_file at the root-relative path after a cd', { timeout: 30_000 }, async () => {
+      ctx = { ...ctx, shellSession: createShellSession(workspace) }
+      await run('run_shell', { command: 'cd packages/api' })
+      const err = await failure('read_file', { path: 'src/index.ts' })
+      expect(err).toMatch(/ENOENT/)
+      expect(err).toContain(`${NOTE}, not from the shell's working directory (${api}).`)
+      expect(err).toContain(`${join(api, 'src', 'index.ts')} exists; use that path.]`)
+      // The path it names is the one that works.
+      expect(await run('read_file', { path: join(api, 'src', 'index.ts') })).toBe('1\texport const x = 1')
+    })
+
+    it('names the path for every file tool that needs an existing file', async () => {
+      shellIn(join(workspace, api))
+      writeFileSync(join(workspace, api, 'nb.ipynb'), JSON.stringify({ cells: [], metadata: {}, nbformat: 4, nbformat_minor: 5 }))
+      const file = `${join(api, 'src', 'index.ts')} exists; use that path.]`
+      expect(await failure('read_file', { path: 'src/index.ts' })).toContain(file)
+      expect(await failure('edit_file', { path: 'src/index.ts', old_string: 'x', new_string: 'y' })).toContain(file)
+      expect(
+        await failure('multi_edit', { path: 'src/index.ts', edits: [{ old_string: 'x', new_string: 'y' }] })
+      ).toContain(file)
+      expect(await failure('list_dir', { path: 'src' })).toContain(`${join(api, 'src')} exists; use that path.]`)
+      expect(await failure('notebook_edit', { path: 'nb.ipynb', cell: 1, mode: 'insert', source: 'x' })).toContain(
+        `${join(api, 'nb.ipynb')} exists; use that path.]`
+      )
+      const update = ['*** Begin Patch', '*** Update File: src/index.ts', '@@', '-export const x = 1', '+export const x = 2', '*** End Patch']
+      const updateErr = await failure('apply_patch', { patch: update.join('\n') })
+      expect(updateErr).toContain('Update File: src/index.ts does not exist.')
+      expect(updateErr).toContain(file)
+      const del = ['*** Begin Patch', '*** Delete File: src/index.ts', '*** End Patch']
+      expect(await failure('apply_patch', { patch: del.join('\n') })).toContain(file)
+      // Nothing was changed by any of them.
+      expect(readFileSync(join(workspace, api, 'src', 'index.ts'), 'utf8')).toBe('export const x = 1\n')
+    })
+
+    it('names the path a shell-relative `..` reaches inside the project', async () => {
+      mkdirSync(join(workspace, 'packages', 'shared'))
+      writeFileSync(join(workspace, 'packages', 'shared', 'util.ts'), 'u\n')
+      shellIn(join(workspace, api))
+      const err = await failure('read_file', { path: '../shared/util.ts' })
+      expect(err).toMatch(/escapes the allowed roots/)
+      expect(err).toContain(`${join('packages', 'shared', 'util.ts')} exists; use that path.]`)
+    })
+
+    it('names a path in another allowed root in full', async () => {
+      const extra = realpathSync(mkdtempSync(join(tmpdir(), 'houston-extra-')))
+      try {
+        mkdirSync(join(extra, 'lib'))
+        writeFileSync(join(extra, 'lib', 'a.ts'), 'a\n')
+        ctx = { ...ctx, roots: [workspace, extra], shellSession: { cwd: extra, env: '' } }
+        expect(await failure('read_file', { path: 'lib/a.ts' })).toContain(`${join(extra, 'lib', 'a.ts')} exists; use that path.]`)
+      } finally {
+        rmSync(extra, { recursive: true, force: true })
+      }
+    })
+
+    it('says nothing while the shell is at the project root', async () => {
+      shellIn(workspace)
+      const err = await failure('read_file', { path: 'src/index.ts' })
+      expect(err).toMatch(/ENOENT/)
+      expect(err).not.toContain(NOTE)
+    })
+
+    it('says nothing when the path is missing under the shell directory too', async () => {
+      shellIn(join(workspace, api))
+      expect(await failure('read_file', { path: 'src/missing.ts' })).not.toContain(NOTE)
+    })
+
+    it('says nothing when the file exists at the root and the call failed for another reason', async () => {
+      mkdirSync(join(workspace, 'src'))
+      writeFileSync(join(workspace, 'src', 'index.ts'), 'root\n')
+      shellIn(join(workspace, api))
+      ctx = { ...ctx, fileTracker: new FileReadTracker() }
+      const err = await failure('edit_file', { path: 'src/index.ts', old_string: 'root', new_string: 'x' })
+      expect(err).toContain('You have not read src/index.ts yet')
+      expect(err).not.toContain(NOTE)
+    })
+
+    describe('outside the roots', () => {
+      let outside: string
+      beforeEach(() => {
+        outside = realpathSync(mkdtempSync(join(tmpdir(), 'houston-outside-')))
+        writeFileSync(join(outside, 'secret.txt'), 'SECRET')
+      })
+      afterEach(() => {
+        rmSync(outside, { recursive: true, force: true })
+      })
+
+      it('never names a path a symlink in the shell directory takes out of them', async () => {
+        symlinkSync(outside, join(workspace, api, 'link'), 'junction')
+        shellIn(join(workspace, api))
+        for (const [name, args] of [
+          ['read_file', { path: 'link/secret.txt' }],
+          ['edit_file', { path: 'link/secret.txt', old_string: 'SECRET', new_string: 'x' }],
+          ['list_dir', { path: 'link' }]
+        ] as const) {
+          const err = await failure(name, args)
+          expect(err).not.toContain(NOTE)
+          expect(err).not.toContain(outside)
+        }
+        expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('SECRET')
+      })
+
+      it('never names a path under a shell directory outside them', async () => {
+        shellIn(outside)
+        const err = await failure('read_file', { path: 'secret.txt' })
+        expect(err).toMatch(/ENOENT/)
+        expect(err).not.toContain(NOTE)
+        expect(err).not.toContain(outside)
+      })
+    })
+  })
+})
+
 describe('run_shell git guard', () => {
   // A command that plants a hook for the user's own git to run outside the sandbox is
   // caught after it runs; the user is asked, and the result says what happened.
