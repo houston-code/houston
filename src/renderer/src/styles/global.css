@@ -5204,6 +5204,93 @@ body.is-resizing .preview-dock__resizer::after {
 .scorecard__body {
   padding: 8px 12px 16px;
 }
+/* The usage view: spend and tokens per day and per project, plus the cost reminder. */
+.usage-view__body {
+  padding: 12px 16px 20px;
+  overflow-y: auto;
+}
+.usage-view__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.usage-view__section {
+  margin-bottom: 18px;
+}
+.usage-view__heading {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.usage-view__empty,
+.usage-view__note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.usage-view__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-view__table th,
+.usage-view__table td {
+  padding: 3px 6px;
+  text-align: right;
+  white-space: nowrap;
+  font-weight: normal;
+}
+.usage-view__table thead th {
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.usage-view__table th[scope='row'],
+.usage-view__table thead th:first-child {
+  text-align: left;
+}
+.usage-view__project {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.usage-view__barcell {
+  width: 30%;
+}
+.usage-view__bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.usage-view__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.usage-view__limit {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.usage-view__limit input {
+  width: 80px;
+  flex-shrink: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+}
 .scorecard-card {
   border: 1px solid var(--border);
   border-radius: 8px;

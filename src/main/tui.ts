@@ -64,6 +64,7 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import { throttleNotice } from '@shared/rateLimit'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
@@ -4607,7 +4608,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         case 'retry':
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
-          if (retryStreak === 0) deps.io.out(paint(`\n· retrying (${retryProgress(e)})… ${e.message}\n`, 'yellow'))
+          if (retryStreak === 0) {
+            const line = e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `retrying (${retryProgress(e)})… ${e.message}`
+            deps.io.out(paint(`\n· ${line}\n`, 'yellow'))
+          }
           retryStreak = e.attempt
           break
         case 'model_fallback':

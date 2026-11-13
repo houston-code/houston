@@ -52,6 +52,7 @@ import type {
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
 import type { Scorecard } from '@shared/scorecard'
+import type { UsageReport } from '@shared/usageReport'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type { ChatStatusMap } from '@shared/chatStatus'
@@ -264,6 +265,8 @@ const api = {
   /** Aggregate a local-only per-model loop scorecard over every persisted chat.
    *  Computed on-device from local files — nothing is ever transmitted. */
   getScorecard: (): Promise<Scorecard> => ipcRenderer.invoke(IPC.conversationScorecard),
+  /** Spend and tokens per day and per project over every saved chat (local only). */
+  getUsageReport: (): Promise<UsageReport> => ipcRenderer.invoke(IPC.conversationUsageReport),
   createConversation: (input: {
     workspace: string
     providerId: string
