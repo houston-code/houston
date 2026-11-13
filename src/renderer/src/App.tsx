@@ -122,6 +122,7 @@ import { GlobalRulesNotice } from './components/GlobalRulesNotice'
 import { PinnedTodos } from './components/PinnedTodos'
 import { currentTodos, showPinnedTodos } from './lib/currentTodos'
 import { useAutoOpenPreview } from './hooks/useAutoOpenPreview'
+import { ImportNotice } from './components/ImportNotice'
 import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
@@ -2988,6 +2989,15 @@ export default function App(): JSX.Element {
         />
 
         <GlobalRulesNotice onDecided={setSettings} />
+
+        <ImportNotice
+          workspace={workspace}
+          onReview={() => {
+            setSettingsSection('import')
+            setSettingsQuery('')
+            setSettingsOpen(true)
+          }}
+        />
 
         <EnvKeyNotice
           // A key stored with no model picked yet starts on that provider's default,

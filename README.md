@@ -592,6 +592,12 @@ Open source under the [Apache License 2.0](LICENSE).
   absolute), to split or share common rules across files. To reuse an existing
   global rules file such as `~/.claude/CLAUDE.md`, add `@~/.claude/CLAUDE.md` to
   `~/.houston/AGENTS.md`; Houston offers to do this once when it finds one.
+- **Import from other tools.** Settings > Import lists the instruction files, MCP
+  servers, skills, and custom commands other coding tools keep in your home folder
+  and the open project (for example a `.mcp.json` or `.claude/commands` in the
+  project), and copies the ones you pick into Houston's own locations. Originals
+  are never changed, nothing Houston already has is overwritten, and imported MCP
+  servers start switched off. Houston offers this once when it first finds any.
 - **Token usage & cost at a glance.** The control bar above the composer shows how
   full the context is (a small bar and "used/maximum") and the chat's **estimated
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show

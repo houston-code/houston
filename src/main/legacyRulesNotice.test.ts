@@ -7,6 +7,8 @@ const state = vi.hoisted(() => ({ userData: '' }))
 vi.mock('./userData', () => ({ getUserDataDir: () => state.userData }))
 
 import {
+  answerImportOffer,
+  isImportOfferAnswered,
   dismissLegacyRulesNotice,
   isLegacyRulesNoticeDismissed,
   takeLegacyRulesTerminalNotice
@@ -63,5 +65,16 @@ describe('legacy rules notice state', () => {
     expect(onDisk()).toEqual({ legacyRulesBannerAnswered: true })
     writeFileSync(file(), '[1,2]')
     expect(isLegacyRulesNoticeDismissed()).toBe(false)
+  })
+})
+
+describe('import offer state', () => {
+  it('is answered once and kept beside the rules notice record', () => {
+    expect(isImportOfferAnswered()).toBe(false)
+    dismissLegacyRulesNotice()
+    answerImportOffer()
+    answerImportOffer()
+    expect(isImportOfferAnswered()).toBe(true)
+    expect(onDisk()).toEqual({ legacyRulesBannerAnswered: true, importOfferAnswered: true })
   })
 })
