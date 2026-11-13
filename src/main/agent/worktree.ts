@@ -5,6 +5,7 @@ import type { ConversationWorktree, RepoInfo, WorktreeRemoval } from '@shared/ag
 import { isSafeGitRef } from '@shared/git'
 import { parseWorktreePorcelain } from './git'
 import { GIT_ENV, hardenedGitArgs } from './gitRead'
+import { findGitEntry } from './gitEntry'
 import { lspManager } from './lsp/manager'
 
 /**
@@ -110,7 +111,8 @@ export function worktreePath(
 export async function getRepoInfo(
   workspace: string,
   exec: GitRun = runGit,
-  exists: (p: string) => boolean = existsSync
+  exists: (p: string) => boolean = existsSync,
+  gitEntry: (dir: string) => string | null = findGitEntry
 ): Promise<RepoInfo> {
   // A missing directory isn't a non-repo folder — it's gone. Report that distinctly
   // (and skip the git spawn, which would only fail with ENOENT on the cwd anyway).
@@ -129,8 +131,9 @@ export async function getRepoInfo(
     const ws = normPath(workspace)
     isLinkedWorktreeRoot = entries.slice(1).some((e) => normPath(e.path) === ws)
   } catch {
-    // The path exists but isn't inside a git repo — a valid plain workspace.
-    return { ...EMPTY_REPO, exists: true }
+    // The path exists but isn't inside a git repo — a valid plain workspace. Unless a
+    // `.git` is there after all: then it's a repository git can't open.
+    return gitEntry(workspace) ? { ...EMPTY_REPO, exists: true, unreadable: true } : { ...EMPTY_REPO, exists: true }
   }
   let currentBranch: string | null = null
   let unborn = false

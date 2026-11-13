@@ -41,6 +41,12 @@ export interface FileDiff {
 export interface WorkingTreeChanges {
   /** False when the workspace is not a git repository. */
   isRepo: boolean
+  /**
+   * Set (with `isRepo` false) when the workspace has a `.git`, in it or a parent
+   * folder, that git can't open: git's own reason. Such a folder is not offered
+   * `git init`, which would start a second repository inside the broken one.
+   */
+  unreadable?: string
   /** Current branch, or null (detached / unborn / non-repo). */
   branch: string | null
   files: FileDiff[]
@@ -63,6 +69,8 @@ export interface WorkingTreeChanges {
  */
 export interface WorkingTreeStats {
   isRepo: boolean
+  /** As in the full set: why git can't open the workspace's repository. */
+  unreadable?: string
   /** Current branch, or null (detached / unborn / non-repo), as in the full set. */
   branch: string | null
   /** Changed files, tracked plus untracked (the full set's `files.length`). */
