@@ -260,3 +260,18 @@ describe('waking idle chats', () => {
     expect(h.start).toHaveBeenCalledWith('p')
   })
 })
+
+describe('what the transcript shows', () => {
+  // The transcript shows a saved note's first paragraph (systemNoteSummary); the
+  // model-facing instructions and fenced output must stay below it.
+  const firstParagraph = (content: string): string => content.split(/\n\s*\n/)[0]!
+  it('opens each note with a short line and keeps the details below', () => {
+    const wake = wakeNote([exit('a')], [])!.content
+    expect(firstParagraph(wake)).toBe(
+      `${SYSTEM_NOTE_PREFIX} Background work finished while the chat was idle, so Houston continued on its own.`
+    )
+    expect(wake.indexOf('the user has not sent a message')).toBeGreaterThan(firstParagraph(wake).length)
+    const mid = backgroundEventsNote([exit('a')])!.content
+    expect(firstParagraph(mid)).toBe(`${SYSTEM_NOTE_PREFIX} Background work you started has news.`)
+  })
+})

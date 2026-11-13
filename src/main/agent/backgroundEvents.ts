@@ -176,8 +176,10 @@ const DATA_CAVEAT =
  */
 export function backgroundEventsNote(events: BackgroundEvent[]): ChatMessage | null {
   if (!events.length) return null
+  // The opening paragraph is what the transcript shows (see systemNoteSummary); the
+  // details after the blank line are for the model.
   return systemNoteMessage(
-    `Background work you started has news. Use read_shell_output for anything more. ${DATA_CAVEAT}\n${events
+    `Background work you started has news.\n\nUse read_shell_output for anything more. ${DATA_CAVEAT}\n${events
       .map(describeEvent)
       .join('\n')}`
   )
@@ -192,7 +194,10 @@ export function wakeNote(events: BackgroundEvent[], reports: ChildReport[]): Cha
   if (!events.length && !reports.length) return null
   const lines = [...describeReports(reports), ...events.map(describeEvent)]
   return systemNoteMessage(
-    'Background work you started finished while the chat was idle, so this turn started on its own: the user has not sent a message. ' +
+    // The opening paragraph is what the transcript shows (see systemNoteSummary); the
+    // rest, after the blank line, is for the model.
+    'Background work finished while the chat was idle, so Houston continued on its own.\n\n' +
+      'This turn started on its own: the user has not sent a message. ' +
       'If it bears on the work in this chat, act on it (check the result, continue the task, report what happened); ' +
       'if nothing needs doing, say so in a sentence and stop. Do not start new long-running background work just to keep waiting. ' +
       `${DATA_CAVEAT}\n${lines.join('\n')}`
