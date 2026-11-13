@@ -3662,6 +3662,22 @@ h6.md-h {
   word-break: break-word;
   color: var(--text-dim);
 }
+/* A running command's output so far: a short pane that follows the newest line. */
+.tool-row__live {
+  margin: 4px 10px 8px 34px;
+  padding: 6px 10px;
+  max-height: 11.5em;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  background: var(--bg-code);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .tool-row__progress {
   margin: -2px 12px 9px 32px;
   font-size: 12px;
