@@ -1,6 +1,6 @@
 import { lstatSync } from 'node:fs'
 import { Minimatch, type MinimatchOptions } from 'minimatch'
-import { runGitCapture } from './gitRead'
+import { hardenedGitArgs, runGitCapture } from './gitRead'
 
 /**
  * Which files the agent's discovery tools (search_files, glob, ast_grep, the
@@ -44,10 +44,22 @@ export const FALLBACK_SKIP_DIRS = new Set([
  * Whether `dir` sits inside a git work tree and is not itself ignored. One git
  * call: check-ignore exits 0 (ignored), 1 (not ignored), or 128 (not a repo).
  */
-export async function inGitScope(dir: string): Promise<boolean> {
-  const res = await runGitCapture(['check-ignore', '-q', '--', dir], dir)
+export async function inGitScope(dir: string, hardening?: Promise<string[]>): Promise<boolean> {
+  const res = await runGitCapture(['check-ignore', '-q', '--', dir], dir, hardening)
   // 0 = ignored (an explicit request to look inside it); 128 = not a repo.
   return res.code === 1
+}
+
+/**
+ * Start working out `dir`'s git hardening once, for the few commands an operation
+ * runs together (see runGitCapture). Each git command used to start its own probe.
+ */
+function shareHardening(dir: string): Promise<string[]> {
+  const h = hardenedGitArgs(dir)
+  // Every caller awaits it; this only keeps an early rejection from being reported as
+  // unhandled before the first of them does.
+  h.catch(() => {})
+  return h
 }
 
 /** Split a NUL-terminated `git ls-files -z` listing. Paths use '/' on every OS. */
@@ -62,10 +74,17 @@ function splitZ(out: string): string[] {
  * disk are listed too; callers that read or stat each path already tolerate that.
  */
 export async function gitListFiles(dir: string, pathspec: string[] = []): Promise<string[] | null> {
-  if (!(await inGitScope(dir))) return null
+  const h = shareHardening(dir)
+  if (!(await inGitScope(dir, h))) return null
+  return listFilesInScope(dir, pathspec, h)
+}
+
+/** {@link gitListFiles} for a `dir` already known to be in git scope. */
+async function listFilesInScope(dir: string, pathspec: string[], h: Promise<string[]>): Promise<string[] | null> {
   const res = await runGitCapture(
     ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', ...pathspec],
-    dir
+    dir,
+    h
   )
   if (!res.ok) return null
   // A file both tracked and modified can be listed once per stage in a conflict;
@@ -79,10 +98,11 @@ export async function gitListFiles(dir: string, pathspec: string[] = []): Promis
  * ignore files but know nothing of the index, so these are handed to them as
  * explicit paths to keep "never skip a tracked file" true on every backend.
  */
-export async function gitTrackedIgnored(dir: string): Promise<string[]> {
+export async function gitTrackedIgnored(dir: string, hardening?: Promise<string[]>): Promise<string[]> {
   const res = await runGitCapture(
     ['ls-files', '--cached', '--ignored', '--exclude-standard', '-z'],
-    dir
+    dir,
+    hardening
   )
   return res.ok ? [...new Set(splitZ(res.stdout))] : []
 }
@@ -114,10 +134,16 @@ export function hasHiddenSegment(rel: string, keep: ReadonlySet<string> = new Se
 export type ScopePlan = { kind: 'plain' } | { kind: 'git'; walk: boolean; explicit: string[] }
 
 export async function planScope(dir: string): Promise<ScopePlan> {
-  if (!(await inGitScope(dir))) return { kind: 'plain' }
-  // --no-index: does a pattern match `dir` (or an ancestor), tracked files aside?
-  const underPattern = (await runGitCapture(['check-ignore', '--no-index', '-q', '--', dir], dir)).code === 0
-  const explicit = underPattern ? ((await gitListFiles(dir)) ?? []) : await gitTrackedIgnored(dir)
+  // One hardening probe for the whole plan, and the two independent checks at once.
+  const h = shareHardening(dir)
+  const [inScope, ignoredByPattern] = await Promise.all([
+    inGitScope(dir, h),
+    // --no-index: does a pattern match `dir` (or an ancestor), tracked files aside?
+    runGitCapture(['check-ignore', '--no-index', '-q', '--', dir], dir, h)
+  ])
+  if (!inScope) return { kind: 'plain' }
+  const underPattern = ignoredByPattern.code === 0
+  const explicit = underPattern ? ((await listFilesInScope(dir, [], h)) ?? []) : await gitTrackedIgnored(dir, h)
   return { kind: 'git', walk: !underPattern, explicit: explicit.filter((rel) => !hasHiddenSegment(rel)) }
 }
 
