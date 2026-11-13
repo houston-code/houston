@@ -102,3 +102,16 @@ describe('loadCommands — frontmatter and user scope', () => {
     expect(await loadCommands(ws, ws)).toHaveLength(0)
   })
 })
+
+describe('loadCommands, switched off', () => {
+  it('skips a command whose front matter says disabled: true', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'houston-cmds-home-'))
+    try {
+      cmdFile('off.md', '---\ndescription: x\ndisabled: true\n---\nDo it')
+      cmdFile('on.md', '---\ndisabled: false\n---\nDo it')
+      expect((await loadCommands(workspace, home)).map((c) => c.name)).toEqual(['on'])
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  })
+})

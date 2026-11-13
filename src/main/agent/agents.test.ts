@@ -220,3 +220,68 @@ describe('buildCapabilities: dispatch models', () => {
     expect(text).toContain('[runs on haiku-mini]')
   })
 })
+
+describe('user-level agents and skills', () => {
+  let home: string
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'houston-agents-home-'))
+  })
+  afterEach(() => rmSync(home, { recursive: true, force: true }))
+
+  function writeUser(rel: string, content: string): void {
+    const file = join(home, rel)
+    mkdirSync(join(file, '..'), { recursive: true })
+    writeFileSync(file, content)
+  }
+
+  it('loads ~/.houston/agents beside the project, and the project wins a name clash', async () => {
+    writeAgent('reviewer', '---\ndescription: project\n---\nP')
+    writeUser('.houston/agents/reviewer.md', '---\ndescription: mine\n---\nU')
+    writeUser('.houston/agents/explainer.md', '---\ndescription: explains\n---\nE')
+    const agents = await loadAgents(ws, home)
+    expect(agents.map((a) => [a.name, a.description])).toEqual([
+      ['explainer', 'explains'],
+      ['reviewer', 'project']
+    ])
+  })
+
+  it('skips an agent switched off with disabled: true', async () => {
+    writeAgent('off', '---\ndescription: x\ndisabled: true\n---\nP')
+    writeUser('.houston/agents/also-off.md', '---\ndisabled: yes\n---\nU')
+    expect(await loadAgents(ws, home)).toEqual([])
+  })
+
+  it('loads ~/.houston/skills with an absolute path, reads its body, and lets the project win', async () => {
+    writeSkill('shared', '---\nname: shared\ndescription: project\n---\nProject body')
+    writeUser('.houston/skills/shared/SKILL.md', '---\nname: shared\ndescription: mine\n---\nMine')
+    writeUser('.houston/skills/mine/SKILL.md', '---\nname: mine\ndescription: personal\n---\nPersonal body')
+    writeUser('.houston/skills/mine/ref.md', 'ref')
+    const skills = await loadSkills(ws, home)
+    expect(skills.map((s) => [s.name, s.description])).toEqual([
+      ['mine', 'personal'],
+      ['shared', 'project']
+    ])
+    const mine = skills[0]
+    expect(mine.path).toBe(`${join(home, '.houston', 'skills', 'mine')}/SKILL.md`)
+    expect(mine.root).toBe(join(home, '.houston', 'skills'))
+    expect(mine.resources).toEqual([`${join(home, '.houston', 'skills', 'mine')}/ref.md`])
+    expect(await loadSkillBody(ws, mine)).toBe('Personal body')
+    expect(await resolveSkillInstructions(ws, skills, 'mine')).toContain('Personal body')
+  })
+
+  it("refuses a user skill whose SKILL.md links out of the user's skills folder", async () => {
+    writeUser('secret.txt', 'private')
+    mkdirSync(join(home, '.houston', 'skills', 'leak'), { recursive: true })
+    const { symlinkSync } = await import('node:fs')
+    symlinkSync(join(home, 'secret.txt'), join(home, '.houston', 'skills', 'leak', 'SKILL.md'))
+    expect(await loadSkills(ws, home)).toEqual([])
+    // And at read time, should a listed skill be swapped for a link afterwards.
+    const forged = { name: 'leak', description: 'd', path: join(home, '.houston', 'skills', 'leak', 'SKILL.md'), root: join(home, '.houston', 'skills') }
+    expect(await loadSkillBody(ws, forged)).toBeNull()
+  })
+
+  it('skips a skill switched off with disabled: true', async () => {
+    writeSkill('off', '---\nname: off\ndisabled: true\n---\nbody')
+    expect(await loadSkills(ws, home)).toEqual([])
+  })
+})

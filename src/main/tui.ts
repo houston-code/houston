@@ -32,7 +32,7 @@ import { providerKeyUrl } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { formatReceiptLines, receiptHasFailure } from '@shared/evidence'
 import { formatReadinessLines, planVerifySteps, readinessOk } from '@shared/planReadiness'
-import type { FileDiffPreview } from '@shared/diff'
+import { diffStat, type FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
   mergeCommands,
@@ -64,6 +64,7 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
+import { throttleNotice } from '@shared/rateLimit'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
@@ -86,6 +87,15 @@ import { SHARE_MESSAGE } from '@shared/share'
 import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
 import { describeToolCall } from '@shared/toolLabel'
 import { renderPreviewView } from './tui-diff'
+import {
+  chatToJson,
+  chatToMarkdown,
+  defaultExportName,
+  parseExportArgs,
+  renderPermissionRules,
+  renderRecap,
+  type ExportFormat
+} from './tui-sessions'
 import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
@@ -789,6 +799,36 @@ export function spinnerFrame(
   return `${head}${mode}${status}${queued}${draft}`
 }
 
+/** How many files an edit summary names before it collapses the rest to a count. */
+const EDIT_SUMMARY_FILES = 3
+
+/**
+ * One line for a write that landed without an approval prompt (auto-edit, full auto,
+ * or a saved rule), so the edit is not invisible: each file with its added and
+ * removed line counts, and the command that shows the diff.
+ */
+export function renderEditSummary(preview: FileDiffPreview[], paint: Painter): string {
+  const files = preview.slice(0, EDIT_SUMMARY_FILES).map((f) => {
+    const { added, removed } = diffStat(f.diff)
+    const more = f.truncated ? '…' : ''
+    const name = f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path
+    const tag = f.created ? paint(' (new)', 'dim') : f.deleted ? paint(' (deleted)', 'dim') : ''
+    const counts = [
+      added || !removed ? paint(`+${added}${more}`, 'green') : '',
+      removed ? paint(`-${removed}${more}`, 'red') : ''
+    ]
+      .filter(Boolean)
+      .join(' ')
+    return `${name}${tag} ${counts}`
+  })
+  const rest = preview.length - EDIT_SUMMARY_FILES
+  if (rest > 0) files.push(paint(`and ${rest} more file${rest === 1 ? '' : 's'}`, 'dim'))
+  return `  ${paint('✎', 'cyan')} ${files.join(paint(', ', 'dim'))}  ${paint('· /diff last shows the diff', 'dim')}`
+}
+
+/** How many of this session's edits `/diff last <n>` can reach back to. */
+const RECENT_EDITS = 20
+
 export interface StatusState {
   providerId: string
   model: string
@@ -922,6 +962,10 @@ export interface TuiPersist {
   search: (workspace: string, query: string) => ResumeEntry[]
   /** Duplicate a conversation (fresh id, copied history); null if it can't be forked. */
   fork: (id: string) => { id: string } | null
+  /** Give a conversation a title of the user's choosing. Absent ⇒ /rename is unavailable. */
+  rename?: (id: string, title: string) => void
+  /** Delete a conversation for good. Absent ⇒ /delete is unavailable. */
+  remove?: (id: string) => void
 }
 
 /**
@@ -1367,6 +1411,14 @@ export type SlashResult =
   | { kind: 'clear' }
   | { kind: 'resume'; query: string }
   | { kind: 'fork' }
+  /** Write this chat to a file (/export [md|json] [path]). */
+  | { kind: 'export'; format: ExportFormat; path?: string }
+  /** Give this chat a title (/rename <title>); empty shows the current one. */
+  | { kind: 'rename'; title: string }
+  /** Delete this chat, after a confirmation (/delete). */
+  | { kind: 'delete' }
+  /** List the saved permission rules, or remove the n-th (/permissions [remove n]). */
+  | { kind: 'permissions'; remove?: number; bad?: boolean }
   | { kind: 'capability'; which: 'skills' | 'agents' }
   | { kind: 'set-theme'; theme: ThemeName }
   | { kind: 'image'; path: string }
@@ -1395,8 +1447,11 @@ export type SlashResult =
    * (/rewind undo). Without `turn` the driver lists the messages and asks.
    */
   | { kind: 'rewind'; undo: boolean; turn?: number; mode?: RewindMode }
-  /** Summarize everything different in the working tree (/changes). */
-  | { kind: 'changes' }
+  /**
+   * Summarize everything different in the working tree (/changes), or with `last`,
+   * show the diff of an edit this session made (`/diff last [n]`, n edits back).
+   */
+  | { kind: 'changes'; last?: number }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
   /** Reprint a past tool result in full (/output [n]). */
@@ -1475,6 +1530,18 @@ export function parseSlashCommand(
       return { kind: 'btw', question: arg.trim() }
     case 'fork':
       return { kind: 'fork' }
+    case 'export':
+      return { kind: 'export', ...parseExportArgs(arg) }
+    case 'rename':
+      return { kind: 'rename', title: arg.trim() }
+    case 'delete':
+      return { kind: 'delete' }
+    case 'permissions': {
+      const a = arg.trim()
+      if (!a) return { kind: 'permissions' }
+      const m = /^(?:remove|rm|delete)\s+(\d+)$/i.exec(a)
+      return m ? { kind: 'permissions', remove: Number(m[1]) } : { kind: 'permissions', bad: true }
+    }
     case 'skills':
     case 'agents':
       return { kind: 'capability', which: name }
@@ -1515,8 +1582,11 @@ export function parseSlashCommand(
     case 'redo':
       return { kind: 'undo', redo: true }
     case 'changes':
-    case 'diff':
-      return { kind: 'changes' }
+    case 'diff': {
+      const m = /^last(?:\s+(\d+))?$/i.exec(arg.trim())
+      if (!m) return { kind: 'changes' }
+      return { kind: 'changes', last: Math.max(1, Number(m[2] ?? m[1] ?? 1) || 1) }
+    }
     case 'verbose': {
       const a = arg.trim().toLowerCase()
       if (a === 'on') return { kind: 'verbose', on: true }
@@ -1658,6 +1728,10 @@ export const HELP_TEXT = [
   '  /btw <question>       ask a quick side question; the answer stays out of this chat',
   '  /btw clear            start this chat\'s side chat over',
   '  /fork                 branch the current session into a copy',
+  '  /rename <title>       give this chat a title',
+  '  /export [md|json] [path]  write this chat to a file (Markdown by default)',
+  '  /delete               delete this chat (asks first)',
+  '  /permissions [remove n]  list the saved permission rules, or remove one',
   '  /cost                 show session token + cost totals',
   '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
@@ -1669,6 +1743,7 @@ export const HELP_TEXT = [
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
+  "  /diff last [n]        show the diff of this session's last edit (n edits back)",
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
@@ -2724,6 +2799,11 @@ export interface TuiDeps {
   listModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
   /** The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch shown. */
   gitBranch?: () => Promise<string | null>
+  /**
+   * Write an export (`/export`) to `path`, relative to the working folder, without
+   * replacing an existing file. Returns the full path written; throws on failure.
+   */
+  writeExport?: (path: string, content: string) => string
   /** Everything different in the working tree, for /changes. */
   workingTree?: () => Promise<{
     isRepo: boolean
@@ -3061,6 +3141,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // turn (so merely opening and closing the REPL doesn't litter history). Null
   // until then, or after `/clear` starts a fresh one.
   let conversationId: string | null = null
+  // This chat's saved title (for /export, /rename and /delete), read from the store.
+  const currentTitle = (): string | null => {
+    if (!conversationId || !deps.persist) return null
+    try {
+      return deps.persist.list(opts.cwd).find((c) => c.id === conversationId)?.title ?? null
+    } catch {
+      return null
+    }
+  }
   // Persist the running message log, best-effort. A store failure (disk full, bad
   // perms) must degrade to an ephemeral session, not crash the REPL mid-turn — a
   // throw here otherwise propagates out of startRun (no catch there) to a Fatal.
@@ -3153,6 +3242,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let pendingImages: ImageAttachment[] = []
   // Estimated current context size (last turn's input tokens), for the status line.
   let contextTokens = 0
+  // This session's landed edits (newest last), for `/diff last [n]`.
+  let recentEdits: FileDiffPreview[][] = []
   // The checked-out branch, re-read before each status line (a turn or `!git`
   // may switch it).
   let branch: string | null = null
@@ -3287,6 +3378,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.out(
         paint(`· continuing "${entry!.title}" (${messages.length} message(s))\n`, 'dim')
       )
+      const recap = renderRecap(messages, paint, { width: columns() })
+      if (recap) deps.io.out(`${recap}\n`)
       const unanswered = unansweredNotice(messages)
       if (unanswered) deps.io.out(paint(`${unanswered}\n`, 'yellow'))
       // What the launch flags set wins over the chat's own for this session, as it
@@ -3579,9 +3672,115 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         conversationId = id
         messages = conv.messages
         deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
+        const recap = renderRecap(messages, paint, { width: columns() })
+        if (recap) deps.io.out(`${recap}\n`)
         const unanswered = unansweredNotice(messages)
         if (unanswered) deps.io.out(paint(`${unanswered}\n`, 'yellow'))
         adoptChatSettings(conv)
+        continue
+      }
+      if (result.kind === 'export') {
+        if (!messages.length) {
+          deps.io.out(paint('· nothing to export yet; this chat has no messages\n', 'dim'))
+          continue
+        }
+        if (!deps.writeExport) {
+          deps.io.out(paint('· export is unavailable here\n', 'dim'))
+          continue
+        }
+        const at = new Date(nowFn())
+        const title = currentTitle() ?? 'Houston chat'
+        const meta = { id: conversationId, title, providerId, model, at }
+        const content = result.format === 'json' ? chatToJson(messages, meta) : chatToMarkdown(messages, meta)
+        const target = result.path ?? defaultExportName(title, at, result.format)
+        try {
+          const written = deps.writeExport(target, content)
+          deps.io.out(paint(`· exported ${messages.length} message(s) to ${written}\n`, 'dim'))
+        } catch (e) {
+          deps.io.out(paint(`· couldn't export: ${(e as Error).message}\n`, 'yellow'))
+        }
+        continue
+      }
+      if (result.kind === 'rename') {
+        if (!deps.persist?.rename || !conversationId) {
+          deps.io.out(
+            paint(
+              conversationId ? '· renaming is unavailable here\n' : '· nothing to rename yet; send a message first\n',
+              'dim'
+            )
+          )
+          continue
+        }
+        if (!result.title) {
+          deps.io.out(paint(`· this chat is "${currentTitle() ?? 'New chat'}". /rename <title> changes it\n`, 'dim'))
+          continue
+        }
+        try {
+          deps.persist.rename(conversationId, result.title)
+          deps.io.out(paint(`· renamed to "${result.title}"\n`, 'dim'))
+        } catch (e) {
+          deps.io.out(paint(`· couldn't rename: ${(e as Error).message}\n`, 'yellow'))
+        }
+        continue
+      }
+      if (result.kind === 'delete') {
+        if (!deps.persist?.remove || !conversationId) {
+          deps.io.out(
+            paint(
+              conversationId ? '· deleting is unavailable here\n' : '· nothing to delete; this chat is not saved yet\n',
+              'dim'
+            )
+          )
+          continue
+        }
+        const title = currentTitle() ?? 'this chat'
+        // discardPending: type-ahead must not answer a question about deleting.
+        const ans = await deps.io.readLine(
+          paint(`Delete "${title}" and its ${messages.length} message(s)? This cannot be undone. [y/N] `, 'yellow'),
+          { discardPending: true }
+        )
+        if (!/^y(es)?$/i.test(ans?.trim() ?? '')) {
+          deps.io.out(paint('· kept\n', 'dim'))
+          continue
+        }
+        try {
+          deps.persist.remove(conversationId)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't delete: ${(e as Error).message}\n`, 'yellow'))
+          continue
+        }
+        messages = []
+        conversationId = null
+        persistedSettings = null
+        pendingImages = []
+        contextTokens = 0
+        deps.io.out(paint(`· deleted "${title}"; this is a new chat\n`, 'dim'))
+        continue
+      }
+      if (result.kind === 'permissions') {
+        const rules = deps.getSettings().permissionRules ?? []
+        if (result.bad) {
+          deps.io.out(paint('· usage: /permissions, or /permissions remove <n>\n', 'dim'))
+          continue
+        }
+        if (result.remove === undefined) {
+          deps.io.out(`${renderPermissionRules(rules, paint, nowFn())}\n`)
+          continue
+        }
+        const rule = rules[result.remove - 1]
+        if (!rule) {
+          deps.io.out(paint(`· no rule ${result.remove}; /permissions lists them\n`, 'yellow'))
+          continue
+        }
+        if (!deps.updateSettings) {
+          deps.io.out(paint('· editing settings is unavailable here\n', 'dim'))
+          continue
+        }
+        const drop = result.remove - 1
+        deps.updateSettings({ permissionRules: rules.filter((_, i) => i !== drop) })
+        deps.io.out(
+          paint(`· removed: ${rule.action} ${rule.tool || '*'} ${rule.match}${rule.exact ? ' (exact)' : ''}\n`, 'dim')
+        )
         continue
       }
       if (result.kind === 'fork') {
@@ -3839,6 +4038,33 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             ? paint(`· put back ${files} file(s) the last turn had changed\n`, 'dim')
             : `${renderUndoResult(files, paint)}\n`
         )
+        continue
+      }
+      if (result.kind === 'changes' && result.last !== undefined) {
+        const edit = recentEdits[recentEdits.length - result.last]
+        if (!edit) {
+          deps.io.out(
+            paint(
+              recentEdits.length
+                ? `· only ${recentEdits.length} edit${recentEdits.length === 1 ? '' : 's'} so far this session\n`
+                : '· no edits yet this session (/changes shows the working tree)\n',
+              'dim'
+            )
+          )
+          continue
+        }
+        const html = deps.highlightHtml
+        const view = renderPreviewView(
+          edit,
+          paint,
+          html
+            ? (lang, code) => {
+                const h = html(lang, code)
+                return h ? htmlToAnsi(h, paint) : code
+              }
+            : undefined
+        )
+        if (view) deps.io.out(`${view}\n`)
         continue
       }
       if (result.kind === 'changes') {
@@ -4215,6 +4441,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Args captured at tool_start, so a write approval can show the actual diff
     // (the approval event itself only carries a human summary).
     const toolArgs = new Map<string, Record<string, unknown>>()
+    // A write's diff, from its tool_start, until its result says whether it landed.
+    const writePreviews = new Map<string, FileDiffPreview[]>()
+    // Writes the user approved at a prompt, where the diff was already on screen.
+    const promptedWrites = new Set<string>()
     // todo_write calls whose list we already drew, so their summary line is dropped.
     const todoCalls = new Set<string>()
     // Review findings print once per status change (line mode can't update in place).
@@ -4316,6 +4546,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // A question or a plan prints itself as the prompt that follows; a "· ask_user"
           // line in front of it is only the wire name.
           if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) break
+          if (e.kind === 'write' && e.preview?.length) writePreviews.set(e.callId, e.preview)
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
           break
         }
@@ -4351,6 +4582,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           const line = renderToolResult(e.name, e.ok, e.output, paint, { verbose, width: columns() })
           if (line) deps.io.out(`${line}\n`)
           toolArgs.delete(e.callId)
+          const preview = writePreviews.get(e.callId)
+          writePreviews.delete(e.callId)
+          if (preview && e.ok) {
+            recentEdits = [...recentEdits, preview].slice(-RECENT_EDITS)
+            // An approved write showed its diff in the prompt; one that ran without
+            // asking gets the summary, so no edit lands unseen.
+            if (!promptedWrites.has(e.callId)) deps.io.out(`${renderEditSummary(preview, paint)}\n`)
+          }
+          promptedWrites.delete(e.callId)
           break
         }
         case 'tool_progress':
@@ -4383,7 +4623,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         case 'retry':
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
-          if (retryStreak === 0) deps.io.out(paint(`\n· retrying (${retryProgress(e)})… ${e.message}\n`, 'yellow'))
+          if (retryStreak === 0) {
+            const line = e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `retrying (${retryProgress(e)})… ${e.message}`
+            deps.io.out(paint(`\n· ${line}\n`, 'yellow'))
+          }
           retryStreak = e.attempt
           break
         case 'model_fallback':
@@ -4391,6 +4634,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\n· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`, 'yellow'))
           break
         case 'tool_approval':
+          if (e.kind === 'write') promptedWrites.add(e.callId)
           enqueue(async () => {
             // Context (name, kind, unsandboxed warning) + the diff for a write.
             deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select })}\n`)
@@ -4717,6 +4961,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Hand the tab back with no title of ours; the shell sets its own at the next
   // prompt, and a lingering "Houston · proj" would be a lie once we're gone.
   deps.io.signal?.({ title: '' })
+  // The way back to this chat, which nothing else on screen names.
+  if (conversationId && deps.persist) {
+    deps.io.out(
+      paint(
+        `\nThis chat is saved. To come back to it:\n  houston --resume ${conversationId}\n  houston --continue   (the latest chat in this folder)\n`,
+        'dim'
+      )
+    )
+  }
   deps.io.out(paint('\nBye.\n', 'dim'))
   return 0
 }

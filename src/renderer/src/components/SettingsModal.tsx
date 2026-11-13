@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice'
 import { useFocusTrap } from '../lib/useFocusTrap'
-import { useApplyTheme } from '../hooks/useApplyTheme'
+import { useApplyAppearance, useApplyTheme } from '../hooks/useApplyTheme'
 import type { AppSettings, PermissionPolicyView } from '@shared/types'
 import { PAGES, PAGE_GROUPS, pageById, type TabId } from './settings/pages'
 import { NAV_ICON } from './settings/navIcons'
@@ -132,6 +132,11 @@ export function SettingsModal({
 
   // Apply the chosen theme at once, as the rest of the app will once it saves.
   useApplyTheme(settings.theme ?? 'system')
+  useApplyAppearance({
+    chatFontSize: settings.chatFontSize,
+    density: settings.density,
+    codeTheme: settings.codeTheme
+  })
 
   // An API key lives in the OS secret store, not settings.json, so saving or removing
   // one is its own action. Merge just the derived key flags from main's response into
