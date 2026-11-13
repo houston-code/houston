@@ -161,14 +161,17 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
     } else if (line.startsWith('Binary files') || line.startsWith('GIT binary patch')) {
       cur.binary = true
       cur.note = 'Binary file'
-    } else if (line.startsWith('--- ')) {
+    } else if (!hunk && line.startsWith('--- ')) {
+      // A file's `---`/`+++` headers come before its first hunk. Inside a hunk the
+      // same text is a change: a removed `-- comment` (SQL, Lua) arrives as `--- comment`
+      // and an added `++ x` as `+++ x`, and reading those as headers dropped them.
       const p = sidePath(line.slice(4))
       if (p === null) {
         if (cur.status !== 'renamed') cur.status = 'added'
       } else if (!cur.oldPath) {
         cur.oldPath = p
       }
-    } else if (line.startsWith('+++ ')) {
+    } else if (!hunk && line.startsWith('+++ ')) {
       const p = sidePath(line.slice(4))
       if (p === null) {
         if (cur.status !== 'renamed') cur.status = 'deleted'
