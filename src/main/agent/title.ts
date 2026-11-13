@@ -3,7 +3,7 @@ import { modelHasReasoning } from '@shared/model-facts'
 import type { ModelCaps, ProviderKind } from '@shared/types'
 import { getProvider } from '../agentHost'
 import { createProvider } from '../providers'
-import { getConversation, needsGeneratedTitle, setGeneratedTitle } from '../conversations'
+import { needsGeneratedTitle, peekConversation, setGeneratedTitle } from '../conversations'
 import { providerStreamError, withProviderRetry } from './retry'
 
 /**
@@ -185,7 +185,9 @@ export async function maybeGenerateTitle(opts: {
   onTitle?: (title: string) => void
 }): Promise<void> {
   if (inFlight.has(opts.conversationId)) return
-  const conv = getConversation(opts.conversationId)
+  // A title is written from message text alone, so attachments stay on disk: this runs
+  // twice a turn, and loading the chat's images each time read and encoded all of them.
+  const conv = peekConversation(opts.conversationId)
   if (!conv || !needsGeneratedTitle(conv)) return
 
   const providerConfig = getProvider(opts.providerId)

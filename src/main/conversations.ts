@@ -190,7 +190,10 @@ function write(conv: Conversation): void {
   const { value: toWrite, refs } = externalizeMedia(stamped, media)
   // 0600 — owner read/write only. Transcripts can capture secrets echoed in tool
   // output (a curl with an auth header, an env dump), so keep them off world-read.
-  writeFileAtomicSync(path, JSON.stringify(toWrite, null, 2), 0o600)
+  // Compact, not indented: nobody reads these by hand, every reader parses either form,
+  // and indentation more than doubled a chat full of nested subagent records, all of
+  // it re-serialised on every save.
+  writeFileAtomicSync(path, JSON.stringify(toWrite), 0o600)
   pruneMedia(media, refs)
 }
 
@@ -739,8 +742,13 @@ export function setAnnouncedPolicy(id: string, policy: ApprovalPolicy): void {
   write(conv)
 }
 
-/** Replace the message log for a conversation and bump updatedAt. */
-export function setMessages(id: string, messages: ChatMessage[]): void {
+/**
+ * Replace the message log for a conversation and bump updatedAt. `meta` is applied in
+ * the same write, as {@link updateConversationMeta} would: a send records the new user
+ * message and the settings it runs under together, and two calls meant reading,
+ * serialising and rewriting the whole file twice.
+ */
+export function setMessages(id: string, messages: ChatMessage[], meta?: ConversationMetaPatch): void {
   const conv = read(id)
   if (!conv) return
   conv.messages = messages
@@ -754,6 +762,10 @@ export function setMessages(id: string, messages: ChatMessage[]): void {
   if (!conv.titleCustom && conv.title === 'New chat') {
     const title = deriveTitle(messages)
     if (title) conv.title = title
+  }
+  if (meta) {
+    Object.assign(conv, meta)
+    dropUnknownChatSettings(conv)
   }
   write(conv)
 }
@@ -797,10 +809,11 @@ export function writeRewind(
   write(conv)
 }
 
-export function updateConversationMeta(
-  id: string,
-  patch: Partial<Pick<ConversationMeta, 'providerId' | 'model' | 'title'>> & ConversationSettingsPatch
-): void {
+/** What {@link updateConversationMeta} can change: the chat's model, title and own settings. */
+export type ConversationMetaPatch = Partial<Pick<ConversationMeta, 'providerId' | 'model' | 'title'>> &
+  ConversationSettingsPatch
+
+export function updateConversationMeta(id: string, patch: ConversationMetaPatch): void {
   const conv = read(id)
   if (!conv) return
   Object.assign(conv, patch)

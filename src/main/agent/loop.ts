@@ -4655,7 +4655,8 @@ export async function startRun(
         })
       }
 
-      persist(messages)
+      // No persist here: every path through the groups above ends in flushResult,
+      // which saved the log with this iteration's last result already in it.
       if (abort.signal.aborted) {
         emit({ type: 'done', stopReason: 'aborted' })
         return
