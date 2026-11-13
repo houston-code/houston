@@ -80,6 +80,15 @@ The full GUI:
 - Slash commands switch settings mid-session.
 - `--continue` reopens this folder's most recent chat at launch; `--resume <id>`
   reopens a specific one.
+- **First run.** With no model ready, it lists the providers that take a key, then
+  the hosts that need none: Ollama and LM Studio on their usual ports, and any
+  endpoint added with `houston providers add`. It asks each host for its models
+  first, so the list says which are running; picking a running one starts on it
+  and remembers it. For an added endpoint that lists no models, you can type a
+  model id instead. `/login` shows the same list later.
+- **A typo is an error.** An unknown flag, a flag missing its value, or a stray word
+  (`houston "fix the bug"`) stops with a message and the usage, instead of opening
+  an empty session. To run a prompt once, use `-p`. `houston --help` lists every flag.
 
 See "The terminal composer" for how to type, paste, and edit a message.
 
@@ -1077,7 +1086,8 @@ The desktop app updates itself separately.
 
 - the version, and whether a newer one is out
 - Node and the platform
-- the active model and every provider's key status
+- the active model (in the terminal, the one this session runs on, however it was
+  chosen) and every provider's key status
 - whether the shell sandbox is actually enforced on this host
 - which external tools (`git`, `gh`, `rg`) are on `PATH`
 - which language servers are installed, and whether servers are off on this host
