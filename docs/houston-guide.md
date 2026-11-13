@@ -117,7 +117,7 @@ the terminal. Only three kinds do anything:
 | Link | Opens |
 | --- | --- |
 | `houston://open?path=/path/to/folder` | a new chat in that folder |
-| `houston://chat/<chat id>` | that chat |
+| `houston://chat/<chat id>` | that chat (the window already showing it comes to the front) |
 | `houston://settings/<page>` | Settings at that page (`models`, `tools`, `permissions`, …); `houston://settings` alone opens the first page |
 
 - A link never runs a command, sends a message, or changes a setting.
