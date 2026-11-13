@@ -27,7 +27,7 @@ interface SearchHit {
 }
 
 /** Clamp the requested result count into the tool's advertised 1–10 range. */
-function clampResults(n: number | undefined): number {
+export function clampSearchResults(n: number | undefined): number {
   return Math.min(Math.max(1, Math.floor(n ?? 5)), 10)
 }
 
@@ -43,7 +43,7 @@ async function failIfNotOk(res: { ok: boolean; status: number; text: () => Promi
 export const NO_RESULTS = 'No results.'
 
 /** Shared rendering so every provider's output reads the same to the model. */
-function formatHits(hits: SearchHit[], answer?: string): string {
+export function formatHits(hits: SearchHit[], answer?: string): string {
   if (hits.length === 0 && !answer) return NO_RESULTS
   const lines: string[] = []
   if (answer) lines.push(`Answer: ${answer.trim()}`, '')
@@ -68,7 +68,7 @@ export const tavilySearch: SearchFn = async (query, apiKey, opts = {}) => {
     body: JSON.stringify({
       api_key: apiKey,
       query,
-      max_results: clampResults(opts.maxResults),
+      max_results: clampSearchResults(opts.maxResults),
       include_answer: true,
       search_depth: 'basic'
     }),
@@ -88,7 +88,7 @@ interface BraveResponse {
 
 export const braveSearch: SearchFn = async (query, apiKey, opts = {}) => {
   const doFetch = opts.fetchImpl ?? fetch
-  const url = `${BRAVE_URL}?q=${encodeURIComponent(query)}&count=${clampResults(opts.maxResults)}`
+  const url = `${BRAVE_URL}?q=${encodeURIComponent(query)}&count=${clampSearchResults(opts.maxResults)}`
   const res = await doFetch(url, {
     method: 'GET',
     headers: { accept: 'application/json', 'x-subscription-token': apiKey },
@@ -117,7 +117,7 @@ export const exaSearch: SearchFn = async (query, apiKey, opts = {}) => {
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
     body: JSON.stringify({
       query,
-      numResults: clampResults(opts.maxResults),
+      numResults: clampSearchResults(opts.maxResults),
       // Ask for short text + the most relevant highlights so each hit carries a
       // usable snippet without dragging back whole pages.
       contents: { text: { maxCharacters: 400 }, highlights: true }

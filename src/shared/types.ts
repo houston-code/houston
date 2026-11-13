@@ -794,6 +794,8 @@ export interface AppSettings {
    * it. Absent = emacs.
    */
   tuiEditor?: 'emacs' | 'vim'
+  /** The terminal's /verbose: show each tool's output as it runs. Absent = off. */
+  tuiVerbose?: boolean
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /**
@@ -931,6 +933,19 @@ export type ChatFontSize = 'small' | 'default' | 'large'
 export type Density = 'comfortable' | 'compact'
 /** Code block and diff colors (Settings > Appearance). */
 export type CodeTheme = 'default' | 'contrast' | 'muted'
+
+/**
+ * An API key found in the desktop app's environment for a provider with no stored key,
+ * offered for the secure store. Carries only what the offer shows: never the key, only
+ * its last four characters.
+ */
+export interface EnvKeyOffer {
+  providerId: string
+  providerLabel: string
+  /** The variable it was found in, e.g. ANTHROPIC_API_KEY. */
+  envVar: string
+  last4: string
+}
 
 /** Result of answering that notice. `error` is set (and nothing is persisted) when the import write failed. */
 export interface LegacyRulesDecideResult {

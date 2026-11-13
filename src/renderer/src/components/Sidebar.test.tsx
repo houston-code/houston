@@ -470,6 +470,18 @@ describe('Sidebar — collapse / expand rail', () => {
     expect(screen.getByLabelText('Collapse sidebar')).toHaveAttribute('title', 'Collapse sidebar')
   })
 
+  it('names the New chat and Settings shortcuts in their tooltips, expanded and collapsed', () => {
+    const shortcuts = { newChatShortcut: '⌘N', settingsShortcut: '⌘,' }
+    const { rerender } = render(<Sidebar {...baseProps(shortcuts)} />)
+    expect(screen.getByRole('button', { name: /New chat/ })).toHaveAttribute('title', 'New chat (⌘N)')
+    expect(screen.getByRole('button', { name: /Settings/ })).toHaveAttribute('title', 'Settings (⌘,)')
+    rerender(<Sidebar {...baseProps({ ...shortcuts, collapsed: true })} />)
+    expect(screen.getByLabelText('New chat')).toHaveAttribute('title', 'New chat (⌘N)')
+    expect(screen.getByLabelText('Settings')).toHaveAttribute('title', 'Settings (⌘,)')
+    rerender(<Sidebar {...baseProps({ collapsed: true })} />)
+    expect(screen.getByLabelText('New chat')).toHaveAttribute('title', 'New chat')
+  })
+
   it('the rail still exposes New chat and Settings affordances', () => {
     const props = baseProps({ collapsed: true })
     render(<Sidebar {...props} />)
