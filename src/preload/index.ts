@@ -22,6 +22,7 @@ import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
+import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import type { GitInitResult } from '@shared/git'
 import type { DoctorFacts } from '@shared/doctor'
 import type { MemoryScope } from '@shared/memory'
@@ -126,6 +127,11 @@ const api = {
   /** All uncommitted working-tree changes (vs HEAD + untracked) for the Changes panel. */
   getWorkingTreeChanges: (workspace: string): Promise<WorkingTreeChanges> =>
     ipcRenderer.invoke(IPC.workingTreeChanges, workspace),
+  /** What a chat's latest turn (`turn`) or all its turns (`chat`) changed, for the Changes view. */
+  getChatChanges: (conversationId: string, scope: 'turn' | 'chat'): Promise<ChatChanges> =>
+    ipcRenderer.invoke(IPC.chatChanges, conversationId, scope),
+  /** Revert one file or hunk shown in the Changes view (after the user confirmed). */
+  revertChange: (req: ChangeRevertRequest): Promise<ChangeRevertResult> => ipcRenderer.invoke(IPC.changesRevert, req),
   /** Initialize a git repo in the workspace so its files show up in the Changes panel. */
   initGitRepo: (workspace: string): Promise<GitInitResult> =>
     ipcRenderer.invoke(IPC.gitInit, workspace),

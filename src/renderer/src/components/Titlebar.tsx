@@ -21,6 +21,7 @@ export function Titlebar({
   changes,
   onShowFiles,
   onShowChanges,
+  changesOpen,
   onTogglePreview,
   previewOpen,
   previewCount,
@@ -45,7 +46,10 @@ export function Titlebar({
   /** Working-tree change counts; highlights the Changes button and shows a +/− badge. */
   changes?: { fileCount: number; added: number; removed: number }
   onShowFiles?: () => void
+  /** Open or close the side panel's Changes tab. */
   onShowChanges?: () => void
+  /** The side panel is open on its Changes tab. */
+  changesOpen?: boolean
   onTogglePreview?: () => void
   previewOpen?: boolean
   /** Number of running dev servers with a detected URL — shown as a badge when > 0. */
@@ -163,6 +167,7 @@ export function Titlebar({
                 className="titlebar__action"
                 onClick={onShowChanges}
                 aria-label="Changes"
+                {...(changesOpen !== undefined ? { 'aria-pressed': changesOpen } : {})}
                 data-tour="changes"
               >
                 <Icon name="diff" size={15} />

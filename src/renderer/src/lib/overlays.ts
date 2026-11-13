@@ -9,7 +9,6 @@
 export interface OverlayFlags {
   settings: boolean
   doctor: boolean
-  changes: boolean
   files: boolean
   scorecard: boolean
   help: boolean
@@ -30,7 +29,6 @@ export function modalOpen(f: OverlayFlags): boolean {
   return (
     f.settings ||
     f.doctor ||
-    f.changes ||
     f.files ||
     f.scorecard ||
     f.help ||
