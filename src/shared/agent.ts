@@ -534,6 +534,27 @@ export interface ModelUsage {
 }
 
 /** Token usage persisted with a conversation so it survives reloads/restarts. */
+/**
+ * What filled the context window on the most recent request, in approximate tokens
+ * (about four characters per token, the same estimate compaction uses). Parts add up
+ * to the estimated request size; the provider's measured total is the usage's
+ * `inputTokens`, which these are shown beside.
+ */
+export interface ContextParts {
+  /** Houston's own instructions: the system prompt, less the two parts below. */
+  system: number
+  /** Project rules files (AGENTS.md and the like) and the user's own prompt addition. */
+  instructions: number
+  /** The saved-memory index that rides in the system prompt. */
+  memory: number
+  /** The tool schemas offered to the model. */
+  tools: number
+  /** Messages: the user's, the model's replies and its tool calls, summaries. */
+  conversation: number
+  /** What tools returned (file contents, command output, search results). */
+  toolResults: number
+}
+
 export interface ConversationUsage {
   /** Input tokens of the most recent turn — i.e. the current context size. */
   inputTokens: number
@@ -553,6 +574,8 @@ export interface ConversationUsage {
    * conversations last written before per-model tracking.
    */
   perModel?: ModelUsage[]
+  /** What filled the context on the most recent request (absent before it was tracked). */
+  contextParts?: ContextParts
 }
 
 /**
@@ -1460,6 +1483,11 @@ export type AgentEvent =
        * are the round's.
        */
       round?: MessageUsage
+      /**
+       * What filled the context on the request this round sent, estimated (see
+       * {@link ContextParts}). Only on the main model's rounds, not on a subagent's.
+       */
+      context?: ContextParts
     }
   /**
    * The tools this run offers the model, once they are assembled (built-ins and

@@ -150,7 +150,8 @@ Open source under the [Apache License 2.0](LICENSE).
   share one set of built-ins, among them `/new` (or `/clear`), `/compact` (summarize
   older turns to free up context now), `/plan` `/ask` `/auto` `/full` (switch
   approval mode), `/model`, `/reasoning`, `/review` (adversarial review), `/rewind`,
-  `/undo` and `/redo`, `/cost`, `/doctor` (check your setup), `/skills` and
+  `/undo` and `/redo`, `/cost`, `/context` (what fills the context), `/doctor`
+  (check your setup), `/skills` and
   `/agents` (list them), `/agent <name> <task>` (hand a task to one of your agents),
   and `/help`; see the [terminal table](#interactive-terminal) for the rest.
   Any Markdown file in `.houston/commands/` (or `~/.houston/commands/` for every
@@ -948,6 +949,7 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/review` | adversarial review of your uncommitted changes |
 | `/init` | write or improve AGENTS.md, the project's instructions file |
 | `/cost` | session token + cost totals, per model |
+| `/context` | what fills the context now: instructions, tools, memories, conversation, tool results |
 | `/doctor` | check your setup: model, keys, sandbox, tools, MCP |
 | `/verbose`, `/output [n]` | show each tool's full output as it runs (remembered across sessions), or reprint one after the fact |
 | `/btw <question>` | ask the side chat a quick question (`/btw clear` starts it over) |

@@ -1860,6 +1860,45 @@ body.is-resizing {
   margin: 0 0 6px;
   color: var(--text-dim);
 }
+.ctx-breakdown {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ctx-breakdown__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ctx-breakdown__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px 48px 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+.ctx-breakdown__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-breakdown__bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.ctx-breakdown__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.ctx-breakdown__tokens,
+.ctx-breakdown__share {
+  text-align: right;
+  color: var(--text-dim);
+}
 .usage-panel__note {
   margin: 6px 0 0;
   color: var(--text-dim);
