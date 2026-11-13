@@ -509,14 +509,18 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Git-aware.** If the project is a git repo, Houston folds the current branch
   and a short working-tree status into the agent's context each turn, so it knows
   what branch it's on and what's already modified without having to run git first.
-- **Changes panel.** The **⤓ Changes** button in the title bar opens a slide-over
-  diff of every uncommitted change in the working tree (the tracked diff vs HEAD,
-  staged and unstaged, plus untracked files), each file expandable with a
-  red/green line diff and a `+/−` stat. It's working-tree scoped (all uncommitted
-  changes, not just the current chat's edits); read-only and hardened, the same
-  way the agent's `git_diff` tool is. A **Create PR** action hands off to the
-  agent: it commits, pushes, and opens the pull request through the same
-  `gh_pr_*` tools and approval gate, so the panel never drives git itself. It
+- **Changes view.** The **Changes** button in the title bar (and `/changes`) opens a
+  **Changes** tab in the right-hand side panel, beside Preview and Background tasks,
+  so the chat stays in view. It has three scopes: **This turn** (what the chat's latest
+  turn changed), **This chat** (everything the chat changed across its turns, from the
+  snapshots Houston takes before each write), and **Working tree** (every uncommitted
+  change, tracked and untracked, from git). Diffs are syntax-coloured, show their real
+  line numbers, and can be shown side by side. Each file can be opened in its default
+  app or reverted, and each change inside an edited file can be reverted on its own;
+  every revert asks first and is refused if the file changed since the list was read.
+  Git runs hardened (no repository hooks or filters) with argument lists only. A
+  **Create PR** action hands off to the agent: it commits, pushes, and opens the pull
+  request through the same `gh_pr_*` tools and approval gate. It
   opens an independent PR against the default branch, or, when the current branch
   already has an open PR, stacks the new one on top (based on that PR's branch) so
   its diff shows only the new changes. Whenever the working tree has changes, the

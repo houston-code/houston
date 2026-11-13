@@ -989,9 +989,35 @@ A single reply also has an output limit.
   commands, and it doesn't touch git history.
 - `/changes` is the natural question after a long autonomous run.
 
+### The Changes view (desktop app)
+
+The **Changes** button in the title bar, `/changes`, the composer bar's file count, and
+**View > Show Changes** open a **Changes** tab in the right-hand side panel, beside
+Preview and Background tasks. The button closes it again. Pick a scope at the top:
+
+| Scope | Shows |
+| --- | --- |
+| **This turn** | what the chat's latest turn changed, against the files before that turn |
+| **This chat** | what every turn of the chat changed, against the files before the first of them |
+| **Working tree** | every uncommitted change in the project, tracked and untracked, from git |
+
+The two chat scopes come from the snapshots Houston takes before each write, so they
+work in a folder without git too; a turn cut by a rewind is left out, and very old
+snapshots are cleared over time (the view says when). The view remembers the scope you
+picked.
+
+- **Reading diffs.** Syntax colouring by file type, real line numbers, changed words
+  marked, and a **Side by side** toggle that puts the old lines beside the new.
+- **Open** a file in its default app with the arrow button on its row.
+- **Revert** a whole file with the button on its row, or one change inside an edited
+  file with **Revert** on that change. Each asks first. In **Working tree**, a file goes
+  back to its last commit (a new file is deleted); in the chat scopes, it goes back to
+  how it was before the turn or chat (a file the chat created is deleted). A revert is
+  refused when the file changed since the list was read, and while the chat is running.
+
 ### Shipping changes (desktop app)
 
-When the working tree has changes, the bar above the composer and the Changes panel
+When the working tree has changes, the bar above the composer and the Changes view
 offer one button that fits the repository:
 
 | Button | When |

@@ -113,6 +113,10 @@ export const IPC = {
   /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
   folderTrustDecide: 'folderTrust:decide',
   workingTreeChanges: 'workingTree:changes',
+  /** What a chat's latest turn, or all its turns, changed (the Changes view's scopes). */
+  chatChanges: 'changes:chat',
+  /** Revert one file, or one hunk, from the Changes view. */
+  changesRevert: 'changes:revert',
   // Settings
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',

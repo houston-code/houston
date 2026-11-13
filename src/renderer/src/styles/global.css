@@ -5358,6 +5358,157 @@ body.is-resizing .preview-dock__resizer::after {
   max-height: none;
 }
 
+/* ---- Changes view, a tab of the right-hand dock ---- */
+.preview-dock__panel--changes {
+  overflow: hidden;
+}
+.changes-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.changes-view__head {
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 10px 12px;
+}
+/* The scope switch and its caption take the first line; totals and the view's
+   buttons sit on the next, so the narrow dock never squeezes the scope names. */
+.changes-view__head .changes-panel__titles {
+  flex: 1 1 100%;
+}
+.changes-view__head .changes-panel__total {
+  margin-right: auto;
+}
+.changes-view__scopes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.changes-view__scope {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.changes-view__scope--on {
+  background: var(--bg-selected);
+  color: var(--text);
+  font-weight: 550;
+}
+.changes-view__scope:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.changes-view__scope:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.changes-view__head .btn[aria-pressed='true'] {
+  background: var(--bg-selected);
+}
+.changes-view__notice {
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--danger);
+  border-bottom: 1px solid var(--border);
+}
+.changes-file__row {
+  display: flex;
+  align-items: center;
+}
+.changes-file__row .changes-file__head {
+  flex: 1;
+  min-width: 0;
+}
+.changes-file__action {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.changes-file__action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.changes-file__action:focus-visible,
+.changes-hunk__revert:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.changes-hunk__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.changes-hunk__range {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.changes-hunk__revert {
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.changes-hunk__revert:hover {
+  background: var(--bg-hover);
+  color: var(--danger);
+}
+/* The inline "are you sure" for a revert: destructive, so it reads as a warning. */
+.changes-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  font-size: 12px;
+}
+.changes-confirm__text {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Side by side: each row holds the old line and the new one in two columns. */
+.diff--split .diff__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 8px;
+}
+.diff__line--empty {
+  background: rgba(127, 127, 127, 0.06);
+  min-height: 1.45em;
+}
+
 /* ---- Files panel (Finder-like workspace browser drawer) ---- */
 /* Wider than the diff drawer (defined after `.drawer`, so this wins) to fit the
    tree + preview columns side by side. */
@@ -5615,64 +5766,64 @@ body.is-resizing .preview-dock__resizer::after {
 }
 /* highlight.js token colors, themed to the app palette (vars set per theme). The
    pane carries `hljs`; tokens are scoped under it so the classes can't leak. */
-:is(.file-preview__text, .md-codeblock__pre) .hljs-comment,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-quote {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-comment,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-quote {
   color: var(--syn-comment);
   font-style: italic;
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-keyword,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-tag,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-literal,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-section,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-operator,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-doctag {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-keyword,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-tag,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-literal,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-section,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-operator,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-doctag {
   color: var(--syn-keyword);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-string,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-regexp,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-bullet,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-addition,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-attr,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-pseudo {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-string,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-regexp,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-bullet,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-addition,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-attr,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-pseudo {
   color: var(--syn-string);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-number,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-symbol,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-link {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-number,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-symbol,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-link {
   color: var(--syn-number);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-title,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-title.function_,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-built_in {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-title,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-title.function_,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-built_in {
   color: var(--syn-function);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-type,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-title.class_,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-class .hljs-title,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-class {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-type,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-title.class_,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-class .hljs-title,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-class {
   color: var(--syn-type);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-attr,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-attribute,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-property,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-id,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-variable,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-template-variable,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-params {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-attr,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-attribute,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-property,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-id,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-variable,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-template-variable,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-params {
   color: var(--syn-attr);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-tag,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-name,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-deletion {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-tag,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-name,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-deletion {
   color: var(--syn-tag);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-meta {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-meta {
   color: var(--syn-meta);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-emphasis {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-emphasis {
   font-style: italic;
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-strong {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-strong {
   font-weight: 600;
 }
 .file-preview__image-wrap {
