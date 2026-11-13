@@ -19,6 +19,7 @@ import {
 } from '@shared/provider-catalog'
 import { isMacPlatform } from '../../../lib/shortcuts'
 import { HeadersField, ModelsField, SettingsSection } from '../fields'
+import { VerifySuggestion } from './verifySuggestion'
 import type { SettingsCtx } from '../context'
 
 /** Configured providers: endpoint/region fields, the API key, and the model list. */
@@ -586,6 +587,11 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           }
         />
       </label>
+      <VerifySuggestion
+        workspace={ctx.workspace}
+        current={settings.verifyCommand ?? ''}
+        onUse={(command) => setSettings((s) => ({ ...s, verifyCommand: command }))}
+      />
     </SettingsSection>
   )
 }

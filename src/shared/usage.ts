@@ -4,7 +4,7 @@
  * so both processes and the unit tests can use them.
  */
 import type { ModelCaps } from './types'
-import type { ModelUsage, ConversationUsage } from './agent'
+import type { ContextParts, ModelUsage, ConversationUsage } from './agent'
 import {
   contextWindowFor,
   modelHasReasoning,
@@ -30,6 +30,8 @@ export interface SessionUsage {
   cacheRead?: number
   /** Per-model cost breakdown, in first-seen order (absent until a turn has billed). */
   perModel?: ModelUsage[]
+  /** What filled the context on the most recent request, estimated (absent until known). */
+  contextParts?: ContextParts
 }
 
 /**
@@ -110,7 +112,8 @@ export function sessionUsageFromConversation(u: ConversationUsage): SessionUsage
     output: u.outputTokens,
     cost: u.cost ?? 0,
     cacheRead: u.cacheReadTokens,
-    perModel: u.perModel
+    perModel: u.perModel,
+    ...(u.contextParts ? { contextParts: u.contextParts } : {})
   }
 }
 

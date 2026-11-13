@@ -235,6 +235,7 @@ import {
   buildSummaryMessages,
   buildSummaryRequestMessages,
   compactionAnchor,
+  estimateContextParts,
   estimateTokens,
   estimateToolTokens,
   evictStaleToolResults,
@@ -1623,6 +1624,12 @@ export async function startRun(
         : undefined
     ]
     let system = buildSystemPrompt(...promptInputs)
+    // The parts of the system prompt that came from the project and the user rather
+    // than from Houston, for the context breakdown (`/context`). Approximate: the
+    // memory index counts only when it actually rides in the prompt.
+    const instructionsChars = (rules.text?.length ?? 0) + (settings.systemPromptExtra?.length ?? 0)
+    const memoryChars =
+      memoryOn && builtinNames.includes('recall_memory') ? (promptSnapshot.memory?.trim().length ?? 0) : 0
     // Which version of Houston's own instructions this run's replies came from, kept on
     // each one so saved chats can be compared across prompt changes (see promptId).
     runPromptId = promptId(promptInputs, builtinDefs.map((t) => t.schema))
@@ -3761,7 +3768,8 @@ export async function startRun(
           // and filing its tokens under the primary hid the hop from the cost breakdown.
           model: route.model,
           ...(turnCacheRead ? { cacheReadTokens: turnCacheRead } : {}),
-          ...(turnCacheWrite ? { cacheWriteTokens: turnCacheWrite } : {})
+          ...(turnCacheWrite ? { cacheWriteTokens: turnCacheWrite } : {}),
+          context: estimateContextParts({ system, instructionsChars, memoryChars, toolTokens, messages: sendMessages })
         })
       }
 

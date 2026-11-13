@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { Formatter } from './agent/format'
-import { formatterStatuses, getIntegrations } from './integrations'
+import { formatterStatuses, getIntegrations, installCommandsFor } from './integrations'
 
 const REGISTRY: Record<string, Formatter[]> = {
   ts: [{ bin: 'prettier', args: (p) => [p] }],
@@ -82,3 +82,51 @@ describe('getIntegrations', () => {
     expect((await getIntegrations({ ...base, shellSyntax: 'posix' })).formattersNeedGitBash).toBe(false)
   })
 })
+
+describe('install commands for missing items', () => {
+  const base = {
+    gh: { installed: false, authenticated: false },
+    formatters: [
+      { bin: 'prettier', installed: false, languages: ['ts'] },
+      { bin: 'gofmt', installed: true, languages: ['go'] }
+    ],
+    ripgrep: { installed: false },
+    languageServers: [
+      { id: 'typescript', name: 'TypeScript', languages: ['ts'], path: null, installHint: '', user: false },
+      { id: 'mine', name: 'Mine', languages: ['x'], path: null, installHint: '', user: true },
+      { id: 'go', name: 'gopls', languages: ['go'], path: '/bin/gopls', installHint: '', user: false }
+    ]
+  }
+
+  it('offers a command for each missing item an installer here can handle', () => {
+    expect(installCommandsFor(base, 'darwin', (b) => b === 'brew' || b === 'npm')).toEqual({
+      gh: 'brew install gh',
+      rg: 'brew install ripgrep',
+      'fmt:prettier': 'npm install -g prettier',
+      'lsp:typescript': 'npm install -g typescript-language-server typescript'
+    })
+  })
+
+  it('leaves out what nothing here can install, and formatters that cannot run anyway', () => {
+    expect(installCommandsFor({ ...base, formattersNeedGitBash: true }, 'win32', (b) => b === 'winget')).toEqual({
+      gh: 'winget install --id GitHub.cli -e',
+      rg: 'winget install --id BurntSushi.ripgrep.MSVC -e'
+    })
+    expect(installCommandsFor(base, 'linux', () => false)).toEqual({})
+  })
+
+  it('reports ripgrep and the install map from getIntegrations', async () => {
+    const info = await getIntegrations({
+      resolveGh: () => null,
+      hasBin: () => false,
+      formatters: REGISTRY,
+      hasRipgrep: () => false,
+      hasInstaller: (b) => b === 'brew',
+      platform: 'darwin'
+    })
+    expect(info.ripgrep).toEqual({ installed: false })
+    expect(info.install?.gh).toBe('brew install gh')
+    expect(info.install?.rg).toBe('brew install ripgrep')
+  })
+})
+

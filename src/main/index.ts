@@ -24,6 +24,7 @@ import { flushSecrets, hasPendingSecretWrites, initSecrets } from './secrets'
 import { wireLocalhostCapture } from './localhostCapture'
 import { wireMockupCapture } from './mockupCapture'
 import { registerPrivilegedSchemes } from './schemes'
+import { wireDeepLinks } from './deepLinkHost'
 import { isAllowedChatFrameUrl } from './visualRender'
 import { appWindows, destroyHelperWindows } from './helperWindows'
 import { chatWindows, isPrimaryWindow, registerAppWindow, targetWindow } from './windows'
@@ -258,7 +259,17 @@ if (acp) {
     const code = await runHeadlessEntry(headless, { version: app.getVersion() })
     app.exit(await flushBeforeExit(code))
   })
+} else if (!app.requestSingleInstanceLock()) {
+  // The app is already open on this profile. Electron hands our argv (a houston://
+  // link on Windows and Linux) to that process as `second-instance`, which brings its
+  // window forward, so this one has nothing left to do.
+  app.quit()
 } else {
+  // Resolved once the credential store is ready; links wait on it (they read settings).
+  let markStarted: () => void = () => {}
+  const startedForLinks = new Promise<void>((done) => (markStarted = done))
+  // Before ready: macOS delivers a launch link through `open-url` during startup.
+  wireDeepLinks({ started: startedForLinks, createWindow })
   app.whenReady().then(async () => {
     // Start decrypting the credential store, and open the window without waiting for
     // it. The OS store (Keychain, libsecret, DPAPI) usually answers in milliseconds,
@@ -284,7 +295,7 @@ if (acp) {
     // Still ahead of every request: nothing above has awaited, and the scheduler's
     // catch-up run waits for `started`, so nothing can have reached a provider yet.
     trustSystemCertificates()
-    await started
+    await started.finally(() => markStarted())
     // Restart-to-install asks the same "work is still running" question as ⌘Q.
     setInstallGuard(confirmRestartForUpdate, resetQuitConfirmation)
     initUpdates()

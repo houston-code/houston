@@ -30,6 +30,11 @@ export interface SettingsCtx {
   onShowScorecard?: () => void
   /** Open the setup health check (/doctor). */
   onShowDoctor?: () => void
+  /**
+   * Open the integrated terminal with `command` typed in but not run (Settings closes
+   * so it can be seen). Absent where there is no terminal.
+   */
+  onTypeInTerminal?: (command: string) => void
   /** The open project's folder, or null with none open. */
   workspace: string | null
   /** Admin + project permission config shown beside the user's (null until loaded). */

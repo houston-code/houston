@@ -93,6 +93,14 @@ extraResources:
   - TRADEMARK.md
   - THIRD-PARTY-NOTICES.md
 
+# houston:// links (open a folder, a chat, or a Settings page; see src/main/deepLinks.ts).
+# electron-builder writes the scheme into the macOS Info.plist (CFBundleURLTypes), the
+# Windows installer's registry entries, and the Linux .desktop file's MimeType.
+protocols:
+  - name: Houston
+    schemes:
+      - houston
+
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.icns

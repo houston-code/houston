@@ -14,6 +14,7 @@ import {
 import { Icon, type IconName } from './Icon'
 import { isMacPlatform } from '../lib/shortcuts'
 import { ComposerPrBar } from './ComposerPrBar'
+import type { PrStatus } from '@shared/gitActions'
 import type { WorkingTreeStats } from '../hooks/useWorkingTreeStats'
 import { loadComposerDraft, saveComposerDraft } from '../lib/composerDraft'
 import { applyMention, mentionBeforeCursor, type MentionToken } from '../lib/mentions'
@@ -180,6 +181,7 @@ export function Composer({
   changes,
   onShowChanges,
   onShip,
+  pr,
   onCommand,
   onSend,
   onInvoke,
@@ -226,6 +228,8 @@ export function Composer({
   onShowChanges?: () => void
   /** Hand PR creation to the agent (the bar's Create PR button). */
   onShip?: (action: ShipAction) => void
+  /** The branch's pull request, shown as a chip in the same bar. */
+  pr?: PrStatus | null
   onCommand: (cmd: Command, args: string) => void
   onSend: (text: string, images?: ImageAttachment[]) => void
   /**
@@ -1122,6 +1126,7 @@ export function Composer({
             onShowChanges={onShowChanges}
             onShip={onShip}
             creating={running}
+            pr={pr}
           />
         )}
         {(images.length > 0 || context.length > 0) && (

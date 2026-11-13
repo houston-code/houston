@@ -71,3 +71,16 @@ test('packaged app bundles the license and attribution files under Resources', (
     expect(statSync(p).size, `${name} is present but empty`).toBeGreaterThan(0)
   }
 })
+
+test('packaged macOS app registers the houston:// link scheme', () => {
+  test.skip(process.platform !== 'darwin', 'Info.plist URL types are macOS-only')
+  test.skip(!resourcesDir && !process.env.CI, 'no packaged app in release/ (unpackaged local run)')
+
+  expect(resourcesDir, 'no packaged app in release/ for this platform. Did `npm run dist*` run first?').toBeTruthy()
+  // Resources/ sits beside Info.plist inside Contents/.
+  const plist = join(resourcesDir as string, '..', 'Info.plist')
+  const json = execFileSync('plutil', ['-convert', 'json', '-o', '-', plist], { encoding: 'utf8' })
+  const types = (JSON.parse(json) as { CFBundleURLTypes?: Array<{ CFBundleURLSchemes?: string[] }> })
+    .CFBundleURLTypes
+  expect(types?.some((t) => t.CFBundleURLSchemes?.includes('houston'))).toBe(true)
+})

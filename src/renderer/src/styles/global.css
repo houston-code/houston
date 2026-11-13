@@ -1860,6 +1860,45 @@ body.is-resizing {
   margin: 0 0 6px;
   color: var(--text-dim);
 }
+.ctx-breakdown {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.ctx-breakdown__rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.ctx-breakdown__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px 48px 36px;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+.ctx-breakdown__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-breakdown__bar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.ctx-breakdown__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.ctx-breakdown__tokens,
+.ctx-breakdown__share {
+  text-align: right;
+  color: var(--text-dim);
+}
 .usage-panel__note {
   margin: 6px 0 0;
   color: var(--text-dim);
@@ -5365,6 +5404,95 @@ body.is-resizing .preview-dock__resizer::after {
   color: var(--danger);
   font-size: 12px;
 }
+/* ---- Commit form in the Changes view ---- */
+.commit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+.commit-form__message {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 44px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--bg-input, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.commit-form__message:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.commit-form__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.commit-form__spacer {
+  flex: 1;
+}
+.commit-form__note {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.commit-form__status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.commit-form__status--error {
+  color: var(--danger);
+}
+
+/* ---- The branch's pull request chip, at the left of the composer's top bar ---- */
+.pr-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: auto;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.pr-chip:hover {
+  background: var(--bg-hover);
+}
+.pr-chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.pr-chip__num {
+  font-weight: 600;
+}
+.pr-chip__state {
+  color: var(--text-dim);
+}
+.pr-chip--merged .pr-chip__state {
+  color: var(--accent);
+}
+.pr-chip__checks--passing {
+  color: var(--ok);
+}
+.pr-chip__checks--failing {
+  color: var(--danger);
+}
+.pr-chip__checks--pending {
+  color: var(--text-dim);
+}
+
 .changes-panel__foot {
   display: flex;
   align-items: center;
@@ -7833,6 +7961,12 @@ body:has(.coachmark) .get-started {
   color: var(--warn);
 }
 /* Optional-integrations status rows (Settings → Tools). */
+.integration__install {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
 .integration {
   display: flex;
   align-items: baseline;
@@ -9106,6 +9240,41 @@ body:has(.coachmark) .get-started {
   /* The borderless close button has no other focus affordance, so the ring must
      clear WCAG 3:1 on its own — full accent, not the translucent shared ring. */
   box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* ---- Files and Plan review as tabs of the right-hand dock ---- */
+.preview-dock__panel--files,
+.preview-dock__panel--plan {
+  overflow: hidden;
+}
+/* Inside the dock the plan fills the tab instead of its own grid column. */
+.plan-panel--docked {
+  grid-column: auto;
+  flex: 1;
+  min-height: 0;
+  border-left: 0;
+}
+.files-panel--docked {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: auto;
+  max-width: none;
+}
+/* The dock is narrow: the tree sits above the preview instead of beside it. */
+.files-panel--docked .files-panel__split {
+  flex-direction: column;
+}
+.files-panel--docked .files-panel__tree {
+  width: auto;
+  flex: 0 0 45%;
+  border-right: 0;
+  border-bottom: 1px solid var(--border);
+}
+.files-panel--docked .files-panel__preview {
+  flex: 1;
+  min-height: 0;
 }
 
 /* ---- Plan review panel (Plan mode: docked right column, resizable) ---- */
