@@ -37,6 +37,22 @@ describe('ToolGroup', () => {
     expect(screen.queryByText(/They said/)).not.toBeInTheDocument()
   })
 
+  it('shows how long a running call has been going, and nothing once it is done', () => {
+    vi.useFakeTimers({ now: 100_000 })
+    try {
+      const running = [tool({ id: 'a', name: 'run_shell', status: 'running', args: { command: 'npm test' }, startedAt: 58_000 })]
+      const { container, rerender } = render(<ToolGroup items={running} onApprove={vi.fn()} />)
+      expect(container.querySelector('.tool-row__elapsed')?.textContent).toBe('42s')
+      // A call under a second old shows no clock (most calls finish that fast).
+      rerender(<ToolGroup items={[{ ...running[0], startedAt: 99_500 }]} onApprove={vi.fn()} />)
+      expect(container.querySelector('.tool-row__elapsed')).toBeNull()
+      rerender(<ToolGroup items={[{ ...running[0], status: 'done' }]} onApprove={vi.fn()} />)
+      expect(container.querySelector('.tool-row__elapsed')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('renders one row per call with its verb and target', () => {
     const items: ToolItem[] = [
       tool({ id: 'a', name: 'run_shell', status: 'done', args: { command: 'npm test' } }),

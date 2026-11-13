@@ -3406,7 +3406,9 @@ describe('one run per conversation', () => {
     expect(atPrompt?.['conv-status-A']).toEqual({
       running: true,
       // Named as its tool row names it, not by the wire name write_file.
-      pending: [{ kind: 'approval', label: 'Write s.txt' }]
+      pending: [{ kind: 'approval', label: 'Write s.txt' }],
+      // When the run began, so a client reopening the chat mid-run can show its clock.
+      startedAt: expect.any(Number)
     })
     // Listeners saw the blocked state, then the answered one, then the run ending.
     expect(seen.some((s) => s['conv-status-A']?.pending.length === 1)).toBe(true)

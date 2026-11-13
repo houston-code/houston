@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   COMPACTION_SUMMARY_PREFIX,
   SYSTEM_NOTE_PREFIX,
@@ -625,6 +625,28 @@ describe('tool_start kind tagging', () => {
     const tool = items.find((i): i is ToolItem => i.kind === 'tool' && i.id === 'w1')
     expect(tool?.toolKind).toBe('write')
     expect(tool?.status).toBe('running')
+  })
+
+  it('stamps when a call starts running, for the row\'s elapsed time', () => {
+    vi.useFakeTimers({ now: 50_000 })
+    try {
+      let items = reduceEvent([], {
+        runId: 'r',
+        type: 'tool_approval',
+        callId: 'w1',
+        name: 'write_file',
+        summary: 'write a.ts',
+        kind: 'write'
+      })
+      expect((items[0] as ToolItem).startedAt).toBeUndefined()
+      vi.setSystemTime(65_000)
+      items = reduceEvent(items, { runId: 'r', type: 'tool_start', callId: 'w1', name: 'write_file', args: {} })
+      items = reduceEvent(items, { runId: 'r', type: 'tool_start', callId: 'x1', name: 'read_file', args: {} })
+      // Counted from the start, not from when the approval card appeared.
+      expect(items.map((i) => (i as ToolItem).startedAt)).toEqual([65_000, 65_000])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('leaves toolKind unset for a legacy tool_start with no kind', () => {

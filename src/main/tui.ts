@@ -107,6 +107,7 @@ import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
+import { formatElapsed } from '@shared/elapsed'
 
 /**
  * Interactive terminal mode: a stay-resident REPL you converse with directly in
@@ -773,7 +774,7 @@ export function spinnerFrame(
   opts: { draft?: string; queued?: number; mode?: string } = {}
 ): string {
   const i = ((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
-  const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(`${elapsedSec}s`, 'dim')}`
+  const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(formatElapsed(elapsedSec * 1000), 'dim')}`
   // The approval mode, kept visible WHILE the turn runs: the composer's status line
   // is gone exactly when "how much is running without asking?" matters most.
   const mode = opts.mode ? paint(`  [${opts.mode}]`, 'dim') : ''

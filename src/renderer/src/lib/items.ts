@@ -85,6 +85,12 @@ export interface ToolItem {
   preview?: FileDiffPreview[]
   status: ToolStatus
   /**
+   * When the call started running (epoch ms, this window's clock), so a running row
+   * can show how long it has been going. Stamped when `tool_start` arrives; absent on
+   * rows rebuilt from the saved log, which never run again.
+   */
+  startedAt?: number
+  /**
    * True on the full-auto shell-network question, raised after a command failed for
    * lack of network: the approval decides whether the chat's shell commands may reach
    * the network (declining keeps them offline), not whether this command runs (it
@@ -445,6 +451,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       if (exists)
         return updateTool(finalized, e.callId, {
           status: 'running',
+          startedAt: Date.now(),
           args: e.args,
           ...(e.preview ? { preview: e.preview } : {})
         })
@@ -462,7 +469,8 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           // Likewise the diff: an auto-approved write never showed an approval card, so
           // tool_start is the only place its preview arrives.
           ...(e.preview ? { preview: e.preview } : {}),
-          status: 'running'
+          status: 'running',
+          startedAt: Date.now()
         }
       ]
     }

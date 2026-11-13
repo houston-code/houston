@@ -9,6 +9,8 @@ import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
 import { droppedSummary, findingTally, isDropped, sortFindings } from '@shared/reviewFindings'
 import { deniedPromptText, stoppedPromptText } from '@shared/promptOutcome'
 import { isSubagentTool } from '@shared/subagents'
+import { formatElapsed } from '@shared/elapsed'
+import { useTick } from '../hooks/useTick'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
@@ -280,6 +282,10 @@ const ToolRow = memo(function ToolRow({
   const awaiting = item.status === 'awaiting-approval'
   const running = item.status === 'running'
   const tally = reviewTally(item.findings, running)
+  // How long a running call has been going, once it has taken a noticeable while. A
+  // subagent's row already shows its own clock in its chips.
+  const now = useTick(running && item.startedAt !== undefined)
+  const runFor = running && item.startedAt !== undefined && now ? now - item.startedAt : 0
   // A denial comes back in the model's wording ("Denied by the user. They said: …"),
   // which read as someone else talking about the user. Say what happened instead,
   // and for an approval the run was stopped in front of, that it was stopped.
@@ -339,6 +345,11 @@ const ToolRow = memo(function ToolRow({
         )}
         {isAgent && records && records.length > 0 && <SubagentChips records={records} />}
         <span className="tool-row__spacer" />
+        {runFor >= 1000 && !(isSubagentTool(item.name) && item.records?.length) && (
+          <span className="tool-row__elapsed" title="How long this has been running">
+            {formatElapsed(runFor)}
+          </span>
+        )}
         {tally && (
           <span className={`tool-row__tally${tally.alarm ? ' tool-row__tally--alarm' : ''}`}>{tally.text}</span>
         )}
