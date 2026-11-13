@@ -4,6 +4,7 @@ import { StringDecoder } from 'node:string_decoder'
 import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
 import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
 import { sanitizeChildEnv } from '../childEnv'
+import { planStdioLaunch, type StdioLaunchDeps } from './stdio-launch'
 import {
   initializeParams,
   negotiatedProtocolVersion,
@@ -162,7 +163,7 @@ const MAX_EXIT_DETAIL_CHARS = 300
 export type SpawnFn = (
   command: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; cwd?: string }
+  options: { env?: NodeJS.ProcessEnv; cwd?: string; windowsVerbatimArguments?: boolean }
 ) => ChildProcessWithoutNullStreams
 
 export class McpClient {
@@ -188,7 +189,11 @@ export class McpClient {
   resources: McpResourceInfo[] = []
   prompts: McpPromptInfo[] = []
 
-  constructor(private readonly spawnFn: SpawnFn = nodeSpawn as unknown as SpawnFn) {}
+  constructor(
+    private readonly spawnFn: SpawnFn = nodeSpawn as unknown as SpawnFn,
+    /** Platform/fs overrides for resolving the command (tests). */
+    private readonly launchDeps: StdioLaunchDeps = {}
+  ) {}
 
   /** True once the process exited, errored, or the client was closed. */
   get isClosed(): boolean {
@@ -209,13 +214,20 @@ export class McpClient {
     onElicit?: (params: unknown) => Promise<ElicitationWireResult>
   }): Promise<void> {
     this.onElicit = opts.onElicit
-    const child = this.spawnFn(opts.command, opts.args ?? [], {
-      // Strip the launching shell's credential-bearing vars so a malicious or
-      // compromised MCP server can't harvest ambient secrets (AWS keys, GH_TOKEN,
-      // *_API_KEY, …) on startup. A server that legitimately needs a token still
-      // gets it: `opts.env` (from McpServerConfig.env) is applied AFTER the strip.
-      env: { ...sanitizeChildEnv(), ...opts.env },
-      cwd: opts.cwd
+    // Strip the launching shell's credential-bearing vars so a malicious or
+    // compromised MCP server can't harvest ambient secrets (AWS keys, GH_TOKEN,
+    // *_API_KEY, …) on startup. A server that legitimately needs a token still
+    // gets it: `opts.env` (from McpServerConfig.env) is applied AFTER the strip.
+    const env = { ...sanitizeChildEnv(), ...opts.env }
+    // On Windows an `npx`-style command is a .cmd shim that spawn can't run directly.
+    const launch = planStdioLaunch(opts.command, opts.args ?? [], env, {
+      cwd: opts.cwd,
+      ...this.launchDeps
+    })
+    const child = this.spawnFn(launch.command, launch.args, {
+      env,
+      cwd: opts.cwd,
+      ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {})
     })
     this.child = child
     child.stdout.on('data', (c: Buffer) => this.onData(c))
