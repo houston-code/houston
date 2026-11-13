@@ -58,7 +58,7 @@ import {
 } from '@shared/composerContext'
 import { workingTreeToText, type WorkingTreeChanges } from '@shared/workingTree'
 import type { ShipAction } from '@shared/shipAction'
-import { hasUltrathink, ultrathinkHint, type UltrathinkEffect } from '@shared/ultrathink'
+import { findUltrathink, splitByRanges, ultrathinkHint, type UltrathinkEffect } from '@shared/ultrathink'
 
 /** Read an image File into a base64 ImageAttachment, or null if unsupported. */
 function readImageFile(file: File): Promise<ImageAttachment | null> {
@@ -277,8 +277,25 @@ export function Composer({
   const [linkUrl, setLinkUrl] = useState('')
   // A transient one-line status under the field (e.g. "No uncommitted changes").
   const [notice, setNotice] = useState<string | null>(null)
-  // The keyword raises this turn's reasoning; say so while it is in the draft.
-  const ultrathink = hasUltrathink(text)
+  // The keyword raises this turn's reasoning; say so while it is in the draft, and
+  // colour the word itself where it will (see the mirror by the field).
+  const keywordUses = useMemo(() => findUltrathink(text), [text])
+  const ultrathink = keywordUses.length > 0
+  const keywordParts = useMemo(
+    () => ((ultrathinkEffect ?? 'raises') === 'raises' ? splitByRanges(text, keywordUses) : null),
+    [text, keywordUses, ultrathinkEffect]
+  )
+  const mirrorRef = useRef<HTMLDivElement>(null)
+  // Keep the mirror on the field's text: same scroll offset, and the same wrap width
+  // once a long draft gives the field a scrollbar.
+  const syncMirror = useCallback((): void => {
+    const el = ref.current
+    const mirror = mirrorRef.current
+    if (!el || !mirror) return
+    mirror.style.width = `${el.clientWidth}px`
+    mirror.scrollTop = el.scrollTop
+  }, [])
+  useEffect(syncMirror, [text, keywordParts, syncMirror])
   const ref = useRef<HTMLTextAreaElement>(null)
   // Ids tying the textarea to its open suggestion list for screen readers.
   const menuId = useId()
@@ -1175,34 +1192,55 @@ export function Composer({
             )}
           </div>
         )}
-        <textarea
-          ref={ref}
-          className="composer__input"
-          data-tour="composer"
-          // The placeholder changes with state and vanishes once typing starts, so it
-          // can't be the field's name.
-          aria-label="Message"
-          aria-autocomplete="list"
-          aria-controls={showCmdMenu ? cmdMenuId : showMentionMenu ? fileMenuId : undefined}
-          aria-activedescendant={
-            showCmdMenu ? `${cmdMenuId}-${cmdIndex}` : showMentionMenu ? `${fileMenuId}-${mentionIndex}` : undefined
-          }
-          placeholder={
-            disabled
-              ? disabledReason ?? 'Pick a model and project folder to start…'
-              : running
-                ? answering
-                  ? answeringPlaceholder(isMacPlatform())
-                  : runningPlaceholder(isMacPlatform())
-                : 'Ask Houston anything…  (@ for files, / for commands, + for attachments)'
-          }
-          value={text}
-          disabled={disabled}
-          rows={1}
-          onChange={(e) => sync(e.target.value, e.target.selectionStart ?? e.target.value.length)}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-        />
+        <div className="composer__field">
+          <textarea
+            ref={ref}
+            className="composer__input"
+            data-tour="composer"
+            // The placeholder changes with state and vanishes once typing starts, so it
+            // can't be the field's name.
+            aria-label="Message"
+            aria-autocomplete="list"
+            aria-controls={showCmdMenu ? cmdMenuId : showMentionMenu ? fileMenuId : undefined}
+            aria-activedescendant={
+              showCmdMenu ? `${cmdMenuId}-${cmdIndex}` : showMentionMenu ? `${fileMenuId}-${mentionIndex}` : undefined
+            }
+            placeholder={
+              disabled
+                ? disabledReason ?? 'Pick a model and project folder to start…'
+                : running
+                  ? answering
+                    ? answeringPlaceholder(isMacPlatform())
+                    : runningPlaceholder(isMacPlatform())
+                  : 'Ask Houston anything…  (@ for files, / for commands, + for attachments)'
+            }
+            value={text}
+            disabled={disabled}
+            rows={1}
+            onChange={(e) => sync(e.target.value, e.target.selectionStart ?? e.target.value.length)}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            onScroll={syncMirror}
+          />
+          {keywordParts && (
+            // The draft again, drawn over the field with only the keyword visible, so
+            // the word reads as coloured where it will raise the turn. A textarea
+            // cannot style part of its own text. Decoration only: hidden from
+            // assistive tech (the hint below says it in words) and from the pointer.
+            <div ref={mirrorRef} className="composer__mirror" aria-hidden="true">
+              {keywordParts.map((part, i) =>
+                part.keyword ? (
+                  <span key={i} className="composer__keyword">
+                    {part.text}
+                  </span>
+                ) : (
+                  part.text
+                )
+              )}
+              {'\u200b'}
+            </div>
+          )}
+        </div>
         {notice && <div className="composer__notice">{notice}</div>}
         {ultrathink && (
           <div className="composer__notice" role="status">

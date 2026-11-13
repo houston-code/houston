@@ -65,6 +65,7 @@ import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
+import { providerSendsXhigh } from '@shared/model-facts'
 import type { ModelUsage } from '@shared/agent'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
@@ -2574,6 +2575,13 @@ function activeModelReasons(deps: TuiDeps, providerId: string | null, model: str
   return p?.models.find((m) => m.id === model)?.caps?.reasoning ?? null
 }
 
+/** Whether the active provider passes `xhigh` to the active model rather than clamping it. */
+function activeModelSendsXhigh(deps: TuiDeps, providerId: string | null, model: string | null): boolean {
+  if (!providerId || !model) return false
+  const p = deps.getSettings().providers.find((x) => x.id === providerId)
+  return p ? providerSendsXhigh(p.kind, model, Boolean(p.baseUrl)) : false
+}
+
 /** `/reasoning` with no argument: what it is now, and what it can be. */
 export function renderReasoningStatus(
   current: ReasoningEffort,
@@ -3135,7 +3143,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         ultrathinkEffect: () =>
           ultrathinkEffect(
             effort,
-            activeModelReasons(deps, providerId, model) ?? (model ? modelCapabilities(model).reasoning : false)
+            activeModelReasons(deps, providerId, model) ?? (model ? modelCapabilities(model).reasoning : false),
+            activeModelSendsXhigh(deps, providerId, model)
           )
       })
       if (text === null) {

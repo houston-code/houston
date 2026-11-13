@@ -51,6 +51,7 @@ import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaul
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
 import { hostPlatform, installHost } from './installHost'
 import { resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
+import { providerSendsXhigh } from '@shared/model-facts'
 import {
   addPermissionRule,
   noteRuleUsed,
@@ -300,6 +301,8 @@ interface Route extends SelectedModel {
   provider: Provider
   caps: ModelCaps | undefined
   reasoningCapable: boolean | undefined
+  /** The provider passes `xhigh` to this model instead of clamping it to `high`. */
+  sendsXhigh: boolean
   explicitCacheControl: boolean
 }
 
@@ -1319,6 +1322,7 @@ export async function startRun(
         provider,
         caps,
         reasoningCapable: caps?.reasoning,
+        sendsXhigh: providerSendsXhigh(cfg.kind, model, Boolean(cfg.baseUrl)),
         // Opt explicit-caching routes (Claude/Qwen/Gemini via an aggregator host)
         // into prompt caching on the iterative loops. One-shot calls (title,
         // compaction) stay opted out: a cache write is a surcharge that only pays
@@ -3440,7 +3444,7 @@ export async function startRun(
       if (run.ultrathink && !run.ultrathinkAnnounced) {
         run.ultrathinkAnnounced = true
         const reasons = resolveCapabilities(route.model, { reasoning: route.reasoningCapable }).reasoning
-        if (ultrathinkEffect(turnSettings.reasoningEffort, reasons) === 'raises') {
+        if (ultrathinkEffect(turnSettings.reasoningEffort, reasons, route.sendsXhigh) === 'raises') {
           emit({ type: 'notice', message: ULTRATHINK_NOTICE })
         }
       }

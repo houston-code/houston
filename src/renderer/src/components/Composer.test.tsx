@@ -137,6 +137,33 @@ describe('Composer', () => {
     expect(screen.getByRole('status')).toHaveTextContent(ULTRATHINK_HINT)
   })
 
+  it('colours the keyword over the field only where it will raise the turn', () => {
+    const { container, rerender } = render(<Composer {...baseProps()} />)
+    const input = screen.getByRole('textbox', { name: 'Message' })
+    expect(container.querySelector('.composer__mirror')).toBeNull()
+    fireEvent.change(input, { target: { value: 'fix it, ultrathink please' } })
+    const mirror = container.querySelector('.composer__mirror')!
+    // The mirror repeats the draft exactly, so each glyph sits on the field's own.
+    expect(mirror.textContent).toBe('fix it, ultrathink please\u200b')
+    expect(mirror).toHaveAttribute('aria-hidden', 'true')
+    const marks = container.querySelectorAll('.composer__keyword')
+    expect(marks).toHaveLength(1)
+    expect(marks[0]).toHaveTextContent('ultrathink')
+    // Nothing to raise: the hint says so, and the word is left plain.
+    rerender(<Composer {...baseProps()} ultrathinkEffect="already" />)
+    expect(container.querySelector('.composer__mirror')).toBeNull()
+    rerender(<Composer {...baseProps()} ultrathinkEffect="none" />)
+    expect(container.querySelector('.composer__mirror')).toBeNull()
+  })
+
+  it('leaves a mentioned keyword plain', () => {
+    const { container } = render(<Composer {...baseProps()} />)
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message' }), {
+      target: { value: 'open ultrathink.ts and "ultrathink"' }
+    })
+    expect(container.querySelector('.composer__mirror')).toBeNull()
+  })
+
   it('names the message field, whatever the placeholder says', () => {
     render(<Composer {...baseProps()} />)
     expect(screen.getByRole('textbox', { name: 'Message' })).toBeInTheDocument()

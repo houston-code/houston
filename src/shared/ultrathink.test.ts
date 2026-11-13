@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { systemNoteMessage } from './agent'
+import { providerSendsXhigh } from './model-facts'
 import {
   findUltrathink,
   hasUltrathink,
+  splitByRanges,
   ultrathinkAtTail,
   ultrathinkEffect,
   ultrathinkHint,
@@ -150,23 +152,68 @@ describe('ultrathinkAtTail', () => {
 describe('ultrathinkEffect', () => {
   it('raises any level below the top on a model that reasons', () => {
     for (const effort of ['off', 'low', 'medium', 'high'] as const) {
-      expect(ultrathinkEffect(effort, true)).toBe('raises')
+      expect(ultrathinkEffect(effort, true, true)).toBe('raises')
     }
-    expect(ultrathinkEffect(undefined, true)).toBe('raises')
+    expect(ultrathinkEffect(undefined, true, true)).toBe('raises')
   })
 
   it('has nothing to raise in a chat already at the top', () => {
-    expect(ultrathinkEffect('xhigh', true)).toBe('already')
+    expect(ultrathinkEffect('xhigh', true, true)).toBe('already')
+    expect(ultrathinkEffect('xhigh', true, false)).toBe('already')
+  })
+
+  it('counts high as the top where the provider clamps xhigh to it', () => {
+    expect(ultrathinkEffect('high', true, false)).toBe('already')
+    expect(ultrathinkEffect('medium', true, false)).toBe('raises')
+    expect(ultrathinkEffect('off', true, false)).toBe('raises')
   })
 
   it('does nothing on a model that cannot reason, whatever the chat is set to', () => {
-    expect(ultrathinkEffect('high', false)).toBe('none')
-    expect(ultrathinkEffect('xhigh', false)).toBe('none')
+    expect(ultrathinkEffect('high', false, true)).toBe('none')
+    expect(ultrathinkEffect('xhigh', false, false)).toBe('none')
   })
 
   it('has a hint for each effect that promises only what the turn gets', () => {
     expect(ultrathinkHint('raises')).toBe(ULTRATHINK_HINT)
     expect(ultrathinkHint('already')).toBe(ULTRATHINK_HINT_ALREADY)
     expect(ultrathinkHint('none')).toBe(ULTRATHINK_HINT_NONE)
+  })
+})
+
+describe('providerSendsXhigh', () => {
+  it('follows the model on the Claude hosts', () => {
+    for (const kind of ['anthropic', 'bedrock', 'vertex', 'foundry'] as const) {
+      expect(providerSendsXhigh(kind, 'claude-opus-4-8', false)).toBe(true)
+      expect(providerSendsXhigh(kind, 'claude-opus-4-6', false)).toBe(false)
+    }
+  })
+
+  it('is true for hosted OpenAI and false once a base URL routes it to Chat Completions', () => {
+    expect(providerSendsXhigh('openai', 'gpt-5.5', false)).toBe(true)
+    expect(providerSendsXhigh('openai', 'gpt-5.5', true)).toBe(false)
+  })
+
+  it('is false wherever the request builder clamps to high', () => {
+    expect(providerSendsXhigh('openai-compatible', 'deepseek/deepseek-r1', true)).toBe(false)
+    expect(providerSendsXhigh('azure-openai', 'gpt-5.5', false)).toBe(false)
+    expect(providerSendsXhigh('gemini', 'gemini-3-pro', false)).toBe(false)
+  })
+})
+
+describe('splitByRanges', () => {
+  it('cuts the text into keyword and plain runs that join back to the text', () => {
+    const text = 'ultrathink, then ultrathink again'
+    const parts = splitByRanges(text, findUltrathink(text))!
+    expect(parts).toEqual([
+      { text: 'ultrathink', keyword: true },
+      { text: ', then ', keyword: false },
+      { text: 'ultrathink', keyword: true },
+      { text: ' again', keyword: false }
+    ])
+    expect(parts.map((p) => p.text).join('')).toBe(text)
+  })
+
+  it('is null when nothing is marked', () => {
+    expect(splitByRanges('hello', [])).toBeNull()
   })
 })

@@ -458,6 +458,30 @@ export function anthropicSupportsXhigh(model: string): boolean {
 }
 
 /**
+ * Whether a request for `xhigh` reaches the model as `xhigh`, or is clamped to `high`
+ * on the way. Mirrors the request builders: the Claude hosts send it to the models
+ * with the tier, hosted OpenAI (the Responses API) sends it through, and everything
+ * else (Chat Completions hosts, a proxied OpenAI base URL, Gemini) tops out at `high`.
+ */
+export function providerSendsXhigh(
+  kind: 'anthropic' | 'openai' | 'gemini' | 'openai-compatible' | 'bedrock' | 'vertex' | 'azure-openai' | 'foundry',
+  model: string,
+  customBaseUrl: boolean
+): boolean {
+  switch (kind) {
+    case 'anthropic':
+    case 'bedrock':
+    case 'vertex':
+    case 'foundry':
+      return anthropicSupportsXhigh(model)
+    case 'openai':
+      return !customBaseUrl
+    default:
+      return false
+  }
+}
+
+/**
  * Claude models that run adaptive thinking even when the request sends no thinking config,
  * at the model's default effort (medium or high). "Reasoning off" can't stop them thinking,
  * so it maps to the lowest effort instead of leaving them at that default.
