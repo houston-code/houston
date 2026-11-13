@@ -14,6 +14,7 @@ import {
   type ApprovalPolicy,
   type Hook,
   type McpServerConfig,
+  type ModelOption,
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
@@ -31,7 +32,7 @@ import { providerKeyUrl } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { formatReceiptLines, receiptHasFailure } from '@shared/evidence'
 import { formatReadinessLines, planVerifySteps, readinessOk } from '@shared/planReadiness'
-import type { FileDiffPreview } from '@shared/diff'
+import { diffStat, type FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
   mergeCommands,
@@ -63,7 +64,8 @@ import type {
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, modelCapabilities } from '@shared/usage'
+import { throttleNotice } from '@shared/rateLimit'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import type { ModelUsage } from '@shared/agent'
@@ -84,6 +86,15 @@ import { SHARE_MESSAGE } from '@shared/share'
 import { MarkdownStream, renderMarkdownAnsi } from './markdown-ansi'
 import { describeToolCall } from '@shared/toolLabel'
 import { renderPreviewView } from './tui-diff'
+import {
+  chatToJson,
+  chatToMarkdown,
+  defaultExportName,
+  parseExportArgs,
+  renderPermissionRules,
+  renderRecap,
+  type ExportFormat
+} from './tui-sessions'
 import { htmlToAnsi } from './syntax'
 import type { PickerSpec, PickerOutcome } from './tui-picker'
 import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
@@ -107,6 +118,7 @@ import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
+import { formatElapsed } from '@shared/elapsed'
 
 /**
  * Interactive terminal mode: a stay-resident REPL you converse with directly in
@@ -770,19 +782,51 @@ export function spinnerFrame(
    * redrawn, so all of this costs no extra screen space and cannot tear the
    * transcript.
    */
-  opts: { draft?: string; queued?: number; mode?: string } = {}
+  opts: { draft?: string; queued?: number; mode?: string; status?: string } = {}
 ): string {
   const i = ((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
-  const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(`${elapsedSec}s`, 'dim')}`
+  const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(formatElapsed(elapsedSec * 1000), 'dim')}`
   // The approval mode, kept visible WHILE the turn runs: the composer's status line
   // is gone exactly when "how much is running without asking?" matters most.
   const mode = opts.mode ? paint(`  [${opts.mode}]`, 'dim') : ''
+  // The rest of the composer's status line (model, branch, context), already painted.
+  const status = opts.status ? `  ${opts.status}` : ''
   const queued = opts.queued ? paint(`  (${opts.queued} queued)`, 'cyan') : ''
   // The draft is shown verbatim so people can see what they typed; it is their own
   // keystrokes, and the decoder never lets a control character into it.
   const draft = opts.draft ? `  ${paint('›', 'green')} ${opts.draft}` : ''
-  return `${head}${mode}${queued}${draft}`
+  return `${head}${mode}${status}${queued}${draft}`
 }
+
+/** How many files an edit summary names before it collapses the rest to a count. */
+const EDIT_SUMMARY_FILES = 3
+
+/**
+ * One line for a write that landed without an approval prompt (auto-edit, full auto,
+ * or a saved rule), so the edit is not invisible: each file with its added and
+ * removed line counts, and the command that shows the diff.
+ */
+export function renderEditSummary(preview: FileDiffPreview[], paint: Painter): string {
+  const files = preview.slice(0, EDIT_SUMMARY_FILES).map((f) => {
+    const { added, removed } = diffStat(f.diff)
+    const more = f.truncated ? '…' : ''
+    const name = f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path
+    const tag = f.created ? paint(' (new)', 'dim') : f.deleted ? paint(' (deleted)', 'dim') : ''
+    const counts = [
+      added || !removed ? paint(`+${added}${more}`, 'green') : '',
+      removed ? paint(`-${removed}${more}`, 'red') : ''
+    ]
+      .filter(Boolean)
+      .join(' ')
+    return `${name}${tag} ${counts}`
+  })
+  const rest = preview.length - EDIT_SUMMARY_FILES
+  if (rest > 0) files.push(paint(`and ${rest} more file${rest === 1 ? '' : 's'}`, 'dim'))
+  return `  ${paint('✎', 'cyan')} ${files.join(paint(', ', 'dim'))}  ${paint('· /diff last shows the diff', 'dim')}`
+}
+
+/** How many of this session's edits `/diff last <n>` can reach back to. */
+const RECENT_EDITS = 20
 
 export interface StatusState {
   providerId: string
@@ -792,6 +836,8 @@ export interface StatusState {
   cost: SessionCost
   /** Current context size in tokens (last turn's input tokens); 0 until a turn runs. */
   contextTokens: number
+  /** The checked-out git branch, or null outside a repository (or on a detached HEAD). */
+  branch?: string | null
 }
 
 /** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
@@ -815,18 +861,42 @@ export function shortCwd(cwd: string, home = process.env.HOME): string {
  * Truncated to `width` so it never wraps.
  */
 export function renderStatusLine(s: StatusState, width: number, paint: Painter): string {
-  const pct = contextPercent(s.contextTokens, contextWindowFor(s.model))
   const parts = [
     paint(`${s.providerId}/${s.model}`, 'cyan'),
     paint(s.policy, 'dim'),
-    paint(shortCwd(s.cwd), 'dim'),
-    formatUsd(s.cost.cost)
+    paint(shortCwd(s.cwd), 'dim')
   ]
+  if (s.branch) parts.push(paint(s.branch, 'magenta'))
+  parts.push(formatUsd(s.cost.cost))
+  const ctx = renderContextUsage(s.contextTokens, s.model, paint)
+  if (ctx) parts.push(ctx)
+  return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
+}
+
+/**
+ * How full the context window is: a mini bar and percent, or the token count when
+ * the model's window is unknown. Empty until a turn has run (nothing to measure).
+ */
+export function renderContextUsage(contextTokens: number, model: string, paint: Painter): string {
+  const pct = contextPercent(contextTokens, contextWindowFor(model))
   if (pct !== null) {
     const tone = pct >= 90 ? 'red' : pct >= 70 ? 'yellow' : 'green'
-    parts.push(`${paint(contextBar(pct), tone)} ${paint(`${pct}%`, tone)}`)
+    return `${paint(contextBar(pct), tone)} ${paint(`${pct}%`, tone)}`
   }
-  return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
+  return contextTokens > 0 ? paint(`${formatTokens(contextTokens)} tok context`, 'dim') : ''
+}
+
+/**
+ * The part of the status line the spinner carries while a turn runs: model, branch
+ * and context. The approval mode is already on that line, and the cost settles at
+ * the turn's end.
+ */
+export function renderRunStatus(s: Pick<StatusState, 'model' | 'branch' | 'contextTokens'>, paint: Painter): string {
+  const parts = s.model ? [paint(s.model, 'dim')] : []
+  if (s.branch) parts.push(paint(s.branch, 'magenta'))
+  const ctx = renderContextUsage(s.contextTokens, s.model, paint)
+  if (ctx) parts.push(ctx)
+  return parts.join(paint(' · ', 'dim'))
 }
 
 /** The status line shown before any provider is set up: no model, just the /login nudge. */
@@ -891,6 +961,10 @@ export interface TuiPersist {
   search: (workspace: string, query: string) => ResumeEntry[]
   /** Duplicate a conversation (fresh id, copied history); null if it can't be forked. */
   fork: (id: string) => { id: string } | null
+  /** Give a conversation a title of the user's choosing. Absent ⇒ /rename is unavailable. */
+  rename?: (id: string, title: string) => void
+  /** Delete a conversation for good. Absent ⇒ /delete is unavailable. */
+  remove?: (id: string) => void
 }
 
 /**
@@ -1336,6 +1410,14 @@ export type SlashResult =
   | { kind: 'clear' }
   | { kind: 'resume'; query: string }
   | { kind: 'fork' }
+  /** Write this chat to a file (/export [md|json] [path]). */
+  | { kind: 'export'; format: ExportFormat; path?: string }
+  /** Give this chat a title (/rename <title>); empty shows the current one. */
+  | { kind: 'rename'; title: string }
+  /** Delete this chat, after a confirmation (/delete). */
+  | { kind: 'delete' }
+  /** List the saved permission rules, or remove the n-th (/permissions [remove n]). */
+  | { kind: 'permissions'; remove?: number; bad?: boolean }
   | { kind: 'capability'; which: 'skills' | 'agents' }
   | { kind: 'set-theme'; theme: ThemeName }
   | { kind: 'image'; path: string }
@@ -1364,8 +1446,11 @@ export type SlashResult =
    * (/rewind undo). Without `turn` the driver lists the messages and asks.
    */
   | { kind: 'rewind'; undo: boolean; turn?: number; mode?: RewindMode }
-  /** Summarize everything different in the working tree (/changes). */
-  | { kind: 'changes' }
+  /**
+   * Summarize everything different in the working tree (/changes), or with `last`,
+   * show the diff of an edit this session made (`/diff last [n]`, n edits back).
+   */
+  | { kind: 'changes'; last?: number }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
   /** Reprint a past tool result in full (/output [n]). */
@@ -1444,6 +1529,18 @@ export function parseSlashCommand(
       return { kind: 'btw', question: arg.trim() }
     case 'fork':
       return { kind: 'fork' }
+    case 'export':
+      return { kind: 'export', ...parseExportArgs(arg) }
+    case 'rename':
+      return { kind: 'rename', title: arg.trim() }
+    case 'delete':
+      return { kind: 'delete' }
+    case 'permissions': {
+      const a = arg.trim()
+      if (!a) return { kind: 'permissions' }
+      const m = /^(?:remove|rm|delete)\s+(\d+)$/i.exec(a)
+      return m ? { kind: 'permissions', remove: Number(m[1]) } : { kind: 'permissions', bad: true }
+    }
     case 'skills':
     case 'agents':
       return { kind: 'capability', which: name }
@@ -1484,8 +1581,11 @@ export function parseSlashCommand(
     case 'redo':
       return { kind: 'undo', redo: true }
     case 'changes':
-    case 'diff':
-      return { kind: 'changes' }
+    case 'diff': {
+      const m = /^last(?:\s+(\d+))?$/i.exec(arg.trim())
+      if (!m) return { kind: 'changes' }
+      return { kind: 'changes', last: Math.max(1, Number(m[2] ?? m[1] ?? 1) || 1) }
+    }
     case 'verbose': {
       const a = arg.trim().toLowerCase()
       if (a === 'on') return { kind: 'verbose', on: true }
@@ -1626,6 +1726,10 @@ export const HELP_TEXT = [
   '  /btw <question>       ask a quick side question; the answer stays out of this chat',
   '  /btw clear            start this chat\'s side chat over',
   '  /fork                 branch the current session into a copy',
+  '  /rename <title>       give this chat a title',
+  '  /export [md|json] [path]  write this chat to a file (Markdown by default)',
+  '  /delete               delete this chat (asks first)',
+  '  /permissions [remove n]  list the saved permission rules, or remove one',
   '  /cost                 show session token + cost totals',
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
@@ -1636,6 +1740,7 @@ export const HELP_TEXT = [
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
+  "  /diff last [n]        show the diff of this session's last edit (n edits back)",
   '  /verbose [on|off]     show each tool\'s full output as it runs',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
@@ -1649,8 +1754,46 @@ export const HELP_TEXT = [
   '  /<name>               run a custom command from .houston/commands',
   '  /exit, /quit          leave (or press Ctrl-D)',
   '',
-  'While a turn runs: Ctrl-C interrupts it. Answer approvals with y / n / a.'
+  'Keys:',
+  '  Enter                 send the message',
+  '  Shift-Enter, Ctrl-J   new line (Alt-Enter too; Shift-Enter where the terminal reports it)',
+  '  @ then Tab            complete a file or folder path into the message',
+  '  !command              run a shell command yourself; its output joins the chat',
+  '  #note                 save a standing instruction to AGENTS.md',
+  '  Shift-Tab             cycle the approval mode, also while a turn runs',
+  '  Up, Down              earlier messages (this folder)',
+  '  Ctrl-R                search earlier messages',
+  '  Ctrl-X Ctrl-E         edit the message in $VISUAL or $EDITOR',
+  '  Ctrl-L                clear the screen',
+  '  Ctrl-C                clear the message (twice to exit); Ctrl-D exits',
+  '  ultrathink            a word in the message: think harder for that turn',
+  '',
+  'While a turn runs: type and press Enter to steer it; Esc or Ctrl-C stops it.',
+  'Answer approvals with y / n / a.'
 ].join('\n')
+
+/** Short tips for keys and prefixes a new user would not find on their own. */
+export const STARTUP_TIPS = [
+  'type @ then Tab to complete a file path into your message',
+  '!command runs a shell command yourself; its output joins the chat',
+  '#note saves a standing instruction to AGENTS.md',
+  'Shift-Tab cycles the approval mode, even while a turn runs',
+  'Ctrl-R searches your earlier messages',
+  'Ctrl-X Ctrl-E edits your message in $VISUAL or $EDITOR',
+  'type while the agent works and press Enter to steer it',
+  'Shift-Enter or Ctrl-J starts a new line'
+]
+
+/**
+ * `count` consecutive tips starting at a seed-chosen place, so each launch shows a
+ * different pair and every tip comes around in turn.
+ */
+export function pickTips(seed: number, count = 2, tips: readonly string[] = STARTUP_TIPS): string[] {
+  if (!tips.length) return []
+  const start = ((Math.floor(seed) % tips.length) + tips.length) % tips.length
+  const n = Math.min(count, tips.length)
+  return Array.from({ length: n }, (_, i) => tips[(start + i) % tips.length])
+}
 
 /** Where /help's descriptions start: two spaces, then the command padded to 22. */
 const HELP_DESC_COLUMN = 24
@@ -1669,8 +1812,8 @@ export function wrapHelp(text: string, width: number, column = HELP_DESC_COLUMN)
     .split('\n')
     .map((line) => {
       if (visibleWidth(line) <= width) return line
-      // Not a command row, or a name so long it runs into the column: plain wrap.
-      if (!line.startsWith('  /') || line[column - 1] !== ' ') return wrapAnsi(line, width)
+      // Not a command or key row, or a name so long it runs into the column: plain wrap.
+      if (!line.startsWith('  ') || line[column - 1] !== ' ') return wrapAnsi(line, width)
       return wrapAnsi(line.slice(column), descWidth)
         .split('\n')
         .map((part, i) => (i === 0 ? line.slice(0, column) : pad) + part)
@@ -1889,30 +2032,101 @@ export function summarizeModels(ids: string[], paint: Painter, max = MENU_MODEL_
   return `${ids.slice(0, max).join(', ')}${paint(`, +${ids.length - max} more`, 'dim')}`
 }
 
-/** Render the provider menu: each keyable provider with its key status, then "Other host…". */
+/**
+ * Hosts that need no key: the local servers (Ollama, LM Studio) and endpoints added
+ * with `houston providers add`. They follow the keyable providers in the /login menu,
+ * where picking one means "use it", not "paste a key".
+ */
+export function hostProviders(settings: AppSettings): ProviderConfig[] {
+  return settings.providers.filter((p) => !p.requiresKey)
+}
+
+/** What asking a host for its models found: the models, or no answer. */
+export type HostProbe = { ok: true; models: ModelOption[] } | { ok: false }
+
+/** True for a base URL on this machine, where "no answer" means "not running". */
+export function isLocalUrl(url: string | undefined): boolean {
+  if (!url) return false
+  try {
+    const host = new URL(url).hostname
+    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1'
+  } catch {
+    return false
+  }
+}
+
+/** A host row's status: what the probe found, or what is configured when there was none. */
+type MenuTone = 'green' | 'yellow' | 'dim'
+function hostStatus(
+  p: ProviderConfig,
+  probe: HostProbe | undefined,
+  paint: Painter
+): { status: string; tone: MenuTone; models: string } {
+  const configured = summarizeModels(p.models.map((m) => m.id), paint)
+  if (!probe) return { status: 'no key needed', tone: 'dim', models: configured }
+  if (!probe.ok) {
+    return {
+      status: isLocalUrl(p.baseUrl) ? '✗ not running' : '✗ no answer',
+      tone: 'dim',
+      models: p.models.length ? configured : paint(p.baseUrl ?? '', 'dim')
+    }
+  }
+  if (!probe.models.length) return { status: '! no models', tone: 'yellow', models: paint(p.baseUrl ?? '', 'dim') }
+  return { status: '✓ running', tone: 'green', models: summarizeModels(probe.models.map((m) => m.id), paint) }
+}
+
+/**
+ * Render the provider menu: each keyable provider with its key status, then the
+ * hosts that need no key (with what probing them found), then "Other host…".
+ */
 export function renderProviderMenu(
   providers: ProviderConfig[],
   paint: Painter,
-  opts: { firstRun: boolean; otherHostExamples?: string }
+  opts: {
+    firstRun: boolean
+    otherHostExamples?: string
+    hosts?: Array<{ provider: ProviderConfig; probe?: HostProbe }>
+  }
 ): string {
+  const hosts = opts.hosts ?? []
   const lines: string[] = [
     opts.firstRun
-      ? paint('No model is ready yet. None of your providers has an API key.', 'yellow')
+      ? paint(
+          hosts.length
+            ? 'No model is ready yet. Set up a provider, or pick a local or added host.'
+            : 'No model is ready yet. None of your providers has an API key.',
+          'yellow'
+        )
       : paint('Providers (key status on this profile):', 'bold')
   ]
   const otherLabel = 'Other host…'
   // Align the status column to the widest label (built-in names like "Anthropic
   // (Claude)" and custom-endpoint labels vary in length), so the rows don't stagger.
-  const labelWidth = Math.max(otherLabel.length, ...providers.map((p) => (p.label ?? p.id).length))
-  providers.forEach((p, i) => {
-    const status = p.hasKey ? paint('✓ key set', 'green') : paint('✗ no key ', 'dim')
-    const models = summarizeModels(
-      p.models.map((m) => m.id),
-      paint
+  const labelWidth = Math.max(
+    otherLabel.length,
+    ...providers.map((p) => (p.label ?? p.id).length),
+    ...hosts.map((h) => (h.provider.label ?? h.provider.id).length)
+  )
+  const rows: Array<{ label: string; status: string; tone: MenuTone; models: string }> = [
+    ...providers.map((p) => ({
+      label: p.label ?? p.id,
+      status: p.hasKey ? '✓ key set' : '✗ no key',
+      tone: (p.hasKey ? 'green' : 'dim') as MenuTone,
+      models: summarizeModels(
+        p.models.map((m) => m.id),
+        paint
+      )
+    })),
+    ...hosts.map((h) => ({ label: h.provider.label ?? h.provider.id, ...hostStatus(h.provider, h.probe, paint) }))
+  ]
+  // Pad the status column too, so the model lists line up across both groups.
+  const statusWidth = Math.max(0, ...rows.map((r) => r.status.length))
+  rows.forEach((r, i) => {
+    lines.push(
+      `  ${paint(`${i + 1})`, 'cyan')} ${r.label.padEnd(labelWidth)}  ${paint(r.status.padEnd(statusWidth), r.tone)}  ${r.models}`
     )
-    lines.push(`  ${paint(`${i + 1})`, 'cyan')} ${(p.label ?? p.id).padEnd(labelWidth)}  ${status}  ${models}`)
   })
-  const other = providers.length + 1
+  const other = providers.length + hosts.length + 1
   // Examples come from the caller (only hosts not already configured), so the hint
   // can't advertise a provider that's already listed above. Falls back to the
   // always-available custom-endpoint option.
@@ -2157,6 +2371,83 @@ async function addHostInteractive(
   return { provider }
 }
 
+/** Ask every host for its models at once. Empty when the client can't probe. */
+async function probeHosts(
+  hosts: ProviderConfig[],
+  deps: TuiDeps,
+  paint: Painter
+): Promise<Map<string, HostProbe>> {
+  const probes = new Map<string, HostProbe>()
+  const list = deps.listModels
+  if (!list || !hosts.length) return probes
+  deps.io.out(paint('· checking local and added hosts…\n', 'dim'))
+  const results = await Promise.allSettled(hosts.map((p) => list(p)))
+  results.forEach((r, i) => {
+    probes.set(hosts[i].id, r.status === 'fulfilled' ? { ok: true, models: r.value } : { ok: false })
+  })
+  return probes
+}
+
+/** What to do to get a host that did not answer, or answered with no models, going. */
+function hostHint(p: ProviderConfig, probe: HostProbe | undefined): string {
+  const name = p.label ?? p.id
+  const running = probe?.ok === true
+  if (p.id === 'ollama') {
+    return running
+      ? 'Ollama is running but has no models yet. Pull one (for example: ollama pull qwen3), then /login.'
+      : `Ollama isn't answering at ${p.baseUrl}. Start it (ollama serve), then /login.`
+  }
+  if (p.id === 'lmstudio') {
+    return running
+      ? 'LM Studio is running but has no model loaded. Load one, then /login.'
+      : `LM Studio isn't answering at ${p.baseUrl}. Start its local server, then /login.`
+  }
+  return running ? `${name} answered but listed no models.` : `${name} didn't answer at ${p.baseUrl}.`
+}
+
+/**
+ * Use a host that needs no key: save the models it reported and select one. A built-in
+ * local server that isn't running gets a hint; any other host can still be used by
+ * typing a model id, since not every server lists its models.
+ */
+async function selectHost(
+  provider: ProviderConfig,
+  probe: HostProbe | undefined,
+  deps: TuiDeps,
+  paint: Painter
+): Promise<{ providerId: string; model: string } | null> {
+  const name = provider.label ?? provider.id
+  let models = probe?.ok && probe.models.length ? probe.models : provider.models
+  if (!models.length) {
+    deps.io.out(paint(`· ${hostHint(provider, probe)}\n`, 'yellow'))
+    if (provider.builtIn) return null
+    const typed = await deps.io.readLine(paint(`Model id to use on ${name} (Enter to cancel): `, 'dim'))
+    const id = typed?.trim()
+    if (!id) {
+      deps.io.out(paint('· nothing changed\n', 'dim'))
+      return null
+    }
+    models = [{ id }]
+  }
+  const model = pickDefaultModel({ ...provider, models })
+  if (!model) return null
+  if (deps.updateSettings) {
+    const current = deps.getSettings().providers
+    // Save what the host reported, so the next launch starts on it with no setup.
+    if (models !== provider.models) {
+      deps.updateSettings({ providers: current.map((p) => (p.id === provider.id ? { ...p, models } : p)) })
+    }
+    deps.updateSettings({ selected: { providerId: provider.id, model } })
+  }
+  deps.io.out(
+    paint(
+      `· Model set to ${provider.id} / ${model}.${models.length > 1 ? ' /model lists the others.' : ''}\n`,
+      'dim'
+    )
+  )
+  return { providerId: provider.id, model }
+}
+
 /**
  * The /login driver: pick a provider (or add a host), paste a key (hidden), and have
  * it take effect immediately. Returns the provider+model to switch to when setup
@@ -2177,17 +2468,29 @@ async function runProviderSetup(
   const isMac = deps.isMac ?? process.platform === 'darwin'
   const configured = new Set(settings.providers.map((p) => p.id))
   const addable = catalogForPlatform(isMac).filter((e) => !configured.has(e.id))
+  // Local servers and added endpoints: ask each for its models first, so the menu can
+  // say which are running (and a pick can use one straight away).
+  const hosts = hostProviders(settings)
+  const probes = await probeHosts(hosts, deps, paint)
   deps.io.out(
-    `${renderProviderMenu(providers, paint, { firstRun: o.firstRun, otherHostExamples: otherHostExamples(addable) })}\n`
+    `${renderProviderMenu(providers, paint, {
+      firstRun: o.firstRun,
+      otherHostExamples: otherHostExamples(addable),
+      hosts: hosts.map((p) => ({ provider: p, ...(probes.has(p.id) ? { probe: probes.get(p.id) } : {}) }))
+    })}\n`
   )
   const ans = await deps.io.readLine(paint(o.firstRun ? 'setup › ' : 'login › ', 'green'))
   if (ans === null) return null
-  const choice = parseProviderMenuChoice(ans, providers.length)
+  const choice = parseProviderMenuChoice(ans, providers.length + hosts.length)
   if (choice.kind === 'cancel') {
     deps.io.out(paint('· no provider selected\n', 'dim'))
     return null
   }
   if (choice.kind === 'provider') {
+    if (choice.index >= providers.length) {
+      const host = hosts[choice.index - providers.length]
+      return selectHost(host, probes.get(host.id), deps, paint)
+    }
     const target = providers[choice.index]
     return keyEntryFor(target, deps, paint, providerKeyUrl(target.id))
   }
@@ -2290,6 +2593,11 @@ export interface TuiIo {
    * status line is gone exactly when it matters most.
    */
   setMode?: (label: string) => void
+  /**
+   * The rest of the status line (model, branch, context use), shown on the spinner
+   * line while a turn runs so it does not vanish with the composer.
+   */
+  setStatus?: (status: string) => void
   /**
    * Present an arrow-key selectable picker (for approvals / `ask_user`). Resolves
    * with the committed value, a request to fall back to typing, or a cancel.
@@ -2480,6 +2788,19 @@ export interface TuiDeps {
     apply: (conversationId: string, turn: number, mode: RewindMode, text: string) => Promise<RewindResult>
     undo: (conversationId: string) => Promise<UndoRewindResult>
   }
+  /**
+   * Ask a host for its models (with a short timeout), so the setup menu can show
+   * which local servers and added endpoints are running. Rejects when the host does
+   * not answer. Absent ⇒ hosts are listed without a probe.
+   */
+  listModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
+  /** The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch shown. */
+  gitBranch?: () => Promise<string | null>
+  /**
+   * Write an export (`/export`) to `path`, relative to the working folder, without
+   * replacing an existing file. Returns the full path written; throws on failure.
+   */
+  writeExport?: (path: string, content: string) => string
   /** Everything different in the working tree, for /changes. */
   workingTree?: () => Promise<{
     isRepo: boolean
@@ -2817,6 +3138,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // turn (so merely opening and closing the REPL doesn't litter history). Null
   // until then, or after `/clear` starts a fresh one.
   let conversationId: string | null = null
+  // This chat's saved title (for /export, /rename and /delete), read from the store.
+  const currentTitle = (): string | null => {
+    if (!conversationId || !deps.persist) return null
+    try {
+      return deps.persist.list(opts.cwd).find((c) => c.id === conversationId)?.title ?? null
+    } catch {
+      return null
+    }
+  }
   // Persist the running message log, best-effort. A store failure (disk full, bad
   // perms) must degrade to an ephemeral session, not crash the REPL mid-turn — a
   // throw here otherwise propagates out of startRun (no catch there) to a Fatal.
@@ -2889,7 +3219,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   const notifyEnabled = settings.desktopNotifications !== false
   // Show each tool's full output as it runs (/verbose). Off by default: the
   // transcript is a conversation, and most results are noise until they aren't.
-  let verbose = false
+  // Remembered across sessions once chosen.
+  let verbose = settings.tuiVerbose === true
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
   // What a run hands back unsent: steers it accepted but ended before reading
@@ -2908,6 +3239,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let pendingImages: ImageAttachment[] = []
   // Estimated current context size (last turn's input tokens), for the status line.
   let contextTokens = 0
+  // This session's landed edits (newest last), for `/diff last [n]`.
+  let recentEdits: FileDiffPreview[][] = []
+  // The checked-out branch, re-read before each status line (a turn or `!git`
+  // may switch it).
+  let branch: string | null = null
+  const refreshBranch = async (): Promise<void> => {
+    if (!deps.gitBranch) return
+    try {
+      branch = await deps.gitBranch()
+    } catch {
+      branch = null
+    }
+  }
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
@@ -3029,6 +3373,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       deps.io.out(
         paint(`· continuing "${entry!.title}" (${messages.length} message(s))\n`, 'dim')
       )
+      const recap = renderRecap(messages, paint, { width: columns() })
+      if (recap) deps.io.out(`${recap}\n`)
       const unanswered = unansweredNotice(messages)
       if (unanswered) deps.io.out(paint(`${unanswered}\n`, 'yellow'))
       // What the launch flags set wins over the chat's own for this session, as it
@@ -3070,7 +3416,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         'dim'
       )}\n` +
       `${paint(`  approval: ${APPROVAL_POLICY_LABEL[policy]}`, 'dim')}\n` +
-      `${paint('  /help for commands, Ctrl-D to exit', 'dim')}\n`
+      `${paint('  /help for commands and keys, Ctrl-D to exit', 'dim')}\n` +
+      // Seconds since the epoch: a different pair of tips on each launch.
+      pickTips(Math.floor(nowFn() / 1000))
+        .map((t) => `${paint(`  tip: ${t}`, 'dim')}\n`)
+        .join('')
   )
 
   for (;;) {
@@ -3102,11 +3452,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // A persistent status line above the composer: model, policy, cwd, cost, and
     // context-window fill — so live session state is always visible. Before a
     // provider is set up it shows a "no model" prompt pointing at /login instead.
+    await refreshBranch()
     deps.io.out(
       `${
         providerId && model
           ? renderStatusLine(
-              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens },
+              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens, branch },
               columns(),
               paint
             )
@@ -3315,9 +3666,115 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         conversationId = id
         messages = conv.messages
         deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
+        const recap = renderRecap(messages, paint, { width: columns() })
+        if (recap) deps.io.out(`${recap}\n`)
         const unanswered = unansweredNotice(messages)
         if (unanswered) deps.io.out(paint(`${unanswered}\n`, 'yellow'))
         adoptChatSettings(conv)
+        continue
+      }
+      if (result.kind === 'export') {
+        if (!messages.length) {
+          deps.io.out(paint('· nothing to export yet; this chat has no messages\n', 'dim'))
+          continue
+        }
+        if (!deps.writeExport) {
+          deps.io.out(paint('· export is unavailable here\n', 'dim'))
+          continue
+        }
+        const at = new Date(nowFn())
+        const title = currentTitle() ?? 'Houston chat'
+        const meta = { id: conversationId, title, providerId, model, at }
+        const content = result.format === 'json' ? chatToJson(messages, meta) : chatToMarkdown(messages, meta)
+        const target = result.path ?? defaultExportName(title, at, result.format)
+        try {
+          const written = deps.writeExport(target, content)
+          deps.io.out(paint(`· exported ${messages.length} message(s) to ${written}\n`, 'dim'))
+        } catch (e) {
+          deps.io.out(paint(`· couldn't export: ${(e as Error).message}\n`, 'yellow'))
+        }
+        continue
+      }
+      if (result.kind === 'rename') {
+        if (!deps.persist?.rename || !conversationId) {
+          deps.io.out(
+            paint(
+              conversationId ? '· renaming is unavailable here\n' : '· nothing to rename yet; send a message first\n',
+              'dim'
+            )
+          )
+          continue
+        }
+        if (!result.title) {
+          deps.io.out(paint(`· this chat is "${currentTitle() ?? 'New chat'}". /rename <title> changes it\n`, 'dim'))
+          continue
+        }
+        try {
+          deps.persist.rename(conversationId, result.title)
+          deps.io.out(paint(`· renamed to "${result.title}"\n`, 'dim'))
+        } catch (e) {
+          deps.io.out(paint(`· couldn't rename: ${(e as Error).message}\n`, 'yellow'))
+        }
+        continue
+      }
+      if (result.kind === 'delete') {
+        if (!deps.persist?.remove || !conversationId) {
+          deps.io.out(
+            paint(
+              conversationId ? '· deleting is unavailable here\n' : '· nothing to delete; this chat is not saved yet\n',
+              'dim'
+            )
+          )
+          continue
+        }
+        const title = currentTitle() ?? 'this chat'
+        // discardPending: type-ahead must not answer a question about deleting.
+        const ans = await deps.io.readLine(
+          paint(`Delete "${title}" and its ${messages.length} message(s)? This cannot be undone. [y/N] `, 'yellow'),
+          { discardPending: true }
+        )
+        if (!/^y(es)?$/i.test(ans?.trim() ?? '')) {
+          deps.io.out(paint('· kept\n', 'dim'))
+          continue
+        }
+        try {
+          deps.persist.remove(conversationId)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't delete: ${(e as Error).message}\n`, 'yellow'))
+          continue
+        }
+        messages = []
+        conversationId = null
+        persistedSettings = null
+        pendingImages = []
+        contextTokens = 0
+        deps.io.out(paint(`· deleted "${title}"; this is a new chat\n`, 'dim'))
+        continue
+      }
+      if (result.kind === 'permissions') {
+        const rules = deps.getSettings().permissionRules ?? []
+        if (result.bad) {
+          deps.io.out(paint('· usage: /permissions, or /permissions remove <n>\n', 'dim'))
+          continue
+        }
+        if (result.remove === undefined) {
+          deps.io.out(`${renderPermissionRules(rules, paint, nowFn())}\n`)
+          continue
+        }
+        const rule = rules[result.remove - 1]
+        if (!rule) {
+          deps.io.out(paint(`· no rule ${result.remove}; /permissions lists them\n`, 'yellow'))
+          continue
+        }
+        if (!deps.updateSettings) {
+          deps.io.out(paint('· editing settings is unavailable here\n', 'dim'))
+          continue
+        }
+        const drop = result.remove - 1
+        deps.updateSettings({ permissionRules: rules.filter((_, i) => i !== drop) })
+        deps.io.out(
+          paint(`· removed: ${rule.action} ${rule.tool || '*'} ${rule.match}${rule.exact ? ' (exact)' : ''}\n`, 'dim')
+        )
         continue
       }
       if (result.kind === 'fork') {
@@ -3382,6 +3839,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'verbose') {
         verbose = result.on ?? !verbose
+        deps.updateSettings?.({ tuiVerbose: verbose })
         deps.io.out(
           paint(
             verbose
@@ -3572,6 +4030,33 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         )
         continue
       }
+      if (result.kind === 'changes' && result.last !== undefined) {
+        const edit = recentEdits[recentEdits.length - result.last]
+        if (!edit) {
+          deps.io.out(
+            paint(
+              recentEdits.length
+                ? `· only ${recentEdits.length} edit${recentEdits.length === 1 ? '' : 's'} so far this session\n`
+                : '· no edits yet this session (/changes shows the working tree)\n',
+              'dim'
+            )
+          )
+          continue
+        }
+        const html = deps.highlightHtml
+        const view = renderPreviewView(
+          edit,
+          paint,
+          html
+            ? (lang, code) => {
+                const h = html(lang, code)
+                return h ? htmlToAnsi(h, paint) : code
+              }
+            : undefined
+        )
+        if (view) deps.io.out(`${view}\n`)
+        continue
+      }
       if (result.kind === 'changes') {
         if (!deps.workingTree) {
           deps.io.out(paint('· working-tree changes are unavailable here\n', 'dim'))
@@ -3588,7 +4073,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(paint('· checking…\n', 'dim'))
         try {
           const facts = await deps.doctor()
-          deps.io.out(`${renderDoctor(buildDoctorReport(facts), paint)}\n`)
+          // The model this session runs on, which --provider/--model, /model or a
+          // resumed chat may have chosen without touching the saved selection.
+          const active = providerId && model ? { providerId, model } : facts.active
+          deps.io.out(`${renderDoctor(buildDoctorReport({ ...facts, active }), paint)}\n`)
         } catch (e) {
           deps.io.out(paint(`· couldn't run diagnostics: ${(e as Error).message}\n`, 'yellow'))
         }
@@ -3938,6 +4426,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Args captured at tool_start, so a write approval can show the actual diff
     // (the approval event itself only carries a human summary).
     const toolArgs = new Map<string, Record<string, unknown>>()
+    // A write's diff, from its tool_start, until its result says whether it landed.
+    const writePreviews = new Map<string, FileDiffPreview[]>()
+    // Writes the user approved at a prompt, where the diff was already on screen.
+    const promptedWrites = new Set<string>()
     // todo_write calls whose list we already drew, so their summary line is dropped.
     const todoCalls = new Set<string>()
     // Review findings print once per status change (line mode can't update in place).
@@ -3982,6 +4474,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
     flushStreamedText = flushMd
     // Liveness while the agent works (relabelled per event; erased on any output).
+    deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
 
     const send = (e: AgentEvent): void => {
@@ -4038,6 +4531,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // A question or a plan prints itself as the prompt that follows; a "· ask_user"
           // line in front of it is only the wire name.
           if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) break
+          if (e.kind === 'write' && e.preview?.length) writePreviews.set(e.callId, e.preview)
           deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
           break
         }
@@ -4073,6 +4567,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           const line = renderToolResult(e.name, e.ok, e.output, paint, { verbose, width: columns() })
           if (line) deps.io.out(`${line}\n`)
           toolArgs.delete(e.callId)
+          const preview = writePreviews.get(e.callId)
+          writePreviews.delete(e.callId)
+          if (preview && e.ok) {
+            recentEdits = [...recentEdits, preview].slice(-RECENT_EDITS)
+            // An approved write showed its diff in the prompt; one that ran without
+            // asking gets the summary, so no edit lands unseen.
+            if (!promptedWrites.has(e.callId)) deps.io.out(`${renderEditSummary(preview, paint)}\n`)
+          }
+          promptedWrites.delete(e.callId)
           break
         }
         case 'tool_progress':
@@ -4105,7 +4608,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         case 'retry':
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
-          if (retryStreak === 0) deps.io.out(paint(`\n· retrying (${retryProgress(e)})… ${e.message}\n`, 'yellow'))
+          if (retryStreak === 0) {
+            const line = e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `retrying (${retryProgress(e)})… ${e.message}`
+            deps.io.out(paint(`\n· ${line}\n`, 'yellow'))
+          }
           retryStreak = e.attempt
           break
         case 'model_fallback':
@@ -4113,6 +4619,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\n· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`, 'yellow'))
           break
         case 'tool_approval':
+          if (e.kind === 'write') promptedWrites.add(e.callId)
           enqueue(async () => {
             // Context (name, kind, unsandboxed warning) + the diff for a write.
             deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select })}\n`)
@@ -4281,7 +4788,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // Current context size ≈ the last MAIN round's input tokens; feeds the
           // status line. Subagent usage events carry inputTokens: 0, so guard
           // against them resetting the meter to zero mid-turn.
-          if (e.inputTokens) contextTokens = e.inputTokens
+          if (e.inputTokens) {
+            contextTokens = e.inputTokens
+            deps.io.setStatus?.(renderRunStatus({ model: model ?? '', branch, contextTokens }, paint))
+          }
           break
         case 'error':
           // The run gave up mid-streak: say the retries are over, so the line above
@@ -4435,6 +4945,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Hand the tab back with no title of ours; the shell sets its own at the next
   // prompt, and a lingering "Houston · proj" would be a lie once we're gone.
   deps.io.signal?.({ title: '' })
+  // The way back to this chat, which nothing else on screen names.
+  if (conversationId && deps.persist) {
+    deps.io.out(
+      paint(
+        `\nThis chat is saved. To come back to it:\n  houston --resume ${conversationId}\n  houston --continue   (the latest chat in this folder)\n`,
+        'dim'
+      )
+    )
+  }
   deps.io.out(paint('\nBye.\n', 'dim'))
   return 0
 }

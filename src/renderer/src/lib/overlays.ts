@@ -11,9 +11,10 @@ export interface OverlayFlags {
   doctor: boolean
   /** Help > Report an Issue: what the new issue will start with. */
   issue: boolean
-  changes: boolean
   files: boolean
   scorecard: boolean
+  /** The usage drawer (spend and tokens per day and per project). */
+  usage: boolean
   help: boolean
   /** The full-size image viewer (opened from a gallery or a tool-card screenshot). */
   viewer: boolean
@@ -33,9 +34,9 @@ export function modalOpen(f: OverlayFlags): boolean {
     f.settings ||
     f.doctor ||
     f.issue ||
-    f.changes ||
     f.files ||
     f.scorecard ||
+    f.usage ||
     f.help ||
     f.viewer ||
     f.palette ||

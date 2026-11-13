@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, mkdirSync, statSync, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, isAbsolute } from 'node:path'
 import { writeFileAtomicSync } from './atomic-write'
 import { getUserDataDir } from './userData'
 import type {
@@ -537,7 +537,10 @@ export function saveSettings(next: AppSettings): AppSettings {
   // same save, instead of persisting a stale reference the picker can't resolve.
   const reconciled: AppSettings = {
     ...next,
-    selected: reconcileSelectedModel(next.providers, next.selected)
+    selected: reconcileSelectedModel(next.providers, next.selected),
+    // Main records the recent models (rememberModel); a save carrying an older copy
+    // (the renderer's settings from before the last run) must not roll that back.
+    ...(cache?.recentModels ? { recentModels: cache.recentModels } : {})
   }
   const { settings } = extractHeaderSecrets({
     ...reconciled,
@@ -639,6 +642,48 @@ export function rememberWorkspace(path: string): AppSettings {
     ...current.recentWorkspaces.filter((p) => p !== path && workspaceExists(p))
   ].slice(0, 10)
   return updateSettings({ recentWorkspaces: recents })
+}
+
+/** How many recently used models the model picker's Recent section keeps. */
+export const RECENT_MODEL_LIMIT = 5
+
+/**
+ * Record a model a run is starting on at the front of the recent-models list (deduped,
+ * capped). Only a model the settings still list under that provider is kept, so a
+ * run-only override or a removed provider never shows up in the picker. A no-op
+ * (no save) when it is already first.
+ */
+export function rememberModel(sel: { providerId: unknown; model: unknown }): AppSettings {
+  const current = getSettings()
+  const { providerId, model } = sel
+  if (typeof providerId !== 'string' || typeof model !== 'string') return current
+  const provider = current.providers.find((p) => p.id === providerId)
+  if (!provider?.models.some((m) => m.id === model)) return current
+  const prior = current.recentModels ?? []
+  if (prior[0]?.providerId === providerId && prior[0]?.model === model) return current
+  const list = [
+    { providerId, model },
+    ...prior.filter((r) => !(r.providerId === providerId && r.model === model))
+  ].slice(0, RECENT_MODEL_LIMIT)
+  if (cache) cache = { ...cache, recentModels: list }
+  return saveSettings({ ...current, recentModels: list })
+}
+
+/**
+ * Open a folder the renderer named directly (a recent folder picked from the welcome
+ * screen or the folder menu, or a folder dragged onto the window) rather than one the
+ * native picker returned. Accepts only an absolute path to an existing directory, so a
+ * dropped file or a recent that vanished comes back null, and records it as the most
+ * recent workspace. Returns the path to open, or null.
+ */
+export function openWorkspaceFolder(path: unknown): string | null {
+  if (typeof path !== 'string' || path === '' || !isAbsolute(path)) return null
+  if (!workspaceExists(path)) {
+    pruneRecentWorkspaces()
+    return null
+  }
+  rememberWorkspace(path)
+  return path
 }
 
 /**

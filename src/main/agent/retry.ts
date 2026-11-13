@@ -1,3 +1,6 @@
+import { causeFromMessage, type TurnErrorCause } from '@shared/turnError'
+import type { ThrottleInfo } from '@shared/rateLimit'
+
 /**
  * Transient-failure handling for provider streaming. The SDKs retry the *initial*
  * request a couple of times, but a connection that drops mid-stream, or a failure
@@ -262,6 +265,58 @@ export function isModelNotFoundError(err: unknown, model: string): boolean {
   if (!is404) return false
   if (model && msg.includes(model)) return true
   return /not_found_error|model_not_found|\bmodel\b[^.]{0,80}\b(?:not found|does not exist)/i.test(msg)
+}
+
+/**
+ * The user-facing cause of a provider failure that ended a turn, read from the error
+ * itself: its HTTP status first (a server that answered said exactly what was wrong),
+ * then the network codes on its cause chain, then its wording. Undefined when none of
+ * them says, so the client falls back to a generic "the turn failed".
+ */
+export function classifyProviderFailure(err: unknown): TurnErrorCause | undefined {
+  if (isQuotaExhaustedError(err)) return 'quota'
+  const status = (err as { status?: unknown })?.status
+  if (status === 401 || status === 403) return 'auth'
+  if (status === 429) return 'rate-limit'
+  if (typeof status === 'number' && status >= 500) return 'provider-down'
+  if (isNetworkError(err)) return 'network'
+  return causeFromMessage(String((err as { message?: unknown })?.message ?? err))
+}
+
+/** A header's value as a non-negative whole number, or undefined. */
+function headerCount(headers: unknown, names: string[]): number | undefined {
+  for (const n of names) {
+    const raw = headerValue(headers, n)?.trim()
+    if (!raw) continue
+    const v = Number(raw)
+    if (Number.isFinite(v) && v >= 0) return Math.floor(v)
+  }
+  return undefined
+}
+
+/**
+ * What to tell the user about a throttled attempt (a 429 that isn't an exhausted
+ * quota), or undefined for any other failure. `waitMs` is the delay the loop chose.
+ * Reads the remaining-quota headers Anthropic and OpenAI-style APIs send, when the
+ * error kept them; nothing else from the response is read.
+ */
+export function throttleInfo(err: unknown, waitMs: number): ThrottleInfo | undefined {
+  const status = (err as { status?: unknown })?.status
+  if (status !== 429 || isQuotaExhaustedError(err)) return undefined
+  const headers = (err as { headers?: unknown })?.headers
+  const retryAfterMs = retryAfterHintMs(err)
+  const remainingRequests = headerCount(headers, ['anthropic-ratelimit-requests-remaining', 'x-ratelimit-remaining-requests'])
+  const remainingTokens = headerCount(headers, [
+    'anthropic-ratelimit-tokens-remaining',
+    'anthropic-ratelimit-input-tokens-remaining',
+    'x-ratelimit-remaining-tokens'
+  ])
+  return {
+    waitMs: Math.max(0, Math.round(waitMs)),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    ...(remainingRequests !== undefined ? { remainingRequests } : {}),
+    ...(remainingTokens !== undefined ? { remainingTokens } : {})
+  }
 }
 
 /** Exponential backoff with full jitter, in ms. `rand` is injectable for tests. */

@@ -27,9 +27,10 @@ Open source under the [Apache License 2.0](LICENSE).
   Microsoft Foundry), and GPT through your own Azure OpenAI deployments. Add a
   known host (OpenRouter, Together, Fireworks, Groq, and more) in one click, point
   at any custom endpoint, and fetch live model lists in Settings. The searchable
-  model picker shows each model's context window, price, and capability badges
-  (tool calling, vision, reasoning), read live from the host where it advertises
-  them, so it warns before you pick a model that can't call tools. Name
+  model picker shows each model's context window and capability badges (tool
+  calling, vision, reasoning, with a legend), read live from the host where it
+  advertises them, so it warns before you pick a model that can't call tools. It
+  marks each provider's recommended model and lists your recently used models first. Name
   `fallbackModels` in settings.json and a turn the selected model can't serve
   moves on to the next one. Each chat keeps its own model, reasoning effort, and
   approval mode, so switching in one chat never changes another; new chats start
@@ -74,7 +75,8 @@ Open source under the [Apache License 2.0](LICENSE).
   language (`ts`, `tsx`, `py`, `rust`, …).
 - **Web search.** Pick a search provider and supply its API key (Settings →
   *Tools* → *Web search*) and the agent can `web_search` the web for current
-  information. Like `web_fetch`, it asks before it leaves the machine (once per chat
+  information. With no search key, models on the Claude API or OpenAI use their
+  provider's built-in web search instead, billed to your model key. Like `web_fetch`, it asks before it leaves the machine (once per chat
   in full auto, unless Settings → *Permissions* → *Web reads in full auto* lets it
   run without asking).
 - **See its own localhost.** After starting a dev server (a background
@@ -114,7 +116,7 @@ Open source under the [Apache License 2.0](LICENSE).
   when it is waiting on you (an approval, a question, a plan, a server asking for input,
   with the reason under the title), a grey pulse while it works, red when its last run
   failed, and blue when it finished while you were elsewhere. Mark any chat unread or
-  read from its ⋯ menu or with ⌥U (Alt+U), or from a specific reply with **Mark unread
+  read from its ⋯ menu (or right-click the chat) or with ⌥U (Alt+U), or from a specific reply with **Mark unread
   from here**. Reopening an unread chat lands on a "New" divider above what you missed.
   Mark everything read from the filter menu, or sort the chats that want attention to
   the top. Collapsed groups, the collapsed sidebar, and the app icon (Dock badge, or a
@@ -132,8 +134,12 @@ Open source under the [Apache License 2.0](LICENSE).
   full PTY sessions (interactive programs, colors, resize) next to the chat. The
   Files panel browses the project like a file manager, with an in-app preview
   (syntax-highlighted code, images) and an Open action that hands a file to its
-  default app. Each chat's ⋯ menu also has **Open in**, which opens the chat's
+  default app. File paths in the transcript (tool rows, the receipt, relative links
+  in replies) open there too, at the line when one is known. Each chat's ⋯ menu also has **Open in**, which opens the chat's
   folder in a detected editor or reveals it in the file manager.
+- **Message box extras.** `Ctrl+R` searches the messages you sent before, a very
+  large paste folds into a chip you can expand, and any file dropped on the box
+  attaches (text inlined, binary files such as PDFs by name).
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message, with no need to paste or describe where things live.
 - **Slash commands.** Type `/` for a command menu. The desktop app and the terminal
@@ -249,7 +255,11 @@ Open source under the [Apache License 2.0](LICENSE).
   `model:` pins the agent to a
   (usually cheaper) sibling model from the current provider. Add a
   `.houston/skills/<name>/SKILL.md` to register a skill: its description is
-  surfaced to the agent, which reads the full instructions on demand.
+  surfaced to the agent, which reads the full instructions on demand. Agents,
+  skills, and custom commands in `~/.houston/` work in every project (a project's
+  own wins a name clash). **Settings > Customize** lists them all, creates new
+  ones from a template, opens them in your editor, switches them off and on, and
+  moves them to the trash, and shows the instruction files Houston loads.
 - **Explains itself.** Ask how Houston works (its slash commands, approval modes,
   hooks, MCP servers, skills, sandboxing, and more) and the agent answers from a
   built-in guide instead of guessing. The guide lives in
@@ -258,7 +268,9 @@ Open source under the [Apache License 2.0](LICENSE).
   change.
 - **MCP servers.** Connect Model Context Protocol servers in Settings: a local
   **stdio** process (with optional working directory and encrypted env vars) or a
-  remote **HTTP** (streamable) or **SSE** endpoint. Remote servers authenticate
+  remote **HTTP** (streamable) or **SSE** endpoint. Add one by hand, from a small
+  built-in catalog of well-known servers (reviewed before it's saved, and saved
+  switched off), or by pasting a standard `mcpServers` JSON object. Remote servers authenticate
   with a static bearer-token / custom header, or with **OAuth** for hosted
   services that require a sign-in: Houston discovers the authorization server,
   registers itself as a client, opens the browser to authorize, and stores +
@@ -286,7 +298,9 @@ Open source under the [Apache License 2.0](LICENSE).
   opens/merges a pull request while the window isn't focused, and clicking it
   brings the app back. PR events also show inline in the transcript: a notice
   banner when `gh_pr_create` opens a PR and when a `gh_pr_view` shows it merged.
-  On by default; toggle it in Settings → *General*.
+  On by default; toggle it in Settings → *General*. An optional, off-by-default
+  setting there also plays a short sound when a turn finishes or the agent needs
+  your input while the window isn't focused.
 - **Rich transcript.** Replies render as full **Markdown**: headings, lists,
   tables, blockquotes, and syntax-styled code blocks with one-click copy. Tool
   activity collapses into a compact, grouped list (one tidy row per call,
@@ -337,7 +351,8 @@ Open source under the [Apache License 2.0](LICENSE).
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
   call you can approve once, deny, *allow for the run* (auto-approves that kind of
   tool for the rest of the conversation), or *always allow* / *always deny*, which
-  saves a permission rule so the choice sticks across future runs. File edits show
+  saves a permission rule so the choice sticks across future runs (the app names the
+  saved rule, with Undo). In the app, `Y`, `A` and `N` answer a waiting approval. File edits show
   an inline red/green **diff** so you can review exactly what changes before
   approving.
 - **Project guardrails.** A repo can ship a `.houston/settings.json` with its own
@@ -421,12 +436,15 @@ Open source under the [Apache License 2.0](LICENSE).
   confirmation says how many messages and files it affects, files you changed since
   the agent wrote them are left alone, and **Undo rewind** reverses it until you send
   again. **Edit and resend** rewinds to a message and sends your edited version in
-  its place. Esc Esc in an empty composer (or `/rewind`, also in the terminal app)
+  its place, and **Retry** on the last reply sends your last message again for a new
+  reply. Right-clicking a message offers the same actions plus copy. Esc Esc in an empty composer (or `/rewind`, also in the terminal app)
   picks the message from a list. Shell commands' side effects aren't snapshotted, so
   a rewind can't undo them.
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right
   now (Ready, Responding…, running a tool, or waiting for your approval, answer, or
-  plan review) and the active model.
+  plan review), how long the turn has run with its output tokens so far, the git
+  branch the chat's folder has checked out, the approval mode, and the active model.
+  A tool call that runs longer than a second shows its own time.
 - **Turn receipts.** A reply that ran checks or changed files ends with a
   **Recorded by Houston** line built from what actually executed, not from what the
   agent says: tests (with pass/fail counts for common runners), builds, installs,
@@ -445,13 +463,18 @@ Open source under the [Apache License 2.0](LICENSE).
   moves in on open and restores on close, Tab stays inside, Esc closes), and all
   animations honor the OS *reduce motion* setting.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
-  *Appearance*; *System* follows your OS appearance and switches live.
+  *Appearance*; *System* follows your OS appearance and switches live. The same
+  page sets the chat text size (small, default, large), a compact density, and a
+  code theme (default, high contrast, muted) for code blocks and diffs.
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
   dropped connections) are retried with exponential backoff, shown inline as a
   "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A
   reply that drops partway through is discarded and started over, never shown
-  twice. If a turn still fails, a **Retry** button re-runs it without you
-  re-typing.
+  twice. If a turn still fails, a bar says why in plain words (a rejected key, a
+  rate limit, the provider down, no network, a missing model, a conversation too
+  long for the model) with the next step: **Retry** re-runs it without you
+  re-typing, or open the provider settings, run the doctor, or switch model. The
+  provider's own message stays one click away.
 - **Secure key storage.** API keys are encrypted with the OS credential store
   through Electron `safeStorage` (the Keychain on macOS, DPAPI on Windows, a desktop
   keyring such as GNOME Keyring or KWallet on Linux) and never leave the main process
@@ -489,14 +512,18 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Git-aware.** If the project is a git repo, Houston folds the current branch
   and a short working-tree status into the agent's context each turn, so it knows
   what branch it's on and what's already modified without having to run git first.
-- **Changes panel.** The **⤓ Changes** button in the title bar opens a slide-over
-  diff of every uncommitted change in the working tree (the tracked diff vs HEAD,
-  staged and unstaged, plus untracked files), each file expandable with a
-  red/green line diff and a `+/−` stat. It's working-tree scoped (all uncommitted
-  changes, not just the current chat's edits); read-only and hardened, the same
-  way the agent's `git_diff` tool is. A **Create PR** action hands off to the
-  agent: it commits, pushes, and opens the pull request through the same
-  `gh_pr_*` tools and approval gate, so the panel never drives git itself. It
+- **Changes view.** The **Changes** button in the title bar (and `/changes`) opens a
+  **Changes** tab in the right-hand side panel, beside Preview and Background tasks,
+  so the chat stays in view. It has three scopes: **This turn** (what the chat's latest
+  turn changed), **This chat** (everything the chat changed across its turns, from the
+  snapshots Houston takes before each write), and **Working tree** (every uncommitted
+  change, tracked and untracked, from git). Diffs are syntax-coloured, show their real
+  line numbers, and can be shown side by side. Each file can be opened in its default
+  app or reverted, and each change inside an edited file can be reverted on its own;
+  every revert asks first and is refused if the file changed since the list was read.
+  Git runs hardened (no repository hooks or filters) with argument lists only. A
+  **Create PR** action hands off to the agent: it commits, pushes, and opens the pull
+  request through the same `gh_pr_*` tools and approval gate. It
   opens an independent PR against the default branch, or, when the current branch
   already has an open PR, stacks the new one on top (based on that PR's branch) so
   its diff shows only the new changes. Whenever the working tree has changes, the
@@ -562,13 +589,20 @@ Open source under the [Apache License 2.0](LICENSE).
   absolute), to split or share common rules across files. To reuse an existing
   global rules file such as `~/.claude/CLAUDE.md`, add `@~/.claude/CLAUDE.md` to
   `~/.houston/AGENTS.md`; Houston offers to do this once when it finds one.
-- **Token usage & cost at a glance.** The control bar above the composer shows the
-  current context size, the output tokens used this session, and an **estimated
+- **Token usage & cost at a glance.** The control bar above the composer shows how
+  full the context is (a small bar and "used/maximum") and the chat's **estimated
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show
-  none), so you can see how big and how expensive a conversation is getting. Open it
-  for a per-model breakdown (subagents and reviews often run on a cheaper model)
-  with the prompt-cache split. The model, project folder, approval policy and
+  their output tokens instead), so you can see how big and how expensive a
+  conversation is getting. Click it for a per-model breakdown (subagents and reviews
+  often run on a cheaper model) with the prompt-cache split. In the transcript, each
+  message shows when it was sent, and each turn's last reply names the model that
+  answered and that turn's tokens and cost. The model, project folder, approval policy and
   reasoning controls live there too, down by the composer, where you're typing.
+- **Usage across chats.** `/usage` opens spend and tokens per day (last 30 days)
+  and per project, summed from the chats saved on your computer (nothing leaves
+  it), with the per-turn cost reminder beside them. When a provider rate-limits a
+  request, the retry notice says so, how long Houston waits, and the remaining
+  quota the provider reported.
 
 ## Install (prebuilt binaries)
 
@@ -621,7 +655,8 @@ Grab the artifact for your platform:
    (paste an API key for Anthropic, OpenAI, or Gemini, which is tested before it is
    saved, or point at a local Ollama or LM Studio server, no key needed). Other
    providers and hosts are in **Settings**.
-3. Open a **project folder** (control bar, above the composer).
+3. Open a **project folder** (control bar, above the composer, which also lists recent
+   folders), or drag a folder onto the window.
 4. Choose a **model** and an **approval policy** (same control bar).
 5. Ask it to build or change something. **Take the tour** in the command palette
    (⌘K) or the Help menu replays the tips any time.
@@ -847,15 +882,21 @@ switch to `auto-edit` and carry it out, or keep planning. While the agent works,
 spinner with an elapsed timer shows it's alive (labelled with the current
 activity), and what you type steers the running turn. Press `Esc` (or `Ctrl-C`) on
 an empty line to stop the current turn (the session stays open); `Ctrl-D` to exit.
-`Shift-Tab` cycles the approval mode, even mid-run.
+`Shift-Tab` cycles the approval mode, even mid-run. An edit that lands without a
+prompt prints one line with each file's added and removed lines (`/diff last` shows
+the diff).
 
-The composer is a full line editor: **Tab** completes slash-command names and
-`@`-file mentions (fuzzy over the workspace), **Up/Down** and **Ctrl-R** recall and
-search previous prompts (history persists per project across restarts), `Ctrl-J` or
-`Alt-Enter` inserts a line break, a pasted block lands as one message, and `/vim`
-turns on vim keys. A line starting with `!` runs in your own shell, and `#` saves a
-standing instruction. The [guide](docs/houston-guide.md#the-terminal-composer) lists
-every key.
+The composer is a full line editor: typing `/` or `@` lists matching commands or
+files under it, **Tab** completes slash-command names and `@`-file mentions (fuzzy
+over the workspace), **Up/Down** and **Ctrl-R** recall and search previous prompts
+(history persists per project across restarts), `Shift-Enter` (where the terminal
+reports it), `Ctrl-J` or `Alt-Enter` inserts a line break, a pasted block lands as one
+message, and `/vim` turns on vim keys. A line starting with `!` runs in your own shell,
+and `#` saves a standing instruction. The startup banner shows a couple of these as
+tips, `/help` lists them under **Keys**, and the
+[guide](docs/houston-guide.md#the-terminal-composer) lists every key. The status line
+above the composer carries the model, approval mode, folder, git branch, cost and
+context use; while a turn runs, the model, branch and context stay on the spinner line.
 
 Slash commands adjust the session without restarting (the desktop app accepts the
 same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
@@ -873,13 +914,17 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/resume [query]` | list (or search by title) and reopen a saved session |
 | `/fork` | branch the current session into a copy, leaving the original intact |
+| `/rename <title>` | give this chat a title |
+| `/export [md\|json] [path]` | write this chat to a Markdown (default) or JSON file in the working folder |
+| `/delete` | delete this chat, after asking |
+| `/permissions [remove n]` | list the saved permission rules, or remove one |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
-| `/changes` (`/diff`) | summarize what is different in the working tree |
+| `/changes` (`/diff`) | summarize what is different in the working tree; `/diff last [n]` shows the diff of this session's last edit (or `n` back) |
 | `/review` | adversarial review of your uncommitted changes |
 | `/init` | write or improve AGENTS.md, the project's instructions file |
 | `/cost` | session token + cost totals, per model |
 | `/doctor` | check your setup: model, keys, sandbox, tools, MCP |
-| `/verbose`, `/output [n]` | show each tool's full output as it runs, or reprint one after the fact |
+| `/verbose`, `/output [n]` | show each tool's full output as it runs (remembered across sessions), or reprint one after the fact |
 | `/btw <question>` | ask the side chat a quick question (`/btw clear` starts it over) |
 | `/spawned`, `/proposals` | open background sessions the agent started, or act on ones it proposed |
 | `/skills`, `/agents`, `/agent <name> <task>` | list the workspace's skills / custom agents, or hand a task to one |
@@ -897,8 +942,9 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 Each session is saved as an ordinary conversation, so it survives restarts and
 shows up in the desktop app's sidebar: one history across both clients. `/resume`
 lists recent sessions for the current folder and reopens one where you left off,
-with the model, reasoning effort, and approval mode it was using; `/clear` starts a
-fresh one.
+with the model, reasoning effort, and approval mode it was using, and replays its
+last few exchanges; `/clear` starts a fresh one. Leaving prints the session id and
+the `houston --resume <id>` command that reopens it.
 
 Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
 (default: your default approval mode, shared with the desktop app), `--full-auto`, and `--continue` /
@@ -979,7 +1025,10 @@ Prefer npm's own linking? The package exposes a `houston` `bin`, so
 a `houston.cmd` shim) or invoke the bundle directly.
 
 **API keys.** The desktop app's keys live in the OS keychain (Electron
-`safeStorage`) and can't be read outside it, so the CLI resolves credentials in
+`safeStorage`) and can't be read outside it. The desktop app never uses an
+environment key on its own, but when it finds `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`
+or `GEMINI_API_KEY` for a provider with no saved key it offers to check and save it
+(showing only the key's last four characters). The CLI resolves credentials in
 this order:
 
 1. Environment variables. The built-in providers use their conventional names
@@ -1006,8 +1055,11 @@ node houston-cli.cjs providers add openrouter        # register a catalog host (
 printf %s "sk-..." | node houston-cli.cjs providers set-key openrouter   # store its key (piped, not echoed)
 ```
 
-Local providers (Ollama, LM Studio) need no key at all: point the CLI at the
-same machine and it just works.
+Local providers (Ollama, LM Studio) need no key at all. When no model is ready,
+the interactive setup list shows them, and any endpoint added with
+`houston providers add`, after asking each one for its models, so a running
+server is one pick away. An unknown flag or a stray argument stops with an
+error and the usage rather than being ignored.
 
 **Custom auth headers.** A provider or MCP server can carry custom HTTP headers
 (a gateway bearer token, attribution headers), and a stdio MCP server can carry
@@ -1281,7 +1333,8 @@ the agent loop and UI never depend on a specific provider.
   without asking in *full auto*, merges, closes, checkouts, and repository creation
   always ask, and MCP tool calls always ask. A shell command that can throw away
   work in the project (`git reset --hard`, a forced `git clean`, `rm -r` of source, a
-  forced or deleting push), and reading or changing a credential file (a `.env`, a
+  forced or deleting push) or wipe data outside it (a database reset or drop, Docker
+  volumes, `terraform destroy`), and reading or changing a credential file (a `.env`, a
   private key), ask in every mode, since the sandbox protects everything but the
   project itself and can read your whole filesystem.
   `view_localhost` is restricted to loopback addresses and loads untrusted page

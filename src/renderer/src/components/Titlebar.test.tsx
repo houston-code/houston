@@ -162,3 +162,32 @@ describe('Titlebar title', () => {
     expect(screen.getByText(long)).toHaveAttribute('title', long)
   })
 })
+
+describe('Titlebar shortcuts in tooltips', () => {
+  it('names the shortcut in the tooltip and aria-keyshortcuts of every action that has one', () => {
+    render(
+      <Titlebar
+        title="Houston"
+        onToggleTerminal={vi.fn()}
+        terminalShortcut="⌃`"
+        onShowShortcuts={vi.fn()}
+        shortcutsShortcut="⌘/"
+      />
+    )
+    const terminal = screen.getByRole('button', { name: 'Terminal' })
+    expect(terminal).toHaveAttribute('aria-keyshortcuts', 'Control+`')
+    fireEvent.mouseEnter(terminal)
+    expect(screen.getByRole('tooltip')).toHaveTextContent('(⌃`)')
+    fireEvent.mouseLeave(terminal)
+    const help = screen.getByRole('button', { name: 'Keyboard shortcuts' })
+    expect(help).toHaveAttribute('aria-keyshortcuts', 'Meta+/')
+    fireEvent.mouseEnter(help)
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Keyboard shortcuts (⌘/)')
+  })
+
+  it('advertises no shortcut when none is bound', () => {
+    render(<Titlebar title="Houston" onToggleTerminal={vi.fn()} onShowShortcuts={vi.fn()} />)
+    expect(screen.getByRole('button', { name: 'Terminal' })).not.toHaveAttribute('aria-keyshortcuts')
+    expect(screen.getByRole('button', { name: 'Keyboard shortcuts' })).not.toHaveAttribute('aria-keyshortcuts')
+  })
+})

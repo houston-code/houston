@@ -6,8 +6,9 @@ import { copyText } from '../lib/clipboard'
 import { describeShell } from '../lib/taskLabel'
 
 /**
- * The right-hand dock. With `onTabChange` it has two tabs, Preview and Tasks (the
- * background-tasks list, passed in as `tasks`); without, it is Preview-only.
+ * The right-hand dock. With `onTabChange` it has tabs: Tasks (the background-tasks
+ * list, passed in as `tasks`), Preview, and Changes when `changes` is given; without,
+ * it is Preview-only.
  *
  * Preview: a resizable right-hand panel that shows the dev servers the
  * agent started (each one's loopback URL, auto-detected from its output) as live,
@@ -21,7 +22,13 @@ import { describeShell } from '../lib/taskLabel'
  * on top (`occluded`) so a preview never covers a modal; main keeps the view alive
  * but hidden. Unmounting (the dock closed) tears every pane down.
  */
-export type DockTab = 'preview' | 'tasks'
+export type DockTab = 'preview' | 'tasks' | 'changes'
+
+const TAB_LABEL: Record<DockTab, string> = {
+  tasks: 'Background tasks',
+  preview: 'Preview',
+  changes: 'Changes'
+}
 
 export function PreviewDock({
   servers,
@@ -31,6 +38,7 @@ export function PreviewDock({
   tab = 'preview',
   onTabChange,
   tasks,
+  changes,
   taskCount = 0,
   focusServerId = null,
   focusRequest
@@ -46,6 +54,8 @@ export function PreviewDock({
   onTabChange?: (tab: DockTab) => void
   /** The Tasks tab's content (the TasksPanel). */
   tasks?: ReactNode
+  /** The Changes tab's content. Rendered only while that tab shows (it reads git). */
+  changes?: ReactNode
   /** Live background tasks, shown as a count on the Tasks tab. */
   taskCount?: number
   /** A server to keep on screen even past the pane cap (Tasks' "Open preview"). */
@@ -57,7 +67,8 @@ export function PreviewDock({
   // While Tasks is showing, Preview stays mounted (its pages and added URLs survive
   // the switch) but its native views are hidden, exactly as under an overlay.
   const previewVisible = tab === 'preview'
-  const tabRefs = useRef<Record<DockTab, HTMLButtonElement | null>>({ preview: null, tasks: null })
+  const tabRefs = useRef<Record<DockTab, HTMLButtonElement | null>>({ preview: null, tasks: null, changes: null })
+  const tabs: DockTab[] = changes !== undefined ? ['tasks', 'preview', 'changes'] : ['tasks', 'preview']
   const [manualUrls, setManualUrls] = useState<string[]>([])
   const [draft, setDraft] = useState('')
   const [draftError, setDraftError] = useState(false)
@@ -176,7 +187,7 @@ export function PreviewDock({
       <header className="preview-dock__header">
         {onTabChange ? (
           <div className="dock-tabs" role="tablist" aria-label="Side panel">
-            {(['tasks', 'preview'] as const).map((id) => (
+            {tabs.map((id, idx) => (
               <button
                 key={id}
                 ref={(el) => {
@@ -196,13 +207,18 @@ export function PreviewDock({
                   if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight' && e.key !== 'Home' && e.key !== 'End')
                     return
                   e.preventDefault()
-                  const next: DockTab =
-                    e.key === 'Home' ? 'tasks' : e.key === 'End' ? 'preview' : id === 'preview' ? 'tasks' : 'preview'
+                  const n = tabs.length
+                  const next =
+                    e.key === 'Home'
+                      ? tabs[0]
+                      : e.key === 'End'
+                        ? tabs[n - 1]
+                        : tabs[(idx + (e.key === 'ArrowRight' ? 1 : n - 1)) % n]
                   onTabChange(next)
                   tabRefs.current[next]?.focus()
                 }}
               >
-                {id === 'preview' ? 'Preview' : 'Background tasks'}
+                {TAB_LABEL[id]}
                 {id === 'tasks' && taskCount > 0 && (
                   <span className="dock-tabs__count" aria-label={`${taskCount} running`}>
                     {taskCount}
@@ -398,6 +414,17 @@ export function PreviewDock({
           hidden={tab !== 'tasks'}
         >
           {tasks}
+        </div>
+      )}
+      {onTabChange && changes !== undefined && (
+        <div
+          className="preview-dock__panel preview-dock__panel--changes"
+          role="tabpanel"
+          id="dock-panel-changes"
+          aria-labelledby="dock-tab-changes"
+          hidden={tab !== 'changes'}
+        >
+          {tab === 'changes' && changes}
         </div>
       )}
     </aside>

@@ -13,6 +13,8 @@ import {
   type TurnReceipt
 } from '@shared/evidence'
 import { describeShell } from '../lib/taskLabel'
+import { fileTargetFromPath } from '../lib/fileLinks'
+import { FileLink, useFileLinks } from './FileLink'
 
 /**
  * What ran during a turn, under the turn's last message: one
@@ -85,7 +87,7 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
             <ul>
               {receipt.filesChanged.map((f) => (
                 <li key={f}>
-                  <code>{f}</code>
+                  <ChangedFile path={f} />
                   {receipt.filesBy?.[f] && <span className="receipt__detail"> by {receipt.filesBy[f]}</span>}
                 </li>
               ))}
@@ -95,6 +97,18 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
         )}
       </div>
     </details>
+  )
+}
+
+/** A changed file, which opens in the preview when it is in the project. */
+function ChangedFile({ path }: { path: string }): JSX.Element {
+  const files = useFileLinks()
+  const target = files ? fileTargetFromPath(path, files.workspace) : null
+  if (!target || !files) return <code>{path}</code>
+  return (
+    <FileLink target={target} links={files} className="receipt__file">
+      <code>{path}</code>
+    </FileLink>
   )
 }
 

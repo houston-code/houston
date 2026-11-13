@@ -40,6 +40,9 @@ export const IPC = {
   legacyRulesNoticeStatus: 'app:legacyRulesNoticeStatus',
   /** Answer that notice: import ~/.claude/CLAUDE.md, or keep the rules separate. */
   legacyRulesNoticeDecide: 'app:legacyRulesNoticeDecide',
+  envKeyOffers: 'app:envKeyOffers',
+  envKeyImport: 'app:envKeyImport',
+  envKeyDismiss: 'app:envKeyDismiss',
   // Updates
   updateCheck: 'update:check',
   updateWhatsNew: 'update:whatsNew',
@@ -68,6 +71,7 @@ export const IPC = {
   shareFromMenu: 'share:fromMenu',
   // Workspace
   workspacePick: 'workspace:pick',
+  workspaceOpen: 'workspace:open',
   directoryPick: 'directory:pick',
   workspaceListFiles: 'workspace:listFiles',
   /** One directory level for the Finder-like Files panel (lazy tree expansion). */
@@ -93,6 +97,14 @@ export const IPC = {
   skillsList: 'skills:list',
   /** List the workspace's custom agents (.houston/agents) as {name, description}, for /agents. */
   agentsList: 'agents:list',
+  /** Settings > Customize: skills, commands and agents in both places, plus loaded instruction files. */
+  customizeList: 'customize:list',
+  customizeCreate: 'customize:create',
+  customizeSetEnabled: 'customize:setEnabled',
+  customizeOpen: 'customize:open',
+  /** Move a skill, command or agent to the system trash. */
+  customizeDelete: 'customize:delete',
+  customizeOpenInstruction: 'customize:openInstruction',
   gitRepoInfo: 'git:repoInfo',
   gitInit: 'git:init',
   /** Whether the user opted out of the first-write git-init prompt for a folder. */
@@ -104,6 +116,10 @@ export const IPC = {
   /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
   folderTrustDecide: 'folderTrust:decide',
   workingTreeChanges: 'workingTree:changes',
+  /** What a chat's latest turn, or all its turns, changed (the Changes view's scopes). */
+  chatChanges: 'changes:chat',
+  /** Revert one file, or one hunk, from the Changes view. */
+  changesRevert: 'changes:revert',
   // Settings
   settingsGet: 'settings:get',
   settingsSave: 'settings:save',
@@ -157,6 +173,8 @@ export const IPC = {
   conversationReorder: 'conversation:reorder',
   /** Aggregate a local-only per-model loop scorecard over every persisted chat. */
   conversationScorecard: 'conversation:scorecard',
+  /** Spend and tokens per day and per project over every saved chat (local only). */
+  conversationUsageReport: 'conversation:usageReport',
   /** Main → renderer: a chat got a model-generated title (live sidebar/header update). */
   conversationTitleChanged: 'conversation:titleChanged',
   // Agent
@@ -193,6 +211,8 @@ export const IPC = {
   chatMarkAllRead: 'chat:markAllRead',
   /** Main → renderer: open this chat (its desktop notification was clicked). */
   chatOpenRequest: 'chat:openRequest',
+  /** main → renderer: play an attention sound (the window is not focused). */
+  attentionSound: 'attention:sound',
   agentEvent: 'agent:event',
   // Session proposals (propose_session cards)
   /** Renderer → main: start a proposed session as its own chat. */

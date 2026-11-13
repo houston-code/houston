@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import {
   abortableSleep,
   backoffDelayMs,
+  classifyProviderFailure,
   describeProviderError,
   isModelNotFoundError,
   isNetworkError,
@@ -15,6 +16,7 @@ import {
   retryAfterHintMs,
   retryDelayMs,
   RetryBudget,
+  throttleInfo,
   withProviderRetry
 } from './retry'
 
@@ -549,5 +551,63 @@ describe('describeProviderError', () => {
     const out = describeProviderError(connectionError(new Error('x'.repeat(500))))
     expect(out.length).toBeLessThan(240)
     expect(out.endsWith('\u2026)')).toBe(true)
+  })
+})
+
+describe('classifyProviderFailure', () => {
+  it('reads the HTTP status first', () => {
+    expect(classifyProviderFailure(apiError(401, 'invalid x-api-key'))).toBe('auth')
+    expect(classifyProviderFailure(apiError(403, 'forbidden'))).toBe('auth')
+    expect(classifyProviderFailure(apiError(429, 'Too many requests'))).toBe('rate-limit')
+    expect(classifyProviderFailure(apiError(500, 'oops'))).toBe('provider-down')
+    expect(classifyProviderFailure(apiError(529, 'Overloaded'))).toBe('provider-down')
+  })
+
+  it('tells an exhausted quota from a rate limit, though both are 429s', () => {
+    expect(classifyProviderFailure(apiError(429, 'You exceeded your current quota'))).toBe('quota')
+  })
+
+  it('recognizes a network failure by its cause chain', () => {
+    const err = Object.assign(new Error('Connection error.'), {
+      cause: Object.assign(new Error('getaddrinfo ENOTFOUND api.example.com'), { code: 'ENOTFOUND' })
+    })
+    expect(classifyProviderFailure(err)).toBe('network')
+  })
+
+  it('leaves a failure it cannot place unnamed', () => {
+    expect(classifyProviderFailure(apiError(400, 'invalid request body'))).toBeUndefined()
+    expect(classifyProviderFailure(new Error('something odd'))).toBeUndefined()
+  })
+})
+
+describe('throttleInfo', () => {
+  it('reports a 429 with the wait, the Retry-After and the remaining quota from the headers', () => {
+    const err = apiError(429, 'rate_limit_error', {
+      'retry-after': '12',
+      'anthropic-ratelimit-requests-remaining': '0',
+      'anthropic-ratelimit-tokens-remaining': '4500'
+    })
+    expect(throttleInfo(err, 12_000)).toEqual({
+      waitMs: 12_000,
+      retryAfterMs: 12_000,
+      remainingRequests: 0,
+      remainingTokens: 4500
+    })
+  })
+
+  it('reads the OpenAI-style headers too, and leaves out what was not sent', () => {
+    const err = apiError(429, 'Too many requests', { 'x-ratelimit-remaining-tokens': '0' })
+    expect(throttleInfo(err, 3_400.6)).toEqual({ waitMs: 3401, remainingTokens: 0 })
+  })
+
+  it('is undefined for anything but a throttle, including an exhausted quota', () => {
+    expect(throttleInfo(apiError(500, 'oops'), 1000)).toBeUndefined()
+    expect(throttleInfo(apiError(429, 'You exceeded your current quota'), 1000)).toBeUndefined()
+    expect(throttleInfo(new Error('Connection error.'), 1000)).toBeUndefined()
+  })
+
+  it('ignores a header that is not a count', () => {
+    const err = apiError(429, 'slow down', { 'x-ratelimit-remaining-requests': 'lots' })
+    expect(throttleInfo(err, 1000)).toEqual({ waitMs: 1000 })
   })
 })

@@ -601,6 +601,12 @@ export interface AppSettings {
   approvalPolicy: ApprovalPolicy
   recentWorkspaces: string[]
   /**
+   * The models runs used most recently, newest first (capped), for the model picker's
+   * Recent section. Main records it when a run starts and owns it: a settings save from
+   * the renderer keeps main's copy rather than a stale one it read earlier.
+   */
+  recentModels?: SelectedModel[]
+  /**
    * Realpath-normalized workspace paths the user has opted out of the first-write
    * "Initialize git repository" prompt for ("Don't ask again for this folder").
    * Checked before showing the banner; appended to on opt-out.
@@ -775,8 +781,19 @@ export interface AppSettings {
    * unread replies. On by default.
    */
   appBadge?: boolean
+  /**
+   * Play a short sound when a turn finishes and when the agent needs input (approval,
+   * question, plan) while Houston isn't the focused window. Off by default.
+   */
+  attentionSounds?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
+  /** Text size in the chat transcript. Absent = 'default'. */
+  chatFontSize?: ChatFontSize
+  /** Spacing in the chat transcript. Absent = 'comfortable'. */
+  density?: Density
+  /** Colors for code blocks, the Files preview, and diffs. Absent = 'default'. */
+  codeTheme?: CodeTheme
   /**
    * The interactive terminal's color theme. Separate from `theme` above, which is
    * the desktop app's light/dark preference: the terminal's palettes are ANSI
@@ -790,6 +807,8 @@ export interface AppSettings {
    * it. Absent = emacs.
    */
   tuiEditor?: 'emacs' | 'vim'
+  /** The terminal's /verbose: show each tool's output as it runs. Absent = off. */
+  tuiVerbose?: boolean
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
   /**
@@ -920,6 +939,26 @@ export interface IntegrationsInfo {
 
 /** The user's answer to the one-time "global rules moved" notice. */
 export type LegacyRulesChoice = 'import' | 'keep'
+
+/** Chat text size (Settings > Appearance). */
+export type ChatFontSize = 'small' | 'default' | 'large'
+/** Transcript spacing (Settings > Appearance). */
+export type Density = 'comfortable' | 'compact'
+/** Code block and diff colors (Settings > Appearance). */
+export type CodeTheme = 'default' | 'contrast' | 'muted'
+
+/**
+ * An API key found in the desktop app's environment for a provider with no stored key,
+ * offered for the secure store. Carries only what the offer shows: never the key, only
+ * its last four characters.
+ */
+export interface EnvKeyOffer {
+  providerId: string
+  providerLabel: string
+  /** The variable it was found in, e.g. ANTHROPIC_API_KEY. */
+  envVar: string
+  last4: string
+}
 
 /** Result of answering that notice. `error` is set (and nothing is persisted) when the import write failed. */
 export interface LegacyRulesDecideResult {

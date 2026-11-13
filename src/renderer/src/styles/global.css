@@ -108,6 +108,97 @@
   --syn-attr: #8a5c00;
   --syn-meta: #0e7490;
 }
+/* ---- Appearance options (Settings > Appearance) ----
+   Applied as attributes on the root by useApplyAppearance; with none set every value
+   below is the default the app always had. Chat text size scales the transcript as a
+   whole (text, code and spacing together), density tightens the transcript's rhythm,
+   and the code theme swaps the syntax and diff colors. Each code theme carries its own
+   dark and light palette; syntaxContrast.test.ts holds every token to AA. */
+:root {
+  --chat-zoom: 1;
+  --chat-row-gap: 18px;
+  --msg-turn-gap: 10px;
+  --msg-line-height: 1.65;
+  --diff-add-bg: rgba(74, 222, 128, 0.13);
+  --diff-del-bg: rgba(255, 107, 107, 0.13);
+  --diff-add-word: rgba(74, 222, 128, 0.28);
+  --diff-del-word: rgba(255, 107, 107, 0.28);
+}
+:root[data-chat-size='small'] {
+  --chat-zoom: 0.9;
+}
+:root[data-chat-size='large'] {
+  --chat-zoom: 1.15;
+}
+:root[data-density='compact'] {
+  --chat-row-gap: 9px;
+  --msg-turn-gap: 3px;
+  --msg-line-height: 1.5;
+}
+/* High contrast: brighter tokens on a pure black (dark) or white (light) code surface,
+   and stronger diff tints. */
+:root:not([data-theme='light'])[data-code-theme='contrast'] {
+  --bg-code: #000000;
+  --syn-comment: #b0b8c4;
+  --syn-keyword: #e0a8ff;
+  --syn-string: #b5f07a;
+  --syn-number: #ffb380;
+  --syn-function: #9cc2ff;
+  --syn-type: #ffe08a;
+  --syn-tag: #ff9aa8;
+  --syn-attr: #ffe08a;
+  --syn-meta: #a6ecff;
+}
+:root[data-theme='light'][data-code-theme='contrast'] {
+  --bg-code: #ffffff;
+  --syn-comment: #4b5059;
+  --syn-keyword: #6b21c8;
+  --syn-string: #1d5a22;
+  --syn-number: #8a3c00;
+  --syn-function: #0d47b8;
+  --syn-type: #6e4900;
+  --syn-tag: #a3101b;
+  --syn-attr: #6e4900;
+  --syn-meta: #0b5e75;
+}
+:root[data-code-theme='contrast'] {
+  --diff-add-bg: rgba(74, 222, 128, 0.24);
+  --diff-del-bg: rgba(255, 107, 107, 0.24);
+  --diff-add-word: rgba(74, 222, 128, 0.45);
+  --diff-del-word: rgba(255, 107, 107, 0.45);
+}
+/* Muted: low-saturation tokens and softer diff tints, for long reading. */
+:root:not([data-theme='light'])[data-code-theme='muted'] {
+  --bg-code: #0e0f12;
+  --syn-comment: #8b8e96;
+  --syn-keyword: #b4a7d6;
+  --syn-string: #a8c4a0;
+  --syn-number: #d4b48c;
+  --syn-function: #9fb4d6;
+  --syn-type: #d1c38f;
+  --syn-tag: #d6a3a8;
+  --syn-attr: #d1c38f;
+  --syn-meta: #9cc4cc;
+}
+:root[data-theme='light'][data-code-theme='muted'] {
+  --bg-code: #f2f0e8;
+  --syn-comment: #6a655b;
+  --syn-keyword: #5e4a8a;
+  --syn-string: #3f6040;
+  --syn-number: #7a5530;
+  --syn-function: #3d5580;
+  --syn-type: #6b5a24;
+  --syn-tag: #8a3d44;
+  --syn-attr: #6b5a24;
+  --syn-meta: #2f6670;
+}
+:root[data-code-theme='muted'] {
+  --diff-add-bg: rgba(74, 222, 128, 0.08);
+  --diff-del-bg: rgba(255, 107, 107, 0.08);
+  --diff-add-word: rgba(74, 222, 128, 0.2);
+  --diff-del-word: rgba(255, 107, 107, 0.2);
+}
+
 /* Respect the OS "reduce motion" preference: disable the blink/spin animations
    and collapse transitions for users who are sensitive to motion. */
 @media (prefers-reduced-motion: reduce) {
@@ -1055,6 +1146,45 @@ body.is-resizing {
   font-weight: 700;
   vertical-align: 1px;
 }
+/* The provider's default model, which Houston recommends. */
+.model-menu__recommended {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--ok);
+  border-radius: 3px;
+  color: var(--ok);
+  font-size: 9.5px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+/* In the Recent section, which provider a model comes from. */
+.model-menu__provider {
+  margin-left: 6px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+/* What the badges mean, in one quiet line under the list. */
+.model-menu__legend {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 6px 9px 3px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.model-menu__legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.model-menu__legend + .model-menu__footnote {
+  border-top: none;
+  margin-top: 0;
+}
+
 /* One line naming the providers with no models yet, instead of an empty group each. */
 .model-menu__footnote {
   flex: none;
@@ -1578,6 +1708,12 @@ body.is-resizing {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.usage__cost {
+  color: var(--text);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 /* The `#`-capture scope prompt, above the composer input. */
 .memory-bar {
   display: flex;
@@ -1604,7 +1740,7 @@ body.is-resizing {
   gap: 6px;
   flex-shrink: 0;
 }
-/* The chip is clickable only when there's a breakdown behind it. */
+/* The chip opens the breakdown by model. */
 .usage-wrap {
   position: relative;
   flex-shrink: 0;
@@ -1625,7 +1761,7 @@ body.is-resizing {
   top: calc(100% + 6px);
   right: 0;
   z-index: 30;
-  min-width: 320px;
+  min-width: 400px;
   padding: 8px 10px;
   background: var(--bg-raised, var(--bg));
   border: 1px solid var(--border);
@@ -1637,8 +1773,10 @@ body.is-resizing {
 .usage-panel__head,
 .usage-panel__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
-  gap: 12px;
+  /* Fixed number columns: every row is its own grid, so auto widths let a row's
+     figures drift out from under the header. */
+  grid-template-columns: minmax(0, 1fr) 48px 48px 52px 56px;
+  gap: 10px;
   padding: 3px 0;
 }
 .usage-panel__head {
@@ -1660,6 +1798,10 @@ body.is-resizing {
   margin-top: 2px;
   font-weight: 600;
 }
+.usage-panel__context {
+  margin: 0 0 6px;
+  color: var(--text-dim);
+}
 .usage-panel__note {
   margin: 6px 0 0;
   color: var(--text-dim);
@@ -1679,6 +1821,49 @@ body.is-resizing {
 }
 .checkpoint-bar__label {
   flex: 1;
+}
+/* A failed turn: the cause in plain words, next steps, and the raw message on demand. */
+.turn-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  font-size: 12.5px;
+}
+.turn-error__text {
+  flex: 1 1 260px;
+  min-width: 0;
+  color: var(--text-dim);
+}
+.turn-error__summary {
+  color: var(--text);
+  font-weight: 600;
+}
+.turn-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.turn-error__raw {
+  flex-basis: 100%;
+  max-height: 160px;
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ---- Queued-input bar (messages typed mid-run) ---- */
@@ -1975,6 +2160,29 @@ body.is-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.statusbar__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 220px;
+  white-space: nowrap;
+}
+.statusbar__branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+}
+.statusbar__icon {
+  flex-shrink: 0;
+}
+.statusbar__mode {
+  white-space: nowrap;
+}
+.statusbar__meter {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .statusbar__model {
   font-family: var(--mono);
   opacity: 0.8;
@@ -2061,6 +2269,88 @@ body.is-resizing {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* Recent project folders: on the welcome screen and under the checklist's folder step. */
+.recent-folders {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 8px;
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.get-started .recent-folders {
+  justify-content: flex-start;
+  margin-top: 6px;
+}
+.recent-folders__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.recent-folders__item {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 1px 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.recent-folders__item:hover {
+  text-decoration-style: solid;
+}
+.recent-folders__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The control bar's folder menu: a folder's name with where it lives beside it. */
+.folder-menu {
+  min-width: 220px;
+  max-width: 360px;
+}
+.folder-menu__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.folder-menu__name {
+  color: var(--text);
+}
+.folder-menu__where {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Shown while files are dragged over the window: a folder dropped anywhere opens it. */
+.folder-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  border: 2px dashed var(--accent);
+  color: var(--text);
+  font-size: 14px;
+}
+.folder-drop__label {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 16px;
+}
+
 /* The checklist's example task, clickable while step 3 is current. */
 .get-started__example {
   font: inherit;
@@ -2267,6 +2557,24 @@ body.is-resizing {
 .connect-model__note a {
   color: var(--accent);
 }
+/* A key found in the app's environment, offered above the key box. */
+.connect-model__env {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.connect-model__env-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .connect-model__tile-ok,
 .connect-model__saved-ok {
   color: var(--ok);
@@ -2392,7 +2700,9 @@ body.is-resizing {
   padding: 0 var(--chat-gap);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--chat-row-gap);
+  /* Settings > Appearance > Chat text size: 1 unless changed. */
+  zoom: var(--chat-zoom);
 }
 /* Lay out and paint only the rows near the viewport. A long chat mounts tens of
    thousands of elements, and without this every one of them is styled, laid out and
@@ -2417,11 +2727,31 @@ body.is-resizing {
    rows and notices have no copy button, so they keep the tighter default gap. */
 .msg--assistant,
 .msg--user {
-  margin-bottom: 10px;
+  margin-bottom: var(--msg-turn-gap);
 }
 .msg--user {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+}
+/* The quiet line under a message: when it was sent and, under a turn's last reply,
+   the model and what the turn spent. */
+.msg__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.msg__meta--user {
+  flex-basis: 100%;
+  justify-content: flex-end;
+}
+.msg__time {
+  cursor: default;
 }
 .msg--user .msg__body {
   max-width: 86%;
@@ -2443,7 +2773,7 @@ body.is-resizing {
   box-shadow: var(--shadow-accent);
 }
 .msg--assistant .msg__body {
-  line-height: 1.65;
+  line-height: var(--msg-line-height);
 }
 /* A turn Houston wrote for the user (/review, Create PR, /agent, a handoff brief):
    a compact chip naming what they did, with the full prompt behind a disclosure. */
@@ -2627,6 +2957,16 @@ body.is-resizing {
 .msg__mark-unread:hover {
   color: var(--sig-unread);
   border-color: var(--sig-unread);
+}
+/* Retry sits after the reply's other hover buttons. */
+.msg__retry {
+  left: 26px;
+}
+.msg__mark-unread + .msg__retry {
+  left: 52px;
+}
+.msg__retry:focus-visible {
+  opacity: 1;
 }
 /* Where unseen output starts: a labelled rule in the unread blue, above the first
    reply the user hasn't seen. */
@@ -3000,6 +3340,27 @@ h6.md-h {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A saved permission rule: the sentence, then each rule in full on its own line. */
+.undo-toast--rules {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.undo-toast__rules {
+  flex-basis: 100%;
+  order: 1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.undo-toast__rules code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
 .undo-toast__btn {
   border: 0;
   background: none;
@@ -3236,6 +3597,12 @@ h6.md-h {
   color: var(--text-dim);
   white-space: nowrap;
 }
+.tool-row__elapsed {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .tool-row__tally--alarm {
   color: var(--danger);
 }
@@ -3367,6 +3734,23 @@ button.finding__head:focus-visible,
   flex-wrap: wrap;
   gap: 8px;
   padding: 0 12px 11px;
+}
+/* Focused (its keys answer it): a quiet accent edge instead of a full ring. */
+.tool-row__approval:focus {
+  outline: none;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* The key that answers each button, as on the plan panel. */
+.tool-row__approval-key {
+  margin-left: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.75;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 15px;
 }
 .tool-row__approval-note {
   flex-basis: 100%;
@@ -3954,10 +4338,10 @@ pre.diff {
   padding: 0 1px;
 }
 .diff__line--add .diff__word {
-  background: rgba(74, 222, 128, 0.28);
+  background: var(--diff-add-word);
 }
 .diff__line--del .diff__word {
-  background: rgba(255, 107, 107, 0.28);
+  background: var(--diff-del-word);
 }
 .diff__text {
   flex: 1;
@@ -3966,13 +4350,13 @@ pre.diff {
   word-break: break-word;
 }
 .diff__line--add {
-  background: rgba(74, 222, 128, 0.13);
+  background: var(--diff-add-bg);
 }
 .diff__line--add .diff__sign {
   color: var(--ok);
 }
 .diff__line--del {
-  background: rgba(255, 107, 107, 0.13);
+  background: var(--diff-del-bg);
 }
 .diff__line--del .diff__sign {
   color: var(--danger);
@@ -4820,6 +5204,93 @@ body.is-resizing .preview-dock__resizer::after {
 .scorecard__body {
   padding: 8px 12px 16px;
 }
+/* The usage view: spend and tokens per day and per project, plus the cost reminder. */
+.usage-view__body {
+  padding: 12px 16px 20px;
+  overflow-y: auto;
+}
+.usage-view__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.usage-view__section {
+  margin-bottom: 18px;
+}
+.usage-view__heading {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.usage-view__empty,
+.usage-view__note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.usage-view__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-view__table th,
+.usage-view__table td {
+  padding: 3px 6px;
+  text-align: right;
+  white-space: nowrap;
+  font-weight: normal;
+}
+.usage-view__table thead th {
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.usage-view__table th[scope='row'],
+.usage-view__table thead th:first-child {
+  text-align: left;
+}
+.usage-view__project {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.usage-view__barcell {
+  width: 30%;
+}
+.usage-view__bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.usage-view__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.usage-view__limit {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.usage-view__limit input {
+  width: 80px;
+  flex-shrink: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+}
 .scorecard-card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -4972,6 +5443,157 @@ body.is-resizing .preview-dock__resizer::after {
   margin: 0 0 4px;
   border-radius: 0;
   max-height: none;
+}
+
+/* ---- Changes view, a tab of the right-hand dock ---- */
+.preview-dock__panel--changes {
+  overflow: hidden;
+}
+.changes-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.changes-view__head {
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 10px 12px;
+}
+/* The scope switch and its caption take the first line; totals and the view's
+   buttons sit on the next, so the narrow dock never squeezes the scope names. */
+.changes-view__head .changes-panel__titles {
+  flex: 1 1 100%;
+}
+.changes-view__head .changes-panel__total {
+  margin-right: auto;
+}
+.changes-view__scopes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.changes-view__scope {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.changes-view__scope--on {
+  background: var(--bg-selected);
+  color: var(--text);
+  font-weight: 550;
+}
+.changes-view__scope:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.changes-view__scope:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.changes-view__head .btn[aria-pressed='true'] {
+  background: var(--bg-selected);
+}
+.changes-view__notice {
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--danger);
+  border-bottom: 1px solid var(--border);
+}
+.changes-file__row {
+  display: flex;
+  align-items: center;
+}
+.changes-file__row .changes-file__head {
+  flex: 1;
+  min-width: 0;
+}
+.changes-file__action {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.changes-file__action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.changes-file__action:focus-visible,
+.changes-hunk__revert:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.changes-hunk__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.changes-hunk__range {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.changes-hunk__revert {
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.changes-hunk__revert:hover {
+  background: var(--bg-hover);
+  color: var(--danger);
+}
+/* The inline "are you sure" for a revert: destructive, so it reads as a warning. */
+.changes-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  font-size: 12px;
+}
+.changes-confirm__text {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Side by side: each row holds the old line and the new one in two columns. */
+.diff--split .diff__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 8px;
+}
+.diff__line--empty {
+  background: rgba(127, 127, 127, 0.06);
+  min-height: 1.45em;
 }
 
 /* ---- Files panel (Finder-like workspace browser drawer) ---- */
@@ -5149,10 +5771,61 @@ body.is-resizing .preview-dock__resizer::after {
   padding: 4px 16px 16px;
 }
 .file-preview__code {
+  position: relative;
   display: flex;
   align-items: flex-start;
   min-height: 100%;
   background: var(--bg-code);
+}
+/* The line a link pointed at, marked across the gutter and the code. */
+.file-preview__line-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-left: 2px solid var(--accent);
+  pointer-events: none;
+}
+/* A file path in the transcript that opens the file: reads as a link, sized like
+   the text around it. */
+.file-link {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 2px;
+}
+.file-link:hover,
+.file-link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+.file-link.md-link {
+  color: var(--accent);
+}
+/* In tool rows and the receipt the paths stay quiet until hovered. */
+.tool-row__target.file-link,
+.tool-reads__path.file-link,
+.tool-row__diff-path.file-link,
+.receipt__file.file-link {
+  text-decoration: none;
+}
+.tool-row__target.file-link:hover,
+.tool-reads__path.file-link:hover,
+.tool-row__diff-path.file-link:hover,
+.receipt__file.file-link:hover,
+.tool-row__target.file-link:focus-visible,
+.tool-reads__path.file-link:focus-visible,
+.tool-row__diff-path.file-link:focus-visible,
+.receipt__file.file-link:focus-visible {
+  text-decoration: underline;
 }
 .file-preview__gutter {
   flex: none;
@@ -5180,64 +5853,64 @@ body.is-resizing .preview-dock__resizer::after {
 }
 /* highlight.js token colors, themed to the app palette (vars set per theme). The
    pane carries `hljs`; tokens are scoped under it so the classes can't leak. */
-:is(.file-preview__text, .md-codeblock__pre) .hljs-comment,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-quote {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-comment,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-quote {
   color: var(--syn-comment);
   font-style: italic;
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-keyword,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-tag,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-literal,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-section,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-operator,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-doctag {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-keyword,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-tag,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-literal,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-section,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-operator,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-doctag {
   color: var(--syn-keyword);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-string,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-regexp,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-bullet,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-addition,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-attr,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-pseudo {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-string,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-regexp,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-bullet,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-addition,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-attr,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-pseudo {
   color: var(--syn-string);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-number,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-symbol,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-link {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-number,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-symbol,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-link {
   color: var(--syn-number);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-title,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-title.function_,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-built_in {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-title,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-title.function_,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-built_in {
   color: var(--syn-function);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-type,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-title.class_,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-class .hljs-title,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-class {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-type,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-title.class_,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-class .hljs-title,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-class {
   color: var(--syn-type);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-attr,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-attribute,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-property,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-id,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-variable,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-template-variable,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-params {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-attr,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-attribute,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-property,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-id,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-variable,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-template-variable,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-params {
   color: var(--syn-attr);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-tag,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-name,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-deletion {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-tag,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-name,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-deletion {
   color: var(--syn-tag);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-meta {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-meta {
   color: var(--syn-meta);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-emphasis {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-emphasis {
   font-style: italic;
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-strong {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-strong {
   font-weight: 600;
 }
 .file-preview__image-wrap {
@@ -5922,6 +6595,78 @@ body:has(.coachmark) .get-started {
   border-radius: 10px;
   z-index: 50;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+/* Ctrl+R search of sent messages: a panel above the message box with its own
+   field, then the matches (newest first). */
+.history-search {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin: 0 0 6px;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  z-index: 50;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.history-search__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.history-search__input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.history-search__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.history-search .history-search__list {
+  position: static;
+  margin: 6px 0 0;
+  box-shadow: none;
+  border: none;
+  padding: 0;
+}
+.history-search__text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font);
+  font-size: 13px;
+}
+.history-search__empty {
+  margin: 8px 2px 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+/* The Expand action on a folded paste's chip. */
+.ctx-chip__expand {
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ctx-chip__expand:hover,
+.ctx-chip__expand:focus-visible {
+  border-color: var(--accent);
 }
 .mention-item {
   padding: 6px 9px;
@@ -7152,6 +7897,106 @@ body:has(.coachmark) .get-started {
   display: inline-flex;
   margin: 0 0 var(--space-2);
 }
+/* ---- Settings > Customize: skills, commands, agents, instruction files ---- */
+.custom-group {
+  margin: 0 0 16px;
+}
+.custom-group__title {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.custom-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.custom-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.custom-item--off .custom-item__name,
+.custom-item--off .custom-item__desc {
+  opacity: 0.6;
+}
+.custom-item__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.custom-item__toggle {
+  display: inline-flex;
+}
+.custom-item__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.custom-item__actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.custom-item__desc,
+.custom-item__note {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.custom-item__note {
+  font-style: italic;
+}
+.custom-item__file {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.custom-item__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text);
+}
+.custom-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.custom-create input,
+.custom-create select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 13px;
+}
+.custom-create input:focus,
+.custom-create select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.custom-create__name {
+  width: 180px;
+}
+.custom-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--danger);
+}
 .ro-rules {
   list-style: none;
   margin: 0;
@@ -7226,6 +8071,115 @@ body:has(.coachmark) .get-started {
 .seg__btn:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* ---- MCP Servers: add from catalog, paste JSON ---- */
+.mcp-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.mcp-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mcp-catalog__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mcp-catalog__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-catalog__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mcp-catalog__review {
+  margin-left: auto;
+}
+.mcp-catalog__desc {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mcp-catalog__cmd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.mcp-review {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.mcp-review__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mcp-review__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mcp-review__field input,
+.mcp-review__field textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.mcp-review__field input:focus,
+.mcp-review__field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-review__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+.mcp-review__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mcp-review__error,
+.mcp-paste__problems {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.mcp-paste__problems {
+  padding-left: 18px;
+}
+.mcp-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .mcp-server {
   margin-bottom: 8px;
