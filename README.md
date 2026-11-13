@@ -27,9 +27,10 @@ Open source under the [Apache License 2.0](LICENSE).
   Microsoft Foundry), and GPT through your own Azure OpenAI deployments. Add a
   known host (OpenRouter, Together, Fireworks, Groq, and more) in one click, point
   at any custom endpoint, and fetch live model lists in Settings. The searchable
-  model picker shows each model's context window, price, and capability badges
-  (tool calling, vision, reasoning), read live from the host where it advertises
-  them, so it warns before you pick a model that can't call tools. Name
+  model picker shows each model's context window and capability badges (tool
+  calling, vision, reasoning, with a legend), read live from the host where it
+  advertises them, so it warns before you pick a model that can't call tools. It
+  marks each provider's recommended model and lists your recently used models first. Name
   `fallbackModels` in settings.json and a turn the selected model can't serve
   moves on to the next one. Each chat keeps its own model, reasoning effort, and
   approval mode, so switching in one chat never changes another; new chats start
@@ -115,7 +116,7 @@ Open source under the [Apache License 2.0](LICENSE).
   when it is waiting on you (an approval, a question, a plan, a server asking for input,
   with the reason under the title), a grey pulse while it works, red when its last run
   failed, and blue when it finished while you were elsewhere. Mark any chat unread or
-  read from its ⋯ menu or with ⌥U (Alt+U), or from a specific reply with **Mark unread
+  read from its ⋯ menu (or right-click the chat) or with ⌥U (Alt+U), or from a specific reply with **Mark unread
   from here**. Reopening an unread chat lands on a "New" divider above what you missed.
   Mark everything read from the filter menu, or sort the chats that want attention to
   the top. Collapsed groups, the collapsed sidebar, and the app icon (Dock badge, or a
@@ -133,7 +134,8 @@ Open source under the [Apache License 2.0](LICENSE).
   full PTY sessions (interactive programs, colors, resize) next to the chat. The
   Files panel browses the project like a file manager, with an in-app preview
   (syntax-highlighted code, images) and an Open action that hands a file to its
-  default app. Each chat's ⋯ menu also has **Open in**, which opens the chat's
+  default app. File paths in the transcript (tool rows, the receipt, relative links
+  in replies) open there too, at the line when one is known. Each chat's ⋯ menu also has **Open in**, which opens the chat's
   folder in a detected editor or reveals it in the file manager.
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message, with no need to paste or describe where things live.
@@ -289,7 +291,9 @@ Open source under the [Apache License 2.0](LICENSE).
   opens/merges a pull request while the window isn't focused, and clicking it
   brings the app back. PR events also show inline in the transcript: a notice
   banner when `gh_pr_create` opens a PR and when a `gh_pr_view` shows it merged.
-  On by default; toggle it in Settings → *General*.
+  On by default; toggle it in Settings → *General*. An optional, off-by-default
+  setting there also plays a short sound when a turn finishes or the agent needs
+  your input while the window isn't focused.
 - **Rich transcript.** Replies render as full **Markdown**: headings, lists,
   tables, blockquotes, and syntax-styled code blocks with one-click copy. Tool
   activity collapses into a compact, grouped list (one tidy row per call,
@@ -425,13 +429,15 @@ Open source under the [Apache License 2.0](LICENSE).
   confirmation says how many messages and files it affects, files you changed since
   the agent wrote them are left alone, and **Undo rewind** reverses it until you send
   again. **Edit and resend** rewinds to a message and sends your edited version in
-  its place. Esc Esc in an empty composer (or `/rewind`, also in the terminal app)
+  its place, and **Retry** on the last reply sends your last message again for a new
+  reply. Right-clicking a message offers the same actions plus copy. Esc Esc in an empty composer (or `/rewind`, also in the terminal app)
   picks the message from a list. Shell commands' side effects aren't snapshotted, so
   a rewind can't undo them.
 - **Status bar.** A slim bar along the bottom shows what the agent is doing right
   now (Ready, Responding…, running a tool, or waiting for your approval, answer, or
-  plan review), how long the turn has run with its output tokens so far, and the
-  active model. A tool call that runs longer than a second shows its own time.
+  plan review), how long the turn has run with its output tokens so far, the git
+  branch the chat's folder has checked out, the approval mode, and the active model.
+  A tool call that runs longer than a second shows its own time.
 - **Turn receipts.** A reply that ran checks or changed files ends with a
   **Recorded by Houston** line built from what actually executed, not from what the
   agent says: tests (with pass/fail counts for common runners), builds, installs,
@@ -576,14 +582,14 @@ Open source under the [Apache License 2.0](LICENSE).
   project), and copies the ones you pick into Houston's own locations. Originals
   are never changed, nothing Houston already has is overwritten, and imported MCP
   servers start switched off. Houston offers this once when it first finds any.
-- **Token usage & cost at a glance.** The control bar above the composer shows the
-  current context size, the output tokens used this session, and an **estimated
+- **Token usage & cost at a glance.** The control bar above the composer shows how
+  full the context is (a small bar and "used/maximum") and the chat's **estimated
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show
-  none), so you can see how big and how expensive a conversation is getting. Open it
-  for a per-model breakdown (subagents and reviews often run on a cheaper model)
-  with the prompt-cache split. In the transcript, each message shows when it was sent,
-  and each turn's last reply names the model that answered and that turn's tokens and
-  cost. The model, project folder, approval policy and
+  their output tokens instead), so you can see how big and how expensive a
+  conversation is getting. Click it for a per-model breakdown (subagents and reviews
+  often run on a cheaper model) with the prompt-cache split. In the transcript, each
+  message shows when it was sent, and each turn's last reply names the model that
+  answered and that turn's tokens and cost. The model, project folder, approval policy and
   reasoning controls live there too, down by the composer, where you're typing.
 
 ## Install (prebuilt binaries)
@@ -1029,8 +1035,11 @@ node houston-cli.cjs providers add openrouter        # register a catalog host (
 printf %s "sk-..." | node houston-cli.cjs providers set-key openrouter   # store its key (piped, not echoed)
 ```
 
-Local providers (Ollama, LM Studio) need no key at all: point the CLI at the
-same machine and it just works.
+Local providers (Ollama, LM Studio) need no key at all. When no model is ready,
+the interactive setup list shows them, and any endpoint added with
+`houston providers add`, after asking each one for its models, so a running
+server is one pick away. An unknown flag or a stray argument stops with an
+error and the usage rather than being ignored.
 
 **Custom auth headers.** A provider or MCP server can carry custom HTTP headers
 (a gateway bearer token, attribution headers), and a stdio MCP server can carry

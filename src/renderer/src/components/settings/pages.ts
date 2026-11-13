@@ -240,9 +240,9 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'notifications',
-        keys: ['desktopNotifications', 'appBadge'],
+        keys: ['desktopNotifications', 'appBadge', 'attentionSounds'],
         Component: NotificationsSection,
-        keywords: ['alerts', 'desktop notifications', 'sound', 'bell', 'badge', 'dock', 'taskbar', 'unread']
+        keywords: ['alerts', 'desktop notifications', 'sound', 'sounds', 'chime', 'audio', 'bell', 'badge', 'dock', 'taskbar', 'unread']
       },
       {
         id: 'preferences',
