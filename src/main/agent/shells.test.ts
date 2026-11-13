@@ -6,6 +6,8 @@ import { join } from 'node:path'
 import { bindShellLedger, resetShellLedger } from './shellLedger'
 import { configureAgentHost, resetAgentHost, type AgentHost } from '../agentHost'
 import {
+  MAX_EXITED_SHELLS,
+  appendCapped,
   backgroundShellGroups,
   killShell,
   listPreviewServers,
@@ -15,7 +17,8 @@ import {
   registerShell,
   peekShell,
   shellTail,
-  unreadSlice
+  unreadSlice,
+  windowOf
 } from './shells'
 
 const onClose = (child: ChildProcess): Promise<void> =>
@@ -311,4 +314,62 @@ describe('unreadSlice (rolling-buffer offsets)', () => {
     // cursor (2) is older than what the buffer still holds (dropped 3).
     expect(unreadSlice('def', 6, 2)).toBe('def')
   })
+})
+
+describe('rolling output window', () => {
+  // The same stream fed to the old trim-on-every-chunk buffer and to the lazy one must
+  // read back identically, whatever the chunking and wherever the cursor sits.
+  it('reads back exactly what trimming on every chunk did', () => {
+    const max = 10
+    let lazy = ''
+    let eager = ''
+    let produced = 0
+    let cursor = 0
+    let seed = 3
+    const rnd = (): number => ((seed = (seed * 1664525 + 1013904223) >>> 0), seed / 2 ** 32)
+    for (let i = 0; i < 400; i++) {
+      const chunk = String(i % 10).repeat(1 + Math.floor(rnd() * 7))
+      produced += chunk.length
+      lazy = appendCapped(lazy, chunk, max)
+      const next = eager + chunk
+      eager = next.length > max ? next.slice(next.length - max) : next
+      expect(windowOf(lazy, max)).toBe(eager)
+      expect(lazy.length).toBeLessThanOrEqual(max * 2)
+      if (rnd() < 0.3) {
+        expect(unreadSlice(windowOf(lazy, max), produced, cursor)).toBe(unreadSlice(eager, produced, cursor))
+        cursor = produced
+      }
+    }
+  })
+
+  it('does not copy the window on every chunk once it is full', () => {
+    const max = 1000
+    let buf = 'x'.repeat(max)
+    buf = appendCapped(buf, 'y', max)
+    // One past the window is kept as is; the cut happens only past twice the window.
+    expect(buf.length).toBe(max + 1)
+    expect(windowOf(buf, max)).toBe('x'.repeat(max - 1) + 'y')
+  })
+})
+
+describe('finished shells', () => {
+  it('forgets the oldest finished shells past the cap, never a running one', async () => {
+    const running = node('setTimeout(() => {}, 60_000)')
+    const runningId = registerShell('long-lived', running)
+    const ids: string[] = []
+    for (let i = 0; i < MAX_EXITED_SHELLS + 3; i++) {
+      const child = node(`process.stdout.write("done ${i}")`)
+      ids.push(registerShell(`short ${i}`, child))
+      await onClose(child)
+    }
+    // Pruning runs as the next shell registers.
+    const last = node('process.stdout.write("last")')
+    const lastId = registerShell('last', last)
+    await onClose(last)
+    expect(readShellOutput(ids[0]).found).toBe(false)
+    expect(readShellOutput(ids[ids.length - 1], { full: true }).stdout).toBe(`done ${ids.length - 1}`)
+    expect(readShellOutput(lastId).stdout).toBe('last')
+    expect(readShellOutput(runningId).running).toBe(true)
+    await killShell(runningId)
+  }, 60_000)
 })
