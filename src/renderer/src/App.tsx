@@ -1977,7 +1977,7 @@ export default function App(): JSX.Element {
         if (action) runSharedCommand(action)
       }
     },
-    [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, commands, currentId, runSharedCommand]
+    [onNewChat, onCompact, onListCapability, onChangePolicy, onInvoke, chat, currentId, runSharedCommand]
   )
 
   // ---- Keyboard shortcuts, command palette, mode cycling ----
