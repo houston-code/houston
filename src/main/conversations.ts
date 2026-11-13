@@ -251,6 +251,7 @@ function commit(id: string, shell: ConversationShell, messagesJson: string): voi
   // This process's own write: drop the cached metadata now rather than lean on the
   // file's stamp, which a filesystem with coarse timestamps could repeat.
   metaCache.delete(id)
+  dropSearchEntry(id)
 }
 
 function write(conv: Conversation): void {
@@ -536,6 +537,7 @@ export function deleteConversation(id: string): void {
   if (existsSync(path)) rmSync(path)
   metaCache.delete(id)
   written.delete(id)
+  dropSearchEntry(id)
   rmSync(mediaDir(id), { recursive: true, force: true })
   // Drop any in-memory "Allow for run" consent so a future conversation can't inherit it.
   clearConversationOverride(id)
@@ -546,14 +548,28 @@ export function deleteConversation(id: string): void {
  * branch the sidebar shows under it, or any message text. Pure.
  */
 export function conversationMatches(conv: Conversation, queryLower: string): boolean {
+  return searchHaystack(conv).some((t) => t.includes(queryLower))
+}
+
+/**
+ * Everything search compares a query against, lowercased, one string per label or
+ * message: kept apart so a query can never match across the boundary of two of them.
+ * Pure.
+ */
+function searchHaystack(conv: Conversation): string[] {
   const labels = [
     conv.title,
     // The sidebar labels a worktree chat by its repo and branch, any other by its folder.
     conv.worktree ? basename(conv.worktree.repoRoot) : basename(conv.workspace),
     conv.worktree?.branch ?? ''
   ]
-  if (labels.some((l) => l.toLowerCase().includes(queryLower))) return true
-  return conv.messages.some((m) => searchableText(m).toLowerCase().includes(queryLower))
+  const out: string[] = []
+  for (const l of labels) if (l) out.push(l.toLowerCase())
+  for (const m of conv.messages) {
+    const t = searchableText(m)
+    if (t) out.push(t.toLowerCase())
+  }
+  return out
 }
 
 /**
@@ -572,18 +588,93 @@ export function searchableText(m: ChatMessage): string {
 }
 
 /** Find conversations whose title or message content matches the query (newest first). */
+/**
+ * Each chat's search haystack (see {@link searchHaystack}), as of the file it came from.
+ * A search used to read and parse every chat in full on the main thread, after each
+ * pause in typing and every few seconds while a chat runs. With this, a search is a
+ * list (stats only, see {@link listConversations}) and an in-memory scan; only chats
+ * whose file changed are read again.
+ *
+ * Validated by the same file stamp as the metadata cache, so a write from another
+ * process is seen on the next search. Since it is the text of every chat, it is held
+ * only while the user is searching: it is released {@link SEARCH_CACHE_IDLE_MS} after
+ * the last search, and while held it stays under a total size, past which the
+ * least recently searched entries go (those chats are read from disk again when next
+ * searched).
+ */
+const searchCache = new Map<string, { stamp: string; haystack: string[]; chars: number }>()
+let searchCacheChars = 0
+/** Total characters the search cache may hold (lowercased text, mostly one byte each). */
+export const MAX_SEARCH_CACHE_CHARS = 32_000_000
+/** How long after the last search the cache is kept. */
+export const SEARCH_CACHE_IDLE_MS = 60_000
+let searchCacheTimer: ReturnType<typeof setTimeout> | null = null
+
+/** Release the cache once searching has stopped for {@link SEARCH_CACHE_IDLE_MS}. */
+function releaseSearchCacheWhenIdle(): void {
+  if (searchCacheTimer) clearTimeout(searchCacheTimer)
+  searchCacheTimer = setTimeout(() => {
+    searchCacheTimer = null
+    resetConversationSearchCache()
+  }, SEARCH_CACHE_IDLE_MS)
+  // Never keep a terminal client alive just to clear this.
+  searchCacheTimer.unref?.()
+}
+
+function dropSearchEntry(id: string): void {
+  const entry = searchCache.get(id)
+  if (!entry) return
+  searchCacheChars -= entry.chars
+  searchCache.delete(id)
+}
+
+/** For tests: forget every cached haystack. */
+export function resetConversationSearchCache(): void {
+  searchCache.clear()
+  searchCacheChars = 0
+}
+
+/** A chat's haystack, from the cache when its file is unchanged, else read and cached. */
+function haystackFor(id: string, stamp: string): string[] | null {
+  const hit = searchCache.get(id)
+  if (hit && hit.stamp === stamp) {
+    // Most recently searched last, so the oldest is evicted first.
+    searchCache.delete(id)
+    searchCache.set(id, hit)
+    return hit.haystack
+  }
+  dropSearchEntry(id)
+  const conv = read(id)
+  if (!conv) return null
+  const haystack = searchHaystack(conv)
+  const chars = haystack.reduce((n, t) => n + t.length, 0)
+  searchCache.set(id, { stamp, haystack, chars })
+  searchCacheChars += chars
+  for (const oldest of searchCache.keys()) {
+    if (searchCacheChars <= MAX_SEARCH_CACHE_CHARS || oldest === id) break
+    dropSearchEntry(oldest)
+  }
+  return haystack
+}
+
+/** Find conversations whose title or message content matches the query (newest first). */
 export function searchConversations(query: string): ConversationMeta[] {
   const q = query.trim().toLowerCase()
   if (!q) return listConversations()
-  const files = readdirSync(dir()).filter((f) => f.endsWith('.json'))
-  const metas: ConversationMeta[] = []
-  for (const f of files) {
-    const conv = read(f.replace(/\.json$/, ''))
-    if (conv && conversationMatches(conv, q)) {
-      metas.push(toMeta(conv))
-    }
+  const metas = listConversations()
+  const live = new Set<string>()
+  const out: ConversationMeta[] = []
+  for (const meta of metas) {
+    live.add(meta.id)
+    // listConversations just stamped every listed chat.
+    const stamp = metaCache.get(meta.id)?.stamp
+    const haystack = stamp ? haystackFor(meta.id, stamp) : null
+    if (haystack?.some((t) => t.includes(q))) out.push(meta)
   }
-  return metas.sort((a, b) => b.updatedAt - a.updatedAt)
+  // Chats deleted since the last search.
+  for (const id of [...searchCache.keys()]) if (!live.has(id)) dropSearchEntry(id)
+  releaseSearchCacheWhenIdle()
+  return out
 }
 
 /**
