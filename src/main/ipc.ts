@@ -136,6 +136,9 @@ import {
   isWorktreeDisposable
 } from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'
+import { branchSyncFor, commitAll, lookupPr, pushBranch, suggestCommitMessage } from './agent/gitActions'
+import { isKnownWorkspace } from './knownWorkspace'
+import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import { initGitRepo } from './agent/gitInit'
 import { realpathSync } from 'node:fs'
 import {
@@ -820,6 +823,22 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.workingTreeChanges, async (_event, workspace: string) =>
     collectWorkingTreeChanges(typeof workspace === 'string' ? workspace : '')
   )
+
+  // The Changes view's commit form and the composer's PR chip run git and gh
+  // themselves, on the user's click, for a project folder the app already knows
+  // (see agent/gitActions.ts for the hardening).
+  const gitDeps = { knownWorkspace: isKnownWorkspace }
+  handle(IPC.gitCommit, (_event, workspace: unknown, message: unknown): Promise<GitActionResult> =>
+    commitAll(workspace, message, gitDeps)
+  )
+  handle(IPC.gitPush, (_event, workspace: unknown): Promise<GitActionResult> => pushBranch(workspace, gitDeps))
+  handle(IPC.gitBranchSync, (_event, workspace: unknown): Promise<BranchSync | null> =>
+    branchSyncFor(workspace, gitDeps)
+  )
+  handle(IPC.gitSuggestMessage, (_event, workspace: unknown, conversationId: unknown): Promise<GitActionResult> =>
+    suggestCommitMessage(workspace, conversationId, gitDeps)
+  )
+  handle(IPC.gitPrStatus, (_event, workspace: unknown): Promise<PrLookup> => lookupPr(workspace, gitDeps))
 
   // Initialize a git repo in the workspace so a non-git project's files become
   // visible/reviewable in the Changes panel (the "Initialize git repository" action).

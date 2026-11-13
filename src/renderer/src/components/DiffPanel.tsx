@@ -3,6 +3,7 @@ import type { FileDiff, WorkingTreeChanges } from '@shared/workingTree'
 import { chooseShipAction, type ShipAction } from '@shared/shipAction'
 import { useInitGitRepo } from '../hooks/useInitGitRepo'
 import { DiffView } from './DiffView'
+import { CommitForm } from './CommitForm'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { Icon } from './Icon'
 
@@ -67,12 +68,18 @@ export function DiffPanel({
   workspace,
   onClose,
   onShip,
-  creating = false
+  creating = false,
+  conversationId = null,
+  commitForm = false
 }: {
   workspace: string | null
   onClose: () => void
   onShip?: (action: ShipAction) => void
   creating?: boolean
+  /** The open chat, whose model suggests commit messages. */
+  conversationId?: string | null
+  /** Show the commit form (commit, push) above the ship action. */
+  commitForm?: boolean
 }): JSX.Element {
   const [data, setData] = useState<WorkingTreeChanges | null>(null)
   const [loading, setLoading] = useState(false)
@@ -184,6 +191,16 @@ export function DiffPanel({
             </>
           )}
         </div>
+
+        {commitForm && workspace && data?.isRepo && (
+          <CommitForm
+            workspace={workspace}
+            conversationId={conversationId}
+            hasChanges={files.length > 0}
+            busy={creating}
+            onChanged={() => void load()}
+          />
+        )}
 
         {onShip && shipAction && data?.isRepo && files.length > 0 && (
           <footer className="changes-panel__foot">

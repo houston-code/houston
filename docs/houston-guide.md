@@ -976,6 +976,29 @@ offer one button that fits the repository:
 Each one hands the work to the agent as a normal turn, so every git and network step
 goes through your approvals.
 
+### Committing and pushing yourself (desktop app)
+
+The Changes view also has a commit form, for when you'd rather not spend an agent turn:
+
+- **Commit message**, with **Suggest message**, which asks the chat's model (or your
+  default model in a new chat) to describe the uncommitted changes, the way a chat gets
+  its title. The diff goes to that model's provider. Edit the suggestion as you like.
+- **Commit** stages every change and commits it (`Cmd+Enter` / `Ctrl+Enter` in the
+  message box). The repository's own git hooks do not run.
+- **Push** sends the branch's new commits to its upstream; on a first push it reads
+  **Publish branch** and sets the upstream on the repository's remote.
+
+Houston refuses to commit or push when the repository's own git config names a program
+git would run for it (a signing program, an ssh command, a credential helper, or an
+include): use a terminal there. Your global git config (identity, signing, credentials)
+applies as usual. **Create PR** stays a hand-off to the agent.
+
+**Pull request chip.** When the chat's branch has a pull request on GitHub, a chip at
+the top of the message box shows its number, state (Open, Draft, Merged, Closed) and
+checks (passed, running, failing); click it to open the PR in your browser. It needs
+the GitHub CLI (`gh`) installed and signed in, and a GitHub remote. It refreshes when
+the window regains focus, when a turn ends, and every few minutes.
+
 ### Prompts Houston writes for you
 
 `/review`, `/init`, `/agent`, the shipping buttons, and a session another chat handed off

@@ -80,4 +80,30 @@ describe('ComposerPrBar', () => {
     expect(container).toBeEmptyDOMElement()
     expect(screen.queryByRole('button', { name: 'Create PR' })).not.toBeInTheDocument()
   })
+
+  it('shows the branch pull request with its state and checks, even with no changes', () => {
+    const pr = {
+      number: 12,
+      title: 'Add a thing',
+      state: 'OPEN' as const,
+      isDraft: false,
+      url: 'https://github.com/o/r/pull/12',
+      checks: 'failing' as const,
+      counts: { passing: 3, failing: 1, pending: 0 }
+    }
+    const { rerender } = render(<ComposerPrBar {...props({ changes: { fileCount: 0, added: 0, removed: 0 }, pr })} />)
+    const link = screen.getByRole('link', {
+      name: 'Pull request #12 (Open): Add a thing. Checks: 1 failing, 3 passed. Opens on GitHub.'
+    })
+    expect(link).toHaveAttribute('href', 'https://github.com/o/r/pull/12')
+    expect(link).toHaveTextContent('#12')
+    expect(link).toHaveTextContent('Checks failing')
+    expect(screen.queryByText(/changed file/)).not.toBeInTheDocument()
+    rerender(<ComposerPrBar {...props({ changes: { fileCount: 0, added: 0, removed: 0 }, pr: { ...pr, state: 'MERGED' as const } })} />)
+    // A merged PR's checks no longer matter.
+    expect(screen.getByRole('link')).toHaveTextContent('Merged')
+    expect(screen.getByRole('link')).not.toHaveTextContent('Checks')
+    rerender(<ComposerPrBar {...props({ changes: { fileCount: 0, added: 0, removed: 0 }, pr: null })} />)
+    expect(screen.queryByRole('link')).not.toBeInTheDocument()
+  })
 })

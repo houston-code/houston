@@ -183,4 +183,14 @@ describe('DiffPanel', () => {
     expect(await screen.findByText('No uncommitted changes.')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Create PR/ })).not.toBeInTheDocument()
   })
+
+  it('shows the commit form when asked to, for a repository', async () => {
+    installApi(sampleChanges)
+    const gitBranchSync = vi.fn().mockResolvedValue({ branch: 'feature/x', upstream: null, ahead: 0, remote: null })
+    window.api = { ...window.api, gitBranchSync } as unknown as typeof window.api
+    render(<DiffPanel workspace="/repo" onClose={vi.fn()} commitForm conversationId="c1" />)
+    expect(await screen.findByLabelText('Commit message')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Suggest message' })).toBeInTheDocument()
+    expect(gitBranchSync).toHaveBeenCalledWith('/repo')
+  })
 })
