@@ -19,6 +19,7 @@ import {
 import {
   ACP_DECLINED_ANSWER,
   ACP_ERROR,
+  ACP_RESIDENT_SESSIONS,
   ACP_NO_QUESTION_ANSWER,
   acpMcpServersToConfigs,
   acpToolKind,
@@ -590,6 +591,155 @@ describe('ACP server: protocol flow', () => {
     const res = await h.call('session/list', { cwd: '/w' })
     expect(res.result.sessions.map((s: any) => s.sessionId)).toEqual(['new', 'old'])
     expect(res.result.sessions[0]).toEqual({ sessionId: 'new', cwd: '/w', title: 'New', updatedAt: new Date(2).toISOString() })
+    await h.end()
+  })
+})
+
+describe('ACP server: idle sessions drop their message log', () => {
+  /**
+   * A store that keeps what runs save (as the real one does), counts reloads per
+   * session, and can be told to fail saves for chosen sessions.
+   */
+  function memoryStore() {
+    const db = new Map<string, AcpStoredSession>()
+    const reloads = new Map<string, number>()
+    const failSaves = new Set<string>()
+    let n = 0
+    let counting = false
+    const store: AcpDeps['store'] = {
+      create: ({ workspace }) => {
+        const id = `conv-${++n}`
+        db.set(id, { id, workspace, messages: [] })
+        return { id }
+      },
+      get: (id) => {
+        if (counting) reloads.set(id, (reloads.get(id) ?? 0) + 1)
+        const s = db.get(id)
+        // A copy, as a read from disk would be.
+        return s ? structuredClone(s) : null
+      },
+      list: () => [...db.values()],
+      setMessages: (id, m) => {
+        if (failSaves.has(id)) throw new Error('disk full')
+        db.get(id)!.messages = structuredClone(m)
+      },
+      setModel: () => {}
+    }
+    return { db, reloads, failSaves, store, countReloads: () => void (counting = true) }
+  }
+
+  /** A run that answers with one assistant turn, saved through onMessages. */
+  const answer: RunBody = async (req, send, _loop, onMessages) => {
+    onMessages?.([...req.messages, { role: 'assistant', content: `reply to ${req.runId}` }])
+    send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+  }
+
+  const newSessions = async (h: Harness, count: number): Promise<string[]> => {
+    const ids: string[] = []
+    for (let i = 0; i < count; i++) ids.push((await h.call('session/new', { cwd: h.cwd, mcpServers: [] })).result.sessionId)
+    return ids
+  }
+
+  it('reloads an evicted session from the store, so its run sees the same messages', async () => {
+    const mem = memoryStore()
+    const h = harness({ run: answer, deps: { store: mem.store } })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const ids = await newSessions(h, ACP_RESIDENT_SESSIONS + 2)
+    for (const id of ids) {
+      expect((await h.call('session/prompt', { sessionId: id, prompt: text(`first ${id}`) })).result).toEqual({ stopReason: 'end_turn' })
+    }
+    mem.countReloads()
+
+    // The oldest session's log was dropped; its next prompt reloads it from the store.
+    const [oldest] = ids
+    const firstReq = h.loop.requests.find((r) => r.conversationId === oldest)!
+    await h.call('session/prompt', { sessionId: oldest, prompt: text('second') })
+    const again = h.loop.requests.at(-1)!
+    expect(again.messages).toEqual([
+      ...firstReq.messages,
+      { role: 'assistant', content: `reply to ${firstReq.runId}` },
+      { role: 'user', content: 'second' }
+    ])
+    expect(mem.reloads.get(oldest)).toBe(1)
+
+    // The most recently used sessions kept theirs.
+    const recent = ids.at(-1)!
+    await h.call('session/prompt', { sessionId: recent, prompt: text('second') })
+    expect(mem.reloads.get(recent)).toBeUndefined()
+    expect(h.loop.requests.at(-1)!.messages).toHaveLength(3)
+    await h.end()
+  })
+
+  it('never evicts a session while its run is in progress', async () => {
+    const mem = memoryStore()
+    let release: () => void = () => {}
+    const held = new Promise<void>((r) => (release = r))
+    const h = harness({
+      deps: { store: mem.store },
+      run: async (req, send, loop, onMessages) => {
+        if (req.conversationId === 'conv-1' && req.messages.length === 1) {
+          // Save the turn early, then keep running while other sessions come and go.
+          onMessages?.([...req.messages, { role: 'assistant', content: 'partial' }])
+          await held
+          send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+          return
+        }
+        await answer(req, send, loop, onMessages)
+      }
+    })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const [busy] = await newSessions(h, 1)
+    const running = h.call('session/prompt', { sessionId: busy, prompt: text('long task') })
+    await tick()
+    const others = await newSessions(h, ACP_RESIDENT_SESSIONS + 2)
+    for (const id of others) await h.call('session/prompt', { sessionId: id, prompt: text('quick') })
+    mem.countReloads()
+    release()
+    expect((await running).result).toEqual({ stopReason: 'end_turn' })
+
+    await h.call('session/prompt', { sessionId: busy, prompt: text('next') })
+    expect(mem.reloads.get(busy)).toBeUndefined()
+    expect(h.loop.requests.at(-1)!.messages.map((m) => m.content)).toEqual(['long task', 'partial', 'next'])
+    await h.end()
+  })
+
+  it('keeps the log of a session whose latest turn never reached the store', async () => {
+    const mem = memoryStore()
+    const h = harness({ run: answer, deps: { store: mem.store } })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const [unsaved, ...others] = await newSessions(h, ACP_RESIDENT_SESSIONS + 2)
+    mem.failSaves.add(unsaved)
+    await h.call('session/prompt', { sessionId: unsaved, prompt: text('kept in memory only') })
+    for (const id of others) await h.call('session/prompt', { sessionId: id, prompt: text('quick') })
+    mem.countReloads()
+
+    await h.call('session/prompt', { sessionId: unsaved, prompt: text('next') })
+    expect(mem.reloads.get(unsaved)).toBeUndefined()
+    expect(h.loop.requests.at(-1)!.messages.map((m) => m.content)).toEqual([
+      'kept in memory only',
+      'reply to run-1',
+      'next'
+    ])
+    await h.end()
+  })
+
+  it('fails the prompt, without starting a run, when an evicted session is gone from the store', async () => {
+    const mem = memoryStore()
+    const h = harness({ run: answer, deps: { store: mem.store } })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const ids = await newSessions(h, ACP_RESIDENT_SESSIONS + 1)
+    for (const id of ids) await h.call('session/prompt', { sessionId: id, prompt: text('hi') })
+    mem.db.delete(ids[0])
+    const runs = h.loop.requests.length
+
+    const res = await h.call('session/prompt', { sessionId: ids[0], prompt: text('again') })
+    expect(res.error.code).toBe(ACP_ERROR.notFound)
+    expect(h.loop.requests).toHaveLength(runs)
+    // The session is not left marked as running.
+    mem.db.set(ids[0], { id: ids[0], workspace: h.cwd, messages: [] })
+    expect((await h.call('session/prompt', { sessionId: ids[0], prompt: text('again') })).result).toEqual({
+      stopReason: 'end_turn'
+    })
     await h.end()
   })
 })
