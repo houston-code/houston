@@ -3992,10 +3992,13 @@ export async function startRun(
           commandFailures: iterFailures,
           reads: toolCalls.filter((c) => FILE_READ_TOOLS.has(c.name) && lookupTool(c.name)?.kind === 'read'),
           changed: toolCalls.some((c) => lookupTool(c.name)?.kind !== 'read'),
-          reverts: iterReverts
+          reverts: iterReverts,
+          spoke: assistantText.trim() !== '',
+          wrote: toolCalls.some((c) => lookupTool(c.name)?.kind === 'write')
         })
         if (action.kind === 'nudge') {
-          lastStallNudge = iter
+          // A status check-in is not a stall: it doesn't hold back the productive-run extension.
+          if (!action.checkIn) lastStallNudge = iter
           messages.push(systemNoteMessage(action.message))
           persist(messages)
         } else if (action.kind === 'stop') {

@@ -1061,6 +1061,13 @@ turn ends: the agent gets one last step with tools off to tell you what it tried
 what keeps going wrong, and the transcript notes that it stopped for repeating
 itself.
 
+Separately, an agent that has made 20 rounds of tool calls without writing anything to
+you or changing a file is asked to stop and give you a short update: what it has
+found, what it thinks is going on, and what it will check next. If something in the
+project keeps getting in its way (a command that fails however it's run, a repository
+git can't open), it's asked to say so and ask you rather than keep trying variations.
+This never ends the turn; the agent carries on after the update.
+
 This continues up to a **hard limit** (200 steps by default), so a big job such as
 scaffolding a new project, or a long debugging session, finishes in one go. Stopping
 the run works as usual at any point.
