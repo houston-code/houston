@@ -2682,6 +2682,8 @@ export default function App(): JSX.Element {
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         toggleShortcut={shortcutHint('toggle-sidebar', mac, shortcuts)}
+        newChatShortcut={shortcutHint('new-chat', mac, shortcuts)}
+        settingsShortcut={shortcutHint('open-settings', mac, shortcuts)}
         chatStatus={chatStatus}
         onSelect={selectConversation}
         onNew={onNewChat}
