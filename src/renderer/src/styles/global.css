@@ -1055,6 +1055,45 @@ body.is-resizing {
   font-weight: 700;
   vertical-align: 1px;
 }
+/* The provider's default model, which Houston recommends. */
+.model-menu__recommended {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--ok);
+  border-radius: 3px;
+  color: var(--ok);
+  font-size: 9.5px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+/* In the Recent section, which provider a model comes from. */
+.model-menu__provider {
+  margin-left: 6px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+/* What the badges mean, in one quiet line under the list. */
+.model-menu__legend {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 6px 9px 3px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.model-menu__legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.model-menu__legend + .model-menu__footnote {
+  border-top: none;
+  margin-top: 0;
+}
+
 /* One line naming the providers with no models yet, instead of an empty group each. */
 .model-menu__footnote {
   flex: none;
@@ -1578,6 +1617,12 @@ body.is-resizing {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.usage__cost {
+  color: var(--text);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 /* The `#`-capture scope prompt, above the composer input. */
 .memory-bar {
   display: flex;
@@ -1604,7 +1649,7 @@ body.is-resizing {
   gap: 6px;
   flex-shrink: 0;
 }
-/* The chip is clickable only when there's a breakdown behind it. */
+/* The chip opens the breakdown by model. */
 .usage-wrap {
   position: relative;
   flex-shrink: 0;
@@ -1625,7 +1670,7 @@ body.is-resizing {
   top: calc(100% + 6px);
   right: 0;
   z-index: 30;
-  min-width: 320px;
+  min-width: 400px;
   padding: 8px 10px;
   background: var(--bg-raised, var(--bg));
   border: 1px solid var(--border);
@@ -1637,8 +1682,10 @@ body.is-resizing {
 .usage-panel__head,
 .usage-panel__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
-  gap: 12px;
+  /* Fixed number columns: every row is its own grid, so auto widths let a row's
+     figures drift out from under the header. */
+  grid-template-columns: minmax(0, 1fr) 48px 48px 52px 56px;
+  gap: 10px;
   padding: 3px 0;
 }
 .usage-panel__head {
@@ -1659,6 +1706,10 @@ body.is-resizing {
   border-top: 1px solid var(--border);
   margin-top: 2px;
   font-weight: 600;
+}
+.usage-panel__context {
+  margin: 0 0 6px;
+  color: var(--text-dim);
 }
 .usage-panel__note {
   margin: 6px 0 0;
@@ -2017,6 +2068,25 @@ body.is-resizing {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.statusbar__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 220px;
+  white-space: nowrap;
+}
+.statusbar__branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+}
+.statusbar__icon {
+  flex-shrink: 0;
+}
+.statusbar__mode {
+  white-space: nowrap;
 }
 .statusbar__meter {
   white-space: nowrap;
@@ -2794,6 +2864,16 @@ body.is-resizing {
 .msg__mark-unread:hover {
   color: var(--sig-unread);
   border-color: var(--sig-unread);
+}
+/* Retry sits after the reply's other hover buttons. */
+.msg__retry {
+  left: 26px;
+}
+.msg__mark-unread + .msg__retry {
+  left: 52px;
+}
+.msg__retry:focus-visible {
+  opacity: 1;
 }
 /* Where unseen output starts: a labelled rule in the unread blue, above the first
    reply the user hasn't seen. */
@@ -5376,10 +5456,61 @@ body.is-resizing .preview-dock__resizer::after {
   padding: 4px 16px 16px;
 }
 .file-preview__code {
+  position: relative;
   display: flex;
   align-items: flex-start;
   min-height: 100%;
   background: var(--bg-code);
+}
+/* The line a link pointed at, marked across the gutter and the code. */
+.file-preview__line-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-left: 2px solid var(--accent);
+  pointer-events: none;
+}
+/* A file path in the transcript that opens the file: reads as a link, sized like
+   the text around it. */
+.file-link {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 2px;
+}
+.file-link:hover,
+.file-link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+.file-link.md-link {
+  color: var(--accent);
+}
+/* In tool rows and the receipt the paths stay quiet until hovered. */
+.tool-row__target.file-link,
+.tool-reads__path.file-link,
+.tool-row__diff-path.file-link,
+.receipt__file.file-link {
+  text-decoration: none;
+}
+.tool-row__target.file-link:hover,
+.tool-reads__path.file-link:hover,
+.tool-row__diff-path.file-link:hover,
+.receipt__file.file-link:hover,
+.tool-row__target.file-link:focus-visible,
+.tool-reads__path.file-link:focus-visible,
+.tool-row__diff-path.file-link:focus-visible,
+.receipt__file.file-link:focus-visible {
+  text-decoration: underline;
 }
 .file-preview__gutter {
   flex: none;

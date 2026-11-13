@@ -14,6 +14,8 @@ import { useTick } from '../hooks/useTick'
 import type { ToolItem } from '../lib/items'
 import { describeTool, foldReadRuns } from '../lib/toolDisplay'
 import { DiffView } from './DiffView'
+import { FileLink, useFileLinks } from './FileLink'
+import { fileTargetFromPath, toolFileTarget } from '../lib/fileLinks'
 import {
   approvalKeyDecision,
   isApprovalKeyEvent,
@@ -352,6 +354,8 @@ const ToolRow = memo(function ToolRow({
   const allLines = previews ? previews.flatMap((p) => p.diff) : []
   const stat = allLines.length > 0 ? diffStat(allLines) : null
   const { verb, target, mono } = describeTool(item)
+  const files = useFileLinks()
+  const fileTarget = files ? toolFileTarget(item.name, item.args, files.workspace) : null
   const awaiting = item.status === 'awaiting-approval'
   const running = item.status === 'running'
   const tally = reviewTally(item.findings, running)
@@ -409,11 +413,20 @@ const ToolRow = memo(function ToolRow({
         <StatusGlyph status={item.status} />
         <span className="tool-row__icon">{iconFor(item)}</span>
         <span className="tool-row__verb">{verb}</span>
-        {target && (
-          <span className={`tool-row__target${mono ? ' tool-row__target--mono' : ''}`} title={target}>
-            {target}
-          </span>
-        )}
+        {target &&
+          (fileTarget && files ? (
+            <FileLink
+              target={fileTarget}
+              links={files}
+              className={`tool-row__target${mono ? ' tool-row__target--mono' : ''}`}
+            >
+              {target}
+            </FileLink>
+          ) : (
+            <span className={`tool-row__target${mono ? ' tool-row__target--mono' : ''}`} title={target}>
+              {target}
+            </span>
+          ))}
         {isAgent && records && records.length > 0 && <SubagentChips records={records} />}
         <span className="tool-row__spacer" />
         {runFor >= 1000 && !(isSubagentTool(item.name) && item.records?.length) && (
@@ -502,9 +515,7 @@ const ToolRow = memo(function ToolRow({
             <div key={`${p.path}:${i}`} className="tool-row__diff-file">
               {needsFileHeader(p, previews.length) && (
                 <div className="tool-row__diff-head">
-                  <span className="tool-row__diff-path" title={p.path}>
-                    {p.path}
-                  </span>
+                  <DiffPath path={p.path} deleted={p.deleted === true} />
                   {p.created && <span className="tool-row__diff-tag">new file</span>}
                   {p.deleted && <span className="tool-row__diff-tag tool-row__diff-tag--del">deleted</span>}
                   {p.renamedFrom && (
@@ -745,6 +756,42 @@ function LiveOutput({ text }: { text: string }): JSX.Element {
   )
 }
 
+/** A diff's file header: opens the file unless the change deleted it. */
+function DiffPath({ path, deleted }: { path: string; deleted: boolean }): JSX.Element {
+  const files = useFileLinks()
+  const target = files && !deleted ? fileTargetFromPath(path, files.workspace) : null
+  if (target && files) {
+    return (
+      <FileLink target={target} links={files} className="tool-row__diff-path">
+        {path}
+      </FileLink>
+    )
+  }
+  return (
+    <span className="tool-row__diff-path" title={path}>
+      {path}
+    </span>
+  )
+}
+
+/** One file in a folded run of reads. */
+function ReadPath({ item, label }: { item: ToolItem; label: string }): JSX.Element {
+  const files = useFileLinks()
+  const target = files ? toolFileTarget(item.name, item.args, files.workspace) : null
+  if (target && files) {
+    return (
+      <FileLink target={target} links={files} className="tool-reads__path">
+        {label}
+      </FileLink>
+    )
+  }
+  return (
+    <span className="tool-reads__path" title={label}>
+      {label}
+    </span>
+  )
+}
+
 /** Whether two item lists hold the same item objects in the same order. */
 function sameItems(a: ToolItem[], b: ToolItem[]): boolean {
   return a.length === b.length && a.every((it, i) => it === b[i])
@@ -783,9 +830,7 @@ const ReadAggregateRow = memo(function ReadAggregateRow({ items }: { items: Tool
             return (
               <li key={it.id} className="tool-reads__item">
                 <StatusGlyph status={it.status} />
-                <span className="tool-reads__path" title={target}>
-                  {target}
-                </span>
+                <ReadPath item={it} label={target} />
               </li>
             )
           })}

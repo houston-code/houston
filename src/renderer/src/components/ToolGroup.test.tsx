@@ -4,6 +4,7 @@ import type { ReviewFinding } from '@shared/agent'
 import { APPROVAL_INTERRUPTED_NOTE } from '@shared/promptOutcome'
 import type { ToolItem } from '../lib/items'
 import { ToolGroup } from './ToolGroup'
+import { FileLinkContext } from './FileLink'
 
 /**
  * A diff line's full text. A modified line is split into per-token spans so the
@@ -844,5 +845,36 @@ describe('ToolGroup live output', () => {
     expect(screen.getByLabelText('Output so far')).toHaveTextContent('compiling a.c')
     rerender(<ToolGroup items={[{ ...running, status: 'done', liveOutput: undefined, output: 'ok' }]} onApprove={vi.fn()} />)
     expect(screen.queryByLabelText('Output so far')).toBeNull()
+  })
+})
+
+describe('ToolGroup file links', () => {
+  const withLinks = (ui: JSX.Element, open = vi.fn()) =>
+    render(<FileLinkContext.Provider value={{ workspace: '/repo', open }}>{ui}</FileLinkContext.Provider>)
+
+  it('opens the file a tool row names, at the line a read started from, without toggling the row', () => {
+    const open = vi.fn()
+    const items: ToolItem[] = [
+      tool({ id: 'r', name: 'read_file', status: 'done', args: { path: 'src/a.ts', offset: 12 }, output: 'x' })
+    ]
+    const { container } = withLinks(<ToolGroup items={items} onApprove={vi.fn()} />, open)
+    fireEvent.click(screen.getByRole('button', { name: 'src/a.ts' }))
+    expect(open).toHaveBeenCalledWith({ path: 'src/a.ts', line: 12 })
+    expect(container.querySelector('.tool-row__head')).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('keeps a path outside the project, and a non-file tool, as plain text', () => {
+    const items: ToolItem[] = [
+      tool({ id: 'r', name: 'read_file', status: 'done', args: { path: '/etc/hosts' } }),
+      tool({ id: 's', name: 'run_shell', status: 'done', args: { command: 'ls' } })
+    ]
+    withLinks(<ToolGroup items={items} onApprove={vi.fn()} />)
+    expect(document.querySelector('.file-link')).toBeNull()
+  })
+
+  it('has no links without a project', () => {
+    const items: ToolItem[] = [tool({ id: 'r', name: 'read_file', status: 'done', args: { path: 'src/a.ts' } })]
+    render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    expect(document.querySelector('.file-link')).toBeNull()
   })
 })
