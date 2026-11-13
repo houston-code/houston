@@ -355,6 +355,23 @@ describe('LspClient against a fake server', () => {
     expect(c.state).toBe('stopped')
   })
 
+  it('reports a launch that throws as a failed start', async () => {
+    const spec = serverRegistry([FAKE_SERVER])[0]
+    const c = new LspClient({
+      server: resolveServer(spec)!,
+      roots: [root],
+      spawn: () => {
+        throw new Error('bad argument')
+      }
+    })
+    const died = vi.fn()
+    c.onDeath(died)
+    await expect(c.start()).rejects.toThrow('bad argument')
+    expect(c.state).toBe('dead')
+    expect(c.deathReason).toBe('failed to start: bad argument')
+    expect(died).toHaveBeenCalledTimes(1)
+  })
+
   it('reports a server that fails to initialize', async () => {
     const c = client({ FAKE_LSP_CRASH_ON: 'initialize' })
     await expect(c.start()).rejects.toThrow()
@@ -411,6 +428,71 @@ describe('LspManager', () => {
     // Once the window passes, it may try again.
     now += 10 * 60_000
     expect(await m.clientFor(file, [root])).not.toBeNull()
+  })
+
+  it('starts one server for concurrent first calls, and quitting stops it', async () => {
+    const spawned: ChildProcess[] = []
+    const base = fakeSpawn({ FAKE_LSP_INIT_DELAY_MS: '50' })
+    const m = makeManager({}, {
+      spawn: (s, r) => {
+        const p = base(s, r)
+        spawned.push(p)
+        return p
+      }
+    })
+    const file = join(root, 'a.fk')
+    writeFileSync(file, 'x\n')
+    const [a, b] = await Promise.all([m.clientFor(file, [root]), m.clientFor(file, [root])])
+    expect(a).not.toBeNull()
+    expect(a).toBe(b)
+    expect(spawned).toHaveLength(1)
+    m.killAll()
+    await vi.waitFor(() => expect(spawned.every((p) => p.exitCode !== null || p.signalCode !== null)).toBe(true))
+  })
+
+  it('starts one server for concurrent first calls while making room at the cap', async () => {
+    const spawned: ChildProcess[] = []
+    const base = fakeSpawn()
+    const m = makeManager({}, {
+      maxServers: 1,
+      spawn: (s, r) => {
+        const p = base(s, r)
+        spawned.push(p)
+        return p
+      }
+    })
+    const other = join(root, 'other')
+    mkdirSync(other)
+    writeFileSync(join(other, 'a.fk'), 'x\n')
+    const first = await m.clientFor(join(other, 'a.fk'), [other])
+    expect(first?.state).toBe('ready')
+    const file = join(root, 'a.fk')
+    writeFileSync(file, 'x\n')
+    // Both calls find the cap reached, so each would wait on stopping the first server.
+    const [a, b] = await Promise.all([m.clientFor(file, [root]), m.clientFor(file, [root])])
+    expect(a).not.toBeNull()
+    expect(a).toBe(b)
+    expect(first?.state).toBe('stopped')
+    expect(spawned).toHaveLength(2)
+    expect(m.runningCount()).toBe(1)
+    m.killAll()
+    await vi.waitFor(() => expect(spawned.every((p) => p.exitCode !== null || p.signalCode !== null)).toBe(true))
+  })
+
+  it('counts a launch that throws as a crash, so it is not retried forever', async () => {
+    let calls = 0
+    const m = makeManager({}, {
+      spawn: () => {
+        calls++
+        throw new Error('bad argument')
+      }
+    })
+    const file = join(root, 'a.fk')
+    writeFileSync(file, 'x\n')
+    for (let i = 0; i < 3; i++) expect(await m.clientFor(file, [root])).toBeNull()
+    expect(calls).toBe(3)
+    expect(await m.clientFor(file, [root])).toBeNull()
+    expect(calls).toBe(3)
   })
 
   it('does not count a slow start against the idle timeout', async () => {
@@ -751,6 +833,46 @@ describe('write seam', () => {
     })
     expect(out).toContain('1 new error in a.fk')
     expect(checker).not.toHaveBeenCalled()
+  })
+
+  it('sends a covered edit to the server once, not the new text, the old, then the new again', async () => {
+    const log = join(root, 'methods.log')
+    const m = makeManager({ FAKE_LSP_LOG: log })
+    const file = join(root, 'a.fk')
+    writeFileSync(file, 'ERROR old\n')
+    const c = (await m.clientFor(file, [root]))!
+    await m.noteRead(file, [root])
+    await vi.waitFor(() => expect(c.currentDiagnostics(file)).toHaveLength(1))
+    const before = await captureBeforeWrite(m, [target('a.fk')], [root], undefined)
+    writeFileSync(file, 'ERROR old\nERROR new\n')
+    const out = await afterWrite({
+      manager: m,
+      targets: [target('a.fk')],
+      roots: [root],
+      workspace: root,
+      before,
+      diagnosticsOnSave: undefined
+    })
+    expect(out).toContain('1 new error in a.fk')
+    expect(c.openText(file)).toBe('ERROR old\nERROR new\n')
+    const methods = readFileSync(log, 'utf8').trim().split('\n')
+    expect(methods.filter((x) => x === 'textDocument/didChange')).toHaveLength(1)
+  })
+
+  it('still syncs a covered target when its diagnostics check fails', async () => {
+    const noteWrite = vi.fn(async () => {})
+    await afterWrite({
+      manager: { noteWrite, clientFor: async () => null },
+      targets: [target('a.fk')],
+      roots: [root],
+      workspace: root,
+      before: new Map([[join(root, 'a.fk'), 'old']]),
+      diagnosticsOnSave: undefined,
+      lspDiagnostics: async () => {
+        throw new Error('boom')
+      }
+    })
+    expect(noteWrite).toHaveBeenCalledTimes(1)
   })
 
   it('syncs every target, including deleted ones, even with diagnostics off', async () => {
