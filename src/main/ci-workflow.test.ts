@@ -181,7 +181,9 @@ describe('CI never scopes away a required check', () => {
 
 describe('CI gates merge on the whole matrix', () => {
   it('makes the required `build` check depend on the plan, every platform leg, the action test, the SBOM gate, and workflow-lint', () => {
-    expect(job('build')).toContain('needs: [plan, package, sbom-conformance, workflow-lint, action-e2e]')
+    expect(job('build')).toContain(
+      'needs: [plan, package, package-retry-plan, package-retry, sbom-conformance, workflow-lint, action-e2e]'
+    )
   })
 
   it('runs the action end-to-end test when the plan says so, on the commit under test', () => {
@@ -192,18 +194,22 @@ describe('CI gates merge on the whole matrix', () => {
     expect(job('plan')).toContain('action-e2e: ${{ steps.plan.outputs.action-e2e }}')
   })
 
-  // `build` runs on Linux; Windows has no bash at /usr/bin to run its script with.
-  it.skipIf(process.platform === 'win32')('requires the action test when planned, and a skip only when it was not', () => {
-    // The `build` step's script, run with each combination of plan and result.
+  /** The `build` step's script. */
+  function buildScript(): string {
     const build = job('build')
     const body = build.slice(build.indexOf('        run: |\n') + '        run: |\n'.length).split('\n')
     const end = body.findIndex((l) => l.trim() !== '' && !l.startsWith(' '.repeat(10)))
-    const script = body
+    return body
       .slice(0, end === -1 ? undefined : end)
       .map((l) => l.slice(10))
       .join('\n')
+  }
+
+  // `build` runs on Linux; Windows has no bash at /usr/bin to run its script with.
+  it.skipIf(process.platform === 'win32')('requires the action test when planned, and a skip only when it was not', () => {
+    // The `build` step's script, run with each combination of plan and result.
     const run = (planned: string, result: string) =>
-      spawnSync('bash', ['-e', '-c', script], {
+      spawnSync('bash', ['-e', '-c', buildScript()], {
         encoding: 'utf8',
         env: {
           PATH: '/usr/bin:/bin',
@@ -232,7 +238,69 @@ describe('CI gates merge on the whole matrix', () => {
     expect(build).toMatch(/if: \$\{\{ !cancelled\(\) && /)
     expect(build).toContain('for r in "$PLAN" "$SBOM" "$LINT"; do')
     expect(build).toContain('[ "$r" = success ] ||')
-    expect(build).toContain('[ "$PACKAGE" = success ] ||')
+    expect(build).toContain('elif [ "$PACKAGE" = success ]; then')
+  })
+
+  it('retries a package leg that never got a runner, with the same steps, once', () => {
+    // GitHub cancels a queued macOS leg after about 15 minutes when the pool is out of
+    // capacity. That leg ran nothing, yet it used to fail `build` and eject the PR.
+    const retryPlan = job('package-retry-plan')
+    expect(retryPlan).toContain('needs: [plan, package]')
+    expect(retryPlan).toContain(
+      "if: ${{ !cancelled() && needs.package.result != 'success' && needs.package.result != 'skipped' }}"
+    )
+    expect(retryPlan).toContain('run: node scripts/ci-retry-legs.mjs >> "$GITHUB_OUTPUT"')
+    // Read-only: it lists the run's jobs and can re-run or cancel nothing.
+    expect(retryPlan).toMatch(/permissions:\n {6}contents: read.*\n {6}actions: read.*\n {4}outputs:/)
+    expect(retryPlan).toContain('ref: ${{ inputs.ref || github.sha }}')
+
+    const retry = job('package-retry')
+    expect(retry).toContain('needs: package-retry-plan')
+    expect(retry).toContain("if: ${{ !cancelled() && needs.package-retry-plan.outputs.retry == 'true' }}")
+    expect(retry).toContain('matrix: ${{ fromJSON(needs.package-retry-plan.outputs.matrix) }}')
+    expect(retry).toContain("CSC_IDENTITY_AUTO_DISCOVERY: 'false'")
+    // The very steps `package` runs, not a copy that could drift.
+    expect(job('package')).toContain('    steps: &package-steps\n')
+    expect(retry).toContain('    steps: *package-steps\n')
+    // Once: nothing retries the retry.
+    expect(workflow).not.toContain('needs.package-retry.result !=')
+    expect(workflow.match(/\*package-steps\n/g)).toHaveLength(1)
+  })
+
+  it.skipIf(process.platform === 'win32')('accepts a retried leg only when the retry plan succeeded, planned it, and it passed', () => {
+    const run = (env: Record<string, string>) =>
+      spawnSync('bash', ['-e', '-c', buildScript()], {
+        encoding: 'utf8',
+        env: {
+          PATH: '/usr/bin:/bin',
+          PLAN: 'success',
+          SBOM: 'success',
+          LINT: 'success',
+          PACKAGE_PLANNED: 'true',
+          ACTION_E2E_PLANNED: 'false',
+          ACTION_E2E: 'skipped',
+          RETRY_PLAN: 'skipped',
+          RETRY_PLANNED: '',
+          PACKAGE_RETRY: 'skipped',
+          ...env
+        }
+      })
+    expect(run({ PACKAGE: 'success' }).status).toBe(0)
+    const retried = { RETRY_PLAN: 'success', RETRY_PLANNED: 'true', PACKAGE_RETRY: 'success' }
+    // GitHub has reported the never-acquired matrix as neither `failure` nor `cancelled`.
+    for (const result of ['failure', 'cancelled', 'abandoned']) {
+      expect(run({ PACKAGE: result, ...retried }).status).toBe(0)
+      expect(run({ PACKAGE: result }).status).toBe(1)
+      expect(run({ PACKAGE: result, ...retried, RETRY_PLAN: 'failure' }).status).toBe(1)
+      expect(run({ PACKAGE: result, ...retried, RETRY_PLANNED: 'false' }).status).toBe(1)
+      for (const again of ['failure', 'cancelled', 'skipped', 'abandoned']) {
+        const out = run({ PACKAGE: result, ...retried, PACKAGE_RETRY: again })
+        expect(out.status).toBe(1)
+        expect(out.stdout).toContain('::error::a package leg did not succeed')
+      }
+    }
+    // A retry is no substitute for a plan that planned no legs.
+    expect(run({ PACKAGE_PLANNED: 'false', PACKAGE: 'failure', ...retried }).status).toBe(1)
   })
 
   it('accepts a skipped `package` only when a successful plan planned no legs', () => {

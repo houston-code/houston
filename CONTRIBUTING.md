@@ -359,7 +359,10 @@ platform-sensitive (the sandbox backends, paths, packaging, native modules), add
 
 `build` is a single required check that passes only when `plan` succeeded, every planned
 `package` leg succeeded (a skipped `package` counts only when `plan` planned none), and
-the SBOM conformance gate and `workflow-lint` succeeded. When a change touches the GitHub
+the SBOM conformance gate and `workflow-lint` succeeded. A leg that GitHub cancels before
+any runner picks it up (the hosted macOS pool runs out of capacity at times) is run once
+more as `package-retry`, and `build` takes that result instead; a leg that started and
+failed is never retried. When a change touches the GitHub
 Action (`action/`, `houston-signing-key.asc`, or `.github/workflows/action-test.yml`), and
 nightly, `plan` also runs the action's end-to-end test (`action-e2e`), and `build` requires
 it. `workflow-lint` runs actionlint and zizmor over `.github/workflows`; zizmor's

@@ -300,7 +300,8 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.package-matrix) }}
     runs-on: ${{ matrix.os }}
-    steps:
+    # Anchored: `package-retry` below runs these same steps (`*package-steps`).
+    steps: &package-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -416,6 +417,66 @@ jobs:
             release/*.deb
             release/latest*.yml
           if-no-files-found: error
+
+  # Which `package` legs to run once more because GitHub never gave them a runner. When the
+  # hosted macOS pool is out of capacity a queued leg is cancelled after about 15 minutes
+  # without running a step; that used to fail `build`, which ejected a good PR from the merge
+  # queue and turned the nightly red. scripts/ci-retry-legs.mjs (unit-tested) reads this
+  # run's jobs and names the legs that never started, or none when any leg that did start
+  # failed. A re-run from outside the run would be too late: the queue ejects on the first
+  # failed `build`.
+  #
+  # `!cancelled()` because a job whose dependency did not succeed is skipped by default. The
+  # result is compared against the two good outcomes rather than `failure`: a matrix whose
+  # legs were never acquired has reported a result that is neither `failure` nor `cancelled`.
+  package-retry-plan:
+    needs: [plan, package]
+    if: ${{ !cancelled() && needs.package.result != 'success' && needs.package.result != 'skipped' }}
+    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read # checkout, for the script
+      actions: read # list this run's jobs
+    outputs:
+      retry: ${{ steps.decide.outputs.retry }}
+      matrix: ${{ steps.decide.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ inputs.ref || github.sha }}
+      - uses: ./.github/actions/setup-node
+        with:
+          cache: 'false'
+      # No `npm ci`: the script uses only node built-ins and the gh CLI on the runner.
+      - name: Find the package legs that never got a runner
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: node scripts/ci-retry-legs.mjs >> "$GITHUB_OUTPUT"
+
+  # The second and last wait for a runner, for exactly the legs `package-retry-plan` named.
+  # Same steps as `package`, and `build` takes these results in place of the originals. A leg
+  # that gets no runner here either fails `build`, as it always did.
+  package-retry:
+    name: package-retry (${{ matrix.target }})
+    needs: package-retry-plan
+    # `!cancelled()`: `package` is upstream of this job and did not succeed.
+    if: ${{ !cancelled() && needs.package-retry-plan.outputs.retry == 'true' }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.package-retry-plan.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    steps: *package-steps
 
   # Refresh the package legs' dependency caches from main. A cache saved by a PR or a
   # merge-queue run is scoped to that ref and no other PR can restore it, and `package`
@@ -534,13 +595,16 @@ jobs:
   # a skipped required check reports a PASS, so without it a red macOS leg would let the PR
   # merge. Here the job runs whenever the run itself was not cancelled, and fails unless
   # every dependency actually succeeded (a skipped or cancelled dependency fails it too).
+  # The one substitution is `package-retry` for `package`: when the only legs that did not
+  # succeed never got a runner (`package-retry-plan` decides, and must itself succeed), their
+  # retry has to succeed instead.
   # The one allowed skip is `package` when `plan` succeeded and planned no legs (a
   # prose-only change); a `package` skipped for any other reason, or a failed `plan`, fails.
   # It is not `always()`: when the concurrency group cancels a superseded run (Dependabot
   # opens and labels a PR in the same second), `always()` ran this job anyway and posted a
   # red `build` that kept the PR blocked after the newer run went green.
   build:
-    needs: [plan, package, sbom-conformance, workflow-lint, action-e2e]
+    needs: [plan, package, package-retry-plan, package-retry, sbom-conformance, workflow-lint, action-e2e]
     if: ${{ !cancelled() && github.event_name != 'push' && !inputs.release }}
     timeout-minutes: 5
     runs-on: ubuntu-24.04
@@ -550,20 +614,27 @@ jobs:
           PLAN: ${{ needs.plan.result }}
           PACKAGE_PLANNED: ${{ needs.plan.outputs.package }}
           PACKAGE: ${{ needs.package.result }}
+          RETRY_PLAN: ${{ needs.package-retry-plan.result }}
+          RETRY_PLANNED: ${{ needs.package-retry-plan.outputs.retry }}
+          PACKAGE_RETRY: ${{ needs.package-retry.result }}
           SBOM: ${{ needs.sbom-conformance.result }}
           LINT: ${{ needs.workflow-lint.result }}
           ACTION_E2E_PLANNED: ${{ needs.plan.outputs.action-e2e }}
           ACTION_E2E: ${{ needs.action-e2e.result }}
         run: |
-          echo "plan=$PLAN (package planned: $PACKAGE_PLANNED, action-e2e planned: $ACTION_E2E_PLANNED) package=$PACKAGE action-e2e=$ACTION_E2E sbom-conformance=$SBOM workflow-lint=$LINT"
+          echo "plan=$PLAN (package planned: $PACKAGE_PLANNED, action-e2e planned: $ACTION_E2E_PLANNED) package=$PACKAGE (retry plan: $RETRY_PLAN, retry planned: $RETRY_PLANNED, retry: $PACKAGE_RETRY) action-e2e=$ACTION_E2E sbom-conformance=$SBOM workflow-lint=$LINT"
           for r in "$PLAN" "$SBOM" "$LINT"; do
             [ "$r" = success ] || { echo "::error::plan, the SBOM gate, or workflow-lint did not succeed ($r)"; exit 1; }
           done
           if [ "$PACKAGE_PLANNED" = false ]; then
             [ "$PACKAGE" = skipped ] || { echo "::error::no package legs were planned, but package reported $PACKAGE"; exit 1; }
             echo "No package legs planned: the change touches only prose that never ships."
+          elif [ "$PACKAGE" = success ]; then
+            :
+          elif [ "$RETRY_PLAN" = success ] && [ "$RETRY_PLANNED" = true ] && [ "$PACKAGE_RETRY" = success ]; then
+            echo "Every package leg that did not succeed never got a runner, and passed on its retry."
           else
-            [ "$PACKAGE" = success ] || { echo "::error::a package leg did not succeed ($PACKAGE)"; exit 1; }
+            echo "::error::a package leg did not succeed ($PACKAGE; retry: $PACKAGE_RETRY)"; exit 1
           fi
           if [ "$ACTION_E2E_PLANNED" = true ]; then
             [ "$ACTION_E2E" = success ] || { echo "::error::the action's end-to-end test did not succeed ($ACTION_E2E)"; exit 1; }

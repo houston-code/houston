@@ -149,6 +149,9 @@ jobs:
       # Not used here: ci.yml's `alert` job only runs on a push to main. But GitHub checks
       # every nested job's permissions against the caller's grant at startup.
       issues: write
+      # Not used here either: ci.yml's `package-retry-plan` job reads the run's jobs, and
+      # `release: true` skips packaging.
+      actions: read
 
   # Release - publish's build legs (release-build.yml), the same steps in the same order:
   # notices, package, the packaged-app e2e on macOS, the standalone CLI, the SBOMs, the binary
