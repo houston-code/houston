@@ -261,6 +261,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
     if (erase) rawWrite(CLEAR_LINE)
   }
   const out = (s: string): void => {
+    // Nothing to print: leave the spinner alone. The streaming renderer holds a block
+    // until it is complete, so most text deltas arrive here empty, and erasing the
+    // spinner for each one left it blank for most of a long answer.
+    if (!s) return
     // Clear the spinner line before real output so streamed text never lands on a
     // spinner frame; the timer redraws it on the next tick, on the fresh line.
     if (cancelTimer) rawWrite(CLEAR_LINE)

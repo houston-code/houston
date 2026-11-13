@@ -296,6 +296,17 @@ describe('createTerminalIo spinner', () => {
     expect(h.text().indexOf('\x1b[2K')).toBeLessThan(h.text().indexOf('hello'))
   })
 
+  it('leaves the spinner on screen when there is nothing to print', () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    h.tick()
+    const drawn = h.text()
+    // A text delta the streaming renderer is still holding arrives as ''.
+    h.io.out('')
+    h.io.out('')
+    expect(h.text()).toBe(drawn)
+  })
+
   it('stops: cancels the timer and erases the line', () => {
     const h = spinnerHarness()
     h.io.startSpinner?.('Working')
