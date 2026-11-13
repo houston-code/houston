@@ -169,6 +169,51 @@ describe('ConnectModel', () => {
   })
 })
 
+describe('ConnectModel helps a first connection', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('looks for local hosts on open and marks the ones that answer, without saving anything', async () => {
+    const { api } = installApi({
+      listModels: () => Promise.resolve([{ id: 'llama3.1' }, { id: 'qwen3' }])
+    })
+    renderPanel()
+    const tile = (name: string): HTMLElement =>
+      screen.getAllByRole('radio').find((r) => r.textContent?.startsWith(name))!
+    await waitFor(() => expect(tile('Ollama')).toHaveTextContent('Ollama (running)'))
+    expect(tile('LM Studio')).toHaveTextContent('LM Studio (running)')
+    expect(api.listModels).toHaveBeenCalledWith('ollama')
+    expect(api.listModels).toHaveBeenCalledWith('lmstudio')
+    expect(api.listModels).not.toHaveBeenCalledWith('anthropic')
+    expect(api.saveSettings).not.toHaveBeenCalled()
+    fireEvent.click(tile('Ollama'))
+    expect(screen.getByText(/is running at/)).toHaveTextContent('with 2 models')
+  })
+
+  it('leaves a local tile unmarked when nothing answers', async () => {
+    const { api } = installApi({ listModels: () => Promise.reject(new Error('ECONNREFUSED')) })
+    renderPanel()
+    await waitFor(() => expect(api.listModels).toHaveBeenCalledTimes(2))
+    expect(screen.getAllByRole('radio').some((r) => r.textContent?.includes('running'))).toBe(false)
+  })
+
+  it('shows what a key looks like and names the model a first key starts on', () => {
+    installApi()
+    renderPanel()
+    expect(keyInput()).toHaveAttribute('placeholder', 'sk-ant-…')
+    expect(screen.getByText(/You.ll start on/)).toHaveTextContent(/opus/i)
+    fireEvent.click(screen.getByRole('radio', { name: 'OpenAI' }))
+    expect(keyInput()).toHaveAttribute('placeholder', 'sk-…')
+  })
+
+  it('opens the full provider list from More providers', () => {
+    installApi()
+    const onMoreProviders = vi.fn()
+    render(<ConnectModel settings={settings()} onConnected={vi.fn()} onBack={vi.fn()} onMoreProviders={onMoreProviders} />)
+    fireEvent.click(screen.getByRole('button', { name: 'More providers' }))
+    expect(onMoreProviders).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('ipcErrorMessage', () => {
   it("strips Electron's remote-method wrapper", async () => {
     const { ipcErrorMessage } = await import('./ConnectModel')

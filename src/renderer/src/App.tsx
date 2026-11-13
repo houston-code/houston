@@ -2647,6 +2647,7 @@ export default function App(): JSX.Element {
                   setConnectBackedOut(true)
                   setConnectOpen(false)
                 }}
+                onMoreProviders={() => runSharedCommand({ kind: 'settings', section: 'models' })}
               />
             ) : showChecklist ? (
               <GetStarted
