@@ -9,15 +9,20 @@ const h = vi.hoisted(() => ({
   // Arguments of every setCompaction call, so tests can assert the stored
   // loop-compaction state was cleared when (and only when) the log is rewritten.
   compactionSet: [] as unknown[],
-  provider: null as Provider | null
+  provider: null as Provider | null,
+  // The live run on the chat, if any (the loop's activeRunForConversation).
+  activeRun: null as string | null
 }))
 
 vi.mock('../providers', () => ({ createProvider: () => h.provider }))
 vi.mock('../agentHost', () => ({
   getProvider: () => ({ id: 'anthropic', kind: 'anthropic', models: [] })
 }))
+vi.mock('./loop', () => ({ activeRunForConversation: () => h.activeRun }))
+vi.mock('../logger', () => ({ log: { warn: () => {}, info: () => {}, error: () => {} } }))
 vi.mock('../conversations', () => ({
   getConversation: () => h.conv,
+  peekConversation: () => h.conv,
   setMessages: (_id: string, m: ChatMessage[]) => {
     h.saved = m
   },
@@ -26,9 +31,11 @@ vi.mock('../conversations', () => ({
   }
 }))
 
-const { applyCompaction, compactConversationNow } = await import('./compact')
+const { applyCompaction, cancelCompaction, compactConversationNow, compactionInProgress } = await import('./compact')
 
 afterEach(() => {
+  vi.useRealTimers()
+  h.activeRun = null
   h.conv = null
   h.saved = null
   h.compactionSet = []
@@ -202,5 +209,135 @@ describe('compactConversationNow', () => {
     expect(res.error).toMatch(/empty summary/)
     expect(h.saved).toBeNull()
     expect(h.compactionSet).toEqual([]) // failed — stored state untouched
+  })
+
+  it('gives up at the overall deadline when every attempt fails retryably', async () => {
+    vi.useFakeTimers()
+    h.conv = { id: 'd1', workspace: '/w', messages: bigConversation(2, 40_000) }
+    let calls = 0
+    h.provider = {
+      async *streamChat() {
+        calls++
+        yield { type: 'error', message: 'overloaded', status: 529 }
+      }
+    }
+    const retries: number[] = []
+    const p = compactConversationNow('d1', 'anthropic', 'claude-test', {
+      deadlineMs: 5_000,
+      onRetry: (r) => retries.push(r.attempt)
+    })
+    await vi.advanceTimersByTimeAsync(5_000)
+    const res = await p
+    expect(res.ok).toBe(false)
+    expect(res.reason).toBe('timeout')
+    expect(res.error).toMatch(/longer than 5 seconds/)
+    expect(res.error).not.toContain('\u2014')
+    expect(calls).toBeGreaterThan(0)
+    // Retries surface to the caller instead of spinning in silence.
+    expect(retries.length).toBeGreaterThan(0)
+    expect(h.saved).toBeNull()
+    expect(compactionInProgress('d1')).toBe(false)
+  })
+
+  it('returns promptly when cancelled, even with a provider that never answers', async () => {
+    h.conv = { id: 'd2', workspace: '/w', messages: bigConversation(2, 40_000) }
+    let started!: () => void
+    const inStream = new Promise<void>((r) => (started = r))
+    h.provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat() {
+        started()
+        await new Promise(() => {}) // hangs, ignoring the signal
+      }
+    }
+    const ctl = new AbortController()
+    const p = compactConversationNow('d2', 'anthropic', 'claude-test', { signal: ctl.signal })
+    await inStream
+    expect(compactionInProgress('d2')).toBe(true)
+    ctl.abort()
+    const res = await p
+    expect(res).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(h.saved).toBeNull()
+    expect(compactionInProgress('d2')).toBe(false)
+  })
+
+  it('cancels an in-flight compaction by conversation id', async () => {
+    h.conv = { id: 'd3', workspace: '/w', messages: bigConversation(2, 40_000) }
+    let started!: () => void
+    const inStream = new Promise<void>((r) => (started = r))
+    h.provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat() {
+        started()
+        await new Promise(() => {})
+      }
+    }
+    expect(cancelCompaction('d3')).toBe(false) // nothing in flight yet
+    const p = compactConversationNow('d3', 'anthropic', 'claude-test')
+    await inStream
+    // A second compaction of the same chat is refused while the first runs.
+    expect(await compactConversationNow('d3', 'anthropic', 'claude-test')).toMatchObject({ ok: false, reason: 'busy' })
+    expect(cancelCompaction('d3')).toBe(true)
+    expect(await p).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(h.saved).toBeNull()
+  })
+
+  it('returns at once for an already-aborted signal', async () => {
+    h.conv = { id: 'd4', workspace: '/w', messages: bigConversation(2, 40_000) }
+    h.provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat() {
+        throw new Error('should not be called')
+      }
+    }
+    const ctl = new AbortController()
+    ctl.abort()
+    expect(await compactConversationNow('d4', 'anthropic', 'claude-test', { signal: ctl.signal })).toMatchObject({
+      ok: false,
+      reason: 'cancelled'
+    })
+  })
+
+  it('does not overwrite a conversation that changed while it was being summarized', async () => {
+    const messages = bigConversation(2, 40_000)
+    h.conv = { id: 'd5', workspace: '/w', messages }
+    h.provider = {
+      async *streamChat() {
+        // A new turn lands in the store while the summary is being written.
+        h.conv = { id: 'd5', workspace: '/w', messages: [...messages, { role: 'user', content: 'newer turn' }] }
+        yield { type: 'text', text: 'SUMMARY' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const res = await compactConversationNow('d5', 'anthropic', 'claude-test')
+    expect(res).toMatchObject({ ok: false, reason: 'changed' })
+    expect(h.saved).toBeNull()
+    expect(h.compactionSet).toEqual([])
+  })
+
+  it('does not overwrite when a run started on the chat mid-compaction', async () => {
+    h.conv = { id: 'd6', workspace: '/w', messages: bigConversation(2, 40_000) }
+    h.provider = {
+      async *streamChat() {
+        h.activeRun = 'run-1'
+        yield { type: 'text', text: 'SUMMARY' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const res = await compactConversationNow('d6', 'anthropic', 'claude-test')
+    expect(res).toMatchObject({ ok: false, reason: 'running' })
+    expect(h.saved).toBeNull()
+  })
+
+  it('refuses to start while a run is live on the chat', async () => {
+    h.conv = { id: 'd7', workspace: '/w', messages: bigConversation(2, 40_000) }
+    h.activeRun = 'run-2'
+    h.provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat() {
+        throw new Error('should not be called')
+      }
+    }
+    expect(await compactConversationNow('d7', 'anthropic', 'claude-test')).toMatchObject({ ok: false, reason: 'running' })
   })
 })

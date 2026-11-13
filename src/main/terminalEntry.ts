@@ -676,7 +676,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       // Custom slash commands from the workspace's .houston/commands (for /<name>).
       commands: () => loadCommands(tui.cwd),
       // On-demand context compaction for the /compact command.
-      compact: (id, providerId, model) => compactConversationNow(id, providerId, model),
+      compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts),
       // Settings editing for /hooks and /mcp (writes the shared settings.json, 0600).
       updateSettings: (patch) => {
         updateSettings(patch)

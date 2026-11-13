@@ -138,7 +138,7 @@ import {
   targetWindow,
   windowShowing
 } from './windows'
-import { compactConversationNow } from './agent/compact'
+import { cancelCompaction, compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
@@ -1251,10 +1251,19 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.conversationForkAt, (_event, id: string, point: unknown) =>
     typeof id === 'string' && isForkPoint(point) ? forkConversationAt(id, point) : null
   )
+  // /compact runs under an overall deadline and can be cancelled by chat id; retries
+  // of a failed summary request are pushed back so the UI can say it's retrying.
   handle(
     IPC.conversationCompact,
-    (_event, id: string, providerId: string, model: string) =>
-      compactConversationNow(id, providerId, model)
+    (event, id: string, providerId: string, model: string) =>
+      compactConversationNow(id, providerId, model, {
+        onRetry: (info) => {
+          if (!event.sender.isDestroyed()) event.sender.send(IPC.conversationCompactProgress, { id, ...info })
+        }
+      })
+  )
+  handle(IPC.conversationCompactCancel, (_event, id: unknown) =>
+    typeof id === 'string' ? cancelCompaction(id) : false
   )
   // Delete a conversation, confirming first via a native dialog so the choice is
   // unambiguous. A chat that owns a Houston-created worktree with work in it gets a

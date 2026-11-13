@@ -2698,6 +2698,33 @@ describe('runTui', () => {
     expect(t.text()).toContain('nothing to compact yet')
   })
 
+  it('Ctrl-C while compacting cancels it and returns the prompt', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const fp = fakePersist()
+    d.persist = fp.persist
+    const t = fakeIo(['first', '/compact', 'again', null])
+    let sawSignal = false
+    d.compact = (_id, _p, _m, o) =>
+      new Promise((resolve) => {
+        sawSignal = Boolean(o?.signal)
+        o?.onRetry?.({ attempt: 1, max: 6, error: 'overloaded' })
+        // Resolves only once the TUI aborts it: a hung provider, cancelled by the user.
+        o?.signal?.addEventListener('abort', () => resolve({ ok: false, summarized: 0, reason: 'cancelled' }))
+        queueMicrotask(() => t.fireInterrupt())
+      })
+    d.io = t.io
+    await runTui(opts, d)
+    expect(sawSignal).toBe(true)
+    expect(t.text()).toContain('compaction cancelled; nothing changed')
+    // The retry surfaced on the spinner, and the spinner was torn down after.
+    expect(t.spinner).toContain('start:Compacting')
+    expect(t.spinner).toContain('label:Compacting (retrying, attempt 1 of 6)')
+    // The prompt came back: the next line ran as a normal turn, and the Ctrl-C did
+    // not leak into it as an interrupted run.
+    expect(rec.runs).toHaveLength(2)
+    expect(t.text()).not.toContain('^C interrupted')
+  })
+
   it('/compact explains when a single big turn cannot be split', async () => {
     const { d } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     const fp = fakePersist()
