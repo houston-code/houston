@@ -53,7 +53,7 @@ export function DoctorModal({
   const dialogRef = useRef<HTMLDivElement>(null)
   useFocusTrap(dialogRef, onClose)
 
-  const report = facts ? buildDoctorReport(facts) : null
+  const report = facts ? buildDoctorReport(facts, 'desktop') : null
   const all = report?.groups.flatMap((g) => g.checks) ?? []
   const v = verdict(all)
 

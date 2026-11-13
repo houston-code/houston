@@ -9,6 +9,7 @@ import type { PromptInvocation } from './promptInvocation'
 import type { TurnReceipt } from './evidence'
 import type { PlanReadiness } from './planReadiness'
 import type { SubagentRecord, SubagentStep } from './subagents'
+import type { TurnErrorCause } from './turnError'
 
 export type ChatRole = 'system' | 'user' | 'assistant' | 'tool'
 
@@ -513,6 +514,8 @@ export interface ConversationUsage {
  */
 export interface ConversationError {
   message: string
+  /** The failure's kind, when the loop named one (see the `error` event). */
+  cause?: TurnErrorCause
 }
 
 /**
@@ -1394,6 +1397,12 @@ export type AgentEvent =
        * holding its own copy of settings re-reads them so its picker shows the flag.
        */
       modelUnavailable?: { providerId: string; model: string }
+      /**
+       * What kind of failure this was, when the loop can tell (bad key, rate limit,
+       * provider down, network, ...), so a client can explain it in plain words and
+       * offer the next step. The message stays the raw account.
+       */
+      cause?: TurnErrorCause
     }
 
 

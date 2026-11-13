@@ -378,6 +378,26 @@ retries the turn with a growing pause between attempts and tells you it's retryi
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.
 
+### When a turn fails
+
+In the desktop app, a failed turn leaves a bar above the message box that says what
+went wrong in plain words and offers the next step:
+
+| Cause | Next steps offered |
+| --- | --- |
+| The key was rejected, or none is set | Open provider settings, Run the doctor, Retry |
+| Rate limited | Retry, Switch model |
+| Out of credit or over quota | Switch model, Open provider settings, Retry |
+| The provider had a server error (5xx, overloaded) | Retry, Switch model |
+| No network (offline, DNS, proxy) | Retry, Run the doctor |
+| The model isn't offered to this key | Switch model, Retry |
+| The conversation is too long for the model | Switch model, Retry |
+| The model can't call tools | Switch model, Retry |
+
+Anything else reads "The last turn failed" with Retry and Run the doctor.
+**Details** shows the provider's own message, which is also in the transcript.
+`/retry` works in both clients.
+
 ### Fallback models
 
 Name backup models for Houston to try when your selected model can't serve a turn:
@@ -1085,11 +1105,14 @@ The desktop app updates itself separately.
 - in the terminal, the terminal's size and color support
 
 Each row is marked healthy, worth knowing, or broken, and anything not healthy comes
-with what to do about it.
+with what to do about it. The fixes fit where you are: the terminal names its slash
+commands (`/login`, `/model`), the desktop app names its own Settings pages and the
+model menu.
 
-**Questions it answers:** "is my shell really sandboxed here?" and "why did setting my
-API key change nothing?" (an environment variable silently outranks a stored key, and
-`/doctor` names it).
+**Questions it answers:** "is my shell really sandboxed here?" and, in the terminal,
+"why did setting my API key change nothing?" (an environment variable silently
+outranks a stored key, and `/doctor` names it; the desktop app never reads keys from
+the environment, so it doesn't warn about them).
 
 ## Running your own commands (!)
 

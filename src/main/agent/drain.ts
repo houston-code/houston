@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { AgentEvent, AgentRunRequest, ChatMessage } from '@shared/agent'
+import type { TurnErrorCause } from '@shared/turnError'
 import { combineQueued, type QueuedInputMeta } from '@shared/queue'
 import { startRun } from './loop'
 import { maybeGenerateTitle } from './title'
@@ -45,10 +46,12 @@ export async function runAndDrain(
 ): Promise<void> {
   let terminal: 'natural' | 'aborted' | 'error' = 'natural'
   let errorMessage = ''
+  let errorCause: TurnErrorCause | undefined
   const send = (e: AgentEvent): void => {
     if (e.type === 'error') {
       terminal = 'error'
       errorMessage = e.message
+      errorCause = e.cause
     } else if (e.type === 'done') terminal = e.stopReason === 'aborted' ? 'aborted' : 'natural'
     io.emit(conversationId, e)
     // A steer has landed: the run is about to persist it into the log, so its queue
@@ -99,7 +102,7 @@ export async function runAndDrain(
   } else if (terminal === 'error') {
     // Persist the failure so the "last turn failed" Retry banner survives a reload.
     // Aborts fall through untouched — a cancel isn't a failure worth re-running.
-    setConversationError(conversationId, { message: errorMessage })
+    setConversationError(conversationId, { message: errorMessage, ...(errorCause ? { cause: errorCause } : {}) })
   }
 }
 
