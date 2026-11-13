@@ -263,10 +263,17 @@ export class McpHttpClient implements McpConnection {
     if (sid) this.sessionId = sid
     if (res.status === 401) {
       await res.text().catch(() => '')
-      throw new McpUnauthorizedError(
+      const err = new McpUnauthorizedError(
         `MCP ${method} failed: HTTP 401 (the server rejected the credentials or requires OAuth sign-in)`,
         res.headers.get('www-authenticate')
       )
+      // Credentials that stopped working (a revoked or silently expired token) won't
+      // start working on this connection: mark it dead, like an expired session, so
+      // the manager reconnects (refreshing the OAuth token) instead of reusing it.
+      this.closed = true
+      this.pending.reject(id, err)
+      this.pending.failAll(err.message)
+      return
     }
     if (res.status === 404 && this.sessionId) {
       // The server expired our session (spec: 404 on a stale Mcp-Session-Id). A
