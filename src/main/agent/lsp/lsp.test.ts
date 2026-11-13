@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -399,6 +399,49 @@ describe('LspManager', () => {
     writeFileSync(file, 'x\n')
     const c = await m.clientFor(file, [root])
     expect(c?.state).toBe('ready')
+  })
+
+  it('stops the least recently used server to stay under the cap', async () => {
+    let now = 1000
+    const m = makeManager({}, { maxServers: 2, now: () => now })
+    const dirs = [0, 1, 2].map((i) => {
+      const d = join(root, `w${i}`)
+      mkdirSync(d)
+      writeFileSync(join(d, 'a.fk'), 'x\n')
+      return d
+    })
+    const a = await m.clientFor(join(dirs[0], 'a.fk'), [dirs[0]])
+    now += 10
+    const b = await m.clientFor(join(dirs[1], 'a.fk'), [dirs[1]])
+    now += 10
+    // Using the first again makes the second the least recently used.
+    await m.clientFor(join(dirs[0], 'a.fk'), [dirs[0]])
+    now += 10
+    const c = await m.clientFor(join(dirs[2], 'a.fk'), [dirs[2]])
+    expect(c?.state).toBe('ready')
+    expect(a?.state).toBe('ready')
+    expect(b?.state).toBe('stopped')
+    expect(m.runningCount()).toBe(2)
+    // A stopped server starts again when it is next needed.
+    expect((await m.clientFor(join(dirs[1], 'a.fk'), [dirs[1]]))?.state).toBe('ready')
+    expect(m.runningCount()).toBe(2)
+  })
+
+  it('stops the servers of a removed folder, and only those', async () => {
+    const m = makeManager()
+    const wt = join(root, 'wt')
+    const keep = join(root, 'wt-other')
+    for (const d of [wt, keep]) {
+      mkdirSync(d)
+      writeFileSync(join(d, 'a.fk'), 'x\n')
+    }
+    const gone = await m.clientFor(join(wt, 'a.fk'), [wt])
+    const kept = await m.clientFor(join(keep, 'a.fk'), [keep])
+    // A sibling whose name starts with the removed folder's is not inside it.
+    await m.stopForRoot(wt)
+    expect(gone?.state).toBe('stopped')
+    expect(kept?.state).toBe('ready')
+    expect(m.runningCount()).toBe(1)
   })
 
   it('stops a server after it sits idle', async () => {
