@@ -121,6 +121,7 @@ import { createTerminal, writeTerminal, resizeTerminal, killTerminal, killTermin
 import { log } from './logger'
 import { setMenuState, setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
+import { anyChatWindowFocused, chatWindows, setWindowShowing, targetWindow, windowShowing } from './windows'
 import { compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
@@ -280,10 +281,25 @@ function updateAppBadge(status: ChatStatusMap): void {
  */
 let attention: ChatAttention | null = null
 
-/** Stream one agent event to the renderer, persisting usage totals along the way. */
+/**
+ * The renderers a run's output goes to: the window that started it, then every other
+ * chat window. Each renderer routes events by run and conversation and ignores runs it
+ * isn't showing, so a chat open in another window (or reopened there after the starting
+ * window closed) follows the run live. With one window this is just that window.
+ */
+function runOutputTargets(sender: WebContents): WebContents[] {
+  const out = sender.isDestroyed() ? [] : [sender]
+  for (const win of chatWindows()) {
+    const wc = win.webContents
+    if (!wc.isDestroyed() && wc.id !== sender.id) out.push(wc)
+  }
+  return out
+}
+
+/** Stream one agent event to the renderers, persisting usage totals along the way. */
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
   const ev = applyRunningUsage(conversationId, e)
-  if (!sender.isDestroyed()) sender.send(IPC.agentEvent, ev)
+  for (const wc of runOutputTargets(sender)) wc.send(IPC.agentEvent, ev)
   maybeNotify(sender, conversationId, ev)
   attention?.noteEvent(conversationId, ev)
 }
@@ -298,10 +314,13 @@ function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): 
 function maybeNotify(sender: WebContents, conversationId: string, e: AgentEvent): void {
   if (getSettings().desktopNotifications === false) return
   if (!notificationFor(e)) return
-  // Nothing is shown while the window is focused (notifyAgentEvent's own gate), so
-  // don't parse the chat file just to label a notification that won't appear.
-  const win = BrowserWindow.fromWebContents(sender)
-  if (win && !win.isDestroyed() && win.isFocused()) return
+  // Nothing is shown while the app is focused (notifyAgentEvent's own gate checks the
+  // window), so don't parse the chat file just to label a notification that won't appear.
+  const starter = sender.isDestroyed() ? null : BrowserWindow.fromWebContents(sender)
+  if ((starter && !starter.isDestroyed() && starter.isFocused()) || anyChatWindowFocused()) return
+  // A click lands on the window showing the chat, else the one that started the run,
+  // else the window the user was last in.
+  const win = windowShowing(conversationId) ?? (starter && !starter.isDestroyed() ? starter : targetWindow()) ?? null
   const conv = peekConversation(conversationId)
   notifyAgentEvent(e, win, {
     enabled: true,
@@ -316,12 +335,12 @@ function emitQueueChanged(
   conversationId: string,
   items: QueuedInputMeta[]
 ): void {
-  if (!sender.isDestroyed()) sender.send(IPC.agentQueueChanged, { conversationId, items })
+  for (const wc of runOutputTargets(sender)) wc.send(IPC.agentQueueChanged, { conversationId, items })
 }
 
-/** Push a conversation's freshly model-generated title to the renderer. */
+/** Push a conversation's freshly model-generated title to the renderers. */
 function emitTitleChanged(sender: WebContents, conversationId: string, title: string): void {
-  if (!sender.isDestroyed()) sender.send(IPC.conversationTitleChanged, { id: conversationId, title })
+  for (const wc of runOutputTargets(sender)) wc.send(IPC.conversationTitleChanged, { id: conversationId, title })
 }
 
 /**
@@ -387,7 +406,7 @@ function makeIo(sender: WebContents): DrainIO {
  */
 function makeBroadcastIo(): DrainIO {
   const toEach = (send: (wc: WebContents) => void): void => {
-    for (const win of BrowserWindow.getAllWindows()) {
+    for (const win of chatWindows()) {
       if (!win.webContents.isDestroyed()) send(win.webContents)
     }
   }
@@ -396,8 +415,8 @@ function makeBroadcastIo(): DrainIO {
     emit: coalescedEmit((conversationId, e) => {
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))
-      const primary = BrowserWindow.getAllWindows()[0]?.webContents
-      if (primary) maybeNotify(primary, conversationId, ev)
+      const notifyVia = (windowShowing(conversationId) ?? targetWindow())?.webContents
+      if (notifyVia) maybeNotify(notifyVia, conversationId, ev)
       attention?.noteEvent(conversationId, ev)
     }),
     emitQueueChanged: (conversationId, items) =>
@@ -1707,6 +1726,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
     }
     const viewing = typeof conversationId === 'string' ? conversationId : null
     chat.setViewing(id, viewing, focused === true)
+    setWindowShowing(id, viewing)
     if (launchedIds.has(id) && (viewing === null || conversationExists(viewing))) lastChat.set(viewing)
   })
   // "Mark unread from here" names a reply by its position among the transcript's
@@ -1854,10 +1874,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Reconcile the native preview views to the renderer-measured rectangles. A
   // fire-and-forget send: it runs on every dock resize / overlay toggle, so it
   // must stay cheap and never block the renderer.
-  on(IPC.previewSync, (_event, specs: PreviewPaneSpec[], visible: boolean) =>
-    syncPreviewPanes(specs, visible)
+  on(IPC.previewSync, (event, specs: PreviewPaneSpec[], visible: boolean) =>
+    syncPreviewPanes(BrowserWindow.fromWebContents(event.sender), specs, visible)
   )
-  on(IPC.previewReload, (_event, id: string) => reloadPreviewPane(id))
+  on(IPC.previewReload, (event, id: string) =>
+    reloadPreviewPane(BrowserWindow.fromWebContents(event.sender), id)
+  )
   // Open a preview's URL in the OS browser — user-initiated, but re-validate
   // loopback-only so a stale/spoofed URL can't turn this into an open-redirect.
   handle(IPC.previewOpenExternal, async (_event, url: string): Promise<void> => {
