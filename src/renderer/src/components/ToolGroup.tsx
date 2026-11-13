@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { memo, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { MAX_APPROVAL_NOTE, type ReviewFinding, type ToolApprovalDecision } from '@shared/agent'
 import { cachedImageDataUrl } from '../lib/imageUrl'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -239,7 +239,12 @@ function reviewTally(findings: ReviewFinding[] | undefined, running: boolean): {
   return { text, alarm }
 }
 
-function ToolRow({
+/**
+ * One tool call's row. Memoized: the transcript re-renders on every streamed update,
+ * and a finished row's item object never changes again (the reducer keeps untouched
+ * items by identity), so only the row whose call is still moving renders.
+ */
+const ToolRow = memo(function ToolRow({
   item,
   onApprove
 }: {
@@ -585,7 +590,7 @@ function ToolRow({
       )}
     </div>
   )
-}
+})
 
 /** The status a fold of reads shows: the most attention-worthy across the run. */
 function combinedStatus(items: ToolItem[]): ToolItem['status'] {
@@ -596,8 +601,13 @@ function combinedStatus(items: ToolItem[]): ToolItem['status'] {
   return 'done'
 }
 
+/** Whether two item lists hold the same item objects in the same order. */
+function sameItems(a: ToolItem[], b: ToolItem[]): boolean {
+  return a.length === b.length && a.every((it, i) => it === b[i])
+}
+
 /** A fold of consecutive reads: one "Read N files" row that expands to the list. */
-function ReadAggregateRow({ items }: { items: ToolItem[] }): JSX.Element {
+const ReadAggregateRow = memo(function ReadAggregateRow({ items }: { items: ToolItem[] }): JSX.Element {
   const [open, setOpen] = useState(false)
   const status = combinedStatus(items)
   return (
@@ -639,9 +649,14 @@ function ReadAggregateRow({ items }: { items: ToolItem[] }): JSX.Element {
       )}
     </div>
   )
-}
+}, (prev, next) => sameItems(prev.items, next.items))
 
-export function ToolGroup({
+/**
+ * A run of consecutive tool calls. Memoized on the items themselves rather than the
+ * array: grouping builds a fresh array for every group on each transcript render, but
+ * a finished group holds the same item objects as before.
+ */
+export const ToolGroup = memo(function ToolGroup({
   items,
   onApprove
 }: {
@@ -661,4 +676,4 @@ export function ToolGroup({
       )}
     </div>
   )
-}
+}, (prev, next) => prev.onApprove === next.onApprove && sameItems(prev.items, next.items))
