@@ -254,20 +254,31 @@ if (acp) {
   })
 } else {
   app.whenReady().then(async () => {
-    // Decrypt the credential store before anything (settings, IPC, the window) reads it.
-    await initSecrets()
-    log.info(`Houston ${app.getVersion()} starting`)
-    log.info(`sandbox backend = ${activeBackendId()} (sandboxed=${isSandboxed()})`)
-    // Drop recents whose folder vanished since last launch (e.g. a worktree removed
-    // with its chat) so a deleted dir can't seed the next new chat's workspace.
-    pruneRecentWorkspaces()
-    registerIpc()
-    buildAppMenu()
+    // Start decrypting the credential store, and open the window without waiting for
+    // it. The OS store (Keychain, libsecret, DPAPI) usually answers in milliseconds,
+    // but it can take seconds, or stop to ask the user, and until now nothing at all
+    // was on screen while it did. Everything that reads a credential still waits:
+    // `started` gates every IPC request and the scheduler (see registerIpc), and the
+    // rest of this function runs after it.
+    const started = initSecrets().then(() => {
+      log.info(`Houston ${app.getVersion()} starting`)
+      log.info(`sandbox backend = ${activeBackendId()} (sandboxed=${isSandboxed()})`)
+      // Drop recents whose folder vanished since last launch (e.g. a worktree removed
+      // with its chat) so a deleted dir can't seed the next new chat's workspace.
+      // Before any request is answered: this is the first thing queued on `started`.
+      pruneRecentWorkspaces()
+      // The menu reads settings, and the first read of settings can move legacy
+      // cleartext header values into the credential store, which must be ready to
+      // take them. So nothing loads settings before this point.
+      buildAppMenu()
+    })
+    registerIpc(started)
     createWindow()
     // After the window exists, so its renderer starts loading while the store is read.
-    // Still ahead of every request: nothing above has awaited, so the scheduler's
-    // catch-up run that registerIpc started cannot have reached a provider yet.
+    // Still ahead of every request: nothing above has awaited, and the scheduler's
+    // catch-up run waits for `started`, so nothing can have reached a provider yet.
     trustSystemCertificates()
+    await started
     // Restart-to-install asks the same "work is still running" question as ⌘Q.
     setInstallGuard(confirmRestartForUpdate, resetQuitConfirmation)
     initUpdates()

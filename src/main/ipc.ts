@@ -487,7 +487,46 @@ async function readClipboardImage(): Promise<ClipboardContent['image']> {
 }
 
 /** Register every IPC handler the renderer can call. */
-export function registerIpc(): void {
+/**
+ * Register every IPC handler.
+ *
+ * `ready`, when given, is the startup work the handlers depend on (the credential store
+ * being decrypted). The handlers are registered at once, so a window that is already
+ * loading never calls a channel with no handler, but each request waits for `ready`
+ * before it runs, and so does anything here that could start a run. That lets the
+ * window be created while the OS credential store is still answering, instead of after
+ * it. Once `ready` settles, requests run with no added hop. Without it (tests), nothing
+ * waits.
+ */
+export function registerIpc(ready?: Promise<unknown>): void {
+  let open = ready === undefined
+  const opened = ready?.then(
+    () => {
+      open = true
+    },
+    () => {
+      // The startup work logs its own failure; requests must still be answered.
+      open = true
+    }
+  )
+  /** `ipcMain.handle`, with the request held until startup has finished. */
+  const handle: typeof ipcMain.handle = (channel, listener) =>
+    ipcMain.handle(channel, (event, ...args) =>
+      open || !opened ? listener(event, ...args) : opened.then(() => listener(event, ...args))
+    )
+  /**
+   * `ipcMain.on`, held the same way. These carry window state (which chat is on
+   * screen, the menu's state), and handling one can read settings, which must not
+   * happen before the credential store is ready (see index.ts).
+   */
+  const on: typeof ipcMain.on = (channel, listener) =>
+    ipcMain.on(channel, (event, ...args) => afterReady(() => listener(event, ...args)))
+  /** Run `fn` now, or as soon as startup has finished. */
+  const afterReady = (fn: () => void): void => {
+    if (open || !opened) fn()
+    else void opened.then(fn)
+  }
+
   // Bind the agent's spawn_session tool to the real shell capabilities (once).
   wireSpawnSession()
 
@@ -496,16 +535,17 @@ export function registerIpc(): void {
   // sidebar). start() also catches up occurrences missed while the app was closed.
   const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn() })
   setSchedulerBackend(scheduler)
-  scheduler.start()
+  // Its catch-up run needs the provider keys, so not before the credential store is ready.
+  afterReady(() => scheduler.start())
 
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.
-  ipcMain.handle(IPC.appGetVersion, () => APP_VERSION)
+  handle(IPC.appGetVersion, () => APP_VERSION)
 
   // /doctor: the health facts, graded into a report by @shared/doctor in the
   // renderer. `workspace` is informational (the report's "workspace" row). Update
   // state has its own GUI surface, so the doctor's version row just shows the version.
-  ipcMain.handle(IPC.doctorFacts, (_event, workspace: unknown): DoctorFacts => {
+  handle(IPC.doctorFacts, (_event, workspace: unknown): DoctorFacts => {
     const cwd = typeof workspace === 'string' ? workspace : ''
     return gatherDoctorFacts(cwd, { version: APP_VERSION, update: null })
   })
@@ -518,7 +558,7 @@ export function registerIpc(): void {
   // or ~/.houston/AGENTS.md (global), the files Houston already loads every run.
   // Returns the path written, or null when the input is malformed. Text is capped
   // here rather than trusting the renderer.
-  ipcMain.handle(
+  handle(
     IPC.memorySave,
     async (_event, workspace: unknown, scope: unknown, text: unknown): Promise<string | null> => {
       if (typeof workspace !== 'string' || typeof text !== 'string') return null
@@ -535,11 +575,11 @@ export function registerIpc(): void {
   )
 
   // Cross-session memory's review page. Requests are validated in memoryIpc.ts.
-  ipcMain.handle(IPC.memoryRequest, (_event, request: unknown): Promise<MemoryResponse> =>
+  handle(IPC.memoryRequest, (_event, request: unknown): Promise<MemoryResponse> =>
     handleMemoryRequest(request)
   )
   // A user gesture with no argument: the only folder it can open is the store's own.
-  ipcMain.handle(IPC.memoryReveal, async (): Promise<void> => {
+  handle(IPC.memoryReveal, async (): Promise<void> => {
     const root = defaultMemoryRoot()
     await mkdir(root, { recursive: true, mode: 0o700 })
     const err = await shell.openPath(root)
@@ -548,12 +588,12 @@ export function registerIpc(): void {
 
   // One-time "global rules moved" notice: shown while ~/.claude/CLAUDE.md exists,
   // ~/.houston/AGENTS.md doesn't import it, and the user hasn't answered yet.
-  ipcMain.handle(
+  handle(
     IPC.legacyRulesNoticeStatus,
     (): boolean => !isLegacyRulesNoticeDismissed() && legacyRulesNoticeApplies()
   )
   // Answer it (see decideLegacyRulesNotice: a failed import is reported, not recorded).
-  ipcMain.handle(
+  handle(
     IPC.legacyRulesNoticeDecide,
     (_event, choice: unknown): Promise<LegacyRulesDecideResult> =>
       decideLegacyRulesNotice(choice, {
@@ -566,26 +606,26 @@ export function registerIpc(): void {
   )
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
-  ipcMain.handle(IPC.updateCheck, () => checkForUpdates())
-  ipcMain.handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
+  handle(IPC.updateCheck, () => checkForUpdates())
+  handle(IPC.updateWhatsNew, () => takePendingWhatsNew())
   // "Restart to install" — apply a downloaded update now instead of on next quit.
-  ipcMain.handle(IPC.updateInstall, () => installUpdate())
+  handle(IPC.updateInstall, () => installUpdate())
   // Closing the banner mid-download stops it, so nothing installs on the next quit.
-  ipcMain.handle(IPC.updateCancelDownload, () => cancelDownload())
+  handle(IPC.updateCancelDownload, () => cancelDownload())
 
   // Share Houston: the sidebar button anchors the macOS share menu at the point it
   // passes (window-relative CSS px); a non-finite point falls back to the cursor.
-  ipcMain.handle(IPC.shareHouston, (event, at?: { x: unknown; y: unknown }): ShareResult => {
+  handle(IPC.shareHouston, (event, at?: { x: unknown; y: unknown }): ShareResult => {
     const point =
       at && Number.isFinite(at.x) && Number.isFinite(at.y)
         ? { x: at.x as number, y: at.y as number }
         : undefined
     return shareHouston(BrowserWindow.fromWebContents(event.sender), point)
   })
-  ipcMain.handle(IPC.shareVia, (_event, target: ShareTarget) => shareHoustonVia(target))
-  ipcMain.handle(IPC.shareFromMenu, () => shareHoustonFromMenu())
+  handle(IPC.shareVia, (_event, target: ShareTarget) => shareHoustonVia(target))
+  handle(IPC.shareFromMenu, () => shareHoustonFromMenu())
 
-  ipcMain.handle(IPC.workspacePick, async (event) => {
+  handle(IPC.workspacePick, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
     const result = await dialog.showOpenDialog(win!, {
       title: 'Choose a project folder',
@@ -600,7 +640,7 @@ export function registerIpc(): void {
 
   // Pick a directory without recording it as a recent workspace (used to add an
   // extra allowed root in Settings).
-  ipcMain.handle(IPC.directoryPick, async (event): Promise<string | null> => {
+  handle(IPC.directoryPick, async (event): Promise<string | null> => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
     const result = await dialog.showOpenDialog(win!, {
       title: 'Choose a directory',
@@ -611,7 +651,7 @@ export function registerIpc(): void {
 
   // Fuzzy file search for the composer's @-mention autocomplete. Confined to the
   // workspace (realpath'd, like the agent loop) so it can't list outside it.
-  ipcMain.handle(
+  handle(
     IPC.workspaceListFiles,
     async (_event, workspace: string, query: string): Promise<string[]> => {
       if (!workspace) return []
@@ -628,7 +668,7 @@ export function registerIpc(): void {
   // One directory level for the Finder-like Files panel. The renderer expands
   // folders lazily, so each call lists only a directory's immediate children;
   // listDirectory realpaths the workspace and confines the subpath to it.
-  ipcMain.handle(IPC.workspaceListDir, async (_event, workspace: string, relPath: string) =>
+  handle(IPC.workspaceListDir, async (_event, workspace: string, relPath: string) =>
     listDirectory(
       typeof workspace === 'string' ? workspace : '',
       typeof relPath === 'string' ? relPath : ''
@@ -637,7 +677,7 @@ export function registerIpc(): void {
 
   // Read a file selected in the Files panel for in-app preview. Confined to the
   // workspace; returns a text/image payload or a note kind for binary/oversize.
-  ipcMain.handle(IPC.workspaceReadFile, async (_event, workspace: string, relPath: string) =>
+  handle(IPC.workspaceReadFile, async (_event, workspace: string, relPath: string) =>
     readWorkspaceFile(
       typeof workspace === 'string' ? workspace : '',
       typeof relPath === 'string' ? relPath : ''
@@ -646,7 +686,7 @@ export function registerIpc(): void {
 
   // Open a file selected in the Files panel in its OS default app. A user
   // gesture; the target is confined to the workspace before shell.openPath.
-  ipcMain.handle(IPC.workspaceOpenPath, (_event, workspace: string, relPath: string) =>
+  handle(IPC.workspaceOpenPath, (_event, workspace: string, relPath: string) =>
     openWorkspacePath(
       typeof workspace === 'string' ? workspace : '',
       typeof relPath === 'string' ? relPath : ''
@@ -656,7 +696,7 @@ export function registerIpc(): void {
   // Composer "+" menu: pick files in a native dialog and return their (capped)
   // text contents as context for the next message. A user gesture, so any path is
   // allowed; reads are bounded and binary files come back with contents omitted.
-  ipcMain.handle(IPC.attachmentPickFiles, async (event): Promise<PickedFile[]> => {
+  handle(IPC.attachmentPickFiles, async (event): Promise<PickedFile[]> => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
     const result = await dialog.showOpenDialog(win!, {
       title: 'Attach files',
@@ -670,19 +710,19 @@ export function registerIpc(): void {
   // in the app renderer); HTML visuals are registered for their sandboxed frames only
   // while the user has them turned on.
   wireHtmlVisualProtocol()
-  ipcMain.handle(IPC.visualMermaid, async (_event, source: unknown, theme: unknown) => {
+  handle(IPC.visualMermaid, async (_event, source: unknown, theme: unknown) => {
     const req = parseMermaidRequest(source, theme)
     if (!req) return { error: 'The diagram is empty or too large to render.' }
     return renderMermaid(req.source, req.theme)
   })
-  ipcMain.handle(IPC.visualRegisterHtml, (_event, html: unknown): string | null =>
+  handle(IPC.visualRegisterHtml, (_event, html: unknown): string | null =>
     getSettings().htmlVisuals === true ? registerHtmlVisual(html) : null
   )
 
   // Image viewer: copy the shown image to the clipboard. The renderer only ever holds
   // image data URLs it was sent, but this is still an IPC boundary, so the payload is
   // parsed strictly (a supported image type, base64, size-capped) before use.
-  ipcMain.handle(IPC.imageCopy, async (_event, dataUrl: unknown): Promise<boolean> => {
+  handle(IPC.imageCopy, async (_event, dataUrl: unknown): Promise<boolean> => {
     const img = parseImageDataUrl(dataUrl)
     if (!img) return false
     try {
@@ -698,7 +738,7 @@ export function registerIpc(): void {
 
   // Image viewer: save the shown image where the user picks (a user gesture, so any
   // folder they choose is fine). Resolves with the saved path, or null if cancelled.
-  ipcMain.handle(IPC.imageSave, async (event, dataUrl: unknown, label: unknown): Promise<string | null> => {
+  handle(IPC.imageSave, async (event, dataUrl: unknown, label: unknown): Promise<string | null> => {
     const img = parseImageDataUrl(dataUrl)
     if (!img) return null
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
@@ -716,7 +756,7 @@ export function registerIpc(): void {
 
   // Composer "+" menu: read the clipboard (text + image) on demand. Both halves are
   // independent: an unreadable image still pastes the text, and vice versa.
-  ipcMain.handle(
+  handle(
     IPC.clipboardRead,
     async (): Promise<ClipboardContent> => ({
       text: await readClipboardText(),
@@ -727,7 +767,7 @@ export function registerIpc(): void {
   // Git repo info for the "new chat in a worktree" picker: main worktree root,
   // current branch, and local branches to pick a base from. Read-only; a non-repo
   // folder just reports isRepo:false so the UI hides the worktree option.
-  ipcMain.handle(IPC.gitRepoInfo, async (_event, workspace: string) => {
+  handle(IPC.gitRepoInfo, async (_event, workspace: string) => {
     if (!workspace)
       return {
         isRepo: false,
@@ -743,29 +783,29 @@ export function registerIpc(): void {
 
   // All uncommitted working-tree changes (tracked diff vs HEAD + untracked files)
   // for the Changes panel. Read-only and hardened; a non-repo yields isRepo:false.
-  ipcMain.handle(IPC.workingTreeChanges, async (_event, workspace: string) =>
+  handle(IPC.workingTreeChanges, async (_event, workspace: string) =>
     collectWorkingTreeChanges(typeof workspace === 'string' ? workspace : '')
   )
 
   // Initialize a git repo in the workspace so a non-git project's files become
   // visible/reviewable in the Changes panel (the "Initialize git repository" action).
-  ipcMain.handle(IPC.gitInit, async (_event, workspace: string) =>
+  handle(IPC.gitInit, async (_event, workspace: string) =>
     initGitRepo(typeof workspace === 'string' ? workspace : '')
   )
 
   // First-write git-init prompt: whether the user opted out for this folder, and
   // persisting that opt-out ("Don't ask again for this folder"). Realpath-normalized
   // in the store so the same folder matches however its path is spelled.
-  ipcMain.handle(IPC.gitInitDismissed, (_event, workspace: string) =>
+  handle(IPC.gitInitDismissed, (_event, workspace: string) =>
     isGitInitDismissed(typeof workspace === 'string' ? workspace : '')
   )
-  ipcMain.handle(IPC.gitInitDismiss, (_event, workspace: string) =>
+  handle(IPC.gitInitDismiss, (_event, workspace: string) =>
     dismissGitInit(typeof workspace === 'string' ? workspace : '')
   )
 
   // Trusted folders: whether this workspace's project config elevates anything
   // (allow rules / hooks / MCP servers), and where the user's consent stands.
-  ipcMain.handle(IPC.folderTrustStatus, async (_event, workspace: string): Promise<FolderTrustStatus> => {
+  handle(IPC.folderTrustStatus, async (_event, workspace: string): Promise<FolderTrustStatus> => {
     if (typeof workspace !== 'string' || !workspace) return { state: 'none' }
     const cfg = await loadProjectConfig(workspace)
     if (!cfg.elevatedHash) return { state: 'none' }
@@ -781,7 +821,7 @@ export function registerIpc(): void {
   // Persist a trust decision. The fingerprint is recomputed here from the file on
   // disk — never accepted from the renderer — so consent is always bound to what
   // the project actually elevates at decision time.
-  ipcMain.handle(IPC.folderTrustDecide, async (_event, workspace: string, decision: unknown) => {
+  handle(IPC.folderTrustDecide, async (_event, workspace: string, decision: unknown) => {
     if (typeof workspace !== 'string' || !workspace) return getSettings()
     if (decision !== 'trusted' && decision !== 'never') return getSettings()
     const cfg = await loadProjectConfig(workspace)
@@ -789,7 +829,7 @@ export function registerIpc(): void {
   })
 
   // Custom slash commands from the workspace's .houston/commands directory.
-  ipcMain.handle(IPC.commandsList, async (_event, workspace: string) => {
+  handle(IPC.commandsList, async (_event, workspace: string) => {
     if (!workspace) return []
     try {
       return await loadCommands(realpathSync(workspace))
@@ -801,7 +841,7 @@ export function registerIpc(): void {
   // Read-only listing of the workspace's skills / custom agents for /skills and
   // /agents. Project to {name, description} only — the agent's full systemPrompt
   // (and a skill's path) never needs to cross into the renderer for a listing.
-  ipcMain.handle(IPC.skillsList, async (_event, workspace: string) => {
+  handle(IPC.skillsList, async (_event, workspace: string) => {
     if (!workspace) return []
     try {
       const skills = await loadSkills(realpathSync(workspace))
@@ -810,7 +850,7 @@ export function registerIpc(): void {
       return []
     }
   })
-  ipcMain.handle(IPC.agentsList, async (_event, workspace: string) => {
+  handle(IPC.agentsList, async (_event, workspace: string) => {
     if (!workspace) return []
     try {
       const agents = await loadAgents(realpathSync(workspace))
@@ -820,9 +860,9 @@ export function registerIpc(): void {
     }
   })
 
-  ipcMain.handle(IPC.settingsGet, () => getSettings())
+  handle(IPC.settingsGet, () => getSettings())
 
-  ipcMain.handle(IPC.settingsSave, (_event, next: AppSettings) => {
+  handle(IPC.settingsSave, (_event, next: AppSettings) => {
     const saved = saveSettings(next)
     // The badge setting may have changed; reapply it against the current status.
     if (attention) updateAppBadge(attention.snapshot())
@@ -830,17 +870,17 @@ export function registerIpc(): void {
   })
 
   // Pure transform for the Settings "Clean up rules" button — no state read/write.
-  ipcMain.handle(IPC.permissionsCleanup, (_event, rules: PermissionRule[]) =>
+  handle(IPC.permissionsCleanup, (_event, rules: PermissionRule[]) =>
     cleanupPermissionRules(Array.isArray(rules) ? rules : [])
   )
 
   // Read-only view of the rules that apply beside the user's own (admin + project).
-  ipcMain.handle(IPC.permissionsPolicy, (_event, workspace: unknown) =>
+  handle(IPC.permissionsPolicy, (_event, workspace: unknown) =>
     describePermissionPolicy(typeof workspace === 'string' ? workspace : null, defaultPolicyDeps(folderTrustFor))
   )
   // Settings' rule tester: matches only, reads nothing beyond the policy files above.
   // Bounded so a pasted novel or a runaway list can't stall the main process.
-  ipcMain.handle(IPC.permissionsTest, (_event, input: unknown) => {
+  handle(IPC.permissionsTest, (_event, input: unknown) => {
     const i = (input ?? {}) as Record<string, unknown>
     const str = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
     return testPermission(
@@ -854,11 +894,11 @@ export function registerIpc(): void {
       defaultPolicyDeps(folderTrustFor)
     )
   })
-  ipcMain.handle(IPC.permissionsUsage, () => getRuleUsage())
+  handle(IPC.permissionsUsage, () => getRuleUsage())
 
   // Preferences export/import. The renderer builds and parses the content (see
   // @shared/settingsPortable); main only moves bytes to and from a file the user picks.
-  ipcMain.handle(IPC.settingsExportFile, async (event, content: unknown): Promise<string | null> => {
+  handle(IPC.settingsExportFile, async (event, content: unknown): Promise<string | null> => {
     if (typeof content !== 'string' || content.length > MAX_SETTINGS_FILE_BYTES) return null
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
     const res = await dialog.showSaveDialog(win!, {
@@ -870,7 +910,7 @@ export function registerIpc(): void {
     writeFileSync(res.filePath, content, 'utf8')
     return res.filePath
   })
-  ipcMain.handle(IPC.settingsImportFile, async (event): Promise<string | null> => {
+  handle(IPC.settingsImportFile, async (event): Promise<string | null> => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
     const res = await dialog.showOpenDialog(win!, {
       title: 'Import settings',
@@ -886,36 +926,36 @@ export function registerIpc(): void {
   })
 
   // Wait for the encrypted write so a failed save reaches the renderer as an error.
-  ipcMain.handle(IPC.settingsSetKey, async (_event, providerId: string, key: string) => {
+  handle(IPC.settingsSetKey, async (_event, providerId: string, key: string) => {
     setKey(providerId, key)
     await flushSecrets()
     return getSettings()
   })
 
-  ipcMain.handle(IPC.settingsDeleteKey, async (_event, providerId: string) => {
+  handle(IPC.settingsDeleteKey, async (_event, providerId: string) => {
     deleteKey(providerId)
     await flushSecrets()
     return getSettings()
   })
 
-  ipcMain.handle(IPC.secureStorageStatus, () => secureStorageStatus())
+  handle(IPC.secureStorageStatus, () => secureStorageStatus())
 
-  ipcMain.handle(IPC.appRelaunch, () => relaunchApp())
+  handle(IPC.appRelaunch, () => relaunchApp())
 
-  ipcMain.handle(IPC.settingsListModels, async (_event, providerId: string) => {
+  handle(IPC.settingsListModels, async (_event, providerId: string) => {
     const provider = getProvider(providerId)
     if (!provider) throw new Error(`Unknown provider: ${providerId}`)
     return listModels(provider)
   })
 
-  ipcMain.handle(IPC.settingsTestKey, (_event, providerId: unknown, key: unknown) =>
+  handle(IPC.settingsTestKey, (_event, providerId: unknown, key: unknown) =>
     testProviderKey(providerId, key)
   )
 
   // Preflight: does this local model support tool calling? Only meaningful for an
   // Ollama-style (openai-compatible) provider; anything else returns null (unknown)
   // so the UI never shows a false warning.
-  ipcMain.handle(IPC.ollamaSupportsTools, async (_event, providerId: string, model: string) => {
+  handle(IPC.ollamaSupportsTools, async (_event, providerId: string, model: string) => {
     const provider = getProvider(providerId)
     if (!provider?.baseUrl || provider.kind !== 'openai-compatible') return null
     return ollamaSupportsTools(provider.baseUrl, model)
@@ -926,7 +966,7 @@ export function registerIpc(): void {
   // and persist the minted tokens in the encrypted store. The renderer saves
   // settings first — the flow reads the persisted server URL by id — and the fresh
   // settings returned carry the updated derived `hasOAuth` flag.
-  ipcMain.handle(
+  handle(
     IPC.mcpOAuthLogin,
     async (_event, serverId: string): Promise<{ ok: boolean; error?: string; settings: AppSettings }> => {
       const server = getSettings().mcpServers?.find((s) => s.id === serverId)
@@ -948,37 +988,37 @@ export function registerIpc(): void {
   )
 
   // Forget a server's stored OAuth token set (sign out).
-  ipcMain.handle(IPC.mcpOAuthLogout, (_event, serverId: string): AppSettings => {
+  handle(IPC.mcpOAuthLogout, (_event, serverId: string): AppSettings => {
     setMcpOAuthTokens(serverId, null)
     return getSettings()
   })
 
   // Live per-server connection status (connected / needs-auth / error) for Settings.
-  ipcMain.handle(IPC.mcpStatus, () => getMcpStatuses())
+  handle(IPC.mcpStatus, () => getMcpStatuses())
 
   // Optional-integrations status (gh CLI, formatters) for the Settings hint.
-  ipcMain.handle(IPC.integrationsGet, () =>
+  handle(IPC.integrationsGet, () =>
     getIntegrations({ languageServers: () => languageServerIntegration(getSettings()) })
   )
 
   // "Open project in…" — user gesture, launches an external editor / file manager.
-  ipcMain.handle(IPC.editorsList, () => detectEditors())
-  ipcMain.handle(IPC.openInEditor, (_event, editorId: string, dir: string) =>
+  handle(IPC.editorsList, () => detectEditors())
+  handle(IPC.openInEditor, (_event, editorId: string, dir: string) =>
     openProjectInEditor(editorId, dir)
   )
-  ipcMain.handle(IPC.revealInFileManager, (_event, target: string) => revealInFileManager(target))
+  handle(IPC.revealInFileManager, (_event, target: string) => revealInFileManager(target))
 
   // Conversations
-  ipcMain.handle(IPC.conversationList, () => listConversations())
-  ipcMain.handle(IPC.conversationSearch, (_event, query: string) => searchConversations(query))
-  ipcMain.handle(IPC.conversationGet, (_event, id: string) => {
+  handle(IPC.conversationList, () => listConversations())
+  handle(IPC.conversationSearch, (_event, query: string) => searchConversations(query))
+  handle(IPC.conversationGet, (_event, id: string) => {
     // A window that loads the saved chat must first have every delta sent before it.
     flushAllDeltas()
     return getConversation(id)
   })
   // Local-only per-model loop scorecard — aggregated on-device, never transmitted.
-  ipcMain.handle(IPC.conversationScorecard, () => computeScorecard())
-  ipcMain.handle(
+  handle(IPC.conversationScorecard, () => computeScorecard())
+  handle(
     IPC.conversationCreate,
     async (
       _event,
@@ -1023,15 +1063,15 @@ export function registerIpc(): void {
       })
     }
   )
-  ipcMain.handle(IPC.conversationSetSettings, (_event, id: string, patch: ConversationSettingsPatch) => {
+  handle(IPC.conversationSetSettings, (_event, id: string, patch: ConversationSettingsPatch) => {
     const meta = setConversationSettings(id, patch)
     // A message queued behind the live run goes out as this chat's next turn, so it
     // takes the change too (a mode tightened mid-run must not be undone by it).
     if (meta) retargetQueue(id, patch)
     return meta
   })
-  ipcMain.handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
-  ipcMain.handle(
+  handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
+  handle(
     IPC.conversationCompact,
     (_event, id: string, providerId: string, model: string) =>
       compactConversationNow(id, providerId, model)
@@ -1042,7 +1082,7 @@ export function registerIpc(): void {
   // worktree holds nothing to keep, so it gets the plain confirmation and is torn
   // down with the chat. In every case the Cancel button truly cancels (returns
   // deleted: false, nothing is touched).
-  ipcMain.handle(
+  handle(
     IPC.conversationDelete,
     async (event, id: string): Promise<DeleteConversationResult> => {
       // Only the title and worktree are needed: no attachment bytes.
@@ -1104,7 +1144,7 @@ export function registerIpc(): void {
     }
   )
   // Rename / pin / move-to-group. Does not affect the recency ordering.
-  ipcMain.handle(
+  handle(
     IPC.conversationOrganize,
     (
       _event,
@@ -1115,7 +1155,7 @@ export function registerIpc(): void {
     }
   )
   // Drag-to-reorder within a sidebar section. Also does not affect recency.
-  ipcMain.handle(
+  handle(
     IPC.conversationReorder,
     (_event, orderedIds: string[], move?: { id: string; groupId: string | null }) => {
       reorderConversations(orderedIds, move)
@@ -1124,7 +1164,7 @@ export function registerIpc(): void {
 
   // Export a conversation to a JSON file the user chooses. Returns the path, or
   // null if cancelled / unknown id.
-  ipcMain.handle(IPC.conversationExport, async (event, id: string): Promise<string | null> => {
+  handle(IPC.conversationExport, async (event, id: string): Promise<string | null> => {
     const conv = getConversation(id)
     if (!conv) return null
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
@@ -1146,7 +1186,7 @@ export function registerIpc(): void {
 
   // Export a conversation as a single self-contained HTML file (inline CSS, no
   // external assets or scripts). Returns the path, or null if cancelled / unknown id.
-  ipcMain.handle(IPC.conversationExportHtml, async (event, id: string): Promise<string | null> => {
+  handle(IPC.conversationExportHtml, async (event, id: string): Promise<string | null> => {
     const conv = getConversation(id)
     if (!conv) return null
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
@@ -1165,7 +1205,7 @@ export function registerIpc(): void {
   // Returns its metadata and whether only the visible text could be recovered (an
   // HTML export from before the embedded data block), or null if cancelled. Throws
   // (surfaced to the renderer) on a malformed file.
-  ipcMain.handle(IPC.conversationImport, async (event): Promise<ImportConversationResult | null> => {
+  handle(IPC.conversationImport, async (event): Promise<ImportConversationResult | null> => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
     const res = await dialog.showOpenDialog(win!, {
       title: 'Import conversation',
@@ -1195,7 +1235,7 @@ export function registerIpc(): void {
   })
 
   // Agent: fire-and-forget; progress is streamed back over IPC.agentEvent.
-  ipcMain.handle(IPC.agentStart, async (event, req: AgentSendRequest): Promise<AgentStartResult | void> => {
+  handle(IPC.agentStart, async (event, req: AgentSendRequest): Promise<AgentStartResult | void> => {
     const conv = getConversation(req.conversationId)
     if (!conv) {
       emitEvent(event.sender, req.conversationId, {
@@ -1280,7 +1320,7 @@ export function registerIpc(): void {
 
   // Re-run the last turn after a failure: run on the conversation's existing
   // messages (the user turn is already persisted) without appending a new one.
-  ipcMain.handle(
+  handle(
     IPC.agentRetry,
     async (
       event,
@@ -1342,7 +1382,7 @@ export function registerIpc(): void {
     }
   )
 
-  ipcMain.handle(IPC.agentCancel, (event, runId: string) => {
+  handle(IPC.agentCancel, (event, runId: string) => {
     // Only the window that started the run may cancel it (runIds are broadcast to all).
     if (!callerOwnsRun(event, runId)) return
     cancelRun(runId)
@@ -1351,34 +1391,34 @@ export function registerIpc(): void {
   // Queued input: buffer messages typed mid-run, dispatched (combined) when the
   // conversation's run finishes naturally. The renderer updates its bar from the
   // returned list; main pushes IPC.agentQueueChanged when an auto-flush empties it.
-  ipcMain.handle(IPC.agentQueueAdd, (_event, req: QueueAddRequest): QueuedInputMeta[] =>
+  handle(IPC.agentQueueAdd, (_event, req: QueueAddRequest): QueuedInputMeta[] =>
     addToQueue(req)
   )
   // Removing a steer that hasn't landed takes it back from the live run as well, so
   // the chip's × means what it says.
-  ipcMain.handle(IPC.agentQueueRemove, (_event, conversationId: string, id: string): QueuedInputMeta[] => {
+  handle(IPC.agentQueueRemove, (_event, conversationId: string, id: string): QueuedInputMeta[] => {
     const runId = activeRunForConversation(conversationId)
     if (runId) unsteerRun(runId, id)
     return removeFromQueue(conversationId, id)
   })
-  ipcMain.handle(IPC.agentQueueClear, (_event, conversationId: string): QueuedInputMeta[] => {
+  handle(IPC.agentQueueClear, (_event, conversationId: string): QueuedInputMeta[] => {
     const runId = activeRunForConversation(conversationId)
     if (runId) for (const id of queuedSteerIds(conversationId)) unsteerRun(runId, id)
     return clearQueue(conversationId)
   })
-  ipcMain.handle(IPC.agentQueueList, (_event, conversationId: string): QueuedInputMeta[] =>
+  handle(IPC.agentQueueList, (_event, conversationId: string): QueuedInputMeta[] =>
     listQueue(conversationId)
   )
   // Dispatch a conversation's queued messages immediately as one combined turn.
   // Used by the queue bar's "Send now" after Stop/error leaves items held (the
   // auto-flush only fires on a natural finish). No-op if a run is already active
   // for the conversation — that run's own natural finish will drain the queue.
-  ipcMain.handle(IPC.agentQueueFlush, (event, conversationId: string): void => {
+  handle(IPC.agentQueueFlush, (event, conversationId: string): void => {
     if (activeRunForConversation(conversationId)) return
     drainQueue(makeIo(event.sender), conversationId, event.sender.id)
   })
 
-  ipcMain.handle(
+  handle(
     IPC.agentApprove,
     (event, runId: string, callId: string, decision: ToolApprovalDecision, note?: unknown) => {
       // Validate at the boundary: an unknown decision must not reach the loop (where
@@ -1393,7 +1433,7 @@ export function registerIpc(): void {
   )
 
   // Deliver the user's answer to a pending ask_user question.
-  ipcMain.handle(
+  handle(
     IPC.agentRespondQuestion,
     (event, runId: string, callId: string, answer: string) => {
       // Validate at the boundary (mirrors agentApprove's decision guard): a non-string
@@ -1407,7 +1447,7 @@ export function registerIpc(): void {
   )
 
   // Deliver the user's answer to a pending MCP elicitation.
-  ipcMain.handle(
+  handle(
     IPC.agentRespondElicitation,
     (event, runId: string, elicitId: string, result: unknown) => {
       // Validate + cap at the boundary: the content is forwarded verbatim to an
@@ -1422,7 +1462,7 @@ export function registerIpc(): void {
   )
 
   // Deliver the user's decision on a present_plan review (accept / suggest / reject).
-  ipcMain.handle(
+  handle(
     IPC.agentResolvePlan,
     (event, runId: string, callId: string, decision: PlanDecision) => {
       // Validate at the boundary (mirrors agentApprove's decision guard): a malformed
@@ -1449,7 +1489,7 @@ export function registerIpc(): void {
 
   // Change the approval policy of an in-flight run so a mode switch made while the
   // agent is working takes effect on its next tool call, not just the next turn.
-  ipcMain.handle(
+  handle(
     IPC.agentSetPolicy,
     (event, runId: string, policy: AppSettings['approvalPolicy']) => {
       // Only the window that started the run may change its policy — otherwise any
@@ -1461,7 +1501,7 @@ export function registerIpc(): void {
 
   // Change the reasoning effort of an in-flight run, for its own chat only; the next
   // model turn uses it. Owner-gated like set-policy; setRunEffort ignores unknown values.
-  ipcMain.handle(IPC.agentSetEffort, (event, runId: string, effort: ReasoningEffort) => {
+  handle(IPC.agentSetEffort, (event, runId: string, effort: ReasoningEffort) => {
     if (!callerOwnsRun(event, runId)) return
     setRunEffort(runId, effort)
   })
@@ -1469,7 +1509,7 @@ export function registerIpc(): void {
   // Start a propose_session card as its own background chat. The approval policy is
   // the user's current one, coerced at this boundary like a normal send (an unknown
   // value would fail open downstream).
-  ipcMain.handle(
+  handle(
     IPC.proposalStart,
     async (_event, conversationId: unknown, callId: unknown, policy: unknown) => {
       if (typeof conversationId !== 'string' || typeof callId !== 'string' || callId.length > 200) {
@@ -1484,7 +1524,7 @@ export function registerIpc(): void {
   )
 
   // Record "do it here" or "dismiss" on a proposal card.
-  ipcMain.handle(
+  handle(
     IPC.proposalSetState,
     (_event, conversationId: unknown, callId: unknown, status: unknown) => {
       if (
@@ -1507,7 +1547,7 @@ export function registerIpc(): void {
       if (!win.webContents.isDestroyed()) win.webContents.send(IPC.sideChatChanged, { conversationId })
     }
   }
-  ipcMain.handle(
+  handle(
     IPC.sideChatAsk,
     async (_event, conversationId: unknown, question: unknown, providerId: unknown, model: unknown) => {
       if (
@@ -1521,14 +1561,14 @@ export function registerIpc(): void {
       return askSideChat({ conversationId, question, providerId, model }, hostSideChatDeps(broadcastSideChat))
     }
   )
-  ipcMain.handle(IPC.sideChatGet, (_event, conversationId: unknown) => {
+  handle(IPC.sideChatGet, (_event, conversationId: unknown) => {
     if (typeof conversationId !== 'string') throw new Error('Invalid side chat request.')
     return sideChatView(conversationId, { getConversation })
   })
-  ipcMain.handle(IPC.sideChatCancel, (_event, conversationId: unknown) => {
+  handle(IPC.sideChatCancel, (_event, conversationId: unknown) => {
     if (typeof conversationId === 'string') cancelSideChat(conversationId)
   })
-  ipcMain.handle(IPC.sideChatClear, (_event, conversationId: unknown) => {
+  handle(IPC.sideChatClear, (_event, conversationId: unknown) => {
     if (typeof conversationId === 'string') {
       clearSideChat(conversationId, { saveSideChat, onChange: broadcastSideChat })
     }
@@ -1546,7 +1586,7 @@ export function registerIpc(): void {
   // queued instead. Either way the message is in the queue, on disk, before this
   // returns: a steer's entry is its durable copy until the run reads it (see
   // QueuedInput.steer). A steer is text only, so one with images is queued.
-  ipcMain.handle(IPC.agentSteer, (event, req: QueueAddRequest): SteerOutcome => {
+  handle(IPC.agentSteer, (event, req: QueueAddRequest): SteerOutcome => {
     if (!req || typeof req.conversationId !== 'string' || typeof req.userText !== 'string') {
       throw new Error('Invalid steer request.')
     }
@@ -1564,7 +1604,7 @@ export function registerIpc(): void {
   // The runId of the live run for a conversation, or null. The renderer queries
   // this when re-opening a conversation so it can re-adopt a still-running run
   // (show Stop, reconnect events/approvals) instead of starting a second one.
-  ipcMain.handle(IPC.agentActiveRun, (_event, conversationId: string): string | null =>
+  handle(IPC.agentActiveRun, (_event, conversationId: string): string | null =>
     activeRunForConversation(conversationId)
   )
 
@@ -1572,7 +1612,7 @@ export function registerIpc(): void {
   // run. The renderer replays these right after re-adopting, so a prompt that was
   // awaiting the user when the transcript was last rebuilt re-renders its UI
   // instead of leaving the run wedged behind a spinner with no way to answer it.
-  ipcMain.handle(IPC.agentPendingPrompts, (_event, conversationId: string): AgentEvent[] =>
+  handle(IPC.agentPendingPrompts, (_event, conversationId: string): AgentEvent[] =>
     pendingPromptsForConversation(conversationId)
   )
 
@@ -1580,7 +1620,7 @@ export function registerIpc(): void {
   // mid-stream, running tools). The renderer replays this right after re-adopting so
   // a mid-turn re-open doesn't show an empty transcript — most visibly on a freshly
   // spawned session opened to watch its first turn stream. Empty if no live run.
-  ipcMain.handle(IPC.agentLiveTranscript, (_event, conversationId: string): AgentEvent[] => {
+  handle(IPC.agentLiveTranscript, (_event, conversationId: string): AgentEvent[] => {
     // The replay holds every delta the loop has emitted, including any still being
     // gathered for the windows: send those first, or the window that replays this and
     // then receives them would show that text twice.
@@ -1616,7 +1656,7 @@ export function registerIpc(): void {
   // The status of every chat with something to show (a live run, its blocking
   // prompts, or an unread mark), for the sidebar's per-chat signal. The renderer reads
   // this once on load, then follows the IPC.chatStatusChanged broadcast.
-  ipcMain.handle(IPC.chatStatusList, (): ChatStatusMap => chat.snapshot())
+  handle(IPC.chatStatusList, (): ChatStatusMap => chat.snapshot())
   onChatStatusChanged((live) => chat.onLiveChanged(live))
 
   // The chat a window showed last, reopened at launch. A window's views are only
@@ -1624,7 +1664,7 @@ export function registerIpc(): void {
   // chat it starts on, which would forget the chat it is about to reopen.
   const lastChat = new LastChatStore(join(getUserDataDir(), 'last-chat.json'))
   const launchedIds = new Set<number>()
-  ipcMain.handle(IPC.chatLaunch, (event): string | null => {
+  handle(IPC.chatLaunch, (event): string | null => {
     launchedIds.add(event.sender.id)
     return launchChat(lastChat.get(), (id) => peekConversation(id)?.workspace, isDirectory)
   })
@@ -1632,7 +1672,7 @@ export function registerIpc(): void {
   // Each window says which chat it shows and whether it has focus; a focused view
   // marks the chat read. A closed window stops counting as a viewer.
   const viewerIds = new Set<number>()
-  ipcMain.on(IPC.chatViewing, (event, conversationId: unknown, focused: unknown) => {
+  on(IPC.chatViewing, (event, conversationId: unknown, focused: unknown) => {
     const id = event.sender.id
     if (!viewerIds.has(id)) {
       viewerIds.add(id)
@@ -1648,7 +1688,7 @@ export function registerIpc(): void {
   })
   // "Mark unread from here" names a reply by its position among the transcript's
   // replies (the renderer has no message log); it's resolved to a log index here.
-  ipcMain.handle(IPC.chatSetUnread, (_event, conversationId: unknown, unread: unknown, fromReply: unknown) => {
+  handle(IPC.chatSetUnread, (_event, conversationId: unknown, unread: unknown, fromReply: unknown) => {
     if (typeof conversationId !== 'string') return
     if (unread === true && typeof fromReply === 'number' && Number.isInteger(fromReply) && fromReply >= 0) {
       chat.setUnreadFromReply(conversationId, fromReply)
@@ -1656,19 +1696,19 @@ export function registerIpc(): void {
       chat.setUnread(conversationId, unread === true)
     }
   })
-  ipcMain.handle(IPC.chatMarkAllRead, () => chat.markAllRead())
+  handle(IPC.chatMarkAllRead, () => chat.markAllRead())
 
   // The background shells (run_shell background mode) for the tasks indicator —
   // queried once on load, then kept current via the shellsChanged broadcast.
-  ipcMain.handle(IPC.shellList, () => listShells())
+  handle(IPC.shellList, () => listShells())
 
   // The Tasks panel's Stop button and output tail. Ids are the registry's 8-hex
   // keys; anything else is refused before it reaches the registry. Stopping only
   // ever signals a process group Houston itself spawned for a background shell.
   const validShellId = (id: unknown): id is string =>
     typeof id === 'string' && /^[0-9a-f]{8}$/.test(id)
-  ipcMain.handle(IPC.shellStop, (_e, id: unknown) => (validShellId(id) ? killShell(id) : 'not-found'))
-  ipcMain.handle(IPC.shellTail, (_e, id: unknown) => (validShellId(id) ? (shellTail(id) ?? null) : null))
+  handle(IPC.shellStop, (_e, id: unknown) => (validShellId(id) ? killShell(id) : 'not-found'))
+  handle(IPC.shellTail, (_e, id: unknown) => (validShellId(id) ? (shellTail(id) ?? null) : null))
 
   // Push the shell registry to every renderer whenever one starts, exits, or first
   // reveals its dev-server URL, so the tasks indicator AND the Preview dock stay
@@ -1699,12 +1739,12 @@ export function registerIpc(): void {
   }
 
   // Revert the file changes a run made (restore each touched file to its pre-turn state).
-  ipcMain.handle(IPC.checkpointRestore, async (_event, runId: string): Promise<number> =>
+  handle(IPC.checkpointRestore, async (_event, runId: string): Promise<number> =>
     (await checkpointCallAllowed(runId)) ? restoreCheckpoint(runId) : 0
   )
 
   // Re-apply a reverted run's file changes (restore each touched file to its post-turn state).
-  ipcMain.handle(IPC.checkpointReapply, async (_event, runId: string): Promise<number> =>
+  handle(IPC.checkpointReapply, async (_event, runId: string): Promise<number> =>
     (await checkpointCallAllowed(runId)) ? reapplyCheckpoint(runId) : 0
   )
 
@@ -1712,7 +1752,7 @@ export function registerIpc(): void {
   // fetches this when re-opening a conversation so the revert/redo affordance — built
   // only from live events otherwise — survives a transcript rebuild, and (via the
   // on-disk fallback) an app restart.
-  ipcMain.handle(
+  handle(
     IPC.checkpointGet,
     (
       _event,
@@ -1744,58 +1784,58 @@ export function registerIpc(): void {
     text.length <= MAX_REWIND_TEXT
   const INVALID_REWIND = { ok: false as const, error: 'Invalid rewind request.' }
 
-  ipcMain.handle(
+  handle(
     IPC.rewindPreview,
     async (_event, conversationId: unknown, turn: unknown, mode: unknown, text: unknown): Promise<RewindPreviewResult> =>
       validRewindArgs(conversationId, turn, mode, text)
         ? previewRewind(conversationId as string, turn as number, mode as RewindMode, text as string)
         : INVALID_REWIND
   )
-  ipcMain.handle(
+  handle(
     IPC.rewindApply,
     async (_event, conversationId: unknown, turn: unknown, mode: unknown, text: unknown): Promise<RewindResult> =>
       validRewindArgs(conversationId, turn, mode, text)
         ? rewindConversation(conversationId as string, turn as number, mode as RewindMode, text as string)
         : INVALID_REWIND
   )
-  ipcMain.handle(IPC.rewindUndo, async (_event, conversationId: unknown): Promise<UndoRewindResult> =>
+  handle(IPC.rewindUndo, async (_event, conversationId: unknown): Promise<UndoRewindResult> =>
     typeof conversationId === 'string' ? undoRewind(conversationId) : INVALID_REWIND
   )
-  ipcMain.handle(IPC.rewindCanUndo, (_event, conversationId: unknown): boolean =>
+  handle(IPC.rewindCanUndo, (_event, conversationId: unknown): boolean =>
     typeof conversationId === 'string' ? canUndoRewind(conversationId) : false
   )
 
   // ---- Integrated terminal (PTY-backed) ----
 
   // Spawn a terminal; output/exit are pushed back to the creating webContents.
-  ipcMain.handle(
+  handle(
     IPC.terminalCreate,
     (event, opts: { cwd?: string; cols?: number; rows?: number }): string =>
       createTerminal(event.sender, opts ?? {})
   )
-  ipcMain.handle(IPC.terminalInput, (_event, id: string, data: string) => writeTerminal(id, data))
-  ipcMain.handle(IPC.terminalResize, (_event, id: string, cols: number, rows: number) =>
+  handle(IPC.terminalInput, (_event, id: string, data: string) => writeTerminal(id, data))
+  handle(IPC.terminalResize, (_event, id: string, cols: number, rows: number) =>
     resizeTerminal(id, cols, rows)
   )
-  ipcMain.handle(IPC.terminalKill, (_event, id: string): boolean => killTerminal(id))
+  handle(IPC.terminalKill, (_event, id: string): boolean => killTerminal(id))
   // Fire-and-forget focus signal so the ⌘W menu handler knows whether to close
   // the active terminal tab or the window.
-  ipcMain.on(IPC.terminalFocusChanged, (_event, focused: boolean) => setTerminalFocused(focused))
-  ipcMain.on(IPC.menuState, (_event, state: MenuState) => setMenuState(state))
+  on(IPC.terminalFocusChanged, (_event, focused: boolean) => setTerminalFocused(focused))
+  on(IPC.menuState, (_event, state: MenuState) => setMenuState(state))
 
   // ---- Live preview dock (started dev servers) ----
 
-  ipcMain.handle(IPC.previewListServers, (): PreviewServer[] => listPreviewServers())
+  handle(IPC.previewListServers, (): PreviewServer[] => listPreviewServers())
   // Reconcile the native preview views to the renderer-measured rectangles. A
   // fire-and-forget send: it runs on every dock resize / overlay toggle, so it
   // must stay cheap and never block the renderer.
-  ipcMain.on(IPC.previewSync, (_event, specs: PreviewPaneSpec[], visible: boolean) =>
+  on(IPC.previewSync, (_event, specs: PreviewPaneSpec[], visible: boolean) =>
     syncPreviewPanes(specs, visible)
   )
-  ipcMain.on(IPC.previewReload, (_event, id: string) => reloadPreviewPane(id))
+  on(IPC.previewReload, (_event, id: string) => reloadPreviewPane(id))
   // Open a preview's URL in the OS browser — user-initiated, but re-validate
   // loopback-only so a stale/spoofed URL can't turn this into an open-redirect.
-  ipcMain.handle(IPC.previewOpenExternal, async (_event, url: string): Promise<void> => {
+  handle(IPC.previewOpenExternal, async (_event, url: string): Promise<void> => {
     assertLoopbackUrl(url)
     await shell.openExternal(url)
   })
