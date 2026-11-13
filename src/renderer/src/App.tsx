@@ -95,6 +95,7 @@ import {
 } from './lib/items'
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
 import { Titlebar } from './components/Titlebar'
+import { KeyHints, keyHintList } from './components/KeyHints'
 import { activeTaskCount } from './components/BackgroundTasks'
 import { TerminalChip } from './components/TerminalChip'
 import { TasksPanel } from './components/TasksPanel'
@@ -2618,6 +2619,13 @@ export default function App(): JSX.Element {
           sideChatOpen={sideChatVisible}
           terminalShortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
           needsYou={{ count: waitingIds.length, onNext: openNextWaiting }}
+          onOpenPalette={() => {
+            setPaletteSeed('')
+            setPaletteOpen(true)
+          }}
+          paletteShortcut={shortcutHint('command-palette', mac, shortcuts)}
+          onShowShortcuts={() => setHelpOpen(true)}
+          shortcutsShortcut={shortcutHint('show-help', mac, shortcuts)}
         />
 
         <UpdateBanner
@@ -2861,6 +2869,14 @@ export default function App(): JSX.Element {
             prefill={composerPrefill?.conversationId === currentId ? composerPrefill : undefined}
             onRewindPicker={currentId ? () => setRewindPickerOpen(true) : undefined}
           />
+          {canChat && chat.items.length === 0 && (
+            <KeyHints
+              hints={keyHintList({
+                palette: shortcutHint('command-palette', mac, shortcuts),
+                cycleMode: shortcutHint('cycle-mode', mac, shortcuts)
+              })}
+            />
+          )}
         </div>
 
         <footer className="statusbar">
