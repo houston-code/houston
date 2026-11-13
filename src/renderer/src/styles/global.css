@@ -1055,6 +1055,45 @@ body.is-resizing {
   font-weight: 700;
   vertical-align: 1px;
 }
+/* The provider's default model, which Houston recommends. */
+.model-menu__recommended {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--ok);
+  border-radius: 3px;
+  color: var(--ok);
+  font-size: 9.5px;
+  font-weight: 700;
+  vertical-align: 1px;
+}
+/* In the Recent section, which provider a model comes from. */
+.model-menu__provider {
+  margin-left: 6px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+}
+/* What the badges mean, in one quiet line under the list. */
+.model-menu__legend {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  padding: 6px 9px 3px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+}
+.model-menu__legend > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.model-menu__legend + .model-menu__footnote {
+  border-top: none;
+  margin-top: 0;
+}
+
 /* One line naming the providers with no models yet, instead of an empty group each. */
 .model-menu__footnote {
   flex: none;
@@ -1578,6 +1617,12 @@ body.is-resizing {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
+.usage__cost {
+  color: var(--text);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 /* The `#`-capture scope prompt, above the composer input. */
 .memory-bar {
   display: flex;
@@ -1604,7 +1649,7 @@ body.is-resizing {
   gap: 6px;
   flex-shrink: 0;
 }
-/* The chip is clickable only when there's a breakdown behind it. */
+/* The chip opens the breakdown by model. */
 .usage-wrap {
   position: relative;
   flex-shrink: 0;
@@ -1625,7 +1670,7 @@ body.is-resizing {
   top: calc(100% + 6px);
   right: 0;
   z-index: 30;
-  min-width: 320px;
+  min-width: 400px;
   padding: 8px 10px;
   background: var(--bg-raised, var(--bg));
   border: 1px solid var(--border);
@@ -1637,8 +1682,10 @@ body.is-resizing {
 .usage-panel__head,
 .usage-panel__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto auto;
-  gap: 12px;
+  /* Fixed number columns: every row is its own grid, so auto widths let a row's
+     figures drift out from under the header. */
+  grid-template-columns: minmax(0, 1fr) 48px 48px 52px 56px;
+  gap: 10px;
   padding: 3px 0;
 }
 .usage-panel__head {
@@ -1660,6 +1707,10 @@ body.is-resizing {
   margin-top: 2px;
   font-weight: 600;
 }
+.usage-panel__context {
+  margin: 0 0 6px;
+  color: var(--text-dim);
+}
 .usage-panel__note {
   margin: 6px 0 0;
   color: var(--text-dim);
@@ -1679,6 +1730,49 @@ body.is-resizing {
 }
 .checkpoint-bar__label {
   flex: 1;
+}
+/* A failed turn: the cause in plain words, next steps, and the raw message on demand. */
+.turn-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  font-size: 12.5px;
+}
+.turn-error__text {
+  flex: 1 1 260px;
+  min-width: 0;
+  color: var(--text-dim);
+}
+.turn-error__summary {
+  color: var(--text);
+  font-weight: 600;
+}
+.turn-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.turn-error__raw {
+  flex-basis: 100%;
+  max-height: 160px;
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* ---- Queued-input bar (messages typed mid-run) ---- */
@@ -1975,6 +2069,29 @@ body.is-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.statusbar__branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 220px;
+  white-space: nowrap;
+}
+.statusbar__branch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--mono);
+}
+.statusbar__icon {
+  flex-shrink: 0;
+}
+.statusbar__mode {
+  white-space: nowrap;
+}
+.statusbar__meter {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .statusbar__model {
   font-family: var(--mono);
   opacity: 0.8;
@@ -2061,6 +2178,88 @@ body.is-resizing {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* Recent project folders: on the welcome screen and under the checklist's folder step. */
+.recent-folders {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 8px;
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.get-started .recent-folders {
+  justify-content: flex-start;
+  margin-top: 6px;
+}
+.recent-folders__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.recent-folders__item {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 1px 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.recent-folders__item:hover {
+  text-decoration-style: solid;
+}
+.recent-folders__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The control bar's folder menu: a folder's name with where it lives beside it. */
+.folder-menu {
+  min-width: 220px;
+  max-width: 360px;
+}
+.folder-menu__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.folder-menu__name {
+  color: var(--text);
+}
+.folder-menu__where {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Shown while files are dragged over the window: a folder dropped anywhere opens it. */
+.folder-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  border: 2px dashed var(--accent);
+  color: var(--text);
+  font-size: 14px;
+}
+.folder-drop__label {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 16px;
+}
+
 /* The checklist's example task, clickable while step 3 is current. */
 .get-started__example {
   font: inherit;
@@ -2267,6 +2466,24 @@ body.is-resizing {
 .connect-model__note a {
   color: var(--accent);
 }
+/* A key found in the app's environment, offered above the key box. */
+.connect-model__env {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.connect-model__env-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .connect-model__tile-ok,
 .connect-model__saved-ok {
   color: var(--ok);
@@ -2421,7 +2638,27 @@ body.is-resizing {
 }
 .msg--user {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+}
+/* The quiet line under a message: when it was sent and, under a turn's last reply,
+   the model and what the turn spent. */
+.msg__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.msg__meta--user {
+  flex-basis: 100%;
+  justify-content: flex-end;
+}
+.msg__time {
+  cursor: default;
 }
 .msg--user .msg__body {
   max-width: 86%;
@@ -2627,6 +2864,16 @@ body.is-resizing {
 .msg__mark-unread:hover {
   color: var(--sig-unread);
   border-color: var(--sig-unread);
+}
+/* Retry sits after the reply's other hover buttons. */
+.msg__retry {
+  left: 26px;
+}
+.msg__mark-unread + .msg__retry {
+  left: 52px;
+}
+.msg__retry:focus-visible {
+  opacity: 1;
 }
 /* Where unseen output starts: a labelled rule in the unread blue, above the first
    reply the user hasn't seen. */
@@ -3000,6 +3247,27 @@ h6.md-h {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A saved permission rule: the sentence, then each rule in full on its own line. */
+.undo-toast--rules {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.undo-toast__rules {
+  flex-basis: 100%;
+  order: 1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.undo-toast__rules code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
 .undo-toast__btn {
   border: 0;
   background: none;
@@ -3236,6 +3504,12 @@ h6.md-h {
   color: var(--text-dim);
   white-space: nowrap;
 }
+.tool-row__elapsed {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .tool-row__tally--alarm {
   color: var(--danger);
 }
@@ -3367,6 +3641,23 @@ button.finding__head:focus-visible,
   flex-wrap: wrap;
   gap: 8px;
   padding: 0 12px 11px;
+}
+/* Focused (its keys answer it): a quiet accent edge instead of a full ring. */
+.tool-row__approval:focus {
+  outline: none;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* The key that answers each button, as on the plan panel. */
+.tool-row__approval-key {
+  margin-left: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.75;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 15px;
 }
 .tool-row__approval-note {
   flex-basis: 100%;
@@ -5389,10 +5680,61 @@ body.is-resizing .preview-dock__resizer::after {
   padding: 4px 16px 16px;
 }
 .file-preview__code {
+  position: relative;
   display: flex;
   align-items: flex-start;
   min-height: 100%;
   background: var(--bg-code);
+}
+/* The line a link pointed at, marked across the gutter and the code. */
+.file-preview__line-mark {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border-left: 2px solid var(--accent);
+  pointer-events: none;
+}
+/* A file path in the transcript that opens the file: reads as a link, sized like
+   the text around it. */
+.file-link {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 2px;
+}
+.file-link:hover,
+.file-link:focus-visible {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+.file-link.md-link {
+  color: var(--accent);
+}
+/* In tool rows and the receipt the paths stay quiet until hovered. */
+.tool-row__target.file-link,
+.tool-reads__path.file-link,
+.tool-row__diff-path.file-link,
+.receipt__file.file-link {
+  text-decoration: none;
+}
+.tool-row__target.file-link:hover,
+.tool-reads__path.file-link:hover,
+.tool-row__diff-path.file-link:hover,
+.receipt__file.file-link:hover,
+.tool-row__target.file-link:focus-visible,
+.tool-reads__path.file-link:focus-visible,
+.tool-row__diff-path.file-link:focus-visible,
+.receipt__file.file-link:focus-visible {
+  text-decoration: underline;
 }
 .file-preview__gutter {
   flex: none;
@@ -7431,6 +7773,115 @@ body:has(.coachmark) .get-started {
 .seg__btn:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* ---- MCP Servers: add from catalog, paste JSON ---- */
+.mcp-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.mcp-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mcp-catalog__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mcp-catalog__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-catalog__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mcp-catalog__review {
+  margin-left: auto;
+}
+.mcp-catalog__desc {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mcp-catalog__cmd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.mcp-review {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.mcp-review__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mcp-review__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mcp-review__field input,
+.mcp-review__field textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.mcp-review__field input:focus,
+.mcp-review__field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-review__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+.mcp-review__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mcp-review__error,
+.mcp-paste__problems {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.mcp-paste__problems {
+  padding-left: 18px;
+}
+.mcp-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .mcp-server {
   margin-bottom: 8px;

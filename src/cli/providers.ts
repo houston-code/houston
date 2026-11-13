@@ -175,7 +175,7 @@ function addCustomEndpoint(args: AddArgs, deps: ProvidersDeps): number {
   deps.saveSettings({ ...settings, providers: [...settings.providers, provider] })
   deps.out(`Added ${label} (${id}) at ${url}.\n`)
   deps.out(`If it needs a key:  houston providers set-key ${id}\n`)
-  deps.out(`Pick a model at run time with:  --model ${id}/<model-id>\n`)
+  deps.out(`Run houston to pick it from the setup list, or pass:  --provider ${id} --model <model-id>\n`)
   return 0
 }
 

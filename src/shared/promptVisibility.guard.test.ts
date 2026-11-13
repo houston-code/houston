@@ -82,17 +82,18 @@ describe('prompt visibility guard', () => {
     // user appears to have written (how the Stop-hook and verify turns used to).
     const loop = readFileSync(join(SRC, 'main/agent/loop.ts'), 'utf8')
     const pushes = loop.match(/messages\.push\(\{\s*role: 'user'/g) ?? []
-    expect(pushes).toHaveLength(1) // the steer loop: `for (const { text: content } of steers) messages.push({ role: 'user', content, steered: true })`
+    // The steer loop: `for (const { text: content } of steers) messages.push({ role: 'user', content, steered: true, at: ... })`
+    expect(pushes).toHaveLength(1)
     expect(loop).toMatch(
-      /for \(const \{ text: content \} of steers\) messages\.push\(\{ role: 'user', content, steered: true \}\)/
+      /for \(const \{ text: content \} of steers\) messages\.push\(\{ role: 'user', content, steered: true, at: new Date\(\)\.toISOString\(\) \}\)/
     )
   })
 
   // Every renderer call that starts or queues a turn.
   const RENDERER_SEND_SITES: Record<string, { count: number; why: string }> = {
     'renderer/src/App.tsx': {
-      count: 14,
-      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" + project-card /init + Changes-view review-comment invocations, and the mid-run steer, its idle send, and its off-chat queue (user text)'
+      count: 15,
+      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" + project-card /init + Changes-view review-comment invocations, the mid-run steer, its idle send, and its off-chat queue (user text), and Retry on the last reply (resends that user message as it was, keeping its invokedAs)'
     },
     'renderer/src/components/Composer.tsx': { count: 3, why: 'the /review invocation and two sends of composer text' },
     'renderer/src/hooks/useChat.ts': { count: 1, why: 'startAgent, forwarding invokedAs' },

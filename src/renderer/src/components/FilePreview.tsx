@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { FilePreview as FilePreviewData } from '@shared/files'
 import { humanSize, MAX_PREVIEW_TEXT_BYTES } from '@shared/files'
 import { cachedImageDataUrl } from '../lib/imageUrl'
@@ -37,11 +37,14 @@ function svgDataUrl(svg: string): string {
 export function FilePreview({
   workspace,
   path,
-  onOpen
+  onOpen,
+  line
 }: {
   workspace: string
   path: string | null
   onOpen: (path: string) => void
+  /** A 1-based line to scroll to and mark (a link that named one). Shows the source view. */
+  line?: number
 }): JSX.Element {
   const [data, setData] = useState<FilePreviewData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -50,7 +53,7 @@ export function FilePreview({
   const rich = useMemo<RichKind>(() => (path ? richKindFor(path) : null), [path])
 
   useEffect(() => {
-    setView('rendered')
+    setView(line ? 'source' : 'rendered')
     if (!path) {
       setData(null)
       return
@@ -67,7 +70,27 @@ export function FilePreview({
     return () => {
       cancelled = true
     }
-  }, [workspace, path])
+  }, [workspace, path, line])
+
+  // Scroll a named line into view and mark it. Lines are a fixed height in the code
+  // pane (no wrapping), so its offset is the line index times the line height.
+  const codeRef = useRef<HTMLDivElement>(null)
+  const markRef = useRef<HTMLDivElement>(null)
+  const lineCount = data?.kind === 'text' ? data.text.split('\n').length : 0
+  const markLine = line && line <= lineCount ? line : undefined
+  useLayoutEffect(() => {
+    const code = codeRef.current
+    const mark = markRef.current
+    if (!code || !mark || !markLine) return
+    const text = code.querySelector<HTMLElement>('.file-preview__text')
+    if (!text) return
+    const style = getComputedStyle(text)
+    const lineHeight = parseFloat(style.lineHeight) || 18
+    const top = (parseFloat(style.paddingTop) || 0) + (markLine - 1) * lineHeight
+    mark.style.top = `${top}px`
+    mark.style.height = `${lineHeight}px`
+    mark.scrollIntoView?.({ block: 'center' })
+  }, [markLine, data, view])
 
   // A right-aligned gutter of line numbers, built as one text node (cheap even for
   // a long file) so it scrolls in lockstep with the code beside it.
@@ -141,7 +164,15 @@ export function FilePreview({
             </div>
           ) : (
             <>
-              <div className="file-preview__code">
+              <div className="file-preview__code" ref={codeRef}>
+                {markLine && (
+                  <div
+                    ref={markRef}
+                    className="file-preview__line-mark"
+                    data-line={markLine}
+                    aria-label={`Line ${markLine}`}
+                  />
+                )}
                 <pre className="file-preview__gutter" aria-hidden="true">
                   {gutter}
                 </pre>

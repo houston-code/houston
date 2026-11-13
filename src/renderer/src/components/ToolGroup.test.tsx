@@ -4,6 +4,7 @@ import type { ReviewFinding } from '@shared/agent'
 import { APPROVAL_INTERRUPTED_NOTE } from '@shared/promptOutcome'
 import type { ToolItem } from '../lib/items'
 import { ToolGroup } from './ToolGroup'
+import { FileLinkContext } from './FileLink'
 
 /**
  * A diff line's full text. A modified line is split into per-token spans so the
@@ -35,6 +36,22 @@ describe('ToolGroup', () => {
     fireEvent.click(container.querySelector('.tool-row__head')!)
     expect(screen.getByText('Not run: the run was stopped before it was approved.')).toBeInTheDocument()
     expect(screen.queryByText(/They said/)).not.toBeInTheDocument()
+  })
+
+  it('shows how long a running call has been going, and nothing once it is done', () => {
+    vi.useFakeTimers({ now: 100_000 })
+    try {
+      const running = [tool({ id: 'a', name: 'run_shell', status: 'running', args: { command: 'npm test' }, startedAt: 58_000 })]
+      const { container, rerender } = render(<ToolGroup items={running} onApprove={vi.fn()} />)
+      expect(container.querySelector('.tool-row__elapsed')?.textContent).toBe('42s')
+      // A call under a second old shows no clock (most calls finish that fast).
+      rerender(<ToolGroup items={[{ ...running[0], startedAt: 99_500 }]} onApprove={vi.fn()} />)
+      expect(container.querySelector('.tool-row__elapsed')).toBeNull()
+      rerender(<ToolGroup items={[{ ...running[0], status: 'done' }]} onApprove={vi.fn()} />)
+      expect(container.querySelector('.tool-row__elapsed')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('renders one row per call with its verb and target', () => {
@@ -818,5 +835,36 @@ describe('ToolGroup: a denied call', () => {
     fireEvent.click(container.querySelector('.tool-row__head')!)
     expect(screen.getByText('Denied: use npm run clean instead')).toBeInTheDocument()
     expect(screen.queryByText(/They said/)).not.toBeInTheDocument()
+  })
+})
+
+describe('ToolGroup file links', () => {
+  const withLinks = (ui: JSX.Element, open = vi.fn()) =>
+    render(<FileLinkContext.Provider value={{ workspace: '/repo', open }}>{ui}</FileLinkContext.Provider>)
+
+  it('opens the file a tool row names, at the line a read started from, without toggling the row', () => {
+    const open = vi.fn()
+    const items: ToolItem[] = [
+      tool({ id: 'r', name: 'read_file', status: 'done', args: { path: 'src/a.ts', offset: 12 }, output: 'x' })
+    ]
+    const { container } = withLinks(<ToolGroup items={items} onApprove={vi.fn()} />, open)
+    fireEvent.click(screen.getByRole('button', { name: 'src/a.ts' }))
+    expect(open).toHaveBeenCalledWith({ path: 'src/a.ts', line: 12 })
+    expect(container.querySelector('.tool-row__head')).toHaveAttribute('aria-expanded', 'false')
+  })
+
+  it('keeps a path outside the project, and a non-file tool, as plain text', () => {
+    const items: ToolItem[] = [
+      tool({ id: 'r', name: 'read_file', status: 'done', args: { path: '/etc/hosts' } }),
+      tool({ id: 's', name: 'run_shell', status: 'done', args: { command: 'ls' } })
+    ]
+    withLinks(<ToolGroup items={items} onApprove={vi.fn()} />)
+    expect(document.querySelector('.file-link')).toBeNull()
+  })
+
+  it('has no links without a project', () => {
+    const items: ToolItem[] = [tool({ id: 'r', name: 'read_file', status: 'done', args: { path: 'src/a.ts' } })]
+    render(<ToolGroup items={items} onApprove={vi.fn()} />)
+    expect(document.querySelector('.file-link')).toBeNull()
   })
 })

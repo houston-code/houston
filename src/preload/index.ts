@@ -1,10 +1,11 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { SecureStorageStatus } from '@shared/secureStorage'
 import type { IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/constants'
 import type {
   AppSettings,
   ApprovalPolicy,
+  EnvKeyOffer,
   FolderTrustStatus,
   IntegrationsInfo,
   LegacyRulesChoice,
@@ -54,6 +55,7 @@ import type { Scorecard } from '@shared/scorecard'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type { ChatStatusMap } from '@shared/chatStatus'
+import type { AttentionSound } from '@shared/notify'
 import type {
   UpdateCheckResult,
   UpdateDownloaded,
@@ -86,8 +88,30 @@ const api = {
   /** Answer that notice: import ~/.claude/CLAUDE.md into it, or keep the rules separate. */
   decideLegacyRulesNotice: (choice: LegacyRulesChoice): Promise<LegacyRulesDecideResult> =>
     ipcRenderer.invoke(IPC.legacyRulesNoticeDecide, choice),
+  /**
+   * API keys found in the app's environment for providers with no stored key: the
+   * startup notice's list (`startup`, skipping "Not now" answers) or the Connect
+   * panel's (`connect`). Each carries the key's last four characters only.
+   */
+  getEnvKeyOffers: (scope: 'startup' | 'connect'): Promise<EnvKeyOffer[]> =>
+    ipcRenderer.invoke(IPC.envKeyOffers, scope),
+  /** Check the provider's environment key and store it; resolves to fresh settings. */
+  importEnvKey: (providerId: string): Promise<AppSettings> => ipcRenderer.invoke(IPC.envKeyImport, providerId),
+  /** "Not now": stop offering these providers' environment keys at startup. */
+  dismissEnvKeyOffers: (providerIds: string[]): Promise<void> =>
+    ipcRenderer.invoke(IPC.envKeyDismiss, providerIds),
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.workspacePick),
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directoryPick),
+  /** Open a folder by path (a recent, or one dropped on the window); null if it isn't one. */
+  openWorkspace: (path: string): Promise<string | null> => ipcRenderer.invoke(IPC.workspaceOpen, path),
+  /** The file-system path behind a dropped File, or '' when it has none. */
+  pathForFile: (file: File): string => {
+    try {
+      return webUtils.getPathForFile(file)
+    } catch {
+      return ''
+    }
+  },
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>
     ipcRenderer.invoke(IPC.workspaceListFiles, workspace, query),
   /** One directory level for the Files panel — a folder's immediate children (lazy tree). */
@@ -390,6 +414,12 @@ const api = {
   /** Mark every chat read. */
   markAllChatsRead: (): Promise<void> => ipcRenderer.invoke(IPC.chatMarkAllRead),
   /** Main asks to open a chat (its desktop notification was clicked). Returns an unsubscribe fn. */
+  /** Main asks for an attention sound (a turn ended or needs input while unfocused). */
+  onAttentionSound: (cb: (sound: AttentionSound) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, sound: AttentionSound): void => cb(sound)
+    ipcRenderer.on(IPC.attentionSound, listener)
+    return () => ipcRenderer.removeListener(IPC.attentionSound, listener)
+  },
   onChatOpenRequest: (cb: (conversationId: string) => void): (() => void) => {
     const listener = (_event: IpcRendererEvent, id: string): void => cb(id)
     ipcRenderer.on(IPC.chatOpenRequest, listener)
