@@ -23,7 +23,7 @@ import type { ForkPoint } from '@shared/conversation-io'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
-import type { WorkingTreeChanges } from '@shared/workingTree'
+import type { WorkingTreeChanges, WorkingTreeStats } from '@shared/workingTree'
 import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import type { GitInitResult } from '@shared/git'
@@ -190,6 +190,9 @@ const api = {
   /** All uncommitted working-tree changes (vs HEAD + untracked) for the Changes panel. */
   getWorkingTreeChanges: (workspace: string): Promise<WorkingTreeChanges> =>
     ipcRenderer.invoke(IPC.workingTreeChanges, workspace),
+  /** Just the counts of getWorkingTreeChanges (files, lines, branch, ship state) for the badge. */
+  getWorkingTreeStats: (workspace: string): Promise<WorkingTreeStats> =>
+    ipcRenderer.invoke(IPC.workingTreeStats, workspace),
   /** Stage and commit every change (the Changes view's commit form). */
   gitCommit: (workspace: string, message: string): Promise<GitActionResult> =>
     ipcRenderer.invoke(IPC.gitCommit, workspace, message),

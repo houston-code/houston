@@ -621,9 +621,11 @@ export function Transcript({
 
   // Keep the latest output in view only while pinned. Using an instant jump
   // (not smooth) avoids restarting an animation on every streaming delta, which
-  // is what made the view flicker and fight the user's own scrolling.
+  // is what made the view flicker and fight the user's own scrolling. Reading
+  // scrollHeight forces a layout, so a burst of deltas folds into one jump per
+  // frame instead of one per update.
+  const pinFrame = useRef<number | null>(null)
   useEffect(() => {
-    const el = containerRef.current
     if (lastUserId !== lastUserRef.current) {
       lastUserRef.current = lastUserId
       if (lastUserId !== undefined) {
@@ -631,8 +633,19 @@ export function Transcript({
         setShowJump(false)
       }
     }
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
+    if (!pinnedRef.current || pinFrame.current !== null) return
+    pinFrame.current = requestAnimationFrame(() => {
+      pinFrame.current = null
+      const el = containerRef.current
+      if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
+    })
   }, [items, lastUserId])
+  useEffect(
+    () => () => {
+      if (pinFrame.current !== null) cancelAnimationFrame(pinFrame.current)
+    },
+    []
+  )
 
   // The view shrinks when a bar opens under it (the turn's file changes, a failed
   // turn's Retry, the queue, a banner) and grows when one closes. Stay at the bottom

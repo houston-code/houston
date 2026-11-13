@@ -128,6 +128,8 @@ export const IPC = {
   /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
   folderTrustDecide: 'folderTrust:decide',
   workingTreeChanges: 'workingTree:changes',
+  /** Just the counts of workingTreeChanges (files, lines, branch, ship state) for the badge. */
+  workingTreeStats: 'workingTree:stats',
   /** Commit every change, from the Changes view's commit form. */
   gitCommit: 'git:commit',
   /** Push the current branch, from the Changes view's commit form. */
