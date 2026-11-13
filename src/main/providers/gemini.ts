@@ -27,6 +27,24 @@ function callSignatures(m: ChatMessage, model: string): Map<string, string> {
   return out
 }
 
+/** The parts of an assistant message as a Gemini `model` turn: its text, then its calls. */
+function modelParts(m: ChatMessage, model: string): Part[] {
+  const parts: Part[] = []
+  if (m.content) parts.push({ text: m.content })
+  // Thinking models (Gemini 3 and later) sign their function calls and reject a
+  // request whose current-turn calls come back without the signature, so each
+  // call is sent with the one it was issued with.
+  const signatures = callSignatures(m, model)
+  for (const tc of m.toolCalls ?? []) {
+    const thoughtSignature = signatures.get(tc.id)
+    parts.push({
+      functionCall: { name: tc.name, args: tc.arguments },
+      ...(thoughtSignature ? { thoughtSignature } : {})
+    })
+  }
+  return parts
+}
+
 export function toGeminiContents(messages: ChatMessage[], model = ''): Content[] {
   const out: Content[] = []
   // Tracks whether the last emitted turn is a `user` turn built from tool
@@ -55,6 +73,28 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
   }
   for (const m of messages) {
     if (m.role !== 'tool') flushToolImages()
+    if (m.role === 'assistant') {
+      const parts = modelParts(m, model)
+      // An assistant turn with nothing to send (the model ended without text or calls:
+      // a MALFORMED_FUNCTION_CALL or SAFETY finish, or a thought-only reply). A model
+      // turn with no parts is a 400 ("contents.parts must not be empty"), and since it
+      // stays in the history every later request would fail too. Leave it out, and let
+      // the next user message fold onto the user turn before it, so two user turns
+      // can't end up in a row.
+      if (!parts.length) {
+        const last = out[out.length - 1]
+        if (last?.role === 'user') {
+          const toolResults = !!last.parts?.some((p) => 'functionResponse' in p)
+          mergingToolResults = toolResults
+          lastPlainUser = !toolResults
+        }
+        continue
+      }
+      lastPlainUser = false
+      mergingToolResults = false
+      out.push({ role: 'model', parts })
+      continue
+    }
     if (m.role !== 'user') lastPlainUser = false
     if (m.role === 'user') {
       const parts: Content['parts'] = []
@@ -92,22 +132,6 @@ export function toGeminiContents(messages: ChatMessage[], model = ''): Content[]
       if (!parts!.length) parts!.push({ text: '' }) // Gemini rejects an empty parts array
       out.push({ role: 'user', parts })
       lastPlainUser = true
-    } else if (m.role === 'assistant') {
-      mergingToolResults = false
-      const parts: Content['parts'] = []
-      if (m.content) parts!.push({ text: m.content })
-      // Thinking models (Gemini 3 and later) sign their function calls and reject a
-      // request whose current-turn calls come back without the signature, so each
-      // call is sent with the one it was issued with.
-      const signatures = callSignatures(m, model)
-      for (const tc of m.toolCalls ?? []) {
-        const thoughtSignature = signatures.get(tc.id)
-        parts!.push({
-          functionCall: { name: tc.name, args: tc.arguments },
-          ...(thoughtSignature ? { thoughtSignature } : {})
-        })
-      }
-      out.push({ role: 'model', parts })
     } else if (m.role === 'tool') {
       const fnPart = {
         functionResponse: {

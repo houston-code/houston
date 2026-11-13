@@ -458,3 +458,54 @@ describe('toGeminiContents: consecutive user turns', () => {
     expect(out[out.length - 2].parts?.every((p) => 'inlineData' in p)).toBe(true)
   })
 })
+
+describe('toGeminiContents: empty assistant turns', () => {
+  /** No turn has an empty parts array, and roles alternate. */
+  function expectSendable(out: ReturnType<typeof toGeminiContents>): void {
+    for (const c of out) expect(c.parts?.length).toBeGreaterThan(0)
+    for (let i = 1; i < out.length; i++) expect(out[i].role).not.toBe(out[i - 1].role)
+  }
+
+  it('leaves out an empty model turn and joins the user turns on either side', () => {
+    // An empty end_turn (MALFORMED_FUNCTION_CALL, SAFETY, a thought-only reply) is
+    // saved as content ''. Sent as a model turn with no parts it 400s every request.
+    const out = toGeminiContents([
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'second' }
+    ])
+    expect(out).toEqual([{ role: 'user', parts: [{ text: 'first' }, { text: 'second' }] }])
+    expectSendable(out)
+  })
+
+  it('folds only text onto a tool-result turn the empty turn followed', () => {
+    const out = toGeminiContents([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'read_file', arguments: {} }] },
+      { role: 'tool', content: 'ok', toolCallId: 'c', toolName: 'read_file' },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'next', images: [{ mediaType: 'image/png', data: 'AAA' }] }
+    ])
+    // The function response never shares a turn with media.
+    const fnTurn = out.find((c) => c.parts?.some((p) => 'functionResponse' in p))!
+    expect(fnTurn.parts?.some((p) => 'inlineData' in p)).toBe(false)
+    expect(fnTurn.parts).toContainEqual({ text: 'next' })
+    expect(out.at(-1)?.parts).toEqual([{ inlineData: { mimeType: 'image/png', data: 'AAA' } }])
+    for (const c of out) expect(c.parts?.length).toBeGreaterThan(0)
+  })
+
+  it('joins the next message onto a tool image turn the empty turn followed', () => {
+    const out = toGeminiContents([
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c', name: 'view', arguments: {} }] },
+      { role: 'tool', content: 'shot', toolCallId: 'c', toolName: 'view', images: [{ mediaType: 'image/png', data: 'AAA' }] },
+      { role: 'assistant', content: '' },
+      { role: 'user', content: 'looks off' }
+    ])
+    // user, model (call), user (response), user (the tool's image, its own turn by
+    // design), and the message joins that last turn rather than adding another.
+    expect(out).toHaveLength(4)
+    for (const c of out) expect(c.parts?.length).toBeGreaterThan(0)
+    expect(out.at(-1)?.parts).toEqual([{ inlineData: { mimeType: 'image/png', data: 'AAA' } }, { text: 'looks off' }])
+  })
+})

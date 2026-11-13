@@ -33,6 +33,20 @@ export class StreamIdleError extends Error {
   }
 }
 
+/**
+ * A response body ended cleanly but before the reply's terminal event (a proxy or a
+ * dropped connection closing the stream), so the reply was cut off somewhere unknown.
+ * Its message reads as a closed stream, which the retry policy treats as transient; it
+ * carries no network code, so it counts against the attempt budget rather than the
+ * outage window (a proxy that always cuts the stream must not retry for minutes).
+ */
+export class StreamClosedEarlyError extends Error {
+  constructor(cause?: unknown) {
+    super('Provider stream closed before the reply finished.', cause === undefined ? undefined : { cause })
+    this.name = 'StreamClosedEarlyError'
+  }
+}
+
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 
 /**
