@@ -382,12 +382,17 @@ describe('mcp manager', () => {
 })
 
 /** An HTTP fake that 401s unless the request carries `Bearer <accepted>`. */
-function authHttpFetch(accepted: string): { fetch: FetchFn; auths: Array<string | undefined> } {
+function authHttpFetch(accepted: string): {
+  fetch: FetchFn
+  auths: Array<string | undefined>
+  accept: (token: string) => void
+} {
   const auths: Array<string | undefined> = []
   const fetch: FetchFn = async (_url, init) => {
     const headers = init.headers as Record<string, string>
     const auth = headers.authorization ?? headers.Authorization
     auths.push(auth)
+    if (init.method === 'GET') return new Response('', { status: 405 })
     if (auth !== `Bearer ${accepted}`) {
       return new Response('', { status: 401, headers: new Headers({ 'www-authenticate': 'Bearer' }) })
     }
@@ -396,7 +401,7 @@ function authHttpFetch(accepted: string): { fetch: FetchFn; auths: Array<string 
     const body = req.id === undefined ? '' : JSON.stringify({ jsonrpc: '2.0', id: req.id, result })
     return new Response(body, { status: 200, headers: new Headers({ 'content-type': 'application/json' }) })
   }
-  return { fetch, auths }
+  return { fetch, auths, accept: (token) => (accepted = token) }
 }
 
 const tok = (over: Partial<McpOAuthTokens> = {}): McpOAuthTokens => ({
@@ -531,6 +536,8 @@ describe('mcp manager: servers shared between live runs', () => {
 })
 
 describe('mcp manager OAuth', () => {
+  const noCtx = { workspace: '/tmp', allowNetwork: false } as ToolContext
+
   it('sends the stored bearer on connect', async () => {
     host.oauth.web = tok()
     const { fetch, auths } = authHttpFetch('live-token')
@@ -575,6 +582,46 @@ describe('mcp manager OAuth', () => {
     expect(oauthSeam.refreshCalls).toBe(1)
     expect(auths[0]).toBe('Bearer revoked-token')
     expect(auths.at(-1)).toBe('Bearer live-token')
+  })
+
+  it('refreshes and reconnects when a token is rejected mid-session, then the retry succeeds', async () => {
+    // No expiresAt, so nothing proactive sees the token go bad: only the 401 on the call.
+    host.oauth.web = tok({ access: 'first-token' })
+    const { fetch, auths, accept } = authHttpFetch('first-token')
+    _setMcpHttpClientFactory(() => new McpHttpClient(fetch))
+    const defs = await getMcpToolDefs([webCfg()])
+    const call = defs.find((d) => d.schema.name === mcpToolName('web', 'remote'))!
+    expect(getMcpStatuses()[0].state).toBe('connected')
+
+    // The server revokes the first token and now accepts only the refreshed one.
+    accept('second-token')
+    oauthSeam.refreshResult = tok({ access: 'second-token' })
+    const first = await call.execute({}, noCtx)
+    expect(first).toContain('401')
+    expect(first).toContain('The server has been reconnected; retry the call.')
+    expect(oauthSeam.refreshCalls).toBe(1)
+    expect(host.oauth.web.access).toBe('second-token')
+    expect(getMcpStatuses()[0].state).toBe('connected')
+
+    const retry = await call.execute({}, noCtx)
+    expect(retry).not.toContain('401')
+    expect(retry).not.toContain('connection was lost')
+    expect(auths.at(-1)).toBe('Bearer second-token')
+    expect(oauthSeam.refreshCalls).toBe(1)
+  })
+
+  it('reports needs-auth instead of connected when a mid-session 401 cannot be refreshed', async () => {
+    host.oauth.web = tok({ access: 'first-token' })
+    const { fetch, accept } = authHttpFetch('first-token')
+    _setMcpHttpClientFactory(() => new McpHttpClient(fetch))
+    const defs = await getMcpToolDefs([webCfg()])
+    const call = defs.find((d) => d.schema.name === mcpToolName('web', 'remote'))!
+    accept('never-issued')
+    // refreshResult stays null: the authorization server rejects the refresh.
+    const out = await call.execute({}, noCtx)
+    expect(out).toContain('connection was lost mid-call')
+    expect(out).not.toContain('retry the call')
+    expect(getMcpStatuses()[0].state).toBe('needs-auth')
   })
 
   it('refuses to send tokens bound to a different resource (URL repoint)', async () => {

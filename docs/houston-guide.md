@@ -2285,7 +2285,9 @@ or **OAuth** for servers that need a sign-in:
   registers itself as an OAuth client automatically, and opens the browser to
   authorize.
 - **Tokens** are stored encrypted, sent as the bearer on every connection, and
-  refreshed automatically when they expire.
+  refreshed automatically when they expire. If the server rejects a token in the
+  middle of a session, Houston refreshes it and reconnects, and the agent retries the
+  call; when the refresh fails too, the server shows as needing sign-in.
 - **Sign out** (or `/mcp logout <n>`) forgets them.
 - An explicit Authorization header, when set, takes precedence over OAuth tokens.
 
@@ -2296,6 +2298,9 @@ or **OAuth** for servers that need a sign-in:
 - The spawned process gets a base environment with credentials stripped, so a token
   the server needs must be listed explicitly.
 - Environment values are treated as secrets and stored encrypted, like header values.
+- On Windows, a command such as `npx` that is installed as a `.cmd` script runs
+  through `cmd.exe`. Its arguments can't contain `"`, `%`, `!`, or a line break there;
+  a server whose arguments need one fails to start with an error saying so.
 
 ### Resources and prompts
 

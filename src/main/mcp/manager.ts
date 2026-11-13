@@ -148,6 +148,13 @@ function boundResourceMatches(url: string | undefined, resource: string | undefi
   }
 }
 
+/** Force an OAuth refresh for a server whose live call just got a 401 (no-op without stored tokens). */
+async function refreshAfterUnauthorized(serverId: string): Promise<void> {
+  const c = lastConfigs.find((x) => x.id === serverId)
+  if (!c || transportOf(c) === 'stdio' || hasAuthorizationHeader(resolveHeaders(c))) return
+  await oauthBearer(c, true).catch(() => {})
+}
+
 /**
  * The `Authorization: Bearer` header from a server's stored OAuth token set,
  * refreshing (and re-persisting) the set first when the access token is expired
@@ -442,6 +449,10 @@ async function callLive(
     out = capMcpOutput(await fn(live.client))
   } catch (e) {
     if (!live.client.isClosed) throw e
+    // A 401 mid-session means the access token went bad without the manager seeing
+    // it expire (revoked, or issued with no expiry): re-mint it before reconnecting,
+    // since the reconnect would otherwise send the same token.
+    if (e instanceof McpUnauthorizedError) await refreshAfterUnauthorized(serverId)
     await ensureConnections(lastConfigs).catch(() => {})
     const revived = connections.get(serverId)
     const hint =

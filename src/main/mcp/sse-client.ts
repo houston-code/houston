@@ -493,6 +493,9 @@ export class McpSseClient implements McpConnection {
       // the (usually empty, 202) body so the connection can be reused.
       await res.text().catch(() => '')
       if (res.status === 401) {
+        // Rejected credentials won't recover on this connection: mark it dead so the
+        // manager reconnects (refreshing the OAuth token) instead of reusing it.
+        this.closed = true
         throw new McpUnauthorizedError(
           'MCP POST failed: HTTP 401 (the server rejected the credentials or requires OAuth sign-in)',
           res.headers.get('www-authenticate')
