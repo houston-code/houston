@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
-import { writeFileAtomicSync } from './atomic-write'
+import { writeFileAtomicStampedSync } from './atomic-write'
 import { externalizeMedia, hydrateMedia, pruneMedia } from './conversationMedia'
 import {
   COMPACTION_SUMMARY_PREFIX,
@@ -178,8 +178,82 @@ function read(id: string): Conversation | null {
   return migrate(raw)
 }
 
+/** A conversation without its message log: everything a bookkeeping change touches. */
+type ConversationShell = Omit<Conversation, 'messages'>
+
+/**
+ * What this process last wrote for a chat, kept so the next save does not have to read
+ * the file back and parse it. Saving used to be read, parse, change one field,
+ * serialise everything, write: several times per model step, on the main thread, each
+ * pass linear in the size of the chat. With this:
+ *
+ * - a bookkeeping change (usage totals, compaction state, the failed-turn marker)
+ *   reuses the message log's JSON text as written last time, so the messages are
+ *   neither parsed nor serialised again;
+ * - replacing the message log needs only the rest of the conversation, so the file is
+ *   not read at all.
+ *
+ * An entry is used only while the file on disk is still the one this process wrote:
+ * its stamp (inode, mtime, size) is taken from the temp file before the rename and
+ * compared with a fresh stat before every use. Another process's write (the terminal
+ * client, a headless run) replaces the file, the stamps differ, and the save falls
+ * back to reading it, exactly as before. `shell` is this module's own copy, never
+ * shared with a caller.
+ */
+interface WrittenChat {
+  stamp: string
+  shell: ConversationShell
+  messagesJson: string
+}
+const written = new Map<string, WrittenChat>()
+/** Chats remembered at once. Each holds its message log as text, so keep it to the few in use. */
+const MAX_WRITTEN_CHATS = 4
+
+function rememberWritten(id: string, entry: WrittenChat): void {
+  written.delete(id)
+  written.set(id, entry)
+  for (const oldest of written.keys()) {
+    if (written.size <= MAX_WRITTEN_CHATS) break
+    written.delete(oldest)
+  }
+}
+
+/** The remembered write for `id`, if the file on disk is still that write. */
+function stillWritten(id: string): WrittenChat | null {
+  const entry = written.get(id)
+  if (!entry) return null
+  if (fileStamp(filePath(id)) !== entry.stamp) {
+    written.delete(id)
+    return null
+  }
+  return entry
+}
+
+/** For tests: forget what this process last wrote, so every save reads the file. */
+export function resetConversationWriteCache(): void {
+  written.clear()
+}
+
+/** The file's text: the shell's fields, then the message log. */
+function serialize(shell: ConversationShell, messagesJson: string): string {
+  // A shell always has fields (id, title, ...), so its JSON ends in a value then "}".
+  return `${JSON.stringify(shell).slice(0, -1)},"messages":${messagesJson}}`
+}
+
+/** Put `shell` + `messagesJson` on disk and remember them as this process's write. */
+function commit(id: string, shell: ConversationShell, messagesJson: string): void {
+  // 0600 — owner read/write only. Transcripts can capture secrets echoed in tool
+  // output (a curl with an auth header, an env dump), so keep them off world-read.
+  // Compact, not indented: nobody reads these by hand, every reader parses either form,
+  // and indentation more than doubled a chat full of nested subagent records.
+  const stamp = writeFileAtomicStampedSync(filePath(id), serialize(shell, messagesJson), 0o600)
+  rememberWritten(id, { stamp, shell: structuredClone(shell), messagesJson })
+  // This process's own write: drop the cached metadata now rather than lean on the
+  // file's stamp, which a filesystem with coarse timestamps could repeat.
+  metaCache.delete(id)
+}
+
 function write(conv: Conversation): void {
-  const path = filePath(conv.id)
   // Stamp on every write, whatever the call path, so a file read as legacy (v0)
   // converges to the current version the first time it's touched (and a file stamped by
   // a newer Houston keeps its higher version).
@@ -188,16 +262,30 @@ function write(conv: Conversation): void {
   // that isn't there yet; files no longer referenced are dropped after it lands.
   const media = mediaDir(conv.id)
   const { value: toWrite, refs } = externalizeMedia(stamped, media)
-  // 0600 — owner read/write only. Transcripts can capture secrets echoed in tool
-  // output (a curl with an auth header, an env dump), so keep them off world-read.
-  // Compact, not indented: nobody reads these by hand, every reader parses either form,
-  // and indentation more than doubled a chat full of nested subagent records, all of
-  // it re-serialised on every save.
-  writeFileAtomicSync(path, JSON.stringify(toWrite), 0o600)
-  // This process's own write: drop the cached metadata now rather than lean on the
-  // file's stamp, which a filesystem with coarse timestamps could repeat.
-  metaCache.delete(conv.id)
+  const { messages, ...shell } = toWrite
+  commit(conv.id, shell, JSON.stringify(messages))
   pruneMedia(media, refs)
+}
+
+/**
+ * Open a chat for a change that does not touch its message log. `conv` is the caller's
+ * to edit; `save` writes it. Uses the remembered write when the file is still ours (no
+ * read, no parse, and the messages are not serialised again), and the file otherwise.
+ * Only for fields that hold no attachments: `save` on the fast path does not
+ * externalize or prune media, and has no need to, since the log is untouched.
+ */
+function openForBookkeeping(id: string): { conv: ConversationShell; save: () => void } | null {
+  if (!isConversationId(id)) return null
+  const ours = stillWritten(id)
+  if (ours) {
+    const shell = structuredClone(ours.shell)
+    return {
+      conv: shell,
+      save: () => commit(id, { ...shell, schemaVersion: stampedVersion(shell.schemaVersion) }, ours.messagesJson)
+    }
+  }
+  const conv = read(id)
+  return conv ? { conv, save: () => write(conv) } : null
 }
 
 export function createConversation(input: {
@@ -447,6 +535,7 @@ export function deleteConversation(id: string): void {
   const path = filePath(id)
   if (existsSync(path)) rmSync(path)
   metaCache.delete(id)
+  written.delete(id)
   rmSync(mediaDir(id), { recursive: true, force: true })
   // Drop any in-memory "Allow for run" consent so a future conversation can't inherit it.
   clearConversationOverride(id)
@@ -685,8 +774,9 @@ export function addUsage(
     cacheWriteTokens?: number
   }
 ): ConversationUsage | null {
-  const conv = read(id)
-  if (!conv) return null
+  const open = openForBookkeeping(id)
+  if (!open) return null
+  const { conv } = open
   const prev = conv.usage ?? { inputTokens: 0, outputTokens: 0, cost: 0 }
   conv.usage = {
     inputTokens: turn.inputTokens || prev.inputTokens,
@@ -697,7 +787,7 @@ export function addUsage(
     // breakdown and the TUI's in-memory one agree on what a session cost.
     perModel: accumulateModelUsage(prev.perModel ?? [], turn)
   }
-  write(conv)
+  open.save()
   return conv.usage
 }
 
@@ -730,8 +820,9 @@ export function mergeRunningTotals(e: AgentEvent, total: ConversationUsage | nul
  * next run shouldn't reorder the sidebar.
  */
 export function setConversationError(id: string, error: ConversationError | null): void {
-  const conv = read(id)
-  if (!conv) return
+  const open = openForBookkeeping(id)
+  if (!open) return
+  const { conv } = open
   if (error) {
     if (conv.lastError?.message === error.message) return
     conv.lastError = error
@@ -739,7 +830,7 @@ export function setConversationError(id: string, error: ConversationError | null
     if (conv.lastError === undefined) return
     delete conv.lastError
   }
-  write(conv)
+  open.save()
 }
 
 /**
@@ -750,8 +841,9 @@ export function setConversationError(id: string, error: ConversationError | null
  * bookkeeping, not user activity, and shouldn't reorder the sidebar.
  */
 export function setCompaction(id: string, compaction: ConversationCompaction | null): void {
-  const conv = read(id)
-  if (!conv) return
+  const open = openForBookkeeping(id)
+  if (!open) return
+  const { conv } = open
   if (compaction) {
     const prev = conv.compaction
     if (
@@ -767,7 +859,7 @@ export function setCompaction(id: string, compaction: ConversationCompaction | n
     if (conv.compaction === undefined) return
     delete conv.compaction
   }
-  write(conv)
+  open.save()
 }
 
 /**
@@ -776,10 +868,10 @@ export function setCompaction(id: string, compaction: ConversationCompaction | n
  * compaction: never bumps `updatedAt`.
  */
 export function setPromptSnapshot(id: string, snapshot: PromptSnapshot): void {
-  const conv = read(id)
-  if (!conv) return
-  conv.promptSnapshot = snapshot
-  write(conv)
+  const open = openForBookkeeping(id)
+  if (!open) return
+  open.conv.promptSnapshot = snapshot
+  open.save()
 }
 
 /**
@@ -787,10 +879,10 @@ export function setPromptSnapshot(id: string, snapshot: PromptSnapshot): void {
  * Conversation.announcedPolicy). Bookkeeping: never bumps `updatedAt`.
  */
 export function setAnnouncedPolicy(id: string, policy: ApprovalPolicy): void {
-  const conv = read(id)
-  if (!conv || conv.announcedPolicy === policy) return
-  conv.announcedPolicy = policy
-  write(conv)
+  const open = openForBookkeeping(id)
+  if (!open || open.conv.announcedPolicy === policy) return
+  open.conv.announcedPolicy = policy
+  open.save()
 }
 
 /**
@@ -800,7 +892,11 @@ export function setAnnouncedPolicy(id: string, policy: ApprovalPolicy): void {
  * serialising and rewriting the whole file twice.
  */
 export function setMessages(id: string, messages: ChatMessage[], meta?: ConversationMetaPatch): void {
-  const conv = read(id)
+  // The new log replaces the old one outright, so only the rest of the conversation
+  // is needed: taken from this process's last write when the file is still that write,
+  // which skips reading and parsing a log that is about to be discarded.
+  const ours = isConversationId(id) ? stillWritten(id) : null
+  const conv: Conversation | null = ours ? { ...structuredClone(ours.shell), messages } : read(id)
   if (!conv) return
   conv.messages = messages
   conv.updatedAt = Date.now()
