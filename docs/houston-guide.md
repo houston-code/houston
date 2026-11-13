@@ -759,7 +759,14 @@ receipt.
 - **Background commands:** how one ended, or that it's still running (for a dev
   server).
 - **Stale checks.** A check that ran before the turn's last file change says so, since
-  it may not cover the final code.
+  it may not cover the final code. When the last test run is one of these, the line
+  says so too: "Tests passed (12) before the last change".
+- **Skipped and dropped tests.** The line says how many tests the last run skipped.
+  When the same test command runs more than once in a turn and its last run ran fewer
+  tests than an earlier one, or skipped more, it says that too ("Tests passed (11,
+  down from 12, 1 skipped, up from 0)") and the receipt is highlighted the way it is
+  for a failure, since a deleted test or an added skip can make a failing suite look
+  green.
 
 ### Todo items it can't back
 
@@ -769,6 +776,10 @@ When the agent marks a todo done that says a check ran ("Backend tests with pyte
 - the receipt lists it as marked done with nothing recorded
 - the agent is told at the moment it marks it
 - the todo list itself stays as the agent wrote it
+
+A run counts only if it came after the turn's last file change. When the only passing
+run came before a later edit, the receipt lists the item as marked done, checked only
+before the last change, and the agent is told to run it on the final code.
 
 Items about writing something ("Write tests for the API") never need a run behind
 them.

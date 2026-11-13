@@ -66,6 +66,16 @@ export function Receipt({ receipt }: { receipt: TurnReceipt }): JSX.Element {
             </ul>
           </div>
         )}
+        {receipt.todoStale && receipt.todoStale.length > 0 && (
+          <div className="receipt__gaps">
+            <span className="receipt__label">Marked done, checked only before the last change</span>
+            <ul>
+              {receipt.todoStale.map((g, i) => (
+                <li key={i}>{g}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {(receipt.checksOmitted ?? 0) > 0 && (
           <p className="receipt__note">
             Plus {receipt.checksOmitted} earlier check{receipt.checksOmitted === 1 ? '' : 's'}.

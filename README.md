@@ -463,7 +463,9 @@ Open source under the [Apache License 2.0](LICENSE).
   **Recorded by Houston** line built from what actually executed, not from what the
   agent says: tests (with pass/fail counts for common runners), builds, installs,
   browser checks, background servers, subagent work, the verify command, and files
-  changed. It flags a todo item marked done with nothing run behind it, and tracks an
+  changed. It flags a todo item marked done with nothing run behind it (or only a run
+  from before the last change), a test command whose rerun ran fewer tests or skipped
+  more than before, and tracks an
   accepted plan's progress across turns. It never goes to the model and costs no
   extra calls.
 - **Keyboard shortcuts.** A ⌘K command palette, ⌘N new chat (⇧⌘N in another

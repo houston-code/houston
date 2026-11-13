@@ -62,6 +62,33 @@ describe('receiptSummary', () => {
     )
   })
 
+  it('says how many tests the last run skipped, and when it ran fewer or skipped more than before', () => {
+    const t = (over: Partial<ReceiptCheck>): string => receiptSummary(receipt({ checks: [check(over)] }))
+    expect(t({ counts: { passed: 12, failed: 0, skipped: 2 } })).toBe('Tests passed (12, 2 skipped)')
+    expect(t({ counts: { passed: 11, failed: 0 }, shrunk: { from: 12, to: 11 } })).toBe('Tests passed (11, down from 12)')
+    expect(t({ counts: { passed: 12, failed: 0, skipped: 3 }, skippedRose: { from: 1, to: 3 } })).toBe(
+      'Tests passed (12, 3 skipped, up from 1)'
+    )
+    expect(
+      t({ counts: { passed: 11, failed: 0, skipped: 1 }, shrunk: { from: 12, to: 11 }, skippedRose: { from: 0, to: 1 } })
+    ).toBe('Tests passed (11, down from 12, 1 skipped, up from 0)')
+    expect(t({ ok: false, exitCode: 1, counts: { passed: 9, failed: 1 }, shrunk: { from: 12, to: 10 } })).toBe(
+      'Tests failed (1 of 10, down from 12)'
+    )
+  })
+
+  it('says when the last passing test run came before the last file change', () => {
+    const r = receipt({
+      checks: [check({ counts: { passed: 12, failed: 0 }, beforeLastWrite: true })],
+      filesChanged: ['src/a.ts'],
+      filesChangedCount: 1
+    })
+    expect(receiptSummary(r)).toBe('Tests passed (12) before the last change · 1 file changed')
+    expect(receiptSummary(receipt({ checks: [check({ exitCode: 0, beforeLastWrite: true })] }))).toBe(
+      'Tests passed before the last change'
+    )
+  })
+
   it('says when an outcome is unknown instead of calling it a pass', () => {
     expect(receiptSummary(receipt({ checks: [check({ ok: null, unknown: 'exit-not-attributable' })] }))).toBe(
       'Test result unknown'
@@ -107,6 +134,22 @@ describe('checkDetail and checkGlyph', () => {
     expect(checkDetail(check({ runs: 3 }))).toBe('exit 0, ran 3 times, last run shown')
   })
 
+  it('says what an earlier run of the same command ran and skipped, when the last ran fewer or skipped more', () => {
+    expect(
+      checkDetail(
+        check({
+          counts: { passed: 11, failed: 0, skipped: 1 },
+          shrunk: { from: 12, to: 11 },
+          skippedRose: { from: 0, to: 1 },
+          runs: 2
+        })
+      )
+    ).toBe('11 passed, 1 skipped, an earlier run ran 12 tests, an earlier run skipped none, ran 2 times, last run shown')
+    expect(checkDetail(check({ counts: { passed: 4, failed: 0, skipped: 3 }, skippedRose: { from: 1, to: 3 }, runs: 2 }))).toBe(
+      '4 passed, 3 skipped, an earlier run skipped 1, ran 2 times, last run shown'
+    )
+  })
+
   it('marks passed, failed, and unknown differently', () => {
     expect([check({}), check({ ok: false }), check({ ok: null })].map(checkGlyph)).toEqual(['✓', '✗', '○'])
   })
@@ -133,11 +176,20 @@ describe('formatReceiptLines', () => {
     const r = receipt({
       checks: [
         check({ ok: false, exitCode: 1, blocked: 'sandbox-write', runs: 2 }),
-        check({ kind: 'http', label: 'curl localhost', ok: null, unknown: 'http-status-unchecked' })
+        check({ kind: 'http', label: 'curl localhost', ok: null, unknown: 'http-status-unchecked' }),
+        check({
+          counts: { passed: 11, failed: 0, skipped: 1 },
+          shrunk: { from: 12, to: 11 },
+          skippedRose: { from: 0, to: 1 },
+          beforeLastWrite: true,
+          runs: 2
+        })
       ],
       otherCommands: 1,
       filesChanged: ['a.py'],
-      filesChangedCount: 1
+      filesChangedCount: 1,
+      todoGaps: ['Run the build'],
+      todoStale: ['Run the tests']
     })
     expect(formatReceiptLines(r).join('\n')).not.toContain('—')
   })
@@ -147,6 +199,22 @@ describe('receiptHasFailure', () => {
   it('is true only when some check failed', () => {
     expect(receiptHasFailure(receipt({ checks: [check({}), check({ ok: null })] }))).toBe(false)
     expect(receiptHasFailure(receipt({ checks: [check({ ok: false })] }))).toBe(true)
+  })
+
+  it('is true when a test command ran fewer tests or skipped more than an earlier run of it', () => {
+    expect(receiptHasFailure(receipt({ checks: [check({ shrunk: { from: 12, to: 11 } })] }))).toBe(true)
+    expect(receiptHasFailure(receipt({ checks: [check({ skippedRose: { from: 0, to: 1 } })] }))).toBe(true)
+    // A pass from before the last change is shown as such, not flagged on its own.
+    expect(receiptHasFailure(receipt({ checks: [check({ beforeLastWrite: true })] }))).toBe(false)
+  })
+
+  it('reads a receipt saved before these fields existed', () => {
+    const old = JSON.parse(
+      '{"v":1,"checks":[{"kind":"test","label":"npm test","ok":true,"exitCode":0,"counts":{"passed":12,"failed":0},"runs":2}],"otherCommands":0,"filesChanged":["a.ts"],"filesChangedCount":1}'
+    ) as TurnReceipt
+    expect(receiptSummary(old)).toBe('Tests passed (12) · 1 file changed')
+    expect(receiptHasFailure(old)).toBe(false)
+    expect(formatReceiptLines(old)[1]).toBe('  ✓ tests: npm test (12 passed, ran 2 times, last run shown)')
   })
 })
 
@@ -207,6 +275,16 @@ describe('todo gaps in the receipt', () => {
       '  ! marked done with nothing recorded: Verify: pytest, curl, build, browser'
     ])
     expect(receiptHasFailure(r)).toBe(true)
+  })
+
+  it('lists todos backed only by a run before the last change apart, and treats them as a failure', () => {
+    const s = receipt({ todoStale: ['Run the test suite'] })
+    expect(receiptSummary(s)).toBe('1 todo marked done, checked only before the last change')
+    expect(formatReceiptLines(s)).toEqual([
+      'What ran: 1 todo marked done, checked only before the last change',
+      '  ! marked done, checked only before the last change: Run the test suite'
+    ])
+    expect(receiptHasFailure(s)).toBe(true)
   })
 })
 
