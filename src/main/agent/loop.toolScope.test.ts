@@ -42,7 +42,8 @@ vi.mock('../mcp/manager', () => ({
   getMcpToolDefs: async (configs: McpServerConfig[] | undefined) => {
     h.mcpConfigs.push(configs)
     return h.mcpDefs
-  }
+  },
+  releaseMcpRun: () => {}
 }))
 vi.mock('./git', () => ({ gitContext: async () => '' }))
 vi.mock('./review', () => ({ reviewWorkspaceChanges: async () => 'no changes' }))

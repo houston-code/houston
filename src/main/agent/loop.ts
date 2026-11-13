@@ -111,7 +111,7 @@ import {
   writeTouchesUnknownPaths
 } from './readCache'
 import { createShellSession } from './shell-session'
-import { getMcpToolDefs } from '../mcp/manager'
+import { getMcpToolDefs, releaseMcpRun } from '../mcp/manager'
 import {
   MCP_LAZY_THRESHOLD,
   builtinCatalogEntries,
@@ -1596,7 +1596,8 @@ export async function startRun(
             ? mergeProjectMcpServers(settings.mcpServers, projectConfig.elevated.mcpServers)
             : settings.mcpServers,
           req.extraMcpServers
-        )
+        ),
+        runId
       )
     ).filter((d) => toolOffered(req.toolScope, d.schema.name))
     // Lazy loading (lazy-mcp.ts): every schema rides along on every request, so the
@@ -4685,6 +4686,8 @@ export async function startRun(
       fail('unexpected', { message: scrubError(`The turn stopped on an unexpected error: ${detail}`) })
     }
   } finally {
+    // This run's MCP servers no longer count as in use (see liveRuns in mcp/manager).
+    releaseMcpRun(runId)
     // A turn stopped mid-tool — the user hit Stop, or an exception unwound after
     // the assistant `tool_use` was persisted but before its result — would leave a
     // dangling tool call that makes the conversation un-continuable. Pair any
