@@ -64,6 +64,7 @@ import type {
   UpdateInstallFailed,
   WhatsNew
 } from '@shared/update'
+import type { ImportOutcome, ImportScan } from '@shared/importConfig'
 import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 
@@ -96,6 +97,15 @@ const api = {
   /** Answer that notice: import ~/.claude/CLAUDE.md into it, or keep the rules separate. */
   decideLegacyRulesNotice: (choice: LegacyRulesChoice): Promise<LegacyRulesDecideResult> =>
     ipcRenderer.invoke(IPC.legacyRulesNoticeDecide, choice),
+  /** Find instruction files, MCP servers, skills and commands other tools keep. */
+  scanImports: (workspace: string | null): Promise<ImportScan> => ipcRenderer.invoke(IPC.importScan, workspace),
+  /** Copy the chosen finds (by id) into Houston's own locations. */
+  applyImports: (workspace: string | null, ids: string[]): Promise<ImportOutcome> =>
+    ipcRenderer.invoke(IPC.importApply, workspace, ids),
+  /** Whether to show the one-time "import from other tools" offer. */
+  getImportOffer: (workspace: string | null): Promise<boolean> => ipcRenderer.invoke(IPC.importOfferStatus, workspace),
+  /** Answer that offer, so it never shows again. */
+  answerImportOffer: (): Promise<void> => ipcRenderer.invoke(IPC.importOfferAnswer),
   /**
    * API keys found in the app's environment for providers with no stored key: the
    * startup notice's list (`startup`, skipping "Not now" answers) or the Connect

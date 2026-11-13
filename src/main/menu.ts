@@ -8,6 +8,7 @@ import { shareHoustonFromMenu } from './share'
 import { openExternalSafely } from './safeExternal'
 import { ISSUES_URL, revealLogs } from './issueReport'
 export { ISSUES_URL }
+import { targetWindow } from './windows'
 import {
   getSettings,
   onSettingsSaved,
@@ -107,7 +108,7 @@ export function setMenuState(next: MenuState): void {
 }
 
 function focusedOrFirstWindow(): BrowserWindow | undefined {
-  return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+  return targetWindow()
 }
 
 function sendMenuCommand(cmd: MenuCommand): void {
@@ -392,8 +393,7 @@ function goMenu(ctx: MenuContext): MenuItemConstructorOptions {
 
 /** Ask the renderer to open the Settings modal (native menu → in-app UI). */
 function onOpenSettings(): void {
-  const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
-  win?.webContents.send(IPC.menuOpenSettings)
+  targetWindow()?.webContents.send(IPC.menuOpenSettings)
 }
 
 /**

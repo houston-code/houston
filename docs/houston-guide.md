@@ -60,6 +60,11 @@ The full GUI:
 
 - **Read and unread.** A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read. The
   filter menu marks every chat read, or sorts the ones that want attention first.
+- **Grouping by folder or date.** Under **Group chats by** in the filter menu, choose
+  **Project folder** (a worktree chat goes under its repository) or **Date** (Today,
+  Yesterday, This week, Older) to split the chats outside your own groups into
+  sections. Pinned chats and your groups stay as they are, and each section collapses
+  on its own. **Your groups only** (the default) turns it off. The choice is remembered.
 - **Right-click menus.** Right-click a chat in the sidebar for the same actions as its
   ⋯ menu. Right-click a message to copy it (or just the text you selected) and for that
   message's own actions: rewind or edit one of yours, or mark unread from a reply.
@@ -653,6 +658,15 @@ conversation, not a log. To see more:
   always kept in the conversation.
 
 Very long output is capped, with a note saying how much was left out.
+
+In the desktop app:
+
+- **Expand tools / Collapse tools**, the round button at the bottom right of a chat
+  that has tool rows, opens or closes every tool row at once.
+- **Show tool output expanded** (Settings, Appearance) opens each tool row with its
+  output or diff in view. Off by default.
+- **Always show reasoning** (same place) keeps the model's reasoning open above each
+  reply instead of folding it away once the reply starts. Off by default.
 
 In the desktop app, file paths in the transcript open the file in the Files panel's
 preview: the file a tool row names (a read opens at the line it started from), a diff's
@@ -2702,7 +2716,7 @@ sidebar) or `Esc` returns to the chat.
 
 | Group | Pages |
 | --- | --- |
-| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Memory |
+| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Memory, Import |
 | **App** | General, Appearance, Keyboard |
 | **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (whether new chats start in a worktree, and additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |
@@ -2822,6 +2836,37 @@ A few one-time tips point at controls the first time they matter:
 **Take the tour** plays the tips any time, and also covers steering (see "Typing while
 it works"). Find it in the command palette (⌘K) or under **Help → Take the Tour…**. If
 you used Houston before this feature, nothing appears on its own.
+
+## Importing from other tools
+
+**Settings > Import** looks for what other coding tools keep in well-known places and
+lets you copy what you want into Houston. The first time Houston finds any, a notice
+offers to open that page (**Review**) or not (**Not now**); it shows once.
+
+What it looks for, and where a copy goes:
+
+| Found | Where | Copied to |
+| --- | --- | --- |
+| Instruction files | your home folder (for example `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`) | the end of `~/.houston/AGENTS.md` |
+| Instruction files | the project (`GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.clinerules`, `.github/copilot-instructions.md`) | the end of the project's `AGENTS.md` |
+| MCP servers | your home folder (for example `~/.cursor/mcp.json`, `~/.claude.json`) | Settings > MCP Servers, switched off |
+| MCP servers | the project (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`) | the project's `.houston/settings.json` |
+| Skills | the project (`.claude/skills/<name>/`) | `.houston/skills/<name>/` |
+| Custom commands | your home folder (`~/.claude/commands`, `~/.codex/prompts`) or the project (`.claude/commands`) | `~/.houston/commands` or `.houston/commands` |
+
+`~/.claude/CLAUDE.md` is imported the way its own notice does it: one
+`@~/.claude/CLAUDE.md` line in `~/.houston/AGENTS.md`, so later edits to it apply too.
+Houston already reads a project's `CLAUDE.md`, so that one isn't listed.
+
+- **Nothing is selected until you pick it.** Tick what you want and choose **Import
+  selected**; **Select all new** ticks everything not yet imported.
+- **Copies only.** Originals are never moved or changed, and nothing Houston already
+  has (a command, skill folder, or server with the same name, or an instruction file
+  imported before) is overwritten; those show as already there.
+- **Nothing runs on import.** An imported MCP server starts switched off: review its
+  command under MCP Servers and switch it on. A project's servers take effect only
+  while you trust the folder, and adding them asks again if you trusted it before.
+- Project files that link outside the project are skipped.
 
 ## License and legal
 

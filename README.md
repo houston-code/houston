@@ -466,6 +466,10 @@ Open source under the [Apache License 2.0](LICENSE).
   *Appearance*; *System* follows your OS appearance and switches live. The same
   page sets the chat text size (small, default, large), a compact density, and a
   code theme (default, high contrast, muted) for code blocks and diffs.
+- **How much detail the transcript shows.** Tool rows start collapsed to one line;
+  the **Expand tools** button at a chat's bottom right opens them all (and collapses them
+  again). Settings → *Appearance* can open tool output by default and keep the
+  model's reasoning in view.
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
   dropped connections) are retried with exponential backoff, shown inline as a
   "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A
@@ -495,7 +499,8 @@ Open source under the [Apache License 2.0](LICENSE).
   a chat yourself always wins; auto-titling never overwrites a title you set.
 - **Organize the sidebar.** Pin important chats to a "Pinned" section, and file
   the rest into your own named, collapsible groups via each chat's ⋯ menu. Pins
-  and groups persist across restarts. **Resize** the sidebar by dragging its right
+  and groups persist across restarts. The filter menu can also split the rest by
+  project folder or by date (Today, Yesterday, This week, Older). **Resize** the sidebar by dragging its right
   edge (double-click to reset), or **collapse** it to a thin rail with the ⌘B
   shortcut or the « toggle; the chosen width and collapsed state are remembered.
 - **Long sessions stay in budget.** When a conversation grows too large, Houston
@@ -589,6 +594,12 @@ Open source under the [Apache License 2.0](LICENSE).
   absolute), to split or share common rules across files. To reuse an existing
   global rules file such as `~/.claude/CLAUDE.md`, add `@~/.claude/CLAUDE.md` to
   `~/.houston/AGENTS.md`; Houston offers to do this once when it finds one.
+- **Import from other tools.** Settings > Import lists the instruction files, MCP
+  servers, skills, and custom commands other coding tools keep in your home folder
+  and the open project (for example a `.mcp.json` or `.claude/commands` in the
+  project), and copies the ones you pick into Houston's own locations. Originals
+  are never changed, nothing Houston already has is overwritten, and imported MCP
+  servers start switched off. Houston offers this once when it first finds any.
 - **Token usage & cost at a glance.** The control bar above the composer shows how
   full the context is (a small bar and "used/maximum") and the chat's **estimated
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show
