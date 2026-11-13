@@ -8,11 +8,11 @@ import { isAllowedNavigation } from './navigation'
 import { cascadeBounds, loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
 import { mainWindowWebPreferences } from './main-window-prefs'
 import { registerIpc } from './ipc'
-import { buildAppMenu } from './menu'
+import { buildAppMenu, refreshMenuForFocus } from './menu'
 import { killAllShells } from './agent/shells'
 import { lspManager } from './agent/lsp/manager'
 import { startShellLedger } from './agent/shellLedger'
-import { destroyAllPreviewPanes, destroyPreviewPanesOf } from './preview'
+import { destroyAllPreviewPanes, destroyPreviewPanesOf, watchPreviewHost } from './preview'
 import { killAllTerminals } from './terminal'
 import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
@@ -127,6 +127,8 @@ function createWindow(): BrowserWindow {
     webPreferences: mainWindowWebPreferences(join(__dirname, '../preload/index.js'))
   })
   registerAppWindow(win)
+  // The menu reflects the focused window's state (its open panels, whether it has a chat).
+  win.on('focus', refreshMenuForFocus)
 
   win.on('ready-to-show', () => win.show())
 
@@ -139,6 +141,8 @@ function createWindow(): BrowserWindow {
     // Linux from quitting now that the app's last window is gone.
     if (chatWindows().length === 0) destroyHelperWindows()
   })
+  // ...and when the page reloads or crashes, which leaves the window but drops the dock.
+  watchPreviewHost(win)
 
   // On Windows/Linux, closing the last window quits the app (window-all-closed →
   // app.quit()), so the live-run confirmation has to happen here, while the window

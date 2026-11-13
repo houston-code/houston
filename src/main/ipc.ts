@@ -2032,7 +2032,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Fire-and-forget focus signal so the ⌘W menu handler knows whether to close
   // the active terminal tab or the window.
   on(IPC.terminalFocusChanged, (_event, focused: boolean) => setTerminalFocused(focused))
-  on(IPC.menuState, (_event, state: MenuState) => setMenuState(state))
+  on(IPC.menuState, (event, state: MenuState) => setMenuState(state, event.sender))
 
   // ---- Live preview dock (started dev servers) ----
 
