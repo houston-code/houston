@@ -445,7 +445,9 @@ Open source under the [Apache License 2.0](LICENSE).
   moves in on open and restores on close, Tab stays inside, Esc closes), and all
   animations honor the OS *reduce motion* setting.
 - **Light & dark themes.** Pick *System*, *Dark*, or *Light* in Settings →
-  *Appearance*; *System* follows your OS appearance and switches live.
+  *Appearance*; *System* follows your OS appearance and switches live. The same
+  page sets the chat text size (small, default, large), a compact density, and a
+  code theme (default, high contrast, muted) for code blocks and diffs.
 - **Resilient streaming.** Transient provider failures (rate limits, overloads,
   dropped connections) are retried with exponential backoff, shown inline as a
   "retrying…" notice, so a blip mid-run no longer throws the whole turn away. A

@@ -245,9 +245,9 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'htmlVisuals'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'htmlVisuals'],
         Component: AppearanceSection,
-        keywords: ['theme', 'dark mode', 'light mode', 'colors', 'visuals', 'html']
+        keywords: ['theme', 'dark mode', 'light mode', 'colors', 'visuals', 'html', 'font size', 'text size', 'density', 'compact', 'code theme', 'syntax']
       }
     ]
   },
