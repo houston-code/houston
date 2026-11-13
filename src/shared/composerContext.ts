@@ -11,8 +11,11 @@
 
 import type { ImageAttachment } from './images'
 
-/** The kinds of non-image context the `+` menu can attach. */
-export type ContextKind = 'file' | 'folder' | 'diff' | 'link'
+/**
+ * The kinds of non-image context a message can carry: what the `+` menu attaches,
+ * and `paste`, a large paste folded into a chip (its text is sent as pasted).
+ */
+export type ContextKind = 'file' | 'folder' | 'diff' | 'link' | 'paste'
 
 /** A single non-image attachment shown as a chip above the composer. */
 export interface ContextAttachment {

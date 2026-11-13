@@ -24,6 +24,7 @@ import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
+import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import type { GitInitResult } from '@shared/git'
 import type { DoctorFacts } from '@shared/doctor'
 import type { MemoryScope } from '@shared/memory'
@@ -52,6 +53,7 @@ import type {
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
 import type { Scorecard } from '@shared/scorecard'
+import type { UsageReport } from '@shared/usageReport'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type { ChatStatusMap } from '@shared/chatStatus'
@@ -63,6 +65,8 @@ import type {
   UpdateInstallFailed,
   WhatsNew
 } from '@shared/update'
+import type { ImportOutcome, ImportScan } from '@shared/importConfig'
+import type { CustomKind, CustomScope, CustomizeOverview, CustomizeResult } from '@shared/customize'
 import type { PreviewPaneSpec, PreviewServer } from '@shared/preview'
 
 /**
@@ -88,6 +92,15 @@ const api = {
   /** Answer that notice: import ~/.claude/CLAUDE.md into it, or keep the rules separate. */
   decideLegacyRulesNotice: (choice: LegacyRulesChoice): Promise<LegacyRulesDecideResult> =>
     ipcRenderer.invoke(IPC.legacyRulesNoticeDecide, choice),
+  /** Find instruction files, MCP servers, skills and commands other tools keep. */
+  scanImports: (workspace: string | null): Promise<ImportScan> => ipcRenderer.invoke(IPC.importScan, workspace),
+  /** Copy the chosen finds (by id) into Houston's own locations. */
+  applyImports: (workspace: string | null, ids: string[]): Promise<ImportOutcome> =>
+    ipcRenderer.invoke(IPC.importApply, workspace, ids),
+  /** Whether to show the one-time "import from other tools" offer. */
+  getImportOffer: (workspace: string | null): Promise<boolean> => ipcRenderer.invoke(IPC.importOfferStatus, workspace),
+  /** Answer that offer, so it never shows again. */
+  answerImportOffer: (): Promise<void> => ipcRenderer.invoke(IPC.importOfferAnswer),
   /**
    * API keys found in the app's environment for providers with no stored key: the
    * startup notice's list (`startup`, skipping "Not now" answers) or the Connect
@@ -139,18 +152,40 @@ const api = {
   registerHtmlVisual: (html: string): Promise<string | null> => ipcRenderer.invoke(IPC.visualRegisterHtml, html),
   listCommands: (workspace: string): Promise<Command[]> =>
     ipcRenderer.invoke(IPC.commandsList, workspace),
-  /** The workspace's skills (.houston/skills), name + description, for /skills. */
+  /** The project's and the user's skills (.houston/skills, ~/.houston/skills), name + description, for /skills. */
   listSkills: (workspace: string): Promise<Array<{ name: string; description: string }>> =>
     ipcRenderer.invoke(IPC.skillsList, workspace),
-  /** The workspace's custom agents (.houston/agents), name + description, for /agents. */
+  /** The project's and the user's custom agents (.houston/agents, ~/.houston/agents), for /agents. */
   listAgents: (workspace: string): Promise<Array<{ name: string; description: string }>> =>
     ipcRenderer.invoke(IPC.agentsList, workspace),
+  /** Settings > Customize: every skill, command and agent (project and user), and the loaded instruction files. */
+  customizeList: (workspace: string | null): Promise<CustomizeOverview> => ipcRenderer.invoke(IPC.customizeList, workspace),
+  /** Create a skill, command or agent from its template and open it. */
+  customizeCreate: (workspace: string | null, kind: CustomKind, scope: CustomScope, name: string): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeCreate, workspace, kind, scope, name),
+  /** Switch an item on or off (its `disabled` front-matter flag). */
+  customizeSetEnabled: (workspace: string | null, id: string, enabled: boolean): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeSetEnabled, workspace, id, enabled),
+  /** Open an item's file in its default app. */
+  customizeOpen: (workspace: string | null, id: string): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeOpen, workspace, id),
+  /** Move an item to the system trash. */
+  customizeDelete: (workspace: string | null, id: string): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeDelete, workspace, id),
+  /** Open a loaded instruction file by its label. */
+  customizeOpenInstruction: (workspace: string | null, label: string): Promise<CustomizeResult> =>
+    ipcRenderer.invoke(IPC.customizeOpenInstruction, workspace, label),
   /** Git repo info for the "new chat in a worktree" picker (or isRepo:false). */
   getRepoInfo: (workspace: string): Promise<RepoInfo> =>
     ipcRenderer.invoke(IPC.gitRepoInfo, workspace),
   /** All uncommitted working-tree changes (vs HEAD + untracked) for the Changes panel. */
   getWorkingTreeChanges: (workspace: string): Promise<WorkingTreeChanges> =>
     ipcRenderer.invoke(IPC.workingTreeChanges, workspace),
+  /** What a chat's latest turn (`turn`) or all its turns (`chat`) changed, for the Changes view. */
+  getChatChanges: (conversationId: string, scope: 'turn' | 'chat'): Promise<ChatChanges> =>
+    ipcRenderer.invoke(IPC.chatChanges, conversationId, scope),
+  /** Revert one file or hunk shown in the Changes view (after the user confirmed). */
+  revertChange: (req: ChangeRevertRequest): Promise<ChangeRevertResult> => ipcRenderer.invoke(IPC.changesRevert, req),
   /** Initialize a git repo in the workspace so its files show up in the Changes panel. */
   initGitRepo: (workspace: string): Promise<GitInitResult> =>
     ipcRenderer.invoke(IPC.gitInit, workspace),
@@ -241,6 +276,8 @@ const api = {
   /** Aggregate a local-only per-model loop scorecard over every persisted chat.
    *  Computed on-device from local files — nothing is ever transmitted. */
   getScorecard: (): Promise<Scorecard> => ipcRenderer.invoke(IPC.conversationScorecard),
+  /** Spend and tokens per day and per project over every saved chat (local only). */
+  getUsageReport: (): Promise<UsageReport> => ipcRenderer.invoke(IPC.conversationUsageReport),
   createConversation: (input: {
     workspace: string
     providerId: string

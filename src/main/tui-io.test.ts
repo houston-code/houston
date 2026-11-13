@@ -385,6 +385,29 @@ describe('readComposer (raw-mode composer)', () => {
     }
   }
 
+  it('repaints when menu rows arrive after the keystroke (an @ file lookup)', async () => {
+    let late: string[] = []
+    let redraw: (() => void) | null = null
+    const t = harness({
+      menuFor: (l, r) => {
+        redraw = r
+        return l.includes('@') ? late : []
+      }
+    })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('see @gre')
+    expect(t.text()).not.toContain('@src/greet.js')
+    late = ['  @src/greet.js']
+    redraw!()
+    expect(t.text()).toContain('@src/greet.js')
+    t.stdin.push('\r')
+    await read
+    // Once the read is over a late answer draws nothing.
+    const before = t.text()
+    redraw!()
+    expect(t.text()).toBe(before)
+  })
+
   it('leaves only the submitted line in the scrollback, not the command menu under it', async () => {
     const t = harness({ menuFor: (l) => (l.startsWith('/') ? ['  /changes  What is different in the working tree'] : []) })
     const read = t.io.readComposer!('> ')

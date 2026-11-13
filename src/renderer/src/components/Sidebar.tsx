@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type DragEvent } from 'react'
 import type { ConversationMeta } from '@shared/agent'
-import type { ChatGroup } from '@shared/types'
+import type { ChatGroup, SidebarGroupBy } from '@shared/types'
 import type { EditorId, EditorStatus } from '@shared/editors'
 import {
   signalLabel,
@@ -66,6 +66,11 @@ export interface SidebarProps {
   /** Whether chats wanting attention sort to the top of each section, and its toggle. */
   unreadFirst?: boolean
   onToggleUnreadFirst?: () => void
+  /** Automatic sections for the chats outside any group, and its setter. */
+  groupBy?: SidebarGroupBy
+  onSetGroupBy?: (by: SidebarGroupBy | undefined) => void
+  /** The current time, for the date sections. Injectable for tests. */
+  now?: number
   onSelect: (id: string) => void
   onNew: () => void
   onDelete: (id: string) => void
@@ -698,7 +703,14 @@ function GroupHeader({
   )
 }
 
-/** Funnel button beside the search box that filters the chat list by status. */
+/** The filter menu's grouping choices: your own groups only, or automatic sections too. */
+const GROUP_BY_OPTIONS: { value: SidebarGroupBy | undefined; label: string }[] = [
+  { value: undefined, label: 'Your groups only' },
+  { value: 'folder', label: 'Project folder' },
+  { value: 'date', label: 'Date' }
+]
+
+/** Funnel button beside the search box that filters the chat list by status, and sets grouping. */
 function FilterButton({
   filter,
   counts,
@@ -706,7 +718,9 @@ function FilterButton({
   unreadCount,
   onMarkAllRead,
   unreadFirst,
-  onToggleUnreadFirst
+  onToggleUnreadFirst,
+  groupBy,
+  onSetGroupBy
 }: {
   filter: ConversationStatusFilter
   counts: { active: number; archived: number }
@@ -716,6 +730,8 @@ function FilterButton({
   onMarkAllRead?: () => void
   unreadFirst: boolean
   onToggleUnreadFirst?: () => void
+  groupBy?: SidebarGroupBy
+  onSetGroupBy?: (by: SidebarGroupBy | undefined) => void
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
@@ -793,6 +809,27 @@ function FilterButton({
               Show unread first
             </button>
           )}
+          {onSetGroupBy && (
+            <>
+              <div className="menu__sep" />
+              <div className="menu__label">Group chats by</div>
+              {GROUP_BY_OPTIONS.map((o) => (
+                <button
+                  key={o.label}
+                  role="menuitemradio"
+                  aria-checked={groupBy === o.value}
+                  className="menu__item"
+                  onClick={() => {
+                    onSetGroupBy(o.value)
+                    setOpen(false)
+                  }}
+                >
+                  {groupBy === o.value ? '● ' : '○ '}
+                  {o.label}
+                </button>
+              ))}
+            </>
+          )}
         </Popover>
       )}
     </div>
@@ -842,7 +879,7 @@ function SidebarSectionView({
   // Slot the drop indicator sits at while dragging over this section, or null.
   const [dropAt, setDropAt] = useState<number | null>(null)
 
-  const droppable = section.kind === 'group' || section.kind === 'ungrouped'
+  const droppable = section.kind === 'group' || section.kind === 'ungrouped' || section.kind === 'auto'
   // Group sections move the chat into the group; Ungrouped clears its group.
   const targetGroupId = section.kind === 'group' ? section.id : null
   const rowCount = section.conversations.length
@@ -1003,7 +1040,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
     conversations,
     groups,
     props.collapsedSections,
-    props.unreadFirst ? wantsAttention : undefined
+    props.unreadFirst ? wantsAttention : undefined,
+    props.groupBy ? { by: props.groupBy, now: props.now ?? Date.now() } : undefined
   )
   const unreadCount = Object.values(props.chatStatus).filter((st) => st.unread !== undefined).length
   const needInput = Object.values(props.chatStatus).filter((st) => st.pending.length > 0).length
@@ -1094,6 +1132,8 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           {...(props.onMarkAllRead ? { onMarkAllRead: props.onMarkAllRead } : {})}
           unreadFirst={props.unreadFirst ?? false}
           {...(props.onToggleUnreadFirst ? { onToggleUnreadFirst: props.onToggleUnreadFirst } : {})}
+          groupBy={props.groupBy}
+          {...(props.onSetGroupBy ? { onSetGroupBy: props.onSetGroupBy } : {})}
         />
       </div>
 

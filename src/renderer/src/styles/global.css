@@ -108,6 +108,97 @@
   --syn-attr: #8a5c00;
   --syn-meta: #0e7490;
 }
+/* ---- Appearance options (Settings > Appearance) ----
+   Applied as attributes on the root by useApplyAppearance; with none set every value
+   below is the default the app always had. Chat text size scales the transcript as a
+   whole (text, code and spacing together), density tightens the transcript's rhythm,
+   and the code theme swaps the syntax and diff colors. Each code theme carries its own
+   dark and light palette; syntaxContrast.test.ts holds every token to AA. */
+:root {
+  --chat-zoom: 1;
+  --chat-row-gap: 18px;
+  --msg-turn-gap: 10px;
+  --msg-line-height: 1.65;
+  --diff-add-bg: rgba(74, 222, 128, 0.13);
+  --diff-del-bg: rgba(255, 107, 107, 0.13);
+  --diff-add-word: rgba(74, 222, 128, 0.28);
+  --diff-del-word: rgba(255, 107, 107, 0.28);
+}
+:root[data-chat-size='small'] {
+  --chat-zoom: 0.9;
+}
+:root[data-chat-size='large'] {
+  --chat-zoom: 1.15;
+}
+:root[data-density='compact'] {
+  --chat-row-gap: 9px;
+  --msg-turn-gap: 3px;
+  --msg-line-height: 1.5;
+}
+/* High contrast: brighter tokens on a pure black (dark) or white (light) code surface,
+   and stronger diff tints. */
+:root:not([data-theme='light'])[data-code-theme='contrast'] {
+  --bg-code: #000000;
+  --syn-comment: #b0b8c4;
+  --syn-keyword: #e0a8ff;
+  --syn-string: #b5f07a;
+  --syn-number: #ffb380;
+  --syn-function: #9cc2ff;
+  --syn-type: #ffe08a;
+  --syn-tag: #ff9aa8;
+  --syn-attr: #ffe08a;
+  --syn-meta: #a6ecff;
+}
+:root[data-theme='light'][data-code-theme='contrast'] {
+  --bg-code: #ffffff;
+  --syn-comment: #4b5059;
+  --syn-keyword: #6b21c8;
+  --syn-string: #1d5a22;
+  --syn-number: #8a3c00;
+  --syn-function: #0d47b8;
+  --syn-type: #6e4900;
+  --syn-tag: #a3101b;
+  --syn-attr: #6e4900;
+  --syn-meta: #0b5e75;
+}
+:root[data-code-theme='contrast'] {
+  --diff-add-bg: rgba(74, 222, 128, 0.24);
+  --diff-del-bg: rgba(255, 107, 107, 0.24);
+  --diff-add-word: rgba(74, 222, 128, 0.45);
+  --diff-del-word: rgba(255, 107, 107, 0.45);
+}
+/* Muted: low-saturation tokens and softer diff tints, for long reading. */
+:root:not([data-theme='light'])[data-code-theme='muted'] {
+  --bg-code: #0e0f12;
+  --syn-comment: #8b8e96;
+  --syn-keyword: #b4a7d6;
+  --syn-string: #a8c4a0;
+  --syn-number: #d4b48c;
+  --syn-function: #9fb4d6;
+  --syn-type: #d1c38f;
+  --syn-tag: #d6a3a8;
+  --syn-attr: #d1c38f;
+  --syn-meta: #9cc4cc;
+}
+:root[data-theme='light'][data-code-theme='muted'] {
+  --bg-code: #f2f0e8;
+  --syn-comment: #6a655b;
+  --syn-keyword: #5e4a8a;
+  --syn-string: #3f6040;
+  --syn-number: #7a5530;
+  --syn-function: #3d5580;
+  --syn-type: #6b5a24;
+  --syn-tag: #8a3d44;
+  --syn-attr: #6b5a24;
+  --syn-meta: #2f6670;
+}
+:root[data-code-theme='muted'] {
+  --diff-add-bg: rgba(74, 222, 128, 0.08);
+  --diff-del-bg: rgba(255, 107, 107, 0.08);
+  --diff-add-word: rgba(74, 222, 128, 0.2);
+  --diff-del-word: rgba(255, 107, 107, 0.2);
+}
+
 /* Respect the OS "reduce motion" preference: disable the blink/spin animations
    and collapse transitions for users who are sensitive to motion. */
 @media (prefers-reduced-motion: reduce) {
@@ -1920,6 +2011,80 @@ body.is-resizing {
   color: var(--text);
 }
 
+/* ---- Settings > Import: what other tools keep, one checkbox per find ---- */
+.import-group {
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+.import-group__title {
+  margin-bottom: 6px;
+  padding: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+.import-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.import-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.import-item--present {
+  opacity: 0.7;
+}
+.import-item__label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text);
+}
+.import-item__name {
+  font-weight: 600;
+}
+.import-item__path,
+.import-item__detail,
+.import-item__note {
+  padding-left: 24px;
+  font-size: 12px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.import-item__path code {
+  font-family: var(--mono);
+  font-size: 0.95em;
+}
+.import-item__note {
+  font-style: italic;
+}
+.import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.import-failures {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--danger);
+}
+.import-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
 /* ---- Update-available banner (persistent until dismissed / updated) ---- */
 .update-banner {
   display: flex;
@@ -2609,7 +2774,9 @@ body.is-resizing {
   padding: 0 var(--chat-gap);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: var(--chat-row-gap);
+  /* Settings > Appearance > Chat text size: 1 unless changed. */
+  zoom: var(--chat-zoom);
 }
 /* Lay out and paint only the rows near the viewport. A long chat mounts tens of
    thousands of elements, and without this every one of them is styled, laid out and
@@ -2625,6 +2792,35 @@ body.is-resizing {
   overflow-clip-margin: 40px;
 }
 
+/* Expand / collapse every tool row: a quiet round button in the transcript's
+   bottom-right margin, above the jump-to-bottom button, shown only when the chat
+   has tool rows. */
+.transcript__tools-toggle {
+  position: absolute;
+  bottom: 58px;
+  right: 22px;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--text-dim);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 0.12s, color 0.12s, border-color 0.12s;
+}
+.transcript__tools-toggle:hover,
+.transcript__tools-toggle:focus-visible {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 /* ---- Messages ---- */
 .msg {
   position: relative;
@@ -2634,7 +2830,7 @@ body.is-resizing {
    rows and notices have no copy button, so they keep the tighter default gap. */
 .msg--assistant,
 .msg--user {
-  margin-bottom: 10px;
+  margin-bottom: var(--msg-turn-gap);
 }
 .msg--user {
   display: flex;
@@ -2680,7 +2876,7 @@ body.is-resizing {
   box-shadow: var(--shadow-accent);
 }
 .msg--assistant .msg__body {
-  line-height: 1.65;
+  line-height: var(--msg-line-height);
 }
 /* A turn Houston wrote for the user (/review, Create PR, /agent, a handoff brief):
    a compact chip naming what they did, with the full prompt behind a disclosure. */
@@ -4262,10 +4458,10 @@ pre.diff {
   padding: 0 1px;
 }
 .diff__line--add .diff__word {
-  background: rgba(74, 222, 128, 0.28);
+  background: var(--diff-add-word);
 }
 .diff__line--del .diff__word {
-  background: rgba(255, 107, 107, 0.28);
+  background: var(--diff-del-word);
 }
 .diff__text {
   flex: 1;
@@ -4274,13 +4470,13 @@ pre.diff {
   word-break: break-word;
 }
 .diff__line--add {
-  background: rgba(74, 222, 128, 0.13);
+  background: var(--diff-add-bg);
 }
 .diff__line--add .diff__sign {
   color: var(--ok);
 }
 .diff__line--del {
-  background: rgba(255, 107, 107, 0.13);
+  background: var(--diff-del-bg);
 }
 .diff__line--del .diff__sign {
   color: var(--danger);
@@ -5128,6 +5324,93 @@ body.is-resizing .preview-dock__resizer::after {
 .scorecard__body {
   padding: 8px 12px 16px;
 }
+/* The usage view: spend and tokens per day and per project, plus the cost reminder. */
+.usage-view__body {
+  padding: 12px 16px 20px;
+  overflow-y: auto;
+}
+.usage-view__stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 16px;
+}
+.usage-view__section {
+  margin-bottom: 18px;
+}
+.usage-view__heading {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.usage-view__empty,
+.usage-view__note {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.usage-view__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.usage-view__table th,
+.usage-view__table td {
+  padding: 3px 6px;
+  text-align: right;
+  white-space: nowrap;
+  font-weight: normal;
+}
+.usage-view__table thead th {
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+}
+.usage-view__table th[scope='row'],
+.usage-view__table thead th:first-child {
+  text-align: left;
+}
+.usage-view__project {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.usage-view__barcell {
+  width: 30%;
+}
+.usage-view__bar {
+  display: block;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.usage-view__fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+.usage-view__limit {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.45;
+}
+.usage-view__limit input {
+  width: 80px;
+  flex-shrink: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+}
 .scorecard-card {
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -5280,6 +5563,157 @@ body.is-resizing .preview-dock__resizer::after {
   margin: 0 0 4px;
   border-radius: 0;
   max-height: none;
+}
+
+/* ---- Changes view, a tab of the right-hand dock ---- */
+.preview-dock__panel--changes {
+  overflow: hidden;
+}
+.changes-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.changes-view__head {
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 10px 12px;
+}
+/* The scope switch and its caption take the first line; totals and the view's
+   buttons sit on the next, so the narrow dock never squeezes the scope names. */
+.changes-view__head .changes-panel__titles {
+  flex: 1 1 100%;
+}
+.changes-view__head .changes-panel__total {
+  margin-right: auto;
+}
+.changes-view__scopes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.changes-view__scope {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 9px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.changes-view__scope--on {
+  background: var(--bg-selected);
+  color: var(--text);
+  font-weight: 550;
+}
+.changes-view__scope:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.changes-view__scope:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.changes-view__head .btn[aria-pressed='true'] {
+  background: var(--bg-selected);
+}
+.changes-view__notice {
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 12px;
+  color: var(--danger);
+  border-bottom: 1px solid var(--border);
+}
+.changes-file__row {
+  display: flex;
+  align-items: center;
+}
+.changes-file__row .changes-file__head {
+  flex: 1;
+  min-width: 0;
+}
+.changes-file__action {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.changes-file__action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.changes-file__action:focus-visible,
+.changes-hunk__revert:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.changes-hunk__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.changes-hunk__range {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.changes-hunk__revert {
+  border: 0;
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.changes-hunk__revert:hover {
+  background: var(--bg-hover);
+  color: var(--danger);
+}
+/* The inline "are you sure" for a revert: destructive, so it reads as a warning. */
+.changes-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg);
+  border-top: 1px solid var(--border);
+  border-left: 3px solid var(--danger);
+  font-size: 12px;
+}
+.changes-confirm__text {
+  flex: 1 1 200px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+/* Side by side: each row holds the old line and the new one in two columns. */
+.diff--split .diff__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: 8px;
+}
+.diff__line--empty {
+  background: rgba(127, 127, 127, 0.06);
+  min-height: 1.45em;
 }
 
 /* ---- Files panel (Finder-like workspace browser drawer) ---- */
@@ -5539,64 +5973,64 @@ body.is-resizing .preview-dock__resizer::after {
 }
 /* highlight.js token colors, themed to the app palette (vars set per theme). The
    pane carries `hljs`; tokens are scoped under it so the classes can't leak. */
-:is(.file-preview__text, .md-codeblock__pre) .hljs-comment,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-quote {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-comment,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-quote {
   color: var(--syn-comment);
   font-style: italic;
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-keyword,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-tag,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-literal,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-section,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-operator,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-doctag {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-keyword,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-tag,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-literal,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-section,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-operator,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-doctag {
   color: var(--syn-keyword);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-string,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-regexp,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-bullet,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-addition,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-attr,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-pseudo {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-string,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-regexp,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-bullet,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-addition,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-attr,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-pseudo {
   color: var(--syn-string);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-number,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-symbol,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-link {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-number,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-symbol,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-link {
   color: var(--syn-number);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-title,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-title.function_,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-built_in {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-title,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-title.function_,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-built_in {
   color: var(--syn-function);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-type,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-title.class_,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-class .hljs-title,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-class {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-type,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-title.class_,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-class .hljs-title,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-class {
   color: var(--syn-type);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-attr,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-attribute,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-property,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-selector-id,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-variable,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-template-variable,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-params {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-attr,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-attribute,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-property,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-selector-id,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-variable,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-template-variable,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-params {
   color: var(--syn-attr);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-tag,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-name,
-:is(.file-preview__text, .md-codeblock__pre) .hljs-deletion {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-tag,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-name,
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-deletion {
   color: var(--syn-tag);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-meta {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-meta {
   color: var(--syn-meta);
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-emphasis {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-emphasis {
   font-style: italic;
 }
-:is(.file-preview__text, .md-codeblock__pre) .hljs-strong {
+:is(.file-preview__text, .md-codeblock__pre, .diff) .hljs-strong {
   font-weight: 600;
 }
 .file-preview__image-wrap {
@@ -6281,6 +6715,78 @@ body:has(.coachmark) .get-started {
   border-radius: 10px;
   z-index: 50;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+/* Ctrl+R search of sent messages: a panel above the message box with its own
+   field, then the matches (newest first). */
+.history-search {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin: 0 0 6px;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  z-index: 50;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+.history-search__field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.history-search__input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.history-search__input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.history-search .history-search__list {
+  position: static;
+  margin: 6px 0 0;
+  box-shadow: none;
+  border: none;
+  padding: 0;
+}
+.history-search__text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font);
+  font-size: 13px;
+}
+.history-search__empty {
+  margin: 8px 2px 2px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+/* The Expand action on a folded paste's chip. */
+.ctx-chip__expand {
+  padding: 1px 6px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ctx-chip__expand:hover,
+.ctx-chip__expand:focus-visible {
+  border-color: var(--accent);
 }
 .mention-item {
   padding: 6px 9px;
@@ -7475,6 +7981,106 @@ body:has(.coachmark) .get-started {
 .set-section__body > .trust-badge {
   display: inline-flex;
   margin: 0 0 var(--space-2);
+}
+/* ---- Settings > Customize: skills, commands, agents, instruction files ---- */
+.custom-group {
+  margin: 0 0 16px;
+}
+.custom-group__title {
+  margin: 0 0 2px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.custom-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 8px;
+  padding: 0;
+  list-style: none;
+}
+.custom-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.custom-item--off .custom-item__name,
+.custom-item--off .custom-item__desc {
+  opacity: 0.6;
+}
+.custom-item__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.custom-item__toggle {
+  display: inline-flex;
+}
+.custom-item__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.custom-item__actions {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: auto;
+}
+.custom-item__desc,
+.custom-item__note {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.custom-item__note {
+  font-style: italic;
+}
+.custom-item__file {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.custom-item__confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text);
+}
+.custom-create {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.custom-create input,
+.custom-create select {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-size: 13px;
+}
+.custom-create input:focus,
+.custom-create select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.custom-create__name {
+  width: 180px;
+}
+.custom-error {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--danger);
 }
 .ro-rules {
   list-style: none;

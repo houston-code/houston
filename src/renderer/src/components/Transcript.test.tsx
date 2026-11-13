@@ -688,6 +688,59 @@ describe('Transcript: staying at the latest message', () => {
   })
 })
 
+describe('transcript detail preferences', () => {
+  const doneTool = (id: string, output: string): ToolItem =>
+    toolItem({ id, name: 'run_shell', status: 'done', args: { command: `echo ${id}` }, output })
+  const items = (): DisplayItem[] => [
+    userItem(),
+    doneTool('t1', 'first output'),
+    assistantItem({ id: 'a1', text: 'between' }),
+    doneTool('t2', 'second output')
+  ]
+  const render_ = (props: Partial<{ toolsExpanded: boolean; showReasoning: boolean }>, list = items()) =>
+    render(<Transcript items={list} onApprove={vi.fn()} onAnswer={vi.fn()} onElicit={vi.fn()} {...props} />)
+
+  it('keeps tool rows collapsed by default, with a control to expand and collapse them all', () => {
+    render_({})
+    expect(screen.queryByText('first output')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Expand tools' }))
+    expect(screen.getByText('first output')).toBeInTheDocument()
+    expect(screen.getByText('second output')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse tools' }))
+    expect(screen.queryByText('first output')).toBeNull()
+  })
+
+  it('reaches a row the user toggled since the last command', () => {
+    const { container } = render_({})
+    fireEvent.click(screen.getByRole('button', { name: 'Expand tools' }))
+    fireEvent.click(container.querySelectorAll('.tool-row__head')[0])
+    expect(screen.queryByText('first output')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse tools' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Expand tools' }))
+    expect(screen.getByText('first output')).toBeInTheDocument()
+  })
+
+  it('opens tool rows from the start with the setting on', () => {
+    render_({ toolsExpanded: true })
+    expect(screen.getByText('first output')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Collapse tools' })).toBeInTheDocument()
+  })
+
+  it('has no control in a chat without tool rows', () => {
+    render_({}, [userItem(), assistantItem()])
+    expect(screen.queryByRole('button', { name: /tools$/ })).toBeNull()
+  })
+
+  it('folds reasoning away by default once the reply starts, and keeps it open with the setting', () => {
+    const list = [userItem(), assistantItem({ text: 'answer', reasoning: 'thinking hard' })]
+    const { container, unmount } = render_({}, list)
+    expect(container.querySelector('details.reasoning')).not.toHaveAttribute('open')
+    unmount()
+    const again = render_({ showReasoning: true }, list)
+    expect(again.container.querySelector('details.reasoning')).toHaveAttribute('open')
+  })
+})
+
 describe('message right-click menus and Retry', () => {
   it('offers copy and the rewind choices on a user message', async () => {
     const handlers = { disabled: false, onRewind: vi.fn(), onEdit: vi.fn() }
