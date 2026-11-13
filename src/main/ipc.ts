@@ -102,6 +102,7 @@ import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
+import { issueReportText, openIssueReport, revealLogs } from './issueReport'
 import type { DoctorFacts } from '@shared/doctor'
 import { saveMemory } from './memory'
 import { handleMemoryRequest } from './memoryIpc'
@@ -572,6 +573,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
     const cwd = typeof workspace === 'string' ? workspace : ''
     return gatherDoctorFacts(cwd, { version: APP_VERSION, update: null })
   })
+  // Help → Open Logs, and the text Report an Issue shows before it opens GitHub.
+  // Opening rebuilds the text in main rather than taking it from the renderer, so the
+  // URL can only ever carry what issueReportBody allows.
+  handle(IPC.logsReveal, () => revealLogs())
+  handle(IPC.issueReportPreview, (): string => issueReportText())
+  handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
   ipcMain.handle(
     IPC.sandboxStatus,

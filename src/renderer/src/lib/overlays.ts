@@ -9,6 +9,8 @@
 export interface OverlayFlags {
   settings: boolean
   doctor: boolean
+  /** Help > Report an Issue: what the new issue will start with. */
+  issue: boolean
   changes: boolean
   files: boolean
   scorecard: boolean
@@ -30,6 +32,7 @@ export function modalOpen(f: OverlayFlags): boolean {
   return (
     f.settings ||
     f.doctor ||
+    f.issue ||
     f.changes ||
     f.files ||
     f.scorecard ||
