@@ -1262,6 +1262,12 @@ commands.
 - `find … -delete`
 - deleting a branch or a stash, rewriting history
 - a forced or deleting `git push`
+- wiping a database: `prisma migrate reset`, `rails db:drop` or `db:reset`,
+  `manage.py flush`, `artisan migrate:fresh`, `dropdb`, and `DROP`, `TRUNCATE`, or an
+  unfiltered `DELETE FROM` handed to `psql`, `mysql`, or `sqlite3` (also `FLUSHALL` in
+  `redis-cli`)
+- removing Docker volumes (`docker volume rm`, `docker compose down -v`) and tearing
+  down infrastructure (`terraform destroy`, `kubectl delete namespace`)
 
 Quoting a word, splitting it across lines, or running it through `bash -c` doesn't
 hide one. "Allow for run" doesn't stop these asking; an `allow` permission rule for

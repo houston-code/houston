@@ -1293,7 +1293,8 @@ the agent loop and UI never depend on a specific provider.
   without asking in *full auto*, merges, closes, checkouts, and repository creation
   always ask, and MCP tool calls always ask. A shell command that can throw away
   work in the project (`git reset --hard`, a forced `git clean`, `rm -r` of source, a
-  forced or deleting push), and reading or changing a credential file (a `.env`, a
+  forced or deleting push) or wipe data outside it (a database reset or drop, Docker
+  volumes, `terraform destroy`), and reading or changing a credential file (a `.env`, a
   private key), ask in every mode, since the sandbox protects everything but the
   project itself and can read your whole filesystem.
   `view_localhost` is restricted to loopback addresses and loads untrusted page

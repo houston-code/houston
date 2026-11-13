@@ -738,11 +738,151 @@ const RUNS_A_COMMAND = new Set([
   'doas',
   'stdbuf',
   'ionice',
-  'caffeinate'
+  'caffeinate',
+  // Package and environment runners: `npx prisma migrate reset`, `bundle exec rails
+  // db:drop`, `poetry run python manage.py flush`.
+  'npx',
+  'pnpx',
+  'bunx',
+  'npm',
+  'pnpm',
+  'yarn',
+  'bun',
+  'bundle',
+  'poetry',
+  'uv',
+  'pipenv',
+  'pdm',
+  'dotenv'
 ])
 
-/** Programs {@link wordsDiscardWork} knows can throw away work in the project. */
-const DISCARDING_PROGRAMS = new Set(['git', 'rm', 'find', 'shred'])
+/**
+ * Tools that empty or drop a data store, or tear down infrastructure, given these
+ * arguments (see {@link dataStoreDiscards}). What they destroy lives outside the project
+ * (a database server's files, a Docker volume, a cloud account), so neither the sandbox
+ * nor a checkpoint can bring it back. A database client runs whatever SQL it's handed,
+ * so for those the test is the statement text in its arguments.
+ */
+const DATA_DISCARDS: Record<string, (args: string[]) => boolean> = {
+  prisma: (a) =>
+    (a[0] === 'migrate' && a[1] === 'reset') ||
+    (a[0] === 'db' && a[1] === 'push' && a.some((w) => w === '--force-reset' || w === '--accept-data-loss')),
+  rails: (a) => a.some((w) => RAILS_DATA_TASKS.has(w)),
+  rake: (a) => a.some((w) => RAILS_DATA_TASKS.has(w)),
+  'manage.py': (a) => djangoDiscards(a),
+  'django-admin': (a) => djangoDiscards(a),
+  python: (a) => a[0] !== undefined && lastSegment(a[0]) === 'manage.py' && djangoDiscards(a.slice(1)),
+  python3: (a) => a[0] !== undefined && lastSegment(a[0]) === 'manage.py' && djangoDiscards(a.slice(1)),
+  artisan: (a) => ARTISAN_DATA_COMMANDS.has(a[0] ?? ''),
+  php: (a) => a[0] !== undefined && lastSegment(a[0]) === 'artisan' && ARTISAN_DATA_COMMANDS.has(a[1] ?? ''),
+  mix: (a) => a[0] === 'ecto.drop' || a[0] === 'ecto.reset',
+  sequelize: (a) => a[0] === 'db:drop' || a[0] === 'db:migrate:undo:all',
+  'sequelize-cli': (a) => a[0] === 'db:drop' || a[0] === 'db:migrate:undo:all',
+  typeorm: (a) => a[0] === 'schema:drop',
+  knex: (a) => a[0] === 'migrate:rollback' && a.includes('--all'),
+  supabase: (a) => a[0] === 'db' && a[1] === 'reset',
+  dotnet: (a) => a[0] === 'ef' && a[1] === 'database' && a[2] === 'drop',
+  dropdb: () => true,
+  psql: (a) => a.some((w) => DESTRUCTIVE_SQL.test(w)),
+  mysql: (a) => a.some((w) => DESTRUCTIVE_SQL.test(w)),
+  mariadb: (a) => a.some((w) => DESTRUCTIVE_SQL.test(w)),
+  sqlite3: (a) => a.some((w) => DESTRUCTIVE_SQL.test(w)),
+  sqlcmd: (a) => a.some((w) => DESTRUCTIVE_SQL.test(w)),
+  mongosh: (a) => a.some((w) => DESTRUCTIVE_MONGO.test(w)),
+  mongo: (a) => a.some((w) => DESTRUCTIVE_MONGO.test(w)),
+  'redis-cli': (a) => a.some((w) => /^flush(?:all|db)$/i.test(w)),
+  docker: (a) => dockerDiscards(a),
+  podman: (a) => dockerDiscards(a),
+  'docker-compose': (a) => composeDownVolumes(a),
+  'podman-compose': (a) => composeDownVolumes(a),
+  terraform: (a) => a[0] === 'destroy' || (a[0] === 'apply' && a.some((w) => w === '-destroy' || w === '--destroy')),
+  tofu: (a) => a[0] === 'destroy' || (a[0] === 'apply' && a.some((w) => w === '-destroy' || w === '--destroy')),
+  kubectl: (a) =>
+    a[0] === 'delete' &&
+    a.slice(1).some((w) => KUBE_DATA_RESOURCES.has(w.split('/')[0]!.toLowerCase()) || w === '--all' || w === '-A' || w === '--all-namespaces')
+}
+
+/** Rails/rake tasks that drop a database or reload its schema over the data in it. */
+const RAILS_DATA_TASKS = new Set([
+  'db:drop',
+  'db:drop:all',
+  'db:reset',
+  'db:purge',
+  'db:purge:all',
+  'db:migrate:reset',
+  'db:schema:load',
+  'db:structure:load',
+  'db:setup',
+  'db:seed:replant',
+  'db:truncate_all'
+])
+
+/** Laravel `artisan` commands that drop or empty every table. */
+const ARTISAN_DATA_COMMANDS = new Set(['migrate:fresh', 'migrate:reset', 'migrate:refresh', 'db:wipe'])
+
+/** Kubernetes resources whose deletion loses data or everything in a namespace. */
+const KUBE_DATA_RESOURCES = new Set([
+  'namespace',
+  'namespaces',
+  'ns',
+  'pvc',
+  'persistentvolumeclaim',
+  'persistentvolumeclaims',
+  'pv',
+  'persistentvolume',
+  'persistentvolumes'
+])
+
+/**
+ * SQL that drops or empties a database object: `DROP DATABASE|SCHEMA|TABLE`, `TRUNCATE
+ * [TABLE] name` (not MySQL's numeric `TRUNCATE(x, d)`), and a `DELETE FROM` with no
+ * `WHERE` before the statement ends.
+ */
+const DESTRUCTIVE_SQL =
+  /\bdrop\s+(?:database|schema|table|owned)\b|\btruncate\s+(?:table\s+)?(?:only\s+)?[A-Za-z_"`[]|\bdelete\s+from\s+[\w."`[\]]+\s*(?:;|$)/i
+
+/** mongosh/mongo `--eval` code that drops a database or collection or deletes every document. */
+const DESTRUCTIVE_MONGO = /\.drop(?:Database)?\s*\(|\.deleteMany\s*\(\s*\{\s*\}\s*\)|\.remove\s*\(\s*\{\s*\}\s*\)/
+
+/** The last path segment of a word (`bin/rails` is `rails`). */
+function lastSegment(word: string): string {
+  return word.slice(word.lastIndexOf('/') + 1)
+}
+
+/** Django management commands that empty or unmigrate the database. */
+function djangoDiscards(args: string[]): boolean {
+  const sub = args[0]
+  if (sub === 'flush' || sub === 'reset_db') return true
+  // `migrate app zero` unapplies every migration of the app, dropping its tables.
+  return sub === 'migrate' && args.slice(1).includes('zero')
+}
+
+/** `docker`/`podman` with these arguments removes a volume or the volumes of a stack. */
+function dockerDiscards(args: string[]): boolean {
+  const [sub, action] = args
+  if (sub === 'volume') return action === 'rm' || action === 'remove' || action === 'prune'
+  if (sub === 'system' && action === 'prune') return args.includes('--volumes')
+  if (sub === 'compose') return composeDownVolumes(args.slice(1))
+  return false
+}
+
+/** `compose down` that also removes the stack's named volumes. */
+function composeDownVolumes(args: string[]): boolean {
+  const down = args.indexOf('down')
+  return down >= 0 && args.slice(down + 1).some((w) => w === '-v' || w === '--volumes' || /^-[A-Za-z]*v[A-Za-z]*$/.test(w))
+}
+
+/**
+ * Whether one command empties or drops a data store or tears down infrastructure (see
+ * {@link DATA_DISCARDS}).
+ */
+function dataStoreDiscards(program: string, args: string[]): boolean {
+  const test = Object.hasOwn(DATA_DISCARDS, program) ? DATA_DISCARDS[program] : undefined
+  return test !== undefined && test(args)
+}
+
+/** Programs {@link wordsDiscardWork} knows can throw away work in the project or its data. */
+const DISCARDING_PROGRAMS = new Set(['git', 'rm', 'find', 'shred', ...Object.keys(DATA_DISCARDS)])
 
 /** Shell keywords that can sit in front of a command word (`then git reset --hard`). */
 const LEADING_KEYWORDS = new Set(['if', 'then', 'else', 'elif', 'do', 'while', 'until', '!', '{', '(', 'time'])
@@ -907,7 +1047,7 @@ function wordsDiscardWork(words: string[]): boolean {
     case 'shred':
       return true
     default:
-      return false
+      return dataStoreDiscards(program, args)
   }
 }
 
@@ -933,15 +1073,36 @@ function commandDiscardsWork(command: string, depth: number): boolean {
  * the project is exactly what these destroy, and shell side effects aren't
  * checkpointed, so they ask in every approval mode.
  *
+ * The same goes for data that lives outside the project where neither the sandbox nor a
+ * checkpoint reaches: a database reset or drop (`prisma migrate reset`, `rails db:drop`,
+ * `manage.py flush`, `dropdb`, SQL that drops or empties a table handed to a database
+ * client), a Docker volume, or torn-down infrastructure (`terraform destroy`); see
+ * {@link DATA_DISCARDS}.
+ *
  * Words are read as bash builds them, inside `$(…)`, backticks, and strings handed to a
  * shell (`bash -c`, `eval`), and with line continuations joined as well as written, so
  * quoting or splitting a word can't hide one. Like {@link shellReferencesExternalPath}
  * it is a static tripwire: a command assembled from variables isn't seen.
  */
 export function shellDiscardsWork(command: string): boolean {
-  if (commandDiscardsWork(command, 0)) return true
+  if (commandDiscardsWork(command, 0) || statementFedToClient(command)) return true
   const joined = joinLineContinuations(command)
   return joined !== command && commandDiscardsWork(joined, 0)
+}
+
+/** A database client reading its statements from a pipe or a here-document. */
+const CLIENT_FED_BY_PIPE = /\|\s*(?:\S*\/)?(?:psql|mysql|mariadb|sqlite3|sqlcmd|mongosh|mongo|redis-cli)\b/
+const CLIENT_FED_BY_HEREDOC = /(?:^|[\s;&|(])(?:\S*\/)?(?:psql|mysql|mariadb|sqlite3|sqlcmd|mongosh|mongo|redis-cli)\b[^\n]*<</m
+
+/**
+ * Whether destructive statements reach a database client through its standard input
+ * (`echo "DROP TABLE users" | psql`, `psql <<SQL … SQL`, `echo flushall | redis-cli`),
+ * where they never appear among the client's own words. Reads the raw command text, so
+ * a here-document body counts here even though it never runs as a command.
+ */
+function statementFedToClient(command: string): boolean {
+  if (!CLIENT_FED_BY_PIPE.test(command) && !CLIENT_FED_BY_HEREDOC.test(command)) return false
+  return DESTRUCTIVE_SQL.test(command) || DESTRUCTIVE_MONGO.test(command) || /\bflush(?:all|db)\b/i.test(command)
 }
 
 /**
