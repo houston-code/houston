@@ -126,7 +126,7 @@ describe('pushBranch and branchSync', () => {
       await commitAll(r, 'Two', deps([r]))
       expect(await branchSync(r)).toMatchObject({ ahead: 1 })
       expect(await pushBranch(r, deps([r]))).toEqual({ ok: true, detail: 'origin/main' })
-      expect(execFileSync('git', ['-C', remote, 'log', '-1', '--format=%s'], { encoding: 'utf8' }).trim()).toBe('Two')
+      expect(execFileSync('git', ['-C', remote, 'log', '-1', '--format=%s', 'main'], { encoding: 'utf8' }).trim()).toBe('Two')
     },
     TIMEOUT
   )
