@@ -3086,6 +3086,27 @@ h6.md-h {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A saved permission rule: the sentence, then each rule in full on its own line. */
+.undo-toast--rules {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.undo-toast__rules {
+  flex-basis: 100%;
+  order: 1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.undo-toast__rules code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
 .undo-toast__btn {
   border: 0;
   background: none;
@@ -3459,6 +3480,23 @@ button.finding__head:focus-visible,
   flex-wrap: wrap;
   gap: 8px;
   padding: 0 12px 11px;
+}
+/* Focused (its keys answer it): a quiet accent edge instead of a full ring. */
+.tool-row__approval:focus {
+  outline: none;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* The key that answers each button, as on the plan panel. */
+.tool-row__approval-key {
+  margin-left: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.75;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 15px;
 }
 .tool-row__approval-note {
   flex-basis: 100%;
