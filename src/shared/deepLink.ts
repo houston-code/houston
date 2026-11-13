@@ -24,6 +24,7 @@ export const DEEP_LINK_SETTINGS_PAGES = [
   'models',
   'agent',
   'tools',
+  'customize',
   'mcp',
   'hooks',
   'memory',
