@@ -70,6 +70,12 @@ The full GUI:
   the full date and time). Under a turn's last reply, a quiet line names the model that
   answered and what the turn spent: tokens in and out, and the cost when the model's
   price is known. Messages saved by older versions show none of this.
+- **Message box.** `Ctrl+R` searches the messages you sent before (type to filter,
+  `Ctrl+R` or the arrows for an older match, `Enter` to put it in the box). A very large
+  paste (40 lines or more, or about 4,000 characters) folds into a **Pasted text** chip
+  that is sent as pasted; **Expand** puts it back in the box. Dropping a file attaches
+  it like **+ Attach files**: a text file's contents go in the message, and a binary
+  file such as a PDF by name only.
 - **Back where you were after a restart.** Houston reopens the chat that was open when
   you quit. If that chat was deleted, or its folder or worktree is gone, it opens a new
   chat in your last folder instead.
