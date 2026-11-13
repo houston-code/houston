@@ -653,6 +653,9 @@ export class GitGuard {
     const seen = new Set<string>()
     for (const [dir, after] of current) {
       for (const c of diffRepo(before.get(dir), after)) {
+        // Already shown to the user by another chat's guard, and kept there: this run's
+        // command didn't make it, and asking again could undo what they chose to keep.
+        if (keptElsewhere.has(changeFingerprint(c))) continue
         // Two checkouts sharing a common dir report its files once.
         const id = `${c.kind}\0${c.file}\0${c.kind === 'config' ? c.key : ''}`
         if (seen.has(id)) continue
@@ -679,6 +682,53 @@ export class GitGuard {
     this.baseline = await this.snapshot()
     return failed
   }
+}
+
+/**
+ * Changes the user chose to keep when a guard asked about them, by
+ * {@link changeFingerprint}, shared by every run in this process. Each run compares
+ * against its own baseline, so a change one chat's command made (and the user kept)
+ * also shows up in every other chat working in the same repository, on that chat's
+ * next command, as if that command had made it. Answering "Undo" there would remove
+ * what the user just kept. Only kept changes are shared: one still waiting for an
+ * answer, or one the asking run never resolved (an aborted run), is still flagged by
+ * every guard that sees it.
+ */
+const keptElsewhere = new Set<string>()
+/** Entries kept in {@link keptElsewhere}; the oldest go first past this. */
+const MAX_KEPT_ELSEWHERE = 512
+
+/**
+ * Identifies one change by where it is and what it now is, so another guard seeing the
+ * same file in the same state recognizes it. A different value in the same file is a
+ * different change and is flagged again. Pure.
+ */
+export function changeFingerprint(c: GitChange): string {
+  switch (c.kind) {
+    case 'config':
+      return `config\0${c.file}\0${c.key}\0${JSON.stringify(c.after)}`
+    case 'hook':
+      return `hook\0${c.file}\0${c.after.hash}\0${c.after.mode}`
+    case 'commondir':
+      return `commondir\0${c.file}\0${c.after}`
+    case 'dotgit':
+      return `dotgit\0${c.file}\0${c.after.kind === 'file' ? c.after.text : c.after.kind}`
+  }
+}
+
+/** Record changes the user kept, so other runs' guards don't ask about them again. */
+export function rememberKept(changes: GitChange[]): void {
+  for (const c of changes) {
+    const id = changeFingerprint(c)
+    keptElsewhere.delete(id)
+    keptElsewhere.add(id)
+  }
+  while (keptElsewhere.size > MAX_KEPT_ELSEWHERE) keptElsewhere.delete(keptElsewhere.values().next().value!)
+}
+
+/** Forget every kept change (tests). */
+export function resetKeptElsewhere(): void {
+  keptElsewhere.clear()
 }
 
 /** The two answers offered when a command changed something exec-capable. */
@@ -736,6 +786,7 @@ export async function reviewGitChanges(
   if (opts.ask) keep = answerKeeps(await opts.ask(gitGuardQuestion(flagged, opts.workspace)))
   if (keep) {
     guard.accept(current)
+    rememberKept(flagged)
     const manual = flagged.map((c) => manualUndo(c)).join('; ')
     out.push(
       `[git: this command changed settings that run programs outside the sandbox (${listed}). ` +
