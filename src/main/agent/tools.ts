@@ -1,6 +1,5 @@
 import { promises as fs, realpathSync, lstatSync, readlinkSync } from 'node:fs'
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path'
-import { minimatch } from 'minimatch'
 import type {
   AgentQuestion,
   ChatMessage,
@@ -94,7 +93,7 @@ import {
 } from './viewlocalhost'
 import { getSearchAdapter, NO_RESULTS } from './websearch'
 import { resolveRipgrep, searchContents } from './search'
-import { FALLBACK_SKIP_DIRS, gitListFiles, hasHiddenSegment } from './fileScope'
+import { FALLBACK_SKIP_DIRS, gitListFiles, globTester, hasHiddenSegment } from './fileScope'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type EditStrategy } from './edit-match'
 import { displayLines, numberLines, numberWidth } from './line-numbers'
@@ -1404,7 +1403,7 @@ const astGrepTool: ToolDef = {
 async function walkGlob(
   dir: string,
   base: string,
-  pattern: string,
+  matches: (rel: string) => boolean,
   out: { full: string; mtimeMs: number }[]
 ): Promise<void> {
   let entries
@@ -1418,8 +1417,8 @@ async function walkGlob(
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       if (FALLBACK_SKIP_DIRS.has(entry.name)) continue
-      await walkGlob(full, base, pattern, out)
-    } else if (entry.isFile() && minimatch(relative(base, full), pattern)) {
+      await walkGlob(full, base, matches, out)
+    } else if (entry.isFile() && matches(relative(base, full))) {
       try {
         const st = await fs.stat(full)
         out.push({ full, mtimeMs: st.mtimeMs })
@@ -1438,9 +1437,11 @@ async function walkGlob(
  */
 async function collectGlob(base: string, pattern: string, out: { full: string; mtimeMs: number }[]): Promise<void> {
   const listed = await gitListFiles(base)
-  if (!listed) return walkGlob(base, base, pattern, out)
+  // Compiled once per call, not once per listed path.
+  const matches = globTester(pattern)
+  if (!listed) return walkGlob(base, base, matches, out)
   for (const rel of listed) {
-    if (hasHiddenSegment(rel) || !minimatch(rel, pattern)) continue
+    if (hasHiddenSegment(rel) || !matches(rel)) continue
     const full = join(base, rel)
     try {
       // lstat: like the walk, never follow a symlink. Tracked files deleted from

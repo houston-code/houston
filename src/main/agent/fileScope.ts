@@ -1,4 +1,5 @@
 import { lstatSync } from 'node:fs'
+import { Minimatch, type MinimatchOptions } from 'minimatch'
 import { runGitCapture } from './gitRead'
 
 /**
@@ -154,5 +155,21 @@ export function isRegularFile(full: string): boolean {
     return lstatSync(full).isFile()
   } catch {
     return false
+  }
+}
+
+/**
+ * A path tester for `pattern`, equivalent to `minimatch(rel, pattern, options)` on
+ * every call. The pattern is compiled once, on the first test (so an invalid
+ * pattern throws exactly when the per-call form would), and reused for every path
+ * after that: minimatch() rebuilds a cache key from the pattern and options on each
+ * call, which dominated a glob over a large repo's listing.
+ */
+export function globTester(pattern: string, options: MinimatchOptions = {}): (rel: string) => boolean {
+  let mm: Minimatch | undefined
+  return (rel) => {
+    // minimatch() short-circuits a comment pattern; Minimatch.match does the same.
+    mm ??= new Minimatch(pattern, options)
+    return mm.match(rel)
   }
 }

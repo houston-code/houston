@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import {
@@ -94,15 +94,26 @@ const LOCK_ATTEMPTS = 200
 /** Pause between lock attempts. The critical section is a few synchronous file ops. */
 const LOCK_RETRY_MS = 5
 
+/**
+ * Age past which a lock file is abandoned whoever it names. The critical section is a
+ * few synchronous file ops, so no live holder keeps it this long; but a pid check
+ * alone never breaks a lock whose pid was reused after its holder crashed.
+ */
+export const LOCK_STALE_MS = 30 * 1000
+
 /** Block this thread for `ms` (the lock is taken from synchronous code). */
 function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
-/** Whether a lock file names a process that no longer exists (it died holding it). */
+/**
+ * Whether a lock file was abandoned: it is older than {@link LOCK_STALE_MS}, or it
+ * names a process that no longer exists (it died holding it).
+ */
 function lockIsStale(lock: string): boolean {
   let pid: number
   try {
+    if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) return true
     pid = Number(readFileSync(lock, 'utf8').trim())
   } catch {
     return false // gone already, or unreadable: let the next attempt find out
@@ -124,6 +135,9 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
   // downgraded); saving keeps that higher number so a later upgrade doesn't re-run
   // migrations the file has already been through.
   let storedVersion = SCHEDULES_SCHEMA_VERSION
+  // Identity of the store as of the last read (see stampOf), or null once the
+  // in-memory copy has been changed here, so the next poll reads it again.
+  let lastStamp: string | null = null
   let schedules: ScheduledRunInfo[] = load()
   let timer: NodeJS.Timeout | null = null
   let started = false
@@ -174,7 +188,23 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
     schedules = load()
   }
 
+  /**
+   * The store's inode, size and mtime, or 'missing'. Every save writes a new file
+   * and renames it into place, so any change, from any process, changes the inode.
+   */
+  function stampOf(): string {
+    try {
+      const st = statSync(deps.file)
+      return `${st.ino}:${st.size}:${st.mtimeMs}`
+    } catch {
+      return 'missing'
+    }
+  }
+
   function load(): ScheduledRunInfo[] {
+    // Taken before the read: a write landing in between makes the next poll read
+    // again, never skip a change.
+    lastStamp = stampOf()
     let raw: string
     try {
       raw = readFileSync(deps.file, 'utf8')
@@ -202,6 +232,9 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
   }
 
   function save(): void {
+    // The in-memory copy now differs from what was read (and from disk, if this
+    // write fails), so the next poll must not take the store as unchanged.
+    lastStamp = null
     const toWrite: PersistedSchedules = {
       schemaVersion: storedVersion,
       schedules
@@ -245,6 +278,18 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
   function fireDue(): void {
     timer = null
     const at = now()
+    // An idle poll: nothing in memory is due and the store is the one last read, so a
+    // reload under the lock would find nothing to claim. Skip the lock file and the
+    // read until the store changes (another process edited it) or an occurrence
+    // comes due.
+    if (
+      lastStamp !== null &&
+      !schedules.some((s) => s.nextRunAt !== null && s.nextRunAt <= at) &&
+      stampOf() === lastStamp
+    ) {
+      arm()
+      return
+    }
     // Claim every due occurrence on disk before starting any run, so another host
     // waking for the same occurrence finds it already advanced.
     const due = locked(() => {
