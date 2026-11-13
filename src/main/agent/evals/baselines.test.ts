@@ -24,6 +24,10 @@ describe('live eval baselines', () => {
     // Empty on a scheduled run, which the suite treats as unset: the schedule always grades.
     expect(text).toContain("HOUSTON_EVAL_RECORD: ${{ inputs.record && '1' || '' }}")
     expect(text).toContain('name: eval-baseline')
+    // The baseline is collected and uploaded even when the scoring step failed, so a task
+    // overrunning its time limit after it was scored does not lose the recording.
+    expect(text.match(/if: \$\{\{ !cancelled\(\) && inputs\.record \}\}/g)).toHaveLength(2)
+    expect(text).not.toContain('if: ${{ inputs.record }}')
     expect(text).not.toMatch(/contents: write|git push/)
   })
 

@@ -764,7 +764,9 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
       ).not.toBe('regressed')
     },
     // A scripted task is a handful of local tool calls; a live one is real model
-    // latency over several turns, repeated for every attempt.
-    LIVE ? LIVE_ATTEMPT_BUDGET_MS * ATTEMPTS : 60_000
+    // latency over several turns, repeated for every attempt. A recording gets twice
+    // that: it grades nothing, so the limit is only a guard against a hang, and a task
+    // that outlives it keeps running beside the next one and can miss the baseline.
+    LIVE ? LIVE_ATTEMPT_BUDGET_MS * ATTEMPTS * (RECORD ? 2 : 1) : 60_000
   )
 })

@@ -172,16 +172,18 @@ jobs:
           npm run eval
       # A recording run commits nothing (the token is read-only): the baseline it wrote is
       # uploaded for a person to review and commit, the same way as one recorded locally with
-      # `npm run eval:baseline`.
+      # `npm run eval:baseline`. Both steps also run when the scoring step failed: the suite
+      # writes the baseline before it reports, so a task that overran its time limit after
+      # being scored would otherwise throw away a complete recording.
       - name: Collect the recorded baseline
-        if: ${{ inputs.record }}
+        if: ${{ !cancelled() && inputs.record }}
         run: |
           set -euo pipefail
           mkdir "$RUNNER_TEMP/baseline"
           git ls-files -z --modified --others --exclude-standard -- src/main/agent/evals/baselines \
             | xargs -0 -I{} cp {} "$RUNNER_TEMP/baseline/"
           ls -l "$RUNNER_TEMP/baseline"
-      - if: ${{ inputs.record }}
+      - if: ${{ !cancelled() && inputs.record }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: eval-baseline
