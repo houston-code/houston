@@ -2503,7 +2503,8 @@ checkout.
 - **Fork from here** forks from one message instead of the whole chat. On a reply (its
   hover button), the new chat holds the conversation up to and including that reply.
   On one of your messages (in its rewind menu), the new chat holds what came before it,
-  with that message waiting in the box to send or change. The original is untouched.
+  with that message waiting in the box to send or change. Both are also in the
+  message's right-click menu. The original is untouched.
 - **Export** as JSON or self-contained HTML, and **import** from either. An HTML export
   from an older version brings back only the chat text.
 - **The File menu** starts a new chat (⌘N), a new chat in another folder (⇧⌘N), or one
