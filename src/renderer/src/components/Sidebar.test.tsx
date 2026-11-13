@@ -1451,3 +1451,32 @@ describe('Sidebar: a long chat title', () => {
     expect(screen.getByText(long)).toHaveAttribute('title', long)
   })
 })
+
+describe('Sidebar right-click menu', () => {
+  it('opens the same menu as ⋯ on right-click, at the pointer', () => {
+    const onFork = vi.fn()
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })], onFork })} />)
+    const row = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    fireEvent.contextMenu(row, { clientX: 40, clientY: 60 })
+    const menu = screen.getByRole('menu', { name: 'Actions for Alpha' })
+    expect(menu.style.top).toBe('64px')
+    expect(menu.style.left).toBe('40px')
+    // Same items as the ⋯ menu.
+    const viaRightClick = within(menu)
+      .getAllByRole('menuitem')
+      .map((b) => b.textContent)
+    fireEvent.keyDown(document, { key: 'Escape' })
+    openConvMenu('Alpha')
+    const viaButton = within(screen.getByRole('menu', { name: 'Actions for Alpha' }))
+      .getAllByRole('menuitem')
+      .map((b) => b.textContent)
+    expect(viaRightClick).toEqual(viaButton)
+  })
+
+  it('opens under ⋯ from the keyboard context-menu key, which has no pointer', () => {
+    render(<Sidebar {...baseProps({ conversations: [makeConv({ id: 'a', title: 'Alpha' })] })} />)
+    const row = screen.getByText('Alpha').closest('.conv') as HTMLElement
+    fireEvent.contextMenu(row, { clientX: 0, clientY: 0 })
+    expect(screen.getByRole('menu', { name: 'Actions for Alpha' })).toBeInTheDocument()
+  })
+})

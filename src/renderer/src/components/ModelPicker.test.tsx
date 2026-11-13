@@ -93,6 +93,71 @@ describe('ModelPicker', () => {
     }
   })
 
+  it('explains the badges in a legend under the list', () => {
+    renderPicker()
+    fireEvent.click(screen.getByRole('combobox'))
+    const legend = document.querySelector('.model-menu__legend')!
+    expect(legend).toHaveTextContent('T tools')
+    expect(legend).toHaveTextContent('V images')
+    expect(legend).toHaveTextContent('R reasoning')
+    expect(screen.getByRole('listbox').contains(legend)).toBe(false)
+  })
+
+  it("marks each provider's default model as recommended", () => {
+    const settings = {
+      providers: [provider({ id: 'openai', models: OPENAI_STORED, defaultModel: 'gpt-5-mini' })]
+    } as unknown as AppSettings
+    renderPicker({ settings })
+    fireEvent.click(screen.getByRole('combobox'))
+    const rec = screen.getByRole('option', { name: /^GPT-5 mini, recommended,/ })
+    expect(rec).toHaveTextContent('Recommended')
+    expect(screen.getAllByText('Recommended')).toHaveLength(1)
+  })
+
+  it('lists the last models used in a Recent section, while not searching', () => {
+    const settings = {
+      providers: [
+        provider({ id: 'openai', models: OPENAI_STORED }),
+        provider({ id: 'nokey', label: 'Other', models: [{ id: 'm1' }], hasKey: false })
+      ],
+      recentModels: [
+        { providerId: 'openai', model: 'o3' },
+        { providerId: 'openai', model: 'gone' },
+        { providerId: 'nokey', model: 'm1' },
+        { providerId: 'openai', model: 'gpt-4o' }
+      ]
+    } as unknown as AppSettings
+    const { onSelect } = renderPicker({ settings })
+    fireEvent.click(screen.getByRole('combobox'))
+    const recent = screen.getByRole('group', { name: 'Recent' })
+    // A removed model and one whose provider has no key are skipped.
+    const names = within(recent)
+      .getAllByRole('option')
+      .map((o) => o.getAttribute('aria-label'))
+    expect(names).toEqual([
+      expect.stringMatching(/^o3, OpenAI \(GPT\),/),
+      expect.stringMatching(/^GPT-4o, OpenAI \(GPT\),/)
+    ])
+    fireEvent.click(within(recent).getAllByRole('option')[1])
+    expect(onSelect).toHaveBeenCalledWith({ providerId: 'openai', model: 'gpt-4o' })
+
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.change(screen.getByLabelText('Search models'), { target: { value: 'o3' } })
+    expect(screen.queryByRole('group', { name: 'Recent' })).not.toBeInTheDocument()
+  })
+
+  it('opens with the active option on the selected model, counting the Recent section', () => {
+    const settings = {
+      providers: [provider({ id: 'openai', models: OPENAI_STORED })],
+      recentModels: [{ providerId: 'openai', model: 'o3' }]
+    } as unknown as AppSettings
+    renderPicker({ settings, selected: { providerId: 'openai', model: 'o3' } })
+    fireEvent.click(screen.getByRole('combobox'))
+    const search = screen.getByLabelText('Search models')
+    const active = document.getElementById(search.getAttribute('aria-activedescendant')!)!
+    expect(active.closest('[role="group"]')).toHaveAttribute('aria-label', 'Recent')
+  })
+
   it('puts the search field below the list, outside the part that scrolls', () => {
     renderPicker()
     fireEvent.click(screen.getByRole('combobox'))
