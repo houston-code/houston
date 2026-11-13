@@ -1,4 +1,4 @@
-import { writeFileSync, renameSync, unlinkSync, promises as fsp } from 'node:fs'
+import { writeFileSync, renameSync, statSync, unlinkSync, promises as fsp } from 'node:fs'
 
 /**
  * Atomic file writes: write a temp file, then rename it over the target. The rename
@@ -31,6 +31,30 @@ export function writeFileAtomicSync(path: string, data: string, mode?: number): 
   try {
     writeFileSync(tmp, data, mode === undefined ? { encoding: 'utf8' } : { encoding: 'utf8', mode })
     renameSync(tmp, path)
+  } catch (err) {
+    try {
+      unlinkSync(tmp)
+    } catch {
+      // Nothing to clean up (the write itself never created it).
+    }
+    throw err
+  }
+}
+
+/**
+ * {@link writeFileAtomicSync}, returning the identity of the file it put in place:
+ * inode, mtime and size, read from the temp before the rename (a rename keeps all
+ * three). A caller that caches what it wrote can later tell "still my file" from "some
+ * other process has replaced it" without a window between the rename and a stat of the
+ * final path, in which that other process's file could be mistaken for its own.
+ */
+export function writeFileAtomicStampedSync(path: string, data: string, mode?: number): string {
+  const tmp = tempName(path)
+  try {
+    writeFileSync(tmp, data, mode === undefined ? { encoding: 'utf8' } : { encoding: 'utf8', mode })
+    const st = statSync(tmp)
+    renameSync(tmp, path)
+    return `${st.ino}:${st.mtimeMs}:${st.size}`
   } catch (err) {
     try {
       unlinkSync(tmp)

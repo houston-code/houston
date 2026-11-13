@@ -19,6 +19,10 @@ import {
   listConversations,
   reportChildToParent,
   resetConversationListCache,
+  resetConversationWriteCache,
+  setCompaction,
+  setPromptSnapshot,
+  setAnnouncedPolicy,
   saveSideChat,
   setProposalState,
   takeChildReports,
@@ -705,6 +709,123 @@ describe('listConversations metadata cache', () => {
     expect(listConversations()).toHaveLength(2)
     writeFileSync(file(bad.id), '{ not json')
     expect(listConversations().map((c) => c.id)).toEqual([good.id])
+  })
+})
+
+describe('saving from the remembered write', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+    resetConversationListCache()
+    resetConversationWriteCache()
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  const onDisk = (id: string): Record<string, unknown> =>
+    JSON.parse(readFileSync(file(id), 'utf8')) as Record<string, unknown>
+
+  /** One step of a made-up session, picked by `n`. Every hot-path mutator appears. */
+  function step(id: string, n: number, log: Array<{ role: 'user' | 'assistant'; content: string }>): void {
+    switch (n % 7) {
+      case 0:
+        log.push({ role: n % 2 ? 'assistant' : 'user', content: `message ${n} ${'x'.repeat(n % 40)}` })
+        setMessages(id, [...log])
+        break
+      case 1:
+        addUsage(id, { inputTokens: 100 + n, outputTokens: n, cost: 0.01, model: n % 2 ? 'm1' : 'm2', cacheReadTokens: n })
+        break
+      case 2:
+        setCompaction(id, n % 3 ? { cut: n % 5, summary: `summary ${n}`, anchor: n } : null)
+        break
+      case 3:
+        setConversationError(id, n % 4 ? { message: `failed ${n % 3}` } : null)
+        break
+      case 4:
+        setAnnouncedPolicy(id, n % 2 ? 'ask' : 'full-auto')
+        break
+      case 5:
+        setPromptSnapshot(id, { date: `2026-01-${String((n % 27) + 1).padStart(2, '0')}` } as never)
+        break
+      default:
+        log.push({ role: 'user', content: `with settings ${n}` })
+        setMessages(id, [...log], { providerId: 'p2', model: `model-${n % 3}`, approvalPolicy: 'ask' })
+    }
+  }
+
+  it('leaves the same file as reading it back before every save', () => {
+    const run = (forget: boolean): Record<string, unknown> => {
+      const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      const log: Array<{ role: 'user' | 'assistant'; content: string }> = []
+      let seed = 5
+      for (let i = 0; i < 300; i++) {
+        seed = (seed * 1664525 + 1013904223) >>> 0
+        // The reference run forgets the last write each time, so every save reads the file.
+        if (forget) resetConversationWriteCache()
+        step(c.id, seed >>> 8, log)
+      }
+      const { id: _id, createdAt: _c, updatedAt: _u, ...rest } = onDisk(c.id)
+      return rest
+    }
+    expect(run(false)).toEqual(run(true))
+  })
+
+  it('reads the file again when another process replaced it, keeping that process\'s changes', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [{ role: 'user', content: 'mine' }])
+    addUsage(c.id, { inputTokens: 1, outputTokens: 1, cost: 0.5 })
+    // The terminal client appends a message and renames the chat, straight on disk.
+    const theirs = onDisk(c.id)
+    writeFileSync(
+      file(c.id),
+      JSON.stringify({
+        ...theirs,
+        title: 'Renamed elsewhere',
+        titleCustom: true,
+        messages: [...(theirs.messages as unknown[]), { role: 'assistant', content: 'from the other process' }]
+      })
+    )
+    // A bookkeeping save here must build on their file, not on what we last wrote.
+    addUsage(c.id, { inputTokens: 2, outputTokens: 3, cost: 0.25 })
+    setConversationError(c.id, { message: 'boom' })
+    const after = getConversation(c.id)
+    expect(after?.title).toBe('Renamed elsewhere')
+    expect(after?.messages.map((m) => m.content)).toEqual(['mine', 'from the other process'])
+    expect(after?.usage).toMatchObject({ outputTokens: 4, cost: 0.75 })
+    expect(after?.lastError?.message).toBe('boom')
+    // And a new message log here keeps their rename too.
+    setMessages(c.id, [{ role: 'user', content: 'replaced' }])
+    expect(getConversation(c.id)).toMatchObject({ title: 'Renamed elsewhere', titleCustom: true })
+  })
+
+  it('does not hand a caller the object it will save from', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [{ role: 'user', content: 'hi' }])
+    const usage = addUsage(c.id, { inputTokens: 1, outputTokens: 1, cost: 1 })!
+    usage.cost = 999
+    addUsage(c.id, { inputTokens: 1, outputTokens: 1, cost: 1 })
+    expect(getConversation(c.id)?.usage?.cost).toBe(2)
+  })
+
+  it('keeps attachments on disk and referenced across bookkeeping saves', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const image = { mediaType: 'image/png', data: Buffer.from('png-bytes').toString('base64') }
+    setMessages(c.id, [{ role: 'user', content: 'look', images: [image] }])
+    addUsage(c.id, { inputTokens: 1, outputTokens: 1, cost: 1 })
+    setCompaction(c.id, { cut: 0, summary: '', anchor: 0 })
+    expect(readFileSync(file(c.id), 'utf8')).not.toContain(image.data)
+    expect(getConversation(c.id)?.messages[0].images).toEqual([image])
+  })
+
+  it('writes the file owner-only on both paths', () => {
+    if (process.platform === 'win32') return
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [{ role: 'user', content: 'hi' }])
+    addUsage(c.id, { inputTokens: 1, outputTokens: 1, cost: 1 })
+    expect(statSync(file(c.id)).mode & 0o777).toBe(0o600)
   })
 })
 
