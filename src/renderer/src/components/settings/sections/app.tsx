@@ -13,6 +13,7 @@ import {
 import { SettingsSection } from '../fields'
 import { KeyboardTab } from '../KeyboardTab'
 import type { SettingsCtx } from '../context'
+import { playAttentionSound } from '../../../lib/attentionSound'
 
 export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
@@ -100,6 +101,23 @@ export function NotificationsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
           Show a count on the app icon of chats that need your input, failed, or have
           replies you haven’t seen (the Dock on macOS, a dot on the taskbar button on
           Windows). On by default.
+        </span>
+      </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.attentionSounds ?? false}
+          onChange={(e) => {
+            const on = e.target.checked
+            setSettings((s) => ({ ...s, attentionSounds: on }))
+            // Let the user hear what they just turned on.
+            if (on) playAttentionSound('done')
+          }}
+        />
+        <span>
+          Play a short sound when the agent finishes a turn or needs your input (approval,
+          a question, or a plan to review) while Houston isn’t the focused window. Off by
+          default.
         </span>
       </label>
     </SettingsSection>
@@ -246,6 +264,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   diagnosticsOnSave: 'diagnostics on save',
   desktopNotifications: 'notifications',
   appBadge: 'app icon badge',
+  attentionSounds: 'sounds',
   theme: 'theme',
   htmlVisuals: 'interactive visuals',
   toolOutputExpanded: 'tool output expanded',

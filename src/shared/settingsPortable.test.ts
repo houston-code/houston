@@ -129,6 +129,7 @@ describe('import checks per preference', () => {
     ['diagnosticsOnSave', false, 0],
     ['desktopNotifications', false, null],
     ['appBadge', false, 'yes'],
+    ['attentionSounds', true, 'loud'],
     ['theme', 'dark', 'sepia'],
     ['htmlVisuals', true, {}],
     ['toolOutputExpanded', true, 'open'],

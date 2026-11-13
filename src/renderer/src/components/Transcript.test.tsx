@@ -741,6 +741,86 @@ describe('transcript detail preferences', () => {
   })
 })
 
+describe('message right-click menus and Retry', () => {
+  it('offers copy and the rewind choices on a user message', async () => {
+    const handlers = { disabled: false, onRewind: vi.fn(), onEdit: vi.fn() }
+    render(
+      <Transcript
+        items={[userItem({ id: 'u1', text: 'fix the bug' }), assistantItem()]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        rewind={handlers}
+      />
+    )
+    fireEvent.contextMenu(screen.getByText('fix the bug'), { clientX: 10, clientY: 10 })
+    const menu = screen.getByRole('menu', { name: 'Message actions' })
+    expect(within(menu).getAllByRole('menuitem').map((b) => b.textContent)).toEqual([
+      'Copy message',
+      'Edit and resend',
+      'Rewind conversation and code',
+      'Rewind conversation only',
+      'Rewind code only'
+    ])
+    fireEvent.click(within(menu).getByRole('menuitem', { name: 'Copy message' }))
+    await waitFor(() => expect(copyText).toHaveBeenCalledWith('fix the bug'))
+    fireEvent.contextMenu(screen.getByText('fix the bug'), { clientX: 10, clientY: 10 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Rewind conversation only' }))
+    expect(handlers.onRewind).toHaveBeenCalledWith(expect.objectContaining({ id: 'u1' }), 'conversation')
+  })
+
+  it('offers copy, Mark unread and Retry on the last reply, and Retry only there', () => {
+    const onRetryLast = vi.fn()
+    const onMarkUnreadFrom = vi.fn()
+    render(
+      <Transcript
+        items={[
+          userItem({ id: 'u1' }),
+          assistantItem({ id: 'a1', text: 'first reply' }),
+          userItem({ id: 'u2', text: 'again' }),
+          assistantItem({ id: 'a2', text: 'second reply' })
+        ]}
+        onApprove={vi.fn()}
+        onAnswer={vi.fn()}
+        onElicit={vi.fn()}
+        onMarkUnreadFrom={onMarkUnreadFrom}
+        onRetryLast={onRetryLast}
+      />
+    )
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1)
+    fireEvent.contextMenu(screen.getByText('first reply'), { clientX: 5, clientY: 5 })
+    expect(
+      within(screen.getByRole('menu', { name: 'Message actions' }))
+        .getAllByRole('menuitem')
+        .map((b) => b.textContent)
+    ).toEqual(['Copy message', 'Mark unread from here'])
+    fireEvent.keyDown(document, { key: 'Escape' })
+    fireEvent.contextMenu(screen.getByText('second reply'), { clientX: 5, clientY: 5 })
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Retry' }))
+    expect(onRetryLast).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    expect(onRetryLast).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows no Retry without a handler (a run is going)', () => {
+    renderTranscript([userItem(), assistantItem()])
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
+  })
+
+  it('offers the selected text first when there is a selection in the message', () => {
+    renderTranscript([userItem(), assistantItem({ text: 'pick these words please' })])
+    const body = screen.getByText('pick these words please')
+    const range = document.createRange()
+    range.selectNodeContents(body)
+    const sel = window.getSelection()!
+    sel.removeAllRanges()
+    sel.addRange(range)
+    fireEvent.contextMenu(body, { clientX: 5, clientY: 5 })
+    expect(screen.getAllByRole('menuitem')[0]).toHaveTextContent('Copy selection')
+    sel.removeAllRanges()
+  })
+})
+
 describe('message timestamps and turn details', () => {
   it('shows when each message was sent, with the full time on hover, and the turn details under its last reply', () => {
     const at = new Date(Date.now() - 5 * 60_000).toISOString()

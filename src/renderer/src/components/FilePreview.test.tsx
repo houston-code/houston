@@ -101,3 +101,27 @@ describe('FilePreview', () => {
     expect(onOpen).toHaveBeenCalledWith('src/a.ts')
   })
 })
+
+describe('FilePreview at a line', () => {
+  it('marks the named line in the code view', async () => {
+    installApi({ kind: 'text', text: 'one\ntwo\nthree', truncated: false, bytes: 13 })
+    const { container } = render(<FilePreview workspace="/repo" path="a.txt" onOpen={vi.fn()} line={2} />)
+    await screen.findByText('one', { exact: false })
+    const mark = container.querySelector('.file-preview__line-mark')
+    expect(mark).toHaveAttribute('data-line', '2')
+  })
+
+  it('shows markdown as source when a line is named, so the line can be marked', async () => {
+    installApi({ kind: 'text', text: '# Title\n\nbody', truncated: false, bytes: 13 })
+    const { container } = render(<FilePreview workspace="/repo" path="README.md" onOpen={vi.fn()} line={3} />)
+    await screen.findByText('Preview')
+    expect(container.querySelector('.file-preview__line-mark')).toHaveAttribute('data-line', '3')
+  })
+
+  it('ignores a line past the end of the file', async () => {
+    installApi({ kind: 'text', text: 'one', truncated: false, bytes: 3 })
+    const { container } = render(<FilePreview workspace="/repo" path="a.txt" onOpen={vi.fn()} line={9} />)
+    await screen.findByText('one', { exact: false })
+    expect(container.querySelector('.file-preview__line-mark')).toBeNull()
+  })
+})

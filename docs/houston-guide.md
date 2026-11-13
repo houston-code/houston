@@ -60,6 +60,9 @@ The full GUI:
 
 - **Read and unread.** A chat's ⋯ menu (or ⌥U / Alt+U) marks it unread or read. The
   filter menu marks every chat read, or sorts the ones that want attention first.
+- **Right-click menus.** Right-click a chat in the sidebar for the same actions as its
+  ⋯ menu. Right-click a message to copy it (or just the text you selected) and for that
+  message's own actions: rewind or edit one of yours, or mark unread from a reply.
 - **Picking up where you left off.** A reply's hover actions include **Mark unread from
   here**, and reopening an unread chat lands on a "New" divider above the first reply
   you haven't seen.
@@ -84,6 +87,15 @@ The full GUI:
 - Slash commands switch settings mid-session.
 - `--continue` reopens this folder's most recent chat at launch; `--resume <id>`
   reopens a specific one.
+- **First run.** With no model ready, it lists the providers that take a key, then
+  the hosts that need none: Ollama and LM Studio on their usual ports, and any
+  endpoint added with `houston providers add`. It asks each host for its models
+  first, so the list says which are running; picking a running one starts on it
+  and remembers it. For an added endpoint that lists no models, you can type a
+  model id instead. `/login` shows the same list later.
+- **A typo is an error.** An unknown flag, a flag missing its value, or a stray word
+  (`houston "fix the bug"`) stops with a message and the usage, instead of opening
+  an empty session. To run a prompt once, use `-p`. `houston --help` lists every flag.
 
 See "The terminal composer" for how to type, paste, and edit a message.
 
@@ -269,8 +281,12 @@ OpenAI-compatible endpoint, or a local model runtime.
 **To add one:** open Settings, add a provider and its key, fetch its live model
 list, and pick a model.
 
-- The picker shows each model's context window and capability badges (tool calling,
-  vision, reasoning).
+- The picker shows each model's context window and capability badges: **T** tool
+  calling, **V** images (vision), **R** reasoning. A legend under the list says what
+  each letter means.
+- Each provider's default model is marked **Recommended**.
+- A **Recent** section at the top lists the last few models your chats ran on, so
+  switching back is one click. It hides while you search.
 - It warns you before you pick a model that can't call tools.
 - Keys are stored encrypted by the OS keychain and never reach the app's interface.
 
@@ -621,6 +637,13 @@ In the desktop app:
   output or diff in view. Off by default.
 - **Always show reasoning** (same place) keeps the model's reasoning open above each
   reply instead of folding it away once the reply starts. Off by default.
+
+In the desktop app, file paths in the transcript open the file in the Files panel's
+preview: the file a tool row names (a read opens at the line it started from), a diff's
+file header, a file the receipt lists as changed, and a relative link in a reply
+(`[setup](docs/setup.md)`, `src/app.ts#L42`, or `src/app.ts:42` opens at that line).
+The preview's **Open** button hands the file to its default app. Only files inside the
+project folder open this way; web links still open in your browser.
 
 ## What actually ran (the receipt)
 
@@ -1006,7 +1029,8 @@ goes back:
 
 ### In the desktop app
 
-- Hover one of your messages and click the rewind button for these choices.
+- Hover one of your messages and click the rewind button for these choices, or
+  right-click the message.
 - Or press `Esc` twice in an empty composer (or type `/rewind`) to pick the message
   from a list.
 - A confirmation shows how many messages and files are affected before anything
@@ -1016,6 +1040,10 @@ goes back:
 - **Edit and resend** (same menu) puts a message in the composer for editing. Sending
   it rewinds to that message first (conversation and code by default, or conversation
   only), then sends the new text, so the agent re-runs from there.
+- **Retry** on the last reply (its hover button, or right-click it) sends your last
+  message again for a new reply, even after a turn that succeeded. The old reply is
+  rewound out of the conversation first (conversation only: files the turn changed stay
+  as they are), so the new reply replaces it.
 
 ### In the terminal
 
@@ -1061,6 +1089,15 @@ quiet, and stopping a run yourself never pings you (you're obviously there).
   The title still updates.
 - Notifications use the terminal's own channel, so they need no extra tools. Not every
   terminal supports them; the bell works everywhere.
+
+**In the desktop app**, a native notification fires for the same events while
+Houston isn't the focused window, and clicking it opens that chat. Settings >
+General > Notifications can also **play a sound**: a short rising chime when a turn
+finishes (or fails), and a soft double knock when the agent needs your input (an
+approval, a question, a plan to review, or a server's form). Sounds are off by
+default, play only while Houston isn't the focused window, and work independently of
+notifications. Turning the setting on plays the chime once so you know what to
+expect.
 
 ## How hard the model thinks (/reasoning)
 
@@ -1111,8 +1148,13 @@ reaches a model with no higher level to move to.
 - the dollar cost, with a total when more than one model billed
 
 Subagents and reviews often run on a different (cheaper) model, so they're listed
-separately rather than folded into the main one. In the desktop app, the breakdown
-also lists what each subagent spent (already counted in its model's row).
+separately rather than folded into the main one.
+
+In the desktop app, the usage chip in the control bar shows how full the context is
+(a small bar and "used/maximum") and the chat's cost so far (output tokens for a
+model with no known price). Clicking it opens the same breakdown, which also lists
+what each subagent spent (already counted in its model's row). The status bar at the
+bottom shows the git branch the chat's folder has checked out and the approval mode.
 
 **Watch the cached count** on a long session. Those tokens are real context, but they
 bill far below the base input rate, so a big number there is why a long conversation
@@ -1142,7 +1184,8 @@ The desktop app updates itself separately.
 
 - the version, and whether a newer one is out
 - Node and the platform
-- the active model and every provider's key status
+- the active model (in the terminal, the one this session runs on, however it was
+  chosen) and every provider's key status
 - whether the shell sandbox is actually enforced on this host
 - which external tools (`git`, `gh`, `rg`) are on `PATH`
 - which language servers are installed, and whether servers are off on this host
