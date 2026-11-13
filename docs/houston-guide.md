@@ -1145,7 +1145,9 @@ picked.
 - **Comment on lines.** Click a line (or its line number) to leave a comment on it;
   `Cmd+Enter` (`Ctrl+Enter`) saves and `Esc` cancels. Comments wait under their lines,
   can be edited or deleted, and stay while you switch scope, close the view or open
-  another chat. **Send N comments to the agent** sends them all as one message naming
+  another chat. A comment whose line no longer holds the code it was left on (a
+  refresh moved or changed it), or that isn't in the current view, is listed below
+  the diff instead, where it can still be edited, deleted, or sent. **Send N comments to the agent** sends them all as one message naming
   each file, line and the code on it; the chat shows it as "N review comments", with
   the full text one click away. **Discard** asks before dropping them.
 
