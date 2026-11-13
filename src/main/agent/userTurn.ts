@@ -27,7 +27,11 @@ function sameUserTurn(a: ChatMessage, b: ChatMessage): boolean {
 export function appendUserTurn(messages: ChatMessage[], next: ChatMessage): ChatMessage[] {
   const last = messages.at(-1)
   if (last && sameUserTurn(last, next)) {
-    const kept = last.unanswered?.length ? { ...next, unanswered: last.unanswered } : next
+    const kept = {
+      ...next,
+      ...(last.unanswered?.length ? { unanswered: last.unanswered } : {}),
+      ...(last.runEnds?.length ? { runEnds: last.runEnds } : {})
+    }
     return [...messages.slice(0, -1), kept]
   }
   return [...messages, next]

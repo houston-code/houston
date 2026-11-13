@@ -184,10 +184,9 @@ describe('runAndDrain', () => {
     // natural-completion fallback doesn't fire.
     expect(h.maybeGenerateTitle).toHaveBeenCalledTimes(1)
     expect(listQueue(cid).map((q) => q.text)).toEqual(['A']) // still held
-    // The failure is persisted so the Retry banner survives a reload — cleared at
-    // run start, then re-set with the error message once the run ends.
-    expect(h.setConversationError).toHaveBeenNthCalledWith(1, cid, null)
-    expect(h.setConversationError).toHaveBeenLastCalledWith(cid, { message: 'kaboom' })
+    // The stored last error belongs to the run itself (startRun clears and sets it,
+    // see loop.test), so the drain doesn't write it a second time.
+    expect(h.setConversationError).not.toHaveBeenCalled()
     clearQueue(cid)
   })
 
@@ -204,10 +203,8 @@ describe('runAndDrain', () => {
     expect(sink.emit.mock.calls.some(([, e]) => e.type === 'turn_start')).toBe(false)
     expect(h.maybeGenerateTitle).toHaveBeenCalledTimes(1) // turn-start only, no fallback
     expect(listQueue(cid).map((q) => q.text)).toEqual(['A'])
-    // An abort isn't a failure to retry: the marker is cleared at start and never
-    // re-set, so no Retry banner is persisted.
-    expect(h.setConversationError).toHaveBeenCalledWith(cid, null)
-    expect(h.setConversationError).not.toHaveBeenCalledWith(cid, expect.objectContaining({ message: expect.anything() }))
+    // As on an error, the run (not the drain) owns the stored last error.
+    expect(h.setConversationError).not.toHaveBeenCalled()
     clearQueue(cid)
   })
 

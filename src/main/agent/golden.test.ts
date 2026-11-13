@@ -138,6 +138,7 @@ vi.mock('../conversations', () => ({
   peekConversation: () => null,
   setAnnouncedPolicy: () => {},
   setCompaction: () => {},
+  setConversationError: () => {},
   setPromptSnapshot: () => {},
   takeChildReports: () => []
 }))

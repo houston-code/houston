@@ -9,6 +9,7 @@ import {
   type ReviewFinding,
   retryProgress,
 } from '@shared/agent'
+import { latestRunEnd, limitNoticeText, runEndNoticeText, runEndRecords } from '@shared/runEnd'
 import { throttleNotice } from '@shared/rateLimit'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import type { FileDiffPreview } from '@shared/diff'
@@ -758,13 +759,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'limit': {
       const finalized = finalizeStreaming(items)
-      const text =
-        e.reason === 'max-steps'
-          ? '⚠ Reached the step limit for one turn and stopped. Send a message to have me continue.'
-          : e.reason === 'stalled'
-            ? '⚠ Stopped: I appeared to be repeating myself without making progress. Send a message with more direction to continue.'
-            : '⚠ The reply was cut off at the model’s output limit. Ask me to continue it.'
-      return [...finalized, { kind: 'notice', id: nextId(), text, tone: 'error' }]
+      return [...finalized, { kind: 'notice', id: nextId(), text: `⚠ ${limitNoticeText(e.reason)}`, tone: 'error' }]
     }
     case 'receipt': {
       // A turn has one receipt, and it comes last. A renderer that re-opened the chat
@@ -994,13 +989,16 @@ export function itemsFromMessages(
       // Saved on the turn's last assistant message, after everything that turn did.
       if (m.receipt) items.push({ kind: 'receipt', id: nextId(), receipt: m.receipt })
     }
-    // Runs started from this message that ended with no reply: the notice each one
-    // showed live (the error it failed on, or "Stopped."), so a reload still says why.
-    for (const r of m.unanswered ?? []) {
+    // Runs that ended on this message other than by finishing: the notice each one
+    // showed live (the error it failed on, "Stopped.", or the limit it hit), so a
+    // reload still says why.
+    for (const r of runEndRecords(m)) {
       items.push(
-        r.reason === 'aborted' || !r.message
-          ? { kind: 'notice', id: nextId(), text: 'Stopped.', tone: 'info' }
-          : { kind: 'notice', id: nextId(), text: r.message, tone: 'error' }
+        r.reason === 'limit'
+          ? { kind: 'notice', id: nextId(), text: `⚠ ${runEndNoticeText(r)}`, tone: 'error' }
+          : r.reason === 'aborted' || !r.message
+            ? { kind: 'notice', id: nextId(), text: 'Stopped.', tone: 'info' }
+            : { kind: 'notice', id: nextId(), text: r.message, tone: 'error' }
       )
     }
   }
@@ -1013,6 +1011,6 @@ export function itemsFromMessages(
  * conversation's last-error notice.
  */
 export function endsWithRecordedError(messages: ChatMessage[], message: string): boolean {
-  const latest = messages.at(-1)?.unanswered?.at(-1)
+  const latest = latestRunEnd(messages)
   return latest?.reason === 'error' && latest.message === message
 }

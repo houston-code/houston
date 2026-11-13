@@ -63,6 +63,35 @@ describe('itemsFromMessages', () => {
     expect(endsWithRecordedError([{ role: 'user', content: 'x' }], 'Provider overloaded')).toBe(false)
   })
 
+  it('shows after a reload why a run that replied stopped, as the live notice said it', () => {
+    const live = (reason: 'max-steps' | 'stalled' | 'max-output'): NoticeItem =>
+      reduceEvent([], { runId: 'r', type: 'limit', reason }).at(-1) as NoticeItem
+    const at = '2026-11-01T00:00:00.000Z'
+    const messages: ChatMessage[] = [
+      { role: 'user', content: 'refactor it' },
+      {
+        role: 'assistant',
+        content: 'partway there',
+        runEnds: [{ reason: 'limit', limit: 'max-steps', at }]
+      },
+      { role: 'user', content: 'keep going' },
+      {
+        role: 'assistant',
+        content: 'still looping',
+        runEnds: [{ reason: 'limit', limit: 'stalled', at }]
+      },
+      { role: 'user', content: 'one more' },
+      { role: 'assistant', content: 'half a reply', runEnds: [{ reason: 'error', message: 'Connection reset', at }] }
+    ]
+    const notices = itemsFromMessages(messages).filter((i): i is NoticeItem => i.kind === 'notice')
+    expect(notices.map((n) => ({ text: n.text, tone: n.tone }))).toEqual([
+      { text: live('max-steps').text, tone: live('max-steps').tone },
+      { text: live('stalled').text, tone: live('stalled').tone },
+      { text: 'Connection reset', tone: 'error' }
+    ])
+    expect(endsWithRecordedError(messages, 'Connection reset')).toBe(true)
+  })
+
   it('flags the compaction summary turn so it renders as markdown', () => {
     const summary = '- did a thing\n- learned a fact'
     const messages: ChatMessage[] = [

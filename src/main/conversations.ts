@@ -37,6 +37,7 @@ import { rewindableTurnIndices, turnText } from '@shared/rewind'
 import { repairDanglingToolResults } from './agent/repair'
 import { accumulateModelUsage } from '@shared/usage'
 import { invocationText } from '@shared/promptInvocation'
+import { runOutcome } from '@shared/runEnd'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
 import type { StoredQueue } from '@shared/queue'
 import { clearConversationOverride } from './agent/overrides'
@@ -818,17 +819,24 @@ export const MAX_PENDING_CHILD_REPORTS = 20
 export const CHILD_REPORT_SUMMARY_CHARS = 400
 
 /**
- * Build a finished child session's report from its persisted log: its title, whether
- * its last run failed, and the start of its final answer. Pure, so the truncation and
+ * Build a finished child session's report from its persisted log: its title, how its
+ * last run ended (finished, failed, stopped, or hit a limit), and the start of its
+ * final answer. Pure, so the truncation and
  * fallback wording are testable without a store.
  */
 export function childReportFrom(child: Conversation, now: number): ChildReport {
   const lastAnswer = [...child.messages]
     .reverse()
     .find((m) => m.role === 'assistant' && m.content.trim())
-  const raw = child.lastError
-    ? child.lastError.message
-    : (lastAnswer?.content ?? 'It finished without a written answer.')
+  // How its last run ended comes from the record the run left on its last message
+  // (a stop, a limit, an error), not the stored error alone: a stalled or capped run
+  // has no error, and reporting it as finished would tell the parent the work is done.
+  const end = runOutcome(child.messages, child.lastError)
+  const raw =
+    end.outcome === 'error'
+      ? (end.message ?? 'The run failed.')
+      : (lastAnswer?.content ??
+        (end.outcome === 'done' ? 'It finished without a written answer.' : 'It stopped without a written answer.'))
   const flat = raw.replace(/\s+/g, ' ').trim()
   const summary =
     flat.length > CHILD_REPORT_SUMMARY_CHARS
@@ -837,7 +845,8 @@ export function childReportFrom(child: Conversation, now: number): ChildReport {
   return {
     conversationId: child.id,
     title: child.title,
-    outcome: child.lastError ? 'error' : 'done',
+    outcome: end.outcome,
+    ...(end.outcome === 'limit' && end.limit ? { limit: end.limit } : {}),
     summary,
     finishedAt: now
   }

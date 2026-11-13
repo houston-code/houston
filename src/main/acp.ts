@@ -31,6 +31,7 @@ import { throttleNotice } from '@shared/rateLimit'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
 import { invocationText } from '@shared/promptInvocation'
+import { limitNoticeText, runEndNoticeText, runEndRecords } from '@shared/runEnd'
 import { parseTodosSafe } from '@shared/todos'
 import { resolveContextWindow } from '@shared/usage'
 import { formatReceiptLines } from '@shared/evidence'
@@ -489,16 +490,35 @@ export function promptFromBlocks(blocks: unknown): { text: string; images: Image
  * the user's turns, the assistant's text and reasoning, and each tool call with its
  * result. Loop-injected notes and compaction summaries are left out (they were
  * never the user's words), and a turn Houston wrote shows as what the user did.
+ * A run that ended other than by finishing (an error, a Stop, a limit) replays as
+ * the notice saying so, as a `notice` update for an editor that presents them and
+ * on the thought stream otherwise, the same as live.
  */
-export function replayUpdates(messages: ChatMessage[], cwd: string): AcpSessionUpdate[] {
+export function replayUpdates(
+  messages: ChatMessage[],
+  cwd: string,
+  opts: { notices?: boolean } = {}
+): AcpSessionUpdate[] {
   const out: AcpSessionUpdate[] = []
   const text = (sessionUpdate: string, t: string): AcpSessionUpdate => ({
     sessionUpdate,
     content: { type: 'text', text: t }
   })
+  const notice = (message: string, severity: 'info' | 'warning' | 'error'): AcpSessionUpdate =>
+    opts.notices
+      ? { sessionUpdate: 'notice', severity, title: message }
+      : text('agent_thought_chunk', `\n${message}\n`)
   for (const m of messages) {
+    replayMessage(m)
+    for (const r of runEndRecords(m)) {
+      out.push(notice(runEndNoticeText(r), r.reason === 'error' ? 'error' : r.reason === 'limit' ? 'warning' : 'info'))
+    }
+  }
+  return out
+
+  function replayMessage(m: ChatMessage): void {
     if (m.role === 'user') {
-      if (m.content.startsWith(SYSTEM_NOTE_PREFIX) || m.content.startsWith(COMPACTION_SUMMARY_PREFIX)) continue
+      if (m.content.startsWith(SYSTEM_NOTE_PREFIX) || m.content.startsWith(COMPACTION_SUMMARY_PREFIX)) return
       const shown = m.invokedAs ? invocationText(m.invokedAs) : m.content
       if (shown) out.push(text('user_message_chunk', shown))
       for (const img of m.images ?? []) {
@@ -531,7 +551,6 @@ export function replayUpdates(messages: ChatMessage[], cwd: string): AcpSessionU
       })
     }
   }
-  return out
 }
 
 function planUpdate(args: Record<string, unknown>): AcpSessionUpdate {
@@ -802,7 +821,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     }
     sessions.set(stored.id, session)
     touch(session)
-    for (const u of replayUpdates(stored.messages, cwd)) update(stored.id, u)
+    const notices = Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.notices)
+    for (const u of replayUpdates(stored.messages, cwd, { notices })) update(stored.id, u)
     return { modes: modeState(mode) }
   }
 
@@ -1269,14 +1289,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           break
         case 'limit':
           state.limit = e.reason
-          notice(
-            e.reason === 'stalled'
-              ? 'Stopped: the agent stalled without making progress.'
-              : e.reason === 'max-output'
-                ? 'Stopped: the model hit its output limit.'
-                : 'Stopped: reached the maximum number of steps for one prompt.',
-            'warning'
-          )
+          notice(limitNoticeText(e.reason), 'warning')
           break
         case 'receipt':
           notice(formatReceiptLines(e.receipt).join('\n'))
