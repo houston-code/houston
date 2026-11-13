@@ -198,7 +198,14 @@ interface Session {
   mode: ApprovalPolicy
   /** The chat's own reasoning effort, when it has one; otherwise runs use the default. */
   effort?: ReasoningEffort
-  messages: ChatMessage[]
+  /**
+   * The conversation so far, or null while it is not held in memory: an idle session
+   * past the most recent `ACP_RESIDENT_SESSIONS` drops it and reloads it from the
+   * store on its next prompt.
+   */
+  messages: ChatMessage[] | null
+  /** Whether `messages` matches what the store holds, so dropping it loses nothing. */
+  saved: boolean
   mcpServers: McpServerConfig[]
   runId: string | null
   cancelled: boolean
@@ -585,10 +592,18 @@ export interface AcpServer {
   close: () => Promise<void>
 }
 
+/**
+ * How many sessions keep their message log in memory. An editor can open many
+ * sessions over a long-lived server; past this many, the least recently used idle
+ * ones drop their log and reload it from the store when prompted again.
+ */
+export const ACP_RESIDENT_SESSIONS = 8
+
 export function createAcpServer(deps: AcpDeps): AcpServer {
   const newId = deps.newId ?? randomUUID
   const log = deps.log ?? (() => {})
   const readFile = deps.readFile ?? defaultReadFile
+  // Ordered least to most recently used (see `touch`).
   const sessions = new Map<string, Session>()
   const running = new Set<Promise<unknown>>()
   let clientCaps: AcpClientCapabilities = {}
@@ -616,6 +631,39 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     running.add(p)
     void p.finally(() => running.delete(p)).catch(() => {})
     return p
+  }
+
+  /**
+   * Mark a session most recently used, then drop the message logs of the least
+   * recently used sessions past `ACP_RESIDENT_SESSIONS`. A session with a run in
+   * progress, or whose latest messages did not reach the store, keeps its log.
+   */
+  const touch = (s: Session): void => {
+    sessions.delete(s.id)
+    sessions.set(s.id, s)
+    let resident = 0
+    for (const x of sessions.values()) if (x.messages) resident++
+    for (const x of sessions.values()) {
+      if (resident <= ACP_RESIDENT_SESSIONS) break
+      if (x === s || !x.messages || x.runId || !x.saved) continue
+      x.messages = null
+      resident--
+    }
+  }
+
+  /** A session's messages, reloaded from the store when they were dropped. */
+  const messagesOf = (s: Session): ChatMessage[] => {
+    if (s.messages) return s.messages
+    let stored: AcpStoredSession | null = null
+    try {
+      stored = deps.store.get(s.id)
+    } catch (e) {
+      log(`acp: failed to reload session ${s.id}: ${String(e)}`)
+    }
+    if (!stored) throw new AcpError(ACP_ERROR.notFound, `No saved session ${s.id}`)
+    s.messages = [...stored.messages]
+    s.saved = true
+    return s.messages
   }
 
   const sessionOf = (params: unknown): Session => {
@@ -693,19 +741,22 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     const { providerId, model } = resolveModel()
     const { id } = deps.store.create({ workspace: cwd, providerId, model })
     const mode = defaultMode()
-    sessions.set(id, {
+    const session: Session = {
       id,
       cwd,
       providerId,
       model,
       mode,
       messages: [],
+      saved: true,
       mcpServers,
       runId: null,
       cancelled: false,
       costUsd: 0,
       context: null
-    })
+    }
+    sessions.set(id, session)
+    touch(session)
     return { sessionId: id, modes: modeState(mode) }
   }
 
@@ -734,7 +785,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       log(`acp: session ${stored.id} was saved for ${stored.workspace}; continuing it in ${cwd}`)
     }
     const mode = live?.mode ?? defaultMode()
-    sessions.set(stored.id, {
+    const session: Session = {
       id: stored.id,
       cwd,
       providerId,
@@ -742,12 +793,15 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       mode,
       ...(effort ? { effort } : {}),
       messages: [...stored.messages],
+      saved: true,
       mcpServers,
       runId: null,
       cancelled: false,
       costUsd: live?.costUsd ?? 0,
       context: live?.context ?? null
-    })
+    }
+    sessions.set(stored.id, session)
+    touch(session)
     for (const u of replayUpdates(stored.messages, cwd)) update(stored.id, u)
     return { modes: modeState(mode) }
   }
@@ -793,15 +847,19 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     if (s.runId) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
     const { text, images } = promptFromBlocks((params as { prompt?: unknown }).prompt)
     if (!text.trim() && images.length === 0) throw new AcpError(ACP_ERROR.invalidParams, 'The prompt is empty')
+    const prior = messagesOf(s)
 
     const runId = newId()
     s.runId = runId
     s.cancelled = false
+    touch(s)
     const messages: ChatMessage[] = [
-      ...s.messages,
+      ...prior,
       { role: 'user', content: text, ...(images.length ? { images } : {}) }
     ]
     s.messages = messages
+    // The new turn is not in the store until the run saves it.
+    s.saved = false
     const turn = createTurn(s, runId)
     const req: AgentRunRequest = {
       runId,
@@ -819,8 +877,10 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     try {
       await deps.startRun(req, turn.send, (m) => {
         s.messages = m
+        s.saved = false
         try {
           deps.store.setMessages(s.id, m)
+          s.saved = true
         } catch (e) {
           log(`acp: failed to save session ${s.id}: ${String(e)}`)
         }
@@ -829,6 +889,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       // their requests settle; nothing waits on them past the run.
     } finally {
       s.runId = null
+      // Other sessions may have been held past the bound while this one ran.
+      touch(s)
     }
     if (s.cancelled || turn.state.stopReason === 'aborted') return { stopReason: 'cancelled' }
     if (turn.state.error) throw new AcpError(ACP_ERROR.internal, turn.state.error)

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { sandboxAvailable, selectBackend } from './select'
 
 // selectBackend/sandboxAvailable are tested via injected platform/exists — NEVER via
-// the host-bound backend the barrel resolves at module load, which can't be re-mocked.
+// the host-bound backend the barrel resolves on first use (index.test.ts covers that).
 
 describe('sandboxAvailable', () => {
   it('is true on macOS when sandbox-exec is present', () => {

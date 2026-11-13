@@ -63,11 +63,21 @@ function aurFields({ version, sha256 }) {
   ]
 }
 
+// The wrapper points Node's on-disk compile cache at the user's cache dir, which spares
+// recompiling the bundle on every start; a NODE_COMPILE_CACHE the user set (even to
+// empty) wins.
 const AUR_PACKAGE = `
 package() {
   install -Dm644 "houston-cli-\${pkgver}.cjs" "\${pkgdir}/usr/lib/houston/houston-cli.cjs"
   install -dm755 "\${pkgdir}/usr/bin"
-  printf '#!/bin/sh\\nexec /usr/bin/node /usr/lib/houston/houston-cli.cjs "$@"\\n' > "\${pkgdir}/usr/bin/houston"
+  printf '%s\\n' \\
+    '#!/bin/sh' \\
+    'if [ -z "\${NODE_COMPILE_CACHE+set}" ]; then' \\
+    '  NODE_COMPILE_CACHE="\${XDG_CACHE_HOME:-\$HOME/.cache}/houston/compile-cache"' \\
+    '  export NODE_COMPILE_CACHE' \\
+    'fi' \\
+    'exec /usr/bin/node /usr/lib/houston/houston-cli.cjs "$@"' \\
+    > "\${pkgdir}/usr/bin/houston"
   chmod 755 "\${pkgdir}/usr/bin/houston"
 }
 `

@@ -232,6 +232,7 @@ import {
   EVICTION_TARGET_FRACTION,
   KEEP_RECENT_USER_TURNS,
   SUMMARY_TRUNCATED_MESSAGE,
+  buildAnchorMessages,
   buildSummaryMessages,
   buildSummaryRequestMessages,
   compactionAnchor,
@@ -259,7 +260,18 @@ import {
 import { buildPinnedMessages, latestTodos, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
 import { todoEvidenceGaps, todoGapNote } from './todoEvidence'
 import { findAcceptedPlan, planProgress, planStillOpen } from './planChecklist'
-import { StallDetector, callSignature, resolveStallThresholds } from './stall'
+import {
+  FILE_READ_TOOLS,
+  STALL_STOP_FALLBACK,
+  StallDetector,
+  callSignature,
+  commandFailureOf,
+  failedCallKey,
+  resolveStallThresholds,
+  stallFinalNote,
+  type CommandFailure
+} from './stall'
+import { RevertTracker } from './revertTracker'
 import {
   MAX_OUTPUT_CONTINUATIONS,
   continuationNote,
@@ -1729,8 +1741,12 @@ export async function startRun(
       return gaps.map(todoGapNote)
     }
     beforeEnd = () => {
-      const todoGaps = todoEvidenceGaps(startTodos, latestTodos(messages), run.evidence).map((g) => g.item)
-      let receipt = run.evidence.receipt(peekShell, { todoGaps })
+      // An item claiming a check nothing ran is listed as such; one backed only by a run
+      // from before a later file change is listed apart, since something did run.
+      const gaps = todoEvidenceGaps(startTodos, latestTodos(messages), run.evidence)
+      const todoGaps = gaps.filter((g) => g.missing.length).map((g) => g.item)
+      const todoStale = gaps.filter((g) => !g.missing.length).map((g) => g.item)
+      let receipt = run.evidence.receipt(peekShell, { todoGaps, todoStale })
       // The accepted plan's progress, from every turn's receipt since it was accepted.
       // Only on a turn that did work (or accepted the plan): a question asked later in
       // the chat gets no receipt for it.
@@ -3143,6 +3159,14 @@ export async function startRun(
         repeatErrorLimit: settings.stallRepeatErrorLimit
       })
     )
+    // Every version each written file has had this run, so a write that puts a file back
+    // to an earlier version is seen as a revert: the detector watches for edits going back
+    // and forth, and the step budget doesn't count a revert as progress.
+    const revertTracker = new RevertTracker()
+    const revertCalls = new Set<string>()
+    // Set once a stall persists past its nudge: the run gets one more step with tools
+    // off so it ends on a reply, then stops with the 'stalled' limit.
+    let stallStop: string | null = null
 
     // End-of-run verification gate (opt-in). Tracks whether this run modified any
     // files (so we don't verify a read-only turn) and how many verification passes
@@ -3153,8 +3177,9 @@ export async function startRun(
     let verifyPassesRun = 0
     const verifyMaxPasses = resolveVerifyMaxPasses(settings.verifyMaxPasses)
 
-    // The request re-sent verbatim ahead of the tail while `cut` sits inside its turn.
-    const anchorMsgs = (): ChatMessage[] => (anchor !== undefined ? [messages[anchor]] : [])
+    // The request re-sent verbatim ahead of the tail while `cut` sits inside its turn,
+    // with the steers the cut passed (see buildAnchorMessages).
+    const anchorMsgs = (): ChatMessage[] => buildAnchorMessages(messages, anchor, cut)
 
     // The persisted log with the eviction watermark applied: large tool results
     // before `evictBefore` replaced by stubs. Index-for-index with `messages`, so cut
@@ -3440,8 +3465,9 @@ export async function startRun(
       // Last iteration: tell the model its tool calls won't run, so it spends the step
       // on a summary. Enforced below by dropping any tool call it makes anyway. Tools
       // stay in the request (a history with tool_use blocks must still declare them).
-      const finalStep = isFinalStep(iter, budget)
-      if (finalStep) {
+      // A stalled run's extra step is a final step too, announced by its own note.
+      const finalStep = stallStop !== null || isFinalStep(iter, budget)
+      if (finalStep && stallStop === null) {
         messages.push(systemNoteMessage(FINAL_STEP_NOTE))
         persist(messages)
       }
@@ -3800,7 +3826,7 @@ export async function startRun(
         cutAtCap = true
         toolCalls = []
         if (!assistantText.trim()) {
-          assistantText = FINAL_STEP_FALLBACK
+          assistantText = stallStop !== null ? STALL_STOP_FALLBACK : FINAL_STEP_FALLBACK
           emit({ type: 'text', delta: assistantText })
         }
       }
@@ -3831,7 +3857,7 @@ export async function startRun(
       }
 
       if (cutAtCap) {
-        emit({ type: 'limit', reason: 'max-steps' })
+        emit({ type: 'limit', reason: stallStop !== null ? 'stalled' : 'max-steps' })
         emit({ type: 'done', stopReason: 'end_turn' })
         return
       }
@@ -3851,6 +3877,14 @@ export async function startRun(
         if (stopReason === 'max_tokens') {
           emit({ type: 'limit', reason: 'max-output' })
           emit({ type: 'done', stopReason })
+          return
+        }
+
+        // A stalled run's extra step got its reply: end with the stall, skipping the
+        // Stop hooks and the verification gate, which are for a turn that finished.
+        if (stallStop !== null) {
+          emit({ type: 'limit', reason: 'stalled' })
+          emit({ type: 'done', stopReason: 'end_turn' })
           return
         }
 
@@ -3957,19 +3991,34 @@ export async function startRun(
       // resolved. `observeStall` reacts to the detector's decision (nudge once, then
       // stop if it persists) and returns true when the run was ended so the caller returns.
       const iterErrors: string[] = []
+      // Commands that ran and exited non-zero (a successful tool call, so not an error
+      // above), and files a write put back to an earlier version this run.
+      const iterFailures: CommandFailure[] = []
+      const iterReverts: string[] = []
       const observeStall = (): boolean => {
         if (!stallEnabled) return false
         const action = stallDetector.observe({
           calls: toolCalls,
-          errors: iterErrors
+          errors: iterErrors,
+          commandFailures: iterFailures,
+          reads: toolCalls.filter((c) => FILE_READ_TOOLS.has(c.name) && lookupTool(c.name)?.kind === 'read'),
+          changed: toolCalls.some((c) => lookupTool(c.name)?.kind !== 'read'),
+          reverts: iterReverts
         })
         if (action.kind === 'nudge') {
           lastStallNudge = iter
           messages.push(systemNoteMessage(action.message))
           persist(messages)
         } else if (action.kind === 'stop') {
-          // Persisted past the corrective nudge — end the run cleanly with a
-          // dedicated limit reason rather than looping until the budget is spent.
+          // Persisted past the corrective nudge: stop rather than loop until the budget
+          // is spent. With a step left, spend it on a reply (tools off) so the turn ends
+          // explaining what went wrong, as the step cap does; the 'stalled' limit follows.
+          if (iter + 1 < budget.maxIterations) {
+            stallStop = action.reason
+            messages.push(systemNoteMessage(stallFinalNote(action.reason)))
+            persist(messages)
+            return false
+          }
           emit({ type: 'limit', reason: 'stalled' })
           emit({ type: 'done', stopReason: 'end_turn' })
           return true
@@ -4072,11 +4121,14 @@ export async function startRun(
           }
         }
         const kind = lookupTool(r.call.name)?.kind
-        if (!r.ok) iterErrors.push(r.output)
+        if (!r.ok) iterErrors.push(failedCallKey(r.call, output))
+        const failure = r.ok ? commandFailureOf(r.call, output) : null
+        if (failure) iterFailures.push({ ...failure, command: redact(failure.command) })
         // A memory save is a write to Houston's own store, not the project: it doesn't
         // arm the verification gate.
         if (r.ok && kind === 'write' && !MEMORY_WRITE_TOOL_NAMES.includes(r.call.name)) filesModified = true
-        if (r.ok && PROGRESS_TOOLS.has(r.call.name)) writeIterations.add(iter)
+        // A write that only put a file back to an earlier version isn't progress.
+        if (r.ok && PROGRESS_TOOLS.has(r.call.name) && !revertCalls.has(r.call.id)) writeIterations.add(iter)
         if (r.ok && isDiscoveryTool(r.call.name, kind)) {
           const sig = callSignature(r.call)
           if (!discoveryCalls.has(sig)) {
@@ -4546,6 +4598,11 @@ export async function startRun(
               if (tool.kind === 'write') {
                 for (const t of writeTargets(call.name, execArgs)) {
                   await recordOriginal(runId, roots, t.path)
+                  try {
+                    await revertTracker.before(resolvePath(t.path))
+                  } catch {
+                    // Outside the roots: the write itself refuses it.
+                  }
                 }
               }
               // The files this write touches, resolved, for the language servers: their
@@ -4694,6 +4751,15 @@ export async function startRun(
                 const targets = writeTargets(call.name, execArgs)
                 for (const t of targets) {
                   await recordResult(runId, roots, t.path, { expectAbsent: t.deleted })
+                  if (t.deleted) continue
+                  try {
+                    if (await revertTracker.after(resolvePath(t.path))) {
+                      iterReverts.push(t.path)
+                      revertCalls.add(call.id)
+                    }
+                  } catch {
+                    // Outside the roots: nothing was written there.
+                  }
                 }
                 run.evidence.recordFiles(workspace, targets.map((t) => t.path))
               }

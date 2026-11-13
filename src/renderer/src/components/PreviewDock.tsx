@@ -37,6 +37,18 @@ const TAB_LABEL: Record<DockTab, string> = {
   plan: 'Plan review'
 }
 
+/**
+ * A comparable fingerprint of one sync: each pane's id, URL and bounds rounded to
+ * whole pixels (main positions views in whole pixels, so sub-pixel jitter moves
+ * nothing), plus whether the views are shown.
+ */
+export function previewSyncSignature(specs: PreviewPaneSpec[], visible: boolean): string {
+  const parts = specs.map(({ id, url, bounds: b }) =>
+    [id, url, Math.round(b.x), Math.round(b.y), Math.round(b.width), Math.round(b.height)].join('\n')
+  )
+  return `${visible ? 1 : 0}\0${parts.join('\0')}`
+}
+
 export function PreviewDock({
   servers,
   occluded,
@@ -132,11 +144,22 @@ export function PreviewDock({
     []
   )
 
+  // `panes` is a fresh array every render; what the native views depend on is which
+  // panes there are and what they show, so effects key on this string instead and
+  // read the panes themselves through a ref.
+  const panesRef = useRef(panes)
+  panesRef.current = panes
+  const panesKey = panes.map((p) => `${p.id}\n${p.url}`).join('\0')
+
+  // What was last sent to main, so an unchanged layout costs no IPC.
+  const lastSent = useRef<string | null>(null)
+
   // Measure each placeholder and tell main where to paint (and whether to show)
-  // the native views. Runs after every layout change and on every resize.
+  // the native views. Runs when the panes or visibility change and on every resize
+  // of the dock, a pane, or the window; skipped when nothing would move.
   const sync = useCallback(() => {
     const specs: PreviewPaneSpec[] = []
-    for (const pane of panes) {
+    for (const pane of panesRef.current) {
       const el = slots.current.get(pane.id)
       if (!el) continue
       const r = el.getBoundingClientRect()
@@ -146,24 +169,30 @@ export function PreviewDock({
         bounds: { x: r.left, y: r.top, width: r.width, height: r.height }
       })
     }
-    window.api.syncPreviewPanes(specs, !occluded && previewVisible)
-  }, [panes, occluded, previewVisible])
+    const visible = !occluded && previewVisible
+    const signature = previewSyncSignature(specs, visible)
+    if (signature === lastSent.current) return
+    lastSent.current = signature
+    window.api.syncPreviewPanes(specs, visible)
+  }, [occluded, previewVisible])
 
   useLayoutEffect(() => {
     sync()
-  }, [sync])
+  }, [sync, panesKey])
 
-  // Re-measure when the dock or window changes size (width drag, window resize).
+  // Re-measure when the dock, a pane, or the window changes size (width drag, a row
+  // opening under the panes, window resize).
   useEffect(() => {
     const ro = new ResizeObserver(() => sync())
     const dock = dockRef.current
     if (dock) ro.observe(dock)
+    for (const el of slots.current.values()) ro.observe(el)
     window.addEventListener('resize', sync)
     return () => {
       ro.disconnect()
       window.removeEventListener('resize', sync)
     }
-  }, [sync])
+  }, [sync, panesKey])
 
   // Tear every native pane down when the dock unmounts (closed).
   useEffect(() => () => window.api.syncPreviewPanes([], false), [])

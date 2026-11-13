@@ -57,6 +57,21 @@ export interface WorkingTreeChanges {
   ship?: RepoShipState
 }
 
+/**
+ * Just the counts of a {@link WorkingTreeChanges}, for the Changes badge: the same
+ * numbers without the per-file diffs.
+ */
+export interface WorkingTreeStats {
+  isRepo: boolean
+  /** Current branch, or null (detached / unborn / non-repo), as in the full set. */
+  branch: string | null
+  /** Changed files, tracked plus untracked (the full set's `files.length`). */
+  fileCount: number
+  added: number
+  removed: number
+  ship?: RepoShipState
+}
+
 /** Undo git's C-style quoting of a path with unusual characters. */
 function dequote(s: string): string {
   if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {

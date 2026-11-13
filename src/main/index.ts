@@ -6,6 +6,7 @@ import { APP_NAME } from '@shared/constants'
 import { openExternalSafely } from './safeExternal'
 import { isAllowedNavigation } from './navigation'
 import { cascadeBounds, loadWindowState, saveWindowState, pickStartupBounds } from './window-state'
+import { mainWindowWebPreferences } from './main-window-prefs'
 import { registerIpc } from './ipc'
 import { buildAppMenu } from './menu'
 import { killAllShells } from './agent/shells'
@@ -122,12 +123,7 @@ function createWindow(): BrowserWindow {
     title: APP_NAME,
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#0e0f12',
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false
-    }
+    webPreferences: mainWindowWebPreferences(join(__dirname, '../preload/index.js'))
   })
   registerAppWindow(win)
 

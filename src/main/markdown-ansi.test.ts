@@ -159,6 +159,102 @@ describe('MarkdownStream', () => {
   })
 })
 
+describe('MarkdownStream chunking', () => {
+  // The stream keeps its boundary scan between pushes; how a reply is cut into deltas
+  // must never change what it prints. `Reference` is the stream as it was before the
+  // scan was kept: it re-splits the whole buffer on every push.
+  class Reference {
+    private buf = ''
+    private printed = false
+    push(delta: string): string {
+      this.buf += delta
+      const { complete, rest } = splitFinalizedBlocks(this.buf)
+      if (!complete.trim()) {
+        this.buf = rest.length < this.buf.length ? rest : this.buf
+        return ''
+      }
+      this.buf = rest
+      return this.emit(complete)
+    }
+    flush(): string {
+      const out = this.buf.trim() ? this.emit(this.buf) : ''
+      this.buf = ''
+      return out
+    }
+    private emit(src: string): string {
+      const out = `${this.printed ? '\n' : ''}${renderMarkdownAnsi(src, { paint, width: 40 })}\n`
+      this.printed = true
+      return out
+    }
+  }
+
+  const samples = [
+    '# Title\n\nSome *prose* with `code` and a [link](https://example.com).\nSecond line.\n\n',
+    '```ts\nconst a = 1\n\nconst b = 2\n```\n\nAfter the fence.\n',
+    '- one\n- two\n  - nested\n\n1. first\n2. second\n\n> quoted\n> more\n\n',
+    '| a | b |\n|---|--:|\n| 1 | 22 |\n| 333 | 4 |\n\nTrailing paragraph',
+    '````md\n```\ninner\n```\n\nstill inside\n````\n\n~~~\ntilde\n```\n\nstill tilde\n~~~\n\ndone\n',
+    '\n\n  \nleading blanks\n\n\n\nmany blanks\n   \n\n',
+    'line one\r\n\r\nline two\r\n```\r\ncode\r\n\r\n```\r\n\r\nend'
+  ]
+  const all = samples.join('\n')
+
+  /** A small seeded PRNG (mulberry32), so a failure reproduces. */
+  const rng = (seed: number) => () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+
+  const chunk = (text: string, next: () => number): string[] => {
+    const out: string[] = []
+    for (let i = 0; i < text.length; ) {
+      const n = next() < 0.2 ? 1 : 1 + Math.floor(next() * 12)
+      out.push(text.slice(i, i + n))
+      i += n
+    }
+    return out
+  }
+
+  it.each([...samples.map((s, i) => [`sample ${i}`, s]), ['all samples', all]])(
+    '%s prints the same however it is chunked',
+    (_name, text) => {
+      const whole = new MarkdownStream({ paint, width: 40 })
+      const expected = whole.push(text) + whole.flush()
+      for (let seed = 1; seed <= 60; seed++) {
+        const next = rng(seed)
+        const s = new MarkdownStream({ paint, width: 40 })
+        const ref = new Reference()
+        let got = ''
+        for (const piece of chunk(text, next)) {
+          const out = s.push(piece)
+          // Each push prints what the full re-split printed, not just the same total.
+          expect(out).toBe(ref.push(piece))
+          got += out
+        }
+        const tail = s.flush()
+        expect(tail).toBe(ref.flush())
+        got += tail
+        expect(got).toBe(expected)
+        expect(s.empty).toBe(true)
+      }
+    }
+  )
+
+  it('starts clean after a flush or a discard', () => {
+    const s = new MarkdownStream({ paint, width: 0 })
+    s.push('```\nopen fence\n')
+    s.discard()
+    // The discarded fence must not swallow the next reply's blank line.
+    expect(s.push('para\n\nnext')).toContain('para')
+    s.flush()
+    s.push('~~~\nanother open fence\n')
+    s.flush()
+    expect(s.push('again\n\n')).toContain('again')
+  })
+})
+
 describe('visual blocks in the terminal', () => {
   const paint = (s: string): string => s
   it('adds a hint under diagram and interactive visual blocks', () => {

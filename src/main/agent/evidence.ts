@@ -633,7 +633,7 @@ function withSkipped(passed: number, failed: number, skipped: number): TestCount
 // ---------------------------------------------------------------------------
 
 /** One check as recorded, before it's folded into the receipt. */
-interface CheckRecord extends Omit<ReceiptCheck, 'runs' | 'beforeLastWrite'> {
+interface CheckRecord extends Omit<ReceiptCheck, 'runs' | 'beforeLastWrite' | 'shrunk' | 'skippedRose'> {
   /** When it ran, in the ledger's own order. */
   seq: number
   /** A background shell still to be settled when the receipt is built. */
@@ -740,13 +740,46 @@ function browserOutcome(e: BrowserEvidence): { ok: boolean | null; unknown?: Unk
 const CHECKS_CODE: ReadonlySet<CheckKind> = new Set(['test', 'typecheck', 'build', 'lint', 'http', 'browser', 'verify'])
 
 /**
+ * What the earlier runs of one command came to, from those with a runner summary:
+ * the most tests any of them ran (passed plus failed) and the fewest any skipped.
+ */
+interface RunHistory {
+  most: number
+  fewestSkipped: number
+}
+
+/** `history` with one more earlier run folded in. */
+function foldRun(history: RunHistory | undefined, c: TestCounts | undefined): RunHistory | undefined {
+  if (!c) return history
+  return {
+    most: Math.max(history?.most ?? 0, c.passed + c.failed),
+    fewestSkipped: Math.min(history?.fewestSkipped ?? Infinity, c.skipped ?? 0)
+  }
+}
+
+/**
+ * Whether the last run of a test command ran fewer tests, or skipped more, than its
+ * earlier runs: how a deleted test or an added `.skip` shows on the receipt, when the
+ * last run on its own reads as a clean pass.
+ */
+function testTrend(c: TestCounts | undefined, h: RunHistory | undefined): Pick<ReceiptCheck, 'shrunk' | 'skippedRose'> {
+  if (!c || !h) return {}
+  const ran = c.passed + c.failed
+  const skipped = c.skipped ?? 0
+  return {
+    ...(ran < h.most ? { shrunk: { from: h.most, to: ran } } : {}),
+    ...(skipped > h.fewestSkipped ? { skippedRose: { from: h.fewestSkipped, to: skipped } } : {})
+  }
+}
+
+/**
  * What one run did, as the loop and its tools saw it. Lives on the run's state for
  * as long as the run does; only the receipt it produces is persisted.
  */
 export class EvidenceLedger {
   private seq = 0
   /** Checks keyed by kind + label; re-inserted on each run so the order is most recent last. */
-  private readonly checks = new Map<string, { record: CheckRecord; runs: number }>()
+  private readonly checks = new Map<string, { record: CheckRecord; runs: number; history?: RunHistory }>()
   private otherCommands = 0
   private readonly delegated: DelegatedCommand[] = []
   private delegatedOmitted = 0
@@ -855,11 +888,14 @@ export class EvidenceLedger {
    * Whether a check of `kind` passed this turn ('any': a check of the code of any kind).
    * An HTTP request whose status wasn't checked counts: it was made, which is what a
    * "curl the API" todo claims. A browser check counts only if it checked the page.
+   * With `afterLastWrite`, a check of the code counts only if it ran after the turn's
+   * last file change, so a pass from before a later edit doesn't back the final code.
    */
-  passed(kind: RequiredCheck): boolean {
+  passed(kind: RequiredCheck, opts: { afterLastWrite?: boolean } = {}): boolean {
     for (const { record } of this.checks.values()) {
       const ok = record.ok === true || (record.kind === 'http' && record.unknown === 'http-status-unchecked')
       if (!ok) continue
+      if (opts.afterLastWrite && CHECKS_CODE.has(record.kind) && record.seq < this.lastWriteSeq) continue
       if (kind === 'any' ? CHECKS_CODE.has(record.kind) : record.kind === kind) return true
     }
     return false
@@ -869,7 +905,11 @@ export class EvidenceLedger {
     const key = `${record.kind}\u0000${record.label}`
     const prior = this.checks.get(key)
     this.checks.delete(key)
-    this.checks.set(key, { record, runs: (prior?.runs ?? 0) + 1 })
+    // The earlier runs' counts are kept as two numbers, so a later run that ran fewer
+    // tests or skipped more still shows it. A background run replaced before it was
+    // settled has no counts yet and adds nothing.
+    const history = prior ? foldRun(prior.history, prior.record.counts) : undefined
+    this.checks.set(key, { record, runs: (prior?.runs ?? 0) + 1, ...(history ? { history } : {}) })
   }
 
   /**
@@ -880,16 +920,24 @@ export class EvidenceLedger {
    */
   receipt(
     peek?: (shellId: string) => ShellPeek | undefined,
-    extra: { todoGaps?: string[] } = {}
+    extra: { todoGaps?: string[]; todoStale?: string[] } = {}
   ): TurnReceipt | null {
     const todoGaps = (extra.todoGaps ?? []).slice(0, 10).map((g) => displayLabel(g, 120))
-    if (this.checks.size === 0 && this.files.size === 0 && todoGaps.length === 0 && this.delegated.length === 0) {
+    const todoStale = (extra.todoStale ?? []).slice(0, 10).map((g) => displayLabel(g, 120))
+    if (
+      this.checks.size === 0 &&
+      this.files.size === 0 &&
+      todoGaps.length === 0 &&
+      todoStale.length === 0 &&
+      this.delegated.length === 0
+    ) {
       return null
     }
-    const all = [...this.checks.values()].map(({ record, runs }): ReceiptCheck => {
+    const all = [...this.checks.values()].map(({ record, runs, history }): ReceiptCheck => {
       const { seq, pending: _pending, ...check } = this.settle(record, peek)
       return {
         ...check,
+        ...(check.kind === 'test' ? testTrend(check.counts, history) : {}),
         ...(CHECKS_CODE.has(check.kind) && seq < this.lastWriteSeq ? { beforeLastWrite: true as const } : {}),
         runs
       }
@@ -912,7 +960,8 @@ export class EvidenceLedger {
             )
           }
         : {}),
-      ...(todoGaps.length ? { todoGaps } : {})
+      ...(todoGaps.length ? { todoGaps } : {}),
+      ...(todoStale.length ? { todoStale } : {})
     }
   }
 
