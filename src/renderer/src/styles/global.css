@@ -3898,6 +3898,59 @@ pre.diff {
 /* Icon-only square buttons: labels moved to native tooltips (`title`) so the
    action row stays compact and never overlaps the centered titlebar title. Each
    is `position: relative` to anchor its corner count badge. */
+.titlebar__commands {
+  -webkit-app-region: no-drag;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px 0 9px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.titlebar__commands:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+.titlebar__kbd {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+}
+.titlebar__action--text {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+}
+/* Keys for the message box, under it, on an empty chat only. */
+.key-hints {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 14px;
+  margin: 8px 0 4px;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.key-hints__item {
+  white-space: nowrap;
+}
+.key-hints__key {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 0 4px;
+  margin-right: 2px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
 .titlebar__action {
   -webkit-app-region: no-drag;
   position: relative;

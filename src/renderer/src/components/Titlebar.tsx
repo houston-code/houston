@@ -29,7 +29,11 @@ export function Titlebar({
   onToggleSideChat,
   sideChatOpen,
   terminalShortcut,
-  needsYou
+  needsYou,
+  onOpenPalette,
+  paletteShortcut,
+  onShowShortcuts,
+  shortcutsShortcut
 }: {
   title: string
   /** Background work (terminals + backgrounded shells) for the indicator's count. */
@@ -58,6 +62,14 @@ export function Titlebar({
    * a "N need you" pill that opens the next one. Absent or 0 hides it.
    */
   needsYou?: { count: number; onNext: () => void }
+  /** Open the command palette. Shown as a labeled button, so it can be found without a shortcut. */
+  onOpenPalette?: () => void
+  /** The palette's shortcut as displayed on this platform (e.g. ⌘K). */
+  paletteShortcut?: string
+  /** Open the keyboard-shortcut sheet. */
+  onShowShortcuts?: () => void
+  /** The sheet's shortcut as displayed on this platform (e.g. ⌘/). */
+  shortcutsShortcut?: string
 }): JSX.Element {
   const hasChanges = !!changes && changes.fileCount > 0
   return (
@@ -73,6 +85,37 @@ export function Titlebar({
               <button type="button" className="titlebar__needs-you" onClick={needsYou.onNext}>
                 <span className="titlebar__needs-you-dot" aria-hidden="true" />
                 {needsYou.count === 1 ? '1 needs you' : `${needsYou.count} need you`}
+              </button>
+            </Tooltip>
+          )}
+          {onOpenPalette && (
+            <Tooltip
+              label={`Commands: actions, slash commands, models and chats${paletteShortcut ? ` (${paletteShortcut})` : ''}`}
+            >
+              <button
+                type="button"
+                className="titlebar__commands"
+                onClick={onOpenPalette}
+                aria-keyshortcuts={paletteShortcut ? ariaKeys(paletteShortcut) : undefined}
+              >
+                Commands
+                {paletteShortcut && (
+                  <kbd className="titlebar__kbd" aria-hidden="true">
+                    {paletteShortcut}
+                  </kbd>
+                )}
+              </button>
+            </Tooltip>
+          )}
+          {onShowShortcuts && (
+            <Tooltip label={`Keyboard shortcuts${shortcutsShortcut ? ` (${shortcutsShortcut})` : ''}`}>
+              <button
+                type="button"
+                className="titlebar__action titlebar__action--text"
+                onClick={onShowShortcuts}
+                aria-label="Keyboard shortcuts"
+              >
+                ?
               </button>
             </Tooltip>
           )}
@@ -159,4 +202,11 @@ export function Titlebar({
       </div>
     </header>
   )
+}
+
+/** A displayed chord (⌘K, Ctrl+K) in the form aria-keyshortcuts expects (Meta+K, Control+K). */
+function ariaKeys(display: string): string {
+  const names: Record<string, string> = { '⌘': 'Meta', '⌃': 'Control', '⌥': 'Alt', '⇧': 'Shift', Ctrl: 'Control' }
+  const parts = display.includes('+') ? display.split('+') : [...display]
+  return parts.map((p) => names[p] ?? p).join('+')
 }

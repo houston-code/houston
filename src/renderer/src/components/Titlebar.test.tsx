@@ -27,6 +27,42 @@ describe('Titlebar preview button', () => {
   })
 })
 
+describe('Titlebar commands and shortcuts buttons', () => {
+  it('shows a labeled Commands button with its shortcut, and opens the palette', () => {
+    const onOpenPalette = vi.fn()
+    render(<Titlebar title="Houston" onOpenPalette={onOpenPalette} paletteShortcut="⌘K" />)
+    const btn = screen.getByRole('button', { name: /^Commands/ })
+    expect(btn).toHaveTextContent('Commands⌘K')
+    expect(btn).toHaveAttribute('aria-keyshortcuts', 'Meta+K')
+    fireEvent.click(btn)
+    expect(onOpenPalette).toHaveBeenCalledTimes(1)
+  })
+
+  it('writes a Ctrl chord the way aria-keyshortcuts expects', () => {
+    render(<Titlebar title="Houston" onOpenPalette={vi.fn()} paletteShortcut="Ctrl+K" />)
+    expect(screen.getByRole('button', { name: /^Commands/ })).toHaveAttribute('aria-keyshortcuts', 'Control+K')
+  })
+
+  it('leaves the shortcut off when the palette has none bound', () => {
+    render(<Titlebar title="Houston" onOpenPalette={vi.fn()} />)
+    const btn = screen.getByRole('button', { name: 'Commands' })
+    expect(btn).not.toHaveAttribute('aria-keyshortcuts')
+  })
+
+  it('opens the keyboard-shortcut sheet from the ? button', () => {
+    const onShowShortcuts = vi.fn()
+    render(<Titlebar title="Houston" onShowShortcuts={onShowShortcuts} shortcutsShortcut="⌘/" />)
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }))
+    expect(onShowShortcuts).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows neither button without handlers', () => {
+    render(<Titlebar title="Houston" />)
+    expect(screen.queryByRole('button', { name: /Commands/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Keyboard shortcuts' })).toBeNull()
+  })
+})
+
 describe('Titlebar icon-only actions', () => {
   it('labels each action for screen readers and shows a descriptive tooltip on hover', () => {
     render(

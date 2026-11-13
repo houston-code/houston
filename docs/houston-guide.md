@@ -2360,6 +2360,15 @@ be reverted with one click (and re-applied after a revert).
 
 To go back further than the last turn, see "Rewinding to an earlier message".
 
+## Finding commands and shortcuts
+
+The top right of the desktop window has a **Commands** button (⌘K) that opens the
+command palette, and a **?** button (⌘/) that lists every keyboard shortcut. On an
+empty chat, a row under the message box names the keys it understands: `/` for
+commands, `@` for files, `#` to save a rule, ⇧Tab to switch the approval mode, ↑ for
+your last prompt, and ⌘K for everything else. The row goes away once the chat has
+messages. Keys you rebind in Settings > Keyboard show as you bound them.
+
 ## Edit, View, and Go menus
 
 The desktop app's menus list what its shortcuts do, with the shortcut beside each
