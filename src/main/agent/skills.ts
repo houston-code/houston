@@ -1,6 +1,7 @@
 import { promises as fs, realpathSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { isAbsolute, join, relative, sep } from 'node:path'
-import { parseFrontmatter } from '@shared/frontmatter'
+import { isDisabledFlag, parseFrontmatter } from '@shared/frontmatter'
 import { HOUSTON_GUIDE } from './guide-content'
 import { RENDER_UI_SKILL } from './render-ui-skill'
 
@@ -19,6 +20,8 @@ import { RENDER_UI_SKILL } from './render-ui-skill'
  */
 
 export const SKILLS_DIR = '.houston/skills'
+/** Skills available in every project, under the home folder (`~/.houston/skills`). */
+export const USER_SKILLS_DIR = join('.houston', 'skills')
 const MAX_SKILLS = 50
 /** Bound the per-skill resource walk so a huge skill directory can't blow up load. */
 const MAX_SKILL_RESOURCES = 100
@@ -27,8 +30,16 @@ const MAX_SKILL_DEPTH = 8
 export interface Skill {
   name: string
   description: string
-  /** Workspace-relative path to the skill's instructions, for the agent to read. */
+  /**
+   * Path to the skill's instructions, for the agent to read: workspace-relative for a
+   * project skill, absolute for one of the user's own (see `root`).
+   */
   path: string
+  /**
+   * The user's skills folder, for a skill loaded from `~/.houston/skills`: its `path`
+   * is absolute and must stay inside this folder. Absent for a project skill.
+   */
+  root?: string
   /**
    * Workspace-relative paths of the skill's other bundled files (everything in the
    * skill directory except its SKILL.md), sorted. Present only when non-empty.
@@ -90,8 +101,8 @@ async function collectSkillResources(absSkillDir: string, relSkillDir: string): 
  * there is no workspace file to read.
  *
  * These are merged into the agent's skill list at the run seam (see
- * {@link withBuiltinSkills}), NOT inside {@link loadSkills} — so the `/skills`
- * command keeps listing only the workspace's own `.houston/skills`.
+ * {@link withBuiltinSkills}), NOT inside {@link loadSkills}, so the `/skills`
+ * command keeps listing only the project's and the user's own skills.
  */
 export const BUILTIN_SKILLS: Skill[] = [
   {
@@ -146,10 +157,20 @@ function resolvesInsideWorkspace(abs: string, workspace: string): boolean {
   }
 }
 
-export async function loadSkills(workspace: string): Promise<Skill[]> {
+/**
+ * Read one skills folder. `display(name)` is the skill directory as the agent should
+ * see it (workspace-relative for a project, absolute for the user's folder), and every
+ * SKILL.md must resolve inside `confine`.
+ */
+async function loadSkillsFrom(
+  dir: string,
+  confine: string,
+  display: (name: string) => string,
+  root?: string
+): Promise<Skill[]> {
   let entries
   try {
-    entries = await fs.readdir(join(workspace, SKILLS_DIR), { withFileTypes: true })
+    entries = await fs.readdir(dir, { withFileTypes: true })
   } catch {
     return []
   }
@@ -162,24 +183,47 @@ export async function loadSkills(workspace: string): Promise<Skill[]> {
     if (skills.length >= MAX_SKILLS) break
     if (!e.isDirectory()) continue
     if (!/^[\w-]+$/.test(e.name)) continue
-    const rel = `${SKILLS_DIR}/${e.name}/SKILL.md`
-    if (!resolvesInsideWorkspace(join(workspace, rel), workspace)) continue
+    const file = join(dir, e.name, 'SKILL.md')
+    if (!resolvesInsideWorkspace(file, confine)) continue
     let raw: string
     try {
-      raw = (await fs.readFile(join(workspace, rel), 'utf8')).trim()
+      raw = (await fs.readFile(file, 'utf8')).trim()
     } catch {
       continue // a dir without a SKILL.md isn't a skill
     }
     if (!raw) continue
     const { data } = parseFrontmatter(raw)
-    const skillDirRel = `${SKILLS_DIR}/${e.name}`
-    const resources = await collectSkillResources(join(workspace, skillDirRel), skillDirRel)
+    // Switched off (Settings > Customize writes `disabled: true`): kept on disk, not offered.
+    if (isDisabledFlag(data.disabled)) continue
+    const skillDir = display(e.name)
+    const resources = await collectSkillResources(join(dir, e.name), skillDir)
     skills.push({
       name: data.name || e.name,
       description: data.description || 'No description.',
-      path: rel,
+      path: `${skillDir}/SKILL.md`,
+      ...(root ? { root } : {}),
       ...(resources.length ? { resources } : {})
     })
+  }
+  return skills
+}
+
+/**
+ * The workspace's skills (`.houston/skills`), plus the user's own from
+ * `~/.houston/skills`. The workspace wins a name clash, as it does for commands: a
+ * project's own definition is the one its contributors mean.
+ */
+export async function loadSkills(workspace: string, home: string = homedir()): Promise<Skill[]> {
+  const userDir = join(home, USER_SKILLS_DIR)
+  const [project, user] = await Promise.all([
+    loadSkillsFrom(join(workspace, SKILLS_DIR), workspace, (name) => `${SKILLS_DIR}/${name}`),
+    loadSkillsFrom(userDir, userDir, (name) => join(userDir, name), userDir)
+  ])
+  const taken = new Set(project.map((s) => s.name.toLowerCase()))
+  const skills = [...project]
+  for (const s of user) {
+    if (skills.length >= MAX_SKILLS) break
+    if (!taken.has(s.name.toLowerCase())) skills.push(s)
   }
   skills.sort((a, b) => a.name.localeCompare(b.name))
   return skills
@@ -198,9 +242,9 @@ export async function loadSkillBody(workspace: string, skill: Skill): Promise<st
     return text || null
   }
   // Checked again at read time: the file can have been swapped for a symlink since the
-  // skill list was built at the start of the run.
-  const abs = join(workspace, skill.path)
-  if (!resolvesInsideWorkspace(abs, workspace)) return null
+  // skill list was built at the start of the run. A user skill stays inside its folder.
+  const abs = skill.root ? skill.path : join(workspace, skill.path)
+  if (!resolvesInsideWorkspace(abs, skill.root ?? workspace)) return null
   let raw: string
   try {
     raw = (await fs.readFile(abs, 'utf8')).trim()

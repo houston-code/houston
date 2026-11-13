@@ -10,6 +10,11 @@ export interface WorkingTreeStats {
   removed: number
   /** Commit/remote facts that choose the composer bar's ship action. */
   ship?: RepoShipState
+  /**
+   * The checked-out branch, for the status bar: a name, null when the folder is a repo
+   * with no branch checked out (detached HEAD, or no commits yet), absent outside a repo.
+   */
+  branch?: string | null
 }
 
 const EMPTY: WorkingTreeStats = { fileCount: 0, added: 0, removed: 0 }
@@ -41,7 +46,7 @@ export function useWorkingTreeStats(workspace: string | null, running: boolean):
       if (wsRef.current !== ws) return
       setStats(
         c.isRepo
-          ? { fileCount: c.files.length, added: c.added, removed: c.removed, ship: c.ship }
+          ? { fileCount: c.files.length, added: c.added, removed: c.removed, ship: c.ship, branch: c.branch }
           : EMPTY
       )
     } catch {

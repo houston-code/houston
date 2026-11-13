@@ -4,19 +4,21 @@ import { visualKind } from '../lib/visuals'
 import { CodeBlock } from './CodeBlock'
 import { Icon } from './Icon'
 import { VisualBlock } from './VisualBlock'
+import { FileLink, useFileLinks, type FileLinks } from './FileLink'
+import { fileTargetFromHref } from '../lib/fileLinks'
 
 /** Render an inline node tree. Keys are positional — the tree is static per render. */
-function renderInline(nodes: Inline[]): JSX.Element[] {
+function renderInline(nodes: Inline[], files: FileLinks | null): JSX.Element[] {
   return nodes.map((n, i) => {
     switch (n.type) {
       case 'text':
         return <span key={i}>{n.value}</span>
       case 'strong':
-        return <strong key={i}>{renderInline(n.children)}</strong>
+        return <strong key={i}>{renderInline(n.children, files)}</strong>
       case 'em':
-        return <em key={i}>{renderInline(n.children)}</em>
+        return <em key={i}>{renderInline(n.children, files)}</em>
       case 'del':
-        return <del key={i}>{renderInline(n.children)}</del>
+        return <del key={i}>{renderInline(n.children, files)}</del>
       case 'code':
         return (
           <code key={i} className="md-code">
@@ -27,10 +29,22 @@ function renderInline(nodes: Inline[]): JSX.Element[] {
         return <br key={i} />
       case 'link': {
         const href = safeHref(n.href)
-        if (!href) return <span key={i}>{renderInline(n.children)}</span>
+        if (!href) {
+          // A relative link to a file in the project opens it in the app's preview;
+          // anything else that isn't a web link stays plain text.
+          const target = files ? fileTargetFromHref(n.href, files.workspace) : null
+          if (target && files) {
+            return (
+              <FileLink key={i} target={target} links={files} className="md-link">
+                {renderInline(n.children, files)}
+              </FileLink>
+            )
+          }
+          return <span key={i}>{renderInline(n.children, files)}</span>
+        }
         return (
           <a key={i} href={href} target="_blank" rel="noreferrer" className="md-link">
-            {renderInline(n.children)}
+            {renderInline(n.children, files)}
           </a>
         )
       }
@@ -38,20 +52,20 @@ function renderInline(nodes: Inline[]): JSX.Element[] {
   })
 }
 
-function renderBlock(block: Block, key: number, visuals: boolean): JSX.Element {
+function renderBlock(block: Block, key: number, visuals: boolean, files: FileLinks | null): JSX.Element {
   switch (block.type) {
     case 'heading': {
       const Tag = `h${Math.min(block.level, 6)}` as keyof JSX.IntrinsicElements
       return (
         <Tag key={key} className="md-h">
-          {renderInline(block.children)}
+          {renderInline(block.children, files)}
         </Tag>
       )
     }
     case 'paragraph':
       return (
         <p key={key} className="md-p">
-          {renderInline(block.children)}
+          {renderInline(block.children, files)}
         </p>
       )
     case 'code': {
@@ -67,13 +81,13 @@ function renderBlock(block: Block, key: number, visuals: boolean): JSX.Element {
     case 'blockquote':
       return (
         <blockquote key={key} className="md-quote">
-          {block.children.map((b, i) => renderBlock(b, i, visuals))}
+          {block.children.map((b, i) => renderBlock(b, i, visuals, files))}
         </blockquote>
       )
     case 'list': {
       const items = block.items.map((it, i) =>
         it.checked === undefined ? (
-          <li key={i}>{it.blocks.map((b, j) => renderBlock(b, j, visuals))}</li>
+          <li key={i}>{it.blocks.map((b, j) => renderBlock(b, j, visuals, files))}</li>
         ) : (
           // A GFM task item: a read-only box in place of the bullet, like GitHub.
           <li key={i} className="md-task">
@@ -86,7 +100,7 @@ function renderBlock(block: Block, key: number, visuals: boolean): JSX.Element {
             >
               {it.checked && <Icon name="check" size={11} />}
             </span>
-            <div className="md-task__body">{it.blocks.map((b, j) => renderBlock(b, j, visuals))}</div>
+            <div className="md-task__body">{it.blocks.map((b, j) => renderBlock(b, j, visuals, files))}</div>
           </li>
         )
       )
@@ -108,7 +122,7 @@ function renderBlock(block: Block, key: number, visuals: boolean): JSX.Element {
               <tr>
                 {block.header.map((cell, i) => (
                   <th key={i} style={{ textAlign: block.align[i] ?? undefined }}>
-                    {renderInline(cell)}
+                    {renderInline(cell, files)}
                   </th>
                 ))}
               </tr>
@@ -118,7 +132,7 @@ function renderBlock(block: Block, key: number, visuals: boolean): JSX.Element {
                 <tr key={r}>
                   {row.map((cell, c) => (
                     <td key={c} style={{ textAlign: block.align[c] ?? undefined }}>
-                      {renderInline(cell)}
+                      {renderInline(cell, files)}
                     </td>
                   ))}
                 </tr>
@@ -138,5 +152,6 @@ function renderBlock(block: Block, key: number, visuals: boolean): JSX.Element {
  */
 export const Markdown = memo(function Markdown({ text, visuals = false }: { text: string; visuals?: boolean }): JSX.Element {
   const blocks = parseMarkdown(text)
-  return <div className="md">{blocks.map((b, i) => renderBlock(b, i, visuals))}</div>
+  const files = useFileLinks()
+  return <div className="md">{blocks.map((b, i) => renderBlock(b, i, visuals, files))}</div>
 })

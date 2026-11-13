@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
+import type { FileDiffPreview } from '@shared/diff'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
@@ -35,6 +36,8 @@ import {
   resolveModelArg,
   keyableProviders,
   renderProviderMenu,
+  hostProviders,
+  isLocalUrl,
   summarizeModels,
   otherHostExamples,
   promptSetupFields,
@@ -82,6 +85,7 @@ import {
   shortCwd,
   homeRelative,
   renderStatusLine,
+  renderEditSummary,
   renderRunStatus,
   renderContextUsage,
   pickTips,
@@ -3206,6 +3210,42 @@ describe('/login helpers', () => {
     expect(out).toContain('Other host')
   })
 
+  it('isLocalUrl recognizes this machine only', () => {
+    expect(isLocalUrl('http://localhost:11434/v1')).toBe(true)
+    expect(isLocalUrl('http://127.0.0.1:1234/v1')).toBe(true)
+    expect(isLocalUrl('http://[::1]:8080/v1')).toBe(true)
+    expect(isLocalUrl('https://router.example.com/v1')).toBe(false)
+    expect(isLocalUrl('not a url')).toBe(false)
+    expect(isLocalUrl(undefined)).toBe(false)
+  })
+
+  it('renderProviderMenu lists hosts that need no key, with what probing found, before Other host', () => {
+    const s = settings({
+      providers: [
+        prov({ id: 'anthropic', label: 'Anthropic', requiresKey: true }),
+        prov({ id: 'ollama', label: 'Ollama (local)', requiresKey: false, builtIn: true, baseUrl: 'http://localhost:11434/v1' }),
+        prov({ id: 'lmstudio', label: 'LM Studio (local)', requiresKey: false, builtIn: true, baseUrl: 'http://localhost:1234/v1' }),
+        prov({ id: 'custom-1', label: 'My Router', requiresKey: false, baseUrl: 'https://router.example.com/v1' })
+      ]
+    })
+    const hosts = hostProviders(s)
+    expect(hosts.map((h) => h.id)).toEqual(['ollama', 'lmstudio', 'custom-1'])
+    const out = renderProviderMenu(keyableProviders(s), makePainter(false), {
+      firstRun: true,
+      hosts: [
+        { provider: hosts[0], probe: { ok: true, models: [{ id: 'qwen3' }, { id: 'llama3.2' }] } },
+        { provider: hosts[1], probe: { ok: false } },
+        { provider: hosts[2], probe: { ok: false } }
+      ]
+    })
+    const lines = out.split('\n')
+    expect(lines[0]).toContain('pick a local or added host')
+    expect(lines.find((l) => l.includes('2)'))).toMatch(/Ollama \(local\)\s+✓ running\s+qwen3, llama3\.2/)
+    expect(lines.find((l) => l.includes('3)'))).toContain('✗ not running')
+    expect(lines.find((l) => l.includes('4)'))).toContain('✗ no answer')
+    expect(lines.find((l) => l.includes('5)'))).toContain('Other host')
+  })
+
   it('summarizeModels caps the preview and collapses the rest to +N more', () => {
     const paint = makePainter(false)
     expect(summarizeModels([], paint)).toBe('no models yet')
@@ -3324,6 +3364,73 @@ describe('runTui — /login & keyless start', () => {
     // The selection is persisted so the next launch skips setup.
     expect(patches.some((p) => (p.selected as { providerId?: string } | null)?.providerId === 'anthropic')).toBe(true)
     expect(t.text()).toContain('Key saved for anthropic')
+  })
+
+  describe('local and added hosts', () => {
+    const withHosts = [
+      ...twoProviders,
+      prov({ id: 'ollama', label: 'Ollama (local)', requiresKey: false, builtIn: true, baseUrl: 'http://localhost:11434/v1' }),
+      prov({ id: 'custom-1', label: 'My Router', requiresKey: false, baseUrl: 'https://router.example.com/v1' })
+    ]
+
+    it('probes them, and picking a running one saves its models and starts on it', async () => {
+      const { d, rec, patches } = wizardDeps(
+        [{ runId: 'x', type: 'done', stopReason: 'end_turn' }],
+        { selected: null, providers: withHosts }
+      )
+      const probed: string[] = []
+      d.listModels = async (p) => {
+        probed.push(p.id)
+        if (p.id === 'ollama') return [{ id: 'qwen3' }, { id: 'llama3.2' }]
+        throw new Error('ECONNREFUSED')
+      }
+      const t = fakeIo(['3', 'hi', null])
+      d.io = t.io
+      expect(await runTui(opts, d)).toBe(0)
+      expect(probed).toEqual(['ollama', 'custom-1'])
+      expect(t.text()).toContain('✓ running')
+      expect(rec.runs[0]).toMatchObject({ providerId: 'ollama' })
+      const saved = patches.find((p) => p.providers)?.providers?.find((p) => p.id === 'ollama')
+      expect(saved?.models.map((m) => m.id)).toEqual(['qwen3', 'llama3.2'])
+      expect(patches.some((p) => (p.selected as { providerId?: string } | null)?.providerId === 'ollama')).toBe(true)
+      expect(t.text()).toContain('/model lists the others')
+    })
+
+    it('a local server that is not running gets a hint, and setup stays open for later', async () => {
+      const { d, rec } = wizardDeps([], { selected: null, providers: withHosts })
+      d.listModels = async () => {
+        throw new Error('ECONNREFUSED')
+      }
+      const t = fakeIo(['3', null])
+      d.io = t.io
+      expect(await runTui(opts, d)).toBe(0)
+      expect(t.text()).toContain("Ollama isn't answering at http://localhost:11434/v1")
+      expect(t.text()).toContain('No provider set up yet')
+      expect(rec.runs).toHaveLength(0)
+    })
+
+    it('an added endpoint that lists nothing can still be used by typing a model id', async () => {
+      const { d, rec } = wizardDeps(
+        [{ runId: 'x', type: 'done', stopReason: 'end_turn' }],
+        { selected: null, providers: withHosts }
+      )
+      d.listModels = async () => {
+        throw new Error('ECONNREFUSED')
+      }
+      const t = fakeIo(['4', 'my-model', 'hi', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain("My Router didn't answer")
+      expect(rec.runs[0]).toMatchObject({ providerId: 'custom-1', model: 'my-model' })
+    })
+
+    it('the key rows keep their numbers, and Other host follows the hosts', async () => {
+      const { d } = wizardDeps([], { selected: null, providers: withHosts })
+      const t = fakeIo(['5', '', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain('Add a host.')
+    })
   })
 
   it('skipping setup lands in a gated REPL, not the shell', async () => {
@@ -3905,6 +4012,31 @@ describe('version, update check, and /doctor', () => {
     await runTui(opts, d)
     expect(t.text()).toContain('Everything looks healthy.')
     expect(t.text()).toContain('seatbelt')
+  })
+
+  // The probe reads the saved selection; a session started with --provider/--model
+  // runs on a model that selection never names, and /doctor called it "none".
+  it('/doctor counts the model this session runs on as active', async () => {
+    const { d } = deps(done, { selected: null })
+    const t = fakeIo(['/doctor', null])
+    d.io = t.io
+    d.doctor = async () => ({
+      version: '1',
+      nodeVersion: 'v22.11.0',
+      platform: 'darwin arm64',
+      cwd: '/w',
+      settingsPath: '/s.json',
+      sandbox: { backend: 'seatbelt', enforced: true },
+      providers: [{ id: 'anthropic', requiresKey: true, hasKey: true }],
+      active: null,
+      mcp: [],
+      binaries: [],
+      terminal: { tty: true, color: false, columns: 80, term: 'xterm' },
+      update: null
+    })
+    await runTui({ ...opts, providerId: 'anthropic', model: 'claude' }, d)
+    expect(t.text()).not.toContain('none selected')
+    expect(t.text()).toContain('anthropic / claude')
   })
 
   it('/doctor reports rather than throws when the probe fails', async () => {
@@ -5287,6 +5419,90 @@ describe('/rewind', () => {
     other.io = t.io
     await runTui(opts, other)
     expect(t.text()).toContain('rewind is unavailable here')
+  })
+})
+
+describe('edits that land without a prompt', () => {
+  const paintNo = makePainter(false)
+  const preview = (path: string, adds: number, dels: number, extra: Partial<FileDiffPreview> = {}): FileDiffPreview => ({
+    path,
+    diff: [
+      ...Array.from({ length: dels }, (_, i) => ({ type: 'del' as const, text: `old ${i}` })),
+      ...Array.from({ length: adds }, (_, i) => ({ type: 'add' as const, text: `new ${i}` }))
+    ],
+    ...extra
+  })
+
+  it('renderEditSummary names each file with its +/- counts and the command to see the diff', () => {
+    expect(renderEditSummary([preview('src/a.ts', 3, 1)], paintNo)).toBe('  ✎ src/a.ts +3 -1  · /diff last shows the diff')
+    expect(renderEditSummary([preview('src/new.ts', 4, 0, { created: true })], paintNo)).toContain('src/new.ts (new) +4')
+    expect(renderEditSummary([preview('old.ts', 0, 9, { deleted: true })], paintNo)).toContain('old.ts (deleted) -9')
+    expect(renderEditSummary([preview('b.ts', 60, 2, { truncated: true })], paintNo)).toContain('b.ts +60… -2…')
+    expect(renderEditSummary([preview('n.ts', 1, 1, { renamedFrom: 'm.ts' })], paintNo)).toContain('m.ts → n.ts')
+  })
+
+  it('collapses files past the third into a count', () => {
+    const line = renderEditSummary(['a', 'b', 'c', 'd', 'e'].map((f) => preview(f, 1, 0)), paintNo)
+    expect(line).toContain('a +1, b +1, c +1, and 2 more files')
+  })
+
+  const write = (callId: string, ok = true): AgentEvent[] => [
+    {
+      runId: 'x',
+      type: 'tool_start',
+      callId,
+      name: 'edit_file',
+      args: { path: 'src/a.ts' },
+      kind: 'write',
+      preview: [preview('src/a.ts', 2, 1)]
+    },
+    { runId: 'x', type: 'tool_result', callId, name: 'edit_file', ok, output: ok ? 'Edited src/a.ts' : 'no match' }
+  ]
+
+  it('prints the summary after an auto-approved write', async () => {
+    const { d } = deps([...write('c1'), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('✎ src/a.ts +2 -1  · /diff last shows the diff')
+  })
+
+  it('stays quiet for a write approved at a prompt (its diff was already shown), and a failed one', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_approval', callId: 'c1', name: 'edit_file', kind: 'write', summary: 'Edit src/a.ts', args: {} } as AgentEvent,
+      ...write('c1'),
+      ...write('c2', false),
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).not.toContain('✎')
+  })
+
+  it('/diff last shows the diff of the last edit, and /diff last n reaches back', async () => {
+    const { d } = deps([...write('c1'), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', '/diff last', '/diff last 3', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('new 1')
+    expect(t.text()).toContain('only 1 edit so far this session')
+  })
+
+  it('/diff last says so before any edit', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/diff last', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('no edits yet this session')
+  })
+
+  it('parses /diff last [n], leaving plain /diff and /changes as the working-tree summary', () => {
+    expect(parseSlashCommand('/diff', settings())).toEqual({ kind: 'changes' })
+    expect(parseSlashCommand('/changes', settings())).toEqual({ kind: 'changes' })
+    expect(parseSlashCommand('/diff last', settings())).toEqual({ kind: 'changes', last: 1 })
+    expect(parseSlashCommand('/diff last 3', settings())).toEqual({ kind: 'changes', last: 3 })
+    expect(parseSlashCommand('/changes last 0', settings())).toEqual({ kind: 'changes', last: 1 })
   })
 })
 

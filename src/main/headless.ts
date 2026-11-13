@@ -281,7 +281,7 @@ export interface HeadlessStdin {
  * Every flag the headless parser reads. `-p` followed by one of these takes no
  * value from it, so `-p --json` with a piped prompt doesn't run "--json" as the task.
  */
-const HEADLESS_FLAGS = new Set([
+export const HEADLESS_FLAGS = new Set([
   '-p',
   '--prompt',
   '--continue',

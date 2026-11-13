@@ -225,6 +225,7 @@ describe('SettingsModal', () => {
       'Providers & Models',
       'Agent Behavior',
       'Tools',
+      'Customize',
       'MCP Servers',
       'Hooks',
       'Scheduled Runs',
@@ -1586,7 +1587,7 @@ describe('SettingsModal', () => {
       expect(document.documentElement.dataset.theme).toBe('dark')
 
       // Picking a new option applies immediately.
-      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Color theme' }), { target: { value: 'light' } })
       expect(document.documentElement.dataset.theme).toBe('light')
     })
 
@@ -1594,7 +1595,7 @@ describe('SettingsModal', () => {
       const api = installApi()
       const { onSaved, unmount } = renderModal({ theme: 'dark' })
       fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
-      fireEvent.change(screen.getByRole('combobox'), { target: { value: 'light' } })
+      fireEvent.change(screen.getByRole('combobox', { name: 'Color theme' }), { target: { value: 'light' } })
 
       // The choice is saved and propagated upward without a Save step.
       await waitFor(() => expect(onSaved).toHaveBeenCalled())
@@ -1671,5 +1672,31 @@ describe('SettingsModal: web search key', () => {
     const link = screen.getByRole('link', { name: 'api-dashboard.search.brave.com' })
     expect(link).toHaveAttribute('href', 'https://api-dashboard.search.brave.com')
     expect(link).toHaveAttribute('target', '_blank')
+  })
+})
+
+describe('SettingsModal appearance options', () => {
+  afterEach(() => {
+    for (const a of ['data-chat-size', 'data-density', 'data-code-theme']) document.documentElement.removeAttribute(a)
+  })
+
+  it('previews and saves chat text size, density and code theme', async () => {
+    const api = installApi()
+    renderModal()
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }))
+    fireEvent.change(screen.getByRole('combobox', { name: 'Chat text size' }), { target: { value: 'large' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Density' }), { target: { value: 'compact' } })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Code theme' }), { target: { value: 'contrast' } })
+    const root = document.documentElement
+    expect(root.getAttribute('data-chat-size')).toBe('large')
+    expect(root.getAttribute('data-density')).toBe('compact')
+    expect(root.getAttribute('data-code-theme')).toBe('contrast')
+    await waitFor(() =>
+      expect(api.saveSettings.mock.calls.at(-1)?.[0]).toMatchObject({
+        chatFontSize: 'large',
+        density: 'compact',
+        codeTheme: 'contrast'
+      })
+    )
   })
 })

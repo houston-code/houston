@@ -6,6 +6,7 @@ export const PAGE_LABELS = {
   models: 'Providers & Models',
   agent: 'Agent Behavior',
   tools: 'Tools',
+  customize: 'Customize',
   mcp: 'MCP Servers',
   hooks: 'Hooks',
   schedules: 'Scheduled Runs',

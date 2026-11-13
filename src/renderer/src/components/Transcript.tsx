@@ -1,4 +1,15 @@
-import { Fragment, memo, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import {
+  Fragment,
+  memo,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+  type RefObject
+} from 'react'
 import {
   COMPACTION_SUMMARY_PREFIX,
   type ElicitationResult,
@@ -22,6 +33,7 @@ import { ElicitationCard } from './ElicitationCard'
 import { Receipt } from './Receipt'
 import { Markdown } from './Markdown'
 import { Icon, type IconName } from './Icon'
+import { ContextMenu, selectionWithin, useContextMenu, type ContextMenuItem } from './ContextMenu'
 
 /** Visually hidden, but read by screen readers (for the live status region). */
 const SR_ONLY: CSSProperties = {
@@ -56,6 +68,53 @@ function CopyButton({ text, className }: { text: string; className?: string }): 
       <Icon name={copied ? 'check' : 'copy'} />
     </button>
   )
+}
+
+/**
+ * A message's right-click menu: the selected text (when there is some), the whole
+ * message, then that message's own actions. Built when the menu opens, so the
+ * selection it offers is the one the user right-clicked on.
+ */
+function useMessageMenu(
+  text: string,
+  actions: () => ContextMenuItem[]
+): {
+  ref: RefObject<HTMLDivElement | null>
+  onContextMenu: (e: ReactMouseEvent) => void
+  menu: JSX.Element | null
+} {
+  const cm = useContextMenu<HTMLDivElement>()
+  const [selection, setSelection] = useState('')
+  const items: ContextMenuItem[] = []
+  if (cm.at) {
+    if (selection.trim()) items.push({ label: 'Copy selection', onSelect: () => void copyText(selection) })
+    if (text.trim()) items.push({ label: 'Copy message', onSelect: () => void copyText(text) })
+    const own = actions()
+    if (own.length && items.length) own[0] = { ...own[0], separator: true }
+    items.push(...own)
+  }
+  return {
+    ref: cm.ref,
+    onContextMenu: (e) => {
+      setSelection(selectionWithin(cm.ref.current))
+      cm.onContextMenu(e)
+    },
+    menu:
+      cm.at && items.length ? (
+        <ContextMenu anchorRef={cm.ref} at={cm.at} label="Message actions" items={items} onClose={cm.close} />
+      ) : null
+  }
+}
+
+/** The rewind menu's choices, shared by the hover menu and the right-click menu. */
+function rewindItems(target: RewindItemTarget, handlers: RewindHandlers): ContextMenuItem[] {
+  const disabled = handlers.disabled
+  return [
+    { label: 'Edit and resend', onSelect: () => handlers.onEdit(target), disabled },
+    { label: 'Rewind conversation and code', onSelect: () => handlers.onRewind(target, 'both'), disabled },
+    { label: 'Rewind conversation only', onSelect: () => handlers.onRewind(target, 'conversation'), disabled },
+    { label: 'Rewind code only', onSelect: () => handlers.onRewind(target, 'code'), disabled }
+  ]
 }
 
 /** When a message was sent, relative, with the full date and time on hover. */
@@ -104,16 +163,19 @@ function InvokedBubble({
   text,
   invokedAs,
   actions,
+  menu,
   at
 }: {
   text: string
   invokedAs: PromptInvocation
   actions?: ReactNode
+  menu: ReturnType<typeof useMessageMenu>
   at?: string
 }): JSX.Element {
   const mono = invokedAs.kind === 'command'
   return (
-    <div className="msg msg--user msg--invoked">
+    <div className="msg msg--user msg--invoked" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      {menu.menu}
       <CopyButton text={text} className="msg__copy--user" />
       {actions}
       <div className="msg__invoked">
@@ -181,13 +243,17 @@ const UserBubble = memo(function UserBubble({
   rewind
 }: UserBubbleProps): JSX.Element {
   const actions = rewindTarget && rewind ? <RewindMenu target={rewindTarget} handlers={rewind} /> : undefined
+  const menu = useMessageMenu(text, () =>
+    rewindTarget && rewind && !isSummary ? rewindItems(rewindTarget, rewind) : []
+  )
   // The compaction summary is model-authored markdown, not user input. Render it as
   // a labeled, full-width block with its body parsed as markdown rather than the
   // right-aligned plain-text bubble used for the user's own turns.
   if (isSummary) {
     const body = text.slice(COMPACTION_SUMMARY_PREFIX.length).trimStart()
     return (
-      <div className="msg msg--summary">
+      <div className="msg msg--summary" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+        {menu.menu}
         <div className="msg__summary-label">🗜 Summary of earlier conversation</div>
         <div className="msg__body">
           <Markdown text={body} />
@@ -196,11 +262,12 @@ const UserBubble = memo(function UserBubble({
     )
   }
   if (invokedAs && !images?.length)
-    return <InvokedBubble text={text} invokedAs={invokedAs} actions={actions} at={at} />
+    return <InvokedBubble text={text} invokedAs={invokedAs} actions={actions} menu={menu} at={at} />
   return (
     // A message steered into a running turn reads like any other: where it lands in
     // the transcript already shows it arrived mid-run.
-    <div className="msg msg--user">
+    <div className="msg msg--user" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      {menu.menu}
       {text.trim() !== '' && <CopyButton text={text} className="msg__copy--user" />}
       {actions}
       <div className="msg__body">
@@ -255,30 +322,11 @@ function RewindMenu({ target, handlers }: { target: RewindItemTarget; handlers: 
       </button>
       {open && (
         <Popover anchorRef={anchor} onClose={() => setOpen(false)} role="menu" ariaLabel="Rewind" align="right">
-          <button role="menuitem" className="menu__item" onClick={() => pick(() => handlers.onEdit(target))}>
-            Edit and resend
-          </button>
-          <button
-            role="menuitem"
-            className="menu__item"
-            onClick={() => pick(() => handlers.onRewind(target, 'both'))}
-          >
-            Rewind conversation and code
-          </button>
-          <button
-            role="menuitem"
-            className="menu__item"
-            onClick={() => pick(() => handlers.onRewind(target, 'conversation'))}
-          >
-            Rewind conversation only
-          </button>
-          <button
-            role="menuitem"
-            className="menu__item"
-            onClick={() => pick(() => handlers.onRewind(target, 'code'))}
-          >
-            Rewind code only
-          </button>
+          {rewindItems(target, handlers).map((item) => (
+            <button key={item.label} role="menuitem" className="menu__item" onClick={() => pick(item.onSelect)}>
+              {item.label}
+            </button>
+          ))}
         </Popover>
       )}
     </>
@@ -336,6 +384,7 @@ const AssistantMessage = memo(function AssistantMessage({
   reasoning,
   replyNumber,
   onMarkUnreadFrom,
+  onRetry,
   at,
   turn
 }: {
@@ -350,11 +399,18 @@ const AssistantMessage = memo(function AssistantMessage({
   replyNumber?: number
   /** Mark the chat unread from a reply, by that position; absent hides the button. */
   onMarkUnreadFrom?: (replyNumber: number) => void
+  /** On the chat's last reply once the run is over: run its user message again. */
+  onRetry?: () => void
 }): JSX.Element {
   const onMarkUnread =
     onMarkUnreadFrom && replyNumber !== undefined ? (): void => onMarkUnreadFrom(replyNumber) : undefined
+  const menu = useMessageMenu(text, () => [
+    ...(!streaming && onMarkUnread ? [{ label: 'Mark unread from here', onSelect: onMarkUnread }] : []),
+    ...(!streaming && onRetry ? [{ label: 'Retry', onSelect: onRetry }] : [])
+  ])
   return (
-    <div className="msg msg--assistant">
+    <div className="msg msg--assistant" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      {menu.menu}
       {reasoning && (
         <details className="reasoning" open={streaming && !text}>
           <summary className="reasoning__summary">💭 Reasoning</summary>
@@ -377,6 +433,16 @@ const AssistantMessage = memo(function AssistantMessage({
           aria-label="Mark unread from here"
         >
           <Icon name="mail" />
+        </button>
+      )}
+      {!streaming && onRetry && (
+        <button
+          className="msg__copy msg__retry"
+          onClick={onRetry}
+          title="Send your last message again for a new reply"
+          aria-label="Retry"
+        >
+          <Icon name="refresh" />
         </button>
       )}
     </div>
@@ -443,6 +509,7 @@ export function Transcript({
   onOpenConversation,
   rewind,
   onMarkUnreadFrom,
+  onRetryLast,
   newFromId
 }: {
   items: DisplayItem[]
@@ -465,6 +532,11 @@ export function Transcript({
    * (0-based). Absent hides the button.
    */
   onMarkUnreadFrom?: (replyNumber: number) => void
+  /**
+   * Send the chat's last user message again for a new reply, offered on the last
+   * reply. Absent (while a run is going, or with nothing to retry) hides it.
+   */
+  onRetryLast?: () => void
   /**
    * The reply where unseen output starts: a "New" divider goes above it, and the
    * view opens scrolled to it instead of to the bottom.
@@ -559,6 +631,12 @@ export function Transcript({
   // every streamed update), which would otherwise re-render every row each time.
   const approve = useStableCallback(onApprove)
   const markUnreadFrom = useStableCallback(onMarkUnreadFrom)
+  const retryLast = useStableCallback(onRetryLast)
+  // The reply that offers Retry: the chat's last one.
+  const lastReplyId = useMemo(() => {
+    for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'assistant') return items[i].id
+    return undefined
+  }, [items])
   const rewindTo = useStableCallback(rewind?.onRewind)
   const rewindEdit = useStableCallback(rewind?.onEdit)
   const rewindDisabled = rewind?.disabled
@@ -632,6 +710,7 @@ export function Transcript({
                     reasoning={node.item.reasoning}
                     replyNumber={n}
                     onMarkUnreadFrom={markUnreadFrom}
+                    onRetry={node.item.id === lastReplyId ? retryLast : undefined}
                     at={node.item.at}
                     turn={turnStats.get(node.item.id)}
                   />
