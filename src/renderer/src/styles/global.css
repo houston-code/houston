@@ -2016,6 +2016,59 @@ body.is-resizing {
   color: var(--accent) !important;
 }
 
+/* Starter tasks on an empty new chat. */
+.starters {
+  margin-top: 22px;
+  width: min(560px, calc(100% - 32px));
+}
+.welcome .starters__title {
+  font-size: 12.5px;
+  margin-bottom: 10px;
+}
+.starters__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.starters__chip {
+  font: inherit;
+  font-size: 13px;
+  color: var(--text);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 13px;
+  cursor: pointer;
+}
+.starters__chip:hover {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+.starters__chip:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* The checklist's example task, clickable while step 3 is current. */
+.get-started__example {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.get-started__example:hover {
+  text-decoration-style: solid;
+}
+
 /* ---- Onboarding: get-started checklist, connect-a-model, coachmarks ---- */
 .sr-only {
   position: absolute;

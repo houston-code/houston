@@ -116,6 +116,7 @@ import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { useUpdateBanner } from './hooks/useUpdateBanner'
 import { GetStarted } from './components/GetStarted'
+import { StarterPrompts } from './components/StarterPrompts'
 import { ConnectModel, providerShortName } from './components/ConnectModel'
 import { TipHost } from './components/TipHost'
 import { ImageViewer } from './components/ImageViewer'
@@ -127,6 +128,7 @@ import {
   checklistVisible,
   firstTaskExample,
   folderKind,
+  starterPrompts,
   PRE_SEND_TIP_DELAY_MS,
   relevantTips,
   type FolderKind,
@@ -2656,12 +2658,16 @@ export default function App(): JSX.Element {
                 }
                 folderSummary={workspace ? baseName(workspace) : undefined}
                 taskExample={firstTaskExample(workspaceKind)}
+                onUseExample={(task) => prefillComposer(task)}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
                 focusModelStep={connectBackedOut}
               />
             ) : (
               <>
+                {canChat && currentId === null && (
+                  <StarterPrompts prompts={starterPrompts(workspaceKind)} onPick={(task) => prefillComposer(task)} />
+                )}
                 {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
                 {workspace && !settings.selected && (
                   <p className="welcome__hint">Pick a model (set an API key in Settings first).</p>

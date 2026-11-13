@@ -74,6 +74,32 @@ describe('GetStarted', () => {
     ).toBeInTheDocument()
   })
 
+  it('puts the example in the message box when clicked, while step 3 is current', () => {
+    const onUseExample = vi.fn()
+    const { rerender } = render(
+      <GetStarted
+        facts={{ modelReady: true, hasWorkspace: true, hasConversation: false }}
+        taskExample="Explain how this project is organized."
+        onUseExample={onUseExample}
+        onConnectModel={vi.fn()}
+        onChooseFolder={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Explain how this project is organized/ }))
+    expect(onUseExample).toHaveBeenCalledWith('Explain how this project is organized.')
+    // Before a folder is open, step 3 is not current yet: the example is plain text.
+    rerender(
+      <GetStarted
+        facts={{ modelReady: true, hasWorkspace: false, hasConversation: false }}
+        taskExample="Explain how this project is organized."
+        onUseExample={onUseExample}
+        onConnectModel={vi.fn()}
+        onChooseFolder={vi.fn()}
+      />
+    )
+    expect(screen.queryByRole('button', { name: /Explain how this project/ })).toBeNull()
+  })
+
   it('lets a finished step 1 be changed, showing what it connected', () => {
     const p = setup({ modelReady: true }, 'Anthropic · Claude Sonnet 5.5')
     expect(screen.getByText('Anthropic · Claude Sonnet 5.5')).toBeInTheDocument()
