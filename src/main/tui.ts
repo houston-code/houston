@@ -14,6 +14,7 @@ import {
   type ApprovalPolicy,
   type Hook,
   type McpServerConfig,
+  type ModelOption,
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
@@ -1959,30 +1960,101 @@ export function summarizeModels(ids: string[], paint: Painter, max = MENU_MODEL_
   return `${ids.slice(0, max).join(', ')}${paint(`, +${ids.length - max} more`, 'dim')}`
 }
 
-/** Render the provider menu: each keyable provider with its key status, then "Other host…". */
+/**
+ * Hosts that need no key: the local servers (Ollama, LM Studio) and endpoints added
+ * with `houston providers add`. They follow the keyable providers in the /login menu,
+ * where picking one means "use it", not "paste a key".
+ */
+export function hostProviders(settings: AppSettings): ProviderConfig[] {
+  return settings.providers.filter((p) => !p.requiresKey)
+}
+
+/** What asking a host for its models found: the models, or no answer. */
+export type HostProbe = { ok: true; models: ModelOption[] } | { ok: false }
+
+/** True for a base URL on this machine, where "no answer" means "not running". */
+export function isLocalUrl(url: string | undefined): boolean {
+  if (!url) return false
+  try {
+    const host = new URL(url).hostname
+    return host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1'
+  } catch {
+    return false
+  }
+}
+
+/** A host row's status: what the probe found, or what is configured when there was none. */
+type MenuTone = 'green' | 'yellow' | 'dim'
+function hostStatus(
+  p: ProviderConfig,
+  probe: HostProbe | undefined,
+  paint: Painter
+): { status: string; tone: MenuTone; models: string } {
+  const configured = summarizeModels(p.models.map((m) => m.id), paint)
+  if (!probe) return { status: 'no key needed', tone: 'dim', models: configured }
+  if (!probe.ok) {
+    return {
+      status: isLocalUrl(p.baseUrl) ? '✗ not running' : '✗ no answer',
+      tone: 'dim',
+      models: p.models.length ? configured : paint(p.baseUrl ?? '', 'dim')
+    }
+  }
+  if (!probe.models.length) return { status: '! no models', tone: 'yellow', models: paint(p.baseUrl ?? '', 'dim') }
+  return { status: '✓ running', tone: 'green', models: summarizeModels(probe.models.map((m) => m.id), paint) }
+}
+
+/**
+ * Render the provider menu: each keyable provider with its key status, then the
+ * hosts that need no key (with what probing them found), then "Other host…".
+ */
 export function renderProviderMenu(
   providers: ProviderConfig[],
   paint: Painter,
-  opts: { firstRun: boolean; otherHostExamples?: string }
+  opts: {
+    firstRun: boolean
+    otherHostExamples?: string
+    hosts?: Array<{ provider: ProviderConfig; probe?: HostProbe }>
+  }
 ): string {
+  const hosts = opts.hosts ?? []
   const lines: string[] = [
     opts.firstRun
-      ? paint('No model is ready yet. None of your providers has an API key.', 'yellow')
+      ? paint(
+          hosts.length
+            ? 'No model is ready yet. Set up a provider, or pick a local or added host.'
+            : 'No model is ready yet. None of your providers has an API key.',
+          'yellow'
+        )
       : paint('Providers (key status on this profile):', 'bold')
   ]
   const otherLabel = 'Other host…'
   // Align the status column to the widest label (built-in names like "Anthropic
   // (Claude)" and custom-endpoint labels vary in length), so the rows don't stagger.
-  const labelWidth = Math.max(otherLabel.length, ...providers.map((p) => (p.label ?? p.id).length))
-  providers.forEach((p, i) => {
-    const status = p.hasKey ? paint('✓ key set', 'green') : paint('✗ no key ', 'dim')
-    const models = summarizeModels(
-      p.models.map((m) => m.id),
-      paint
+  const labelWidth = Math.max(
+    otherLabel.length,
+    ...providers.map((p) => (p.label ?? p.id).length),
+    ...hosts.map((h) => (h.provider.label ?? h.provider.id).length)
+  )
+  const rows: Array<{ label: string; status: string; tone: MenuTone; models: string }> = [
+    ...providers.map((p) => ({
+      label: p.label ?? p.id,
+      status: p.hasKey ? '✓ key set' : '✗ no key',
+      tone: (p.hasKey ? 'green' : 'dim') as MenuTone,
+      models: summarizeModels(
+        p.models.map((m) => m.id),
+        paint
+      )
+    })),
+    ...hosts.map((h) => ({ label: h.provider.label ?? h.provider.id, ...hostStatus(h.provider, h.probe, paint) }))
+  ]
+  // Pad the status column too, so the model lists line up across both groups.
+  const statusWidth = Math.max(0, ...rows.map((r) => r.status.length))
+  rows.forEach((r, i) => {
+    lines.push(
+      `  ${paint(`${i + 1})`, 'cyan')} ${r.label.padEnd(labelWidth)}  ${paint(r.status.padEnd(statusWidth), r.tone)}  ${r.models}`
     )
-    lines.push(`  ${paint(`${i + 1})`, 'cyan')} ${(p.label ?? p.id).padEnd(labelWidth)}  ${status}  ${models}`)
   })
-  const other = providers.length + 1
+  const other = providers.length + hosts.length + 1
   // Examples come from the caller (only hosts not already configured), so the hint
   // can't advertise a provider that's already listed above. Falls back to the
   // always-available custom-endpoint option.
@@ -2227,6 +2299,83 @@ async function addHostInteractive(
   return { provider }
 }
 
+/** Ask every host for its models at once. Empty when the client can't probe. */
+async function probeHosts(
+  hosts: ProviderConfig[],
+  deps: TuiDeps,
+  paint: Painter
+): Promise<Map<string, HostProbe>> {
+  const probes = new Map<string, HostProbe>()
+  const list = deps.listModels
+  if (!list || !hosts.length) return probes
+  deps.io.out(paint('· checking local and added hosts…\n', 'dim'))
+  const results = await Promise.allSettled(hosts.map((p) => list(p)))
+  results.forEach((r, i) => {
+    probes.set(hosts[i].id, r.status === 'fulfilled' ? { ok: true, models: r.value } : { ok: false })
+  })
+  return probes
+}
+
+/** What to do to get a host that did not answer, or answered with no models, going. */
+function hostHint(p: ProviderConfig, probe: HostProbe | undefined): string {
+  const name = p.label ?? p.id
+  const running = probe?.ok === true
+  if (p.id === 'ollama') {
+    return running
+      ? 'Ollama is running but has no models yet. Pull one (for example: ollama pull qwen3), then /login.'
+      : `Ollama isn't answering at ${p.baseUrl}. Start it (ollama serve), then /login.`
+  }
+  if (p.id === 'lmstudio') {
+    return running
+      ? 'LM Studio is running but has no model loaded. Load one, then /login.'
+      : `LM Studio isn't answering at ${p.baseUrl}. Start its local server, then /login.`
+  }
+  return running ? `${name} answered but listed no models.` : `${name} didn't answer at ${p.baseUrl}.`
+}
+
+/**
+ * Use a host that needs no key: save the models it reported and select one. A built-in
+ * local server that isn't running gets a hint; any other host can still be used by
+ * typing a model id, since not every server lists its models.
+ */
+async function selectHost(
+  provider: ProviderConfig,
+  probe: HostProbe | undefined,
+  deps: TuiDeps,
+  paint: Painter
+): Promise<{ providerId: string; model: string } | null> {
+  const name = provider.label ?? provider.id
+  let models = probe?.ok && probe.models.length ? probe.models : provider.models
+  if (!models.length) {
+    deps.io.out(paint(`· ${hostHint(provider, probe)}\n`, 'yellow'))
+    if (provider.builtIn) return null
+    const typed = await deps.io.readLine(paint(`Model id to use on ${name} (Enter to cancel): `, 'dim'))
+    const id = typed?.trim()
+    if (!id) {
+      deps.io.out(paint('· nothing changed\n', 'dim'))
+      return null
+    }
+    models = [{ id }]
+  }
+  const model = pickDefaultModel({ ...provider, models })
+  if (!model) return null
+  if (deps.updateSettings) {
+    const current = deps.getSettings().providers
+    // Save what the host reported, so the next launch starts on it with no setup.
+    if (models !== provider.models) {
+      deps.updateSettings({ providers: current.map((p) => (p.id === provider.id ? { ...p, models } : p)) })
+    }
+    deps.updateSettings({ selected: { providerId: provider.id, model } })
+  }
+  deps.io.out(
+    paint(
+      `· Model set to ${provider.id} / ${model}.${models.length > 1 ? ' /model lists the others.' : ''}\n`,
+      'dim'
+    )
+  )
+  return { providerId: provider.id, model }
+}
+
 /**
  * The /login driver: pick a provider (or add a host), paste a key (hidden), and have
  * it take effect immediately. Returns the provider+model to switch to when setup
@@ -2247,17 +2396,29 @@ async function runProviderSetup(
   const isMac = deps.isMac ?? process.platform === 'darwin'
   const configured = new Set(settings.providers.map((p) => p.id))
   const addable = catalogForPlatform(isMac).filter((e) => !configured.has(e.id))
+  // Local servers and added endpoints: ask each for its models first, so the menu can
+  // say which are running (and a pick can use one straight away).
+  const hosts = hostProviders(settings)
+  const probes = await probeHosts(hosts, deps, paint)
   deps.io.out(
-    `${renderProviderMenu(providers, paint, { firstRun: o.firstRun, otherHostExamples: otherHostExamples(addable) })}\n`
+    `${renderProviderMenu(providers, paint, {
+      firstRun: o.firstRun,
+      otherHostExamples: otherHostExamples(addable),
+      hosts: hosts.map((p) => ({ provider: p, ...(probes.has(p.id) ? { probe: probes.get(p.id) } : {}) }))
+    })}\n`
   )
   const ans = await deps.io.readLine(paint(o.firstRun ? 'setup › ' : 'login › ', 'green'))
   if (ans === null) return null
-  const choice = parseProviderMenuChoice(ans, providers.length)
+  const choice = parseProviderMenuChoice(ans, providers.length + hosts.length)
   if (choice.kind === 'cancel') {
     deps.io.out(paint('· no provider selected\n', 'dim'))
     return null
   }
   if (choice.kind === 'provider') {
+    if (choice.index >= providers.length) {
+      const host = hosts[choice.index - providers.length]
+      return selectHost(host, probes.get(host.id), deps, paint)
+    }
     const target = providers[choice.index]
     return keyEntryFor(target, deps, paint, providerKeyUrl(target.id))
   }
@@ -2555,6 +2716,12 @@ export interface TuiDeps {
     apply: (conversationId: string, turn: number, mode: RewindMode, text: string) => Promise<RewindResult>
     undo: (conversationId: string) => Promise<UndoRewindResult>
   }
+  /**
+   * Ask a host for its models (with a short timeout), so the setup menu can show
+   * which local servers and added endpoints are running. Rejects when the host does
+   * not answer. Absent ⇒ hosts are listed without a probe.
+   */
+  listModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
   /** The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch shown. */
   gitBranch?: () => Promise<string | null>
   /** Everything different in the working tree, for /changes. */
@@ -3690,7 +3857,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(paint('· checking…\n', 'dim'))
         try {
           const facts = await deps.doctor()
-          deps.io.out(`${renderDoctor(buildDoctorReport(facts), paint)}\n`)
+          // The model this session runs on, which --provider/--model, /model or a
+          // resumed chat may have chosen without touching the saved selection.
+          const active = providerId && model ? { providerId, model } : facts.active
+          deps.io.out(`${renderDoctor(buildDoctorReport({ ...facts, active }), paint)}\n`)
         } catch (e) {
           deps.io.out(paint(`· couldn't run diagnostics: ${(e as Error).message}\n`, 'yellow'))
         }

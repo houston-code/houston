@@ -35,6 +35,8 @@ import {
   resolveModelArg,
   keyableProviders,
   renderProviderMenu,
+  hostProviders,
+  isLocalUrl,
   summarizeModels,
   otherHostExamples,
   promptSetupFields,
@@ -3206,6 +3208,42 @@ describe('/login helpers', () => {
     expect(out).toContain('Other host')
   })
 
+  it('isLocalUrl recognizes this machine only', () => {
+    expect(isLocalUrl('http://localhost:11434/v1')).toBe(true)
+    expect(isLocalUrl('http://127.0.0.1:1234/v1')).toBe(true)
+    expect(isLocalUrl('http://[::1]:8080/v1')).toBe(true)
+    expect(isLocalUrl('https://router.example.com/v1')).toBe(false)
+    expect(isLocalUrl('not a url')).toBe(false)
+    expect(isLocalUrl(undefined)).toBe(false)
+  })
+
+  it('renderProviderMenu lists hosts that need no key, with what probing found, before Other host', () => {
+    const s = settings({
+      providers: [
+        prov({ id: 'anthropic', label: 'Anthropic', requiresKey: true }),
+        prov({ id: 'ollama', label: 'Ollama (local)', requiresKey: false, builtIn: true, baseUrl: 'http://localhost:11434/v1' }),
+        prov({ id: 'lmstudio', label: 'LM Studio (local)', requiresKey: false, builtIn: true, baseUrl: 'http://localhost:1234/v1' }),
+        prov({ id: 'custom-1', label: 'My Router', requiresKey: false, baseUrl: 'https://router.example.com/v1' })
+      ]
+    })
+    const hosts = hostProviders(s)
+    expect(hosts.map((h) => h.id)).toEqual(['ollama', 'lmstudio', 'custom-1'])
+    const out = renderProviderMenu(keyableProviders(s), makePainter(false), {
+      firstRun: true,
+      hosts: [
+        { provider: hosts[0], probe: { ok: true, models: [{ id: 'qwen3' }, { id: 'llama3.2' }] } },
+        { provider: hosts[1], probe: { ok: false } },
+        { provider: hosts[2], probe: { ok: false } }
+      ]
+    })
+    const lines = out.split('\n')
+    expect(lines[0]).toContain('pick a local or added host')
+    expect(lines.find((l) => l.includes('2)'))).toMatch(/Ollama \(local\)\s+✓ running\s+qwen3, llama3\.2/)
+    expect(lines.find((l) => l.includes('3)'))).toContain('✗ not running')
+    expect(lines.find((l) => l.includes('4)'))).toContain('✗ no answer')
+    expect(lines.find((l) => l.includes('5)'))).toContain('Other host')
+  })
+
   it('summarizeModels caps the preview and collapses the rest to +N more', () => {
     const paint = makePainter(false)
     expect(summarizeModels([], paint)).toBe('no models yet')
@@ -3324,6 +3362,73 @@ describe('runTui — /login & keyless start', () => {
     // The selection is persisted so the next launch skips setup.
     expect(patches.some((p) => (p.selected as { providerId?: string } | null)?.providerId === 'anthropic')).toBe(true)
     expect(t.text()).toContain('Key saved for anthropic')
+  })
+
+  describe('local and added hosts', () => {
+    const withHosts = [
+      ...twoProviders,
+      prov({ id: 'ollama', label: 'Ollama (local)', requiresKey: false, builtIn: true, baseUrl: 'http://localhost:11434/v1' }),
+      prov({ id: 'custom-1', label: 'My Router', requiresKey: false, baseUrl: 'https://router.example.com/v1' })
+    ]
+
+    it('probes them, and picking a running one saves its models and starts on it', async () => {
+      const { d, rec, patches } = wizardDeps(
+        [{ runId: 'x', type: 'done', stopReason: 'end_turn' }],
+        { selected: null, providers: withHosts }
+      )
+      const probed: string[] = []
+      d.listModels = async (p) => {
+        probed.push(p.id)
+        if (p.id === 'ollama') return [{ id: 'qwen3' }, { id: 'llama3.2' }]
+        throw new Error('ECONNREFUSED')
+      }
+      const t = fakeIo(['3', 'hi', null])
+      d.io = t.io
+      expect(await runTui(opts, d)).toBe(0)
+      expect(probed).toEqual(['ollama', 'custom-1'])
+      expect(t.text()).toContain('✓ running')
+      expect(rec.runs[0]).toMatchObject({ providerId: 'ollama' })
+      const saved = patches.find((p) => p.providers)?.providers?.find((p) => p.id === 'ollama')
+      expect(saved?.models.map((m) => m.id)).toEqual(['qwen3', 'llama3.2'])
+      expect(patches.some((p) => (p.selected as { providerId?: string } | null)?.providerId === 'ollama')).toBe(true)
+      expect(t.text()).toContain('/model lists the others')
+    })
+
+    it('a local server that is not running gets a hint, and setup stays open for later', async () => {
+      const { d, rec } = wizardDeps([], { selected: null, providers: withHosts })
+      d.listModels = async () => {
+        throw new Error('ECONNREFUSED')
+      }
+      const t = fakeIo(['3', null])
+      d.io = t.io
+      expect(await runTui(opts, d)).toBe(0)
+      expect(t.text()).toContain("Ollama isn't answering at http://localhost:11434/v1")
+      expect(t.text()).toContain('No provider set up yet')
+      expect(rec.runs).toHaveLength(0)
+    })
+
+    it('an added endpoint that lists nothing can still be used by typing a model id', async () => {
+      const { d, rec } = wizardDeps(
+        [{ runId: 'x', type: 'done', stopReason: 'end_turn' }],
+        { selected: null, providers: withHosts }
+      )
+      d.listModels = async () => {
+        throw new Error('ECONNREFUSED')
+      }
+      const t = fakeIo(['4', 'my-model', 'hi', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain("My Router didn't answer")
+      expect(rec.runs[0]).toMatchObject({ providerId: 'custom-1', model: 'my-model' })
+    })
+
+    it('the key rows keep their numbers, and Other host follows the hosts', async () => {
+      const { d } = wizardDeps([], { selected: null, providers: withHosts })
+      const t = fakeIo(['5', '', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain('Add a host.')
+    })
   })
 
   it('skipping setup lands in a gated REPL, not the shell', async () => {
@@ -3905,6 +4010,31 @@ describe('version, update check, and /doctor', () => {
     await runTui(opts, d)
     expect(t.text()).toContain('Everything looks healthy.')
     expect(t.text()).toContain('seatbelt')
+  })
+
+  // The probe reads the saved selection; a session started with --provider/--model
+  // runs on a model that selection never names, and /doctor called it "none".
+  it('/doctor counts the model this session runs on as active', async () => {
+    const { d } = deps(done, { selected: null })
+    const t = fakeIo(['/doctor', null])
+    d.io = t.io
+    d.doctor = async () => ({
+      version: '1',
+      nodeVersion: 'v22.11.0',
+      platform: 'darwin arm64',
+      cwd: '/w',
+      settingsPath: '/s.json',
+      sandbox: { backend: 'seatbelt', enforced: true },
+      providers: [{ id: 'anthropic', requiresKey: true, hasKey: true }],
+      active: null,
+      mcp: [],
+      binaries: [],
+      terminal: { tty: true, color: false, columns: 80, term: 'xterm' },
+      update: null
+    })
+    await runTui({ ...opts, providerId: 'anthropic', model: 'claude' }, d)
+    expect(t.text()).not.toContain('none selected')
+    expect(t.text()).toContain('anthropic / claude')
   })
 
   it('/doctor reports rather than throws when the probe fails', async () => {

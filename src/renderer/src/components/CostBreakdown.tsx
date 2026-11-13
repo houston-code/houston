@@ -7,8 +7,9 @@ import { ContextBreakdown } from './ContextBreakdown'
 const MAX_AGENT_ROWS = 8
 
 /**
- * The context/usage chip in the control bar, and — when there's more than one
- * number worth seeing — a click-to-open breakdown.
+ * The context/usage chip in the control bar: how full the context is (a small bar
+ * and "used / maximum"), what the chat has cost so far, and a click-to-open
+ * breakdown by model.
  *
  * The aggregate meter answered "how full is the context, and what has this cost",
  * but not *which model* spent it (a subagent or compaction pass often runs on a
@@ -41,15 +42,10 @@ export function CostBreakdown({
     if (openSignal > 0) setOpen(true)
   }, [openSignal])
 
-  // A breakdown is only worth a click when there's something the inline chip does
-  // not already show: more than one model, or cache reads.
-  // Plus one row for whatever the per-model tallies don't cover (usage recorded before
-  // Houston kept them), so the rows add up to the total printed under them.
+  // One row per model, plus one for whatever the per-model tallies don't cover (usage
+  // recorded before Houston kept them), so the rows add up to the total printed under them.
   const earlier = unattributedUsage(usage)
   const rows = [...(usage.perModel ?? []), ...(earlier ? [earlier] : [])]
-  // What fills the context is always worth a click once it is known.
-  const hasDetail =
-    rows.length > 1 || (usage.cacheRead ?? 0) > 0 || agents.length > 0 || usage.contextParts !== undefined
   const agentRows = agents.slice(0, MAX_AGENT_ROWS)
   const agentRest = agents.slice(MAX_AGENT_ROWS)
 
@@ -70,10 +66,13 @@ export function CostBreakdown({
     }
   }, [open])
 
-  const inlineText =
+  // Context as "used/maximum", then what the chat cost. A model with no known price
+  // (a local one) costs nothing to show, so the chip says how much it wrote instead.
+  const contextText =
     meterPct !== null
-      ? `${formatTokens(usage.context)}/${formatTokens(contextWindow!)} · ${meterPct}%`
+      ? `${formatTokens(usage.context)}/${formatTokens(contextWindow!)}`
       : `${formatTokens(usage.context)} ctx`
+  const spendText = usage.cost > 0 ? formatUsd(usage.cost) : `${formatTokens(usage.output)} out`
 
   const meter =
     meterPct !== null ? (
@@ -88,19 +87,7 @@ export function CostBreakdown({
       : `Context: ${usage.context.toLocaleString()} tokens`) +
     `\nOutput this conversation: ${usage.output.toLocaleString()} tokens` +
     (usage.cost > 0 ? `\nEstimated cost: ${formatUsd(usage.cost)} (approximate)` : '') +
-    (hasDetail ? '\nClick for what fills the context and the per-model breakdown' : '')
-
-  // Nothing extra to show → the plain, non-interactive chip, exactly as before.
-  if (!hasDetail) {
-    return (
-      <span className="usage" title={tooltip}>
-        {meter}
-        <span className="usage__text">
-          {inlineText} · {formatTokens(usage.output)} out
-        </span>
-      </span>
-    )
-  }
+    '\nClick for what fills the context and the per-model breakdown'
 
   return (
     <div className="usage-wrap" ref={ref}>
@@ -109,13 +96,14 @@ export function CostBreakdown({
         className="usage usage--button"
         title={tooltip}
         aria-expanded={open}
-        aria-label="Cost breakdown"
+        aria-label={`Usage: context ${contextText}${meterPct !== null ? ` (${meterPct}%)` : ''}, ${
+          usage.cost > 0 ? `cost ${spendText}` : spendText
+        }. Show breakdown`}
         onClick={() => setOpen((v) => !v)}
       >
         {meter}
-        <span className="usage__text">
-          {inlineText} · {formatTokens(usage.output)} out
-        </span>
+        <span className="usage__text">{contextText}</span>
+        <span className="usage__cost">{spendText}</span>
       </button>
       {open && (
         <div className="usage-panel" role="dialog" aria-label="Cost breakdown">

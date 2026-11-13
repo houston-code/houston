@@ -11,13 +11,26 @@ import type { SessionUsage } from '@shared/usage'
 const base: SessionUsage = { context: 12_000, output: 3_000, cost: 0.42 }
 
 describe('CostBreakdown', () => {
-  it('is a plain chip (no button) when there is nothing extra to show', () => {
-    render(<CostBreakdown usage={base} contextWindow={200_000} meterPct={6} meterClass="" />)
-    expect(screen.queryByRole('button', { name: 'Cost breakdown' })).toBeNull()
-    // One model and no cache is not a breakdown worth a click either.
-    const oneModel = { ...base, output: 50, cost: 0.01, perModel: [row('claude')] }
+  it('shows context as used/maximum and the cost as text, and always opens the breakdown', () => {
+    // One model and no cache: the breakdown still opens (the chip is how you get to it).
+    const oneModel = { ...base, perModel: [row('claude', { cost: 0.42, outputTokens: 3_000 })] }
     render(<CostBreakdown usage={oneModel} contextWindow={200_000} meterPct={6} meterClass="" />)
-    expect(screen.queryByRole('button', { name: 'Cost breakdown' })).toBeNull()
+    const btn = screen.getByRole('button', { name: /Show breakdown/ })
+    expect(btn).toHaveTextContent('12k/200k')
+    expect(btn).toHaveTextContent('$0.42')
+    expect(btn).toHaveAccessibleName('Usage: context 12k/200k (6%), cost $0.420. Show breakdown')
+    fireEvent.click(btn)
+    const panel = screen.getByRole('dialog', { name: 'Cost breakdown' })
+    expect(within(panel).getByText('Context: 12,000 of 200,000 tokens (6%)')).toBeInTheDocument()
+    expect(within(panel).getByText('claude')).toBeInTheDocument()
+  })
+
+  it('shows output tokens instead of a cost for a model with no known price', () => {
+    render(<CostBreakdown usage={{ ...base, cost: 0 }} contextWindow={null} meterPct={null} meterClass="" />)
+    const btn = screen.getByRole('button', { name: /Show breakdown/ })
+    expect(btn).toHaveTextContent('12k ctx')
+    expect(btn).toHaveTextContent('3k out')
+    expect(btn).not.toHaveTextContent('$')
   })
 
   it('opens a per-model breakdown when more than one model billed', () => {
@@ -28,7 +41,7 @@ describe('CostBreakdown', () => {
       perModel: [row('claude', { cost: 0.4, cacheReadTokens: 8_000 }), row('haiku', { cost: 0.02 })]
     }
     render(<CostBreakdown usage={usage} contextWindow={200_000} meterPct={6} meterClass="" />)
-    fireEvent.click(screen.getByRole('button', { name: 'Cost breakdown' }))
+    fireEvent.click(screen.getByRole('button', { name: /Show breakdown/ }))
     const panel = screen.getByRole('dialog', { name: 'Cost breakdown' })
     expect(within(panel).getByText('claude')).toBeInTheDocument()
     expect(within(panel).getByText('haiku')).toBeInTheDocument() // the cheaper subagent model, shown apart
@@ -44,7 +57,7 @@ describe('CostBreakdown', () => {
       perModel: [row('claude', { cacheReadTokens: 9_000 })]
     }
     render(<CostBreakdown usage={usage} contextWindow={200_000} meterPct={6} meterClass="" />)
-    expect(screen.getByRole('button', { name: 'Cost breakdown' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Show breakdown/ })).toBeInTheDocument()
   })
 
   it('adds an "Earlier models" row for usage recorded before the per-model breakdown', () => {
@@ -57,7 +70,7 @@ describe('CostBreakdown', () => {
       perModel: [row('claude-haiku-4-5', { outputTokens: 691, cost: 0.2279633, cacheReadTokens: 724_768 })]
     }
     render(<CostBreakdown usage={usage} contextWindow={200_000} meterPct={61} meterClass="" />)
-    fireEvent.click(screen.getByRole('button', { name: 'Cost breakdown' }))
+    fireEvent.click(screen.getByRole('button', { name: /Show breakdown/ }))
     const panel = screen.getByRole('dialog', { name: 'Cost breakdown' })
     const earlier = within(panel).getByText('Earlier models').closest('.usage-panel__row') as HTMLElement
     expect(earlier).not.toBeNull()
@@ -68,14 +81,14 @@ describe('CostBreakdown', () => {
   it('adds no "Earlier models" row when the rows already add up', () => {
     const usage: SessionUsage = { ...base, output: 100, cost: 0.02, perModel: [row('claude'), row('haiku')] }
     render(<CostBreakdown usage={usage} contextWindow={200_000} meterPct={6} meterClass="" />)
-    fireEvent.click(screen.getByRole('button', { name: 'Cost breakdown' }))
+    fireEvent.click(screen.getByRole('button', { name: /Show breakdown/ }))
     expect(screen.queryByText('Earlier models')).toBeNull()
   })
 
   it('toggles closed again, and closes on Escape', () => {
     const usage: SessionUsage = { ...base, perModel: [row('claude'), row('haiku')] }
     render(<CostBreakdown usage={usage} contextWindow={200_000} meterPct={6} meterClass="" />)
-    const btn = screen.getByRole('button', { name: 'Cost breakdown' })
+    const btn = screen.getByRole('button', { name: /Show breakdown/ })
     fireEvent.click(btn)
     expect(screen.getByRole('dialog')).toBeInTheDocument()
     fireEvent.keyDown(document, { key: 'Escape' })
@@ -89,7 +102,7 @@ describe('CostBreakdown', () => {
       contextParts: { system: 4000, tools: 5000, instructions: 1000, memory: 0, conversation: 1500, toolResults: 500 }
     }
     render(<CostBreakdown usage={usage} contextWindow={200_000} meterPct={6} meterClass="" />)
-    fireEvent.click(screen.getByRole('button', { name: 'Cost breakdown' }))
+    fireEvent.click(screen.getByRole('button', { name: /Show breakdown/ }))
     const ctx = screen.getByRole('region', { name: 'What fills the context' })
     expect(within(ctx).getByText('Context: 12,000 of 200,000 tokens (6%)')).toBeInTheDocument()
     expect(within(ctx).getByText('Tool definitions')).toBeInTheDocument()

@@ -101,12 +101,15 @@ export function normalizeRelPath(path: string): string {
 export function FilesPanel({
   workspace,
   onClose,
-  initialPath
+  initialPath,
+  initialLine
 }: {
   workspace: string | null
   onClose: () => void
   /** A workspace-relative file to reveal on open: its folders expanded, the file selected and previewed. */
   initialPath?: string
+  /** With `initialPath`: the 1-based line to scroll to and mark in its preview. */
+  initialLine?: number
 }): JSX.Element {
   // Children keyed by directory path ('' is the workspace root). Presence of a key
   // means "loaded" — undefined is still-loading, [] is a genuinely empty folder.
@@ -335,7 +338,13 @@ export function FilesPanel({
           </div>
 
           <div className="files-panel__preview">
-            <FilePreview workspace={workspace ?? ''} path={selected} onOpen={onOpen} />
+            <FilePreview
+              workspace={workspace ?? ''}
+              path={selected}
+              onOpen={onOpen}
+              // Only the file the panel was opened on carries the line.
+              line={initialPath && selected === normalizeRelPath(initialPath) ? initialLine : undefined}
+            />
           </div>
         </div>
       </aside>
