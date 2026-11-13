@@ -616,12 +616,18 @@ const api = {
   /** Report the UI state the native menu reflects (e.g. whether a chat is open). */
   setMenuState: (state: MenuState): void => ipcRenderer.send(IPC.menuState, state),
 
-  /** Subscribe to the native menu's "Settings…" item. Returns an unsubscribe fn. */
-  onOpenSettings: (cb: () => void): (() => void) => {
-    const listener = (): void => cb()
+  /**
+   * Subscribe to the native menu's "Settings…" item, and to houston://settings links,
+   * which name a page. Returns an unsubscribe fn.
+   */
+  onOpenSettings: (cb: (page?: string) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, page?: unknown): void =>
+      cb(typeof page === 'string' ? page : undefined)
     ipcRenderer.on(IPC.menuOpenSettings, listener)
     return () => ipcRenderer.removeListener(IPC.menuOpenSettings, listener)
   },
+  /** Tell main this window's listeners are attached, so held houston:// links can arrive. */
+  deepLinksReady: (): void => ipcRenderer.send(IPC.deepLinkReady),
 
   // Live preview dock (started dev servers; see main/preview.ts)
   /** List the dev servers detected from the agent's started background shells. */

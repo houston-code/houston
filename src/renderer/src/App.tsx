@@ -164,6 +164,7 @@ import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
 import { FindBar } from './components/FindBar'
 import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
+import { pageForWords } from './components/settings/pageIds'
 import type { WhatsNew } from '@shared/update'
 import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutRules } from './lib/ruleToast'
 
@@ -486,8 +487,17 @@ export default function App(): JSX.Element {
     })
   }, [])
 
-  // Open the Settings modal when chosen from the native app menu (macOS ⌘,).
-  useEffect(() => window.api.onOpenSettings(() => setSettingsOpen(true)), [])
+  // Open the Settings modal when chosen from the native app menu (macOS ⌘,), or from
+  // a houston://settings/<page> link, which names the page to show.
+  useEffect(
+    () =>
+      window.api.onOpenSettings((page) => {
+        const named = page ? pageForWords(page) : null
+        if (named) setSettingsSection(named)
+        setSettingsOpen(true)
+      }),
+    []
+  )
 
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
@@ -2768,6 +2778,10 @@ export default function App(): JSX.Element {
       }),
     [currentId, workspace, sidebarCollapsed, terminalOpen, previewOpen, dockTab, sideChatShown]
   )
+  // Every listener a houston:// link can reach (menu commands, chat open requests,
+  // Settings) is subscribed by the effects above, which React runs first, so links
+  // main held while this window loaded can be delivered now.
+  useEffect(() => window.api.deepLinksReady?.(), [])
 
   // Global keyboard shortcuts (see lib/shortcuts.ts for the registry): ⌘N new chat,
   // ⇧⌘N new chat in another folder, ⌘K palette, ⌘1–9 / ⌃Tab switch chats, Shift+Tab

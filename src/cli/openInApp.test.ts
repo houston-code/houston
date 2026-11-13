@@ -1,0 +1,83 @@
+import { describe, expect, it, vi } from 'vitest'
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
+import { parseDeepLink } from '@shared/deepLink'
+import { runOpenCommand, urlOpener, type OpenInAppDeps, resolveDirectory, launchDetached } from './openInApp'
+
+// The working directory as this platform spells it (D:\work on Windows), since the
+// command resolves paths with the platform's own rules.
+const WORK = resolve('/work')
+
+function deps(over: Partial<OpenInAppDeps> = {}): OpenInAppDeps & { out: ReturnType<typeof vi.fn>; err: ReturnType<typeof vi.fn> } {
+  return {
+    cwd: WORK,
+    platform: 'darwin',
+    resolveDirectory: (p) => (p.startsWith(WORK) ? p : null),
+    launch: vi.fn(async () => {}),
+    out: vi.fn(),
+    err: vi.fn(),
+    ...over
+  } as OpenInAppDeps & { out: ReturnType<typeof vi.fn>; err: ReturnType<typeof vi.fn> }
+}
+
+describe('houston open', () => {
+  it('opens the current folder by default through the OS URL handler', async () => {
+    const d = deps()
+    expect(await runOpenCommand([], d)).toBe(0)
+    const [cmd, args] = (d.launch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[]]
+    expect(cmd).toBe('open')
+    expect(parseDeepLink(args[0])).toEqual({ type: 'open-folder', path: WORK })
+  })
+
+  it('resolves a relative folder against the working directory', async () => {
+    const d = deps()
+    expect(await runOpenCommand(['sub dir'], d)).toBe(0)
+    const [, args] = (d.launch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[]]
+    expect(parseDeepLink(args[args.length - 1])).toEqual({ type: 'open-folder', path: join(WORK, 'sub dir') })
+  })
+
+  it('refuses a path that is not a folder, extra arguments, and unknown flags', async () => {
+    expect(await runOpenCommand([resolve('/elsewhere')], deps())).toBe(1)
+    expect(await runOpenCommand(['a', 'b'], deps())).toBe(2)
+    expect(await runOpenCommand(['--force'], deps())).toBe(2)
+  })
+
+  it('reports a launcher failure', async () => {
+    const d = deps({ launch: async () => Promise.reject(new Error('spawn xdg-open ENOENT')) })
+    expect(await runOpenCommand([], d)).toBe(1)
+    expect(d.err.mock.calls.flat().join('')).toMatch(/Could not open the Houston app/)
+  })
+
+  it('passes the link as one argument on every platform, never through a shell', () => {
+    const url = 'houston://open?path=%2Fa%26b'
+    expect(urlOpener('darwin', url)).toEqual({ cmd: 'open', args: [url] })
+    expect(urlOpener('linux', url)).toEqual({ cmd: 'xdg-open', args: [url] })
+    expect(urlOpener('win32', url)).toEqual({ cmd: 'rundll32.exe', args: ['url.dll,FileProtocolHandler', url] })
+  })
+})
+
+describe('resolveDirectory', () => {
+  it('returns the canonical path of an existing folder, and null for a file or a missing path', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-open-'))
+    try {
+      const file = join(dir, 'note.txt')
+      writeFileSync(file, 'x')
+      expect(resolveDirectory(dir)).toBe(realpathSync(dir))
+      expect(resolveDirectory(file)).toBeNull()
+      expect(resolveDirectory(join(dir, 'missing'))).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('launchDetached', () => {
+  it('resolves once the program has started', async () => {
+    await expect(launchDetached(process.execPath, ['-e', ''])).resolves.toBeUndefined()
+  })
+
+  it('rejects when the program cannot be started', async () => {
+    await expect(launchDetached(join(tmpdir(), 'houston-no-such-binary'), [])).rejects.toThrow()
+  })
+})

@@ -67,6 +67,8 @@ export const IPC = {
   updateCancelDownload: 'update:cancelDownload',
   /** Main → renderer: the native menu's "Settings…" item was chosen — open the modal. */
   menuOpenSettings: 'menu:openSettings',
+  /** Renderer → main: its listeners are attached, so held houston:// links can be delivered. */
+  deepLinkReady: 'deepLink:ready',
   /** Main → renderer: a native File-menu command was chosen (see MenuCommand). */
   menuCommand: 'menu:command',
   /** Renderer → main: UI state the native menu depends on (see MenuState). */

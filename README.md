@@ -1092,6 +1092,11 @@ the interactive setup list shows them, and any endpoint added with
 server is one pick away. An unknown flag or a stray argument stops with an
 error and the usage rather than being ignored.
 
+`houston open [dir]` hands a folder (the current one by default) to the desktop
+app as a new chat, through a `houston://open` link. The app also opens
+`houston://chat/<id>` and `houston://settings/<page>` links; it asks before opening
+a folder it hasn't seen, and a link can never run a command or send a message.
+
 **Custom auth headers.** A provider or MCP server can carry custom HTTP headers
 (a gateway bearer token, attribution headers), and a stdio MCP server can carry
 env values. Like keys, their values are kept in the OS keychain by the desktop
