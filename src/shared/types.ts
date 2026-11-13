@@ -796,6 +796,12 @@ export interface AppSettings {
   attentionSounds?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
+  /** Text size in the chat transcript. Absent = 'default'. */
+  chatFontSize?: ChatFontSize
+  /** Spacing in the chat transcript. Absent = 'comfortable'. */
+  density?: Density
+  /** Colors for code blocks, the Files preview, and diffs. Absent = 'default'. */
+  codeTheme?: CodeTheme
   /**
    * The interactive terminal's color theme. Separate from `theme` above, which is
    * the desktop app's light/dark preference: the terminal's palettes are ANSI
@@ -941,6 +947,13 @@ export interface IntegrationsInfo {
 
 /** The user's answer to the one-time "global rules moved" notice. */
 export type LegacyRulesChoice = 'import' | 'keep'
+
+/** Chat text size (Settings > Appearance). */
+export type ChatFontSize = 'small' | 'default' | 'large'
+/** Transcript spacing (Settings > Appearance). */
+export type Density = 'comfortable' | 'compact'
+/** Code block and diff colors (Settings > Appearance). */
+export type CodeTheme = 'default' | 'contrast' | 'muted'
 
 /**
  * An API key found in the desktop app's environment for a provider with no stored key,

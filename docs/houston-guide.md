@@ -577,7 +577,7 @@ long as it needs to be.
 | `Shift-Enter`, `Ctrl-J`, `Alt-Enter` | insert a line break (`Shift-Enter` where the terminal reports it) |
 | `Up` / `Down` | move between lines, then step through past messages |
 | `Ctrl-R` | search past messages (type to filter, `Ctrl-R` again for older, `Enter` to accept, `Esc` to cancel) |
-| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`) |
+| `Tab` | complete a slash command or an `@`-file mention (fuzzy: `@tuied` finds `src/tui-editor.ts`). Typing `@` already lists the matching files under the message, as `/` lists commands |
 | `Ctrl-A` / `Ctrl-E` | start / end of line |
 | `Alt-B` / `Alt-F` | move a word |
 | `Ctrl-W` | delete the word before the cursor |
@@ -985,7 +985,12 @@ A single reply also has an output limit.
 | `/undo` | puts back the files the last turn changed |
 | `/redo` | re-applies them |
 | `/changes` (or `/diff`) | summarizes everything different in the working tree: each file with its status and lines gained and lost, plus a total |
+| `/diff last [n]` | *terminal:* shows the diff of this session's last edit, or the one `n` edits back |
 
+- **Edits you didn't approve one by one still show up.** In the terminal, an edit that
+  lands without a prompt (auto-edit, full auto, or a saved rule) prints one line naming
+  each file with its lines added and removed, like `✎ src/app.ts +12 -3`, and
+  `/diff last` shows the whole diff.
 - **Nothing to set up.** Houston snapshots every write before it happens.
 - **Best with auto-approve modes**, where edits land without a prompt: "that was
   wrong, put it back" is one word rather than a hand revert.
@@ -1568,7 +1573,8 @@ A skill is a reusable bundle of instructions the agent loads only when a task ne
 it.
 
 **Create one** at `.houston/skills/<name>/SKILL.md`, with frontmatter `name` and
-`description`, and a body of instructions.
+`description`, and a body of instructions. Put it in `~/.houston/skills/<name>/` to
+have it in every project; a project's skill wins if both use the same name.
 
 **How it's loaded (progressive disclosure):**
 
@@ -1592,7 +1598,8 @@ main conversation clean.
 
 **Define one** with a Markdown file at `.houston/agents/<name>.md`: frontmatter
 `description` plus a system-prompt body. The main agent dispatches it by name with
-`dispatch_agent`.
+`dispatch_agent`. One in `~/.houston/agents/` is available in every project; a
+project's agent wins if both use the same name.
 
 ### Frontmatter options
 
@@ -1603,6 +1610,7 @@ main conversation clean.
 | `model:` | pins it to a (usually cheaper) sibling model from the current provider; unknown ids fall back to the chat's model |
 | `max_turns:` | a hard limit on its steps (a whole number up to 500) that never extends |
 | `write: true` | gives it the writable tier (see below) |
+| `disabled: true` | switches it off without deleting it (also works for skills and commands) |
 
 ### Read-only and writable
 
@@ -1685,6 +1693,29 @@ A subagent works under the same step budget as the main agent:
 `/agent <name> <task>` hands a job to one of your agents directly, instead of
 describing it and hoping the right one gets picked. It works in the desktop app and
 the terminal. `/agent` alone (or `/agents`) lists them.
+
+## Customize page
+
+**Settings > Customize** gathers what you can add to Houston without code:
+
+- **Skills, commands and agents.** Every skill, custom command, and custom agent from
+  the project's `.houston/` folder and your own `~/.houston/`, each marked **This
+  project** or **All projects**. When both have one with the same name, the project's
+  is used, and yours says so.
+  - **Create** one from a starter template: type a name (letters, digits, `-` or
+    `_`), choose where it goes, and it opens in your editor. Nothing is overwritten.
+  - **Open** opens its file in your default app for that file type.
+  - The checkbox switches it **off** or on. Off adds `disabled: true` to the file's
+    frontmatter (on removes it), so it stays on disk but isn't offered in any client.
+  - **Delete** asks first, then moves the file (or a skill's whole folder) to the
+    system trash.
+- **Instruction files.** The rules files Houston reads at the start of each run, in
+  load order: `~/.houston/AGENTS.md`, the project's `AGENTS.md` and `CLAUDE.md`, and
+  nested ones in subfolders. One shortened to fit the rules budget is marked. **Open**
+  opens it in your default app.
+
+A project file that links outside the project can't be switched, opened, or deleted
+from here.
 
 ## Spawn separate sessions
 
@@ -2604,10 +2635,18 @@ sidebar) or `Esc` returns to the chat.
 
 | Group | Pages |
 | --- | --- |
-| **AI** | Providers & Models, Agent Behavior, Tools, MCP Servers, Hooks, Memory |
+| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Memory |
 | **App** | General, Appearance, Keyboard |
 | **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (whether new chats start in a worktree, and additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |
+
+**Appearance** sets how the app looks, and every change shows at once:
+
+- **Color theme:** System (follows your OS), Dark, or Light.
+- **Chat text size:** Small, Default, or Large. Scales the whole chat, code included.
+- **Density:** Comfortable, or Compact for less space between messages.
+- **Code theme:** Default, High contrast, or Muted, for code blocks, the Files preview,
+  and diffs. Every theme keeps code readable in both light and dark.
 
 **Check for Updates…** is also in the app menu on macOS, and the Help menu on Windows
 and Linux.

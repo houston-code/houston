@@ -22,6 +22,7 @@ import {
   LanguageServersSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
+import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import {
@@ -167,6 +168,23 @@ export const PAGES: SettingsPage[] = [
     ]
   },
   {
+    id: 'customize',
+    label: PAGE_LABELS.customize,
+    group: 'AI',
+    sections: [
+      {
+        id: 'customizations',
+        Component: CustomizeSection,
+        keywords: ['skills', 'commands', 'slash commands', 'agents', 'subagents', 'templates', 'extensions', 'disable', 'enable']
+      },
+      {
+        id: 'instruction-files',
+        Component: InstructionFilesSection,
+        keywords: ['rules', 'agents.md', 'claude.md', 'instructions', 'project rules', 'global rules']
+      }
+    ]
+  },
+  {
     id: 'mcp',
     label: PAGE_LABELS.mcp,
     group: 'AI',
@@ -245,7 +263,7 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
         Component: AppearanceSection,
         keywords: [
           'theme',
@@ -254,6 +272,12 @@ export const PAGES: SettingsPage[] = [
           'colors',
           'visuals',
           'html',
+          'font size',
+          'text size',
+          'density',
+          'compact',
+          'code theme',
+          'syntax',
           'transcript',
           'tool output',
           'expand',

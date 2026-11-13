@@ -131,6 +131,7 @@ import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
+import { registerCustomizeIpc } from './customizeIpc'
 import {
   getRepoInfo,
   createWorktree,
@@ -898,6 +899,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return []
     }
   })
+
+  // Settings > Customize (create, switch off, open, trash; instruction files).
+  registerCustomizeIpc(handle)
 
   handle(IPC.settingsGet, () => getSettings())
 

@@ -382,7 +382,7 @@ export const GROUPS = [
   },
   {
     title: "Extending Houston",
-    slugs: ["skills", "custom-subagents", "hooks", "plugins", "mcp-servers", "github-tools"],
+    slugs: ["customize-page", "skills", "custom-subagents", "hooks", "plugins", "mcp-servers", "github-tools"],
   },
   {
     title: "Reference",
