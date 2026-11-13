@@ -252,7 +252,18 @@ export type ProviderStreamEvent =
   | { type: 'text'; text: string }
   | { type: 'reasoning'; text: string }
   | { type: 'tool_call'; call: ToolCall }
-  | { type: 'done'; stopReason: StopReason; usage?: TokenUsage; reasoning?: ReasoningBlock[] }
+  | {
+      type: 'done'
+      stopReason: StopReason
+      usage?: TokenUsage
+      reasoning?: ReasoningBlock[]
+      /**
+       * Set when the provider ended the reply itself instead of the model finishing it:
+       * a refusal, a content or safety filter. The provider's own reason (`refusal`,
+       * `content_filter`, `SAFETY`, ...). The loop reports it rather than ending silently.
+       */
+      refusal?: string
+    }
   | {
       type: 'error'
       message: string

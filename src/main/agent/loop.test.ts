@@ -9858,6 +9858,30 @@ describe('a run that ends without a reply', () => {
     expect(Number.isNaN(Date.parse(last.unanswered?.[0].at ?? ''))).toBe(false)
   })
 
+  it('fails a turn the provider refused before any text, instead of a blank success', async () => {
+    const r = await run({
+      conversationId: 'conv-runend-refused',
+      userText: prompt,
+      turns: [[{ type: 'done', stopReason: 'end_turn', refusal: 'refusal' }]]
+    })
+    const err = r.events.at(-1) as { type: string; message?: string }
+    expect(err.type).toBe('error')
+    expect(err.message).toMatch(/declined to answer/)
+    expect(runEndLines().some((l) => l.includes('class=refused'))).toBe(true)
+    // No blank assistant message is saved, and the turn reads as unanswered.
+    expect(r.messages).toHaveLength(1)
+    expect(r.messages[0].unanswered?.[0]).toMatchObject({ reason: 'error' })
+  })
+
+  it('keeps the text of a reply a filter cut short, with a notice', async () => {
+    const r = await run({
+      turns: [[{ type: 'text', text: 'Here is part' }, { type: 'done', stopReason: 'end_turn', refusal: 'content_filter' }]]
+    })
+    expect(r.events.some((e) => e.type === 'notice' && /may be incomplete/.test((e as { message: string }).message))).toBe(true)
+    expect(r.events.at(-1)?.type).toBe('done')
+    expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Here is part' })
+  })
+
   it('logs and records a model that cannot call tools', async () => {
     const r = await run({
       conversationId: 'conv-runend-tools',

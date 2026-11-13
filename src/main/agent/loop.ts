@@ -1100,6 +1100,7 @@ export type RunEndClass =
   | 'model-not-found'
   | 'tools-unsupported'
   | 'provider-error'
+  | 'refused'
   | 'unexpected'
 
 /** Longest error detail one run-end log line carries. */
@@ -1138,6 +1139,23 @@ function logRunEnd(
 }
 
 /** A provider failure for the log: its HTTP status and error name, when known, then its (redacted) text. */
+/** Why the provider stopped a reply, as the user reads it. */
+function refusalCause(reason: string): string {
+  return reason === 'refusal' ? 'the model declined to answer' : `the provider's content filter stopped the reply (${reason})`
+}
+
+/** The error for a turn the provider ended before the model said anything. User-facing. */
+export function refusalMessage(reason: string): string {
+  return (
+    `No reply: ${refusalCause(reason)}. Try rephrasing the request, or switch to another model.`
+  )
+}
+
+/** The notice for a reply the provider cut short after some text. User-facing. */
+export function refusalNotice(reason: string): string {
+  return `This reply may be incomplete: ${refusalCause(reason)}.`
+}
+
 function providerFailureDetail(e: unknown, text: string): string {
   const status = (e as { status?: unknown } | null)?.status
   const name = e instanceof Error ? e.name : typeof e
@@ -3537,6 +3555,8 @@ export async function startRun(
       let turnCacheRead = 0
       let turnCacheWrite = 0
       let turnReasoning: ReasoningBlock[] = []
+      // The provider's reason when it, not the model, ended the reply (a refusal or filter).
+      let turnRefusal: string | undefined
 
       // Stream the model turn, retrying transient failures with backoff. A failure
       // after part of the turn has streamed is retried too: the partial turn is
@@ -3558,6 +3578,7 @@ export async function startRun(
         turnCacheRead = 0
         turnCacheWrite = 0
         turnReasoning = []
+        turnRefusal = undefined
         let emitted = false
         // How much of this attempt reached the clients, which a discard retracts, and
         // where its events start in the mid-turn replay buffer, which a discard trims.
@@ -3595,6 +3616,7 @@ export async function startRun(
               toolCalls.push(ev.call)
             } else if (ev.type === 'done') {
               stopReason = ev.stopReason
+              turnRefusal = ev.refusal
               if (ev.usage?.inputTokens) {
                 lastInputTokens = ev.usage.inputTokens
                 turnInput = ev.usage.inputTokens
@@ -3804,6 +3826,18 @@ export async function startRun(
       // continuation of a cut-off answer, then has room the first attempt didn't.
       if (stopReason === 'max_tokens') outputCapRaised = true
       else outputContinuations = 0
+
+      // The provider ended the reply itself: the model refused, or a content or safety
+      // filter stopped it. With nothing said, ending normally would leave a blank turn
+      // that every client reports as success, so fail it with the reason instead. With
+      // some text already shown, keep it and say it may be cut short.
+      if (turnRefusal !== undefined && toolCalls.length === 0) {
+        if (!assistantText.trim()) {
+          fail('refused', { message: refusalMessage(turnRefusal) }, turnRefusal)
+          return
+        }
+        emit({ type: 'notice', message: refusalNotice(turnRefusal) })
+      }
 
       // On the last iteration a tool call can't be run (the cap is reached), and
       // persisting it would end the turn on a tool_use with nothing after it. Drop the

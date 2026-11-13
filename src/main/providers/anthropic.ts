@@ -429,6 +429,8 @@ export function createMessagesProvider(
       yield {
         type: 'done',
         stopReason,
+        // Claude declining to continue ends with stop_reason `refusal`.
+        ...(final.stop_reason === 'refusal' ? { refusal: 'refusal' } : {}),
         usage: {
           inputTokens,
           outputTokens: final.usage?.output_tokens,
