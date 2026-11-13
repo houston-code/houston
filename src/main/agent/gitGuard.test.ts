@@ -362,6 +362,34 @@ describe('GitGuard on real repositories', () => {
     expect(() => git(ws, 'config', '--get', 'core.fsmonitor')).toThrow()
   })
 
+  it('ignores a sibling worktree added after the baseline, from the main checkout or a linked one', async () => {
+    const wt = join(tmp, 'wt')
+    git(ws, 'worktree', 'add', '-q', wt)
+    const fromMain = await guarded()
+    const fromLinked = new GitGuard([wt])
+    await fromLinked.ensureBaseline()
+
+    // Another chat (or the user's terminal) adds a worktree while these commands run.
+    const later = join(tmp, 'later')
+    git(ws, 'worktree', 'add', '-q', later)
+    expect((await fromMain.check()).changes).toEqual([])
+    expect((await fromLinked.check()).changes).toEqual([])
+    expect(git(later, 'rev-parse', '--is-inside-work-tree').trim()).toBe('true')
+  })
+
+  it('still catches a sibling commondir that only looks like the usual ../.. through a symlink', async () => {
+    if (!posix) return
+    const guard = await guarded()
+    // git follows the symlink before the `..`s, so this one lands in `far`, not in `.git`.
+    const far = join(tmp, 'far')
+    mkdirSync(join(far, 'a', 'b'), { recursive: true })
+    writeFileSync(join(far, 'a', 'b', 'commondir'), '../..\n')
+    mkdirSync(join(ws, '.git/worktrees'), { recursive: true })
+    symlinkSync(join(far, 'a', 'b'), join(ws, '.git/worktrees/evil'))
+    const { changes } = await guard.check()
+    expect(changes).toMatchObject([{ kind: 'commondir', file: join(ws, '.git/worktrees/evil/commondir') }])
+  })
+
   it('catches a repointed .git file and restores the pointer', async () => {
     const wt = join(tmp, 'wt')
     git(ws, 'worktree', 'add', '-q', wt)
