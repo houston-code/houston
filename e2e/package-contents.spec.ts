@@ -99,6 +99,15 @@ test('the asar carries every runtime dependency entry point and no dev-only file
   // And what the filter is there to drop.
   const devOnly = [...asar].filter((p) => p.startsWith('node_modules/') && /\.(map|d\.[cm]?ts|ts)$/.test(p))
   expect(devOnly.slice(0, 10), 'source maps, type declarations or raw .ts sources in the asar').toEqual([])
+
+  // highlight.js is trimmed to what the main process loads: `highlight.js/lib/common`
+  // resolves to the es/common.js wrapper, which pulls in lib/. Losing either would
+  // break code highlighting in the terminal client without failing anything else here.
+  for (const f of ['es/common.js', 'lib/common.js', 'lib/core.js', 'lib/languages/typescript.js']) {
+    expect(asar.has(`node_modules/highlight.js/${f}`), `highlight.js/${f} missing from the asar`).toBe(true)
+  }
+  const hljsExtras = [...asar].filter((p) => /^node_modules\/highlight\.js\/(styles|scss|es\/languages)\//.test(p))
+  expect(hljsExtras.slice(0, 10), 'unused highlight.js stylesheets or ES language copies in the asar').toEqual([])
 })
 
 test('the packaged app embeds no absolute path from the build machine', () => {
