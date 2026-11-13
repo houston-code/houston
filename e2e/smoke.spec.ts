@@ -19,6 +19,17 @@ test('app boots and renders the UI', async () => {
     // the whole main ↔ preload ↔ renderer bridge is wired — not just that a
     // BrowserWindow opened. (It renders a "Loading…" placeholder until then.)
     await expect(window.locator('.app')).toBeVisible()
+
+    // The renderer runs in Chromium's process sandbox, and the preload bridge still
+    // loaded there (reaching `.app` above already needed it). Electron reports the
+    // OS-level sandbox state of a process on macOS and Windows only.
+    if (process.platform === 'darwin' || process.platform === 'win32') {
+      const sandboxed = await app.evaluate(({ app: electronApp, BrowserWindow }) => {
+        const pid = BrowserWindow.getAllWindows()[0]?.webContents.getOSProcessId()
+        return electronApp.getAppMetrics().find((m) => m.pid === pid)?.sandboxed
+      })
+      expect(sandboxed).toBe(true)
+    }
   } finally {
     await close()
   }
