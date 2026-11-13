@@ -27,9 +27,10 @@ Open source under the [Apache License 2.0](LICENSE).
   Microsoft Foundry), and GPT through your own Azure OpenAI deployments. Add a
   known host (OpenRouter, Together, Fireworks, Groq, and more) in one click, point
   at any custom endpoint, and fetch live model lists in Settings. The searchable
-  model picker shows each model's context window, price, and capability badges
-  (tool calling, vision, reasoning), read live from the host where it advertises
-  them, so it warns before you pick a model that can't call tools. Name
+  model picker shows each model's context window and capability badges (tool
+  calling, vision, reasoning, with a legend), read live from the host where it
+  advertises them, so it warns before you pick a model that can't call tools. It
+  marks each provider's recommended model and lists your recently used models first. Name
   `fallbackModels` in settings.json and a turn the selected model can't serve
   moves on to the next one. Each chat keeps its own model, reasoning effort, and
   approval mode, so switching in one chat never changes another; new chats start

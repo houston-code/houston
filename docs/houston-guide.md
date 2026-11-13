@@ -269,8 +269,12 @@ OpenAI-compatible endpoint, or a local model runtime.
 **To add one:** open Settings, add a provider and its key, fetch its live model
 list, and pick a model.
 
-- The picker shows each model's context window and capability badges (tool calling,
-  vision, reasoning).
+- The picker shows each model's context window and capability badges: **T** tool
+  calling, **V** images (vision), **R** reasoning. A legend under the list says what
+  each letter means.
+- Each provider's default model is marked **Recommended**.
+- A **Recent** section at the top lists the last few models your chats ran on, so
+  switching back is one click. It hides while you search.
 - It warns you before you pick a model that can't call tools.
 - Keys are stored encrypted by the OS keychain and never reach the app's interface.
 

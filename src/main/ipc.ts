@@ -49,6 +49,7 @@ import {
   saveSettings,
   rememberWorkspace,
   openWorkspaceFolder,
+  rememberModel,
   workspacePickerStartDir,
   getProvider,
   isGitInitDismissed,
@@ -1362,6 +1363,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
       approvalPolicy,
       ...(reasoningEffort ? { reasoningEffort } : {})
     })
+    // The model picker lists recently used models; best-effort, never blocks the run.
+    try {
+      rememberModel({ providerId: req.providerId, model: req.model })
+    } catch (e) {
+      log.warn(`could not record the recent model: ${(e as Error).message}`)
+    }
 
     void runAndDrain(
       makeIo(event.sender),
