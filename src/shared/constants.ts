@@ -37,6 +37,14 @@ export const IPC = {
   legacyRulesNoticeStatus: 'app:legacyRulesNoticeStatus',
   /** Answer that notice: import ~/.claude/CLAUDE.md, or keep the rules separate. */
   legacyRulesNoticeDecide: 'app:legacyRulesNoticeDecide',
+  /** Find instruction files, MCP servers, skills and commands other tools keep. */
+  importScan: 'import:scan',
+  /** Copy the chosen finds into Houston's own locations. */
+  importApply: 'import:apply',
+  /** Whether to offer the one-time import notice. */
+  importOfferStatus: 'import:offerStatus',
+  /** Answer the one-time import notice. */
+  importOfferAnswer: 'import:offerAnswer',
   envKeyOffers: 'app:envKeyOffers',
   envKeyImport: 'app:envKeyImport',
   envKeyDismiss: 'app:envKeyDismiss',

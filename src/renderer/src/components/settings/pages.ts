@@ -24,6 +24,7 @@ import {
 import { McpServersSection } from './sections/mcp'
 import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
+import { ImportSection } from './sections/import'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import {
   AdditionalFoldersSection,
@@ -235,6 +236,18 @@ export const PAGES: SettingsPage[] = [
         id: 'saved-memories',
         Component: MemoriesSection,
         keywords: ['remember', 'memories', 'forget', 'delete', 'edit', 'pin', 'restore', 'undo']
+      }
+    ]
+  },
+  {
+    id: 'import',
+    label: PAGE_LABELS.import,
+    group: 'AI',
+    sections: [
+      {
+        id: 'import-other-tools',
+        Component: ImportSection,
+        keywords: ['migrate', 'copy', 'other tools', 'instructions', 'rules', 'mcp', 'skills', 'commands', 'mcp.json', 'switch']
       }
     ]
   },
