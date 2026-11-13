@@ -47,7 +47,7 @@ import {
   type PromptInvocation
 } from '@shared/promptInvocation'
 import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
-import type { CompactResult } from './agent/compact'
+import type { CompactOptions, CompactResult } from './agent/compact'
 import type { McpServerStatus } from './mcp/manager'
 import type {
   AgentEvent,
@@ -2687,7 +2687,7 @@ export interface TuiDeps {
   /** Load the workspace's custom `.houston/commands`, so `/<name>` runs one as a turn. */
   commands?: () => Promise<Command[]>
   /** Compact the given conversation on demand (the `/compact` command). */
-  compact?: (id: string, providerId: string, model: string) => Promise<CompactResult>
+  compact?: (id: string, providerId: string, model: string, opts?: CompactOptions) => Promise<CompactResult>
   /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
   updateSettings?: (patch: Partial<AppSettings>) => void
   /**
@@ -3156,6 +3156,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let effort: ReasoningEffort = deps.getSettings().reasoningEffort ?? DEFAULT_REASONING_EFFORT
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
+  // A /compact in flight: Ctrl-C or Esc cancels it and returns the prompt.
+  let compactAbort: AbortController | null = null
   // Prints whatever assistant text the running turn is still holding back (markdown
   // renders block by block, so a paragraph waits for its end). The interrupt handler
   // calls it first, so the text the user stopped lands above "^C interrupted", not
@@ -3324,6 +3326,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     return deps.steerRun?.(activeRunId, text) ?? false
   })
   deps.io.onInterrupt?.(() => {
+    if (compactAbort) {
+      compactAbort.abort()
+      return
+    }
     if (activeRunId) {
       deps.cancelRun(activeRunId)
       deps.io.stopSpinner?.()
@@ -4266,8 +4272,23 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· nothing to compact yet; start a conversation first\n', 'dim'))
           continue
         }
-        deps.io.out(paint('· compacting…\n', 'dim'))
-        const res = await deps.compact(conversationId, providerId, model)
+        deps.io.out(paint('· compacting… (Esc or Ctrl-C cancels)\n', 'dim'))
+        const ctl = new AbortController()
+        compactAbort = ctl
+        deps.io.startSpinner?.('Compacting')
+        let res: CompactResult
+        try {
+          res = await deps.compact(conversationId, providerId, model, {
+            signal: ctl.signal,
+            onRetry: ({ attempt, max }) =>
+              deps.io.setSpinnerLabel?.(`Compacting (retrying, attempt ${attempt}${max ? ` of ${max}` : ''})`)
+          })
+        } catch (e) {
+          res = { ok: false, summarized: 0, error: (e as Error).message }
+        } finally {
+          compactAbort = null
+          deps.io.stopSpinner?.()
+        }
         if (res.ok && res.messages) {
           messages = res.messages
           deps.io.out(paint(`· compacted ${res.summarized} earlier message(s)\n`, 'dim'))
@@ -4280,6 +4301,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               'dim'
             )
           )
+        } else if (res.reason === 'cancelled') {
+          deps.io.out(paint('· compaction cancelled; nothing changed\n', 'dim'))
         } else {
           deps.io.out(paint(`· couldn't compact: ${res.error ?? 'unknown error'}\n`, 'yellow'))
         }

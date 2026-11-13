@@ -29,6 +29,9 @@ const h = vi.hoisted(() => ({
   // Spied so the agentStart/agentRetry tests can inspect the request the handler
   // hands the drain loop (in particular the validated approvalPolicy).
   runAndDrain: vi.fn(),
+  // The /compact entry points, so the IPC wiring is tested without a provider.
+  compactConversationNow: vi.fn(),
+  cancelCompaction: vi.fn<(id: string) => boolean>(() => false),
   // Configured per test to return the WebContents id that "owns" a run.
   runOwner: vi.fn<(runId: string) => number | undefined>(),
   // Steerable "is a run live on this conversation" — the checkpoint gate reads it.
@@ -103,6 +106,10 @@ vi.mock('./agent/worktree', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./agent/worktree')>()),
   isWorktreeDisposable: h.isWorktreeDisposable,
   removeWorktree: h.removeWorktree
+}))
+vi.mock('./agent/compact', () => ({
+  compactConversationNow: h.compactConversationNow,
+  cancelCompaction: h.cancelCompaction
 }))
 // Don't touch the real filesystem for the `#`-capture handler.
 vi.mock('./memory', () => ({ saveMemory: h.saveMemory }))
@@ -1168,6 +1175,40 @@ describe('background shell IPC (Tasks panel)', () => {
     expect(await call(IPC.shellStop, id)).toBe('killed')
     await closed
     expect(await call(IPC.shellStop, id)).toBe('already-exited')
+  })
+})
+
+describe('/compact IPC', () => {
+  beforeEach(() => {
+    h.handlers.clear()
+    h.compactConversationNow.mockReset()
+    h.cancelCompaction.mockReset()
+    registerIpc()
+  })
+
+  it('cancels by chat id, refusing anything that is not a string', async () => {
+    h.cancelCompaction.mockReturnValue(true)
+    const cancel = h.handlers.get(IPC.conversationCompactCancel)!
+    expect(await cancel({ sender: {} }, 'chat-1')).toBe(true)
+    expect(h.cancelCompaction).toHaveBeenCalledWith('chat-1')
+    for (const bad of [undefined, 42, { id: 'chat-1' }]) expect(await cancel({ sender: {} }, bad)).toBe(false)
+    expect(h.cancelCompaction).toHaveBeenCalledTimes(1)
+  })
+
+  it('pushes retry notices to the window that started the compaction', async () => {
+    const sent: unknown[][] = []
+    const sender = { isDestroyed: () => false, send: (...a: unknown[]) => sent.push(a) }
+    h.compactConversationNow.mockImplementation(
+      async (_id: string, _p: string, _m: string, o: { onRetry: (i: unknown) => void }) => {
+        o.onRetry({ attempt: 2, max: 6, error: 'overloaded' })
+        return { ok: false, summarized: 0, reason: 'cancelled', error: 'Compaction cancelled.' }
+      }
+    )
+    const res = await h.handlers.get(IPC.conversationCompact)!({ sender }, 'chat-1', 'anthropic', 'm')
+    expect(res).toMatchObject({ ok: false, reason: 'cancelled' })
+    expect(sent).toEqual([
+      [IPC.conversationCompactProgress, { id: 'chat-1', attempt: 2, max: 6, error: 'overloaded' }]
+    ])
   })
 })
 

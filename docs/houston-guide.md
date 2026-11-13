@@ -2747,6 +2747,11 @@ window:
   to the model is compacted.
 - **Settings:** set a fixed token threshold, or turn compaction off, in Settings,
   *Agent Behavior*, *Context window*.
+- **`/compact` on demand.** It shows progress (including when it retries a slow or
+  overloaded model) and can be cancelled: **Cancel** in the desktop app, **Esc** or
+  **Ctrl-C** in the terminal. It gives up after 3 minutes. A cancelled or failed
+  compaction changes nothing, and it never overwrites the chat if a turn started or a
+  new message arrived while it was summarizing; run it again instead.
 
 ### Tools loaded on demand
 
