@@ -339,6 +339,26 @@ export function documentAsText(doc: FetchedDocument): string {
   return `${header}\n\n${doc.text}${tail}`
 }
 
+/** `work`'s result, or a rejection as soon as `signal` aborts (the abandoned work settles unobserved). */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  work.catch(() => {})
+  if (signal.aborted) return Promise.reject(new Error('aborted'))
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new Error('aborted'))
+    signal.addEventListener('abort', onAbort, { once: true })
+    work.then(
+      (v) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(v)
+      },
+      (e) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(e)
+      }
+    )
+  })
+}
+
 /**
  * Fetch a URL and return its status, type, and body text. HTML is converted to text;
  * other text/JSON bodies are returned as-is. Redirects are followed manually so each
@@ -365,7 +385,9 @@ export async function fetchUrlAsDocument(
     let current = validateFetchUrl(raw)
     for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
       // Vet and pin per hop: a redirect target is a fresh host, chosen by the server.
-      const pin = await resolveAndPin(current.hostname, resolveHost)
+      // dns.lookup takes no signal, so a stuck resolver would otherwise outlast the
+      // timeout and Stop; race it so the fetch still ends (it never yields an unvetted pin).
+      const pin = await untilAborted(resolveAndPin(current.hostname, resolveHost), ac.signal)
       const res = await transport({
         url: current,
         signal: ac.signal,

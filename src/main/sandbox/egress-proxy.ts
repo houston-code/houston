@@ -124,6 +124,8 @@ export interface StartEgressProxyOptions {
   log?: (ev: EgressLogEvent) => void
   /** Base directory for the unix-socket dir (default `os.tmpdir()`); injectable for tests. */
   baseTmpDir?: string
+  /** How long an upstream may take to accept the connection (default 15s); injectable for tests. */
+  upstreamConnectTimeoutMs?: number
 }
 
 export interface EgressProxyHandle {
@@ -245,6 +247,7 @@ function denyBody(host: string, reason: string | undefined): string {
  * tears down listeners, live tunnels, and the socket's temp dir.
  */
 export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressProxyHandle> {
+  const connectTimeoutMs = opts.upstreamConnectTimeoutMs ?? UPSTREAM_CONNECT_TIMEOUT_MS
   const sockets = new Set<Socket>()
   const track = (s: Socket): void => {
     sockets.add(s)
@@ -289,8 +292,7 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
         port,
         method: req.method,
         path: `${url.pathname}${url.search}`,
-        headers: forwardableHeaders(req.headers),
-        timeout: UPSTREAM_CONNECT_TIMEOUT_MS
+        headers: forwardableHeaders(req.headers)
       },
       (upRes) => {
         // Strip hop-by-hop headers here too: a forwarded `Connection: keep-alive`
@@ -300,7 +302,24 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
         upRes.pipe(res)
       }
     )
-    upstream.on('timeout', () => upstream.destroy(new Error('upstream connect timed out')))
+    // Time out the connect only. A socket timeout left armed past it is an idle timer
+    // over the whole exchange, which would 502 an upstream slow to send its first byte.
+    upstream.on('socket', (sock) => {
+      if (!sock.connecting) return // a reused keep-alive socket is already connected
+      const onTimeout = (): void => {
+        upstream.destroy(new Error('upstream connect timed out'))
+      }
+      sock.setTimeout(connectTimeoutMs)
+      sock.once('timeout', onTimeout)
+      sock.once('connect', () => {
+        sock.setTimeout(0)
+        sock.removeListener('timeout', onTimeout)
+      })
+    })
+    // A client that goes away mid-exchange takes its upstream request with it.
+    res.on('close', () => {
+      if (!res.writableFinished) upstream.destroy()
+    })
     upstream.on('error', (e) => {
       if (!res.headersSent) {
         res.writeHead(502, { 'content-type': 'text/plain' })
@@ -338,7 +357,7 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
       }
       upstream.destroy()
     }
-    upstream.setTimeout(UPSTREAM_CONNECT_TIMEOUT_MS, () => abort('upstream connect timed out'))
+    upstream.setTimeout(connectTimeoutMs, () => abort('upstream connect timed out'))
     upstream.on('error', (e) => abort(`Bad gateway: ${e.message}`))
     upstream.on('connect', () => {
       upstream.setTimeout(0)

@@ -217,6 +217,76 @@ describe('startEgressProxy (TCP)', () => {
   })
 })
 
+describe('startEgressProxy upstream lifetimes', () => {
+  it('forwards a plain-HTTP response that is slower than the connect timeout to start', async () => {
+    const slow = createHttpServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'text/plain' })
+        res.end('slow but fine')
+      }, 300)
+    })
+    await new Promise<void>((done) => slow.listen(0, '127.0.0.1', () => done()))
+    const port = (slow.address() as { port: number }).port
+    const proxy = await startEgressProxy({
+      checkHost: (host) => ({ allowed: host === '127.0.0.1' }),
+      upstreamConnectTimeoutMs: 100
+    })
+    try {
+      const res = await rawProxyHttp(proxy.endpoints.tcpPort, `http://127.0.0.1:${port}/`)
+      expect(res).toContain('200')
+      expect(res).toContain('slow but fine')
+    } finally {
+      await proxy.close()
+      await new Promise<void>((done) => slow.close(() => done()))
+    }
+  })
+
+  it('drops the upstream request when the client leaves before the response starts', async () => {
+    let upstreamGone!: () => void
+    const gone = new Promise<void>((done) => (upstreamGone = done))
+    let reached!: () => void
+    const arrived = new Promise<void>((done) => (reached = done))
+    // Never answers: only the client leaving can end this exchange.
+    const silent = createHttpServer((req) => {
+      req.socket.once('close', () => upstreamGone())
+      reached()
+    })
+    await new Promise<void>((done) => silent.listen(0, '127.0.0.1', () => done()))
+    const port = (silent.address() as { port: number }).port
+    const proxy = await startEgressProxy({ checkHost: (host) => ({ allowed: host === '127.0.0.1' }) })
+    try {
+      const sock = netConnect(proxy.endpoints.tcpPort, '127.0.0.1', () => {
+        sock.write(`GET http://127.0.0.1:${port}/ HTTP/1.1\r\nHost: x\r\n\r\n`)
+      })
+      sock.on('error', () => {})
+      await arrived
+      sock.destroy()
+      await Promise.race([
+        gone,
+        new Promise((_r, reject) => setTimeout(() => reject(new Error('upstream left open')), 2000))
+      ])
+    } finally {
+      await proxy.close()
+      silent.closeAllConnections()
+      await new Promise<void>((done) => silent.close(() => done()))
+    }
+  })
+
+  it('still denies plain HTTP to a disallowed host with the injected timeout', async () => {
+    const proxy = await startEgressProxy({
+      checkHost: () => ({ allowed: false, reason: 'not on the allowlist' }),
+      upstreamConnectTimeoutMs: 100
+    })
+    try {
+      const res = await rawProxyHttp(proxy.endpoints.tcpPort, 'http://attacker.example/steal')
+      expect(res).toContain('403')
+      expect(res).toContain(EGRESS_BLOCKED_MARKER)
+    } finally {
+      await proxy.close()
+    }
+  })
+})
+
 describe.skipIf(process.platform === 'win32')('startEgressProxy (unix socket + forwarder)', () => {
   let target: { server: Server; port: number }
   let proxy: EgressProxyHandle

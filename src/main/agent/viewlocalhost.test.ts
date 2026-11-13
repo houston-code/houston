@@ -5,7 +5,9 @@ import {
   MAX_STEPS,
   MAX_WAIT_FOR_MS,
   MAX_WAIT_MS,
+  PAGE_CALL_TIMEOUT_MS,
   REDACTED_PASSWORD,
+  STEP_TIMEOUT_MS,
   PRESS_KEYS,
   STEP_ACTIONS,
   captureLocalhost,
@@ -627,5 +629,106 @@ describe('captureLocalhost with steps', () => {
     const { session } = fakeSession()
     const cap = await captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
     expect(cap.steps).toBeUndefined()
+  })
+})
+
+describe('captureLocalhost on a page that stops responding', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+  const never = <T>(): Promise<T> => new Promise<T>(() => {})
+  const click: CaptureStep[] = [{ action: 'click', selector: '#go' }]
+
+  it('fails the capture once a step hangs past its timeout, and closes the window', async () => {
+    vi.useFakeTimers()
+    let shot = false
+    const { session, closed } = fakeSession({
+      runStep: () => never(),
+      screenshot: async () => {
+        shot = true
+        return Buffer.from('PNG')
+      }
+    })
+    const p = captureLocalhost({ url: 'http://localhost:3000', steps: click }, { open: async () => session })
+    const settled = expect(p).rejects.toThrow(/stopped responding: the step click "#go" did not finish within 30s/)
+    await vi.advanceTimersByTimeAsync(STEP_TIMEOUT_MS)
+    await settled
+    expect(closed()).toBe(true)
+    expect(shot).toBe(false)
+  })
+
+  it('ends promptly when stopped while a step hangs', async () => {
+    const ac = new AbortController()
+    const { session, closed } = fakeSession({ runStep: () => never() })
+    const p = captureLocalhost(
+      { url: 'http://localhost:3000', steps: click, signal: ac.signal },
+      { open: async () => session }
+    )
+    await new Promise((r) => setTimeout(r, 0))
+    ac.abort()
+    await expect(p).rejects.toThrow(/cancelled/)
+    expect(closed()).toBe(true)
+  })
+
+  it('fails the capture when the screenshot hangs', async () => {
+    vi.useFakeTimers()
+    const { session, closed } = fakeSession({ screenshot: () => never() })
+    const p = captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
+    const settled = expect(p).rejects.toThrow(/stopped responding: the screenshot/)
+    await vi.advanceTimersByTimeAsync(PAGE_CALL_TIMEOUT_MS)
+    await settled
+    expect(closed()).toBe(true)
+  })
+
+  it('fails the capture when measuring the selector hangs', async () => {
+    vi.useFakeTimers()
+    const { session, closed } = fakeSession({ rectForSelector: () => never() })
+    const p = captureLocalhost({ url: 'http://localhost:3000', selector: '#app' }, { open: async () => session })
+    const settled = expect(p).rejects.toThrow(/stopped responding: measuring the selector/)
+    await vi.advanceTimersByTimeAsync(PAGE_CALL_TIMEOUT_MS)
+    await settled
+    expect(closed()).toBe(true)
+  })
+
+  it('fails a variant capture when the full-page screenshot hangs', async () => {
+    vi.useFakeTimers()
+    const { session, closed } = fakeSession({ screenshotFullPage: () => never() })
+    const p = captureLocalhost(
+      {
+        url: 'http://localhost:3000',
+        variants: [{ label: 'desktop', width: 1280, height: 800, colorScheme: 'light', mobile: false, fullPage: true }]
+      },
+      { open: async () => session }
+    )
+    const settled = expect(p).rejects.toThrow(/stopped responding: the full-page screenshot/)
+    await vi.advanceTimersByTimeAsync(PAGE_CALL_TIMEOUT_MS)
+    await settled
+    expect(closed()).toBe(true)
+  })
+
+  it('still returns the screenshot when reading the page text hangs, then closes', async () => {
+    vi.useFakeTimers()
+    const { session, closed } = fakeSession({ pageText: () => never() })
+    const p = captureLocalhost({ url: 'http://localhost:3000' }, { open: async () => session })
+    await vi.advanceTimersByTimeAsync(PAGE_CALL_TIMEOUT_MS)
+    const cap = await p
+    expect(cap.png.toString()).toBe('PNGBYTES')
+    expect('pageText' in cap).toBe(false)
+    expect(closed()).toBe(true)
+  })
+
+  it('ends promptly when stopped while the page text read hangs', async () => {
+    const ac = new AbortController()
+    const { session, closed } = fakeSession({ pageText: () => never() })
+    const p = captureLocalhost({ url: 'http://localhost:3000', signal: ac.signal }, { open: async () => session })
+    await new Promise((r) => setTimeout(r, 0))
+    ac.abort()
+    await expect(p).rejects.toThrow(/cancelled/)
+    expect(closed()).toBe(true)
+  })
+
+  it('runSteps rejects on a hung step instead of reporting it as a step failure', async () => {
+    const { session } = fakeSession({ runStep: () => never() })
+    await expect(runSteps(session, click, undefined, 60_000, Date.now, 20)).rejects.toThrow(/stopped responding/)
   })
 })
