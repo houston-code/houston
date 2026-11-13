@@ -1,12 +1,23 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
-import { permissionRuleKey, type PermissionRule } from '@shared/types'
-import { cliArgvError, nodeVersionError, selectRunMode, shortUsage, USAGE, wireCliHost } from './index'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// The entry must answer -h/-v without evaluating the real program (run.ts and, through
+// it, the agent core, store, TUI, and sandbox). The factory below runs only if something
+// actually loads './run', so it doubles as the "was the heavy graph evaluated" probe.
+const probe = vi.hoisted(() => ({ loads: 0, runCli: [] as string[][] }))
+vi.mock('./run', () => {
+  probe.loads++
+  return {
+    runCli: async (argv: string[]) => {
+      probe.runCli.push(argv)
+      return 7
+    },
+    log: { error: () => {} },
+    flushRuleUsage: () => {}
+  }
+})
+
+import { USAGE, cliArgvError, main, nodeVersionError, shortUsage } from './index'
 import { HEADLESS_FLAGS } from '../main/headless'
-import { noteRuleUsed } from '../main/agentHost'
-import { flushRuleUsage, resetRuleUsageForTests } from '../main/ruleUsage'
 
 describe('nodeVersionError', () => {
   it('returns null when the runtime is new enough', () => {
@@ -33,94 +44,73 @@ describe('nodeVersionError', () => {
   })
 })
 
-describe('selectRunMode', () => {
-  const tty = (argv: string[]) => selectRunMode(argv, '/cwd', true)
-  const piped = (argv: string[]) => selectRunMode(argv, '/cwd', false)
-
-  it('serves ACP on --acp, ahead of every other mode, piped stdin or not', () => {
-    expect(piped(['--acp']).kind).toBe('acp')
-    expect(selectRunMode(['--acp'], '/cwd', false, true).kind).toBe('acp')
-    expect(tty(['--acp', '-i']).kind).toBe('acp')
-    expect(tty(['--acp', '-p', 'x']).kind).toBe('acp')
-  })
-
-  it('runs interactive on explicit -i / --interactive / --tui, TTY or not', () => {
-    expect(tty(['-i']).kind).toBe('tui')
-    expect(piped(['--interactive']).kind).toBe('tui')
-    expect(piped(['--tui']).kind).toBe('tui')
-  })
-
-  it('runs headless on -p, and -p wins even at a TTY', () => {
-    expect(tty(['-p', 'do it']).kind).toBe('headless')
-    expect(piped(['-p', 'do it']).kind).toBe('headless')
-  })
-
-  it('a bare invocation at a TTY defaults to interactive', () => {
-    const mode = tty([])
-    expect(mode.kind).toBe('tui')
-    // Flags on a bare invocation are still honored in the defaulted interactive mode.
-    expect(selectRunMode(['--model=gpt'], '/cwd', true)).toMatchObject({
-      kind: 'tui',
-      options: { model: 'gpt' }
+describe('main', () => {
+  let out: string[]
+  beforeEach(() => {
+    out = []
+    probe.runCli = []
+    vi.spyOn(process.stdout, 'write').mockImplementation((chunk: string | Uint8Array) => {
+      out.push(String(chunk))
+      return true
     })
   })
-
-  it('a bare invocation without a TTY falls to usage (no REPL to hang)', () => {
-    expect(piped([]).kind).toBe('usage')
-  })
-
-  it('a bare invocation with a prompt piped in runs headless, reading it from stdin', () => {
-    expect(selectRunMode([], '/cwd', false, true)).toMatchObject({
-      kind: 'headless',
-      options: { prompt: '', promptFromStdin: true }
-    })
-    expect(selectRunMode(['--json', '--max-turns', '5'], '/cwd', false, true)).toMatchObject({
-      kind: 'headless',
-      options: { promptFromStdin: true, json: true, maxTurns: 5 }
-    })
-    // An explicit prompt still wins over whatever is piped.
-    expect(selectRunMode(['-p', 'do it'], '/cwd', false, true)).toMatchObject({
-      kind: 'headless',
-      options: { prompt: 'do it' }
-    })
-    // -i is explicit too: a piped stdin doesn't turn it into a one-shot run.
-    expect(selectRunMode(['-i'], '/cwd', false, true).kind).toBe('tui')
-  })
-
-  it('`-p -` reads the prompt from stdin', () => {
-    expect(selectRunMode(['-p', '-'], '/cwd', false, true)).toMatchObject({
-      kind: 'headless',
-      options: { promptFromStdin: true }
-    })
-  })
-
-  it('carries the resolved cwd into the interactive options', () => {
-    expect(selectRunMode(['--cwd', '/proj'], '/cwd', true)).toMatchObject({
-      kind: 'tui',
-      options: { cwd: '/proj' }
-    })
-  })
-})
-
-describe('wireCliHost', () => {
-  const saved = process.env.HOUSTON_DATA_DIR
-  let dir = ''
   afterEach(() => {
-    resetRuleUsageForTests()
-    if (saved === undefined) delete process.env.HOUSTON_DATA_DIR
-    else process.env.HOUSTON_DATA_DIR = saved
-    if (dir) rmSync(dir, { recursive: true, force: true })
+    vi.restoreAllMocks()
   })
 
-  it('records when a permission rule decides a call, in the profile the desktop app reads', () => {
-    dir = mkdtempSync(join(tmpdir(), 'houston-cli-host-'))
-    process.env.HOUSTON_DATA_DIR = dir
-    wireCliHost()
-    const rule: PermissionRule = { action: 'allow', tool: 'run_shell', match: 'npm test' }
-    noteRuleUsed(rule)
-    flushRuleUsage()
-    const usage = JSON.parse(readFileSync(join(dir, 'rule-usage.json'), 'utf8')) as Record<string, number>
-    expect(typeof usage[permissionRuleKey(rule)]).toBe('number')
+  it.each([['--version'], ['-v'], ['--help'], ['-h'], ['-p', 'hi', '--version']])(
+    'answers %s without loading the program',
+    async (...args) => {
+      const load = vi.fn()
+      const code = await main(['node', 'houston', ...args], load)
+      expect(code).toBe(0)
+      expect(load).not.toHaveBeenCalled()
+    }
+  )
+
+  it('prints the version and the usage text', async () => {
+    await main(['node', 'houston', '--version'])
+    await main(['node', 'houston', '--help'])
+    expect(out[0]).toMatch(/^\S+\n$/)
+    expect(out[1]).toBe(USAGE)
+  })
+
+  it('never evaluates the program module for -h/-v with the default loader', async () => {
+    await main(['node', 'houston', '--version'])
+    await main(['node', 'houston', '-h'])
+    expect(probe.loads).toBe(0)
+  })
+
+  it('loads the program for a real mode and returns its exit code', async () => {
+    const argv = ['node', 'houston', 'providers']
+    expect(await main(argv)).toBe(7)
+    expect(probe.loads).toBe(1)
+    expect(probe.runCli).toEqual([argv])
+  })
+
+  it('hands the program the version, the usage, and the command-line check', async () => {
+    let opts: Parameters<typeof import('./run').runCli>[1] | undefined
+    const load = vi.fn(async () => ({
+      runCli: async (_argv: string[], o: NonNullable<typeof opts>) => {
+        opts = o
+        return 0
+      }
+    })) as unknown as Parameters<typeof main>[1]
+    await main(['node', 'houston', '--modle', 'x'], load)
+    expect(opts!.usage).toBe(USAGE)
+    expect(opts!.argvProblem(['-p', 'hi'])).toBeNull()
+    const problem = opts!.argvProblem(['--modle', 'x'])!
+    expect(problem.startsWith('houston: unknown option: --modle\n\n')).toBe(true)
+    expect(problem).toContain(shortUsage())
+    expect(problem.endsWith('Run houston --help for every option.\n')).toBe(true)
+  })
+
+  it('opens a folder in the desktop app without loading the program', async () => {
+    const load = vi.fn()
+    // A missing folder fails inside the open command, before anything is launched.
+    vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    expect(await main(['node', 'houston', 'open', '/definitely/not/a/folder'], load)).toBe(1)
+    expect(load).not.toHaveBeenCalled()
   })
 })
 
