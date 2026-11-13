@@ -3242,6 +3242,49 @@ describe('context management inside a long turn', () => {
     for (const w of t.sends) expectValidWindow(w)
   })
 
+  it('re-sends a steer verbatim once an in-turn cut passes it', async () => {
+    // The user corrects course after the first read; compaction later cuts past the
+    // correction. Only the request used to be re-sent, so the steer survived only as
+    // the summarizer's paraphrase of it.
+    h.probeTools = [bigReadFile()]
+    h.settings.compactionThreshold = 8000
+    const STEER = 'use pnpm, not npm'
+    const t = longTurn(8)
+    h.provider = t.provider
+    const runId = 'run-steer-compaction'
+    const events: AgentEvent[] = []
+    let messages: ChatMessage[] = []
+    await startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'full-auto',
+        messages: [{ role: 'user', content: REQUEST }]
+      },
+      (e) => {
+        events.push(e)
+        if (e.type === 'tool_result' && e.callId === 'read1') steerRun(runId, STEER)
+      },
+      (m) => {
+        messages = m
+      }
+    )
+
+    expect(events.at(-1)?.type).toBe('done')
+    expect(messages.filter((m) => m.steered).map((m) => m.content)).toEqual([STEER])
+    const compacted = t.sends.filter((w) => w[0].content.startsWith(COMPACTION_SUMMARY_PREFIX))
+    // Some cut really did fold the steer's own message into the summary…
+    expect(compacted.some((w) => !w.some((m) => m.content === STEER))).toBe(true)
+    for (const w of compacted) {
+      // …yet every compacted window still carries it word for word, exactly once.
+      expect(w.filter((m) => m.role === 'user' && m.content.includes(STEER))).toHaveLength(1)
+      expect(w.filter((m) => m.role === 'user' && m.content.includes(REQUEST))).toHaveLength(1)
+      expectValidWindow(w)
+    }
+  })
+
   it('keeps each turn\'s first window an extension of the last turn\'s final one', async () => {
     // Nothing compacted. The pinned block used to be spliced in front of each turn's
     // request, so it moved down a turn every turn and the next turn's first request

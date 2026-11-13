@@ -232,6 +232,7 @@ import {
   EVICTION_TARGET_FRACTION,
   KEEP_RECENT_USER_TURNS,
   SUMMARY_TRUNCATED_MESSAGE,
+  buildAnchorMessages,
   buildSummaryMessages,
   buildSummaryRequestMessages,
   compactionAnchor,
@@ -3161,8 +3162,9 @@ export async function startRun(
     let verifyPassesRun = 0
     const verifyMaxPasses = resolveVerifyMaxPasses(settings.verifyMaxPasses)
 
-    // The request re-sent verbatim ahead of the tail while `cut` sits inside its turn.
-    const anchorMsgs = (): ChatMessage[] => (anchor !== undefined ? [messages[anchor]] : [])
+    // The request re-sent verbatim ahead of the tail while `cut` sits inside its turn,
+    // with the steers the cut passed (see buildAnchorMessages).
+    const anchorMsgs = (): ChatMessage[] => buildAnchorMessages(messages, anchor, cut)
 
     // The persisted log with the eviction watermark applied: large tool results
     // before `evictBefore` replaced by stubs. Index-for-index with `messages`, so cut
