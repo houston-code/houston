@@ -7192,6 +7192,115 @@ body:has(.coachmark) .get-started {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent);
 }
+/* ---- MCP Servers: add from catalog, paste JSON ---- */
+.mcp-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.mcp-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mcp-catalog__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mcp-catalog__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-catalog__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mcp-catalog__review {
+  margin-left: auto;
+}
+.mcp-catalog__desc {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mcp-catalog__cmd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.mcp-review {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.mcp-review__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mcp-review__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mcp-review__field input,
+.mcp-review__field textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.mcp-review__field input:focus,
+.mcp-review__field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-review__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+.mcp-review__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mcp-review__error,
+.mcp-paste__problems {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.mcp-paste__problems {
+  padding-left: 18px;
+}
+.mcp-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .mcp-server {
   margin-bottom: 8px;
   display: flex;

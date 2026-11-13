@@ -258,7 +258,9 @@ Open source under the [Apache License 2.0](LICENSE).
   change.
 - **MCP servers.** Connect Model Context Protocol servers in Settings: a local
   **stdio** process (with optional working directory and encrypted env vars) or a
-  remote **HTTP** (streamable) or **SSE** endpoint. Remote servers authenticate
+  remote **HTTP** (streamable) or **SSE** endpoint. Add one by hand, from a small
+  built-in catalog of well-known servers (reviewed before it's saved, and saved
+  switched off), or by pasting a standard `mcpServers` JSON object. Remote servers authenticate
   with a static bearer-token / custom header, or with **OAuth** for hosted
   services that require a sign-in: Houston discovers the authorization server,
   registers itself as a client, opens the browser to authorize, and stores +

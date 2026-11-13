@@ -1847,6 +1847,25 @@ remote **HTTP** (streamable) or **SSE** endpoint.
   demand" under "Context, worktrees, and history"), and the agent pulls in only the
   tool definitions it needs instead of sending every schema on every request.
 
+### Adding a server
+
+Under the server list in Settings > MCP Servers:
+
+- **+ Add MCP server** adds an empty entry to fill in by hand.
+- **Add from catalog** lists a few well-known servers: the protocol's reference
+  servers (Filesystem, Git, Fetch, Memory, Sequential thinking, Time), GitHub's hosted
+  server, and Playwright. **Review** opens one with its command and arguments (one per
+  line) filled in, the open project's folder where it needs one, for you to check and
+  edit. **Add server** saves it switched off unless you tick **Switch it on now**. The
+  catalog ships with Houston; nothing is downloaded to show it.
+- **Paste JSON** takes the `{ "mcpServers": { "<name>": { ... } } }` object that server
+  instructions usually give (a `servers` map or Houston's own list works too). **Read
+  it** shows each server it found and anything it couldn't read; adding them saves them
+  switched off, skipping any id you already have.
+
+Nothing runs until a server is saved and switched on; `npx` and `uvx` servers then
+download their package the first time they start.
+
 ### Signing in
 
 Remote servers take custom headers (such as a static `Authorization: Bearer` token),
