@@ -27,6 +27,7 @@ import {
   isKnownHooksPath,
   manualUndo,
   parseConfigList,
+  resetKeptElsewhere,
   reviewGitChanges,
   type GitChange,
   type RepoSnap
@@ -493,6 +494,60 @@ describe('GitGuard on real repositories', () => {
       const note = await reviewGitChanges(guard, { workspace: ws })
       expect(note).toContain('Nobody was available')
       expect(() => git(ws, 'config', '--get', 'core.fsmonitor')).toThrow()
+    })
+
+    describe('two chats in one repository', () => {
+      // Each run has its own guard and baseline, so a change made during one chat's
+      // command shows up in the other chat's next check as well.
+      afterEach(() => resetKeptElsewhere())
+
+      it('does not ask again in another chat about a change the user kept', async () => {
+        const a = await guarded()
+        const b = await guarded()
+        const hook = join(ws, '.git/hooks/pre-push')
+        writeFileSync(hook, '#!/bin/sh\nlefthook run pre-push\n')
+        await reviewGitChanges(a, { workspace: ws, ask: async () => GIT_GUARD_KEEP })
+        const ask = vi.fn(async () => GIT_GUARD_UNDO)
+        expect(await reviewGitChanges(b, { workspace: ws, ask })).toBe('')
+        expect(ask).not.toHaveBeenCalled()
+        expect(existsSync(hook)).toBe(true)
+      })
+
+      it('still asks about the same file once it changes to something else', async () => {
+        const a = await guarded()
+        const b = await guarded()
+        git(ws, 'config', 'core.fsmonitor', 'kept-monitor')
+        await reviewGitChanges(a, { workspace: ws, ask: async () => GIT_GUARD_KEEP })
+        git(ws, 'config', 'core.fsmonitor', 'sh -c evil')
+        const ask = vi.fn(async () => GIT_GUARD_UNDO)
+        await reviewGitChanges(b, { workspace: ws, ask })
+        expect(ask).toHaveBeenCalledTimes(1)
+        // Undo in b puts back b's own baseline, from before either change.
+        expect(() => git(ws, 'config', '--get', 'core.fsmonitor')).toThrow()
+      })
+
+      it('still asks when the other chat never answered (its run ended first)', async () => {
+        const a = await guarded()
+        const b = await guarded()
+        git(ws, 'config', 'core.fsmonitor', 'sh -c evil')
+        // a saw it but was stopped before its question was answered.
+        expect((await a.check()).changes).toHaveLength(1)
+        const ask = vi.fn(async () => GIT_GUARD_UNDO)
+        await reviewGitChanges(b, { workspace: ws, ask })
+        expect(ask).toHaveBeenCalledTimes(1)
+        expect(() => git(ws, 'config', '--get', 'core.fsmonitor')).toThrow()
+      })
+
+      it('still asks about a change the user undid elsewhere and something put back', async () => {
+        const a = await guarded()
+        const b = await guarded()
+        git(ws, 'config', 'core.fsmonitor', 'sh -c evil')
+        await reviewGitChanges(a, { workspace: ws, ask: async () => GIT_GUARD_UNDO })
+        git(ws, 'config', 'core.fsmonitor', 'sh -c evil')
+        const ask = vi.fn(async () => GIT_GUARD_UNDO)
+        await reviewGitChanges(b, { workspace: ws, ask })
+        expect(ask).toHaveBeenCalledTimes(1)
+      })
     })
   })
 })
