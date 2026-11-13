@@ -523,7 +523,7 @@ const ToolRow = memo(function ToolRow({
                   )}
                 </div>
               )}
-              {p.diff.length > 0 && <DiffView diff={p.diff} />}
+              {p.diff.length > 0 && <DiffView diff={p.diff} path={p.path} />}
               {p.truncated && (
                 <div className="tool-row__diff-more">Diff shortened; the change continues past this point.</div>
               )}

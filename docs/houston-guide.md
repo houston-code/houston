@@ -70,6 +70,12 @@ The full GUI:
   the full date and time). Under a turn's last reply, a quiet line names the model that
   answered and what the turn spent: tokens in and out, and the cost when the model's
   price is known. Messages saved by older versions show none of this.
+- **Message box.** `Ctrl+R` searches the messages you sent before (type to filter,
+  `Ctrl+R` or the arrows for an older match, `Enter` to put it in the box). A very large
+  paste (40 lines or more, or about 4,000 characters) folds into a **Pasted text** chip
+  that is sent as pasted; **Expand** puts it back in the box. Dropping a file attaches
+  it like **+ Attach files**: a text file's contents go in the message, and a binary
+  file such as a PDF by name only.
 - **Back where you were after a restart.** Houston reopens the chat that was open when
   you quit. If that chat was deleted, or its folder or worktree is gone, it opens a new
   chat in your last folder instead.
@@ -394,6 +400,10 @@ retries the turn with a growing pause between attempts and tells you it's retryi
   already answered in this run, Houston keeps retrying for up to five minutes and
   picks up when the connection comes back. Before the provider has answered once,
   a connection failure gets the usual few attempts, so a mistyped address fails fast.
+- **Rate limits are named.** When the provider throttles a request (HTTP 429),
+  the notice says so, how long Houston waits before trying again (the provider's
+  `Retry-After` when it sends one), and how many requests or tokens its headers say
+  are left in the current window. An exhausted quota is not retried.
 - **Nothing half-runs.** Tool calls in a discarded reply never run.
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.
@@ -509,8 +519,23 @@ safe subset in place. In the desktop app:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
 **Terminal-only commands.** `/vim`, `/verbose`, `/output`, `/spawned`, `/proposals`,
-`/image`, and `/exit`. Typed in the desktop app, they tell you where the app does the
-same thing instead of being sent to the model.
+`/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`. Typed in the
+desktop app, they tell you where the app does the same thing instead of being sent to
+the model.
+
+**Terminal sessions.**
+
+- `/rename <title>` gives the chat a title (the desktop sidebar shows it too).
+- `/export [md|json] [path]` writes the chat to a file in the working folder: Markdown
+  by default (your messages, the replies, each tool call, and tool output cut to 40
+  lines), or JSON with every message as saved. Without a path it is named after the
+  chat and the time. It never overwrites a file.
+- `/delete` deletes the chat after asking, then starts a new one.
+- `/permissions` lists your saved permission rules, numbered; `/permissions remove <n>`
+  deletes one. Rules in a project's `.houston/settings.json` are edited in that file.
+- Resuming a chat (`/resume`, `--continue`, `--resume <id>`) replays its last three
+  exchanges, so you can see where you left off.
+- Leaving prints the `houston --resume <id>` command that reopens the chat.
 
 ### Terminal themes
 
@@ -1001,9 +1026,35 @@ A single reply also has an output limit.
   commands, and it doesn't touch git history.
 - `/changes` is the natural question after a long autonomous run.
 
+### The Changes view (desktop app)
+
+The **Changes** button in the title bar, `/changes`, the composer bar's file count, and
+**View > Show Changes** open a **Changes** tab in the right-hand side panel, beside
+Preview and Background tasks. The button closes it again. Pick a scope at the top:
+
+| Scope | Shows |
+| --- | --- |
+| **This turn** | what the chat's latest turn changed, against the files before that turn |
+| **This chat** | what every turn of the chat changed, against the files before the first of them |
+| **Working tree** | every uncommitted change in the project, tracked and untracked, from git |
+
+The two chat scopes come from the snapshots Houston takes before each write, so they
+work in a folder without git too; a turn cut by a rewind is left out, and very old
+snapshots are cleared over time (the view says when). The view remembers the scope you
+picked.
+
+- **Reading diffs.** Syntax colouring by file type, real line numbers, changed words
+  marked, and a **Side by side** toggle that puts the old lines beside the new.
+- **Open** a file in its default app with the arrow button on its row.
+- **Revert** a whole file with the button on its row, or one change inside an edited
+  file with **Revert** on that change. Each asks first. In **Working tree**, a file goes
+  back to its last commit (a new file is deleted); in the chat scopes, it goes back to
+  how it was before the turn or chat (a file the chat created is deleted). A revert is
+  refused when the file changed since the list was read, and while the chat is running.
+
 ### Shipping changes (desktop app)
 
-When the working tree has changes, the bar above the composer and the Changes panel
+When the working tree has changes, the bar above the composer and the Changes view
 offer one button that fits the repository:
 
 | Button | When |
@@ -1167,6 +1218,23 @@ bottom shows the git branch the chat's folder has checked out and the approval m
 **Watch the cached count** on a long session. Those tokens are real context, but they
 bill far below the base input rate, so a big number there is why a long conversation
 costs less than its token count suggests.
+
+### Usage across chats (/usage)
+
+In the desktop app, `/usage` (or **Show usage and spend** in the command palette)
+opens a panel built from the chats saved on this computer. Nothing is sent anywhere.
+
+- **Per day:** the last 30 days, with replies, tokens in and out, and estimated cost.
+- **Per project:** every project folder (a worktree counts under its repository),
+  all time, with its chats, tokens and cost.
+- **Undated spend:** subagents, reviews, and chats saved before replies recorded
+  their own usage count toward projects and the all-time total, but not toward a day.
+  The panel says how much that is.
+- **Cost reminder:** the same setting as Settings > Agent Behavior > Loop control.
+  When one turn has cost more than the amount, Houston tells the agent to wrap up and
+  summarize. It is a reminder, not a hard stop. 0 turns it off.
+
+Costs are estimates from each model's list price.
 
 ## Version and updates
 
@@ -2638,7 +2706,7 @@ sidebar) or `Esc` returns to the chat.
 
 | Group | Pages |
 | --- | --- |
-| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Memory |
+| **AI** | Providers & Models, Agent Behavior, Tools, Customize, MCP Servers, Hooks, Memory, Import |
 | **App** | General, Appearance, Keyboard |
 | **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (whether new chats start in a worktree, and additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |
@@ -2758,6 +2826,37 @@ A few one-time tips point at controls the first time they matter:
 **Take the tour** plays the tips any time, and also covers steering (see "Typing while
 it works"). Find it in the command palette (⌘K) or under **Help → Take the Tour…**. If
 you used Houston before this feature, nothing appears on its own.
+
+## Importing from other tools
+
+**Settings > Import** looks for what other coding tools keep in well-known places and
+lets you copy what you want into Houston. The first time Houston finds any, a notice
+offers to open that page (**Review**) or not (**Not now**); it shows once.
+
+What it looks for, and where a copy goes:
+
+| Found | Where | Copied to |
+| --- | --- | --- |
+| Instruction files | your home folder (for example `~/.codex/AGENTS.md`, `~/.gemini/GEMINI.md`) | the end of `~/.houston/AGENTS.md` |
+| Instruction files | the project (`GEMINI.md`, `.cursorrules`, `.windsurfrules`, `.clinerules`, `.github/copilot-instructions.md`) | the end of the project's `AGENTS.md` |
+| MCP servers | your home folder (for example `~/.cursor/mcp.json`, `~/.claude.json`) | Settings > MCP Servers, switched off |
+| MCP servers | the project (`.mcp.json`, `.cursor/mcp.json`, `.vscode/mcp.json`, `.gemini/settings.json`) | the project's `.houston/settings.json` |
+| Skills | the project (`.claude/skills/<name>/`) | `.houston/skills/<name>/` |
+| Custom commands | your home folder (`~/.claude/commands`, `~/.codex/prompts`) or the project (`.claude/commands`) | `~/.houston/commands` or `.houston/commands` |
+
+`~/.claude/CLAUDE.md` is imported the way its own notice does it: one
+`@~/.claude/CLAUDE.md` line in `~/.houston/AGENTS.md`, so later edits to it apply too.
+Houston already reads a project's `CLAUDE.md`, so that one isn't listed.
+
+- **Nothing is selected until you pick it.** Tick what you want and choose **Import
+  selected**; **Select all new** ticks everything not yet imported.
+- **Copies only.** Originals are never moved or changed, and nothing Houston already
+  has (a command, skill folder, or server with the same name, or an instruction file
+  imported before) is overwritten; those show as already there.
+- **Nothing runs on import.** An imported MCP server starts switched off: review its
+  command under MCP Servers and switch it on. A project's servers take effect only
+  while you trust the folder, and adding them asks again if you trusted it before.
+- Project files that link outside the project are skipped.
 
 ## License and legal
 

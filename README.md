@@ -137,6 +137,9 @@ Open source under the [Apache License 2.0](LICENSE).
   default app. File paths in the transcript (tool rows, the receipt, relative links
   in replies) open there too, at the line when one is known. Each chat's ⋯ menu also has **Open in**, which opens the chat's
   folder in a detected editor or reveals it in the file manager.
+- **Message box extras.** `Ctrl+R` searches the messages you sent before, a very
+  large paste folds into a chip you can expand, and any file dropped on the box
+  attaches (text inlined, binary files such as PDFs by name).
 - **@-mention files.** Type `@` in the composer to fuzzy-search project files and
   drop a path into your message, with no need to paste or describe where things live.
 - **Slash commands.** Type `/` for a command menu. The desktop app and the terminal
@@ -510,14 +513,18 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Git-aware.** If the project is a git repo, Houston folds the current branch
   and a short working-tree status into the agent's context each turn, so it knows
   what branch it's on and what's already modified without having to run git first.
-- **Changes panel.** The **⤓ Changes** button in the title bar opens a slide-over
-  diff of every uncommitted change in the working tree (the tracked diff vs HEAD,
-  staged and unstaged, plus untracked files), each file expandable with a
-  red/green line diff and a `+/−` stat. It's working-tree scoped (all uncommitted
-  changes, not just the current chat's edits); read-only and hardened, the same
-  way the agent's `git_diff` tool is. A **Create PR** action hands off to the
-  agent: it commits, pushes, and opens the pull request through the same
-  `gh_pr_*` tools and approval gate, so the panel never drives git itself. It
+- **Changes view.** The **Changes** button in the title bar (and `/changes`) opens a
+  **Changes** tab in the right-hand side panel, beside Preview and Background tasks,
+  so the chat stays in view. It has three scopes: **This turn** (what the chat's latest
+  turn changed), **This chat** (everything the chat changed across its turns, from the
+  snapshots Houston takes before each write), and **Working tree** (every uncommitted
+  change, tracked and untracked, from git). Diffs are syntax-coloured, show their real
+  line numbers, and can be shown side by side. Each file can be opened in its default
+  app or reverted, and each change inside an edited file can be reverted on its own;
+  every revert asks first and is refused if the file changed since the list was read.
+  Git runs hardened (no repository hooks or filters) with argument lists only. A
+  **Create PR** action hands off to the agent: it commits, pushes, and opens the pull
+  request through the same `gh_pr_*` tools and approval gate. It
   opens an independent PR against the default branch, or, when the current branch
   already has an open PR, stacks the new one on top (based on that PR's branch) so
   its diff shows only the new changes. Whenever the working tree has changes, the
@@ -583,6 +590,12 @@ Open source under the [Apache License 2.0](LICENSE).
   absolute), to split or share common rules across files. To reuse an existing
   global rules file such as `~/.claude/CLAUDE.md`, add `@~/.claude/CLAUDE.md` to
   `~/.houston/AGENTS.md`; Houston offers to do this once when it finds one.
+- **Import from other tools.** Settings > Import lists the instruction files, MCP
+  servers, skills, and custom commands other coding tools keep in your home folder
+  and the open project (for example a `.mcp.json` or `.claude/commands` in the
+  project), and copies the ones you pick into Houston's own locations. Originals
+  are never changed, nothing Houston already has is overwritten, and imported MCP
+  servers start switched off. Houston offers this once when it first finds any.
 - **Token usage & cost at a glance.** The control bar above the composer shows how
   full the context is (a small bar and "used/maximum") and the chat's **estimated
   USD cost** (for models with known pricing: Claude/GPT/Gemini; local models show
@@ -592,6 +605,11 @@ Open source under the [Apache License 2.0](LICENSE).
   message shows when it was sent, and each turn's last reply names the model that
   answered and that turn's tokens and cost. The model, project folder, approval policy and
   reasoning controls live there too, down by the composer, where you're typing.
+- **Usage across chats.** `/usage` opens spend and tokens per day (last 30 days)
+  and per project, summed from the chats saved on your computer (nothing leaves
+  it), with the per-turn cost reminder beside them. When a provider rate-limits a
+  request, the retry notice says so, how long Houston waits, and the remaining
+  quota the provider reported.
 
 ## Install (prebuilt binaries)
 
@@ -903,6 +921,10 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 | `/rewind` | go back to an earlier message: the conversation, the code, or both |
 | `/resume [query]` | list (or search by title) and reopen a saved session |
 | `/fork` | branch the current session into a copy, leaving the original intact |
+| `/rename <title>` | give this chat a title |
+| `/export [md\|json] [path]` | write this chat to a Markdown (default) or JSON file in the working folder |
+| `/delete` | delete this chat, after asking |
+| `/permissions [remove n]` | list the saved permission rules, or remove one |
 | `/undo`, `/redo` | revert the files the last turn changed, or put them back |
 | `/changes` (`/diff`) | summarize what is different in the working tree; `/diff last [n]` shows the diff of this session's last edit (or `n` back) |
 | `/review` | adversarial review of your uncommitted changes |
@@ -927,8 +949,9 @@ same set, and short aliases such as `/diff`, `/think`, and `/q` work in both):
 Each session is saved as an ordinary conversation, so it survives restarts and
 shows up in the desktop app's sidebar: one history across both clients. `/resume`
 lists recent sessions for the current folder and reopens one where you left off,
-with the model, reasoning effort, and approval mode it was using; `/clear` starts a
-fresh one.
+with the model, reasoning effort, and approval mode it was using, and replays its
+last few exchanges; `/clear` starts a fresh one. Leaving prints the session id and
+the `houston --resume <id>` command that reopens it.
 
 Flags mirror headless: `--cwd`, `--provider` / `--model`, `--approval`
 (default: your default approval mode, shared with the desktop app), `--full-auto`, and `--continue` /
