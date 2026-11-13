@@ -142,6 +142,7 @@ import {
 } from '@shared/onboarding'
 import { isAnyPopoverOpen } from './components/Popover'
 import { Icon } from './components/Icon'
+import { StatusBarInfo } from './components/StatusBarInfo'
 import { CommandPalette } from './components/CommandPalette'
 import { FindBar } from './components/FindBar'
 import { desktopCommandAction, type DesktopCommandAction, type SettingsSection } from './lib/desktopCommands'
@@ -2927,6 +2928,10 @@ export default function App(): JSX.Element {
             open={terminalOpen}
             shortcut={shortcutHint('toggle-terminal', mac, shortcuts)}
             onShow={toggleTerminal}
+          />
+          <StatusBarInfo
+            branch={workspace ? workingTreeStats.branch : undefined}
+            policy={canChat ? settings.approvalPolicy : null}
           />
           {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
         </footer>
