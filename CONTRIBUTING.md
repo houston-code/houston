@@ -196,6 +196,10 @@ everyone learns to ignore. Two flakes is a real drop and fails. A task scoring
 *above* its baseline is reported as `improved`, which means the baseline is stale
 and worth re-recording.
 
+A recording is also refused when any failed attempt ended in a run error (the
+provider refused the call, the account ran out of credit) rather than a result:
+that is not a score, and a task frozen at 0 can never regress.
+
 A baseline where **every** task scored 0 is refused, both when recording it and
 when loading it. Nothing passing is almost always a misconfiguration (an empty or
 wrong model id, a bad key, a provider outage) rather than a real score, and
