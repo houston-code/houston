@@ -1,4 +1,5 @@
 import { causeFromMessage, type TurnErrorCause } from '@shared/turnError'
+import type { ThrottleInfo } from '@shared/rateLimit'
 
 /**
  * Transient-failure handling for provider streaming. The SDKs retry the *initial*
@@ -280,6 +281,42 @@ export function classifyProviderFailure(err: unknown): TurnErrorCause | undefine
   if (typeof status === 'number' && status >= 500) return 'provider-down'
   if (isNetworkError(err)) return 'network'
   return causeFromMessage(String((err as { message?: unknown })?.message ?? err))
+}
+
+/** A header's value as a non-negative whole number, or undefined. */
+function headerCount(headers: unknown, names: string[]): number | undefined {
+  for (const n of names) {
+    const raw = headerValue(headers, n)?.trim()
+    if (!raw) continue
+    const v = Number(raw)
+    if (Number.isFinite(v) && v >= 0) return Math.floor(v)
+  }
+  return undefined
+}
+
+/**
+ * What to tell the user about a throttled attempt (a 429 that isn't an exhausted
+ * quota), or undefined for any other failure. `waitMs` is the delay the loop chose.
+ * Reads the remaining-quota headers Anthropic and OpenAI-style APIs send, when the
+ * error kept them; nothing else from the response is read.
+ */
+export function throttleInfo(err: unknown, waitMs: number): ThrottleInfo | undefined {
+  const status = (err as { status?: unknown })?.status
+  if (status !== 429 || isQuotaExhaustedError(err)) return undefined
+  const headers = (err as { headers?: unknown })?.headers
+  const retryAfterMs = retryAfterHintMs(err)
+  const remainingRequests = headerCount(headers, ['anthropic-ratelimit-requests-remaining', 'x-ratelimit-remaining-requests'])
+  const remainingTokens = headerCount(headers, [
+    'anthropic-ratelimit-tokens-remaining',
+    'anthropic-ratelimit-input-tokens-remaining',
+    'x-ratelimit-remaining-tokens'
+  ])
+  return {
+    waitMs: Math.max(0, Math.round(waitMs)),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+    ...(remainingRequests !== undefined ? { remainingRequests } : {}),
+    ...(remainingTokens !== undefined ? { remainingTokens } : {})
+  }
 }
 
 /** Exponential backoff with full jitter, in ms. `rand` is injectable for tests. */

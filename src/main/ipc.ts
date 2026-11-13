@@ -49,6 +49,7 @@ import {
   saveSettings,
   rememberWorkspace,
   openWorkspaceFolder,
+  rememberModel,
   workspacePickerStartDir,
   getProvider,
   isGitInitDismissed,
@@ -111,7 +112,8 @@ import type { MemoryResponse } from '@shared/memoryTypes'
 import { decideLegacyRulesNotice, legacyRulesNoticeApplies } from './globalRules'
 import { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } from './legacyRulesNotice'
 import { MAX_MEMORY_NOTE } from '@shared/memory'
-import { notificationFor, notifyAgentEvent, workspaceLabel } from './notifications'
+import { notifyAgentEvent, workspaceLabel } from './notifications'
+import { attentionSignals } from '@shared/notify'
 import {
   restoreCheckpoint,
   reapplyCheckpoint,
@@ -129,6 +131,7 @@ import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
+import { registerCustomizeIpc } from './customizeIpc'
 import {
   getRepoInfo,
   createWorktree,
@@ -136,6 +139,8 @@ import {
   isWorktreeDisposable
 } from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'
+import { collectChatChanges, revertChange } from './agent/changes'
+import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import { initGitRepo } from './agent/gitInit'
 import { realpathSync } from 'node:fs'
 import {
@@ -152,6 +157,7 @@ import {
   organizeConversation,
   reorderConversations,
   computeScorecard,
+  computeUsageReport,
   addUsage,
   mergeRunningTotals,
   setMessages,
@@ -296,19 +302,22 @@ function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): 
 }
 
 /**
- * Fire a native desktop notification for a notable agent event (turn finished,
- * approval/question needed, error) when Houston isn't focused. Cheap gates first —
- * the setting being off, or an event that never notifies — so streaming deltas
- * don't pay for the conversation lookup. Every agent event flows through emitEvent,
- * so this also covers queued follow-up runs.
+ * Pull the user back for a notable agent event while Houston isn't focused: a native
+ * desktop notification (turn finished, approval/question needed, error, PR) and,
+ * when the user turned them on, an attention sound (turn ended, input needed). Cheap
+ * gates first (the settings being off, or an event that never signals) so streaming
+ * deltas don't pay for the conversation lookup. Every agent event flows through
+ * emitEvent, so this also covers queued follow-up runs.
  */
 function maybeNotify(sender: WebContents, conversationId: string, e: AgentEvent): void {
-  if (getSettings().desktopNotifications === false) return
-  if (!notificationFor(e)) return
-  // Nothing is shown while the window is focused (notifyAgentEvent's own gate), so
+  const signals = attentionSignals(e, getSettings())
+  if (!signals) return
+  // Nothing is signalled while the window is focused (the user is watching), so
   // don't parse the chat file just to label a notification that won't appear.
   const win = BrowserWindow.fromWebContents(sender)
   if (win && !win.isDestroyed() && win.isFocused()) return
+  if (signals.sound && !sender.isDestroyed()) sender.send(IPC.attentionSound, signals.sound)
+  if (!signals.notify) return
   const conv = peekConversation(conversationId)
   notifyAgentEvent(e, win, {
     enabled: true,
@@ -824,6 +833,41 @@ export function registerIpc(ready?: Promise<unknown>): void {
     collectWorkingTreeChanges(typeof workspace === 'string' ? workspace : '')
   )
 
+  // The Changes view's turn and chat scopes: what the chat's checkpoints say it
+  // changed, against the files as they are now. Read-only.
+  handle(IPC.chatChanges, async (_event, conversationId: unknown, scope: unknown): Promise<ChatChanges> =>
+    typeof conversationId === 'string' && (scope === 'turn' || scope === 'chat')
+      ? collectChatChanges(conversationId, scope)
+      : { files: [], added: 0, removed: 0, unavailable: 0 }
+  )
+
+  // Revert one file or hunk from the Changes view (the user confirmed it there). The
+  // working-tree scope only touches a project the app already knows; a chat's scopes
+  // wait for its run to finish; and every revert re-checks that the file still holds
+  // the diff the view showed (see agent/changes.ts).
+  const knownWorkspace = (workspace: string): boolean => {
+    let real: string
+    try {
+      real = realpathSync(workspace)
+    } catch {
+      return false
+    }
+    const candidates = [...(getSettings().recentWorkspaces ?? []), ...listConversations().map((c) => c.workspace)]
+    return candidates.some((c) => {
+      try {
+        return typeof c === 'string' && realpathSync(c) === real
+      } catch {
+        return false
+      }
+    })
+  }
+  handle(IPC.changesRevert, async (_event, req: ChangeRevertRequest): Promise<ChangeRevertResult> =>
+    revertChange(req, {
+      runActive: (id) => activeRunForConversation(id) !== null,
+      knownWorkspace
+    })
+  )
+
   // Initialize a git repo in the workspace so a non-git project's files become
   // visible/reviewable in the Changes panel (the "Initialize git repository" action).
   handle(IPC.gitInit, async (_event, workspace: string) =>
@@ -896,6 +940,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return []
     }
   })
+
+  // Settings > Customize (create, switch off, open, trash; instruction files).
+  registerCustomizeIpc(handle)
 
   handle(IPC.settingsGet, () => getSettings())
 
@@ -1081,6 +1128,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
   })
   // Local-only per-model loop scorecard — aggregated on-device, never transmitted.
   handle(IPC.conversationScorecard, () => computeScorecard())
+  // Local-only spend and tokens per day and per project, for the usage view.
+  handle(IPC.conversationUsageReport, () => computeUsageReport())
   handle(
     IPC.conversationCreate,
     async (
@@ -1365,6 +1414,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
       approvalPolicy,
       ...(reasoningEffort ? { reasoningEffort } : {})
     })
+    // The model picker lists recently used models; best-effort, never blocks the run.
+    try {
+      rememberModel({ providerId: req.providerId, model: req.model })
+    } catch (e) {
+      log.warn(`could not record the recent model: ${(e as Error).message}`)
+    }
 
     void runAndDrain(
       makeIo(event.sender),

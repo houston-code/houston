@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mentionQuery, commandQuery, completeInput, makeCompleter, COMMANDS, commandMenu, renderCommandMenu, MENU_LIMIT, type CommandSpec } from './tui-complete'
+import { mentionQuery, commandQuery, completeInput, makeCompleter, COMMANDS, commandMenu, renderCommandMenu, renderMentionMenu, makeMentionMenu, MENU_LIMIT, type CommandSpec } from './tui-complete'
 
 describe('mentionQuery', () => {
   it('extracts an @token at the end of the line', () => {
@@ -142,5 +142,68 @@ describe('commandMenu', () => {
     const rows = renderCommandMenu(many, paint)
     expect(rows).toHaveLength(MENU_LIMIT + 1)
     expect(rows.at(-1)).toContain(`${20 - MENU_LIMIT} more`)
+  })
+})
+
+describe('the @ mention dropdown', () => {
+  const plain = (x: string): string => x
+
+  it('renders matching paths, capped, with the Tab hint', () => {
+    expect(renderMentionMenu(['src/a.ts', 'src/'], plain)).toEqual(['  @src/a.ts', '  @src/', '  Tab completes'])
+    const many = Array.from({ length: MENU_LIMIT + 3 }, (_, i) => `f${i}`)
+    const rows = renderMentionMenu(many, plain)
+    expect(rows).toContain('  … 3 more')
+    expect(renderMentionMenu([], plain)).toEqual(['  (no matching file)'])
+  })
+
+  it('looks the files up once per query and repaints when they arrive', async () => {
+    const asked: string[] = []
+    const menu = makeMentionMenu(async (q) => {
+      asked.push(q)
+      return [`src/${q}.ts`]
+    }, plain)
+    let redraws = 0
+    const redraw = (): void => {
+      redraws++
+    }
+    expect(menu('look at @gre', redraw)).toEqual([]) // nothing yet: the lookup is async
+    expect(menu('look at @gre', redraw)).toEqual([]) // still one lookup in flight
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(redraws).toBe(1)
+    expect(menu('look at @gre', redraw)).toEqual(['  @src/gre.ts', '  Tab completes'])
+    expect(asked).toEqual(['gre'])
+  })
+
+  it('is not a mention menu outside an @ token', () => {
+    const menu = makeMentionMenu(async () => ['x'], plain)
+    expect(menu('plain words', () => {})).toBeNull()
+    expect(menu('/model', () => {})).toBeNull()
+  })
+
+  it('drops an older query’s late answer', async () => {
+    const resolvers: Record<string, (v: string[]) => void> = {}
+    const menu = makeMentionMenu((q) => new Promise((res) => (resolvers[q] = res)), plain)
+    let redraws = 0
+    menu('@a', () => redraws++)
+    menu('@ab', () => redraws++)
+    resolvers.a(['old.ts'])
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(redraws).toBe(0)
+    resolvers.ab(['new.ts'])
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(menu('@ab', () => {})).toEqual(['  @new.ts', '  Tab completes'])
+  })
+
+  it('keeps the menu as it was when the lookup fails', async () => {
+    const menu = makeMentionMenu(async () => {
+      throw new Error('not a repo')
+    }, plain)
+    expect(menu('@x', () => {})).toEqual([])
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(menu('@x', () => {})).toEqual([])
   })
 })

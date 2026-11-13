@@ -93,8 +93,8 @@ describe('prompt visibility guard', () => {
   // Every renderer call that starts or queues a turn.
   const RENDERER_SEND_SITES: Record<string, { count: number; why: string }> = {
     'renderer/src/App.tsx': {
-      count: 13,
-      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" + project-card /init invocations, and the mid-run steer, its idle send, and its off-chat queue (user text)'
+      count: 14,
+      why: 'sendNow/dispatch/onSend/onInvoke plumbing, the ship + /agent + proposal "Do it here" + side-chat "Send to main" + project-card /init invocations, the mid-run steer, its idle send, and its off-chat queue (user text), and Retry on the last reply (resends that user message as it was, keeping its invokedAs)'
     },
     'renderer/src/components/Composer.tsx': { count: 3, why: 'the /review invocation and two sends of composer text' },
     'renderer/src/hooks/useChat.ts': { count: 1, why: 'startAgent, forwarding invokedAs' },
