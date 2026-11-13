@@ -33,6 +33,7 @@ import {
   resizeTerminal,
   killTerminal,
   killAllTerminals,
+  killTerminalsOf,
   terminalCount
 } from './terminal'
 
@@ -141,5 +142,23 @@ describe('terminal manager', () => {
     spawned[0].emitData('x')
     await nextTick()
     expect(sender.send).not.toHaveBeenCalled()
+  })
+
+  it('killTerminalsOf ends only the terminals that renderer opened', () => {
+    const closing = fakeSender()
+    const other = fakeSender()
+    const a = createTerminal(closing)
+    createTerminal(other)
+    const c = createTerminal(closing)
+    expect(killTerminalsOf(closing)).toBe(2)
+    expect(spawned[0].kill).toHaveBeenCalled()
+    expect(spawned[1].kill).not.toHaveBeenCalled()
+    expect(spawned[2].kill).toHaveBeenCalled()
+    expect(terminalCount()).toBe(1)
+    // Their ids are gone: input to them is a no-op, and a second release finds nothing.
+    writeTerminal(a, 'x')
+    writeTerminal(c, 'x')
+    expect(spawned[0].write).not.toHaveBeenCalled()
+    expect(killTerminalsOf(closing)).toBe(0)
   })
 })

@@ -117,7 +117,8 @@ import {
   getConversationCheckpoint,
   conversationForLatestRun
 } from './agent/checkpoints'
-import { createTerminal, writeTerminal, resizeTerminal, killTerminal } from './terminal'
+import { createTerminal, writeTerminal, resizeTerminal, killTerminal, killTerminalsOf } from './terminal'
+import { log } from './logger'
 import { setMenuState, setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
 import { compactConversationNow } from './agent/compact'
@@ -341,6 +342,28 @@ function coalescedEmit(
     }
     c.push(e)
   }
+}
+
+/** Renderers whose lifecycle already ends their terminals (see watchTerminalHost). */
+const terminalHosts = new WeakSet<WebContents>()
+
+/**
+ * End a renderer's terminals when its page goes away: the window closed (on macOS the
+ * app keeps running), the page reloaded, or the renderer crashed. The page held the
+ * only handle to them, so they would otherwise keep running unseen until quit. A
+ * reload is a cross-document navigation of the main frame; the first page load
+ * happens before any terminal exists, and an in-page navigation is not reported here.
+ */
+function watchTerminalHost(wc: WebContents): void {
+  if (terminalHosts.has(wc)) return
+  terminalHosts.add(wc)
+  const release = (): void => {
+    const n = killTerminalsOf(wc)
+    if (n) log.info(`closed ${n} terminal(s) whose window went away`)
+  }
+  wc.once('destroyed', release)
+  wc.on('render-process-gone', release)
+  wc.on('did-navigate', release)
 }
 
 /** Bind the run/queue orchestrator's output to a specific renderer. */
@@ -1810,8 +1833,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Spawn a terminal; output/exit are pushed back to the creating webContents.
   handle(
     IPC.terminalCreate,
-    (event, opts: { cwd?: string; cols?: number; rows?: number }): string =>
-      createTerminal(event.sender, opts ?? {})
+    (event, opts: { cwd?: string; cols?: number; rows?: number }): string => {
+      watchTerminalHost(event.sender)
+      return createTerminal(event.sender, opts ?? {})
+    }
   )
   handle(IPC.terminalInput, (_event, id: string, data: string) => writeTerminal(id, data))
   handle(IPC.terminalResize, (_event, id: string, cols: number, rows: number) =>
