@@ -1,15 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parseDeepLink } from '@shared/deepLink'
 import { runOpenCommand, urlOpener, type OpenInAppDeps, resolveDirectory, launchDetached } from './openInApp'
 
+// The working directory as this platform spells it (D:\work on Windows), since the
+// command resolves paths with the platform's own rules.
+const WORK = resolve('/work')
+
 function deps(over: Partial<OpenInAppDeps> = {}): OpenInAppDeps & { out: ReturnType<typeof vi.fn>; err: ReturnType<typeof vi.fn> } {
   return {
-    cwd: '/work',
+    cwd: WORK,
     platform: 'darwin',
-    resolveDirectory: (p) => (p.startsWith('/work') ? p : null),
+    resolveDirectory: (p) => (p.startsWith(WORK) ? p : null),
     launch: vi.fn(async () => {}),
     out: vi.fn(),
     err: vi.fn(),
@@ -23,18 +27,18 @@ describe('houston open', () => {
     expect(await runOpenCommand([], d)).toBe(0)
     const [cmd, args] = (d.launch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[]]
     expect(cmd).toBe('open')
-    expect(parseDeepLink(args[0])).toEqual({ type: 'open-folder', path: '/work' })
+    expect(parseDeepLink(args[0])).toEqual({ type: 'open-folder', path: WORK })
   })
 
   it('resolves a relative folder against the working directory', async () => {
     const d = deps()
     expect(await runOpenCommand(['sub dir'], d)).toBe(0)
     const [, args] = (d.launch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, string[]]
-    expect(parseDeepLink(args[args.length - 1])).toEqual({ type: 'open-folder', path: '/work/sub dir' })
+    expect(parseDeepLink(args[args.length - 1])).toEqual({ type: 'open-folder', path: join(WORK, 'sub dir') })
   })
 
   it('refuses a path that is not a folder, extra arguments, and unknown flags', async () => {
-    expect(await runOpenCommand(['/elsewhere'], deps())).toBe(1)
+    expect(await runOpenCommand([resolve('/elsewhere')], deps())).toBe(1)
     expect(await runOpenCommand(['a', 'b'], deps())).toBe(2)
     expect(await runOpenCommand(['--force'], deps())).toBe(2)
   })
