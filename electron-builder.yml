@@ -32,6 +32,12 @@ files:
   - package.json
   - '!node_modules/**/*.{map,d.ts,d.mts,d.cts}'
   - '!node_modules/**/*.ts' # raw TypeScript sources (e.g. openai/src); never executed
+  # highlight.js ships its stylesheets (the renderer bundles the one it uses) and a second
+  # copy of every language as ES modules. The main process loads only
+  # `highlight.js/lib/common`, which resolves to es/common.js, a wrapper around lib/: keep
+  # es/ itself and lib/, drop the rest (about 6 MB).
+  - '!node_modules/highlight.js/{styles,scss}/**'
+  - '!node_modules/highlight.js/es/languages/**'
   # node-pty compiles in place, so its dir also holds the build's leftovers: object files,
   # MSBuild project and log files, gyp Makefiles, and a stray copy of the addon under bin/
   # that the loader never reads (it loads build/Release, then prebuilds/). Several record
