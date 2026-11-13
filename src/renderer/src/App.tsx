@@ -44,7 +44,7 @@ import {
   planNewChatWorkspace,
   suggestBranch
 } from './lib/worktree'
-import { useApplyTheme } from './hooks/useApplyTheme'
+import { useApplyAppearance, useApplyTheme } from './hooks/useApplyTheme'
 import { useChatStatus } from './hooks/useChatStatus'
 import { useWindowFocused } from './hooks/useWindowFocused'
 import { useBackgroundTasks, type BackgroundTask } from './hooks/useBackgroundTasks'
@@ -463,6 +463,11 @@ export default function App(): JSX.Element {
 
   // Apply the saved color theme, following the OS while on "system".
   useApplyTheme(settings?.theme ?? 'system')
+  useApplyAppearance({
+    chatFontSize: settings?.chatFontSize,
+    density: settings?.density,
+    codeTheme: settings?.codeTheme
+  })
 
   // Live status of every conversation with a run (running, blocking prompts), used
   // to mark chats in the sidebar, including ones running in the background.
