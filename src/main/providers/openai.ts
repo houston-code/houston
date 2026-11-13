@@ -187,6 +187,8 @@ export function createChatCompletionsProvider(
       // Accumulate streamed tool calls by their `index`.
       const toolAcc = new Map<number, { id: string; name: string; args: string }>()
       let finishReason: string | null = null
+      // A refusal streams as `delta.refusal` text instead of content.
+      let refused = false
       let inputTokens: number | undefined
       let outputTokens: number | undefined
       let cacheReadTokens: number | undefined
@@ -226,6 +228,11 @@ export function createChatCompletionsProvider(
         const choice = chunk.choices[0]
         if (!choice) continue
         const delta = choice.delta
+        const refusalText = (delta as { refusal?: string | null } | undefined)?.refusal
+        if (refusalText) {
+          refused = true
+          yield { type: 'text', text: refusalText }
+        }
         if (delta?.content) {
           if (contentMode === 'text') {
             const clean = scrubber.push(delta.content)
@@ -303,6 +310,7 @@ export function createChatCompletionsProvider(
       yield {
         type: 'done',
         stopReason: mapFinishReason(finishReason, hadToolCalls),
+        ...(refused ? { refusal: 'refusal' } : finishReason === 'content_filter' ? { refusal: 'content_filter' } : {}),
         usage: {
           inputTokens,
           outputTokens,

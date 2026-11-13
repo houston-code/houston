@@ -27,6 +27,9 @@ function callSignatures(m: ChatMessage, model: string): Map<string, string> {
   return out
 }
 
+/** Gemini finish reasons that mean a filter stopped the reply, not the model finishing it. */
+const GEMINI_BLOCKED = new Set(['SAFETY', 'RECITATION', 'PROHIBITED_CONTENT', 'BLOCKLIST', 'SPII', 'IMAGE_SAFETY'])
+
 export function toGeminiContents(messages: ChatMessage[], model = ''): Content[] {
   const out: Content[] = []
   // Tracks whether the last emitted turn is a `user` turn built from tool
@@ -230,6 +233,7 @@ export function createGeminiProvider(apiKey: string): Provider {
         // seen. Otherwise a tool call means tool_use, and a plain finish is end_turn.
         stopReason:
           finishReason === 'MAX_TOKENS' ? 'max_tokens' : sawToolCall ? 'tool_use' : 'end_turn',
+        ...(finishReason && GEMINI_BLOCKED.has(finishReason) ? { refusal: finishReason } : {}),
         usage: {
           inputTokens,
           outputTokens,
