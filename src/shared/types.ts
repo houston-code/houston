@@ -807,6 +807,13 @@ export interface AppSettings {
    */
   sidebarUnreadFirst?: boolean
   /**
+   * Whether a new chat at a git repository's root starts with "New worktree" on: the
+   * chat then works on its own branch in a separate folder. Set when the user flips the
+   * toggle (or in Settings), so their choice carries to the next chat. Absent = on,
+   * with a one-line explanation shown until the user has chosen.
+   */
+  newChatWorktree?: boolean
+  /**
    * Width (px) of the left sidebar. Clamped to [SIDEBAR_MIN_WIDTH,
    * SIDEBAR_MAX_WIDTH] on read; falls back to SIDEBAR_DEFAULT_WIDTH when unset.
    */

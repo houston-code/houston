@@ -427,6 +427,20 @@ describe('ControlBar mode and effort pickers', () => {
   })
 })
 
+describe('ControlBar worktree explanation', () => {
+  it('explains a new worktree until the user has chosen, and only while it is on', () => {
+    const props = { ...baseProps(), newChat: true, repoInfo: repo, worktreeMode: true }
+    const { rerender } = render(<ControlBar {...props} />)
+    expect(screen.getByRole('note')).toHaveTextContent('its own branch in a separate folder')
+    rerender(<ControlBar {...props} worktreeMode={false} />)
+    expect(screen.queryByRole('note')).toBeNull()
+    rerender(<ControlBar {...props} settings={{ ...props.settings, newChatWorktree: true }} />)
+    expect(screen.queryByRole('note')).toBeNull()
+    rerender(<ControlBar {...props} newChat={false} />)
+    expect(screen.queryByRole('note')).toBeNull()
+  })
+})
+
 describe('ControlBar rows', () => {
   const groups = (container: HTMLElement): HTMLElement[] => [
     ...container.querySelectorAll<HTMLElement>('.control-bar > .control-bar__group')

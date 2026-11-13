@@ -5,8 +5,7 @@ import {
   branchNameError,
   canCreateWorktree,
   defaultBaseBranch,
-  planNewChatWorkspace
-} from './worktree'
+  planNewChatWorkspace, initialWorktreeMode } from './worktree'
 
 describe('suggestBranch', () => {
   it('produces an <adjective>-<noun>-<suffix> branch name (no path prefix)', () => {
@@ -125,5 +124,18 @@ describe('unborn repos (no commits on the current branch)', () => {
     // Born branch: itself. Detached HEAD: '' (the "HEAD (detached)" option).
     expect(defaultBaseBranch(info({ unborn: false, branches: ['main'] }))).toBe('main')
     expect(defaultBaseBranch(info({ unborn: false, currentBranch: null }))).toBe('')
+  })
+})
+
+describe('initialWorktreeMode', () => {
+  it('turns the toggle on where the planner would, until the user turns it off', () => {
+    expect(initialWorktreeMode(true, undefined)).toBe(true)
+    expect(initialWorktreeMode(true, true)).toBe(true)
+    expect(initialWorktreeMode(true, false)).toBe(false)
+  })
+
+  it('never turns it on where the planner would not (a subfolder, a repo with no commits)', () => {
+    expect(initialWorktreeMode(false, undefined)).toBe(false)
+    expect(initialWorktreeMode(false, true)).toBe(false)
   })
 })

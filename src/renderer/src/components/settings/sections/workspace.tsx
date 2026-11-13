@@ -47,6 +47,27 @@ export function AdditionalFoldersSection({ ctx }: { ctx: SettingsCtx }): JSX.Ele
   )
 }
 
+/** Whether new chats in a git repository start in their own worktree. */
+export function NewChatWorktreeSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
+  const { settings, setSettings } = ctx
+  return (
+    <SettingsSection title="New chats in a git repository">
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.newChatWorktree ?? true}
+          onChange={(e) => setSettings((s) => ({ ...s, newChatWorktree: e.target.checked }))}
+        />
+        <span>
+          Start each new chat in its own git worktree: a separate folder on a new branch, so
+          your checkout stays as it is until you merge. Off: chats edit the folder you opened,
+          on its current branch. Each new chat can still change this with its New worktree box.
+        </span>
+      </label>
+    </SettingsSection>
+  )
+}
+
 /** Per-folder decisions on honoring a project's elevating config. */
 export function TrustedFoldersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx

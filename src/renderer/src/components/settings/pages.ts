@@ -24,7 +24,12 @@ import {
 import { McpServersSection } from './sections/mcp'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
-import { AdditionalFoldersSection, SandboxEgressSection, TrustedFoldersSection } from './sections/workspace'
+import {
+  AdditionalFoldersSection,
+  NewChatWorktreeSection,
+  SandboxEgressSection,
+  TrustedFoldersSection
+} from './sections/workspace'
 import {
   AppearanceSection,
   DiagnosticsCheckSection,
@@ -300,6 +305,11 @@ export const PAGES: SettingsPage[] = [
     label: PAGE_LABELS.workspace,
     group: 'Security',
     sections: [
+      {
+        id: 'new-chat-worktree',
+        Component: NewChatWorktreeSection,
+        keywords: ['worktree', 'branch', 'git', 'checkout', 'isolate', 'new chat']
+      },
       {
         id: 'additional-folders',
         Component: AdditionalFoldersSection,

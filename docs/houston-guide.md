@@ -2338,7 +2338,10 @@ In a git repo, a new chat runs in a fresh, isolated worktree on its own branch u
 `.houston/worktrees/` by default, so the agent's edits never touch your current
 checkout.
 
-- Untick **New worktree** to work in the repo directly.
+- Untick **New worktree** to work in the repo directly. The app remembers the choice,
+  so the next new chat starts the same way; change it any time per chat, or under
+  Settings > Workspace > **New chats in a git repository**. Until you choose, a line
+  under the controls explains what a worktree does.
 - In a repo whose current branch has no commits yet (a fresh `git init`), the toggle
   starts off. A worktree can only branch from a branch that has commits, and isn't
   offered when no branch has any.
@@ -2441,7 +2444,7 @@ sidebar) or `Esc` returns to the chat.
 | --- | --- |
 | **AI** | Providers & Models, Agent Behavior, Tools, MCP Servers, Hooks, Memory |
 | **App** | General, Appearance, Keyboard |
-| **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (additional folders the agent may use) |
+| **Security** | Permissions (the default approval mode, permission rules, trusted folders, sandbox egress), Workspace (whether new chats start in a worktree, and additional folders the agent may use) |
 | **About** | installed version and a manual "Check for updates", diagnostics, legal |
 
 **Check for Updates…** is also in the app menu on macOS, and the Help menu on Windows
