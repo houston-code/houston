@@ -115,6 +115,7 @@ import type { ProposalHandlers } from './components/ProposalCard'
 import { Composer, IDLE_ONLY_COMMANDS } from './components/Composer'
 import { GitInitBanner } from './components/GitInitBanner'
 import { GlobalRulesNotice } from './components/GlobalRulesNotice'
+import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
 import { UpdateBanner } from './components/UpdateBanner'
@@ -2756,6 +2757,14 @@ export default function App(): JSX.Element {
         />
 
         <GlobalRulesNotice onDecided={setSettings} />
+
+        <EnvKeyNotice
+          // A key stored with no model picked yet starts on that provider's default,
+          // as connecting one in the checklist does; otherwise the pick stays.
+          onImported={(fresh, providerId) =>
+            fresh.selected ? setSettings(fresh) : void onModelConnected(fresh, providerId)
+          }
+        />
 
         <GitInitBanner
           // Re-evaluate cleanly per workspace: a new folder gets its own banner state.

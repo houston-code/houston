@@ -37,6 +37,9 @@ export const IPC = {
   legacyRulesNoticeStatus: 'app:legacyRulesNoticeStatus',
   /** Answer that notice: import ~/.claude/CLAUDE.md, or keep the rules separate. */
   legacyRulesNoticeDecide: 'app:legacyRulesNoticeDecide',
+  envKeyOffers: 'app:envKeyOffers',
+  envKeyImport: 'app:envKeyImport',
+  envKeyDismiss: 'app:envKeyDismiss',
   // Updates
   updateCheck: 'update:check',
   updateWhatsNew: 'update:whatsNew',

@@ -2516,6 +2516,16 @@ On first launch, the welcome screen shows a three-step **Get started** checklist
    organized." for a folder with files, or "Build a simple to-do list web page in this
    folder." for an empty one. Click the suggestion to put it in the message box.
 
+**Keys you already exported.** The desktop app only uses keys saved in its secure
+store, never one that happens to be in its environment. When it starts and finds
+`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` or `GEMINI_API_KEY` set for a provider with no
+saved key, it asks once: **Use it** checks the key with the provider and saves it, so
+the app and the terminal stop needing it entered twice; **Not now** stops asking for
+that provider. The notice shows only the provider, the variable's name, and the key's
+last four characters, and nothing is saved unless you choose **Use it**. An app opened
+from the Dock or Start menu often doesn't see variables set in your shell profile; when
+it does, the Connect panel offers the same key above the key box.
+
 Each step ticks itself off from the app's real state, and the checklist goes away for
 good once the first task is sent. After that, every empty new chat shows a row of
 starter tasks suited to the folder (for a project: explain it, find a bug, add tests,

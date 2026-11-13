@@ -5,6 +5,7 @@ import { IPC } from '@shared/constants'
 import type {
   AppSettings,
   ApprovalPolicy,
+  EnvKeyOffer,
   FolderTrustStatus,
   IntegrationsInfo,
   LegacyRulesChoice,
@@ -85,6 +86,18 @@ const api = {
   /** Answer that notice: import ~/.claude/CLAUDE.md into it, or keep the rules separate. */
   decideLegacyRulesNotice: (choice: LegacyRulesChoice): Promise<LegacyRulesDecideResult> =>
     ipcRenderer.invoke(IPC.legacyRulesNoticeDecide, choice),
+  /**
+   * API keys found in the app's environment for providers with no stored key: the
+   * startup notice's list (`startup`, skipping "Not now" answers) or the Connect
+   * panel's (`connect`). Each carries the key's last four characters only.
+   */
+  getEnvKeyOffers: (scope: 'startup' | 'connect'): Promise<EnvKeyOffer[]> =>
+    ipcRenderer.invoke(IPC.envKeyOffers, scope),
+  /** Check the provider's environment key and store it; resolves to fresh settings. */
+  importEnvKey: (providerId: string): Promise<AppSettings> => ipcRenderer.invoke(IPC.envKeyImport, providerId),
+  /** "Not now": stop offering these providers' environment keys at startup. */
+  dismissEnvKeyOffers: (providerIds: string[]): Promise<void> =>
+    ipcRenderer.invoke(IPC.envKeyDismiss, providerIds),
   pickWorkspace: (): Promise<string | null> => ipcRenderer.invoke(IPC.workspacePick),
   pickDirectory: (): Promise<string | null> => ipcRenderer.invoke(IPC.directoryPick),
   listWorkspaceFiles: (workspace: string, query: string): Promise<string[]> =>
