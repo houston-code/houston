@@ -6471,6 +6471,38 @@ describe('loop control — stall detection', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  it('ends a persistent stall with a reply step that runs no tools', async () => {
+    writeFileSync(join(ws, 'a.txt'), 'x')
+    let calls = 0
+    let sawFinalNote = false
+    const looping: Provider = {
+      async *streamChat(req) {
+        if (req.messages.some((m) => typeof m.content === 'string' && /this turn is ending now/.test(m.content))) {
+          sawFinalNote = true
+          // A model that still reaches for a tool on its last step: the call must not run.
+          yield { type: 'text', text: 'I kept rereading a.txt without progress.' }
+          yield { type: 'tool_call', call: { id: `x${calls}`, name: 'read_file', arguments: { path: 'a.txt' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        calls++
+        yield { type: 'tool_call', call: { id: `c${calls}`, name: 'read_file', arguments: { path: 'a.txt' } } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const r = await withSettings({ stallDetection: true, stallRepeatCallLimit: 2, maxIterations: 40 }, () =>
+      run({ provider: looping, policy: 'full-auto' })
+    )
+    expect(sawFinalNote).toBe(true)
+    const limit = r.events.find((e) => e.type === 'limit') as { reason: string } | undefined
+    expect(limit?.reason).toBe('stalled')
+    const last = r.messages.at(-1)!
+    expect(last.role).toBe('assistant')
+    expect(last.content).toMatch(/without progress/)
+    expect(last.toolCalls ?? []).toHaveLength(0)
+    expect(types(r).at(-1)).toBe('done')
+  })
+
   it('does not fire on a healthy varied run', async () => {
     writeFileSync(join(ws, 'a.txt'), 'x')
     writeFileSync(join(ws, 'b.txt'), 'y')
