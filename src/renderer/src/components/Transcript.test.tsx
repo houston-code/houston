@@ -687,3 +687,37 @@ describe('Transcript: staying at the latest message', () => {
     }
   })
 })
+
+describe('message timestamps and turn details', () => {
+  it('shows when each message was sent, with the full time on hover, and the turn details under its last reply', () => {
+    const at = new Date(Date.now() - 5 * 60_000).toISOString()
+    const { container } = renderTranscript([
+      userItem({ at, turn: { models: ['model-a'], inputTokens: 12_300, outputTokens: 820, cost: 0.034 } }),
+      assistantItem({ id: 'a1', text: 'looking' }),
+      assistantItem({ id: 'a2', text: 'done', at })
+    ])
+    const times = container.querySelectorAll('time.msg__time')
+    expect(times).toHaveLength(2)
+    expect(times[0].textContent).toBe('5m ago')
+    expect(times[0].getAttribute('title')).toBeTruthy()
+    expect(times[0].getAttribute('datetime')).toBe(at)
+    const metas = container.querySelectorAll('.msg--assistant .msg__meta')
+    expect(metas).toHaveLength(1)
+    expect(metas[0].textContent).toContain('model-a')
+    expect(metas[0].textContent).toContain('12.3k in, 820 out')
+    expect(metas[0].textContent).toContain('$0.034')
+  })
+
+  it('adds nothing for older messages that lack the data', () => {
+    const { container } = renderTranscript([userItem(), assistantItem()])
+    expect(container.querySelector('.msg__meta')).toBeNull()
+  })
+
+  it('hides the details while the reply is still streaming', () => {
+    const { container } = renderTranscript([
+      userItem({ turn: { models: ['m'], inputTokens: 1, outputTokens: 1, cost: 0 } }),
+      assistantItem({ streaming: true, at: new Date().toISOString() })
+    ])
+    expect(container.querySelector('.msg--assistant .msg__meta')).toBeNull()
+  })
+})

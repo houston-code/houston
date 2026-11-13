@@ -95,7 +95,11 @@ side effects aren't checkpointed. So a shell command that can throw away work in
 project (`git reset --hard`, a forced `git clean`, `git checkout -- .`, `rm -r` of
 anything but build output and dependencies, `find … -delete`, deleting a branch or
 stash, a forced or deleting `git push`) **asks in every mode**, full auto and "Allow
-for run" included; only an explicit `allow` rule for the command skips it. The check
+for run" included; only an explicit `allow` rule for the command skips it. So does a
+command that destroys data the project doesn't hold and a checkpoint can't restore: a
+database reset or drop (`prisma migrate reset`, `rails db:drop`, `manage.py flush`,
+`dropdb`, or `DROP`/`TRUNCATE` SQL handed to a database client), removing Docker
+volumes, or `terraform destroy`. The check
 reads words as bash builds them (inside `$(…)`, backticks, `bash -c`, `eval`, and
 across line continuations), but like the workspace-escape check it is a static
 tripwire: a command assembled from variables isn't seen. A new install starts in full

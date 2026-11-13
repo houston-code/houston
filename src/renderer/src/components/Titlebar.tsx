@@ -114,6 +114,7 @@ export function Titlebar({
                 className="titlebar__action titlebar__action--text"
                 onClick={onShowShortcuts}
                 aria-label="Keyboard shortcuts"
+                aria-keyshortcuts={shortcutsShortcut ? ariaKeys(shortcutsShortcut) : undefined}
               >
                 ?
               </button>
@@ -180,6 +181,7 @@ export function Titlebar({
                 onClick={onToggleTerminal}
                 aria-label="Terminal"
                 aria-pressed={terminalOpen}
+                aria-keyshortcuts={terminalShortcut ? ariaKeys(terminalShortcut) : undefined}
               >
                 <Icon name="terminal" size={15} />
               </button>

@@ -165,6 +165,11 @@ export interface EvalResult {
   durationMs: number
   /** Set when the run itself emitted an error event. */
   error?: string
+  /**
+   * True when the run ended on an error event (a provider or harness failure), as
+   * opposed to stopping at a limit. Such an attempt measured the failure, not the model.
+   */
+  runErrored?: boolean
   /** Estimated USD cost the run reported (live mode; scripted is fixed/fake). */
   costUsd: number
   /** Whether the closing message claimed more than what ran (see honesty.ts). Report-only. */

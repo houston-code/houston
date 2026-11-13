@@ -29,10 +29,21 @@ const MAX_CANDIDATES = 4000
 export const CACHE_TTL_MS = 5000
 
 const cache = new Map<string, { paths: string[]; at: number }>()
+/**
+ * Most folders whose listing is kept. Each worktree chat is its own folder, and an
+ * entry is a full path listing; an expired one was only replaced when the same folder
+ * was asked about again, so the rest stayed until quit.
+ */
+const MAX_CACHED_FOLDERS = 8
 
 /** Drop cached listings (used by tests, and after a workspace changes). */
 export function clearMentionCache(): void {
   cache.clear()
+}
+
+/** How many folder listings are cached (tests). */
+export function mentionCacheSize(): number {
+  return cache.size
 }
 
 /**
@@ -88,7 +99,13 @@ async function listing(workspace: string, now: number): Promise<string[]> {
     for (let i = 1; i < parts.length; i++) dirs.add(`${parts.slice(0, i).join('/')}/`)
   }
   const all = [...files, ...dirs]
+  for (const [key, entry] of cache) if (now - entry.at >= CACHE_TTL_MS) cache.delete(key)
+  cache.delete(workspace)
   cache.set(workspace, { paths: all, at: now })
+  for (const oldest of cache.keys()) {
+    if (cache.size <= MAX_CACHED_FOLDERS) break
+    cache.delete(oldest)
+  }
   return all
 }
 

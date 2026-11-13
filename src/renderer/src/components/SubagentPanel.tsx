@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { diffStat } from '@shared/diff'
 import { formatTokens, formatUsd } from '@shared/usage'
 import {
@@ -17,6 +17,7 @@ import {
 import { deniedPromptText, stoppedPromptText } from '@shared/promptOutcome'
 import { copyText } from '../lib/clipboard'
 import { useFocusTrap } from '../lib/useFocusTrap'
+import { useTick } from '../hooks/useTick'
 import { DiffView } from './DiffView'
 import { Markdown } from './Markdown'
 
@@ -39,17 +40,6 @@ function stepOutput(s: SubagentStep): string | undefined {
 
 /** Steps shown while an agent runs before "Show all" (the newest ones). */
 const LIVE_STEPS = 12
-
-/** Re-render every second while `active`, for live elapsed times. */
-function useTick(active: boolean): number {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    if (!active) return
-    const t = window.setInterval(() => setNow(Date.now()), 1000)
-    return () => window.clearInterval(t)
-  }, [active])
-  return active ? now : 0
-}
 
 function plural(n: number, word: string): string {
   return `${n} ${word}${n === 1 ? '' : 's'}`
