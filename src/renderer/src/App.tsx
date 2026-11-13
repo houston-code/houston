@@ -166,6 +166,9 @@ import { describeRule, ruleActionOf, savedRulesText, waitForSavedRules, withoutR
 // bar are imported above instead: they open on a keystroke and are typed into at
 // once, and while a lazy chunk loaded on first open, the next keys went to the
 // message box (and Enter sent them as a message).
+const IssueReportModal = lazy(() =>
+  import('./components/IssueReportModal').then((m) => ({ default: m.IssueReportModal }))
+)
 const DoctorModal = lazy(() =>
   import('./components/DoctorModal').then((m) => ({ default: m.DoctorModal }))
 )
@@ -238,6 +241,7 @@ export default function App(): JSX.Element {
   // A settings search to open on (`/settings <words>`).
   const [settingsQuery, setSettingsQuery] = useState('')
   const [doctorOpen, setDoctorOpen] = useState(false)
+  const [issueOpen, setIssueOpen] = useState(false)
   const [filesOpen, setFilesOpen] = useState(false)
   // A file for the Files panel to reveal when it opens (the image viewer's "Show in Files").
   const [filesTarget, setFilesTarget] = useState<string | undefined>(undefined)
@@ -2309,6 +2313,20 @@ export default function App(): JSX.Element {
         run: toggleTerminal
       },
       {
+        id: 'act-report-issue',
+        title: 'Report an issue',
+        section: 'Actions',
+        keywords: 'bug github feedback problem help',
+        run: () => setIssueOpen(true)
+      },
+      {
+        id: 'act-open-logs',
+        title: 'Open logs',
+        section: 'Actions',
+        keywords: 'log file folder debug troubleshoot help',
+        run: () => void window.api.revealLogs()
+      },
+      {
         id: 'act-toggle-preview',
         title: previewOpen && dockTab === 'preview' ? 'Hide preview panel' : 'Show preview panel',
         section: 'Actions',
@@ -2518,6 +2536,7 @@ export default function App(): JSX.Element {
   const overlays: OverlayFlags = {
     settings: settingsOpen,
     doctor: doctorOpen,
+    issue: issueOpen,
     files: filesOpen,
     scorecard: scorecardOpen,
     usage: usageOpen,
@@ -2542,6 +2561,7 @@ export default function App(): JSX.Element {
         else if (cmd.type === 'new-chat-in-workspace') enterNewChat(cmd.workspace)
         else if (cmd.type === 'import-chat') void onImportConversation()
         else if (cmd.type === 'take-tour') startTour()
+        else if (cmd.type === 'report-issue') setIssueOpen(true)
         else if (cmd.type === 'export-chat' && currentId) {
           if (cmd.format === 'html') void onExportConversationHtml(currentId)
           else void onExportConversation(currentId)
@@ -3279,6 +3299,7 @@ export default function App(): JSX.Element {
         )}
 
         {doctorOpen && <DoctorModal workspace={workspace} onClose={() => setDoctorOpen(false)} />}
+        {issueOpen && <IssueReportModal onClose={() => setIssueOpen(false)} />}
 
         {filesOpen && (
           <FilesPanel

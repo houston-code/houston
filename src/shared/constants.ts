@@ -25,6 +25,9 @@ export const IPC = {
   appGetVersion: 'app:getVersion',
   /** Gather the /doctor health facts (sandbox, provider keys, MCP, binaries). */
   doctorFacts: 'app:doctorFacts',
+  logsReveal: 'app:logsReveal',
+  issueReportPreview: 'app:issueReportPreview',
+  issueReportOpen: 'app:issueReportOpen',
   /** Whether an OS sandbox confines shell commands on this host. */
   sandboxStatus: 'app:sandboxStatus',
   /** Save a `#`-captured standing instruction to AGENTS.md (project or global). */

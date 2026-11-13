@@ -564,6 +564,8 @@ export type MenuCommand =
   | { type: 'switch-model' }
   /** Help → Keyboard Shortcuts. */
   | { type: 'show-shortcuts' }
+  /** Help → Report an Issue…: show what the report includes before opening it. */
+  | { type: 'report-issue' }
 
 /** The panels the View menu shows and hides. */
 export type MenuPanel = 'sidebar' | 'terminal' | 'tasks' | 'preview' | 'side-chat'

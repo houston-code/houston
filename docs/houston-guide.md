@@ -2672,7 +2672,15 @@ The desktop app's **Help** menu is last in the menu bar on every platform.
 - **Houston Website** opens houstoncode.ai.
 - **Houston on GitHub** opens the repository, where you can browse open issues and add a
   👍 to the ones you want fixed first.
-- **Report an Issue** opens a new GitHub issue.
+- **Open Logs** shows Houston's log file (`houston.log` in the app's profile folder) in
+  your file manager. Keys and tokens are scrubbed from it, but it can name your folders,
+  so read it before attaching it to a public report.
+- **Report an Issue…** first shows the text a new GitHub issue will start with: your
+  Houston version, platform, and a summary of the diagnostics (each check's name and
+  status, as in `/doctor`). It includes no logs, file paths, keys, or names you chose
+  (MCP servers and custom providers are only counted). **Open GitHub** opens the issue
+  in your browser with that text filled in; describe what happened there before you
+  submit. Both are also in the command palette.
 - **Take the Tour…** plays the getting-started tips again.
 - **On macOS** it also has the system search field: type part of a command's name (for
   example "settings") to find it in the menus.

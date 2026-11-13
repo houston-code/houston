@@ -77,6 +77,12 @@ const api = {
   /** Gather the /doctor health facts for the given workspace. */
   getDoctorFacts: (workspace: string): Promise<DoctorFacts> =>
     ipcRenderer.invoke(IPC.doctorFacts, workspace),
+  /** Show the log file in the OS file manager (Help → Open Logs). */
+  revealLogs: (): Promise<void> => ipcRenderer.invoke(IPC.logsReveal),
+  /** The text Report an Issue fills in, to show before opening it. */
+  getIssueReport: (): Promise<string> => ipcRenderer.invoke(IPC.issueReportPreview),
+  /** Open a new GitHub issue with that text filled in. */
+  openIssueReport: (): Promise<boolean> => ipcRenderer.invoke(IPC.issueReportOpen),
   /** Whether an OS sandbox confines shell commands on this host. */
   getSandboxStatus: (): Promise<SandboxStatus> => ipcRenderer.invoke(IPC.sandboxStatus),
   /** Save a `#`-captured standing instruction; resolves to the file path written, or null. */
