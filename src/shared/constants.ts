@@ -128,6 +128,16 @@ export const IPC = {
   /** Persist the user's trust decision for a workspace ('trusted' | 'never'). */
   folderTrustDecide: 'folderTrust:decide',
   workingTreeChanges: 'workingTree:changes',
+  /** Commit every change, from the Changes view's commit form. */
+  gitCommit: 'git:commit',
+  /** Push the current branch, from the Changes view's commit form. */
+  gitPush: 'git:push',
+  /** The current branch against its upstream (for the Push button). */
+  gitBranchSync: 'git:branchSync',
+  /** Ask the chat's model for a commit message for the uncommitted changes. */
+  gitSuggestMessage: 'git:suggestMessage',
+  /** The current branch's pull request, for the composer chip. */
+  gitPrStatus: 'git:prStatus',
   /** What a chat's latest turn, or all its turns, changed (the Changes view's scopes). */
   chatChanges: 'changes:chat',
   /** Revert one file, or one hunk, from the Changes view. */

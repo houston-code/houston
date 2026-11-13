@@ -556,6 +556,11 @@ Open source under the [Apache License 2.0](LICENSE).
   without opening the panel first. The button adapts to the repository: **Publish
   to GitHub** when there is no remote yet, **Push first commit** when nothing is
   committed, and **Commit & push** for a remote that isn't on GitHub.
+  The Changes panel also commits and pushes without an agent turn: a message box with
+  **Suggest message** (written by the chat's model), **Commit** (stages every change;
+  repository hooks don't run) and **Push** / **Publish branch**. When the branch has a
+  GitHub pull request, a chip above the message box shows its number, state and CI
+  checks (needs `gh` installed and signed in).
 - **Start a chat in its own worktree.** Every new chat in a git repo defaults to
   running in a fresh, isolated worktree on its own branch, so the agent's edits
   never touch your current checkout. Right after the folder picker in the control

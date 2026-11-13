@@ -24,6 +24,7 @@ import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
 import type { WorkingTreeChanges } from '@shared/workingTree'
+import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import type { GitInitResult } from '@shared/git'
 import type { DoctorFacts } from '@shared/doctor'
@@ -189,6 +190,18 @@ const api = {
   /** All uncommitted working-tree changes (vs HEAD + untracked) for the Changes panel. */
   getWorkingTreeChanges: (workspace: string): Promise<WorkingTreeChanges> =>
     ipcRenderer.invoke(IPC.workingTreeChanges, workspace),
+  /** Stage and commit every change (the Changes view's commit form). */
+  gitCommit: (workspace: string, message: string): Promise<GitActionResult> =>
+    ipcRenderer.invoke(IPC.gitCommit, workspace, message),
+  /** Push the current branch, setting its upstream on a first push. */
+  gitPush: (workspace: string): Promise<GitActionResult> => ipcRenderer.invoke(IPC.gitPush, workspace),
+  /** The current branch against its upstream, or null outside a repository. */
+  gitBranchSync: (workspace: string): Promise<BranchSync | null> => ipcRenderer.invoke(IPC.gitBranchSync, workspace),
+  /** A commit message for the uncommitted changes, from the chat's model. */
+  gitSuggestMessage: (workspace: string, conversationId: string | null): Promise<GitActionResult> =>
+    ipcRenderer.invoke(IPC.gitSuggestMessage, workspace, conversationId),
+  /** The current branch's pull request (via gh), for the composer chip. */
+  gitPrStatus: (workspace: string): Promise<PrLookup> => ipcRenderer.invoke(IPC.gitPrStatus, workspace),
   /** What a chat's latest turn (`turn`) or all its turns (`chat`) changed, for the Changes view. */
   getChatChanges: (conversationId: string, scope: 'turn' | 'chat'): Promise<ChatChanges> =>
     ipcRenderer.invoke(IPC.chatChanges, conversationId, scope),

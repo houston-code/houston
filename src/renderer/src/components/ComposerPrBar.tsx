@@ -1,5 +1,7 @@
 import { chooseShipAction, type ShipAction } from '@shared/shipAction'
+import type { PrStatus } from '@shared/gitActions'
 import type { WorkingTreeStats } from '../hooks/useWorkingTreeStats'
+import { PrChip } from './PrChip'
 
 /**
  * A slim bar at the top of the composer, shown only when the working tree has
@@ -8,50 +10,59 @@ import type { WorkingTreeStats } from '../hooks/useWorkingTreeStats'
  * same action as the Changes-panel footer button — both entry points are kept).
  * The button follows the repo's state: "Create PR" needs commits and a GitHub
  * remote, so a fresh repo gets "Publish to GitHub" instead (see chooseShipAction).
- * Renders nothing when there are no changes.
+ * With `pr`, the branch's pull request (number, state, checks) shows on the left
+ * whether or not there are changes. Renders nothing with neither.
  */
 export function ComposerPrBar({
   changes,
   onShowChanges,
   onShip,
-  creating = false
+  creating = false,
+  pr = null
 }: {
   changes: WorkingTreeStats
   onShowChanges: () => void
   onShip: (action: ShipAction) => void
   /** True while a run is in progress — sending now would clobber it, so disable. */
   creating?: boolean
+  /** The branch's pull request, when there is one (see usePrStatus). */
+  pr?: PrStatus | null
 }): JSX.Element | null {
   const { fileCount, added, removed } = changes
-  if (fileCount === 0) return null
+  if (fileCount === 0 && !pr) return null
   const action = chooseShipAction(changes.ship)
   return (
     <div className="composer__pr-bar">
-      <button
-        type="button"
-        className="composer__pr-stat"
-        onClick={onShowChanges}
-        title="View working-tree changes"
-      >
-        <span className="composer__pr-files">
-          {fileCount} changed file{fileCount === 1 ? '' : 's'}
-        </span>
-        {(added > 0 || removed > 0) && (
-          <span className="diff-stat">
-            <span className="diff-stat__add">+{added}</span>
-            <span className="diff-stat__del">−{removed}</span>
+      {pr && <PrChip pr={pr} />}
+      {fileCount > 0 && (
+        <>
+        <button
+          type="button"
+          className="composer__pr-stat"
+          onClick={onShowChanges}
+          title="View working-tree changes"
+        >
+          <span className="composer__pr-files">
+            {fileCount} changed file{fileCount === 1 ? '' : 's'}
           </span>
-        )}
-      </button>
-      <button
-        type="button"
-        className="btn btn--sm btn--accent"
-        onClick={() => onShip(action)}
-        disabled={creating}
-        title={creating ? 'Wait for the current run to finish' : action.title}
-      >
-        {action.label}
-      </button>
+          {(added > 0 || removed > 0) && (
+            <span className="diff-stat">
+              <span className="diff-stat__add">+{added}</span>
+              <span className="diff-stat__del">−{removed}</span>
+            </span>
+          )}
+        </button>
+        <button
+          type="button"
+          className="btn btn--sm btn--accent"
+          onClick={() => onShip(action)}
+          disabled={creating}
+          title={creating ? 'Wait for the current run to finish' : action.title}
+        >
+          {action.label}
+        </button>
+        </>
+      )}
     </div>
   )
 }

@@ -91,6 +91,7 @@ import { useInputQueue } from './hooks/useInputQueue'
 import { queueBarLabel } from './lib/queueBar'
 import { deliverMidRunMessage } from './lib/midRunMessage'
 import { useWorkingTreeStats } from './hooks/useWorkingTreeStats'
+import { usePrStatus } from './hooks/usePrStatus'
 import type { ShipAction } from '@shared/shipAction'
 import { saveComposerDraft } from './lib/composerDraft'
 import type { ForkPoint } from '@shared/conversation-io'
@@ -841,6 +842,8 @@ export default function App(): JSX.Element {
   // Uncommitted-change counts for the titlebar Changes badge (refreshes on run
   // completion / window focus).
   const workingTreeStats = useWorkingTreeStats(workspace, chat.running)
+  // The branch's pull request for the composer chip; gh is asked only for a GitHub remote.
+  const prStatus = usePrStatus(workspace, workingTreeStats.ship?.remote?.host === 'github', chat.running)
 
   // Load the workspace's custom slash commands (alongside the built-ins).
   useEffect(() => {
@@ -3319,6 +3322,7 @@ export default function App(): JSX.Element {
             ultrathinkEffect={ultrathinkOnSend}
             lastUserMessage={lastUserText(chat.items)}
             changes={workspace ? workingTreeStats : undefined}
+            pr={workspace ? prStatus : null}
             onShowChanges={showChanges}
             onShip={canChat ? onShip : undefined}
             onCommand={onCommand}
@@ -3387,6 +3391,7 @@ export default function App(): JSX.Element {
                 running={chat.running}
                 onShip={canChat ? onShip : undefined}
                 creating={chat.running}
+                commitForm
                 onSendComments={canChat ? onSendReviewComments : undefined}
               />
             }
