@@ -97,7 +97,26 @@ function addPreviewUrls(shell: Shell, found: FoundUrl[]): boolean {
 /** Keep at most this many trailing bytes per stream (rolling window). */
 const MAX_BUF = 2_000_000
 
+/**
+ * Most finished shells kept for reading back. A shell that exited and left nothing
+ * running is only history: its two output windows (megabytes each) would otherwise
+ * stay in memory until the app quits, for every shell a long session ever started.
+ */
+export const MAX_EXITED_SHELLS = 30
+
 const shells = new Map<string, Shell>()
+
+/**
+ * Forget the oldest finished shells beyond {@link MAX_EXITED_SHELLS}. Only a shell
+ * whose process group is known to be empty goes: one with a leftover server still
+ * needs its row in the Tasks panel and its group id for Stop.
+ */
+function pruneExited(): void {
+  const done = [...shells.values()].filter((s) => !s.running && !hasLeftover(s))
+  if (done.length <= MAX_EXITED_SHELLS) return
+  done.sort((a, b) => (a.exitedAt ?? 0) - (b.exitedAt ?? 0))
+  for (const s of done.slice(0, done.length - MAX_EXITED_SHELLS)) shells.delete(s.id)
+}
 
 /**
  * Listeners notified whenever the shell registry changes (a shell starts, exits,
@@ -142,9 +161,21 @@ function appendRecent(buf: string, chunk: string): string {
   return next.length > MAX_RECENT ? next.slice(next.length - MAX_RECENT) : next
 }
 
-function appendCapped(buf: string, chunk: string): string {
+/**
+ * Append to a rolling buffer whose readable window is its last `max` chars. Trimming
+ * to exactly `max` on every chunk flattened and copied the whole window each time
+ * (megabytes per chunk once a chatty server filled it), so the buffer is allowed to
+ * run up to twice the window before it is cut back. Readers go through
+ * {@link windowOf}, so what they see is unchanged.
+ */
+export function appendCapped(buf: string, chunk: string, max = MAX_BUF): string {
   const next = buf + chunk
-  return next.length > MAX_BUF ? next.slice(next.length - MAX_BUF) : next
+  return next.length > max * 2 ? next.slice(next.length - max) : next
+}
+
+/** The readable window of a buffer built by {@link appendCapped}: its last `max` chars. */
+export function windowOf(buf: string, max = MAX_BUF): string {
+  return buf.length > max ? buf.slice(buf.length - max) : buf
 }
 
 /**
@@ -215,7 +246,13 @@ export function registerShell(
     shell.recent = appendRecent(shell.recent, s)
     sniff(s)
   })
+  // Nothing more will be appended: give back the slack appendCapped let build up.
+  const settle = (): void => {
+    shell.stdout = windowOf(shell.stdout)
+    shell.stderr = windowOf(shell.stderr)
+  }
   child.on('close', (code) => {
+    settle()
     shell.running = false
     shell.exitCode = code
     shell.exitedAt = Date.now()
@@ -224,12 +261,14 @@ export function registerShell(
     watchLeftovers()
   })
   child.on('error', () => {
+    settle()
     shell.running = false
     shell.exitedAt = Date.now()
     persistLedger()
     notifyShellsChanged()
     watchLeftovers()
   })
+  pruneExited()
   shells.set(id, shell)
   persistLedger()
   notifyShellsChanged()
@@ -253,8 +292,10 @@ export interface ShellOutput {
 export function readShellOutput(id: string, opts: { full?: boolean } = {}): ShellOutput {
   const s = shells.get(id)
   if (!s) return { found: false, running: false, exitCode: null, stdout: '', stderr: '', newUrls: [] }
-  const stdout = opts.full ? s.stdout : unreadSlice(s.stdout, s.stdoutProduced, s.readStdout)
-  const stderr = opts.full ? s.stderr : unreadSlice(s.stderr, s.stderrProduced, s.readStderr)
+  const out = windowOf(s.stdout)
+  const err = windowOf(s.stderr)
+  const stdout = opts.full ? out : unreadSlice(out, s.stdoutProduced, s.readStdout)
+  const stderr = opts.full ? err : unreadSlice(err, s.stderrProduced, s.readStderr)
   s.readStdout = s.stdoutProduced
   s.readStderr = s.stderrProduced
   // A full re-read restates every URL; an incremental one only those not yet reported.
@@ -275,7 +316,7 @@ const PEEK_TAIL_CHARS = 16_000
 export function peekShell(id: string): { running: boolean; exitCode: number | null; output: string } | undefined {
   const s = shells.get(id)
   if (!s) return undefined
-  const output = [s.stdout, s.stderr].filter(Boolean).join('\n')
+  const output = [windowOf(s.stdout), windowOf(s.stderr)].filter(Boolean).join('\n')
   return { running: s.running, exitCode: s.exitCode, output: output.slice(-PEEK_TAIL_CHARS) }
 }
 
