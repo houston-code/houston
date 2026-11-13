@@ -901,6 +901,15 @@ the run works as usual at any point.
 the keep-going-while-productive switch, and the hard limit. If you had already set
 your own step count, it stays a hard stop until you turn the switch on.
 
+### Watching a running turn
+
+- **Desktop:** the status bar shows how long the turn has run and the output tokens
+  it has produced so far ("1m 5s · 2.4k tokens"). The count is estimated from the
+  text while a reply streams and replaced by the provider's own figure when each reply
+  finishes. A tool call that takes longer than a second shows its own running time on
+  its row.
+- **Terminal:** the spinner line shows the same running time.
+
 ### Long replies
 
 A single reply also has an output limit.

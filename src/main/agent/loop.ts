@@ -375,6 +375,8 @@ const EMPTY_RECEIPT: TurnReceipt = { v: 1, checks: [], otherCommands: 0, filesCh
 
 interface RunState {
   abort: AbortController
+  /** When the run started (epoch ms), for the clients' elapsed-time display. */
+  startedAt: number
   /**
    * Course corrections typed while the turn is running, waiting for the next
    * iteration boundary. Queued rather than applied on arrival: a message can only
@@ -625,7 +627,11 @@ export function chatStatusSnapshot(): ChatStatusMap {
   const out: ChatStatusMap = {}
   for (const [conversationId, runId] of runsByConversation) {
     const run = runs.get(runId)
-    out[conversationId] = { running: true, pending: run ? pendingPromptSummary(run) : [] }
+    out[conversationId] = {
+      running: true,
+      pending: run ? pendingPromptSummary(run) : [],
+      ...(run ? { startedAt: run.startedAt } : {})
+    }
   }
   return out
 }
@@ -1187,6 +1193,7 @@ export async function startRun(
   const ultrathinkTail = ultrathinkAtTail(req.messages)
   const run: RunState = {
     abort,
+    startedAt: Date.now(),
     steering: [],
     approvals: new Map(),
     questions: new Map(),

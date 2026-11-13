@@ -62,6 +62,7 @@ import { nextApprovalPolicy } from './lib/policyCycle'
 import { resolveShortcuts } from './lib/keybindingOverrides'
 import { modelPaletteItems, type PaletteItem } from './lib/palette'
 import { statusText } from './lib/statusLine'
+import { RunMeterText } from './components/RunMeterText'
 import { newGroupId } from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
 import { occludesPreview, ownsShiftTab, suppressesTips, type OverlayFlags } from './lib/overlays'
@@ -804,7 +805,7 @@ export default function App(): JSX.Element {
       // isn't on disk yet (otherwise it vanishes on switch-back, most visibly on a
       // freshly spawned session); pendingPrompts re-renders any approval/question
       // still awaiting the user, so a run parked on a prompt isn't left wedged.
-      if (activeRunId) chat.adopt(activeRunId, pendingPrompts, liveTranscript)
+      if (activeRunId) chat.adopt(activeRunId, pendingPrompts, liveTranscript, chatStatusRef.current[id]?.startedAt)
       // Restore the revert/redo affordance for the conversation's latest turn — the
       // checkpoint state is built only from live events and lost on a reset/rebuild.
       chat.seedCheckpoint(checkpoint)
@@ -2980,6 +2981,7 @@ export default function App(): JSX.Element {
         <footer className="statusbar">
           <span className={`statusbar__dot${chat.running ? ' statusbar__dot--busy' : ''}`} />
           <span className="statusbar__state">{statusText(chat.items, chat.running)}</span>
+          <RunMeterText meter={chat.meter} />
           <TerminalChip
             tabCount={terminals.tabs.length}
             open={terminalOpen}

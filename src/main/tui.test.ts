@@ -1048,6 +1048,10 @@ describe('status line & progress', () => {
     // wraps around the frame set
     expect(spinnerFrame(10, 'x', 0, paint)).toContain('⠋')
   })
+
+  it('spinnerFrame writes a long turn in minutes, as the desktop status bar does', () => {
+    expect(spinnerFrame(0, 'Working', 192, paint)).toBe('⠋ Working 3m 12s')
+  })
 })
 
 describe('renderCapabilityList', () => {

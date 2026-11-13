@@ -12,6 +12,7 @@ import type { ImageAttachment } from '@shared/images'
 import type { PromptInvocation } from '@shared/promptInvocation'
 import type { SessionUsage } from '@shared/usage'
 import { reduceEvent, type DisplayItem, type PlanStatus } from '../lib/items'
+import { meterOnEvent, startMeter, type RunMeter } from '../lib/runMeter'
 
 /**
  * A plan the agent has presented and is now blocking on, shown in the docked review
@@ -50,6 +51,8 @@ export interface ChatController {
   running: boolean
   /** The open conversation's persisted running token usage, or null. */
   usage: SessionUsage | null
+  /** The running turn's clock and output-token count, or null when no turn runs. */
+  meter: RunMeter | null
   /** The current/last turn's revertable file changes, or null. */
   checkpoint: Checkpoint | null
   /** True when the last finished run ended in an error (offer a retry). */
@@ -100,9 +103,11 @@ export interface ChatController {
    * blocking that run; they're folded in so a prompt that was awaiting the user
    * re-renders its UI (the live events are one-shot and already fired). Both replay
    * through reduceEvent, which upserts by id/callId, so it's idempotent against the
-   * transcript just rebuilt from the log.
+   * transcript just rebuilt from the log. `startedAt` is when the run began (from the
+   * main process's chat status), so the status bar's clock counts from the turn's
+   * start rather than from the switch back.
    */
-  adopt: (runId: string, pendingPrompts?: AgentEvent[], liveTranscript?: AgentEvent[]) => void
+  adopt: (runId: string, pendingPrompts?: AgentEvent[], liveTranscript?: AgentEvent[], startedAt?: number) => void
   /** Append a transient notice to the transcript (e.g. slash-command feedback). */
   notify: (text: string, tone?: 'info' | 'error') => void
 }
@@ -122,6 +127,10 @@ export function useChat(conversationId: string | null = null): ChatController {
   const [items, setItems] = useState<DisplayItem[]>([])
   const [running, setRunning] = useState(false)
   const [usage, setUsage] = useState<SessionUsage | null>(null)
+  const [meter, setMeter] = useState<RunMeter | null>(null)
+  // The chat's cumulative output count as last seen, so a usage event (which carries
+  // running totals) can tell the meter how much this round added.
+  const outputSeenRef = useRef(0)
   const [checkpoint, setCheckpoint] = useState<Checkpoint | null>(null)
   const [errored, setErrored] = useState(false)
   const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null)
@@ -140,6 +149,7 @@ export function useChat(conversationId: string | null = null): ChatController {
         if (e.conversationId !== convIdRef.current) return
         runIdRef.current = e.runId
         setRunning(true)
+        setMeter(startMeter(Date.now()))
         setErrored(false)
         setCheckpoint(null)
         setItems((prev) => [
@@ -158,6 +168,9 @@ export function useChat(conversationId: string | null = null): ChatController {
       if (e.type === 'usage') {
         // The main process accumulates and persists; the event carries the
         // conversation's cumulative totals, so we set rather than sum.
+        const delta = e.outputTokens ? e.outputTokens - outputSeenRef.current : 0
+        if (e.outputTokens) outputSeenRef.current = e.outputTokens
+        setMeter((m) => (m ? meterOnEvent(m, e, delta) : m))
         setUsage((prev) => ({
           context: e.inputTokens || prev?.context || 0,
           output: e.outputTokens || prev?.output || 0,
@@ -199,11 +212,15 @@ export function useChat(conversationId: string | null = null): ChatController {
       }
       // A fresh plan (initial, or a revision after "suggest changes") opens/refreshes
       // the review panel; the previous one, if any, is superseded in the transcript.
+      if (e.type === 'text' || e.type === 'reasoning' || e.type === 'turn_discarded') {
+        setMeter((m) => (m ? meterOnEvent(m, e) : m))
+      }
       if (e.type === 'plan_ready') setPendingPlan({ callId: e.callId, plan: e.plan })
       setItems((prev) => reduceEvent(prev, e))
       if (e.type === 'error') setErrored(true)
       if (e.type === 'done' || e.type === 'error') {
         setRunning(false)
+        setMeter(null)
         runIdRef.current = null
         // A run can only finish once its plan review is resolved (the tool unblocks
         // it), so a plan still pending here means the run ended some other way — drop
@@ -227,6 +244,7 @@ export function useChat(conversationId: string | null = null): ChatController {
       }
     ])
     setRunning(true)
+    setMeter(startMeter(Date.now()))
     setCheckpoint(null)
     setErrored(false)
     try {
@@ -256,6 +274,7 @@ export function useChat(conversationId: string | null = null): ChatController {
       // A run that starts and then fails reports back via an `error` event instead.
       if (runIdRef.current === runId) {
         setRunning(false)
+        setMeter(null)
         runIdRef.current = null
         setErrored(true)
       }
@@ -266,12 +285,14 @@ export function useChat(conversationId: string | null = null): ChatController {
     const runId = crypto.randomUUID()
     runIdRef.current = runId
     setRunning(true)
+    setMeter(startMeter(Date.now()))
     setErrored(false)
     try {
       await window.api.retryAgent({ runId, ...params })
     } catch {
       if (runIdRef.current === runId) {
         setRunning(false)
+        setMeter(null)
         runIdRef.current = null
         setErrored(true)
       }
@@ -350,7 +371,9 @@ export function useChat(conversationId: string | null = null): ChatController {
     (next: DisplayItem[], nextUsage: SessionUsage | null = null, nextErrored = false) => {
       setItems(next)
       setRunning(false)
+      setMeter(null)
       setUsage(nextUsage)
+      outputSeenRef.current = nextUsage?.output ?? 0
       setCheckpoint(null)
       setPendingPlan(null)
       // Seed from the conversation's persisted failure so a reload restores the
@@ -362,9 +385,13 @@ export function useChat(conversationId: string | null = null): ChatController {
   )
 
   const adopt = useCallback(
-    (runId: string, pendingPrompts: AgentEvent[] = [], liveTranscript: AgentEvent[] = []) => {
+    (runId: string, pendingPrompts: AgentEvent[] = [], liveTranscript: AgentEvent[] = [], startedAt?: number) => {
       runIdRef.current = runId
       setRunning(true)
+      // The clock counts from the run's start. The token count can't recover rounds that
+      // finished while this chat wasn't open (only the chat's total was saved), so it
+      // starts from the open round's streamed text and grows from there.
+      setMeter(liveTranscript.reduce((m, ev) => meterOnEvent(m, ev), startMeter(startedAt ?? Date.now())))
       setErrored(false)
       // Replay, in order, the in-flight turn's streamed-but-unpersisted output
       // (liveTranscript) then the prompts still blocking the run (pendingPrompts, a
@@ -394,6 +421,7 @@ export function useChat(conversationId: string | null = null): ChatController {
     items,
     running,
     usage,
+    meter,
     checkpoint,
     errored,
     send,
