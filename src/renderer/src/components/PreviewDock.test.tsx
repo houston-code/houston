@@ -392,6 +392,113 @@ describe('PreviewDock tabs (Background tasks | Preview)', () => {
   })
 })
 
+describe('PreviewDock native view sync', () => {
+  /** A ResizeObserver that records instances and lets a test fire its callback. */
+  class RecordingResizeObserver {
+    static instances: RecordingResizeObserver[] = []
+    observed: Element[] = []
+    disconnected = false
+    constructor(private readonly cb: () => void) {
+      RecordingResizeObserver.instances.push(this)
+    }
+    observe(el: Element): void {
+      this.observed.push(el)
+    }
+    unobserve(): void {}
+    disconnect(): void {
+      this.disconnected = true
+    }
+    fire(): void {
+      this.cb()
+    }
+  }
+
+  /** Give every pane placeholder a rect, as layout would. */
+  function setPaneRect(rect: { x: number; y: number; width: number; height: number }): void {
+    for (const el of document.querySelectorAll('.preview-pane__view')) {
+      ;(el as HTMLElement).getBoundingClientRect = () =>
+        ({ left: rect.x, top: rect.y, width: rect.width, height: rect.height }) as DOMRect
+    }
+  }
+
+  beforeEach(() => {
+    RecordingResizeObserver.instances = []
+    vi.stubGlobal('ResizeObserver', RecordingResizeObserver)
+  })
+
+  const servers = [running('a', 'http://localhost:3000/')]
+  const dock = (over: Partial<React.ComponentProps<typeof PreviewDock>> = {}): JSX.Element => (
+    // A fresh servers array each time, as the app passes on every render.
+    <PreviewDock servers={[...servers]} occluded={false} onResizeMouseDown={noop} onClose={noop} {...over} />
+  )
+  const live = (): RecordingResizeObserver[] => RecordingResizeObserver.instances.filter((o) => !o.disconnected)
+
+  it('sends nothing and keeps its observer when the app re-renders with nothing changed', () => {
+    const { rerender } = render(dock())
+    const calls = api.syncPreviewPanes.mock.calls.length
+    expect(calls).toBeGreaterThan(0)
+    const observers = RecordingResizeObserver.instances.length
+
+    for (let i = 0; i < 5; i++) rerender(dock())
+
+    expect(api.syncPreviewPanes.mock.calls.length).toBe(calls)
+    expect(RecordingResizeObserver.instances.length).toBe(observers)
+  })
+
+  it('syncs again when a resize moves a pane, but not when it lands on the same pixels', () => {
+    render(dock())
+    setPaneRect({ x: 10, y: 20, width: 300, height: 200 })
+    const ro = live()[0]
+
+    ro.fire()
+    expect(api.syncPreviewPanes).toHaveBeenLastCalledWith(
+      [{ id: 'server:a', url: 'http://localhost:3000/', bounds: { x: 10, y: 20, width: 300, height: 200 } }],
+      true
+    )
+    const calls = api.syncPreviewPanes.mock.calls.length
+
+    // Same whole pixels: nothing moves, nothing is sent.
+    setPaneRect({ x: 10.2, y: 20, width: 300, height: 199.8 })
+    ro.fire()
+    window.dispatchEvent(new Event('resize'))
+    expect(api.syncPreviewPanes.mock.calls.length).toBe(calls)
+
+    // A window resize that does move the pane is sent.
+    setPaneRect({ x: 10, y: 20, width: 420, height: 200 })
+    window.dispatchEvent(new Event('resize'))
+    expect(api.syncPreviewPanes.mock.calls.length).toBe(calls + 1)
+    expect(api.syncPreviewPanes.mock.calls.at(-1)![0][0].bounds.width).toBe(420)
+  })
+
+  it('observes each pane placeholder as well as the dock', () => {
+    render(dock())
+    const observed = live()[0].observed
+    expect(observed).toContain(document.querySelector('.preview-dock'))
+    expect(observed).toContain(document.querySelector('.preview-pane__view'))
+  })
+
+  it('syncs on occlusion, tab switch, and a pane being added or removed', () => {
+    const { rerender } = render(dock({ onTabChange: noop }))
+    const last = (): [Array<{ id: string }>, boolean] =>
+      api.syncPreviewPanes.mock.calls.at(-1) as [Array<{ id: string }>, boolean]
+
+    rerender(dock({ onTabChange: noop, occluded: true }))
+    expect(last()[1]).toBe(false)
+    rerender(dock({ onTabChange: noop }))
+    expect(last()[1]).toBe(true)
+
+    rerender(dock({ onTabChange: noop, tab: 'tasks' }))
+    expect(last()[1]).toBe(false)
+    rerender(dock({ onTabChange: noop, tab: 'preview' }))
+    expect(last()[1]).toBe(true)
+
+    rerender(dock({ onTabChange: noop, servers: [...servers, running('b', 'http://localhost:3001/')] }))
+    expect(last()[0].map((p) => p.id)).toEqual(['server:a', 'server:b'])
+    rerender(dock({ onTabChange: noop }))
+    expect(last()[0].map((p) => p.id)).toEqual(['server:a'])
+  })
+})
+
 describe('PreviewDock pane labels', () => {
   it('labels a server pane by the command that runs it, with the full command on hover', () => {
     const cmd = 'cd /w/app/web && source venv/bin/activate && python manage.py runserver > /tmp/log 2>&1'

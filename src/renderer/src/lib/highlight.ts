@@ -67,9 +67,49 @@ export function highlightCode(lang: string, text: string): string | null {
   if (!lang || text.length > MAX_HIGHLIGHT_BYTES) return null
   const resolved = EXT_LANG[lang.toLowerCase()] ?? lang.toLowerCase()
   if (!hljs.getLanguage(resolved)) return null
+  const key = `${resolved}\0${text}`
+  const hit = codeCache.get(key)
+  if (hit !== undefined) {
+    // Re-insert so the Map's insertion order tracks recency (least recent first).
+    codeCache.delete(key)
+    codeCache.set(key, hit)
+    return hit.html
+  }
   try {
-    return hljs.highlight(text, { language: resolved, ignoreIllegals: true }).value
+    const html = hljs.highlight(text, { language: resolved, ignoreIllegals: true }).value
+    rememberCode(key, text.length, html)
+    return html
   } catch {
     return null
   }
+}
+
+/**
+ * Highlighted fenced blocks, most recently used last. Code blocks are memoised per
+ * component instance, so without this every block of a reopened chat would be
+ * tokenized again. Bounded by the total size of the cached inputs.
+ */
+export const MAX_CODE_CACHE_CHARS = 2_000_000
+const codeCache = new Map<string, { html: string; size: number }>()
+let codeCacheChars = 0
+
+function rememberCode(key: string, size: number, html: string): void {
+  codeCache.set(key, { html, size })
+  codeCacheChars += size
+  for (const [oldest, entry] of codeCache) {
+    if (codeCacheChars <= MAX_CODE_CACHE_CHARS) break
+    codeCacheChars -= entry.size
+    codeCache.delete(oldest)
+  }
+}
+
+/** Empty the fenced-block cache (tests). */
+export function clearHighlightCache(): void {
+  codeCache.clear()
+  codeCacheChars = 0
+}
+
+/** How many fenced blocks and input characters the cache holds (tests). */
+export function highlightCacheStats(): { entries: number; chars: number } {
+  return { entries: codeCache.size, chars: codeCacheChars }
 }

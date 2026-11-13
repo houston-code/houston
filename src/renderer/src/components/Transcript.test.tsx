@@ -1,5 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   COMPACTION_SUMMARY_PREFIX,
   type ElicitationResult,
@@ -637,6 +637,32 @@ describe('Transcript: staying at the latest message', () => {
     fireEvent.scroll(el)
   }
 
+  // The pin to the bottom runs once per animation frame: queue frames here and run
+  // them on demand, so each assertion sees the frame that would have painted.
+  let frames = new Map<number, FrameRequestCallback>()
+  let nextFrame = 1
+  function flushFrames(): void {
+    const pending = [...frames.values()]
+    frames = new Map()
+    act(() => {
+      for (const cb of pending) cb(performance.now())
+    })
+  }
+  beforeEach(() => {
+    frames = new Map()
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      const id = nextFrame++
+      frames.set(id, cb)
+      return id
+    })
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+      frames.delete(id)
+    })
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   it('follows a message the user sends, even after they scrolled up to read', () => {
     const view = (items: DisplayItem[]): JSX.Element => (
       <Transcript items={items} onApprove={noop} onAnswer={noop} onElicit={noop} />
@@ -644,17 +670,55 @@ describe('Transcript: staying at the latest message', () => {
     const first = [userItem({ id: 'u1' }), assistantItem({ id: 'a1', text: 'a long reply' })]
     const { container, rerender } = render(view(first))
     const scroller = container.querySelector('.transcript') as HTMLElement
+    flushFrames()
     sizeScroller(scroller, { scrollHeight: 1000, clientHeight: 300, top: 0 })
     expect(screen.getByRole('button', { name: '↓' })).toBeInTheDocument()
 
     // More of the reply streaming in leaves the reader where they are.
     rerender(view([userItem({ id: 'u1' }), assistantItem({ id: 'a1', text: 'a long reply, longer' })]))
+    flushFrames()
     expect(scroller.scrollTop).toBe(0)
 
     // Their next message brings them to the bottom and clears the jump button.
     rerender(view([...first, userItem({ id: 'u2', text: 'next question' })]))
+    flushFrames()
     expect(scroller.scrollTop).toBe(1000)
     expect(screen.queryByRole('button', { name: '↓' })).not.toBeInTheDocument()
+  })
+
+  it('pins to the bottom once per frame however many updates stream in', () => {
+    const view = (text: string): JSX.Element => (
+      <Transcript items={[userItem({ id: 'u1' }), assistantItem({ id: 'a1', text })]} onApprove={noop} onAnswer={noop} onElicit={noop} />
+    )
+    const { container, rerender } = render(view('a'))
+    const scroller = container.querySelector('.transcript') as HTMLElement
+    let reads = 0
+    Object.defineProperty(scroller, 'scrollHeight', {
+      configurable: true,
+      get: () => {
+        reads++
+        return 800
+      }
+    })
+
+    for (const text of ['ab', 'abc', 'abcd', 'abcde']) rerender(view(text))
+    expect(reads).toBe(0)
+    expect(frames.size).toBe(1)
+
+    flushFrames()
+    expect(reads).toBe(1)
+    expect(scroller.scrollTop).toBe(800)
+
+    // The next delta schedules the next frame.
+    rerender(view('abcdef'))
+    expect(frames.size).toBe(1)
+  })
+
+  it('drops a pending pin when the transcript unmounts', () => {
+    const { unmount } = renderTranscript([userItem(), assistantItem()])
+    expect(frames.size).toBe(1)
+    unmount()
+    expect(frames.size).toBe(0)
   })
 
   it('stays at the bottom when a bar opens beneath it, but not once scrolled up', () => {

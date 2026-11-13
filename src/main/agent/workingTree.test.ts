@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   collectShipState,
   collectWorkingTreeChanges,
+  collectWorkingTreeStats,
   ghHostsFile,
-  knownGithubHosts
+  knownGithubHosts,
+  sumNumstat
 } from './workingTree'
 
 // Real git in a temp dir: the branch label and diff base depend on how git resolves
@@ -220,4 +222,107 @@ describe('ghHostsFile', () => {
     )
     expect(ghHostsFile({}, 'darwin', '/h')).toBe(join('/h', '.config', 'gh', 'hosts.yml'))
   })
+})
+
+describe('sumNumstat', () => {
+  it('sums plain, binary, and rename records', () => {
+    const out = [
+      '3\t1\ta.txt',
+      '-\t-\tbin.dat',
+      '2\t2\t',
+      'old name.txt',
+      'new name.txt',
+      '0\t4\tgone.txt',
+      ''
+    ].join('\0')
+    expect(sumNumstat(out)).toEqual({ files: 4, added: 5, removed: 7 })
+  })
+
+  it('reads an empty listing as no changes', () => {
+    expect(sumNumstat('')).toEqual({ files: 0, added: 0, removed: 0 })
+  })
+})
+
+describe.skipIf(!hasGit)('collectWorkingTreeStats', () => {
+  // Each case runs both collectors over real git, which is slow on a loaded machine.
+  const GIT_TIMEOUT = 30_000
+
+  /** What the badge would compute from the full change set. */
+  async function fromFull(dir: string): Promise<unknown> {
+    const full = await collectWorkingTreeChanges(dir)
+    return full.isRepo
+      ? {
+          isRepo: true,
+          branch: full.branch,
+          fileCount: full.files.length,
+          added: full.added,
+          removed: full.removed,
+          ship: full.ship
+        }
+      : { isRepo: false, branch: null, fileCount: 0, added: 0, removed: 0 }
+  }
+
+  it('matches the full change set for modified, added, deleted, renamed, binary and untracked files', async () => {
+    const dir = freshRepo()
+    const body = Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n') + '\n'
+    writeFileSync(join(dir, 'mod.txt'), 'one\ntwo\nthree\nfour\n')
+    writeFileSync(join(dir, 'del.txt'), 'gone\nsoon\n')
+    writeFileSync(join(dir, 'old name.txt'), body)
+    writeFileSync(join(dir, 'bin.dat'), Buffer.from([0, 1, 2, 3, 0, 5]))
+    writeFileSync(join(dir, 'run.sh'), 'echo hi\n')
+    commit(dir)
+
+    // A mode-only change: a file entry with no hunks (POSIX only; Windows ignores modes).
+    if (process.platform !== 'win32') chmodSync(join(dir, 'run.sh'), 0o755)
+    writeFileSync(join(dir, 'mod.txt'), 'one\n2\nthree\nfour\nfive\n')
+    unlinkSync(join(dir, 'del.txt'))
+    git(dir, 'mv', 'old name.txt', 'new name.txt')
+    writeFileSync(join(dir, 'new name.txt'), body.replace('line 7\n', 'line seven\n'))
+    writeFileSync(join(dir, 'bin.dat'), Buffer.from([0, 9, 9, 9, 0, 5, 6]))
+    writeFileSync(join(dir, 'staged.txt'), 'a\nb\nc\n')
+    git(dir, 'add', 'staged.txt', 'new name.txt')
+    // Untracked: plain, no trailing newline, leading blank line, empty, and binary.
+    writeFileSync(join(dir, 'notes.txt'), 'x\ny\n')
+    writeFileSync(join(dir, 'no-eol.txt'), 'p\nq')
+    writeFileSync(join(dir, 'blank-first.txt'), '\nafter\n')
+    writeFileSync(join(dir, 'empty.txt'), '')
+    writeFileSync(join(dir, 'blob.bin'), Buffer.from([7, 0, 7]))
+
+    const full = await collectWorkingTreeChanges(dir)
+    // The fixture really exercises each kind of change the counts must agree on.
+    const statuses = new Set(full.files.map((f) => f.status))
+    for (const s of ['modified', 'added', 'deleted', 'renamed', 'untracked'] as const) {
+      expect(statuses).toContain(s)
+    }
+    expect(full.files.some((f) => f.binary && f.status === 'modified')).toBe(true)
+
+    const stats = await collectWorkingTreeStats(dir)
+    expect(stats).toEqual(await fromFull(dir))
+    expect(stats.fileCount).toBe(full.files.length)
+    expect(stats.added).toBeGreaterThan(0)
+    expect(stats.removed).toBeGreaterThan(0)
+  }, GIT_TIMEOUT)
+
+  it('matches on an unborn HEAD with staged and untracked files', async () => {
+    const dir = freshRepo()
+    writeFileSync(join(dir, 'b.txt'), 'one\ntwo\n')
+    git(dir, 'add', 'b.txt')
+    expect(await collectWorkingTreeStats(dir)).toEqual(await fromFull(dir))
+  }, GIT_TIMEOUT)
+
+  it('matches on a clean tree and reports a non-repo as such', async () => {
+    const dir = freshRepo()
+    commit(dir)
+    expect(await collectWorkingTreeStats(dir)).toEqual(await fromFull(dir))
+
+    const plain = mkdtempSync(join(tmpdir(), 'houston-plain-'))
+    dirs.push(plain)
+    expect(await collectWorkingTreeStats(plain)).toEqual({
+      isRepo: false,
+      branch: null,
+      fileCount: 0,
+      added: 0,
+      removed: 0
+    })
+  }, GIT_TIMEOUT)
 })
