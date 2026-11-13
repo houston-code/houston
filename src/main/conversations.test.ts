@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { COMPACTION_SUMMARY_PREFIX, SYSTEM_NOTE_PREFIX } from '@shared/agent'
@@ -13,10 +13,12 @@ import {
   conversationMatches,
   searchableText,
   createConversation,
+  deleteConversation,
   forkConversation,
   importConversation,
   listConversations,
   reportChildToParent,
+  resetConversationListCache,
   saveSideChat,
   setProposalState,
   takeChildReports,
@@ -26,6 +28,7 @@ import {
   needsGeneratedTitle,
   organizeConversation,
   otherConversationsInWorktree,
+  setConversationError,
   setConversationSettings,
   setMessages,
   updateConversationMeta
@@ -618,6 +621,90 @@ describe('per-chat settings (persisted)', () => {
     const got = getConversation(imported.id)
     expect(got?.approvalPolicy).toBeUndefined()
     expect(got?.reasoningEffort).toBeUndefined()
+  })
+})
+
+describe('listConversations metadata cache', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'houston-conv-'))
+    setUserDataDir(dir)
+    resetConversationListCache()
+  })
+  afterEach(() => {
+    resetUserDataDir()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  const titles = (): string[] => listConversations().map((c) => c.title)
+
+  it('lists the same metadata as reading every chat, across every kind of change', () => {
+    const a = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const b = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(a.id, [{ role: 'user', content: 'First chat' }])
+    setMessages(b.id, [{ role: 'user', content: 'Second chat' }])
+    expect(titles().sort()).toEqual(['First chat', 'Second chat'])
+    // A message log is never part of the list payload.
+    expect(listConversations().every((c) => !('messages' in c))).toBe(true)
+
+    organizeConversation(a.id, { title: 'Renamed', pinned: true })
+    expect(listConversations().find((c) => c.id === a.id)).toMatchObject({ title: 'Renamed', pinned: true })
+
+    setConversationError(b.id, { message: 'boom' })
+    expect(listConversations().find((c) => c.id === b.id)?.errored).toBe(true)
+
+    deleteConversation(a.id)
+    expect(titles()).toEqual(['Second chat'])
+  })
+
+  it('reuses a chat whose file has not changed instead of reading it again', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [{ role: 'user', content: 'Original' }])
+    // A whole-second mtime, which utimes can set back exactly below.
+    const when = 1_700_000_000
+    utimesSync(file(c.id), when, when)
+    expect(titles()).toEqual(['Original'])
+    // Change the bytes in place but leave the file's stamp (inode, size, mtime) as it
+    // was: only a list that trusts the stamp still reports the old title.
+    const before = statSync(file(c.id))
+    const raw = readFileSync(file(c.id), 'utf8')
+    writeFileSync(file(c.id), raw.replaceAll('Original', 'Replaced'))
+    utimesSync(file(c.id), when, when)
+    const after = statSync(file(c.id))
+    expect([after.ino, after.size, after.mtimeMs]).toEqual([before.ino, before.size, before.mtimeMs])
+    expect(titles()).toEqual(['Original'])
+    // And once the stamp does move, the new content is read.
+    utimesSync(file(c.id), when + 1, when + 1)
+    expect(titles()).toEqual(['Replaced'])
+  })
+
+  it('picks up a chat another process rewrote or added', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    setMessages(c.id, [{ role: 'user', content: 'Mine' }])
+    expect(titles()).toEqual(['Mine'])
+    // Another process's write: straight to disk, not through this module.
+    const raw = JSON.parse(readFileSync(file(c.id), 'utf8')) as Record<string, unknown>
+    writeFileSync(file(c.id), JSON.stringify({ ...raw, title: 'Changed elsewhere' }))
+    expect(titles()).toEqual(['Changed elsewhere'])
+    const other = '11111111-1111-4111-8111-111111111111'
+    writeFileSync(file(other), JSON.stringify({ ...raw, id: other, title: 'Added elsewhere', updatedAt: 1 }))
+    expect(titles()).toEqual(['Changed elsewhere', 'Added elsewhere'])
+    rmSync(file(other))
+    expect(titles()).toEqual(['Changed elsewhere'])
+  })
+
+  it('hands out copies, so a caller cannot change what the next list returns', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    listConversations()[0].title = 'scribbled'
+    expect(listConversations()[0].title).toBe(c.title)
+  })
+
+  it('drops a file that turned corrupt and lists the rest', () => {
+    const good = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const bad = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    expect(listConversations()).toHaveLength(2)
+    writeFileSync(file(bad.id), '{ not json')
+    expect(listConversations().map((c) => c.id)).toEqual([good.id])
   })
 })
 
