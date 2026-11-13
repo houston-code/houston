@@ -37,7 +37,7 @@ import {
   type ToolApprovalDecision
 } from '@shared/agent'
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
-import { parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
+import { isForkPoint, parseConversationFile, resolveImportWorkspace, MAX_IMPORT_BYTES } from '@shared/conversation-io'
 import { conversationToHtml } from '@shared/html-export'
 import { sanitizeAttachments, exceedsImageSizeLimit, imageFileName, parseImageDataUrl } from '@shared/images'
 import { sanitizeInvocation } from '@shared/promptInvocation'
@@ -104,6 +104,7 @@ import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
+import { issueReportText, openIssueReport, revealLogs } from './issueReport'
 import type { DoctorFacts } from '@shared/doctor'
 import { saveMemory } from './memory'
 import { handleMemoryRequest } from './memoryIpc'
@@ -111,6 +112,7 @@ import { defaultMemoryRoot } from './agent/memoryStore'
 import type { MemoryResponse } from '@shared/memoryTypes'
 import { decideLegacyRulesNotice, legacyRulesNoticeApplies } from './globalRules'
 import { dismissLegacyRulesNotice, isLegacyRulesNoticeDismissed } from './legacyRulesNotice'
+import { registerImportIpc } from './importIpc'
 import { MAX_MEMORY_NOTE } from '@shared/memory'
 import { notifyAgentEvent, workspaceLabel } from './notifications'
 import { attentionSignals } from '@shared/notify'
@@ -141,6 +143,7 @@ import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
+import { registerCustomizeIpc } from './customizeIpc'
 import {
   getRepoInfo,
   createWorktree,
@@ -148,6 +151,8 @@ import {
   isWorktreeDisposable
 } from './agent/worktree'
 import { collectWorkingTreeChanges } from './agent/workingTree'
+import { collectChatChanges, revertChange } from './agent/changes'
+import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
 import { initGitRepo } from './agent/gitInit'
 import { realpathSync } from 'node:fs'
 import {
@@ -158,12 +163,14 @@ import {
   conversationExists,
   createConversation,
   forkConversation,
+  forkConversationAt,
   deleteConversation,
   otherConversationsInWorktree,
   importConversation,
   organizeConversation,
   reorderConversations,
   computeScorecard,
+  computeUsageReport,
   addUsage,
   mergeRunningTotals,
   setMessages,
@@ -189,6 +196,7 @@ import {
   type UndoRewindResult
 } from '@shared/rewind'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
+import { registerScheduleIpc } from './scheduleIpc'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 
 /** A preferences export is a few KB; anything past this is not one. */
@@ -411,6 +419,7 @@ function makeIo(sender: WebContents): DrainIO {
   const coalesced = coalescedEmit((conversationId, e) => emitEvent(sender, conversationId, e))
   return {
     imageGallery: true,
+    liveShellOutput: true,
     emit: coalesced,
     emitQueueChanged: (conversationId, items) => emitQueueChanged(sender, conversationId, items),
     emitTitleChanged: (conversationId, title) => emitTitleChanged(sender, conversationId, title)
@@ -433,6 +442,7 @@ function makeBroadcastIo(): DrainIO {
   }
   return {
     imageGallery: true,
+    liveShellOutput: true,
     emit: coalescedEmit((conversationId, e) => {
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))
@@ -605,6 +615,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
   setSchedulerBackend(scheduler)
   // Its catch-up run needs the provider keys, so not before the credential store is ready.
   afterReady(() => scheduler.start())
+  // Settings > Scheduled runs: list, create, pause/resume, run now, delete.
+  registerScheduleIpc(handle, scheduler)
 
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.
@@ -617,6 +629,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
     const cwd = typeof workspace === 'string' ? workspace : ''
     return gatherDoctorFacts(cwd, { version: APP_VERSION, update: null })
   })
+  // Help → Open Logs, and the text Report an Issue shows before it opens GitHub.
+  // Opening rebuilds the text in main rather than taking it from the renderer, so the
+  // URL can only ever carry what issueReportBody allows.
+  handle(IPC.logsReveal, () => revealLogs())
+  handle(IPC.issueReportPreview, (): string => issueReportText())
+  handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
   ipcMain.handle(
     IPC.sandboxStatus,
@@ -672,6 +690,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
         }
       })
   )
+
+  // Import from other tools (Settings > Import, and the one-time offer).
+  registerImportIpc(handle)
 
   // Updates: manual "Check for updates" + the one-shot post-restart "What's new".
   handle(IPC.updateCheck, () => checkForUpdates())
@@ -859,6 +880,41 @@ export function registerIpc(ready?: Promise<unknown>): void {
     collectWorkingTreeChanges(typeof workspace === 'string' ? workspace : '')
   )
 
+  // The Changes view's turn and chat scopes: what the chat's checkpoints say it
+  // changed, against the files as they are now. Read-only.
+  handle(IPC.chatChanges, async (_event, conversationId: unknown, scope: unknown): Promise<ChatChanges> =>
+    typeof conversationId === 'string' && (scope === 'turn' || scope === 'chat')
+      ? collectChatChanges(conversationId, scope)
+      : { files: [], added: 0, removed: 0, unavailable: 0 }
+  )
+
+  // Revert one file or hunk from the Changes view (the user confirmed it there). The
+  // working-tree scope only touches a project the app already knows; a chat's scopes
+  // wait for its run to finish; and every revert re-checks that the file still holds
+  // the diff the view showed (see agent/changes.ts).
+  const knownWorkspace = (workspace: string): boolean => {
+    let real: string
+    try {
+      real = realpathSync(workspace)
+    } catch {
+      return false
+    }
+    const candidates = [...(getSettings().recentWorkspaces ?? []), ...listConversations().map((c) => c.workspace)]
+    return candidates.some((c) => {
+      try {
+        return typeof c === 'string' && realpathSync(c) === real
+      } catch {
+        return false
+      }
+    })
+  }
+  handle(IPC.changesRevert, async (_event, req: ChangeRevertRequest): Promise<ChangeRevertResult> =>
+    revertChange(req, {
+      runActive: (id) => activeRunForConversation(id) !== null,
+      knownWorkspace
+    })
+  )
+
   // Initialize a git repo in the workspace so a non-git project's files become
   // visible/reviewable in the Changes panel (the "Initialize git repository" action).
   handle(IPC.gitInit, async (_event, workspace: string) =>
@@ -931,6 +987,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return []
     }
   })
+
+  // Settings > Customize (create, switch off, open, trash; instruction files).
+  registerCustomizeIpc(handle)
 
   handle(IPC.settingsGet, () => getSettings())
 
@@ -1116,6 +1175,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
   })
   // Local-only per-model loop scorecard — aggregated on-device, never transmitted.
   handle(IPC.conversationScorecard, () => computeScorecard())
+  // Local-only spend and tokens per day and per project, for the usage view.
+  handle(IPC.conversationUsageReport, () => computeUsageReport())
   handle(
     IPC.conversationCreate,
     async (
@@ -1169,6 +1230,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     return meta
   })
   handle(IPC.conversationFork, (_event, id: string) => forkConversation(id))
+  // "Fork from here" on a message: the point is checked here, at the IPC boundary.
+  handle(IPC.conversationForkAt, (_event, id: string, point: unknown) =>
+    typeof id === 'string' && isForkPoint(point) ? forkConversationAt(id, point) : null
+  )
   handle(
     IPC.conversationCompact,
     (_event, id: string, providerId: string, model: string) =>

@@ -19,10 +19,14 @@ import {
   FormatOnSaveSection,
   HooksSection,
   IntegrationsSection,
-  LanguageServersSection
+  LanguageServersSection,
+  PreviewSection
 } from './sections/tools'
 import { McpServersSection } from './sections/mcp'
+import { ScheduledRunsSection } from './sections/schedules'
+import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
+import { ImportSection } from './sections/import'
 import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
 import {
   AdditionalFoldersSection,
@@ -163,6 +167,29 @@ export const PAGES: SettingsPage[] = [
         keys: ['diagnosticsOnSave'],
         Component: DiagnosticsSection,
         keywords: ['lint', 'eslint', 'errors', 'type check', 'problems']
+      },
+      {
+        id: 'preview',
+        keys: ['previewAutoOpen'],
+        Component: PreviewSection,
+        keywords: ['dev server', 'localhost', 'browser', 'auto open', 'panel', 'web app']
+      }
+    ]
+  },
+  {
+    id: 'customize',
+    label: PAGE_LABELS.customize,
+    group: 'AI',
+    sections: [
+      {
+        id: 'customizations',
+        Component: CustomizeSection,
+        keywords: ['skills', 'commands', 'slash commands', 'agents', 'subagents', 'templates', 'extensions', 'disable', 'enable']
+      },
+      {
+        id: 'instruction-files',
+        Component: InstructionFilesSection,
+        keywords: ['rules', 'agents.md', 'claude.md', 'instructions', 'project rules', 'global rules']
       }
     ]
   },
@@ -203,6 +230,18 @@ export const PAGES: SettingsPage[] = [
     ]
   },
   {
+    id: 'schedules',
+    label: PAGE_LABELS.schedules,
+    group: 'AI',
+    sections: [
+      {
+        id: 'scheduled-runs',
+        Component: ScheduledRunsSection,
+        keywords: ['schedule', 'cron', 'recurring', 'timer', 'automation', 'background', 'daily', 'weekly', 'run later']
+      }
+    ]
+  },
+  {
     id: 'memory',
     label: PAGE_LABELS.memory,
     group: 'AI',
@@ -217,6 +256,18 @@ export const PAGES: SettingsPage[] = [
         id: 'saved-memories',
         Component: MemoriesSection,
         keywords: ['remember', 'memories', 'forget', 'delete', 'edit', 'pin', 'restore', 'undo']
+      }
+    ]
+  },
+  {
+    id: 'import',
+    label: PAGE_LABELS.import,
+    group: 'AI',
+    sections: [
+      {
+        id: 'import-other-tools',
+        Component: ImportSection,
+        keywords: ['migrate', 'copy', 'other tools', 'instructions', 'rules', 'mcp', 'skills', 'commands', 'mcp.json', 'switch']
       }
     ]
   },
@@ -245,9 +296,30 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'htmlVisuals'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
         Component: AppearanceSection,
-        keywords: ['theme', 'dark mode', 'light mode', 'colors', 'visuals', 'html']
+        keywords: [
+          'theme',
+          'dark mode',
+          'light mode',
+          'colors',
+          'visuals',
+          'html',
+          'font size',
+          'text size',
+          'density',
+          'compact',
+          'code theme',
+          'syntax',
+          'accent',
+          'highlight color',
+          'transcript',
+          'tool output',
+          'expand',
+          'collapse',
+          'reasoning',
+          'thinking'
+        ]
       }
     ]
   },

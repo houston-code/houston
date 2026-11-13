@@ -68,6 +68,7 @@ import { runQuarantineExtraction } from './untrusted'
 import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt, promptId } from './prompt'
+import { createLiveOutput } from './liveOutput'
 import { applyRunOverrides } from './run-overrides'
 import {
   hasUltrathink,
@@ -135,6 +136,7 @@ import {
   providerStreamError,
   retryDelayMs,
   RetryBudget,
+  throttleInfo,
   withProviderRetry
 } from './retry'
 import { causeFromMessage, type TurnErrorCause } from '@shared/turnError'
@@ -1270,7 +1272,15 @@ export async function startRun(
     const full = { ...(e as object), runId } as AgentEvent
     // Buffer what streams this round so a renderer that re-opens the conversation
     // mid-turn can replay it (the disk log lags a streaming round). Cleared at each
-    // `persist` below, so the buffer only ever holds events not yet on disk.
+    // `persist` below, so the buffer only ever holds events not yet on disk. A live
+    // output update replaces the call's previous one, so a long command's stream
+    // can't grow the buffer without end.
+    if (full.type === 'tool_progress' && full.output !== undefined) {
+      const callId = full.callId
+      run.transcript = run.transcript.filter(
+        (b) => !(b.type === 'tool_progress' && b.callId === callId && b.output !== undefined)
+      )
+    }
     run.transcript.push(full)
     send(full)
   }
@@ -3702,8 +3712,16 @@ export async function startRun(
           }
           discardPartial()
           const max = retries.reportedMax
-          emit({ type: 'retry', attempt: attempt + 1, ...(max !== undefined ? { max } : {}), message: reason })
-          await abortableSleep(retryDelayMs(e, attempt + 1), abort.signal)
+          const waitMs = retryDelayMs(e, attempt + 1)
+          const throttle = throttleInfo(e, waitMs)
+          emit({
+            type: 'retry',
+            attempt: attempt + 1,
+            ...(max !== undefined ? { max } : {}),
+            message: reason,
+            ...(throttle ? { throttle } : {})
+          })
+          await abortableSleep(waitMs, abort.signal)
           if (abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
             return
@@ -4562,18 +4580,32 @@ export async function startRun(
                     // what ran is what the user approved (see ghRunner).
                     ...(ghRepoCall ? { ghRepo } : {})
                   }
-                  output = await tool.execute(
-                    execArgs,
-                    tool.kind === 'shell'
-                      ? {
-                          ...ctx,
-                          recordEvidence: (e) => {
-                            if (e.kind === 'shell' && e.blocked === 'network') networkBlocked = true
-                            ctx.recordEvidence?.(e)
+                  // A client that shows a running command's output as it arrives gets
+                  // its tail, redacted and throttled (see liveOutput.ts).
+                  const live =
+                    tool.kind === 'shell' && req.liveShellOutput === true
+                      ? createLiveOutput(
+                          (tail) => emit({ type: 'tool_progress', callId: call.id, message: '', output: tail }),
+                          redact
+                        )
+                      : undefined
+                  try {
+                    output = await tool.execute(
+                      execArgs,
+                      tool.kind === 'shell'
+                        ? {
+                            ...ctx,
+                            ...(live ? { onShellOutput: live.push } : {}),
+                            recordEvidence: (e) => {
+                              if (e.kind === 'shell' && e.blocked === 'network') networkBlocked = true
+                              ctx.recordEvidence?.(e)
+                            }
                           }
-                        }
-                      : ctx
-                  )
+                        : ctx
+                    )
+                  } finally {
+                    live?.close()
+                  }
                 } catch (e) {
                   output = `Error: ${(e as Error).message}`
                   ok = false

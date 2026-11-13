@@ -95,6 +95,16 @@ vi.mock('./rules', async (importActual) => ({
     truncated: []
   })
 }))
+// Skills and agents also load from the user's ~/.houston/{skills,agents}: machine
+// state again, so the loaders read a home folder that doesn't exist.
+vi.mock('./skills', async (importActual) => {
+  const actual = await importActual<typeof import('./skills')>()
+  return { ...actual, loadSkills: (ws: string) => actual.loadSkills(ws, '/nonexistent-houston-golden-home') }
+})
+vi.mock('./agents', async (importActual) => {
+  const actual = await importActual<typeof import('./agents')>()
+  return { ...actual, loadAgents: (ws: string) => actual.loadAgents(ws, '/nonexistent-houston-golden-home') }
+})
 // Real gitContext shells out to git; githubContext probes PATH for gh. Both are
 // environment-dependent, so scenarios script the git section via `h.gitContext`.
 vi.mock('./git', () => ({ gitContext: async () => h.gitContext }))

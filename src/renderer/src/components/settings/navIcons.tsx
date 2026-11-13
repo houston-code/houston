@@ -38,9 +38,22 @@ export const NAV_ICON: Record<TabId, JSX.Element> = {
       <path d="M10.2 2.2a3.2 3.2 0 00-3.8 4.3L2 10.9 3.1 14l3.1-.1 4.4-4.4a3.2 3.2 0 004.3-3.8l-2 2-2.1-.6-.6-2.1z" />
     </svg>
   ),
+  customize: (
+    <svg {...svg}>
+      <path d="M2 4h3M9 4h5M2 12h7M13 12h1" />
+      <circle cx="7" cy="4" r="2" />
+      <circle cx="11" cy="12" r="2" />
+    </svg>
+  ),
   mcp: (
     <svg {...svg}>
       <path d="M6 1.5v3M10 1.5v3M4.5 4.5h7v3a3.5 3.5 0 01-7 0zM8 11v3.5" />
+    </svg>
+  ),
+  schedules: (
+    <svg {...svg}>
+      <circle cx="8" cy="8.5" r="6" />
+      <path d="M8 5.5v3l2 1.5" />
     </svg>
   ),
   hooks: (
@@ -53,6 +66,12 @@ export const NAV_ICON: Record<TabId, JSX.Element> = {
     <svg {...svg}>
       <path d="M4 1.5h6.5l2 2v11h-8.5a1 1 0 01-1-1v-11a1 1 0 011-1z" />
       <path d="M6 1.5v5l1.5-1 1.5 1v-5" />
+    </svg>
+  ),
+  import: (
+    <svg {...svg}>
+      <path d="M8 1.5v8M5 6.5l3 3 3-3" />
+      <path d="M2.5 10.5v2a1 1 0 001 1h9a1 1 0 001-1v-2" />
     </svg>
   ),
   workspace: (

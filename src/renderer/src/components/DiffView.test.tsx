@@ -73,4 +73,65 @@ describe('DiffView', () => {
     const { container } = render(<DiffView diff={[]} />)
     expect(container.querySelectorAll('.diff__line')).toHaveLength(0)
   })
+
+  it('numbers a hunk from where it sits in its file', () => {
+    const { container } = render(
+      <DiffView
+        diff={[
+          { type: 'ctx', text: 'a' },
+          { type: 'del', text: 'b' },
+          { type: 'add', text: 'c' }
+        ]}
+        start={{ old: 40, new: 42 }}
+      />
+    )
+    expect(gutter(container)).toEqual(['42', '41', '43'])
+  })
+
+  it('colours code by the file type and still marks the changed words', () => {
+    const { container } = render(<DiffView diff={diffLines('const a = 1', 'const a = 22')} path="x.ts" />)
+    expect(container.querySelector('.hljs-keyword')?.textContent).toBe('const')
+    const marks = [...container.querySelectorAll('.diff__line--add mark.diff__word')].map((m) => m.textContent)
+    expect(marks.join('')).toBe('22')
+    // The line reads exactly as written.
+    expect(container.querySelector('.diff__line--add .diff__text')?.textContent).toBe('const a = 22')
+  })
+
+  it('lays the old side beside the new side', () => {
+    const { container } = render(
+      <DiffView diff={diffLines('a\nb\nc\n', 'a\nB\nc\nd\n')} layout="split" />
+    )
+    const rows = [...container.querySelectorAll('.diff__row')].map((r) =>
+      [...r.querySelectorAll('.diff__line')].map((l) => l.querySelector('.diff__text')?.textContent ?? '')
+    )
+    expect(rows).toEqual([
+      ['a', 'a'],
+      ['b', 'B'],
+      ['c', 'c'],
+      ['', 'd']
+    ])
+    expect(container.querySelectorAll('.diff__line--empty')).toHaveLength(1)
+  })
+
+  it('opens a comment from a line click or its number, and shows what goes under a line', () => {
+    const clicks: unknown[] = []
+    const { container } = render(
+      <DiffView
+        diff={diffLines('a\nb\n', 'a\nc\n')}
+        path="f.ts"
+        onLineClick={(t) => clicks.push(t)}
+        renderBelow={(key) => (key === 'new:2' ? <p>note under c</p> : null)}
+      />
+    )
+    screen.getByRole('button', { name: 'Comment on removed line 2 of f.ts' }).click()
+    ;(container.querySelector('.diff__line--add') as HTMLElement).click()
+    expect(clicks).toEqual([
+      { side: 'old', line: 2, text: 'b' },
+      { side: 'new', line: 2, text: 'c' }
+    ])
+    expect(screen.getByText('note under c')).toBeInTheDocument()
+    // Without onLineClick the numbers stay plain text.
+    const { container: plain } = render(<DiffView diff={diffLines('a', 'b')} />)
+    expect(plain.querySelector('button')).toBeNull()
+  })
 })

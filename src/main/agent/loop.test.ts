@@ -366,6 +366,7 @@ async function run(
     allowShellNetwork?: boolean
     /** Answer prompts synchronously inside `send`, as the headless CLI does. */
     syncReplies?: boolean
+    liveShellOutput?: boolean
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
@@ -402,7 +403,8 @@ async function run(
       messages: opts.messages ?? [{ role: 'user', content: opts.userText ?? 'do it' }],
       ...(opts.unattended !== undefined ? { unattended: opts.unattended } : {}),
       ...(opts.overrides ? { overrides: opts.overrides } : {}),
-      ...(opts.allowShellNetwork ? { allowShellNetwork: true } : {})
+      ...(opts.allowShellNetwork ? { allowShellNetwork: true } : {}),
+      ...(opts.liveShellOutput ? { liveShellOutput: true } : {})
     },
     send,
     (m) => {
@@ -1041,6 +1043,21 @@ describe('startRun', () => {
     expect(types(r)).toContain('retry')
     expect(r.messages.find((m) => m.role === 'assistant')?.content).toBe('recovered')
   }, 20_000)
+
+  it('says a retry is a throttle when the provider rate-limited the request', async () => {
+    const r = await run({
+      turns: [
+        [{ type: 'error', message: '429 rate_limit_error', status: 429, retryAfterMs: 5000 }],
+        [{ type: 'error', message: 'The server had an error.', status: 500 }],
+        [{ type: 'text', text: 'recovered' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const retries = r.events.filter((e) => e.type === 'retry') as Extract<AgentEvent, { type: 'retry' }>[]
+    expect(retries).toHaveLength(2)
+    // The wait is the loop's own (stubbed to 0 here); the provider's ask rides along.
+    expect(retries[0].throttle).toEqual({ waitMs: 0, retryAfterMs: 5000 })
+    expect(retries[1].throttle).toBeUndefined()
+  })
 
   it('does not retry that same prose when no status came with it', async () => {
     // The counterpart: the status is what makes it retryable, so an adapter that can't
@@ -1893,6 +1910,80 @@ describe('startRun', () => {
     ])
     expect(existsSync(join(ws, 'other.txt'))).toBe(false)
     expect(existsSync(join(ws, 'src', 'deep.ts'))).toBe(false)
+  })
+
+  describe('live shell output', () => {
+    const SECRET = 'stored-opaque-credential-value-live'
+    // What a re-opening renderer would replay, read just before the command ends.
+    let replay: AgentEvent[] = []
+    // A stand-in run_shell that prints in pieces, a credential split across two.
+    const printing = (conversationId = ''): void => {
+      h.probeTools = [
+        {
+          kind: 'shell',
+          summarize: () => 'probe run_shell',
+          schema: {
+            name: 'run_shell',
+            description: 'probe run_shell',
+            parameters: {
+              type: 'object',
+              properties: { command: { type: 'string' } },
+              required: ['command'],
+              additionalProperties: false
+            }
+          },
+          execute: async (_a, ctx) => {
+            ctx.onShellOutput?.('building...\n')
+            await new Promise((r) => setTimeout(r, 200))
+            ctx.onShellOutput?.(`token=${SECRET.slice(0, 10)}`)
+            ctx.onShellOutput?.(`${SECRET.slice(10)}\ndone\n`)
+            await new Promise((r) => setTimeout(r, 200))
+            if (conversationId) replay = liveTranscriptForConversation(conversationId)
+            return 'built'
+          }
+        }
+      ]
+    }
+    const turns = (): ProviderStreamEvent[][] => [
+      [
+        { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'make' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+    ]
+    const liveOf = (r: RunResult): string[] =>
+      r.events.flatMap((e) => (e.type === 'tool_progress' && e.output !== undefined ? [e.output] : []))
+
+    it('streams the tail of a running command, redacted, to a client that asks', async () => {
+      h.secrets = [SECRET]
+      h.sandboxed = true
+      printing('conv-live-output')
+      const r = await run({
+        policy: 'full-auto',
+        turns: turns(),
+        liveShellOutput: true,
+        conversationId: 'conv-live-output'
+      })
+      const live = liveOf(r)
+      expect(live[0]).toBe('building...\n')
+      const last = live[live.length - 1]
+      expect(last).toContain('done')
+      expect(live.join('')).not.toContain(SECRET)
+      // Every update comes before the command's result.
+      const resultAt = r.events.findIndex((e) => e.type === 'tool_result')
+      const lastLiveAt = r.events.map((e) => e.type).lastIndexOf('tool_progress')
+      expect(lastLiveAt).toBeLessThan(resultAt)
+      // The re-open replay holds only the latest update, however many were sent.
+      expect(live.length).toBeGreaterThan(1)
+      expect(replay.filter((e) => e.type === 'tool_progress')).toHaveLength(1)
+    })
+
+    it('sends nothing to a client that does not ask', async () => {
+      h.sandboxed = true
+      printing()
+      const r = await run({ policy: 'full-auto', turns: turns() })
+      expect(r.events.some((e) => e.type === 'tool_progress')).toBe(false)
+    })
   })
 
   it('"Always allow" on `rm *` saves an exact rule that does not auto-approve `rm -rf ~`', async () => {
@@ -8367,6 +8458,38 @@ describe('scheduled runs (loop wiring)', () => {
     const results = r.events.filter((e) => e.type === 'tool_result')
     expect(results[0]?.type === 'tool_result' && results[0].output).toContain('No scheduled runs')
     expect(results[1]?.type === 'tool_result' && results[1].output).toContain('Cancelled scheduled run sch-test')
+  })
+
+  it('lists a paused schedule as paused instead of giving a next run', async () => {
+    const paused: ScheduledRunInfo = {
+      name: 'nightly',
+      spec: 'daily at 09:00',
+      prompt: 'p',
+      workspace: 'w',
+      providerId: 'anthropic',
+      model: 'm',
+      approvalPolicy: 'plan',
+      id: 'sch-p',
+      nextRunAt: 4102444800000,
+      createdAt: 1,
+      paused: true
+    }
+    setSchedulerBackend({ ...fakeBackend([]), list: () => [paused] })
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'c1', name: 'list_scheduled_runs', arguments: {} } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'text', text: 'ok' },
+          { type: 'done', stopReason: 'end_turn' }
+        ]
+      ]
+    })
+    const result = r.events.find((e) => e.type === 'tool_result')
+    expect(result?.type === 'tool_result' && result.output).toBe('- sch-p: "nightly", daily at 09:00; paused')
   })
 })
 

@@ -164,3 +164,40 @@ export function sideChatTurn(question: string, answer: string): InvokedTurn {
 export function sideChatExchangeText(question: string, answer: string): string {
   return `From a side chat:\n\nQuestion: ${question}\n\nAnswer: ${answer}`
 }
+
+/** One line comment left on a diff in the Changes view. */
+export interface ReviewComment {
+  /** The file's path as the Changes view listed it. */
+  path: string
+  /** Which side of the diff the line is on: the new file, or a removed line. */
+  side: 'old' | 'new'
+  line: number
+  /** The line's code, so the agent can find it even after the file has moved on. */
+  code: string
+  /** What the user wrote. */
+  body: string
+}
+
+/**
+ * "Send N comments to the agent" from the Changes view: every comment as one turn,
+ * each with its file, line and the code it is on. The chip says how many comments
+ * on how many files; the full text is one click away.
+ */
+export function reviewCommentsTurn(comments: readonly ReviewComment[]): InvokedTurn {
+  const files = new Set(comments.map((c) => c.path)).size
+  const n = comments.length
+  const parts = comments.map((c, i) => {
+    const where = `${c.path}, line ${c.line}${c.side === 'old' ? ' (a removed line)' : ''}`
+    const code = c.code.trim() ? `\n   Code: ${c.code.trim()}` : ''
+    const body = c.body.trim().split('\n').join('\n   ')
+    return `${i + 1}. ${where}${code}\n   Comment: ${body}`
+  })
+  return {
+    text: `I left ${n === 1 ? 'a comment' : `${n} comments`} on the changes in this project. Address ${n === 1 ? 'it' : 'each one'}, then say briefly what you changed for each.\n\n${parts.join('\n\n')}`,
+    invokedAs: {
+      kind: 'action',
+      label: n === 1 ? 'Review comment' : `${n} review comments`,
+      detail: `On ${files} file${files === 1 ? '' : 's'}`
+    }
+  }
+}

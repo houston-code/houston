@@ -49,6 +49,78 @@ describe.each([
   })
 })
 
+// Accent presets: on dark, --accent is read on the panel surfaces and --accent-fill
+// carries white text; on light, --accent carries white text (the user's bubbles) and
+// is read on the warm surfaces. The default accent is held to the same rules.
+describe.each(['default', 'violet', 'green', 'orange', 'pink'])('%s accent', (accent) => {
+  const preset = (selector: string): Record<string, string> => (accent === 'default' ? {} : themeVars(selector))
+  const dark = { ...themeVars(':root'), ...preset(`:root:not([data-theme='light'])[data-accent='${accent}']`) }
+  const light = {
+    ...themeVars(':root'),
+    ...themeVars(":root[data-theme='light']"),
+    ...preset(`:root[data-theme='light'][data-accent='${accent}']`)
+  }
+
+  it('reads on the dark surfaces, and its dark fill carries white text', () => {
+    for (const surface of ['--bg', '--bg-elevated', '--bg-input']) {
+      expect(contrast(dark['--accent'], dark[surface]), `--accent on ${surface}`).toBeGreaterThanOrEqual(4.5)
+    }
+    expect(contrast('#ffffff', dark['--accent-fill'])).toBeGreaterThanOrEqual(4.5)
+    expect(contrast('#ffffff', dark['--accent-fill-hover'])).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('carries white text in light, and reads on the light surfaces', () => {
+    for (const fill of ['--accent', '--accent-fill', '--accent-fill-hover']) {
+      expect(contrast('#ffffff', light[fill]), `white on ${fill}`).toBeGreaterThanOrEqual(4.5)
+    }
+    for (const surface of ['--bg', '--bg-elevated', '--bg-hover']) {
+      expect(contrast(light['--accent'], light[surface]), `--accent on ${surface}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+})
+
+// Each code theme overrides the tokens and the code surface for both palettes; the
+// panel surfaces (--bg, --bg-elevated) stay the base theme's.
+describe.each([
+  ['contrast', 'dark', ':root', ":root:not([data-theme='light'])[data-code-theme='contrast']"],
+  ['contrast', 'light', ":root[data-theme='light']", ":root[data-theme='light'][data-code-theme='contrast']"],
+  ['muted', 'dark', ':root', ":root:not([data-theme='light'])[data-code-theme='muted']"],
+  ['muted', 'light', ":root[data-theme='light']", ":root[data-theme='light'][data-code-theme='muted']"]
+])('%s code theme, %s syntax tokens', (_name, _theme, base, override) => {
+  const vars = { ...themeVars(':root'), ...themeVars(base), ...themeVars(override) }
+
+  it('overrides every token and the code surface', () => {
+    const own = themeVars(override)
+    for (const token of TOKENS) expect(own[`--syn-${token}`], `--syn-${token}`).toBeDefined()
+    expect(own['--bg-code']).toBeDefined()
+  })
+
+  it.each(TOKENS)('--syn-%s clears 4.5:1 on every code surface', (token) => {
+    const fg = vars[`--syn-${token}`]
+    for (const surface of SURFACES) {
+      expect(contrast(fg, vars[surface]), `--syn-${token} on ${surface}`).toBeGreaterThanOrEqual(4.5)
+    }
+  })
+})
+
+describe('appearance defaults', () => {
+  it('leave the transcript and diffs exactly as before when no option is set', () => {
+    const vars = (() => {
+      const start = css.indexOf(':root {\n  --chat-zoom')
+      const body = css.slice(start, css.indexOf('\n}', start))
+      return Object.fromEntries([...body.matchAll(/(--[\w-]+):\s*([^;]+);/g)].map((m) => [m[1], m[2].trim()]))
+    })()
+    expect(vars).toMatchObject({
+      '--chat-zoom': '1',
+      '--chat-row-gap': '18px',
+      '--msg-turn-gap': '10px',
+      '--msg-line-height': '1.65',
+      '--diff-add-bg': 'rgba(74, 222, 128, 0.13)',
+      '--diff-del-bg': 'rgba(255, 107, 107, 0.13)'
+    })
+  })
+})
+
 describe('titlebar count badge', () => {
   it('fills with --accent-fill, the accent shade white text is checked against', () => {
     const start = css.indexOf('.titlebar__badge {')

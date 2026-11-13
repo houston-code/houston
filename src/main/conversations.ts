@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { writeFileAtomicStampedSync } from './atomic-write'
+import { buildUsageReport, type UsageInput, type UsageReport } from '@shared/usageReport'
 import { externalizeMedia, hydrateMedia, pruneMedia } from './conversationMedia'
 import {
   COMPACTION_SUMMARY_PREFIX,
@@ -29,7 +30,10 @@ import type {
   SpawnedFrom,
   StoredSideChat
 } from '@shared/agent'
-import { forkConversationData, type ImportedConversation } from '@shared/conversation-io'
+import { forkConversationData, type ForkPoint, type ImportedConversation } from '@shared/conversation-io'
+import { replyMessageIndexes } from '@shared/chatStatus'
+import { rewindableTurnIndices, turnText } from '@shared/rewind'
+import { repairDanglingToolResults } from './agent/repair'
 import { accumulateModelUsage } from '@shared/usage'
 import { invocationText } from '@shared/promptInvocation'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
@@ -358,6 +362,43 @@ export function conversationExists(id: string): boolean {
  * different direction without disturbing the original. Returns the new
  * conversation, or null if the source doesn't exist.
  */
+/**
+ * How many leading messages a fork from `point` keeps, or null when the point no
+ * longer names a message in `messages`. After a reply, that reply's tool results come
+ * along (a call without its results can't be sent); before a user message, nothing of
+ * that message or after it.
+ */
+export function forkCut(messages: ChatMessage[], point: ForkPoint): number | null {
+  if (point.kind === 'reply') {
+    const at = replyMessageIndexes(messages)[point.n]
+    if (at === undefined) return null
+    let cut = at + 1
+    while (messages[cut]?.role === 'tool') cut++
+    return cut
+  }
+  const at = rewindableTurnIndices(messages)[point.n]
+  if (at === undefined || turnText(messages[at]) !== point.text) return null
+  return at
+}
+
+/**
+ * Fork a chat from one of its messages: a new chat holding the conversation up to
+ * that point (see {@link forkCut}), made like a whole-chat fork. Null when the chat or
+ * the point is gone.
+ */
+export function forkConversationAt(id: string, point: ForkPoint): Conversation | null {
+  const src = getConversation(id)
+  if (!src) return null
+  const cut = forkCut(src.messages, point)
+  if (cut === null) return null
+  // Anything left unbalanced by the cut is closed off, as a hand-off's history is.
+  const messages = repairDanglingToolResults(src.messages.slice(0, cut))
+  const fork = forkConversationData({ ...src, messages }, randomUUID(), Date.now())
+  fork.titleGenerated = true
+  write(fork)
+  return fork
+}
+
 export function forkConversation(id: string): Conversation | null {
   // Hydrated: the fork's write() copies the bytes into the fork's own media folder.
   const src = getConversation(id)
@@ -488,6 +529,27 @@ export function computeScorecard(): Scorecard {
     })
   }
   return buildScorecard(inputs)
+}
+
+/**
+ * Spend and tokens per day and per project over every saved chat, for the usage
+ * view. Local only, like {@link computeScorecard}: it reads the user's own chat files
+ * in the main process and hands back only the sums, never message text.
+ */
+export function computeUsageReport(now: Date = new Date()): UsageReport {
+  const files = readdirSync(dir()).filter((f) => f.endsWith('.json'))
+  const inputs: UsageInput[] = []
+  for (const f of files) {
+    const conv = read(f.replace(/\.json$/, ''))
+    if (!conv) continue
+    inputs.push({
+      project: conv.worktree?.repoRoot || conv.workspace,
+      messages: conv.messages,
+      inherited: inheritedMessages(conv),
+      ...(conv.usage ? { usage: conv.usage } : {})
+    })
+  }
+  return buildUsageReport(inputs, now)
 }
 
 /** How many messages at the start of `conv`'s log were copied from another chat. */

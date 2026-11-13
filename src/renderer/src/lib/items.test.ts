@@ -14,6 +14,7 @@ import {
   showsHandoff,
   systemNoteSummary,
   turnStatsByReply,
+  MAX_LIVE_OUTPUT,
   reduceEvent,
   type DisplayItem,
   type NoticeItem,
@@ -244,6 +245,23 @@ describe('present_plan', () => {
     expect(plan).toMatchObject({ id: 'p1', status: 'accepted' })
     expect(plan?.plan).toMatchObject({ title: 'Ship it', steps: ['One'], files: ['x.ts'] })
     expect(items.some((i) => i.kind === 'tool' && i.id === 'p1')).toBe(false)
+  })
+})
+
+describe('reduceEvent — throttled retry', () => {
+  it('says the provider rate-limited the request rather than calling it a connection issue', () => {
+    const items = reduceEvent([], {
+      runId: 'r',
+      type: 'retry',
+      attempt: 2,
+      max: 6,
+      message: '429 rate_limit_error',
+      throttle: { waitMs: 20_000, remainingRequests: 0 }
+    })
+    expect(items[0]).toMatchObject({
+      kind: 'notice',
+      text: '⏳ Rate limited by the provider. Retrying in 20s (2/6). 0 requests left in this window.'
+    })
   })
 })
 
@@ -1236,5 +1254,35 @@ describe('message timestamps and turn details', () => {
   it('ignores usage before any user message', () => {
     const items: DisplayItem[] = []
     expect(reduceEvent(items, { runId: 'r', type: 'usage', inputTokens: 1, outputTokens: 1, cost: 0 })).toBe(items)
+  })
+})
+
+describe('live shell output', () => {
+  const running = (): DisplayItem[] =>
+    reduceEvent([], { runId: 'r', type: 'tool_start', callId: 'c', name: 'run_shell', args: { command: 'make' } })
+  const tool = (items: DisplayItem[]): ToolItem => items.find((i) => i.kind === 'tool') as ToolItem
+
+  it('shows the latest output on the running row, and drops it for the result', () => {
+    let items = running()
+    items = reduceEvent(items, { runId: 'r', type: 'tool_progress', callId: 'c', message: '', output: 'one\n' })
+    items = reduceEvent(items, { runId: 'r', type: 'tool_progress', callId: 'c', message: '', output: 'one\ntwo\n' })
+    expect(tool(items).liveOutput).toBe('one\ntwo\n')
+    expect(tool(items).progress).toBeUndefined()
+    items = reduceEvent(items, { runId: 'r', type: 'tool_result', callId: 'c', name: 'run_shell', ok: true, output: 'two' })
+    expect(tool(items).liveOutput).toBeUndefined()
+  })
+
+  it('ignores a late update for a finished row, and caps what a row holds', () => {
+    let items = running()
+    items = reduceEvent(items, { runId: 'r', type: 'tool_result', callId: 'c', name: 'run_shell', ok: true, output: 'x' })
+    const done = reduceEvent(items, { runId: 'r', type: 'tool_progress', callId: 'c', message: '', output: 'late' })
+    expect(done).toBe(items)
+    const big = reduceEvent(running(), { runId: 'r', type: 'tool_progress', callId: 'c', message: '', output: 'z'.repeat(MAX_LIVE_OUTPUT + 10) })
+    expect(tool(big).liveOutput).toHaveLength(MAX_LIVE_OUTPUT)
+  })
+
+  it('still takes a plain progress line', () => {
+    const items = reduceEvent(running(), { runId: 'r', type: 'tool_progress', callId: 'c', message: 'phase 2' })
+    expect(tool(items).progress).toBe('phase 2')
   })
 })

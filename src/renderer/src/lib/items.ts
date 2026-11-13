@@ -9,6 +9,7 @@ import {
   type ReviewFinding,
   retryProgress,
 } from '@shared/agent'
+import { throttleNotice } from '@shared/rateLimit'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import type { FileDiffPreview } from '@shared/diff'
 import type { TurnReceipt } from '@shared/evidence'
@@ -131,6 +132,11 @@ export interface ToolItem {
   output?: string
   /** Latest progress line from a long-running tool (e.g. a review's current phase). */
   progress?: string
+  /**
+   * The tail of a running shell command's output so far, replaced with each update
+   * and dropped when the result arrives. Capped here as well as in main.
+   */
+  liveOutput?: string
   /** Live child rows for nested subagents this tool spawned (e.g. review dimension reviewers). */
   subagents?: SubAgentRow[]
   /** Live review findings (review_changes), upserted by id as verification settles them. */
@@ -376,6 +382,13 @@ export function turnStatsByReply(items: DisplayItem[]): Map<string, TurnStats> {
   return out
 }
 
+/** Most characters of live output a row holds (main already sends no more). */
+export const MAX_LIVE_OUTPUT = 16 * 1024
+
+function capLiveOutput(text: string): string {
+  return text.length > MAX_LIVE_OUTPUT ? text.slice(-MAX_LIVE_OUTPUT) : text
+}
+
 let counter = 0
 const nextId = (): string => `i${Date.now().toString(36)}-${counter++}`
 
@@ -529,6 +542,13 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
       ]
     }
     case 'tool_progress': {
+      // A running command's output so far replaces the last update; a finished row
+      // (its result already in) ignores a late one.
+      if (e.output !== undefined) {
+        const row = items.find((it) => it.kind === 'tool' && it.id === e.callId)
+        if (!row || row.kind !== 'tool' || row.status !== 'running') return items
+        return updateTool(items, e.callId, { liveOutput: capLiveOutput(e.output) })
+      }
       // Update the live progress line on the running tool (no-op if it's gone).
       return updateTool(items, e.callId, { progress: e.message })
     }
@@ -656,6 +676,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         status,
         output: e.output,
         progress: undefined, // clear the live progress line now the tool has finished
+        liveOutput: undefined, // and the live output: the result replaces it
         ...(e.images?.length ? { images: e.images } : {})
       })
       // The tool finished, so any nested subagent row still spinning is now resolved,
@@ -708,7 +729,9 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
     }
     case 'retry': {
       const finalized = finalizeStreaming(items)
-      const text = `⟳ Connection issue, retrying (${retryProgress(e)}): ${e.message}`
+      const text = e.throttle
+        ? `⏳ ${throttleNotice(e.throttle, retryProgress(e))}`
+        : `⟳ Connection issue, retrying (${retryProgress(e)}): ${e.message}`
       // Back-to-back attempts update one line ("retrying (3/6)") rather than stacking
       // a row per attempt down the transcript.
       const last = finalized[finalized.length - 1]

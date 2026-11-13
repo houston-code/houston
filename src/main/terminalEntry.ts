@@ -49,6 +49,7 @@ import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import { listModels } from './providers'
 import { runGitCapture } from './agent/gitRead'
+import { writeExportFile } from './tui-sessions'
 import {
   canPersistHeaderSecrets,
   canSetKey,
@@ -62,11 +63,13 @@ import { log } from './logger'
 import {
   runTui,
   makePainter,
+  resolveTheme,
   mediaTypeForImagePath,
   type BackgroundSession,
   type ResumeEntry,
   type TuiOptions
 } from './tui'
+import { detectTerminalBackground } from './tui-background'
 import type { DoctorFacts } from './tui-doctor'
 import { gatherDoctorFacts } from './doctor'
 import { saveMemory } from './memory'
@@ -91,6 +94,7 @@ import {
   makeCompleter,
   commandMenu,
   renderCommandMenu,
+  makeMentionMenu,
   COMMANDS,
   type CommandSpec
 } from './tui-complete'
@@ -106,6 +110,8 @@ import {
   peekConversation,
   searchConversations,
   forkConversation,
+  organizeConversation,
+  deleteConversation,
   setGeneratedTitle,
   reportChildToParent,
   saveSideChat
@@ -505,10 +511,20 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       /* no custom commands — the built-ins still list */
     })
 
+  // A light terminal with no saved theme starts on the light theme. Asked before the
+  // composer starts reading the keyboard, so the terminal's reply never lands in it.
+  if (tui.color && !resolveTheme(getSettings().tuiTheme ?? '')) {
+    const bg = await detectTerminalBackground({ input: process.stdin, output: process.stdout }, process.env)
+    if (bg === 'light') tui.detectedTheme = 'light'
+  }
+  // Typing `@` lists matching files under the composer, as `/` lists commands.
+  const mentionMenu = makeMentionMenu((q) => findFiles(tui.cwd, q), paint as never)
+
   const io = createTerminalIo({
-    menuFor: (line) => {
+    menuFor: (line, redraw) => {
       const matches = commandMenu(line, menuCommands)
-      return matches ? renderCommandMenu(matches, paint as never) : []
+      if (matches) return renderCommandMenu(matches, paint as never)
+      return mentionMenu(line, redraw) ?? []
     },
     paint,
     // Read live: an entry submitted this session must be recallable on the next
@@ -560,6 +576,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
         const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd)
         return head.ok ? head.stdout.trim() || null : null
       },
+      writeExport: (path, content) => writeExportFile(tui.cwd, path, content),
       workingTree: async () => {
         const c = await collectWorkingTreeChanges(tui.cwd)
         return {
@@ -715,6 +732,10 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
           const forked = forkConversation(id)
           return forked ? { id: forked.id } : null
         },
+        // The desktop sidebar's rename: marks the title as chosen, so it is never
+        // replaced by a generated one.
+        rename: (id, title) => organizeConversation(id, { title }),
+        remove: (id) => deleteConversation(id),
         get: (id) => {
           const conv = getConversation(id)
           return conv

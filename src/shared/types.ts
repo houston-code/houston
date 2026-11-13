@@ -564,6 +564,8 @@ export type MenuCommand =
   | { type: 'switch-model' }
   /** Help → Keyboard Shortcuts. */
   | { type: 'show-shortcuts' }
+  /** Help → Report an Issue…: show what the report includes before opening it. */
+  | { type: 'report-issue' }
 
 /** The panels the View menu shows and hides. */
 export type MenuPanel = 'sidebar' | 'terminal' | 'tasks' | 'preview' | 'side-chat'
@@ -732,6 +734,16 @@ export interface AppSettings {
    */
   htmlVisuals?: boolean
   /**
+   * Show each tool row in the desktop transcript expanded (its output or diff in view)
+   * rather than collapsed to one line. Off by default.
+   */
+  toolOutputExpanded?: boolean
+  /**
+   * Keep the model's reasoning open under each reply in the desktop transcript, instead
+   * of behind its toggle once the reply starts. Off by default.
+   */
+  showReasoning?: boolean
+  /**
    * Cross-session memory: the agent sees the memories saved in earlier sessions and
    * can read them (docs/memory-design.md). On unless set to false.
    */
@@ -786,6 +798,14 @@ export interface AppSettings {
   attentionSounds?: boolean
   /** UI color theme (default follows the OS). */
   theme?: 'system' | 'dark' | 'light'
+  /** Accent color preset. Absent = 'default' (the theme's own accent). */
+  accentColor?: AccentColor
+  /** Text size in the chat transcript. Absent = 'default'. */
+  chatFontSize?: ChatFontSize
+  /** Spacing in the chat transcript. Absent = 'comfortable'. */
+  density?: Density
+  /** Colors for code blocks, the Files preview, and diffs. Absent = 'default'. */
+  codeTheme?: CodeTheme
   /**
    * The interactive terminal's color theme. Separate from `theme` above, which is
    * the desktop app's light/dark preference: the terminal's palettes are ANSI
@@ -820,6 +840,12 @@ export interface AppSettings {
    */
   sidebarUnreadFirst?: boolean
   /**
+   * Split the chats outside any group into automatic sections by project folder or
+   * by date (Today, Yesterday, This week, Older). Pinned chats and the user's own
+   * groups stay as they are. Absent = no automatic sections.
+   */
+  sidebarGroupBy?: SidebarGroupBy
+  /**
    * Whether a new chat at a git repository's root starts with "New worktree" on: the
    * chat then works on its own branch in a separate folder. Set when the user flips the
    * toggle (or in Settings), so their choice carries to the next chat. Absent = on,
@@ -848,6 +874,11 @@ export interface AppSettings {
   previewWidth?: number
   /** Whether the preview panel is open. */
   previewOpen?: boolean
+  /**
+   * Open the Preview panel when the agent starts a dev server whose URL is detected,
+   * once per chat. Absent means on.
+   */
+  previewAutoOpen?: boolean
   /** Width (px) of the docked plan-review panel (Plan mode). */
   planWidth?: number
   /**
@@ -932,6 +963,13 @@ export interface IntegrationsInfo {
 /** The user's answer to the one-time "global rules moved" notice. */
 export type LegacyRulesChoice = 'import' | 'keep'
 
+/** Chat text size (Settings > Appearance). */
+export type ChatFontSize = 'small' | 'default' | 'large'
+/** Transcript spacing (Settings > Appearance). */
+export type Density = 'comfortable' | 'compact'
+/** Code block and diff colors (Settings > Appearance). */
+export type CodeTheme = 'default' | 'contrast' | 'muted'
+
 /**
  * An API key found in the desktop app's environment for a provider with no stored key,
  * offered for the secure store. Carries only what the offer shows: never the key, only
@@ -944,6 +982,13 @@ export interface EnvKeyOffer {
   envVar: string
   last4: string
 }
+
+/** Accent color presets (Settings > Appearance); 'default' is each theme's own. */
+export const ACCENT_COLORS = ['default', 'violet', 'green', 'orange', 'pink'] as const
+export type AccentColor = (typeof ACCENT_COLORS)[number]
+
+/** How the sidebar sorts chats outside any group into sections. */
+export type SidebarGroupBy = 'folder' | 'date'
 
 /** Result of answering that notice. `error` is set (and nothing is persisted) when the import write failed. */
 export interface LegacyRulesDecideResult {

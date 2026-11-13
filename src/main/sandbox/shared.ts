@@ -3,6 +3,7 @@ import type { ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve, win32 } from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { DEFAULT_SHELL_OUTPUT_MAX_BYTES } from '@shared/defaults'
 import { sanitizeChildEnv } from '../childEnv'
 import type {
@@ -710,8 +711,28 @@ export function runWithBackend(
       }
     }
 
-    child.stdout?.on('data', (c: Buffer) => out.push(c))
-    child.stderr?.on('data', (c: Buffer) => err.push(c))
+    // A live view gets each chunk too, decoded per stream so a character split
+    // across two chunks arrives whole.
+    const watch = opts.onOutput
+    const watchStream = (decoder: StringDecoder) => (c: Buffer): void => {
+      if (!watch) return
+      try {
+        const text = decoder.write(c)
+        if (text) watch(text)
+      } catch {
+        // An observer's failure never touches the run.
+      }
+    }
+    const watchOut = watchStream(new StringDecoder('utf8'))
+    const watchErr = watchStream(new StringDecoder('utf8'))
+    child.stdout?.on('data', (c: Buffer) => {
+      out.push(c)
+      watchOut(c)
+    })
+    child.stderr?.on('data', (c: Buffer) => {
+      err.push(c)
+      watchErr(c)
+    })
 
     child.on('error', (e) => {
       if (settled) return
