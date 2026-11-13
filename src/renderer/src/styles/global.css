@@ -1680,6 +1680,49 @@ body.is-resizing {
 .checkpoint-bar__label {
   flex: 1;
 }
+/* A failed turn: the cause in plain words, next steps, and the raw message on demand. */
+.turn-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  width: 100%;
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-left-width: 3px;
+  border-radius: 8px;
+  background: var(--bg-elevated);
+  font-size: 12.5px;
+}
+.turn-error__text {
+  flex: 1 1 260px;
+  min-width: 0;
+  color: var(--text-dim);
+}
+.turn-error__summary {
+  color: var(--text);
+  font-weight: 600;
+}
+.turn-error__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.turn-error__raw {
+  flex-basis: 100%;
+  max-height: 160px;
+  margin: 2px 0 0;
+  padding: 6px 8px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 
 /* ---- Queued-input bar (messages typed mid-run) ---- */
 .queue-bar {
@@ -1975,6 +2018,10 @@ body.is-resizing {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.statusbar__meter {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .statusbar__model {
   font-family: var(--mono);
   opacity: 0.8;
@@ -2061,6 +2108,88 @@ body.is-resizing {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* Recent project folders: on the welcome screen and under the checklist's folder step. */
+.recent-folders {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px 8px;
+  margin-top: 14px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+.get-started .recent-folders {
+  justify-content: flex-start;
+  margin-top: 6px;
+}
+.recent-folders__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+.recent-folders__item {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 1px 2px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+.recent-folders__item:hover {
+  text-decoration-style: solid;
+}
+.recent-folders__item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The control bar's folder menu: a folder's name with where it lives beside it. */
+.folder-menu {
+  min-width: 220px;
+  max-width: 360px;
+}
+.folder-menu__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.folder-menu__name {
+  color: var(--text);
+}
+.folder-menu__where {
+  color: var(--text-dim);
+  font-size: 11.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Shown while files are dragged over the window: a folder dropped anywhere opens it. */
+.folder-drop {
+  position: fixed;
+  inset: 0;
+  z-index: 110;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  border: 2px dashed var(--accent);
+  color: var(--text);
+  font-size: 14px;
+}
+.folder-drop__label {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 16px;
+}
+
 /* The checklist's example task, clickable while step 3 is current. */
 .get-started__example {
   font: inherit;
@@ -2267,6 +2396,24 @@ body.is-resizing {
 .connect-model__note a {
   color: var(--accent);
 }
+/* A key found in the app's environment, offered above the key box. */
+.connect-model__env {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-input);
+  font-size: 12.5px;
+  color: var(--text);
+}
+.connect-model__env-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .connect-model__tile-ok,
 .connect-model__saved-ok {
   color: var(--ok);
@@ -2421,7 +2568,27 @@ body.is-resizing {
 }
 .msg--user {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
+}
+/* The quiet line under a message: when it was sent and, under a turn's last reply,
+   the model and what the turn spent. */
+.msg__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.msg__meta--user {
+  flex-basis: 100%;
+  justify-content: flex-end;
+}
+.msg__time {
+  cursor: default;
 }
 .msg--user .msg__body {
   max-width: 86%;
@@ -3000,6 +3167,27 @@ h6.md-h {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A saved permission rule: the sentence, then each rule in full on its own line. */
+.undo-toast--rules {
+  flex-wrap: wrap;
+  row-gap: 6px;
+}
+.undo-toast__rules {
+  flex-basis: 100%;
+  order: 1;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+.undo-toast__rules code {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  color: var(--text-dim);
+}
 .undo-toast__btn {
   border: 0;
   background: none;
@@ -3236,6 +3424,12 @@ h6.md-h {
   color: var(--text-dim);
   white-space: nowrap;
 }
+.tool-row__elapsed {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
 .tool-row__tally--alarm {
   color: var(--danger);
 }
@@ -3367,6 +3561,23 @@ button.finding__head:focus-visible,
   flex-wrap: wrap;
   gap: 8px;
   padding: 0 12px 11px;
+}
+/* Focused (its keys answer it): a quiet accent edge instead of a full ring. */
+.tool-row__approval:focus {
+  outline: none;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+/* The key that answers each button, as on the plan panel. */
+.tool-row__approval-key {
+  margin-left: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: inherit;
+  opacity: 0.75;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 4px;
+  line-height: 15px;
 }
 .tool-row__approval-note {
   flex-basis: 100%;
@@ -7191,6 +7402,115 @@ body:has(.coachmark) .get-started {
 .seg__btn:focus-visible {
   outline: none;
   box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* ---- MCP Servers: add from catalog, paste JSON ---- */
+.mcp-add {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+.mcp-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mcp-catalog__item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.mcp-catalog__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.mcp-catalog__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mcp-catalog__review {
+  margin-left: auto;
+}
+.mcp-catalog__desc {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mcp-catalog__cmd {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+.mcp-review {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.mcp-review__title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.mcp-review__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.mcp-review__field input,
+.mcp-review__field textarea {
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.mcp-review__field input:focus,
+.mcp-review__field textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.mcp-review__check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text);
+}
+.mcp-review__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.mcp-review__error,
+.mcp-paste__problems {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+.mcp-paste__problems {
+  padding-left: 18px;
+}
+.mcp-paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
 }
 .mcp-server {
   margin-bottom: 8px;

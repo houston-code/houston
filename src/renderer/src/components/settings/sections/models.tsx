@@ -648,7 +648,9 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
       desc={
         <>
           Enable the <code>web_search</code> tool by choosing a provider and supplying
-          its API key, stored in your OS keychain.
+          its API key, stored in your OS keychain. Without a key, models on the Claude
+          API or OpenAI use their provider&apos;s built-in web search, billed to your
+          model key.
         </>
       }
     >

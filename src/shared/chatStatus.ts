@@ -71,6 +71,8 @@ export interface ChatLiveStatus {
   running: boolean
   /** Prompts the live run is blocked on, oldest first. Empty when nothing is waiting. */
   pending: PendingPrompt[]
+  /** When the live run started (epoch ms), so a client that reopens the chat mid-run can show how long it has been going. */
+  startedAt?: number
   /** Present while the chat has something the user hasn't seen. */
   unread?: UnreadInfo
 }

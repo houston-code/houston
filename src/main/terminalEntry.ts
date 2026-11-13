@@ -48,6 +48,7 @@ import {
 import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import { listModels } from './providers'
+import { runGitCapture } from './agent/gitRead'
 import {
   canPersistHeaderSecrets,
   canSetKey,
@@ -553,6 +554,12 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       // doesn't answer quickly is reported as not running rather than holding up
       // the menu (the SDK's own retries can take far longer).
       listModels: (provider) => withTimeout(listModels(provider), HOST_PROBE_MS),
+      // symbolic-ref names the branch (even an unborn one) and fails on a detached
+      // HEAD or outside a repository, where the status line shows no branch.
+      gitBranch: async () => {
+        const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd)
+        return head.ok ? head.stdout.trim() || null : null
+      },
       workingTree: async () => {
         const c = await collectWorkingTreeChanges(tui.cwd)
         return {

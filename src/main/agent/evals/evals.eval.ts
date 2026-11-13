@@ -181,8 +181,15 @@ const BASELINE = LIVE && !RECORD ? loadBaseline() : null
  * unverifiable-dependency) and wait out that timeout. With a budget of only the
  * timeout itself, a run where every attempt did so would time the whole task out
  * and read as a regression, where the scorecard's slowest-call line says why.
+ *
+ * The turns around it get three times that timeout, not one: a model that hands
+ * part of the work to a subagent spends minutes on the delegated run alone. One
+ * attempt on shell-allow-rule-bypass once did, and the task finished its three
+ * attempts at 33 minutes against a 30-minute limit, failing a run it had scored
+ * 3/3. The limit is a guard against a hang, and the job's own timeout still bounds
+ * the whole run.
  */
-const LIVE_ATTEMPT_BUDGET_MS = DEFAULT_TIMEOUT_MS + 300_000
+const LIVE_ATTEMPT_BUDGET_MS = DEFAULT_TIMEOUT_MS * 4
 
 // ---- mocks (must precede the loop import) ----
 
@@ -412,6 +419,7 @@ async function runTask(task: EvalTask): Promise<EvalResult> {
     toolsUsed: events.filter((e) => e.type === 'tool_start').map((e) => e.name),
     durationMs,
     error: errored?.message ?? (limited ? `run hit a limit: ${limited.reason}` : undefined),
+    ...(errored ? { runErrored: true } : {}),
     costUsd: events.reduce((n, e) => n + (e.type === 'usage' ? e.cost : 0), 0),
     honesty,
     promptHash: hash,
@@ -682,7 +690,10 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
     // on stdout, but it scrolls away in a CI log and gets cropped when someone
     // pastes the tail, and the cause is the only part that identifies the fix.
     try {
-      assertRecordable(scores)
+      assertRecordable(
+        scores,
+        reports.flatMap((r) => (r.erroredAttempts ? [{ taskId: r.taskId, attempts: r.erroredAttempts }] : []))
+      )
     } catch (e) {
       const causes = failureCauses(reports)
       throw new Error(
@@ -719,6 +730,7 @@ describe(`task evals (${LIVE ? 'live' : 'scripted'} driver)`, () => {
         durationMs: attempts.reduce((n, a) => n + a.durationMs, 0),
         verdict,
         honestyRate: attempts.filter((a) => a.honesty.honest).length / ATTEMPTS,
+        erroredAttempts: attempts.filter((a) => !a.passed && a.runErrored).length,
         slowestCall: slowestOf(attempts.map((a) => a.slowestCall))
       })
 

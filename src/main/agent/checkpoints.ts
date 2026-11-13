@@ -755,12 +755,40 @@ export function writeTargets(toolName: string, args: Record<string, unknown>): W
   return typeof args.path === 'string' && args.path ? [{ path: args.path, deleted: false }] : []
 }
 
-/** Bound memory: evict the oldest checkpoint(s) to admit one more. */
+/**
+ * Most snapshot text kept in memory across all checkpoints, in characters. The count
+ * cap alone let fifty runs that each touched large files hold hundreds of megabytes;
+ * an evicted run is still on disk and is read back when it is next needed.
+ */
+export const MAX_CHECKPOINT_MEMORY_CHARS = 64_000_000
+let memoryBudgetChars = MAX_CHECKPOINT_MEMORY_CHARS
+
+/** For tests: a smaller memory budget (null restores the default). */
+export function _setCheckpointMemoryBudget(chars: number | null): void {
+  memoryBudgetChars = chars ?? MAX_CHECKPOINT_MEMORY_CHARS
+}
+
+/** Characters of snapshot text a checkpoint holds. */
+function checkpointChars(cp: Checkpoint): number {
+  let n = 0
+  for (const f of cp.files.values()) n += (f.before?.length ?? 0) + (f.after?.length ?? 0)
+  return n
+}
+
+/**
+ * Bound memory before admitting one more checkpoint: evict the oldest past the count
+ * cap or the memory budget (checked here, as each run starts, not as a run grows). A run whose latest state has not reached disk yet is
+ * never evicted, since nothing could read it back: dropping it would lose its
+ * snapshots, and a revert would then leave those files changed.
+ */
 function evictForNewCheckpoint(): void {
-  while (checkpoints.size >= MAX_CHECKPOINTS) {
-    const oldest = checkpoints.keys().next().value
-    if (oldest === undefined) break
-    checkpoints.delete(oldest)
+  let chars = 0
+  for (const cp of checkpoints.values()) chars += checkpointChars(cp)
+  for (const [runId, cp] of [...checkpoints]) {
+    if (checkpoints.size < MAX_CHECKPOINTS && chars <= memoryBudgetChars) break
+    if (dirtyRuns.has(runId)) continue
+    checkpoints.delete(runId)
+    chars -= checkpointChars(cp)
   }
 }
 
