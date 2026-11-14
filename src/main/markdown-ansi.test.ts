@@ -157,6 +157,21 @@ describe('MarkdownStream', () => {
     const out = s.flush()
     expect(out).toContain('const x = 1')
   })
+
+  // A reply is the model's text: an escape in it could move the cursor, rewrite the
+  // transcript above or write the clipboard. Only the renderer's own colour survives.
+  it('drops the control characters a reply carries, keeping its lines and tabs', () => {
+    const s = new MarkdownStream({ paint: makePainter(true), width: 0 })
+    const out =
+      s.push('Done\x1b]52;c;ZXZpbA==\x07.\r\n\n') + s.push('```\n\tcode\x1b[2J\n```\n\n') + s.push('**b**\x9b') + s.flush()
+    // Nothing but colour: no other escape, and no other control character.
+    // eslint-disable-next-line no-control-regex -- asserting no control characters survive
+    expect(out).not.toMatch(/\x1b\[(?![0-9;]*m)|\x1b\]|[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f-\x9f]/)
+    expect(out).toContain('Done]52;c;ZXZpbA==.')
+    expect(out).toContain('\tcode[2J')
+    expect(out).toContain('\x1b[1m') // the bold it renders
+    expect(renderMarkdownAnsi('a\x1b[2Kb\rc', { paint, width: 0 })).toBe('a[2Kbc')
+  })
 })
 
 describe('MarkdownStream chunking', () => {
