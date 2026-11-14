@@ -213,7 +213,7 @@
   },
   {
     "name": "run_shell",
-    "description": "Run a shell command in the project directory and return its combined stdout/stderr and exit code. Foreground commands share a session within a turn, so `cd` and exported variables carry over to later calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command stops after 300s by default (raise `timeout_seconds` for a slow one-shot such as a cold `npm install`); GNU `timeout` is not available, so don't wrap commands in it. Use background:true for anything open-ended (a dev server, a watcher, a build of unknown length): it returns a shell id at once for read_shell_output and kill_shell. Never background with `&`: a trailing `&` on a foreground command loses its exit status, and a background:true command containing `&` is refused because the process would be orphaned. In a background command, make the server the last command and keep its output on stdout rather than in a file, so read_shell_output and the Preview pane can see it.",
+    "description": "Run a shell command in the project directory and return its combined stdout/stderr and exit code. Foreground commands share a session within a turn, so `cd` and exported variables carry over to later calls (e.g. `cd build` then `make`, or activate a virtualenv once). A foreground command stops after 300s by default (raise `timeout_seconds` for a slow one-shot such as a cold `npm install`); GNU `timeout` is not available, so don't wrap commands in it. Use background:true for anything open-ended (a dev server, a watcher, a build of unknown length): it returns a shell id at once for read_shell_output and kill_shell. You are told when it exits (and of lines containing a notify_on phrase), even after your turn ends, so to wait on something slow (a long build, a command that blocks until CI finishes) start it in the background instead of polling. Never background with `&`: a trailing `&` on a foreground command loses its exit status, and a background:true command containing `&` is refused because the process would be orphaned. In a background command, make the server the last command and keep its output on stdout rather than in a file, so read_shell_output and the Preview pane can see it.",
     "parameters": {
       "type": "object",
       "properties": {
@@ -224,6 +224,13 @@
         "background": {
           "type": "boolean",
           "description": "Run without waiting and return a shell id (default false). Use for long-running processes."
+        },
+        "notify_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "With background:true: up to 5 plain phrases (case-insensitive, not regex); output lines containing one are reported to you, e.g. [\"error\", \"ready\"]."
         },
         "timeout_seconds": {
           "type": "number",

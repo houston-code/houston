@@ -12,8 +12,9 @@ import type {
 import type { ImageAttachment } from '@shared/images'
 import type { PromptInvocation } from '@shared/promptInvocation'
 import type { SessionUsage } from '@shared/usage'
-import { reduceEvent, type DisplayItem, type PlanStatus } from '../lib/items'
+import { reduceEvent, systemNoteSummary, type DisplayItem, type PlanStatus } from '../lib/items'
 import { meterOnEvent, startMeter, type RunMeter } from '../lib/runMeter'
+import { SYSTEM_NOTE_PREFIX } from '@shared/agent'
 
 /**
  * A plan the agent has presented and is now blocking on, shown in the docked review
@@ -177,6 +178,14 @@ export function useChat(conversationId: string | null = null): ChatController {
       setErrored(false)
       setFailure(null)
       setCheckpoint(null)
+      // A turn Houston started on its own (background work finished while the
+      // chat was idle) opens with its automated note: shown as a notice, the way
+      // the saved log shows it, never as a message the user sent.
+      if (e.userText.startsWith(SYSTEM_NOTE_PREFIX)) {
+        const text = systemNoteSummary(e.userText)
+        setItems((prev) => [...prev, { kind: 'notice', id: `u-${e.runId}`, text, tone: 'info' }])
+        return
+      }
       setItems((prev) => [
         ...prev,
         {

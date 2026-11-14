@@ -285,9 +285,9 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'notifications',
-        keys: ['desktopNotifications', 'appBadge', 'attentionSounds'],
+        keys: ['desktopNotifications', 'appBadge', 'attentionSounds', 'backgroundWake'],
         Component: NotificationsSection,
-        keywords: ['alerts', 'desktop notifications', 'sound', 'sounds', 'chime', 'audio', 'bell', 'badge', 'dock', 'taskbar', 'unread']
+        keywords: ['alerts', 'desktop notifications', 'sound', 'sounds', 'chime', 'audio', 'bell', 'badge', 'dock', 'taskbar', 'unread', 'background', 'wake', 'continue']
       },
       {
         id: 'preferences',

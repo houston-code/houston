@@ -130,6 +130,7 @@ describe('import checks per preference', () => {
     ['desktopNotifications', false, null],
     ['appBadge', false, 'yes'],
     ['attentionSounds', true, 'loud'],
+    ['backgroundWake', false, 'on'],
     ['theme', 'dark', 'sepia'],
     ['accentColor', 'green', 'chartreuse'],
     ['chatFontSize', 'large', 'huge'],

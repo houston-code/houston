@@ -794,6 +794,13 @@ export interface AppSettings {
    */
   desktopNotifications?: boolean
   /**
+   * When background work the agent started finishes while its chat is idle (a
+   * background command exits or prints a watched line, a spawned session finishes),
+   * start a turn on its own so the agent can act on it. Off: the agent hears about it
+   * with the user's next message. On by default.
+   */
+  backgroundWake?: boolean
+  /**
    * Show a count on the app icon (the macOS Dock badge, the Linux launcher count, a
    * dot on the Windows taskbar button) of chats that need input, failed, or have
    * unread replies. On by default.

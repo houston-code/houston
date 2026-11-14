@@ -2,7 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentEvent, StopReason } from '@shared/agent'
 import type { QueuedInputMeta } from '@shared/queue'
 import { addToQueue, clearQueue, listQueue } from './queue'
-import { runAndDrain, type DrainIO } from './drain'
+import { runAndDrain, startWakeTurn, type DrainIO } from './drain'
+import { pushBackgroundEvent, resetBackgroundEventsForTest } from './backgroundEvents'
 
 // Mock the run loop and the conversation store; use the real queue manager so the
 // drain path is exercised end-to-end against actual queue state.
@@ -13,9 +14,12 @@ const h = vi.hoisted(() => ({
   setConversationError: vi.fn(),
   updateConversationMeta: vi.fn(),
   maybeGenerateTitle: vi.fn(() => Promise.resolve()),
-  maybeSuggestNext: vi.fn((_opts: { conversationId: string; onSuggestion: (t: string) => void }) => Promise.resolve())
+  maybeSuggestNext: vi.fn((_opts: { conversationId: string; onSuggestion: (t: string) => void }) => Promise.resolve()),
+  activeRun: vi.fn((): string | null => null),
+  takeChildReports: vi.fn((): unknown[] => [])
 }))
-vi.mock('./loop', () => ({ startRun: h.startRun }))
+vi.mock('./loop', () => ({ startRun: h.startRun, activeRunForConversation: h.activeRun }))
+vi.mock('../agentHost', () => ({ getSettings: () => ({ approvalPolicy: 'auto-edit' }) }))
 // Auto-titling has its own tests (title.test.ts); here we only assert drain wires it
 // up at turn start (plus a natural-completion fallback), so stub it out rather than reaching the provider/store.
 vi.mock('./title', () => ({ maybeGenerateTitle: h.maybeGenerateTitle }))
@@ -26,6 +30,7 @@ vi.mock('../conversations', () => ({
   setMessages: h.setMessages,
   setConversationError: h.setConversationError,
   updateConversationMeta: h.updateConversationMeta,
+  takeChildReports: h.takeChildReports,
   // The queue's disk copy (covered in queue.test.ts); nothing stored here.
   getQueuedInput: () => null,
   setQueuedInput: () => {}
@@ -339,5 +344,69 @@ describe('runAndDrain', () => {
       await settle()
       expect(h.maybeSuggestNext).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('startWakeTurn', () => {
+  const conv = (over: Record<string, unknown> = {}) => ({
+    id: 'c',
+    title: 'T',
+    workspace: '/ws',
+    providerId: 'anthropic',
+    model: 'claude',
+    createdAt: 0,
+    updatedAt: 0,
+    messages: [{ role: 'user', content: 'build it' }],
+    ...over
+  })
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resetBackgroundEventsForTest()
+    endRunsWith({ done: 'end_turn' })
+    h.activeRun.mockReturnValue(null)
+    h.takeChildReports.mockReturnValue([])
+    h.getConversation.mockImplementation(() => conv({ approvalPolicy: 'ask' }))
+  })
+  const exit = { kind: 'shell_exit' as const, shellId: 's1', command: 'make', exitCode: 0, tail: 'ok', at: 1 }
+
+  it("starts a wake run on the chat's own settings, opening with the note", async () => {
+    pushBackgroundEvent('c', exit, { wake: false })
+    const o = io()
+    expect(startWakeTurn(o, 'c')).toBe(true)
+    await settle()
+    const req = h.startRun.mock.calls[0]![0]
+    expect(req).toMatchObject({ conversationId: 'c', approvalPolicy: 'ask', wake: true, workspace: '/ws' })
+    expect(req.messages.at(-1).content).toContain('background shell s1')
+    expect(h.setMessages.mock.calls[0]![1].at(-1).content).toContain('the user has not sent a message')
+    const start = o.emit.mock.calls.find((c) => c[1].type === 'turn_start')![1]
+    expect(start).toMatchObject({ type: 'turn_start', conversationId: 'c' })
+  })
+
+  it('falls back to the default policy for a chat that never stored one', async () => {
+    h.getConversation.mockImplementation(() => conv())
+    pushBackgroundEvent('c', exit, { wake: false })
+    expect(startWakeTurn(io(), 'c')).toBe(true)
+    await settle()
+    expect(h.startRun.mock.calls[0]![0].approvalPolicy).toBe('auto-edit')
+  })
+
+  it('includes finished spawned sessions', async () => {
+    h.takeChildReports.mockReturnValue([{ conversationId: 'k', title: 'Child', outcome: 'done', summary: 'all good', finishedAt: 1 }])
+    expect(startWakeTurn(io(), 'c')).toBe(true)
+    await settle()
+    expect(h.startRun.mock.calls[0]![0].messages.at(-1).content).toContain('session "Child" finished')
+  })
+
+  it('starts nothing for a running chat, a missing chat, or no news', () => {
+    pushBackgroundEvent('c', exit, { wake: false })
+    h.activeRun.mockReturnValue('run-1')
+    expect(startWakeTurn(io(), 'c')).toBe(false)
+    h.activeRun.mockReturnValue(null)
+    h.getConversation.mockImplementation(() => null)
+    expect(startWakeTurn(io(), 'c')).toBe(false)
+    h.getConversation.mockImplementation(() => conv())
+    resetBackgroundEventsForTest()
+    expect(startWakeTurn(io(), 'c')).toBe(false)
+    expect(h.startRun).not.toHaveBeenCalled()
   })
 })

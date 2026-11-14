@@ -180,6 +180,16 @@ import {
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { detectTestEdits, isTestRelevantPath, testEditsNote } from './testTampering'
 import { peekShell } from './shells'
+import {
+  backgroundEventsNote,
+  backgroundEventsNotice,
+  childReportWaiting,
+  clearChildReportFlag,
+  hasBackgroundNews,
+  noteRunEnded,
+  noteRunStarted,
+  takeBackgroundEvents
+} from './backgroundEvents'
 import { gatherReadinessFacts, planReadiness, readinessNote } from './readiness'
 import { isSensitiveRead } from './sensitive-paths'
 import { lspManager } from './lsp/manager'
@@ -1299,6 +1309,9 @@ export async function startRun(
     // again if this run fails. Here rather than in one client, so every client's runs
     // keep it.
     setConversationError(conversationId, null)
+    // For waking idle chats on background news (backgroundEvents.ts): a turn the
+    // user started resets the automatic-turn streak; a wake turn adds to it.
+    noteRunStarted(conversationId, req.wake === true)
   }
 
   // Runs once, just before the event that ends the run (its first `done`, or the
@@ -1387,6 +1400,18 @@ export async function startRun(
   // Hoisted above the try so the `finally` can backfill results for any tool call
   // left dangling by an interruption (see the repair calls below).
   const messages: ChatMessage[] = [...req.messages]
+  // Hand the model news from background work held for this chat (backgroundEvents.ts):
+  // before the user's new message at turn start, or appended at an iteration boundary.
+  const deliverBackgroundEvents = (beforeLast: boolean): void => {
+    if (!conversationId) return
+    const events = takeBackgroundEvents(conversationId)
+    const note = backgroundEventsNote(events)
+    if (!note) return
+    if (beforeLast) messages.splice(messages.length - 1, 0, note)
+    else messages.push(note)
+    persist(messages)
+    emit({ type: 'notice', message: backgroundEventsNotice(events) })
+  }
   // Scrubs an unexpected error's message before it reaches the client (see the catch
   // below). Swapped for the run's secret redactor once that is built.
   let scrubError = (text: string): string => text
@@ -1653,6 +1678,10 @@ export async function startRun(
     // the user the same news. Taken (cleared) here so each report lands exactly once;
     // persisted right away so an early failure later in the run can't lose it.
     if (conversationId && messages[messages.length - 1]?.role === 'user') {
+      // Background shells that exited (or printed a watched line) since the last turn,
+      // told the same way.
+      deliverBackgroundEvents(true)
+      clearChildReportFlag(conversationId)
       const reports = takeChildReports(conversationId)
       if (reports.length > 0) {
         messages.splice(messages.length - 1, 0, childReportsNote(reports))
@@ -3545,6 +3574,27 @@ export async function startRun(
         persist(messages)
       }
 
+      // News from background work that arrived while this turn ran: a shell exited,
+      // printed a watched line, or a spawned session finished. Same boundary as steers,
+      // the one point where the window is not mid-request.
+      if (conversationId && hasBackgroundNews(conversationId)) {
+        deliverBackgroundEvents(false)
+        if (childReportWaiting(conversationId)) {
+          clearChildReportFlag(conversationId)
+          const reports = takeChildReports(conversationId)
+          if (reports.length > 0) {
+            messages.push(childReportsNote(reports))
+            persist(messages)
+            emit({
+              type: 'notice',
+              message: `Finished while this turn ran: ${reports
+                .map((r) => `"${r.title}" (${r.outcome === 'error' ? 'failed' : 'done'})`)
+                .join(', ')}`
+            })
+          }
+        }
+      }
+
       // A turn carrying the `ultrathink` keyword: tell the model once, after the message
       // that carries it, so a model with no higher effort tier to move to still gets the
       // request. The effort itself is raised where each model request is built.
@@ -5106,6 +5156,7 @@ export async function startRun(
       if (conversationId && runsByConversation.get(conversationId) === runId) {
         runsByConversation.delete(conversationId)
         notifyActiveRunsChanged()
+        noteRunEnded(conversationId, !ended ? 'natural' : ended.cls === 'aborted' ? 'aborted' : 'error')
       }
     }
   }
