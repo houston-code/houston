@@ -324,6 +324,59 @@ describe('childReportFrom', () => {
   it('says so when the child never wrote an answer', () => {
     expect(childReportFrom(conv({}), 0).summary).toMatch(/without a written answer/)
   })
+
+  // The outcome comes from the record the child's last run left, not the stored
+  // error alone: a stalled, capped, or stopped run has no error, and calling it
+  // finished told the parent the work was done.
+  const at = '2026-11-01T00:00:00.000Z'
+  const endedWith = (runEnds: NonNullable<ChatMessage['runEnds']>, extra: Partial<Conversation> = {}): Conversation =>
+    conv({
+      messages: [
+        { role: 'user', content: 'go' },
+        { role: 'assistant', content: 'Got partway.', runEnds }
+      ],
+      ...extra
+    })
+
+  it('reports a stalled run as a limit, with its reason', () => {
+    expect(childReportFrom(endedWith([{ reason: 'limit', limit: 'stalled', at }]), 0)).toMatchObject({
+      outcome: 'limit',
+      limit: 'stalled',
+      summary: 'Got partway.'
+    })
+  })
+
+  it('reports a run that hit the step limit as a limit', () => {
+    expect(childReportFrom(endedWith([{ reason: 'limit', limit: 'max-steps', at }]), 0)).toMatchObject({
+      outcome: 'limit',
+      limit: 'max-steps'
+    })
+  })
+
+  it('reports a stopped run as stopped, not finished', () => {
+    const r = childReportFrom(endedWith([{ reason: 'aborted', at }]), 0)
+    expect(r).toMatchObject({ outcome: 'stopped', summary: 'Got partway.' })
+    expect(r.limit).toBeUndefined()
+    // Stopped before it wrote anything: said so, without claiming it finished.
+    const early = childReportFrom(conv({ messages: [{ role: 'user', content: 'go', runEnds: [{ reason: 'aborted', at }] }] }), 0)
+    expect(early).toMatchObject({ outcome: 'stopped', summary: 'It stopped without a written answer.' })
+  })
+
+  it('reports an error after a reply by its error', () => {
+    expect(
+      childReportFrom(endedWith([{ reason: 'error', message: 'Connection reset', at }], { lastError: { message: 'Connection reset' } }), 0)
+    ).toMatchObject({ outcome: 'error', summary: 'Connection reset' })
+  })
+
+  it('reads only the latest run: an earlier record on an answered message does not count', () => {
+    const c = conv({
+      messages: [
+        { role: 'user', content: 'go', runEnds: [{ reason: 'aborted', at }] },
+        { role: 'assistant', content: 'All done.' }
+      ]
+    })
+    expect(childReportFrom(c, 0)).toMatchObject({ outcome: 'done', summary: 'All done.' })
+  })
 })
 
 describe('proposals and child reports (persisted)', () => {

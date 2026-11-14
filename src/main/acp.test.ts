@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { AppSettings, ApprovalPolicy } from '@shared/types'
+import { limitNoticeText } from '@shared/runEnd'
 import {
   BLOCKING_EVENT_TYPES,
   type AgentEvent,
@@ -605,6 +606,33 @@ describe('ACP server: protocol flow', () => {
     await h.end()
   })
 
+  it('replays why a loaded session last stopped, as a notice for an editor that shows them', async () => {
+    const at = '2026-11-01T00:00:00.000Z'
+    const h = harness({
+      stored: [
+        {
+          id: 'saved-limit',
+          workspace: '/x',
+          providerId: 'anthropic',
+          model: 'claude-sonnet-4-5',
+          messages: [
+            { role: 'user', content: 'refactor it' },
+            { role: 'assistant', content: 'partway', runEnds: [{ reason: 'limit', limit: 'stalled', at }] }
+          ]
+        }
+      ],
+      run: async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: { session: { notices: true } } })
+    await h.call('session/load', { sessionId: 'saved-limit', cwd: h.cwd, mcpServers: [] })
+    expect(h.updates('saved-limit')).toEqual([
+      { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'refactor it' } },
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partway' } },
+      { sessionUpdate: 'notice', severity: 'warning', title: limitNoticeText('stalled') }
+    ])
+    await h.end()
+  })
+
   it("moves a loaded session to the default model only when the chat's provider is gone, and records it", async () => {
     const h = harness({
       stored: [{ id: 'saved-2', workspace: '/x', messages: [], providerId: 'retired', model: 'old-model' }],
@@ -1010,6 +1038,26 @@ describe('ACP mapping helpers', () => {
         status: 'completed',
         content: [{ type: 'content', content: { type: 'text', text: 'file body' } }]
       }
+    ])
+  })
+
+  it('replays each run-end record after its message, older records included, on the thought stream by default', () => {
+    const at = '2026-11-01T00:00:00.000Z'
+    const ups = replayUpdates(
+      [
+        { role: 'user', content: 'go', unanswered: [{ reason: 'error', message: 'Provider overloaded', at }] },
+        { role: 'user', content: 'Automated note from Houston (not from the user): x', runEnds: [{ reason: 'aborted', at }] },
+        { role: 'assistant', content: 'done-ish', runEnds: [{ reason: 'limit', limit: 'max-steps', at }] }
+      ],
+      W
+    )
+    const thought = (t: string): unknown => ({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: `\n${t}\n` } })
+    expect(ups).toEqual([
+      { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'go' } },
+      thought('Provider overloaded'),
+      thought('Stopped.'),
+      { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done-ish' } },
+      thought(limitNoticeText('max-steps'))
     ])
   })
 })

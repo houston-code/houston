@@ -107,6 +107,7 @@ import {
   type CommandSpec
 } from './tui-complete'
 import { mergeCommands } from '@shared/commands'
+import { runOutcome, runOutcomePhrase } from '@shared/runEnd'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
 import { highlightToHtml } from './syntax'
 import {
@@ -368,8 +369,12 @@ export function wireTerminalSessionBackends(opts: {
         })
         .finally(() => {
           liveSpawnedRuns.delete(conversationId)
-          const title = getConversation(conversationId)?.title ?? conversationId
-          opts.notify?.(`background session "${title}" finished. Resume it to see the result (id ${conversationId})`)
+          const conv = getConversation(conversationId)
+          const title = conv?.title ?? conversationId
+          // How it ended, from the record its run left (a stall, a limit, a stop, an
+          // error): "finished" for every one of them hid that the work was not done.
+          const how = conv ? runOutcomePhrase(runOutcome(conv.messages, conv.lastError)) : 'ended'
+          opts.notify?.(`background session "${title}" ${how}. Resume it to see the result (id ${conversationId})`)
         })
       pending.add(run)
       void run.finally(() => pending.delete(run))
@@ -400,11 +405,14 @@ export function wireTerminalSessionBackends(opts: {
     backgroundSessions: () =>
       spawned.map((s) => {
         const conv = getConversation(s.id)
+        const running = liveSpawnedRuns.has(s.id)
+        const end = !running && conv ? runOutcome(conv.messages, conv.lastError) : undefined
         return {
           id: s.id,
           title: conv?.title ?? '(untitled)',
-          running: liveSpawnedRuns.has(s.id),
+          running,
           startedAt: s.startedAt,
+          ...(end ? { outcome: end.outcome, ...(end.limit ? { limit: end.limit } : {}) } : {}),
           // The worktree is the point of a fan-out: it says which branch this
           // session is actually working on.
           ...(conv?.worktree?.branch ? { branch: conv.worktree.branch } : {})

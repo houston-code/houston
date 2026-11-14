@@ -173,11 +173,18 @@ describe('wireTerminalSessionBackends', () => {
     expect(result.conversationId).toBeTruthy()
     expect(result.note).toContain('non-interactively')
     // The background run started (agent host unconfigured here, so it errors out
-    // quickly) — the wait must settle and the completion note must fire.
+    // quickly) — the wait must settle and the completion note must fire, saying it
+    // failed rather than that it finished.
     expect(handle.pendingBackgroundSessions()).toBe(1)
     await handle.waitForBackgroundSessions()
     expect(handle.pendingBackgroundSessions()).toBe(0)
-    expect(notes.some((n) => n.includes('finished'))).toBe(true)
+    const note = notes.find((n) => n.startsWith('background session'))
+    expect(note).toMatch(/^background session ".*" failed\. Resume it to see the result/)
+    expect(note).not.toContain('finished')
+    // The /sessions list says the same.
+    expect(handle.backgroundSessions()).toEqual([
+      expect.objectContaining({ id: result.conversationId, running: false, outcome: 'error' })
+    ])
   })
 
   it('persists schedules through the scheduler seam without starting timers', () => {

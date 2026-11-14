@@ -92,6 +92,11 @@ The full GUI:
   that is sent as pasted; **Expand** puts it back in the box. Dropping a file attaches
   it like **+ Attach files**: a text file's contents go in the message, and a binary
   file such as a PDF by name only.
+- **Why a turn stopped, after a reload.** When a turn ends without finishing (an
+  error, your Stop, the step limit, the model's output limit, or a stall), the notice
+  that said so is saved with the chat, so reopening it shows the same notice in place.
+  The terminal (`/resume`, `--continue`, `--resume <id>`) and editors that load a
+  session say it too.
 - **Back where you were after a restart.** Houston reopens the chat that was open when
   you quit. If that chat was deleted, or its folder or worktree is gone, it opens a new
   chat in your last folder instead.
@@ -592,7 +597,8 @@ the model.
 - `/permissions` lists your saved permission rules, numbered; `/permissions remove <n>`
   deletes one. Rules in a project's `.houston/settings.json` are edited in that file.
 - Resuming a chat (`/resume`, `--continue`, `--resume <id>`) replays its last three
-  exchanges, so you can see where you left off.
+  exchanges, so you can see where you left off, and says how its last turn ended when it
+  didn't finish (an error, a Stop, or a limit it hit).
 - Leaving prints the `houston --resume <id>` command that reopens the chat.
 
 ### Terminal themes
@@ -1974,9 +1980,11 @@ A subagent reports back into the current turn. `spawn_session` instead spins off
   worktree. It starts fresh with its prompt or, with context "fork", with a copy of
   the spawning chat so far.
 - **Never more permissive.** It inherits the current approval policy.
-- **When it finishes,** the chat that started it gets a short report (title, whether
-  it worked, the start of its answer) as a Houston note at the start of its next turn,
-  and you see a notice in the transcript.
+- **When it ends,** the chat that started it gets a short report (title, how it ended,
+  the start of its answer) as a Houston note at the start of its next turn, and you see
+  a notice in the transcript. The report says whether it finished, failed, was stopped,
+  or hit a limit (the step limit, the model's output limit, or a stall), so unfinished
+  work isn't reported as done.
 
 ### In the desktop app
 
@@ -1996,6 +2004,8 @@ Spawned sessions run here too:
   automatically
 - they're saved as ordinary conversations you can open later with `/resume` or
   `--resume <id>`
+- when one ends, a line says how (finished, failed, was stopped, or hit a limit), and
+  `/sessions` lists each one the same way
 - a one-shot headless run waits for its spawned sessions before exiting
 
 ## Proposed sessions

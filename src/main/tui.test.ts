@@ -15,6 +15,7 @@ import type {
 } from '@shared/agent'
 import { BUILTIN_TEMPLATE_COMMANDS, REVIEW_TEMPLATE, type Command } from '@shared/commands'
 import { SHARE_MESSAGE } from '@shared/share'
+import { limitNoticeText } from '@shared/runEnd'
 import { APPROVAL_INTERRUPTED_NOTE, QUESTION_STOPPED_ANSWER } from '@shared/promptOutcome'
 import {
   parseTuiArgs,
@@ -111,7 +112,7 @@ import {
   renderRewindPoints,
   parseRewindSelection,
   parseRewindMode,
-  unansweredNotice
+  runEndNotice
 } from './tui'
 import type { PickerOutcome, PickerSpec } from './tui-picker'
 import { COMMANDS } from './tui-complete'
@@ -5006,6 +5007,24 @@ describe('--continue / --resume at launch', () => {
     expect(rec.runs[0].messages[0].content).toBe('from the docs pass')
   })
 
+  it('--resume says the last run hit the step limit, as the live notice did', async () => {
+    const { d } = deps(done)
+    const t = fakeIo([null])
+    d.io = t.io
+    d.persist = persistWith({
+      older: [
+        { role: 'user', content: 'refactor it' },
+        {
+          role: 'assistant',
+          content: 'partway',
+          runEnds: [{ reason: 'limit', limit: 'max-steps', at: '2026-11-01T00:00:00.000Z' }]
+        }
+      ]
+    })
+    await runTui({ ...opts, resumeId: 'older' }, d)
+    expect(t.text()).toContain(`· ${limitNoticeText('max-steps')}`)
+  })
+
   // A named session that isn't there is a mistake worth saying out loud; nothing
   // to continue is just a fresh start.
   it('names a --resume miss, and shrugs at an empty --continue', async () => {
@@ -6238,25 +6257,67 @@ describe('propose_session in the terminal', () => {
   })
 })
 
-describe('unansweredNotice', () => {
-  it('says why the last message got no reply, from its latest record', () => {
+describe('runEndNotice', () => {
+  it('says why the last message got no reply, from its latest record (older saved records)', () => {
     const at = '2026-10-22T00:00:00.000Z'
-    expect(unansweredNotice([{ role: 'user', content: 'hi' }])).toBeNull()
+    expect(runEndNotice([{ role: 'user', content: 'hi' }])).toBeNull()
     expect(
-      unansweredNotice([{ role: 'user', content: 'hi', unanswered: [{ reason: 'error', message: 'boom\u001b[31m', at }] }])
+      runEndNotice([{ role: 'user', content: 'hi', unanswered: [{ reason: 'error', message: 'boom\u001b[31m', at }] }])
     ).toBe('· the last message got no reply: boom[31m')
     expect(
-      unansweredNotice([
+      runEndNotice([
         { role: 'user', content: 'hi', unanswered: [{ reason: 'error', message: 'boom', at }, { reason: 'aborted', at }] }
       ])
     ).toBe('· the last message got no reply: it was stopped')
     // Only the last message counts: an earlier record was followed by more turns.
     expect(
-      unansweredNotice([
+      runEndNotice([
         { role: 'user', content: 'hi', unanswered: [{ reason: 'aborted', at }] },
         { role: 'user', content: 'again' }
       ])
     ).toBeNull()
+  })
+
+  it('says how a run that replied ended: a limit in the live wording, an error, a stop', () => {
+    const at = '2026-11-01T00:00:00.000Z'
+    const replied = (runEnds: ChatMessage['runEnds']): ChatMessage[] => [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'partway', runEnds }
+    ]
+    expect(runEndNotice(replied([{ reason: 'limit', limit: 'stalled', at }]))).toBe(`· ${limitNoticeText('stalled')}`)
+    expect(runEndNotice(replied([{ reason: 'limit', limit: 'max-output', at }]))).toBe(
+      `· ${limitNoticeText('max-output')}`
+    )
+    expect(runEndNotice(replied([{ reason: 'error', message: 'overloaded', at }]))).toBe(
+      '· the last run failed: overloaded'
+    )
+    expect(runEndNotice(replied([{ reason: 'aborted', at }]))).toBe('· the last run was stopped before it finished')
+    expect(runEndNotice(replied(undefined))).toBeNull()
+    // A current record on a message no run answered reads like an older one.
+    expect(runEndNotice([{ role: 'user', content: 'go', runEnds: [{ reason: 'aborted', at }] }])).toBe(
+      '· the last message got no reply: it was stopped'
+    )
+  })
+})
+
+describe('renderBackgroundSessions outcomes', () => {
+  it('says how a finished session ended instead of calling every one finished', () => {
+    const out = renderBackgroundSessions(
+      [
+        { id: 'a', title: 'Clean', running: false, startedAt: 1, outcome: 'done' },
+        { id: 'b', title: 'Capped', running: false, startedAt: 2, outcome: 'limit', limit: 'max-steps' },
+        { id: 'c', title: 'Looped', running: false, startedAt: 3, outcome: 'limit', limit: 'stalled' },
+        { id: 'd', title: 'Halted', running: false, startedAt: 4, outcome: 'stopped' },
+        { id: 'e', title: 'Broke', running: false, startedAt: 5, outcome: 'error' }
+      ],
+      10,
+      makePainter(false)
+    )
+    expect(out).toMatch(/✓ finished {2}Clean/)
+    expect(out).toMatch(/■ hit the step limit {2}Capped/)
+    expect(out).toMatch(/■ stalled without making progress {2}Looped/)
+    expect(out).toMatch(/■ was stopped {2}Halted/)
+    expect(out).toMatch(/✗ failed {2}Broke/)
   })
 })
 

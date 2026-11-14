@@ -68,7 +68,8 @@ import { throttleNotice } from '@shared/rateLimit'
 import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
-import type { ContextParts, ModelUsage } from '@shared/agent'
+import type { ContextParts, ModelUsage, RunLimitReason } from '@shared/agent'
+import { latestRunEnd, limitNoticeText, runEndNoticeText, runOutcomePhrase, type RunOutcome } from '@shared/runEnd'
 import { renderContextReport } from '@shared/contextBreakdown'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
@@ -999,6 +1000,10 @@ export interface BackgroundSession {
   startedAt: number
   /** The branch it is working on, when it was given its own worktree. */
   branch?: string
+  /** How its last run ended, once it is no longer running (absent: finished). */
+  outcome?: RunOutcome['outcome']
+  /** Which limit, when `outcome` is `limit`. */
+  limit?: RunLimitReason
 }
 
 /**
@@ -1020,7 +1025,14 @@ export function renderBackgroundSessions(
   const ordered = [...sessions].sort((a, b) => Number(b.running) - Number(a.running) || b.startedAt - a.startedAt)
   const lines = [paint('Background sessions:', 'bold')]
   ordered.forEach((s, i) => {
-    const state = s.running ? paint('● running', 'cyan') : paint('✓ finished', 'green')
+    const state = s.running
+      ? paint('● running', 'cyan')
+      : !s.outcome || s.outcome === 'done'
+        ? paint('✓ finished', 'green')
+        : paint(
+            `${s.outcome === 'error' ? '✗' : '■'} ${runOutcomePhrase({ outcome: s.outcome, limit: s.limit })}`,
+            s.outcome === 'error' ? 'red' : 'yellow'
+          )
     const branch = s.branch ? paint(`  ${s.branch}`, 'magenta') : ''
     const when = paint(formatRelativeTime(s.startedAt, now), 'dim')
     lines.push(`  ${paint(String(i + 1), 'cyan')}. ${state}  ${s.title}${branch}  ${when}`)
@@ -1161,16 +1173,21 @@ export function renderWorkingTree(
 }
 
 /**
- * The line that tells a reopened chat its last message got no reply, and why (the
- * error its latest run ended on, or a Stop). Null when the last message was answered.
- * The GUI shows the same record as a notice under the message.
+ * The line that tells a reopened chat how its latest run ended when it didn't
+ * finish: the error it failed on, a Stop, or the limit it hit (worded as the live
+ * notice was). Null when the latest run finished. The GUI shows the same record as a
+ * notice under the message.
  */
-export function unansweredNotice(messages: ChatMessage[]): string | null {
-  const latest = messages.at(-1)?.unanswered?.at(-1)
+export function runEndNotice(messages: ChatMessage[]): string | null {
+  const latest = latestRunEnd(messages)
   if (!latest) return null
-  return latest.reason === 'error' && latest.message
-    ? `· the last message got no reply: ${stripControlChars(latest.message)}`
-    : '· the last message got no reply: it was stopped'
+  if (latest.reason === 'limit') return `· ${runEndNoticeText(latest)}`
+  const noReply = messages.at(-1)?.role === 'user'
+  if (latest.reason === 'error') {
+    const why = stripControlChars(runEndNoticeText(latest))
+    return noReply ? `· the last message got no reply: ${why}` : `· the last run failed: ${why}`
+  }
+  return noReply ? '· the last message got no reply: it was stopped' : '· the last run was stopped before it finished'
 }
 
 /** Render a numbered picker of recent conversations for `/resume`. */
@@ -3421,8 +3438,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       )
       const recap = renderRecap(messages, paint, { width: columns() })
       if (recap) deps.io.out(`${recap}\n`)
-      const unanswered = unansweredNotice(messages)
-      if (unanswered) deps.io.out(paint(`${unanswered}\n`, 'yellow'))
+      const ended = runEndNotice(messages)
+      if (ended) deps.io.out(paint(`${ended}\n`, 'yellow'))
       // What the launch flags set wins over the chat's own for this session, as it
       // does for a headless --resume: `--approval plan` on a chat saved in full-auto
       // must not quietly run it in full-auto.
@@ -3715,8 +3732,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
         const recap = renderRecap(messages, paint, { width: columns() })
         if (recap) deps.io.out(`${recap}\n`)
-        const unanswered = unansweredNotice(messages)
-        if (unanswered) deps.io.out(paint(`${unanswered}\n`, 'yellow'))
+        const ended = runEndNotice(messages)
+        if (ended) deps.io.out(paint(`${ended}\n`, 'yellow'))
         adoptChatSettings(conv)
         continue
       }
@@ -4906,7 +4923,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`\nError: ${e.message}\n`, 'red'))
           break
         case 'limit':
-          deps.io.out(paint(`\n· stopped: ${e.reason}\n`, 'yellow'))
+          deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
           break
         case 'compaction':
           deps.io.out(paint(`\n· compacted ${e.summarized} messages\n`, 'dim'))
