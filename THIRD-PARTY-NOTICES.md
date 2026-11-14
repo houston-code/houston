@@ -21671,7 +21671,7 @@ OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### undici: 6.29.1
+### undici: 7.30.1
 
 - License: MIT
 - Homepage: https://undici.nodejs.org
