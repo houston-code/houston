@@ -3,6 +3,7 @@ import { SecureStorageNotice, secureStorageBlocked } from './SecureStorageNotice
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { useApplyAccent, useApplyAppearance, useApplyTheme } from '../hooks/useApplyTheme'
 import type { AppSettings, PermissionPolicyView } from '@shared/types'
+import { SEARCH_PROVIDERS } from '@shared/search'
 import { PAGES, PAGE_GROUPS, pageById, type TabId } from './settings/pages'
 import { NAV_ICON } from './settings/navIcons'
 import { TOOL_NAMES } from './settings/permissionRules'
@@ -86,11 +87,8 @@ export function SettingsModal({
     setSettings,
     initial,
     containerRef: bodyRef,
-    onSaved,
-    onError: setFormError
+    onSaved
   })
-  const requestClose = onClose
-  useFocusTrap(modalRef, requestClose)
 
   // Mod+F (and / outside a text field) jump to the search box while Settings is
   // open, ahead of the app's own find-in-chat shortcut.
@@ -157,25 +155,47 @@ export function SettingsModal({
       searchKeyStatus: fresh.searchKeyStatus
     }))
 
-  const saveKey = async (id: string): Promise<void> => {
+  /** Store the typed key; true once it is saved (or there was nothing to save). */
+  const saveKey = async (id: string): Promise<boolean> => {
     const key = keyInputs[id]?.trim()
-    if (!key) return
+    if (!key) return true
     setBusy(id)
     setFormError(null)
     setStorageBlocked(null)
     try {
       applyKeyResult(await window.api.setKey(id, key), id, true)
       setKeyInputs((k) => ({ ...k, [id]: '' }))
+      return true
     } catch (e) {
       // Surface storage failures instead of letting the key silently vanish. When the
       // OS secure store is the cause (a denied Keychain prompt), say how to recover.
       const blocked = await secureStorageBlocked()
       if (blocked) setStorageBlocked(blocked)
       else setFormError(`Could not save API key: ${(e as Error).message}`)
+      return false
     } finally {
       setBusy(null)
     }
   }
+
+  // Leaving saves a key that was typed but not saved yet, as every other setting
+  // saves on its own; a key that fails to save keeps Settings open with the error.
+  const closing = useRef(false)
+  const requestClose = async (): Promise<void> => {
+    if (closing.current) return
+    const keyIds = new Set([...settings.providers.map((p) => p.id), ...SEARCH_PROVIDERS.map((p) => p.keyId)])
+    const unsaved = Object.keys(keyInputs).filter((id) => keyInputs[id]?.trim() && keyIds.has(id))
+    if (unsaved.length > 0) {
+      closing.current = true
+      try {
+        for (const id of unsaved) if (!(await saveKey(id))) return
+      } finally {
+        closing.current = false
+      }
+    }
+    onClose()
+  }
+  useFocusTrap(modalRef, () => void requestClose())
 
   const removeKey = async (id: string): Promise<void> => {
     setBusy(id)
@@ -274,6 +294,11 @@ export function SettingsModal({
                 Undo
               </button>
             )}
+            {autosave.status === 'error' && (
+              <button className="link set-status__undo" onClick={() => void autosave.flush()}>
+                Retry
+              </button>
+            )}
           </p>
         </div>
 
@@ -282,7 +307,7 @@ export function SettingsModal({
             {/* The way out leads the sidebar, styled as navigation rather than a button
                 beside the title: it is the first thing on the left, and nowhere near
                 the macOS window close button, which a far-right ✕ used to invite. */}
-            <button className="set-nav__back" onClick={requestClose} title="Back to the app (Esc)">
+            <button className="set-nav__back" onClick={() => void requestClose()} title="Back to the app (Esc)">
               <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M10 3.5L5.5 8l4.5 4.5" />
               </svg>
@@ -377,12 +402,18 @@ export function SettingsModal({
           </div>
         </div>
 
-        {(storageBlocked || formError) && (
+        {(storageBlocked || formError || autosave.error) && (
           <div className="modal__foot">
             {storageBlocked && <SecureStorageNotice platform={storageBlocked} />}
             {formError && (
               <span role="alert" className="set-foot__error">
                 {formError}
+              </span>
+            )}
+            {/* Cleared by the next save that lands (Retry, or any later change). */}
+            {autosave.error && (
+              <span role="alert" className="set-foot__error">
+                {autosave.error}
               </span>
             )}
           </div>

@@ -1,7 +1,7 @@
 import { createElement, useRef, type ReactElement } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useFocusTrap } from './useFocusTrap'
+import { useEscapeWithin, useFocusTrap } from './useFocusTrap'
 
 /**
  * The hook filters focusables by `offsetParent !== null` to skip hidden nodes.
@@ -144,6 +144,38 @@ describe('useFocusTrap', () => {
 
     expect(onClose).toHaveBeenCalledOnce()
     expect(stopPropagation).toHaveBeenCalledOnce()
+  })
+
+  it('leaves Escape to an inline editor that takes it, and closes once nothing does', async () => {
+    const onClose = vi.fn()
+    const onCancel = vi.fn()
+    let draft = true
+    function WithEditor(): ReactElement {
+      const ref = useRef<HTMLDivElement>(null)
+      const editor = useRef<HTMLDivElement>(null)
+      useFocusTrap(ref, onClose)
+      useEscapeWithin(editor, () => {
+        if (!draft) return false
+        onCancel()
+      })
+      return createElement(
+        'div',
+        { ref, role: 'dialog', tabIndex: -1 },
+        createElement('div', { ref: editor, key: 'e' }, createElement('textarea', { 'aria-label': 'draft' }))
+      )
+    }
+    render(createElement(WithEditor))
+    const box = screen.getByLabelText('draft')
+    fireEvent.keyDown(box, { key: 'Escape' })
+    expect(onCancel).toHaveBeenCalledOnce()
+    expect(onClose).not.toHaveBeenCalled()
+    // Focus lost with the editor goes back to the dialog, so the next Escape reaches it.
+    box.remove()
+    await new Promise((r) => requestAnimationFrame(() => r(null)))
+    expect(document.activeElement).toBe(screen.getByRole('dialog'))
+    draft = false
+    fireEvent.keyDown(screen.getByRole('dialog').firstElementChild as HTMLElement, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledOnce()
   })
 
   it('ignores unrelated keys', () => {

@@ -1,9 +1,74 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { AppSettings, McpServerConfig, McpServerStatus } from '@shared/types'
 import { sanitizeServerId } from '@shared/mcp'
+import { serverIdProblem } from '@shared/mcpCatalog'
 import { HeadersField, SettingsSection } from '../fields'
 import type { SettingsCtx } from '../context'
 import { McpAddPanels } from './mcpCatalog'
+
+/**
+ * A server's id. Typed freely and tidied to the namespacing-safe charset when the
+ * field loses focus: tidying every keystroke would eat the `-` of `my-server` (a
+ * trailing `-` is trimmed) before the next letter arrived.
+ */
+function ServerIdField({ id, onChange }: { id: string; onChange: (id: string) => void }): JSX.Element {
+  const [text, setText] = useState(id)
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!focused.current) setText(id)
+  }, [id])
+  return (
+    <input
+      className="rule__tool"
+      placeholder="id"
+      value={text}
+      onFocus={() => {
+        focused.current = true
+      }}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        focused.current = false
+        const clean = sanitizeServerId(text)
+        setText(clean)
+        if (clean !== id) onChange(clean)
+      }}
+    />
+  )
+}
+
+/**
+ * A stdio server's arguments, one per line as in the catalog's review form, so an
+ * argument may hold spaces (a folder path). Parsed when the field loses focus.
+ */
+function ArgsField({ args, onChange }: { args: string[]; onChange: (args: string[]) => void }): JSX.Element {
+  const [text, setText] = useState(() => args.join('\n'))
+  const focused = useRef(false)
+  const joined = args.join('\n')
+  useEffect(() => {
+    if (!focused.current) setText(joined)
+  }, [joined])
+  return (
+    <textarea
+      className="mcp-server__args"
+      rows={Math.max(3, text.split('\n').length)}
+      placeholder={'args, one per line, e.g.\n-y\n@modelcontextprotocol/server-filesystem'}
+      value={text}
+      onFocus={() => {
+        focused.current = true
+      }}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        focused.current = false
+        const parsed = text
+          .split('\n')
+          .map((a) => a.trim())
+          .filter(Boolean)
+        setText(parsed.join('\n'))
+        onChange(parsed)
+      }}
+    />
+  )
+}
 
 /** Model Context Protocol servers: stdio processes or remote HTTP/SSE endpoints. */
 export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
@@ -16,6 +81,12 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const patchServer = (i: number, patch: Partial<McpServerConfig>): void =>
     setServers(servers.map((sv, idx) => (idx === i ? { ...sv, ...patch } : sv)))
   const removeServer = (i: number): void => setServers(servers.filter((_, idx) => idx !== i))
+  // Servers already saved: their env values, headers, and OAuth tokens are stored
+  // under the id (this page only ever sees them masked), so the id can't change. A
+  // server added here keeps its id editable until it signs in with OAuth or the page
+  // is opened again.
+  const [savedIds, setSavedIds] = useState(() => new Set(servers.map((sv) => sv.id).filter(Boolean)))
+  const [renameHint, setRenameHint] = useState<number | null>(null)
 
   // Live per-server connection badges (connected / needs sign-in / error), read
   // once per modal open — the manager updates them on each run's reconcile.
@@ -53,6 +124,8 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
     setFormError(null)
     try {
       await ctx.persistNow()
+      // The tokens are stored under this id from here on.
+      setSavedIds((ids) => new Set(ids).add(id))
       const res = await window.api.mcpOAuthLogin(id)
       if (!res.ok) setFormError(`MCP sign-in failed: ${res.error ?? 'unknown error'}`)
       applyOAuthFlags(res.settings)
@@ -93,17 +166,27 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
       {servers.map((sv, i) => {
         const transport = sv.transport ?? (sv.url && !sv.command ? 'http' : 'stdio')
         const status = mcpStatuses.find((x) => x.id === sv.id)
+        const locked = savedIds.has(sv.id)
+        const idProblem = serverIdProblem(
+          sv.id,
+          servers.filter((_, idx) => idx !== i).map((other) => other.id)
+        )
         return (
           <div className="mcp-server" key={i}>
             <div className="mcp-server__row">
-              <input
-                className="rule__tool"
-                placeholder="id"
-                value={sv.id}
-                onChange={(e) =>
-                  patchServer(i, { id: sanitizeServerId(e.target.value) })
-                }
-              />
+              {locked ? (
+                <input
+                  className="rule__tool"
+                  value={sv.id}
+                  readOnly
+                  aria-label={`Server id ${sv.id}`}
+                  title="To rename a server, remove it and add it again"
+                  onFocus={() => setRenameHint(i)}
+                  onBlur={() => setRenameHint(null)}
+                />
+              ) : (
+                <ServerIdField id={sv.id} onChange={(id) => patchServer(i, { id })} />
+              )}
               <select
                 value={transport}
                 onChange={(e) =>
@@ -130,6 +213,10 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                 ✕
               </button>
             </div>
+            {renameHint === i && locked && (
+              <p className="field__hint">To rename a server, remove it and add it again.</p>
+            )}
+            {idProblem && <p className="field__hint field__hint--warn">{idProblem}</p>}
             {transport === 'http' || transport === 'sse' ? (
               <>
                 <input
@@ -189,16 +276,7 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   value={sv.command}
                   onChange={(e) => patchServer(i, { command: e.target.value })}
                 />
-                <input
-                  className="mcp-server__args"
-                  placeholder="args (space-separated, e.g. -y @modelcontextprotocol/server-filesystem .)"
-                  value={(sv.args ?? []).join(' ')}
-                  onChange={(e) =>
-                    patchServer(i, {
-                      args: e.target.value.split(/\s+/).filter(Boolean)
-                    })
-                  }
-                />
+                <ArgsField args={sv.args ?? []} onChange={(args) => patchServer(i, { args })} />
                 <input
                   className="mcp-server__args"
                   placeholder="working directory (optional)"
@@ -206,8 +284,9 @@ export function McpServersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   onChange={(e) => patchServer(i, { cwd: e.target.value || undefined })}
                 />
                 <HeadersField
+                  env
                   className="mcp-server__args"
-                  placeholder="env vars, one per line (e.g. GITHUB_TOKEN: ghp_xxx); values are stored encrypted"
+                  placeholder="env vars, one per line (e.g. GITHUB_TOKEN=ghp_xxx); values are stored encrypted"
                   headers={sv.env}
                   onChange={(env) => patchServer(i, { env })}
                 />
