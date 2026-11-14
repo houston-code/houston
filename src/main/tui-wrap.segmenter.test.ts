@@ -19,6 +19,11 @@ describe('the grapheme segmenter', () => {
     expect(built).toBe(0)
     expect(wrap.visibleWidth('plain ASCII text')).toBe(16)
     expect(built).toBe(0)
+    // Nor single-width text: the status line's dots and ellipsis, dashes, curly quotes,
+    // box drawing and the spinner's braille are measured by their length.
+    expect(wrap.visibleWidth('model · full-auto · …/repo — “ok” │ ⠋')).toBe(37)
+    expect(wrap.wrapAnsi('it’s a line — with “quotes” in it', 12)).toBe('it’s a line\n— with\n“quotes” in\nit')
+    expect(built).toBe(0)
     expect(wrap.visibleWidth('日本')).toBe(4)
     expect(wrap.visibleWidth('👍🏽')).toBe(2)
     expect(built).toBe(1)
