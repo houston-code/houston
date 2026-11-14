@@ -1241,6 +1241,7 @@ npm run build    # typecheck + bundle to out/
 npm test         # unit tests (vitest: node + jsdom projects)
 npm run test:e2e # Electron e2e suite (Playwright; builds first)
 npm run test:e2e:packaged # same suite against an app already built by `npm run dist*`
+npm run test:soak # memory soak: long desktop and CLI sessions checked against e2e/soak/budgets.ts
 npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 ```
 

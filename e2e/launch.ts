@@ -58,7 +58,8 @@ export interface LaunchTarget {
  * the package job always builds the app first, so a missing one is a failure there, not
  * a silent fallback that would leave the suite testing something other than the artifact.
  */
-export function resolveLaunch(): LaunchTarget {
+export function resolveLaunch(prefer: 'packaged' | 'unpackaged' = 'packaged'): LaunchTarget {
+  if (prefer === 'unpackaged') return unpackagedTarget()
   const packaged = findPackagedApp()
   if (packaged) {
     return { executablePath: packaged.executable, args: [], mode: `packaged (${packaged.dir})`, packaged: true }
@@ -66,11 +67,18 @@ export function resolveLaunch(): LaunchTarget {
   if (process.env.CI) {
     throw new Error('No packaged app in release/ for this platform. Did `npm run dist*` run before the e2e suite?')
   }
+  return unpackagedTarget()
+}
+
+/** The `out/` bundle from `npm run build`, run by the `electron` package's binary. */
+function unpackagedTarget(): LaunchTarget {
+  const main = join(ROOT, 'out', 'main', 'index.js')
+  if (!existsSync(main)) throw new Error('No out/ bundle. Run `npm run build` first.')
   // In Node, importing `electron` yields the path to the executable, but its published
   // types describe the in-process API, so cast to use it as the launcher.
   return {
     executablePath: electronPath as unknown as string,
-    args: [join(ROOT, 'out', 'main', 'index.js')],
+    args: [main],
     mode: 'unpackaged (out/)',
     packaged: false
   }
@@ -85,6 +93,14 @@ export interface LaunchOptions {
   userDataDir?: string
   /** Extra environment for the app, layered over the test process's own. */
   env?: Record<string, string>
+  /** Extra command-line switches for Electron, before the app's own arguments. */
+  switches?: string[]
+  /**
+   * Launch the unpackaged `out/` bundle even where a packaged app exists (the memory
+   * soak measures the app's code, and builds `out/` rather than installers). Default:
+   * the packaged app, as described on resolveLaunch.
+   */
+  prefer?: 'packaged' | 'unpackaged'
 }
 
 export interface LaunchedApp {
@@ -104,7 +120,7 @@ export interface LaunchedApp {
  * published at the time.
  */
 export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> {
-  const target = resolveLaunch()
+  const target = resolveLaunch(opts.prefer)
   test.info().annotations.push({ type: 'launch-mode', description: target.mode })
   const owned = opts.userDataDir === undefined
   const userDataDir = opts.userDataDir ?? mkdtempSync(join(tmpdir(), 'houston-e2e-'))
@@ -115,7 +131,7 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
   try {
     app = await electron.launch({
       executablePath: target.executablePath,
-      args: [...target.args, `--user-data-dir=${userDataDir}`],
+      args: [...(opts.switches ?? []), ...target.args, `--user-data-dir=${userDataDir}`],
       env
     })
   } catch (err) {
