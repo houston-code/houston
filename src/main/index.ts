@@ -28,6 +28,7 @@ import { wireLocalhostCapture } from './localhostCapture'
 import { wireMockupCapture } from './mockupCapture'
 import { registerPrivilegedSchemes } from './schemes'
 import { wireDeepLinks } from './deepLinkHost'
+import { configureIpcSenderPolicy } from './ipcSender'
 import { isAllowedChatFrameUrl } from './visualRender'
 import { appWindows, destroyHelperWindows } from './helperWindows'
 import { chatWindows, isPrimaryWindow, registerAppWindow, setWindowOpener, targetWindow } from './windows'
@@ -137,6 +138,16 @@ function followThemeInWindowBackgrounds(): void {
  * window-state.ts). Only the primary window (the oldest one open) saves its bounds, so
  * a second window never overwrites where the main one reopens.
  */
+/**
+ * The document every chat window loads: the Vite dev server in development, else the
+ * bundled index.html. Navigation is pinned to it and IPC is only answered from it.
+ */
+function rendererDocument(): { devUrl: string | undefined; indexFile: string; startUrl: string } {
+  const devUrl = process.env['ELECTRON_RENDERER_URL']
+  const indexFile = join(__dirname, '../renderer/index.html')
+  return { devUrl, indexFile, startUrl: devUrl ?? pathToFileURL(indexFile).toString() }
+}
+
 function createWindow(): BrowserWindow {
   // A window opened beside others (File > New Window, Open in New Window) cascades
   // from the one in use, on that window's display.
@@ -218,9 +229,7 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
-  const devUrl = process.env['ELECTRON_RENDERER_URL']
-  const indexFile = join(__dirname, '../renderer/index.html')
-  const startUrl = devUrl ?? pathToFileURL(indexFile).toString()
+  const { devUrl, indexFile, startUrl } = rendererDocument()
 
   // Pin the main frame to its own document. The renderer holds the privileged
   // `window.api` bridge, so a top-level navigation to any other origin must never
@@ -325,6 +334,10 @@ if (acp) {
   // Resolved once the credential store is ready; links wait on it (they read settings).
   let markStarted: () => void = () => {}
   const startedForLinks = new Promise<void>((done) => (markStarted = done))
+  // Only a chat window's main frame showing this document may call an IPC handler
+  // (ipcSender.ts). Set before anything registers a handler or loads a window.
+  const renderer = rendererDocument()
+  configureIpcSenderPolicy({ startUrl: renderer.startUrl, devUrl: renderer.devUrl })
   // Before ready: macOS delivers a launch link through `open-url` during startup.
   wireDeepLinks({ started: startedForLinks, createWindow })
   app.whenReady().then(async () => {

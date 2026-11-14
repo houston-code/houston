@@ -141,7 +141,9 @@ the terminal. Only three kinds do anything:
 
 - A link never runs a command, sends a message, or changes a setting.
 - Opening a folder Houston hasn't opened before (not a recent folder, and no chat in
-  it) asks first. Network paths are refused.
+  it) asks first. Network and device paths (a Windows share such as `\\host\share`
+  in any spelling, including `/\host\share` and `\\?\UNC\...`) are refused before
+  Houston looks at them.
 - From a terminal, `houston open [dir]` (the standalone CLI) opens a folder, the current
   one by default, in the desktop app.
 - Only one copy of the desktop app runs per profile. Launching it again brings the open

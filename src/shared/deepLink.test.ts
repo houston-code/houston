@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { win32 } from 'node:path'
 import {
   DEEP_LINK_SETTINGS_PAGES,
   MAX_DEEP_LINK_LENGTH,
@@ -81,6 +82,59 @@ describe('isAbsoluteLocalPath', () => {
     expect(isAbsoluteLocalPath('D:a')).toBe(false)
     expect(isAbsoluteLocalPath('\\\\host\\s')).toBe(false)
     expect(isAbsoluteLocalPath('a/b')).toBe(false)
+  })
+
+  // Windows reads `/` and `\` alike, so a path that starts with two separators in any
+  // mix is a share or a device once resolved. Touching one before the confirm dialog
+  // (realpath, stat) would send the user's NTLM hash to the host it names.
+  const NETWORK_AND_DEVICE = [
+    '\\\\host\\share',
+    '//host/share',
+    '/\\attacker\\share\\x',
+    '\\/attacker/share',
+    '/\\?\\UNC\\h\\s',
+    '/\\.\\pipe\\x',
+    '\\\\?\\UNC\\h\\s',
+    '\\\\?\\C:\\x',
+    '\\\\.\\pipe\\x',
+    '//?/UNC/h/s',
+    '//./pipe/x',
+    '\\\\'
+  ]
+
+  it('refuses every share and device spelling, separators in any mix', () => {
+    for (const p of NETWORK_AND_DEVICE) expect(isAbsoluteLocalPath(p), p).toBe(false)
+  })
+
+  it('refuses them inside a link too', () => {
+    for (const p of NETWORK_AND_DEVICE) {
+      expect(parseDeepLink(`houston://open?path=${encodeURIComponent(p)}`), p).toBeNull()
+    }
+  })
+
+  it('accepts only paths that resolve to a local root on Windows', () => {
+    const corpus = [
+      ...NETWORK_AND_DEVICE,
+      '/a',
+      '/a\\\\b',
+      '/..\\..\\\\host\\share',
+      'C:\\x',
+      'C:/x',
+      'C:\\\\host\\share',
+      'C:/\\host',
+      'D:\\x\\..\\..\\\\?\\UNC\\h',
+      '\\x'
+    ]
+    for (const p of corpus) {
+      if (!isAbsoluteLocalPath(p)) continue
+      // From a drive-letter current directory (the network-cwd case is refused in main).
+      const root = win32.parse(win32.resolve('C:\\Users\\me', p)).root
+      expect(root.startsWith('\\\\'), `${p} -> ${root}`).toBe(false)
+    }
+  })
+
+  it('still accepts ordinary POSIX and drive paths', () => {
+    for (const p of ['/home/dev/repo', '/', 'C:\\Users\\me\\repo', 'c:/repo']) expect(isAbsoluteLocalPath(p), p).toBe(true)
   })
 })
 
