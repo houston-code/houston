@@ -124,7 +124,9 @@ records as a submodule, since the root's `git status` recurses into those and ru
 their fsmonitor. For a linked worktree that covers the shared common dir, the other
 worktrees' redirects, and the main checkout's index too, because the sandbox makes the
 common dir writable (see `gitWritableRoots`). After each foreground `run_shell` (and
-when a background shell's output is read or it is stopped), it compares again:
+when a background shell's output is read or it is stopped, and after each verify-on-stop
+command, which runs the project's scripts outside the tool-approval gate), it compares
+again:
 
 - Settings that run nothing (`user.*`, remotes, upstreams, `core.fsmonitor=true`, which
   selects git's built-in daemon) are never reported.

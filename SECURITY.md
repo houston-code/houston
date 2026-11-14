@@ -119,12 +119,19 @@ across line continuations), but like the workspace-escape check it is a static
 tripwire: a command assembled from variables isn't seen. A new install starts in full
 auto only where the OS sandbox confines shell commands, and in ask elsewhere.
 
+The optional verify-on-stop command runs outside the tool-approval gate, so it carries
+the same limits itself. A command Houston inferred from the project's files (such as
+`npm test`) runs only where the OS sandbox confines it, or after the user allowed
+unsandboxed shell commands for the run; elsewhere it is skipped with a notice. A
+user-set command gets network exactly when the agent's own shell commands do, since it
+runs project scripts the agent can edit. Each one is followed by the git check below.
+
 The sandbox also leaves the project's `.git` writable, so ordinary git (commits,
 `git config`, upstreams, hook installers) works inside it. What a command could plant
 there for the user's **own** git to run later, outside the sandbox (a hook,
 `core.fsmonitor`, a filter driver or other command-valued setting, a `commondir`
 redirect, or a nested repository registered as a submodule that carries one), is
-**detected after each shell command** rather than blocked: Houston compares those
+**detected after each shell command** (verify-on-stop included) rather than blocked: Houston compares those
 parts of each root's repository with their state before the command and, on a change,
 asks the user to keep or undo it (an unattended run undoes it). Houston's own git
 calls run hardened against all of these regardless. This is detection, not

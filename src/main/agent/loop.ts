@@ -269,7 +269,7 @@ import { memoryStore, type MemoryStore } from './memoryStore'
 import { buildMemoryIndex } from './memoryIndex'
 import { MEMORY_SAVE_NAME, MEMORY_WRITE_TOOL_NAMES, memoryTaintSource } from './memoryTools'
 import { gitWritableRoots } from './gitDirs'
-import { GitGuard } from './gitGuard'
+import { GitGuard, reviewGitChanges } from './gitGuard'
 import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
 import {
   COMPACTION_TAIL_FRACTION,
@@ -357,6 +357,8 @@ import {
   runVerification,
   verifyFailureMessage,
   inferredVerifyNotice,
+  inferredVerifySkippedNotice,
+  inferredVerifyBlockedUnconfined,
   resolveVerifyMaxPasses
 } from './verify-gate'
 
@@ -3672,8 +3674,9 @@ export async function startRun(
     // The command the gate runs: the user's own, or, when the gate is on with none set,
     // the one the project's files suggest (package.json scripts, Cargo, Go, pytest).
     // An inferred command runs only in Full auto, where shell commands already run
-    // without asking, and gets network only where the agent's own shell commands
-    // would; it is announced once, the first time it runs.
+    // without asking, only where the OS sandbox confines it (or the run holds the
+    // unconfined-shell consent), and gets network only on the agent's own shell-network
+    // grant; it is announced once, the first time it runs (or is skipped).
     const userVerifyCommand = (settings.verifyCommand ?? '').trim()
     const inferredVerify =
       settings.verifyOnStop === true && userVerifyCommand === '' ? inferVerifyCommand(workspace) : null
@@ -3683,6 +3686,7 @@ export async function startRun(
       return null
     }
     let inferredVerifyAnnounced = false
+    let inferredVerifySkipNoted = false
     const verifyGateConfigured =
       settings.verifyOnStop === true && (userVerifyCommand !== '' || inferredVerify !== null)
     const treeAtStart = verifyGateConfigured ? await workingTreeFingerprint(workspace) : null
@@ -4587,7 +4591,7 @@ export async function startRun(
           if (treeNow !== null && treeNow !== treeAtStart) filesModified = true
         }
         const verify = verifyCommandFor()
-        if (
+        const verifyDue =
           stopReason === 'end_turn' &&
           verify !== null &&
           shouldVerify({
@@ -4600,32 +4604,67 @@ export async function startRun(
             // Plan suppresses the verify shell command even after a prior edit.
             policy: run.policy
           })
-        ) {
+        // The verify command runs straight through the sandbox runner, outside the
+        // approval gate, so the unconfined-shell consent run_shell needs on a host with no
+        // OS sandbox is checked here: an inferred command (the project's own test script)
+        // never runs unconfined without it. Read live, so "Allow for run" on an
+        // unconfined prompt earlier in the run lets it through.
+        const verifyRefused =
+          verifyDue &&
+          inferredVerifyBlockedUnconfined({
+            inferred: verify.inferred,
+            sandboxed: isSandboxed(),
+            unconfinedConsent: run.shellUnsandboxedOverride
+          })
+        if (verifyRefused && !inferredVerifySkipNoted && inferredVerify) {
+          inferredVerifySkipNoted = true
+          emit({ type: 'notice', message: inferredVerifySkippedNotice(verify.command, inferredVerify.source) })
+        }
+        if (verifyDue && !verifyRefused) {
           verifyPassesRun += 1
           if (verify.inferred && !inferredVerifyAnnounced && inferredVerify) {
             inferredVerifyAnnounced = true
             emit({ type: 'notice', message: inferredVerifyNotice(verify.command, inferredVerify.source) })
           }
+          // Snapshot the git guard's baseline first (a no-op once a shell command has):
+          // a verify command is as able as run_shell to plant a hook or a
+          // command-valued .git/config key for the user's own git to run later.
+          try {
+            await gitGuard.ensureBaseline()
+          } catch {
+            // A failed snapshot only means this command goes unchecked.
+          }
           const result = await runVerification({
             command: verify.command,
             workspace,
             roots,
-            // A user-set verify command is USER-authored (a settings field the agent
-            // can't change), not agent-authored, so it isn't part of the
-            // shell-exfiltration vector the shell-network consent guards. Keep its prior
-            // network behavior (full-auto, or an explicit shell-network grant) so a
-            // verify command that hits the network isn't silently starved in full-auto.
-            // An inferred one runs scripts the project (and so the agent) can edit, so
-            // it gets network only on the agent's own shell-network grant.
-            allowNetwork:
-              (verify.inferred ? run.shellNetworkGranted : run.policy === 'full-auto' || run.shellNetworkGranted) &&
-              !egressUnavailable,
-            // The user-authored verify command still egresses through the same
-            // per-domain allowlist — the policy is about destinations, not authorship.
+            // Even a user-set command runs the project's scripts (`npm test` runs
+            // whatever package.json says), and the agent can edit those, so it is part
+            // of the shell-exfiltration vector the shell-network consent guards: it gets
+            // network exactly when the agent's own shell commands would (shellNetworkOn:
+            // the conscious grant, or Full auto behind the egress allowlist unless the
+            // user declined). An inferred one stays on the explicit grant alone.
+            allowNetwork: verify.inferred ? run.shellNetworkGranted && !egressUnavailable : shellNetworkOn(),
+            // Egress goes through the same per-domain allowlist as run_shell.
             egressProxy,
             signal: abort.signal,
             maxBytes: resolveShellOutputBudget(settings)
           })
+          // The same post-command check run_shell gets: ask about exec-capable git
+          // changes, or undo them when nobody can answer (headless, or a stopped run).
+          let verifyGitNote = ''
+          try {
+            verifyGitNote = await reviewGitChanges(gitGuard, {
+              workspace,
+              ...(req.unattended === true
+                ? {}
+                : // Unique across the chat's turns: question cards are keyed by this id.
+                  { ask: (q: AgentQuestion) => askRunUser(`${runId}:verify-git-${verifyPassesRun}`, q) })
+            })
+          } catch {
+            // Unchecked, as for run_shell.
+          }
+          if (verifyGitNote) emit({ type: 'notice', message: `Verification command: ${verifyGitNote}` })
           if (result.aborted || abort.signal.aborted) {
             emit({ type: 'done', stopReason: 'aborted' })
             return
@@ -4635,7 +4674,11 @@ export async function startRun(
           if (!result.passed) {
             // Push the failure feedback as a system note so the model sees it next
             // turn and the transcript shows it as Houston's, not the user's; then loop.
-            messages.push(systemNoteMessage(verifyFailureMessage(verify.command, result.output)))
+            messages.push(
+              systemNoteMessage(
+                verifyFailureMessage(verify.command, result.output) + (verifyGitNote ? `\n\n${verifyGitNote}` : '')
+              )
+            )
             persist(messages)
             continue
           }

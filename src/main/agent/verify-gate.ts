@@ -18,7 +18,12 @@ import { runSandboxed, clampToolResult } from '../sandbox'
  *    configured, the loop may use the one the project's files suggest
  *    (`inferVerifyCommand`, a fixed set like `npm test` or `cargo test`), but only
  *    in Full auto, where shell commands already run without asking, with network
- *    only on the agent's own shell-network grant, and it says so once per run.
+ *    only on the agent's own shell-network grant, only where the OS sandbox confines
+ *    it (or the run has the unconfined-shell consent), and it says so once per run.
+ *  - A user-set command gets network exactly when the agent's own shell commands do:
+ *    it runs the project's scripts, which the agent can edit.
+ *  - The loop runs the git guard (gitGuard.ts) around it, as after `run_shell`, so a
+ *    test script planting a hook or a command-valued `.git/config` key is caught.
  *  - Only fires when files were actually modified this run (no point verifying a
  *    read-only Q&A turn).
  *  - BOUNDED: at most `maxPasses` extra verification cycles, after which `done`
@@ -113,6 +118,36 @@ export function verifyFailureMessage(command: string, output: string): string {
 /** Said once per run, the first time the gate runs a command it inferred. */
 export function inferredVerifyNotice(command: string, source: string): string {
   return `Verifying with \`${command}\` (from ${source}). Set a verification command in Settings to use a different one.`
+}
+
+/**
+ * Whether an INFERRED verify command must be skipped because it would run unconfined.
+ *
+ * The verify gate runs its command straight through the sandbox runner, not through
+ * the tool-approval gate, so the per-command unconfined-shell consent `run_shell` gets
+ * on a host with no OS sandbox (Windows, Linux without bubblewrap) never fires for it.
+ * An inferred command (`npm test` read from the project's manifest) runs scripts the
+ * repository, and so the agent, controls: a malicious repo's `test` script would run as
+ * the user with nothing confining it, in Full auto, without anyone agreeing to an
+ * unconfined command. So it runs only where the sandbox confines it, or after the user
+ * gave the run's unconfined-shell consent ("Allow for run" on an unconfined prompt).
+ * A user-set command is the user's own choice of what to run and is not affected. Pure.
+ */
+export function inferredVerifyBlockedUnconfined(opts: {
+  inferred: boolean
+  sandboxed: boolean
+  unconfinedConsent: boolean
+}): boolean {
+  return opts.inferred && !opts.sandboxed && !opts.unconfinedConsent
+}
+
+/** Said once per run when an inferred verify command is skipped for want of a sandbox. */
+export function inferredVerifySkippedNotice(command: string, source: string): string {
+  return (
+    `Skipped verifying with \`${command}\` (from ${source}): shell commands aren't sandboxed on this ` +
+    'computer, and Houston runs a command it picked from the project only when they are, or after you ' +
+    'allow unsandboxed commands for this run. Set a verification command in Settings to run one anyway.'
+  )
 }
 
 /** Inputs needed to actually execute the verification command. */
