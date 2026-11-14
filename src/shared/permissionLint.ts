@@ -2,16 +2,20 @@ import type { PermissionRule } from './types'
 
 /**
  * Static checks over a permission-rule list, for the editors that show one (the
- * Settings rules list and its text view). Rules are matched top to bottom and the
- * first match wins (see matchRule in main/agent/permissions.ts), so a rule's place
- * in the list is part of its meaning. These checks only flag what is certain from
- * the rules themselves, never what depends on a particular call:
+ * Settings rules list and its text view). A matching deny always wins, wherever it
+ * sits; otherwise rules are matched top to bottom and the first matching allow or ask
+ * decides (see matchRule in main/agent/permissions.ts), so the order of allow and ask
+ * rules is part of their meaning. These checks only flag what is certain from the
+ * rules themselves, never what depends on a particular call:
  *
  * - `empty`: a blank pattern matches nothing, so the rule never applies.
- * - `shadowed`: an earlier rule for the same (or every) tool already matches every
- *   call this one could, because its pattern is `*` or the identical pattern. The
- *   later rule never decides anything. When the two disagree on the action the
- *   earlier one silently wins, which is the case worth warning about.
+ * - `shadowed`: another rule for the same (or every) tool already matches every call
+ *   this one could, because its pattern is `*` or the identical pattern, and wins: a
+ *   deny anywhere in the list (over an allow or ask, or an earlier deny over a later
+ *   one), or an earlier allow or ask over a later allow or ask. An earlier allow or ask
+ *   never shadows a later deny. The shadowed rule never decides anything. When the two
+ *   disagree on the action the other one silently wins, which is the case worth
+ *   warning about. A deny or ask on one file-editing tool covers the others too.
  * - `broad-allow`: an allow whose pattern is `*`, which approves every call of that
  *   tool (every tool, for tool `*`) without asking.
  */
@@ -20,11 +24,24 @@ export type RuleIssue =
   | { kind: 'shadowed'; by: number; conflicting: boolean }
   | { kind: 'broad-allow' }
 
-/** Whether rule `a` (earlier) applies to every tool rule `b` applies to. */
+/**
+ * The file-editing tools: a deny or ask rule naming one applies to them all (see
+ * FILE_EDIT_TOOLS in main/agent/permissions.ts).
+ */
+const FILE_EDIT_TOOLS: ReadonlySet<string> = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'notebook_edit'])
+
+/** Whether rule `a` applies to every tool rule `b` applies to. */
 function coversTool(a: PermissionRule, b: PermissionRule): boolean {
   const at = a.tool || '*'
   const bt = b.tool || '*'
-  return at === '*' || at === bt
+  if (at === '*' || at === bt) return true
+  return a.action !== 'allow' && FILE_EDIT_TOOLS.has(at) && FILE_EDIT_TOOLS.has(bt)
+}
+
+/** Whether rule `a`, at index `i`, wins over rule `b`, at index `j`, where both match. */
+function winsOver(a: PermissionRule, i: number, b: PermissionRule, j: number): boolean {
+  if (a.action === 'deny') return b.action !== 'deny' || i < j
+  return b.action !== 'deny' && i < j
 }
 
 /** Whether rule `a` matches every subject rule `b` matches (for a covered tool). */
@@ -53,13 +70,13 @@ export function lintPermissionRules(rules: PermissionRule[]): Map<number, RuleIs
       add(j, { kind: 'empty' })
       return
     }
-    for (let i = 0; i < j; i++) {
-      const earlier = rules[i]
-      if (coversTool(earlier, rule) && coversPattern(earlier, rule)) {
-        add(j, { kind: 'shadowed', by: i, conflicting: earlier.action !== rule.action })
-        break
-      }
-    }
+    // A deny that covers the rule is the real winner, so it is reported first.
+    const covering = (i: number): boolean =>
+      i !== j && winsOver(rules[i], i, rule, j) && coversTool(rules[i], rule) && coversPattern(rules[i], rule)
+    const indices = rules.map((_, i) => i)
+    const by =
+      indices.find((i) => rules[i].action === 'deny' && covering(i)) ?? indices.find((i) => covering(i))
+    if (by !== undefined) add(j, { kind: 'shadowed', by, conflicting: rules[by].action !== rule.action })
     if (rule.action === 'allow' && !rule.exact && rule.match === '*') add(j, { kind: 'broad-allow' })
   })
   return out

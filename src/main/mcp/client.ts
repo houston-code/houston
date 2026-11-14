@@ -31,6 +31,7 @@ import {
   type ListedPages,
   type McpListKind
 } from './protocol'
+import { withTraceContext } from './trace'
 
 /**
  * A minimal MCP client over the stdio transport: it spawns the server process and
@@ -370,10 +371,13 @@ export class McpClient {
     // gets it: `opts.env` (from McpServerConfig.env) is applied AFTER the strip.
     const env = { ...sanitizeChildEnv(), ...opts.env }
     // On Windows an `npx`-style command is a .cmd shim that spawn can't run directly.
-    const launch = planStdioLaunch(opts.command, opts.args ?? [], env, {
-      cwd: opts.cwd,
-      ...this.launchDeps
-    })
+    // A test's fake spawn starts no executable, so there is nothing on disk to
+    // resolve: it is planned only when the test asks for a platform explicitly.
+    const realSpawn = this.spawnFn === (nodeSpawn as unknown as SpawnFn)
+    const launch =
+      realSpawn || this.launchDeps.platform
+        ? planStdioLaunch(opts.command, opts.args ?? [], env, { cwd: opts.cwd, ...this.launchDeps })
+        : { command: opts.command, args: opts.args ?? [] }
     // POSIX: its own process group, so close() can stop what a launcher started too.
     // Not on Windows, where detached would open a console window; the tree is killed
     // by parent pid there instead.
@@ -607,7 +611,7 @@ export class McpClient {
       }
     })
     try {
-      this.send({ jsonrpc: '2.0', id, method, params: sent })
+      this.send({ jsonrpc: '2.0', id, method, params: withTraceContext(sent) })
     } catch (e) {
       // A synchronous write failure (e.g. EPIPE on a closing pipe) must settle the
       // pending entry + timers; reject does both.

@@ -427,6 +427,21 @@ export function modelPricing(model: string): ModelPricing | null {
   )
 }
 
+/**
+ * USD a provider bills per search its own web search tool runs, on top of the request's
+ * tokens, keyed by provider kind. Both list $10 per 1,000 searches (OpenAI's rate for its
+ * current models). Approximate, like the token prices above.
+ */
+const NATIVE_WEB_SEARCH_FEE_USD: Readonly<Record<string, number>> = {
+  anthropic: 0.01,
+  openai: 0.01
+}
+
+/** The per-search fee for a provider kind's built-in web search; 0 when it has none. */
+export function nativeWebSearchFeeUsd(providerKind: string | undefined): number {
+  return (providerKind && NATIVE_WEB_SEARCH_FEE_USD[providerKind]) || 0
+}
+
 /** Best-effort context window in tokens, or null for unknown ids (the UI then shows the
  *  raw count). */
 export function contextWindowFor(model: string): number | null {
@@ -511,6 +526,33 @@ export function providerSendsXhigh(
       return anthropicSupportsXhigh(model)
     case 'openai':
       return !customBaseUrl
+    default:
+      return false
+  }
+}
+
+/**
+ * Whether a PDF read_file attaches reaches the model as a document. Mirrors the request
+ * builders: the Claude hosts send `document` blocks, hosted OpenAI (the Responses API)
+ * sends `input_file`, and Gemini sends inline data, the last two only for the multimodal
+ * models that read them. Chat Completions hosts and a proxied OpenAI base URL have no
+ * document part, so a PDF sent there would silently vanish.
+ */
+export function providerAcceptsPdf(
+  kind: 'anthropic' | 'openai' | 'gemini' | 'openai-compatible' | 'bedrock' | 'vertex' | 'azure-openai' | 'foundry',
+  model: string,
+  customBaseUrl: boolean
+): boolean {
+  switch (kind) {
+    case 'anthropic':
+    case 'bedrock':
+    case 'vertex':
+    case 'foundry':
+      return true
+    case 'openai':
+      return !customBaseUrl && modelHasVision(model)
+    case 'gemini':
+      return modelHasVision(model)
     default:
       return false
   }

@@ -18,7 +18,14 @@ import {
 import type { ImageAttachment } from '@shared/images'
 import { cachedImageDataUrl } from '../lib/imageUrl'
 import type { PromptInvocation, PromptInvocationKind } from '@shared/promptInvocation'
-import { rewindTargets, turnStatsByReply, type DisplayItem, type RewindItemTarget } from '../lib/items'
+import {
+  rewindTargets,
+  turnStartIndex,
+  turnStatsByReply,
+  type DisplayItem,
+  type RewindItemTarget
+} from '../lib/items'
+import { useImageViewer } from '../lib/imageViewer'
 import { fullTime, parseAt, relativeTime, turnStatsParts, useNow, type TurnStats } from '../lib/messageMeta'
 import type { RewindMode } from '@shared/rewind'
 import { Popover } from './Popover'
@@ -28,6 +35,7 @@ import { countsAsReply } from '@shared/chatStatus'
 import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
 import { scrollBehavior } from '../lib/motion'
+import { liveAnnouncement, messageHeading } from '../lib/transcriptA11y'
 import { useTransientFlag } from '../hooks/useTransientFlag'
 import { useStableCallback } from '../hooks/useStableCallback'
 import { ToolGroup } from './ToolGroup'
@@ -186,7 +194,8 @@ function InvokedBubble({
 }): JSX.Element {
   const mono = invokedAs.kind === 'command'
   return (
-    <div className="msg msg--user msg--invoked" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+    <article className="msg msg--user msg--invoked" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      <h3 style={SR_ONLY}>{messageHeading('user', at)}</h3>
       {menu.menu}
       <CopyButton text={text} className="msg__copy--user" />
       {actions}
@@ -204,7 +213,7 @@ function InvokedBubble({
         </details>
       </div>
       <MessageMeta at={at} align="user" />
-    </div>
+    </article>
   )
 }
 
@@ -264,13 +273,13 @@ const UserBubble = memo(function UserBubble({
   if (isSummary) {
     const body = text.slice(COMPACTION_SUMMARY_PREFIX.length).trimStart()
     return (
-      <div className="msg msg--summary" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      <article className="msg msg--summary" ref={menu.ref} onContextMenu={menu.onContextMenu}>
         {menu.menu}
-        <div className="msg__summary-label">🗜 Summary of earlier conversation</div>
+        <div className="msg__summary-label" role="heading" aria-level={3}>🗜 Summary of earlier conversation</div>
         <div className="msg__body">
           <Markdown text={body} />
         </div>
-      </div>
+      </article>
     )
   }
   if (invokedAs && !images?.length)
@@ -278,24 +287,49 @@ const UserBubble = memo(function UserBubble({
   return (
     // A message steered into a running turn reads like any other: where it lands in
     // the transcript already shows it arrived mid-run.
-    <div className="msg msg--user" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+    <article className="msg msg--user" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      <h3 style={SR_ONLY}>{messageHeading('user', at)}</h3>
       {menu.menu}
       {text.trim() !== '' && <CopyButton text={text} className="msg__copy--user" />}
       {actions}
       <div className="msg__body">
-        {images && images.length > 0 && (
-          <div className="bubble__images">
-            {images.map((img, i) => (
-              <img key={i} className="bubble__image" src={cachedImageDataUrl(img)} alt="attachment" />
-            ))}
-          </div>
-        )}
+        {images && images.length > 0 && <BubbleImages images={images} />}
         {text}
       </div>
       <MessageMeta at={at} align="user" />
-    </div>
+    </article>
   )
 }, sameUserBubble)
+
+/** The images attached to a message: thumbnails that open full size in the image viewer. */
+function BubbleImages({ images }: { images: ImageAttachment[] }): JSX.Element {
+  const viewer = useImageViewer()
+  const label = (i: number): string => (images.length > 1 ? `Attached image ${i + 1}` : 'Attached image')
+  return (
+    <div className="bubble__images">
+      {images.map((img, i) => {
+        const src = cachedImageDataUrl(img)
+        if (!viewer) return <img key={i} className="bubble__image" src={src} alt={label(i)} />
+        const open = (): void =>
+          viewer.open(
+            images.map((a, j) => ({ src: cachedImageDataUrl(a), label: label(j) })),
+            i
+          )
+        return (
+          <button
+            key={i}
+            type="button"
+            className="bubble__image-open"
+            onClick={open}
+            aria-label={`Open ${label(i).toLowerCase()} full size`}
+          >
+            <img className="bubble__image" src={src} alt="" />
+          </button>
+        )
+      })}
+    </div>
+  )
+}
 
 /** The transcript's rewind hooks; absent hides the menu (a new chat, a read-only view). */
 export interface RewindHandlers {
@@ -432,7 +466,8 @@ const AssistantMessage = memo(function AssistantMessage({
     ...(!streaming && onRetry ? [{ label: 'Retry', onSelect: onRetry }] : [])
   ])
   return (
-    <div className="msg msg--assistant" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+    <article className="msg msg--assistant" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      <h3 style={SR_ONLY}>{messageHeading('assistant', at)}</h3>
       {menu.menu}
       {reasoning && (
         <details className="reasoning" open={showReasoning || (streaming && !text)}>
@@ -442,7 +477,7 @@ const AssistantMessage = memo(function AssistantMessage({
       )}
       {(text || !reasoning) && (
         <div className="msg__body">
-          <Markdown text={text} visuals />
+          <Markdown text={text} visuals streaming={streaming} />
           {streaming && <span className="md-cursor" />}
         </div>
       )}
@@ -478,7 +513,7 @@ const AssistantMessage = memo(function AssistantMessage({
           <Icon name="refresh" />
         </button>
       )}
-    </div>
+    </article>
   )
 })
 
@@ -546,7 +581,8 @@ export function Transcript({
   onRetryLast,
   newFromId,
   toolsExpanded = false,
-  showReasoning = false
+  showReasoning = false,
+  announceReplies = false
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
@@ -587,6 +623,11 @@ export function Transcript({
   toolsExpanded?: boolean
   /** Reasoning stays open under each reply (the "Always show reasoning" setting). */
   showReasoning?: boolean
+  /**
+   * Screen readers hear each finished reply's text, and the name of a tool that
+   * failed, instead of only "Response ready" (the "Read replies aloud" setting).
+   */
+  announceReplies?: boolean
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -621,14 +662,14 @@ export function Transcript({
   function handleScroll(): void {
     const el = containerRef.current
     if (!el) return
-    const movedDown = el.scrollTop > lastTopRef.current
+    const movedUp = el.scrollTop < lastTopRef.current
     lastTopRef.current = el.scrollTop
     if (isNearBottom(el)) pinnedRef.current = true
-    // A view that moved down while pinned was pushed by layout (rows above settling to
-    // their real height), not by the reader, who can't scroll down past the bottom:
-    // stay pinned and catch up. Only a move up, or a view left short of the bottom
-    // without moving, means the reader went somewhere else.
-    else if (!(pinnedRef.current && movedDown)) pinnedRef.current = false
+    // The reader can only leave the bottom by scrolling up. A view that moved down while
+    // pinned, or stayed put while the chat grew beneath it (a row laid out at its
+    // placeholder height settling to its real one a frame later), was moved by layout:
+    // stay pinned and catch up.
+    else if (movedUp || !pinnedRef.current) pinnedRef.current = false
     else followBottom()
     setShowJump(!pinnedRef.current)
     const divider = newRef.current
@@ -639,7 +680,7 @@ export function Transcript({
   // opened row up out of view instead; hold it off while their toggle lays out.
   const anchorTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   function noteDisclosure(target: EventTarget | null): void {
-    if (!(target instanceof Element && target.closest('[aria-expanded], summary'))) return
+    if (!(target instanceof Element && target.closest('[aria-expanded], [data-disclosure], summary'))) return
     disclosedAtRef.current = performance.now()
     const el = containerRef.current
     if (!el) return
@@ -741,9 +782,12 @@ export function Transcript({
   const approve = useStableCallback(onApprove)
   const markUnreadFrom = useStableCallback(onMarkUnreadFrom)
   const retryLast = useStableCallback(onRetryLast)
-  // The reply that offers Retry: the chat's last one.
+  // The reply that offers Retry: the chat's last one, and only when it answers the
+  // latest message, since Retry sends that message again. A message that got no reply
+  // (the run failed or was stopped first) leaves an earlier turn's reply without it.
   const lastReplyId = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) if (items[i].kind === 'assistant') return items[i].id
+    const start = turnStartIndex(items, items.length)
+    for (let i = items.length - 1; i > start; i--) if (items[i].kind === 'assistant') return items[i].id
     return undefined
   }, [items])
   const rewindTo = useStableCallback(rewind?.onRewind)
@@ -772,6 +816,14 @@ export function Transcript({
   // pressing it again reaches rows the user has toggled since.
   const [expandAll, setExpandAll] = useState<TranscriptPrefs['expandAll']>(null)
   const allOpen = expandAll ? expandAll.open : toolsExpanded
+  // Turning "Show tool output expanded" on or off with the chat open opens or closes
+  // the rows already shown, as the button would, so the rows and the button agree.
+  const seenToolsExpanded = useRef(toolsExpanded)
+  useEffect(() => {
+    if (seenToolsExpanded.current === toolsExpanded) return
+    seenToolsExpanded.current = toolsExpanded
+    setExpandAll((prev) => ({ open: toolsExpanded, seq: (prev?.seq ?? 0) + 1 }))
+  }, [toolsExpanded])
   const hasTools = useMemo(() => nodes.some((n) => n.kind === 'toolgroup'), [nodes])
   const prefs = useMemo<TranscriptPrefs>(
     () => ({ toolsExpanded, showReasoning, expandAll }),
@@ -793,17 +845,13 @@ export function Transcript({
 
   // A coarse, polite status for screen readers — the streaming transcript is
   // otherwise silent to assistive tech. Announces on change only (not on mount).
+  // With announceReplies on, it reads a finished reply's text and a failed tool's name.
+  // A finished coding turn ends with its receipt, after the reply, so that is skipped.
   const liveStatus = useMemo(() => {
-    const last = nodes[nodes.length - 1]
-    if (!last) return ''
-    if (last.kind === 'toolgroup' && last.items.some((i) => i.status === 'awaiting-approval'))
-      return 'The agent is waiting for your approval.'
-    if (last.kind === 'question') return 'The agent is asking a question.'
-    if (last.kind === 'elicitation' && !last.item.outcome)
-      return 'An MCP server is requesting input.'
-    if (last.kind === 'assistant') return last.item.streaming ? 'The agent is responding…' : 'Response ready.'
-    return ''
-  }, [nodes])
+    let end = nodes.length - 1
+    while (end >= 0 && nodes[end].kind === 'receipt') end--
+    return liveAnnouncement(nodes[end], announceReplies)
+  }, [nodes, announceReplies])
 
   const renderNode = (node: RenderNode): ReactNode => {
     switch (node.kind) {
@@ -923,10 +971,16 @@ export function Transcript({
       <div aria-live="polite" aria-atomic="true" style={SR_ONLY}>
         {liveStatus}
       </div>
+      {/* The conversation as a log for assistive tech. Its own announcing is off: the
+          polite region above speaks for it, once per change rather than per streamed
+          token. */}
       <div
         className="transcript"
         ref={containerRef}
         onScroll={handleScroll}
+        role="log"
+        aria-label="Conversation"
+        aria-live="off"
         onClickCapture={(e) => noteDisclosure(e.target)}
         onKeyDownCapture={(e) => {
           if (e.key === 'Enter' || e.key === ' ') noteDisclosure(e.target)
@@ -944,12 +998,12 @@ export function Transcript({
       </div>
       {newAbove && (
         <button className="jump-new" onClick={jumpToNew}>
-          ↑ Jump to first unread
+          <span aria-hidden="true">↑</span> Jump to first unread
         </button>
       )}
       {showJump && (
-        <button className="jump-bottom" onClick={jumpToBottom} title="Scroll to bottom">
-          ↓
+        <button className="jump-bottom" onClick={jumpToBottom} title="Scroll to bottom" aria-label="Scroll to bottom">
+          <span aria-hidden="true">↓</span>
         </button>
       )}
     </div>

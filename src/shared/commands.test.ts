@@ -15,6 +15,7 @@ import {
   COMMAND_ALIASES,
   COMMAND_GROUPS,
   CUSTOM_COMMAND_GROUP,
+  commandHasRunOptions,
   type Command
 } from './commands'
 import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, parseApprovalPolicy } from './types'
@@ -102,6 +103,20 @@ describe('matchCommands ranking', () => {
     expect(names('think')[0]).toBe('reasoning')
   })
 
+  it('puts the command named exactly first, ahead of longer names that start with it', () => {
+    expect(names('agent').slice(0, 2)).toEqual(['agent', 'agents'])
+    expect(names('agents')[0]).toBe('agents')
+    expect(names('AGENT')[0]).toBe('agent')
+  })
+
+  it('puts an exact name ahead of a command that has it as an alias', () => {
+    const custom: Command = { name: 'diff', description: 'A workspace diff command', template: 'Diff' }
+    const both = mergeCommands(builtinCommands('gui'), [custom])
+    // resolveCommand reads `/diff` as the custom command too, so Enter runs the one shown first.
+    expect(matchCommands(both, 'diff')[0]).toBe(custom)
+    expect(resolveCommand(both, 'diff')).toBe(custom)
+  })
+
   it('finds a command by a word in its description', () => {
     expect(names('sandbox')).toContain('doctor')
     expect(names('invite')).toEqual(['share'])
@@ -142,6 +157,23 @@ describe('command groups', () => {
     expect(byName.agent.args).toBe('<name> <task>')
     expect(byName.model.args).toBe('[name]')
     expect(byName.undo.args).toBeUndefined()
+  })
+
+  it('describes what the desktop does where it differs from the terminal', () => {
+    const gui = Object.fromEntries(builtinCommands('gui').map((c) => [c.name, c]))
+    const tui = Object.fromEntries(builtinCommands('tui').map((c) => [c.name, c]))
+    expect(gui.settings.description).toBe('Open Settings, or one page of it')
+    expect(gui.settings.args).toBe('[page]')
+    expect(gui.theme.description).toBe('Open Appearance settings')
+    expect(gui.theme.args).toBeUndefined()
+    for (const name of ['memory', 'trust', 'mcp']) {
+      expect(gui[name].description, name).toContain('Settings')
+      expect(gui[name].description, name).not.toMatch(/forget|\(add|\(show/)
+    }
+    // The terminal keeps its own wording.
+    expect(tui.settings.description).toBe('Show a summary of your current settings')
+    expect(tui.theme.args).toBe('[name]')
+    expect(tui.memory.description).toContain('show, edit, pin')
   })
 })
 
@@ -296,5 +328,33 @@ describe('/init', () => {
     expect(init.template).toMatch(/Only write what you verified/)
     expect(init.template).toMatch(/improve it in place/)
     expect(init.template).not.toContain('\u2014')
+  })
+})
+
+describe('commandHasRunOptions', () => {
+  it('is true only when the frontmatter changes how the turn runs', () => {
+    const base: Command = { name: 'x', description: 'x', template: 'T', args: '<a>' }
+    expect(commandHasRunOptions(base)).toBe(false)
+    for (const extra of [{ model: 'm' }, { effort: 'low' as const }, { agent: 'a' }, { allowedTools: 'glob' }]) {
+      expect(commandHasRunOptions({ ...base, ...extra })).toBe(true)
+    }
+  })
+
+  it("is true for a workspace or user command whose template pulls in context, never for a built-in's", () => {
+    const withShell: Command = { name: 'x', description: 'x', template: 'Diff: !`git diff`', source: 'project' }
+    expect(commandHasRunOptions(withShell)).toBe(true)
+    expect(commandHasRunOptions({ ...withShell, template: 'See @docs/a.md', source: 'user' })).toBe(true)
+    expect(commandHasRunOptions({ ...withShell, source: undefined })).toBe(false)
+    expect(commandHasRunOptions({ ...withShell, template: 'Ping @octocat' })).toBe(false)
+  })
+})
+
+describe('command names matching Object.prototype members', () => {
+  it('resolve to nothing and carry no terminal note', () => {
+    const cmds = builtinCommands('tui')
+    for (const name of ['constructor', '__proto__', 'valueOf', 'hasOwnProperty']) {
+      expect(resolveCommand(cmds, name)).toBeUndefined()
+      expect(terminalOnlyNote(name)).toBeNull()
+    }
   })
 })

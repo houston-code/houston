@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { decideApproval, isBlockedByPlan, needsApproval, type ApprovalInputs } from './approval'
+import {
+  decideApproval,
+  grantKey,
+  isBlockedByPlan,
+  launchesSession,
+  needsApproval,
+  startsShellAgent,
+  type ApprovalInputs
+} from './approval'
 
 describe('needsApproval', () => {
   it('auto-approves everything once "Allow for run" (override) is set', () => {
@@ -155,7 +163,8 @@ describe('decideApproval', () => {
     it('an allow rule skips the prompt', () => {
       expect(decideApproval(base({ ruleAction: 'allow', kind: 'shell' }))).toEqual({
         mustApprove: false,
-        unsandboxedShell: false
+        unsandboxedShell: false,
+        hard: false
       })
     })
 
@@ -186,14 +195,15 @@ describe('decideApproval', () => {
     it('flags shell as unsandboxed and prompts by default', () => {
       expect(decideApproval(base({ kind: 'shell', shellSandboxed: false }))).toEqual({
         mustApprove: true,
-        unsandboxedShell: true
+        unsandboxedShell: true,
+        hard: true
       })
     })
 
     it('an allow permission rule does NOT bypass the prompt (the key regression fix)', () => {
       expect(
         decideApproval(base({ kind: 'shell', shellSandboxed: false, ruleAction: 'allow' }))
-      ).toEqual({ mustApprove: true, unsandboxedShell: true })
+      ).toEqual({ mustApprove: true, unsandboxedShell: true, hard: true })
     })
 
     it('a generic override (granted for an unrelated tool) does NOT bypass the prompt', () => {
@@ -214,7 +224,7 @@ describe('decideApproval', () => {
         decideApproval(
           base({ kind: 'shell', shellSandboxed: false, shellUnsandboxedOverride: true })
         )
-      ).toEqual({ mustApprove: false, unsandboxedShell: true })
+      ).toEqual({ mustApprove: false, unsandboxedShell: true, hard: false })
     })
 
     it('an ask rule still prompts after the unconfined-shell override (tighten-only)', () => {
@@ -229,13 +239,13 @@ describe('decideApproval', () => {
             shellUnsandboxedOverride: true
           })
         )
-      ).toEqual({ mustApprove: true, unsandboxedShell: true })
+      ).toEqual({ mustApprove: true, unsandboxedShell: true, hard: false })
     })
 
     it('an ask-rule prompt keeps the unsandboxed banner even without the override', () => {
       expect(
         decideApproval(base({ kind: 'shell', shellSandboxed: false, ruleAction: 'ask' }))
-      ).toEqual({ mustApprove: true, unsandboxedShell: true })
+      ).toEqual({ mustApprove: true, unsandboxedShell: true, hard: true })
     })
 
     it('the override still auto-approves an allow-ruled command (no over-tightening)', () => {
@@ -248,13 +258,13 @@ describe('decideApproval', () => {
             shellUnsandboxedOverride: true
           })
         )
-      ).toEqual({ mustApprove: false, unsandboxedShell: true })
+      ).toEqual({ mustApprove: false, unsandboxedShell: true, hard: false })
     })
 
     it('non-shell kinds are unaffected by the unconfined-shell gate', () => {
       expect(
         decideApproval(base({ kind: 'write', shellSandboxed: false, policy: 'auto-edit' }))
-      ).toEqual({ mustApprove: false, unsandboxedShell: false })
+      ).toEqual({ mustApprove: false, unsandboxedShell: false, hard: false })
       expect(decideApproval(base({ kind: 'read', shellSandboxed: false })).mustApprove).toBe(false)
     })
   })
@@ -284,7 +294,7 @@ describe('decideApproval', () => {
             shellDiscardsWork: true
           })
         )
-      ).toEqual({ mustApprove: true, unsandboxedShell: true })
+      ).toEqual({ mustApprove: true, unsandboxedShell: true, hard: true })
     })
 
     it('an explicit allow rule still allows it on a confining host', () => {
@@ -416,5 +426,201 @@ describe('decideApproval', () => {
         decideApproval(base({ kind: 'read', policy: 'full-auto', sensitiveWrite: true })).mustApprove
       ).toBe(false)
     })
+  })
+  describe("a PreToolUse hook's approve (hookApproved)", () => {
+    const hooked = (over: Partial<ApprovalInputs>) => decideApproval(base({ hookApproved: true, ...over }))
+
+    it('clears the ordinary prompt the mode shows (an auto-edit shell command)', () => {
+      expect(decideApproval(base({ kind: 'shell', policy: 'auto-edit' })).mustApprove).toBe(true)
+      expect(hooked({ kind: 'shell', policy: 'auto-edit' }).mustApprove).toBe(false)
+    })
+
+    it("clears a user `ask` rule's prompt", () => {
+      expect(hooked({ kind: 'write', ruleAction: 'ask' }).mustApprove).toBe(false)
+    })
+
+    it('does not clear a workspace-escaping or work-discarding shell command', () => {
+      for (const policy of ['ask', 'auto-edit', 'full-auto'] as const) {
+        expect(hooked({ kind: 'shell', policy, shellEscapesWorkspace: true })).toMatchObject({ mustApprove: true, hard: true })
+        expect(hooked({ kind: 'shell', policy, shellDiscardsWork: true })).toMatchObject({ mustApprove: true, hard: true })
+      }
+    })
+
+    it('does not clear an escaping command that a user `ask` rule also matches', () => {
+      expect(hooked({ kind: 'shell', ruleAction: 'ask', shellEscapesWorkspace: true }).mustApprove).toBe(true)
+    })
+
+    it('does not clear a credential read or write', () => {
+      expect(hooked({ kind: 'read', policy: 'full-auto', sensitiveRead: true }).mustApprove).toBe(true)
+      expect(hooked({ kind: 'write', policy: 'full-auto', sensitiveWrite: true }).mustApprove).toBe(true)
+      expect(hooked({ kind: 'shell', policy: 'full-auto', sensitiveWrite: true }).mustApprove).toBe(true)
+    })
+
+    it('does not clear a tainted memory write or a tainted session launch', () => {
+      expect(hooked({ kind: 'write', policy: 'full-auto', memoryTainted: true }).mustApprove).toBe(true)
+      expect(hooked({ kind: 'write', policy: 'full-auto', taintedLaunch: true }).mustApprove).toBe(true)
+    })
+
+    it('does not stand in for the per-run consent to run unconfined shell', () => {
+      expect(hooked({ kind: 'shell', policy: 'full-auto', shellSandboxed: false })).toEqual({
+        mustApprove: true,
+        unsandboxedShell: true,
+        hard: true
+      })
+      // Once the user gave that consent, a hook may clear a user `ask` rule's prompt.
+      expect(
+        hooked({ kind: 'shell', shellSandboxed: false, shellUnsandboxedOverride: true, ruleAction: 'ask' }).mustApprove
+      ).toBe(false)
+    })
+
+    it('clears a network prompt (an ordinary per-destination ask)', () => {
+      expect(hooked({ kind: 'network', policy: 'full-auto' }).mustApprove).toBe(false)
+    })
+  })
+
+  describe('session launches from a tainted conversation (taintedLaunch)', () => {
+    it('ask in every mode, past an allow rule and a run grant', () => {
+      for (const policy of ['ask', 'auto-edit', 'full-auto'] as const) {
+        expect(decideApproval(base({ kind: 'write', policy, taintedLaunch: true })).mustApprove).toBe(true)
+      }
+      expect(
+        decideApproval(base({ kind: 'write', policy: 'full-auto', ruleAction: 'allow', override: true, taintedLaunch: true }))
+          .mustApprove
+      ).toBe(true)
+    })
+
+    it('leave an untainted launch to the mode', () => {
+      expect(decideApproval(base({ kind: 'write', policy: 'full-auto', taintedLaunch: false })).mustApprove).toBe(false)
+    })
+  })
+
+  describe('a dispatch that starts a shell-running agent (startsShellAgent)', () => {
+    it('asks in auto-edit, which asks for shell, though its kind is write', () => {
+      expect(decideApproval(base({ kind: 'write', policy: 'auto-edit', startsShellAgent: true })).mustApprove).toBe(true)
+      expect(decideApproval(base({ kind: 'write', policy: 'ask', startsShellAgent: true })).mustApprove).toBe(true)
+    })
+
+    it('runs without asking in full auto', () => {
+      expect(decideApproval(base({ kind: 'write', policy: 'full-auto', startsShellAgent: true })).mustApprove).toBe(false)
+    })
+
+    it('is cleared by its own grant or an allow rule', () => {
+      expect(
+        decideApproval(base({ kind: 'write', policy: 'auto-edit', startsShellAgent: true, override: true })).mustApprove
+      ).toBe(false)
+      expect(
+        decideApproval(base({ kind: 'write', policy: 'auto-edit', startsShellAgent: true, ruleAction: 'allow' })).mustApprove
+      ).toBe(false)
+    })
+  })
+
+  describe('in-project control-file write (protectedWrite=true)', () => {
+    it('prompts a write or shell command in every mode, full auto included', () => {
+      for (const kind of ['write', 'shell'] as const) {
+        for (const policy of ['full-auto', 'auto-edit', 'ask'] as const) {
+          expect(
+            decideApproval(base({ kind, policy, sensitiveWrite: true, protectedWrite: true })).mustApprove
+          ).toBe(true)
+        }
+      }
+    })
+
+    it('is NOT cleared by "Allow for run", unlike a credential-file write', () => {
+      for (const kind of ['write', 'shell'] as const) {
+        expect(
+          decideApproval(
+            base({ kind, policy: 'full-auto', override: true, sensitiveWrite: true, protectedWrite: true })
+          ).mustApprove
+        ).toBe(true)
+      }
+    })
+
+    it('an explicit allow rule clears it', () => {
+      for (const kind of ['write', 'shell'] as const) {
+        expect(
+          decideApproval(base({ kind, ruleAction: 'allow', sensitiveWrite: true, protectedWrite: true }))
+            .mustApprove
+        ).toBe(false)
+      }
+    })
+
+    it('on a host without a sandbox, the unconfined-shell consent does not clear it', () => {
+      expect(
+        decideApproval(
+          base({
+            kind: 'shell',
+            policy: 'full-auto',
+            shellSandboxed: false,
+            shellUnsandboxedOverride: true,
+            override: true,
+            protectedWrite: true
+          })
+        )
+      ).toEqual({ mustApprove: true, unsandboxedShell: true, hard: true })
+      // With an allow rule for it, the unconfined consent applies as for any command.
+      expect(
+        decideApproval(
+          base({
+            kind: 'shell',
+            ruleAction: 'allow',
+            shellSandboxed: false,
+            shellUnsandboxedOverride: true,
+            protectedWrite: true
+          })
+        ).mustApprove
+      ).toBe(false)
+    })
+
+    it('does not affect reads or network calls', () => {
+      expect(decideApproval(base({ kind: 'read', policy: 'full-auto', protectedWrite: true })).mustApprove).toBe(
+        false
+      )
+    })
+
+    it("is not cleared by a hook's approve", () => {
+      for (const kind of ['write', 'shell'] as const) {
+        expect(
+          decideApproval(base({ kind, policy: 'full-auto', sensitiveWrite: true, protectedWrite: true, hookApproved: true }))
+        ).toMatchObject({ mustApprove: true, hard: true })
+      }
+    })
+  })
+})
+
+describe('grantKey', () => {
+  it('keys ordinary tools by kind', () => {
+    expect(grantKey('write_file', 'write')).toBe('write')
+    expect(grantKey('edit_file', 'write')).toBe('write')
+    expect(grantKey('run_shell', 'shell')).toBe('shell')
+    expect(grantKey('read_file', 'read')).toBe('read')
+  })
+
+  it('gives the tools that start unattended work their own key, apart from write', () => {
+    const names = ['schedule_run', 'spawn_session', 'dispatch_writable_agent']
+    for (const name of names) {
+      expect(grantKey(name, 'write')).toBe(`tool:${name}`)
+      expect(grantKey(name, 'write')).not.toBe(grantKey('write_file', 'write'))
+    }
+    expect(new Set(names.map((n) => grantKey(n, 'write'))).size).toBe(3)
+  })
+
+  it('keys MCP tools per server, so one server grant never covers another', () => {
+    expect(grantKey('mcp__alpha__search', 'mcp')).toBe('mcp:alpha')
+    expect(grantKey('mcp__alpha__other__tool', 'mcp')).toBe('mcp:alpha')
+    expect(grantKey('mcp__beta__search', 'mcp')).toBe('mcp:beta')
+  })
+})
+
+describe('tool classifiers', () => {
+  it('launchesSession names schedule_run and spawn_session only', () => {
+    expect(launchesSession('schedule_run')).toBe(true)
+    expect(launchesSession('spawn_session')).toBe(true)
+    expect(launchesSession('propose_session')).toBe(false)
+    expect(launchesSession('write_file')).toBe(false)
+  })
+
+  it('startsShellAgent names dispatch_writable_agent only', () => {
+    expect(startsShellAgent('dispatch_writable_agent')).toBe(true)
+    expect(startsShellAgent('dispatch_agent')).toBe(false)
   })
 })

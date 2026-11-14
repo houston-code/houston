@@ -2,12 +2,18 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { FileEntry } from '@shared/files'
 import { Icon } from './Icon'
 import { FilePreview } from './FilePreview'
+import { ItemBoundary } from './ItemBoundary'
+import { PathLabel } from './PathLabel'
 import { baseName } from '../lib/paths'
 import { useFocusTrap } from '../lib/useFocusTrap'
 import { tabStop, treeKeyDown } from '../lib/rovingFocus'
+import { ipcErrorMessage } from '../lib/ipcError'
 
 /** Debounce before a filter query hits the fuzzy file search (keeps typing smooth). */
 const FILTER_DEBOUNCE_MS = 160
+
+/** Wait this long after the window regains focus before re-reading (focus can flap). */
+const FOCUS_REFRESH_MS = 300
 
 /** Indentation (px) added per tree depth, plus the row's base left padding. */
 const INDENT_PX = 14
@@ -18,7 +24,7 @@ interface TreeRowProps {
   depth: number
   expanded: Set<string>
   selected: string | null
-  childrenByDir: Record<string, FileEntry[]>
+  childrenByDir: Record<string, FileEntry[] | null>
   onToggle: (entry: FileEntry) => void
   onSelect: (entry: FileEntry) => void
   /** The one row in the Tab order (the tree's roving tab stop). */
@@ -31,12 +37,12 @@ interface TreeRowProps {
  * open and loaded. The arrow keys walk this order, and it picks the tab stop.
  */
 export function visibleTreePaths(
-  entries: readonly FileEntry[] | undefined,
+  entries: readonly FileEntry[] | null | undefined,
   expanded: ReadonlySet<string>,
-  childrenByDir: Record<string, FileEntry[]>
+  childrenByDir: Record<string, FileEntry[] | null>
 ): string[] {
   const out: string[] = []
-  const walk = (list: readonly FileEntry[] | undefined): void => {
+  const walk = (list: readonly FileEntry[] | null | undefined): void => {
     for (const e of list ?? []) {
       out.push(e.path)
       if (e.isDirectory && expanded.has(e.path)) walk(childrenByDir[e.path])
@@ -50,7 +56,8 @@ export function visibleTreePaths(
  * One row in the tree. A folder toggles open/closed (and its children render as
  * indented sibling rows once loaded); a file selects itself for preview. The
  * children list is owned by the panel and looked up by path, so expansion state
- * survives re-renders and folders only fetch their contents once.
+ * survives re-renders and folders only fetch their contents once. A folder that
+ * couldn't be listed is `null` there, told apart from a genuinely empty one.
  */
 function TreeRow({
   entry,
@@ -91,8 +98,8 @@ function TreeRow({
         </button>
       </div>
       {isOpen &&
-        kids &&
-        (kids.length > 0 ? (
+        kids !== undefined &&
+        (kids && kids.length > 0 ? (
           kids.map((c) => (
             <TreeRow
               key={c.path}
@@ -109,7 +116,7 @@ function TreeRow({
           ))
         ) : (
           <div className="files-row files-row--empty" role="none" style={{ paddingLeft: pad + INDENT_PX }}>
-            empty
+            {kids === null ? 'Couldn’t read this folder.' : 'Empty folder'}
           </div>
         ))}
     </>
@@ -135,7 +142,9 @@ export function FilesPanel({
   onClose,
   initialPath,
   initialLine,
-  docked = false
+  docked = false,
+  running = false,
+  active = true
 }: {
   workspace: string | null
   onClose: () => void
@@ -149,10 +158,15 @@ export function FilesPanel({
   initialPath?: string
   /** With `initialPath`: the 1-based line to scroll to and mark in its preview. */
   initialLine?: number
+  /** The chat's run is going; the tree and preview re-read when it ends. */
+  running?: boolean
+  /** The panel is showing (the side panel keeps it mounted behind other tabs). */
+  active?: boolean
 }): JSX.Element {
   // Children keyed by directory path ('' is the workspace root). Presence of a key
-  // means "loaded" — undefined is still-loading, [] is a genuinely empty folder.
-  const [childrenByDir, setChildrenByDir] = useState<Record<string, FileEntry[]>>({})
+  // means "loaded": undefined is still-loading, [] is a genuinely empty folder, and
+  // null is one that couldn't be listed.
+  const [childrenByDir, setChildrenByDir] = useState<Record<string, FileEntry[] | null>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<string | null>(null)
   const [loadingRoot, setLoadingRoot] = useState(false)
@@ -160,6 +174,10 @@ export function FilesPanel({
   // Filter mode: a non-empty query shows flat fuzzy-search results instead of the tree.
   const [filter, setFilter] = useState('')
   const [results, setResults] = useState<string[] | null>(null)
+  // Why the last "Open" failed, until the next one.
+  const [notice, setNotice] = useState<string | null>(null)
+  // Bumped to make the preview re-read its file (Refresh, a finished run, focus).
+  const [previewReload, setPreviewReload] = useState(0)
   // As a modal drawer: focus starts in the filter field (type to find a file), Tab
   // stays inside, Esc closes, and focus returns to whatever opened it. Docked, the
   // panel sits beside the chat and leaves focus alone.
@@ -173,6 +191,7 @@ export function FilesPanel({
   // `reveal` is the first load: expand down to `initialPath` and select it. Refresh
   // re-reads the folders already open and keeps the selection, rather than snapping
   // back to the file the panel was opened on and collapsing everything else.
+  const loadingRef = useRef(false)
   const reload = useCallback(async (reveal: boolean) => {
     if (!workspace) {
       setChildrenByDir({})
@@ -180,9 +199,10 @@ export function FilesPanel({
     }
     setError(null)
     setLoadingRoot(true)
+    loadingRef.current = true
     try {
       const kids = await window.api.listWorkspaceDir(workspace, '')
-      const loaded: Record<string, FileEntry[]> = { '': kids }
+      const loaded: Record<string, FileEntry[] | null> = { '': kids }
       const open = new Set<string>()
       if (!reveal) {
         for (const dir of expandedRef.current) {
@@ -212,8 +232,9 @@ export function FilesPanel({
       setChildrenByDir(loaded)
       setExpanded(open)
     } catch (e) {
-      setError((e as Error).message)
+      setError(ipcErrorMessage(e))
     } finally {
+      loadingRef.current = false
       setLoadingRoot(false)
     }
   }, [workspace, initialPath])
@@ -221,6 +242,44 @@ export function FilesPanel({
   useEffect(() => {
     void reload(true)
   }, [reload])
+
+  // Re-read the open folders and the previewed file. A read already under way is
+  // fresh enough (and a second one could undo the first one's reveal).
+  const refresh = useCallback(() => {
+    if (loadingRef.current) return
+    setPreviewReload((n) => n + 1)
+    void reload(false)
+  }, [reload])
+
+  // The agent writes files during a run: show what it left once the run ends. Hidden
+  // behind another tab, the panel catches up when it shows again instead.
+  const wasRunning = useRef(running)
+  const wasActive = useRef(active)
+  useEffect(() => {
+    const ended = wasRunning.current && !running
+    const shown = active && !wasActive.current
+    wasRunning.current = running
+    wasActive.current = active
+    if (active && (ended || shown)) refresh()
+  }, [running, active, refresh])
+
+  // Catch files changed outside the app while it was in the background.
+  useEffect(() => {
+    if (!active) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onFocus = (): void => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        refresh()
+      }, FOCUS_REFRESH_MS)
+    }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      if (timer) clearTimeout(timer)
+    }
+  }, [active, refresh])
 
   // Fetch a folder's children once, on first expand.
   const loadDir = useCallback(
@@ -230,8 +289,9 @@ export function FilesPanel({
         const kids = await window.api.listWorkspaceDir(workspace, relPath)
         setChildrenByDir((prev) => ({ ...prev, [relPath]: kids }))
       } catch {
-        // A single folder failing to list shouldn't blow away the whole tree.
-        setChildrenByDir((prev) => ({ ...prev, [relPath]: [] }))
+        // A single folder failing to list shouldn't blow away the whole tree; it says
+        // so in place, and opening it again retries.
+        setChildrenByDir((prev) => ({ ...prev, [relPath]: null }))
       }
     },
     [workspace]
@@ -247,16 +307,25 @@ export function FilesPanel({
         return next
       })
       // Side effect outside the updater so StrictMode's double-invoke can't double-fetch.
-      if (willOpen && !(entry.path in childrenByDir)) void loadDir(entry.path)
+      if (willOpen && !childrenByDir[entry.path]) void loadDir(entry.path)
     },
     [expanded, childrenByDir, loadDir]
   )
 
   const onSelect = useCallback((entry: FileEntry) => setSelected(entry.path), [])
+  // An "Open" failure is about the file it was for.
+  useEffect(() => setNotice(null), [selected])
 
   const onOpen = useCallback(
     (path: string) => {
-      if (workspace) void window.api.openWorkspacePath(workspace, path)
+      if (!workspace) return
+      setNotice(null)
+      window.api.openWorkspacePath(workspace, path).then(
+        (r) => {
+          if (!r.ok) setNotice(r.error ?? 'Could not open that file.')
+        },
+        () => setNotice('Could not open that file.')
+      )
     },
     [workspace]
   )
@@ -302,7 +371,7 @@ export function FilesPanel({
         <button
           type="button"
           className="btn btn--sm"
-          onClick={() => void reload(false)}
+          onClick={refresh}
           disabled={loadingRoot || !workspace}
           title="Refresh"
           aria-label="Refresh"
@@ -315,6 +384,12 @@ export function FilesPanel({
           </button>
         )}
       </header>
+
+      {notice && (
+        <p className="changes-view__notice" role="status">
+          {notice}
+        </p>
+      )}
 
       <div className="files-panel__split">
         <div className="files-panel__tree">
@@ -367,7 +442,7 @@ export function FilesPanel({
                     >
                       <span className="files-row__chevron" />
                       <Icon name="file" className="files-row__icon" />
-                      <span className="files-row__name files-row__name--path">{p}</span>
+                      <PathLabel className="files-row__name files-row__name--path" path={p} />
                     </button>
                   </div>
                 ))
@@ -396,13 +471,19 @@ export function FilesPanel({
         </div>
 
         <div className="files-panel__preview">
-          <FilePreview
-            workspace={workspace ?? ''}
-            path={selected}
-            onOpen={onOpen}
-            // Only the file the panel was opened on carries the line.
-            line={initialPath && selected === normalizeRelPath(initialPath) ? initialLine : undefined}
-          />
+          {/* A file that fails to preview shows a notice here instead of taking the
+              window down (the docked panel reopens on launch, so it would recur).
+              Selecting another file clears it. */}
+          <ItemBoundary resetKey={selected}>
+            <FilePreview
+              workspace={workspace ?? ''}
+              path={selected}
+              onOpen={onOpen}
+              reloadSignal={previewReload}
+              // Only the file the panel was opened on carries the line.
+              line={initialPath && selected === normalizeRelPath(initialPath) ? initialLine : undefined}
+            />
+          </ItemBoundary>
         </div>
       </div>
     </>

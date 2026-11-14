@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { DiffHunk, FileDiff, WorkingTreeChanges } from '@shared/workingTree'
+import type { DiffHunk, FileChangeStatus, FileDiff, WorkingTreeChanges } from '@shared/workingTree'
 import {
   canRevertHunks,
   fileDiffSignature,
@@ -23,17 +23,34 @@ import {
 } from '../lib/diffComments'
 import { CONTEXT_STEP, contextRoom, expandHunk, fileLines, hunkMatches } from '../lib/diffContext'
 import { DiffView, lineKey, type DiffLayout, type DiffLineTarget } from './DiffView'
+import { ItemBoundary } from './ItemBoundary'
 import { Icon } from './Icon'
 import { CommitForm } from './CommitForm'
+import { PathLabel } from './PathLabel'
+import { ipcErrorMessage } from '../lib/ipcError'
 
 /** Below this many files the list starts fully expanded; above it, collapsed. */
 const AUTO_EXPAND_LIMIT = 8
+
+/** Wait this long after the window regains focus before re-reading (focus can flap). */
+const FOCUS_REFRESH_MS = 300
 
 const SCOPE_LABEL: Record<ChangesScope, string> = {
   turn: 'This turn',
   chat: 'This chat',
   tree: 'Working tree'
 }
+
+/** Each file's change as a letter in its row, and in words for a screen reader. */
+const STATUS_TAG: Record<FileChangeStatus, { letter: string; label: string }> = {
+  added: { letter: 'A', label: 'Added' },
+  modified: { letter: 'M', label: 'Modified' },
+  deleted: { letter: 'D', label: 'Deleted' },
+  renamed: { letter: 'R', label: 'Renamed' },
+  untracked: { letter: 'U', label: 'Untracked' }
+}
+
+const SCOPES = ['turn', 'chat', 'tree'] as const
 
 const STORE_SCOPE = 'houston.changes.scope'
 const STORE_LAYOUT = 'houston.changes.layout'
@@ -312,12 +329,14 @@ function FileSection({
           aria-expanded={open}
         >
           <span className="tool-row__chevron">{open ? '▾' : '▸'}</span>
-          <span className="changes-file__path" title={file.path}>
-            {file.oldPath && file.oldPath !== file.path && (
-              <span className="changes-file__old">{file.oldPath} → </span>
-            )}
-            {file.path}
-          </span>
+          <span
+            className={`changes-file__status changes-file__status--${file.status}`}
+            title={STATUS_TAG[file.status].label}
+          >
+            <span aria-hidden="true">{STATUS_TAG[file.status].letter}</span>
+            <span className="sr-only">{STATUS_TAG[file.status].label}</span>
+          </span>{' '}
+          <PathLabel className="changes-file__path" path={file.path} oldPath={file.oldPath} />
           <span className="tool-row__spacer" />
           {mine.length > 0 && (
             <span className="changes-file__comments" aria-label={`${mine.length} comment${mine.length === 1 ? '' : 's'}`}>
@@ -380,15 +399,20 @@ function FileSection({
                 </div>
                 {confirm === i && confirmBar(i)}
                 {room && contextButton(i, 'above', room.above)}
-                <DiffView
-                  diff={h.lines}
-                  path={file.path}
-                  start={hunkStart(h)}
-                  layout={layout}
-                  onLineClick={onLineClick}
-                  renderBelow={renderBelow}
-                  reveal={reveal}
-                />
+                {/* A hunk that fails to render (a hostile file name or content) shows a
+                    notice in place instead of taking the whole window down; the panel's
+                    open state is remembered, so that would recur on every launch. */}
+                <ItemBoundary resetKey={h.lines}>
+                  <DiffView
+                    diff={h.lines}
+                    path={file.path}
+                    start={hunkStart(h)}
+                    layout={layout}
+                    onLineClick={onLineClick}
+                    renderBelow={renderBelow}
+                    reveal={reveal}
+                  />
+                </ItemBoundary>
                 {room && contextButton(i, 'below', room.below)}
               </div>
               )
@@ -417,11 +441,16 @@ type Loaded =
  * agent (commit, push, open PR through its own tools) rather than the renderer
  * driving git directly. The action follows the repo's state (see chooseShipAction).
  * `creating` disables it while a run is busy.
+ *
+ * `active` says whether the view is on screen: the side panel keeps it mounted behind
+ * other tabs so drafts survive, and it reads git only while it shows (again each time
+ * it comes back, when a run ends, and when the window regains focus).
  */
 export function DiffPanel({
   workspace,
   conversationId = null,
   running = false,
+  active = true,
   onShip,
   creating = false,
   commitForm = false,
@@ -432,6 +461,8 @@ export function DiffPanel({
   conversationId?: string | null
   /** The chat's run is going: reverts wait, and the list refreshes when it ends. */
   running?: boolean
+  /** The view is showing. Hidden, it keeps its state but doesn't read git. */
+  active?: boolean
   onShip?: (action: ShipAction) => void
   creating?: boolean
   /**
@@ -466,11 +497,14 @@ export function DiffPanel({
     },
     [commentsKey]
   )
-  const tree = data?.scope === 'tree' ? data.tree : null
-  const chat = data && data.scope !== 'tree' ? data.chat : null
+  // What was loaded for the scope on screen. Just after a scope switch `data` still
+  // holds the previous scope until the new read lands, and nothing of it may show.
+  const current = data?.scope === scope ? data : null
+  const tree = current?.scope === 'tree' ? current.tree : null
+  const chat = current && current.scope !== 'tree' ? current.chat : null
   const files = useMemo(
-    () => (data?.scope === scope ? (data.scope === 'tree' ? data.tree.files : data.chat.files) : []),
-    [data, scope]
+    () => (current ? (current.scope === 'tree' ? current.tree.files : current.chat.files) : []),
+    [current]
   )
   // Unchanged lines revealed around hunks: each file's text as read from disk (null
   // when it can't be read, or no longer matches its diff), and how far each hunk has
@@ -585,6 +619,8 @@ export function DiffPanel({
   // Only the newest load may write state: a slow reply for a scope (or folder, or chat)
   // the user already left must not replace what the current one shows.
   const loadSeq = useRef(0)
+  // Counts working-tree reads, so the commit form re-reads the branch along with them.
+  const [treeReads, setTreeReads] = useState(0)
   const load = useCallback(async (): Promise<void> => {
     const seq = ++loadSeq.current
     if (!workspace) {
@@ -597,33 +633,72 @@ export function DiffPanel({
     try {
       if (scope === 'tree') {
         const tree = await window.api.getWorkingTreeChanges(workspace)
-        if (seq === loadSeq.current) setData({ scope, tree })
+        if (seq === loadSeq.current) {
+          setData({ scope, tree })
+          setTreeReads((n) => n + 1)
+        }
       } else if (conversationId) {
         const chat = await window.api.getChatChanges(conversationId, scope)
         if (seq === loadSeq.current) setData({ scope, chat })
       }
     } catch (e) {
-      if (seq === loadSeq.current) setError((e as Error).message)
+      if (seq === loadSeq.current) setError(ipcErrorMessage(e))
     } finally {
       if (seq === loadSeq.current) setLoading(false)
     }
   }, [workspace, scope, conversationId])
 
+  // Read on first show, on a scope switch, and each time the view comes back.
   useEffect(() => {
-    void load()
-  }, [load])
+    if (active) void load()
+  }, [load, active])
 
-  // A finished turn changes what every scope shows.
+  // A finished turn changes what every scope shows. Hidden, the view reads again when
+  // it next shows instead.
   const wasRunning = useRef(running)
   useEffect(() => {
-    if (wasRunning.current && !running) void load()
+    if (wasRunning.current && !running && active) void load()
     wasRunning.current = running
-  }, [running, load])
+  }, [running, load, active])
+
+  // Catch commits and edits made outside the app (a terminal, an editor) while it was
+  // in the background, so the list never offers to revert a change that is gone.
+  useEffect(() => {
+    if (!active) return
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const onFocus = (): void => {
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        void load()
+      }, FOCUS_REFRESH_MS)
+    }
+    window.addEventListener('focus', onFocus)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      if (timer) clearTimeout(timer)
+    }
+  }, [active, load])
 
   const pickScope = (s: ChangesScope): void => {
     setStoredScope(s)
     writePref(STORE_SCOPE, s)
     setNotice(null)
+  }
+  // Arrow keys pick the next scope that can be chosen (the chat scopes wait for a
+  // chat), as a radio group does.
+  const onScopeKey = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    const step: Record<string, number> = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }
+    const open = SCOPES.filter((s) => s === 'tree' || conversationId)
+    const i = open.indexOf(scope)
+    let next: number
+    if (e.key in step) next = (i + step[e.key] + open.length) % open.length
+    else if (e.key === 'Home') next = 0
+    else if (e.key === 'End') next = open.length - 1
+    else return
+    e.preventDefault()
+    pickScope(open[next])
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="radio"]')[SCOPES.indexOf(open[next])]?.focus()
   }
   const pickLayout = (l: DiffLayout): void => {
     setLayout(l)
@@ -674,13 +749,20 @@ export function DiffPanel({
     <section className="changes-view" aria-label="Changes">
       <header className="changes-panel__head changes-view__head">
         <div className="changes-panel__titles">
-          <div className="changes-view__scopes" role="radiogroup" aria-label="Show changes from">
-            {(['turn', 'chat', 'tree'] as const).map((s) => (
+          <div
+            className="changes-view__scopes"
+            role="radiogroup"
+            aria-label="Show changes from"
+            onKeyDown={onScopeKey}
+          >
+            {SCOPES.map((s) => (
               <button
                 key={s}
                 type="button"
                 role="radio"
                 aria-checked={scope === s}
+                // One Tab stop for the group (the chosen scope); arrows move within it.
+                tabIndex={scope === s ? 0 : -1}
                 className={`changes-view__scope${scope === s ? ' changes-view__scope--on' : ''}`}
                 disabled={s !== 'tree' && !conversationId}
                 title={s !== 'tree' && !conversationId ? 'Start the chat first' : undefined}
@@ -728,10 +810,10 @@ export function DiffPanel({
       <div className="changes-panel__body">
         {error ? (
           <p className="changes-panel__empty">Couldn’t read changes: {error}</p>
-        ) : loading && !data ? (
-          <p className="changes-panel__empty">Loading…</p>
         ) : !workspace ? (
           <p className="changes-panel__empty">Open a chat in a project to see its changes.</p>
+        ) : !current ? (
+          <p className="changes-panel__empty">Loading…</p>
         ) : tree && !tree.isRepo && tree.unreadable ? (
           <div className="changes-panel__empty changes-panel__init">
             <p>
@@ -760,7 +842,7 @@ export function DiffPanel({
             {initError && <p className="changes-panel__init-error">{initError}</p>}
           </div>
         ) : files.length === 0 ? (
-          <p className="changes-panel__empty">{data ? empty : 'Loading…'}</p>
+          <p className="changes-panel__empty">{empty}</p>
         ) : (
           <>
             {viewFiles.map((f, n) => (
@@ -789,7 +871,7 @@ export function DiffPanel({
         )}
       </div>
 
-      {onSendComments && data?.scope === scope && outdated.length > 0 && (
+      {onSendComments && current && outdated.length > 0 && (
         <section className="changes-view__outdated" aria-label="Comments not on a line shown here">
           <p className="changes-panel__foot-hint">
             Not on a line shown here (the code changed or is in another view):
@@ -864,6 +946,7 @@ export function DiffPanel({
           conversationId={conversationId}
           hasChanges={files.length > 0}
           busy={creating}
+          refreshSignal={treeReads}
           onChanged={() => void load()}
         />
       )}

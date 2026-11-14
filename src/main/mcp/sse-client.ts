@@ -36,6 +36,7 @@ import {
   type ListedPages,
   type McpListKind
 } from './protocol'
+import { withTraceContext } from './trace'
 
 /**
  * A minimal MCP client over the **legacy HTTP+SSE** transport (MCP protocol
@@ -102,6 +103,35 @@ export type FetchFn = (url: string, init: RequestInit) => Promise<Response>
  * treated as broken rather than buffered without limit.
  */
 export const MAX_MCP_MESSAGE_CHARS = 64 * 1024 * 1024
+
+/**
+ * A response body as text, read at most `max` characters deep. `Response.text()`
+ * buffers whatever the server sends, so a hostile or broken server answering a POST
+ * with an endless JSON body (or a huge error page) would grow the main process's
+ * memory without bound; the SSE path already caps each event at the same
+ * {@link MAX_MCP_MESSAGE_CHARS}. Past the cap the transfer is cancelled and this
+ * rejects with a "larger than" error, which fails the request it answered.
+ */
+export async function readCappedText(res: Response, max = MAX_MCP_MESSAGE_CHARS): Promise<string> {
+  if (!res.body) return ''
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  const parts: string[] = []
+  let chars = 0
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    const text = decoder.decode(value, { stream: true })
+    chars += text.length
+    if (chars > max) {
+      await reader.cancel().catch(() => {})
+      throw new Error(`MCP server sent a response larger than ${max / 1024 / 1024} MB`)
+    }
+    parts.push(text)
+  }
+  parts.push(decoder.decode())
+  return parts.join('')
+}
 
 /**
  * Collects a streamed SSE body and returns each event once it is complete.
@@ -504,7 +534,7 @@ export class McpSseClient implements McpConnection {
     void result.catch(() => {})
     try {
       // The run's Stop also abandons a POST the server has not acknowledged yet.
-      await this.postMessage({ jsonrpc: '2.0', id, method, params: sent }, timeoutMs, opts.signal)
+      await this.postMessage({ jsonrpc: '2.0', id, method, params: withTraceContext(sent) }, timeoutMs, opts.signal)
     } catch (e) {
       this.pending.reject(id, e as Error)
     }
@@ -542,7 +572,7 @@ export class McpSseClient implements McpConnection {
       })
       // The JSON-RPC response arrives over the SSE stream, not in this body. Drain
       // the (usually empty, 202) body so the connection can be reused.
-      await res.text().catch(() => '')
+      await readCappedText(res).catch(() => '')
       if (res.status === 401) {
         // Rejected credentials won't recover on this connection: mark it dead so the
         // manager reconnects (refreshing the OAuth token) instead of reusing it.

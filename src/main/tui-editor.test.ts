@@ -7,6 +7,7 @@ import {
   setEditorText,
   blobToken,
   findHistoryMatch,
+  parseImagePaths,
   PASTE_COLLAPSE_LINES,
   type EditorState,
   type EditorOutcome
@@ -146,6 +147,20 @@ describe('reduceEditor — editing keys', () => {
       kind: 'external-edit',
       text: 'draft'
     })
+  })
+
+  it('hands Ctrl-O and Alt-T to the adapter with the draft untouched, and ignores paging keys', () => {
+    for (const [key, kind] of [
+      ['transcript', 'transcript'],
+      ['cycle-thoughts', 'cycle-thoughts']
+    ] as const) {
+      const r = run([type('draft'), { type: key }])
+      expect(r.outcome).toEqual({ kind })
+      expect(editorText(r.state)).toBe('draft')
+    }
+    const paged = run([type('draft'), { type: 'page-up' }, { type: 'page-down' }])
+    expect(paged.outcome).toBeUndefined()
+    expect(editorText(paged.state)).toBe('draft')
   })
 })
 
@@ -346,5 +361,187 @@ describe('paste placeholders cannot be forged', () => {
     const text = (outcome as { kind: 'submit'; text: string }).text
     expect(text).toContain(body)
     expect(text).toContain(token)
+  })
+})
+
+describe('reduceEditor: undo and redo', () => {
+  const draft = (s: EditorState): string => s.lines.join('\n')
+  const undo: EditorKey = { type: 'undo' }
+  const redo: EditorKey = { type: 'redo' }
+
+  it('takes back a run of typing as one step', () => {
+    const { state } = run([type('h'), type('e'), type('llo'), undo])
+    expect(draft(state)).toBe('')
+    expect(state.col).toBe(0)
+  })
+
+  it('splits typing at a cursor move', () => {
+    const { state } = run([type('abc'), { type: 'left' }, type('X'), undo])
+    expect(draft(state)).toBe('abc')
+    expect(state.col).toBe(2)
+    expect(draft(run([undo], state).state)).toBe('')
+  })
+
+  it('makes paste, kill and yank steps of their own', () => {
+    const start = run([type('one two'), { type: 'paste', value: ' three' }, { type: 'kill-word' }, { type: 'yank' }])
+    expect(draft(start.state)).toBe('one two three')
+    const afterYank = run([undo], start.state).state
+    expect(draft(afterYank)).toBe('one two ')
+    const afterKill = run([undo], afterYank).state
+    expect(draft(afterKill)).toBe('one two three')
+    const afterPaste = run([undo], afterKill).state
+    expect(draft(afterPaste)).toBe('one two')
+  })
+
+  it('coalesces a run of backspaces', () => {
+    const { state } = run([type('hello'), { type: 'left' }, { type: 'backspace' }, { type: 'backspace' }, undo])
+    expect(draft(state)).toBe('hello')
+  })
+
+  it('redoes what undo took back, and a new edit clears redo', () => {
+    const s1 = run([type('abc'), undo, redo]).state
+    expect(draft(s1)).toBe('abc')
+    const s2 = run([undo, type('x'), redo], s1).state
+    expect(draft(s2)).toBe('x')
+  })
+
+  it('undoes a collapsed paste, blob and all', () => {
+    const body = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n')
+    const pasted = run([{ type: 'paste', value: body }]).state
+    expect(pasted.blobs).toHaveLength(1)
+    const back = run([undo], pasted).state
+    expect(back.blobs).toHaveLength(0)
+    const again = run([redo], back).state
+    expect(editorText(again)).toBe(body)
+  })
+
+  it('treats an $EDITOR round trip as one step', () => {
+    const typed = run([type('draft')]).state
+    const edited = setEditorText(typed, 'rewritten in the editor')
+    expect(draft(run([undo], edited).state)).toBe('draft')
+  })
+
+  it('does nothing with nothing to undo or redo', () => {
+    const { state } = run([undo, redo])
+    expect(draft(state)).toBe('')
+  })
+
+  it('does not record history recall or cursor moves as edits', () => {
+    const s = initialEditorState(['earlier'])
+    const { state } = run([{ type: 'up' }, undo], s)
+    expect(draft(state)).toBe('earlier')
+  })
+
+  it('bounds the undo history', () => {
+    let s = initialEditorState()
+    for (let i = 0; i < 150; i++) s = run([{ type: 'paste', value: 'x' }], s).state
+    expect(s.undo.length).toBeLessThanOrEqual(100)
+  })
+})
+
+describe('reduceEditor: Ctrl-S stash', () => {
+  const stash: EditorKey = { type: 'stash' }
+
+  it('stashes the draft (text, cursor, blobs) and clears the composer', () => {
+    const body = Array.from({ length: 12 }, (_, i) => `line ${i}`).join('\n')
+    const s = run([type('see '), { type: 'paste', value: body }, { type: 'left' }]).state
+    const { state } = run([stash], s)
+    expect(state.lines).toEqual([''])
+    expect(state.blobs).toEqual([])
+    expect(state.stashed?.blobs).toHaveLength(1)
+    // Ctrl-S on the empty composer brings it all back, cursor included.
+    const back = run([stash], state).state
+    expect(back.lines).toEqual(s.lines)
+    expect(back.col).toBe(s.col)
+    expect(editorText(back)).toBe(`see ${body}`)
+    expect(back.stashed).toBeNull()
+  })
+
+  it('does nothing on an empty composer with no stash', () => {
+    const { state, outcome } = run([stash])
+    expect(state.lines).toEqual([''])
+    expect(outcome).toBeUndefined()
+  })
+
+  it('keeps an older stash in history rather than dropping it', () => {
+    const first = run([type('first idea'), stash]).state
+    const r = run([type('second idea'), stash], first)
+    expect(r.outcome).toEqual({ kind: 'remember', text: 'first idea' })
+    expect(r.state.history.at(-1)).toBe('first idea')
+    expect(r.state.stashed?.lines).toEqual(['second idea'])
+  })
+
+  it('carries a stash into a fresh read', () => {
+    const stashed = run([type('later'), stash]).state.stashed
+    const next = initialEditorState([], '', stashed)
+    expect(run([stash], next).state.lines).toEqual(['later'])
+  })
+
+  it('can be undone', () => {
+    const { state } = run([type('keep me'), stash, { type: 'undo' }])
+    expect(state.lines).toEqual(['keep me'])
+  })
+})
+
+describe('reduceEditor: Esc Esc', () => {
+  const dbl: EditorKey = { type: 'escape', double: true }
+
+  it('clears the draft into history so Up recalls it', () => {
+    const { state, outcome } = run([type('half a thought'), dbl])
+    expect(outcome).toEqual({ kind: 'remember', text: 'half a thought' })
+    expect(state.lines).toEqual([''])
+    expect(run([{ type: 'up' }], state).state.lines).toEqual(['half a thought'])
+  })
+
+  it('asks for the rewind picker on an empty composer', () => {
+    expect(run([dbl]).outcome).toEqual({ kind: 'rewind' })
+  })
+
+  it('leaves the draft alone on a single Esc', () => {
+    const { state, outcome } = run([type('keep'), { type: 'escape' }])
+    expect(state.lines).toEqual(['keep'])
+    expect(outcome).toBeUndefined()
+  })
+})
+
+describe('reduceEditor: image and suspend keys', () => {
+  it('report to the adapter and leave the buffer alone', () => {
+    const s = run([type('look at this')]).state
+    const img = reduceEditor(s, { type: 'paste-image' })
+    expect(img.outcome).toEqual({ kind: 'paste-image' })
+    expect(img.state.lines).toEqual(['look at this'])
+    expect(reduceEditor(s, { type: 'suspend' }).outcome).toEqual({ kind: 'suspend' })
+  })
+})
+
+describe('parseImagePaths', () => {
+  it('reads one plain or several space-separated paths', () => {
+    expect(parseImagePaths('/tmp/shot.png')).toEqual(['/tmp/shot.png'])
+    expect(parseImagePaths('a.png b.JPG c.jpeg d.gif e.webp')).toEqual(['a.png', 'b.JPG', 'c.jpeg', 'd.gif', 'e.webp'])
+    expect(parseImagePaths('/tmp/a.png\n/tmp/b.png\n')).toEqual(['/tmp/a.png', '/tmp/b.png'])
+  })
+
+  it('reads quoted paths and backslash-escaped spaces', () => {
+    expect(parseImagePaths("'/home/me/Screen Shot 1.png'")).toEqual(['/home/me/Screen Shot 1.png'])
+    expect(parseImagePaths('"/tmp/my pic.webp" /tmp/x.gif')).toEqual(['/tmp/my pic.webp', '/tmp/x.gif'])
+    expect(parseImagePaths('/home/me/Screen\\ Shot\\ 1.png')).toEqual(['/home/me/Screen Shot 1.png'])
+  })
+
+  it('reads file:// URLs', () => {
+    expect(parseImagePaths('file:///tmp/my%20pic.png')).toEqual(['/tmp/my pic.png'])
+    expect(parseImagePaths('file:///C:/shots/a.png', { windows: true })).toEqual(['C:/shots/a.png'])
+  })
+
+  it('keeps Windows backslashes as separators', () => {
+    expect(parseImagePaths('C:\\Users\\me\\a.png', { windows: true })).toEqual(['C:\\Users\\me\\a.png'])
+  })
+
+  it('is null for anything that is not only image paths', () => {
+    expect(parseImagePaths('')).toBeNull()
+    expect(parseImagePaths('look at shot.png please')).toBeNull()
+    expect(parseImagePaths('/tmp/notes.txt')).toBeNull()
+    expect(parseImagePaths('/tmp/a.png /tmp/b.pdf')).toBeNull()
+    expect(parseImagePaths("'/tmp/open quote.png")).toBeNull()
+    expect(parseImagePaths('file:///bad%E0%A4.png')).toBeNull()
   })
 })

@@ -1,4 +1,4 @@
-import { reduceEditor, cps, cpLen, cpSlice, type EditorState, type EditorOutcome } from './tui-editor'
+import { reduceEditor, editorEmpty, cps, cpLen, cpSlice, type EditorState, type EditorOutcome } from './tui-editor'
 import type { EditorKey } from './tui-keys'
 import type { Painter } from './tui'
 
@@ -541,7 +541,9 @@ export function reduceVim(vim: VimState, s: EditorState, key: EditorKey): VimRes
 
   if (vim.mode === 'insert') {
     if (key.type === 'escape') {
-      return { vim: { ...vim, mode: 'normal', pending: '' }, state: clampNormal(s) }
+      // Leaving insert ends a typing run: what is typed after the next `i` is an
+      // undo step of its own (Ctrl-_), not a continuation of this one.
+      return { vim: { ...vim, mode: 'normal', pending: '' }, state: clampNormal({ ...s, lastEdit: null }) }
     }
     const r = reduceEditor(s, key)
     return { vim, state: r.state, ...(r.outcome ? { outcome: r.outcome } : {}) }
@@ -550,15 +552,30 @@ export function reduceVim(vim: VimState, s: EditorState, key: EditorKey): VimRes
   switch (key.type) {
     case 'char': {
       let cur: VimResult = { vim, state: s }
-      for (const ch of cps(key.value)) {
-        cur = normalChar(cur.vim, cur.state, ch)
+      const chars = cps(key.value)
+      for (let i = 0; i < chars.length; i++) {
+        cur = normalChar(cur.vim, cur.state, chars[i])
         if (cur.outcome) return cur
+        // A command that entered insert mode ("A", "o", "cw") makes the rest of the
+        // burst text, as it is for a slower typist: fast typing, autorepeat or a
+        // laggy link must not run "hello" as five commands.
+        if (cur.vim.mode === 'insert' && i + 1 < chars.length) {
+          const r = reduceEditor(cur.state, { type: 'char', value: chars.slice(i + 1).join('') })
+          return { vim: cur.vim, state: r.state, ...(r.outcome ? { outcome: r.outcome } : {}) }
+        }
       }
       return cur
     }
     case 'escape':
-      // Esc in normal mode abandons a half-typed command.
+      // Esc in normal mode abandons a half-typed command. A double press here, on an
+      // empty composer, opens the rewind picker; it never clears text (Esc is how
+      // you get to normal mode, so pressing it twice is not a request to discard).
+      if (key.double && editorEmpty(s)) return { vim: { ...vim, pending: '' }, state: s, outcome: { kind: 'rewind' } }
       return { vim: { ...vim, pending: '' }, state: s }
+    case 'undo':
+      // Ctrl-_ in normal mode is `u`: the changes made here are on vim's stack, and
+      // two undo histories answering to one key would take back the wrong thing.
+      return normalChar({ ...vim, pending: '' }, s, 'u')
     default: {
       // Everything else (Enter, arrows, Ctrl-C/D/R/L, paste, Tab) means in normal
       // mode exactly what it means in insert mode. Delegating keeps submit, history

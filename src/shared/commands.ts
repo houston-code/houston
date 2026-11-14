@@ -3,6 +3,8 @@
  * commands are prompt templates loaded from `.houston/commands/*.md` in the
  * workspace. Pure helpers live here so main + renderer share one definition.
  */
+import type { ReasoningEffort } from './agent'
+import { hasContext } from './commandContext'
 
 export interface Command {
   name: string
@@ -17,8 +19,29 @@ export interface Command {
   autoRun?: boolean
   /** Menu heading the command is listed under; custom commands have none. */
   group?: CommandGroup
-  /** What may follow the name, shown dimmed beside it (for example `[name]`). */
+  /**
+   * What may follow the name, shown dimmed beside it (for example `[name]`). A
+   * custom command sets it with its `argument-hint` frontmatter.
+   */
   args?: string
+  /**
+   * Where a custom command was loaded from: the workspace's `.houston/commands`
+   * (`project`, untrusted unless the folder is) or the user's `~/.houston/commands`.
+   */
+  source?: 'project' | 'user'
+  /** `/<skill-name>`: runs a skill (listed under its own heading). */
+  skill?: boolean
+  /** Custom-command frontmatter `model`: the model this one turn runs on. */
+  model?: string
+  /** Custom-command frontmatter `effort`: the thinking effort for this one turn. */
+  effort?: ReasoningEffort
+  /** Custom-command frontmatter `agent`: dispatch the expanded prompt to this subagent. */
+  agent?: string
+  /**
+   * Custom-command frontmatter `allowed-tools`, as written: tools pre-approved for
+   * this one turn, in permission-rule syntax (`read_file`, `run_shell(git status*)`).
+   */
+  allowedTools?: string
 }
 
 /** Menu headings, in the order the menu shows them. Custom commands come last. */
@@ -26,6 +49,8 @@ export const COMMAND_GROUPS = ['Chat', 'Modes', 'Review and undo', 'Extend', 'Se
 export type CommandGroup = (typeof COMMAND_GROUPS)[number]
 /** Heading for a workspace's own commands (`.houston/commands`). */
 export const CUSTOM_COMMAND_GROUP = 'Custom'
+/** Heading for the skills, each runnable as `/<skill-name>`. */
+export const SKILL_COMMAND_GROUP = 'Skills'
 
 /** Parse a leading slash command from composer text: "/name the rest" → {name, args}. */
 export function parseSlashCommand(text: string): { name: string; args: string } | null {
@@ -58,12 +83,12 @@ export function expandTemplate(template: string, args: string): string {
 
 /** The heading a command is listed under. */
 export function commandGroup(cmd: Command): string {
-  return cmd.group ?? CUSTOM_COMMAND_GROUP
+  return cmd.group ?? (cmd.skill ? SKILL_COMMAND_GROUP : CUSTOM_COMMAND_GROUP)
 }
 
 /** The commands ordered by menu heading (stable within one), for an unfiltered menu. */
 export function groupCommands(commands: Command[]): Command[] {
-  const order: string[] = [...COMMAND_GROUPS, CUSTOM_COMMAND_GROUP]
+  const order: string[] = [...COMMAND_GROUPS, CUSTOM_COMMAND_GROUP, SKILL_COMMAND_GROUP]
   return commands
     .map((c, i) => ({ c, i, g: order.indexOf(commandGroup(c)) }))
     .sort((a, b) => a.g - b.g || a.i - b.i)
@@ -79,22 +104,26 @@ function isSubsequence(needle: string, hay: string): boolean {
 
 /**
  * How well a command answers what was typed after the slash; lower is better, null
- * is no match. A name that starts with it comes first, then an alias that does,
- * then a name containing it, then a word of the description starting with it (so
- * `/perm` finds `/approval`), then the letters appearing in order in the name.
+ * is no match. The command the text names exactly comes first (its name, then an
+ * alias, as {@link resolveCommand} reads it), so `/agent` is never taken for
+ * `/agents`. Then a name that starts with it, then an alias that does, then a name
+ * containing it, then a word of the description starting with it (so `/perm` finds
+ * `/approval`), then the letters appearing in order in the name.
  */
 function commandRank(cmd: Command, q: string): number | null {
   const name = cmd.name.toLowerCase()
-  if (name.startsWith(q)) return 0
+  if (name === q) return 0
+  if (COMMAND_ALIASES[q] === cmd.name) return 1
+  if (name.startsWith(q)) return 2
   for (const [alias, target] of Object.entries(COMMAND_ALIASES)) {
-    if (target === cmd.name && alias.startsWith(q)) return 1
+    if (target === cmd.name && alias.startsWith(q)) return 3
   }
-  if (name.includes(q)) return 2
+  if (name.includes(q)) return 4
   if (q.length >= 3) {
     const words = cmd.description.toLowerCase().split(/[^a-z0-9]+/)
-    if (words.some((w) => w.startsWith(q))) return 3
+    if (words.some((w) => w.startsWith(q))) return 5
   }
-  if (q.length >= 2 && isSubsequence(q, name)) return 4
+  if (q.length >= 2 && isSubsequence(q, name)) return 6
   return null
 }
 
@@ -124,6 +153,7 @@ export const COMMAND_ALIASES: Readonly<Record<string, string>> = {
   aside: 'btw',
   think: 'reasoning',
   proposed: 'proposals',
+  bashes: 'tasks',
   paste: 'image',
   q: 'quit'
 }
@@ -136,7 +166,8 @@ export function resolveCommand(commands: Command[], name: string): Command | und
   const n = name.toLowerCase()
   const direct = commands.find((c) => c.name.toLowerCase() === n)
   if (direct) return direct
-  const target = COMMAND_ALIASES[n]
+  // Own-property only: a typed `/constructor` must not resolve to Object's members.
+  const target = Object.hasOwn(COMMAND_ALIASES, n) ? COMMAND_ALIASES[n] : undefined
   return target ? commands.find((c) => c.name === target) : undefined
 }
 
@@ -185,6 +216,19 @@ export function mergeCommands(builtin: Command[], custom: Command[]): Command[] 
 }
 
 /**
+ * Whether a custom command needs the main process to run it: a frontmatter option
+ * that changes how its turn runs (model, effort, agent, allowed-tools), or a
+ * template that pulls in `@file` or `` !`command` `` context. The desktop composer
+ * can't express those by filling the message box, so such a command runs straight
+ * away, prepared by the main process.
+ */
+export function commandHasRunOptions(cmd: Command): boolean {
+  if (cmd.model || cmd.effort || cmd.agent || cmd.allowedTools) return true
+  // Only a workspace's or the user's own command; the first-party templates have none.
+  return cmd.source !== undefined && cmd.template !== undefined && hasContext(cmd.template)
+}
+
+/**
  * The first-party `/review` command's prompt. Shared so every client (GUI + TUI)
  * runs the exact same adversarial-review turn from one definition.
  */
@@ -211,6 +255,12 @@ export type CommandClient = 'gui' | 'tui'
 export interface BuiltinCommand extends Command {
   /** Clients that expose this command. */
   clients: CommandClient[]
+  /**
+   * What the desktop menu says instead, where the app does the job differently from
+   * the terminal (it opens a Settings page rather than printing or taking
+   * subcommands). `args: null` shows no argument hint there.
+   */
+  gui?: { description?: string; args?: string | null }
 }
 
 /**
@@ -227,7 +277,11 @@ export interface BuiltinCommand extends Command {
 export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'new', group: 'Chat', description: 'Start a new chat', clients: ['gui', 'tui'] },
   { name: 'clear', group: 'Chat', description: 'Start a new chat (alias for /new)', clients: ['gui', 'tui'] },
-  { name: 'compact', group: 'Chat', description: 'Summarize older turns to free up context now', clients: ['gui', 'tui'] },
+  {
+    name: 'compact', group: 'Chat', args: '[focus]',
+    description: 'Summarize older turns to free up context now (/compact [what to keep in detail])',
+    clients: ['gui', 'tui']
+  },
   {
     name: 'retry', group: 'Chat',
     description: 'Run your last message again after a turn that failed',
@@ -243,7 +297,12 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'full', group: 'Modes', description: 'Approval: full auto (sandboxed)', clients: ['gui', 'tui'] },
   { name: 'model', group: 'Modes', args: '[name]', description: 'List or switch the active model', clients: ['gui', 'tui'] },
   { name: 'login', group: 'Setup', description: 'Set or update an API key (also: /providers)', clients: ['gui', 'tui'] },
-  { name: 'settings', group: 'Setup', args: '[page]', description: 'Show a summary of your current settings', clients: ['gui', 'tui'] },
+  {
+    name: 'settings', group: 'Setup', args: '[page]',
+    description: 'Show a summary of your current settings',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Open Settings, or one page of it' }
+  },
   { name: 'undo', group: 'Review and undo', description: "Revert the files the last turn changed", clients: ['gui', 'tui'] },
   { name: 'redo', group: 'Review and undo', description: 'Put back what /undo reverted', clients: ['gui', 'tui'] },
   {
@@ -264,7 +323,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   {
     name: 'usage', group: 'Setup',
     description: 'Spend and tokens per day and per project, from the chats on this computer',
-    clients: ['gui']
+    clients: ['gui', 'tui']
   },
   {
     name: 'doctor', group: 'Setup',
@@ -277,8 +336,38 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'add-dir', group: 'Terminal', args: '[path]',
+    description: 'Let the agent work in another folder this session (/add-dir alone lists them)',
+    clients: ['tui']
+  },
+  {
+    name: 'notify', group: 'Terminal', args: '[auto|osc|bell|off]',
+    description: 'Choose the bell and notification sent when a run needs you',
+    clients: ['tui']
+  },
+  {
+    name: 'screen-reader', group: 'Terminal', args: '[on|off]',
+    description: 'Plain lines for a screen reader: no redraws, numbered choices',
+    clients: ['tui']
+  },
+  {
+    name: 'reduce-motion', group: 'Terminal', args: '[on|off]',
+    description: 'Hold the activity line still instead of animating the spinner',
+    clients: ['tui']
+  },
+  {
     name: 'verbose', group: 'Terminal',
     description: "Show each tool's full output as it runs",
+    clients: ['tui']
+  },
+  {
+    name: 'thoughts', group: 'Terminal', args: '[show|summary|hide]',
+    description: "How the model's reasoning shows as it streams (Alt-T cycles it)",
+    clients: ['tui']
+  },
+  {
+    name: 'transcript', group: 'Terminal',
+    description: 'The whole session full screen, with reasoning and full tool output (Ctrl-O)',
     clients: ['tui']
   },
   {
@@ -286,11 +375,21 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Reprint a tool result in full (/output [n])',
     clients: ['tui']
   },
+  {
+    name: 'copy', group: 'Terminal', args: '[n]',
+    description: 'Copy a reply, or one of its code blocks, to the clipboard',
+    clients: ['tui']
+  },
   { name: 'approval', group: 'Modes', args: '[mode]', description: 'Show or set the approval policy', clients: ['gui', 'tui'] },
   { name: 'resume', group: 'Chat', args: '[search]', description: 'Reopen (or search) a saved session', clients: ['gui', 'tui'] },
   {
     name: 'spawned', group: 'Terminal',
     description: 'List the background sessions the agent started, and open one',
+    clients: ['tui']
+  },
+  {
+    name: 'tasks', group: 'Terminal', args: '[n | kill n]',
+    description: 'List the background shells and subagents of this chat, show one, or stop one',
     clients: ['tui']
   },
   {
@@ -322,7 +421,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'skills', group: 'Extend',
-    description: 'List the workspace skills (.houston/skills)',
+    description: 'List the skills (.houston/skills and .agents/skills); run one with /<name>',
     clients: ['gui', 'tui']
   },
   {
@@ -335,15 +434,31 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Hand a task to one of your .houston/agents (/agent <name> <task>)',
     clients: ['gui', 'tui']
   },
-  { name: 'mcp', group: 'Extend', description: 'List MCP servers (add, remove, login, logout)', clients: ['gui', 'tui'] },
+  {
+    name: 'mcp', group: 'Extend',
+    description: 'List MCP servers (add, remove, enable, disable, reconnect, login, logout, registry search)',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Manage MCP servers in Settings' }
+  },
   {
     name: 'trust', group: 'Setup',
     description: "Show this folder's project-config trust (/trust forget re-decides)",
-    clients: ['gui', 'tui']
+    clients: ['gui', 'tui'],
+    gui: { description: "Review this folder's project-config trust in Settings" }
   },
   { name: 'hooks', group: 'Extend', description: 'List configured hooks', clients: ['gui', 'tui'] },
-  { name: 'memory', group: 'Extend', description: 'Review saved memories (show, edit, pin, forget, on, off)', clients: ['gui', 'tui'] },
-  { name: 'theme', group: 'Setup', args: '[name]', description: 'List or switch the color theme', clients: ['gui', 'tui'] },
+  {
+    name: 'memory', group: 'Extend',
+    description: 'Review saved memories (show, edit, pin, forget, on, off)',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Review saved memories in Settings' }
+  },
+  {
+    name: 'theme', group: 'Setup', args: '[name]',
+    description: 'List or switch the color theme',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Open Appearance settings', args: null }
+  },
   { name: 'image', group: 'Terminal', args: '[path]', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
   { name: 'cwd', group: 'Setup', description: 'Show the working directory', clients: ['gui', 'tui'] },
   { name: 'share', group: 'Chat', description: 'Copy an invite to Houston to share with a friend', clients: ['gui', 'tui'] },
@@ -368,19 +483,24 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'quit', group: 'Terminal', description: 'Leave', clients: ['tui'] }
 ]
 
-/** Strip the catalog-only `clients` tag, yielding a plain `Command`. */
-function toCommand(c: BuiltinCommand): Command {
-  const cmd: Command = { name: c.name, description: c.description }
+/**
+ * Strip the catalog-only tags, yielding a plain `Command`; for the desktop, with its
+ * own wording where the catalog gives one.
+ */
+function toCommand(c: BuiltinCommand, client?: CommandClient): Command {
+  const gui = client === 'gui' ? c.gui : undefined
+  const cmd: Command = { name: c.name, description: gui?.description ?? c.description }
   if (c.template !== undefined) cmd.template = c.template
   if (c.autoRun !== undefined) cmd.autoRun = c.autoRun
   if (c.group !== undefined) cmd.group = c.group
-  if (c.args !== undefined) cmd.args = c.args
+  const args = gui && gui.args !== undefined ? gui.args : c.args
+  if (args !== undefined && args !== null) cmd.args = args
   return cmd
 }
 
 /** The built-in commands a given client surfaces, as plain `Command`s. */
 export function builtinCommands(client: CommandClient): Command[] {
-  return BUILTIN_COMMAND_CATALOG.filter((c) => c.clients.includes(client)).map(toCommand)
+  return BUILTIN_COMMAND_CATALOG.filter((c) => c.clients.includes(client)).map((c) => toCommand(c, client))
 }
 
 /**
@@ -391,9 +511,17 @@ export function builtinCommands(client: CommandClient): Command[] {
  */
 const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   vim: 'the app\'s composer has no vim mode',
+  'add-dir': 'in the app, add folders the agent may use under Settings, Workspace, Additional folders',
+  'reduce-motion': 'the app follows your system\'s reduce motion setting',
+  notify: 'in the app, notifications and sounds are under Settings > General > Notifications',
+  'screen-reader': 'the app works with your screen reader as it is, and Settings has Read replies to screen readers',
   verbose: 'in the app, open a tool row to see its full output',
   output: 'in the app, open a tool row to see its full output',
+  thoughts: 'in the app, reasoning folds above each reply; Settings > Appearance > Always show reasoning keeps it open',
+  transcript: 'in the app, the chat itself is the full transcript: open a tool row or the reasoning to see it in full',
+  copy: 'in the app, use the copy button on a reply or code block',
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
+  tasks: 'in the app, background commands are in the Background tasks list in the right-hand dock, and subagents show under the tool call that started them',
   proposals: 'in the app, proposed sessions appear as cards in the chat, with Start and Dismiss',
   image: 'in the app, attach an image with the + button, or paste or drop it into the message box',
   rename: "in the app, rename a chat from its More actions menu in the sidebar",
@@ -410,10 +538,10 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
  */
 export function terminalOnlyNote(name: string): string | null {
   const n = name.toLowerCase()
-  const canonical = COMMAND_ALIASES[n] ?? n
+  const canonical = (Object.hasOwn(COMMAND_ALIASES, n) ? COMMAND_ALIASES[n] : undefined) ?? n
   const entry = BUILTIN_COMMAND_CATALOG.find((c) => c.name === canonical)
   if (!entry || entry.clients.includes('gui')) return null
-  const where = DESKTOP_EQUIVALENT[canonical]
+  const where = Object.hasOwn(DESKTOP_EQUIVALENT, canonical) ? DESKTOP_EQUIVALENT[canonical] : undefined
   return `/${n} is a terminal command${where ? `: ${where}` : ''}.`
 }
 
@@ -425,4 +553,4 @@ export function terminalOnlyNote(name: string): string | null {
  */
 export const BUILTIN_TEMPLATE_COMMANDS: Command[] = BUILTIN_COMMAND_CATALOG.filter(
   (c) => c.template !== undefined
-).map(toCommand)
+).map((c) => toCommand(c))

@@ -90,6 +90,11 @@ export interface ReasoningBlock {
    * an `id` without it is a dangling reference to a response we never stored.
    */
   encryptedContent?: string
+  /**
+   * Chat Completions hosts that return structured reasoning (OpenRouter): the reply's
+   * `reasoning_details`, whole, sent back verbatim on later requests.
+   */
+  details?: Array<Record<string, unknown>>
 }
 
 /** A non-image document (e.g. a PDF) attached to a message, base64-encoded. */
@@ -170,6 +175,16 @@ export interface ChatMessage {
    */
   at?: string
   /**
+   * Present on a message that carries text from outside the user with no tool call in
+   * this log to show it: an automated note quoting the reports of sessions this chat
+   * started, or the first message of a session that a chat which had read outside text
+   * spawned or scheduled (whose text the model wrote). Names where the text came from.
+   * Read by the memory taint rule (memoryTaintSource in src/main/agent/memoryTools.ts),
+   * so such a conversation's memory writes and session launches still ask. Never shown,
+   * and providers never see it.
+   */
+  taintSource?: string
+  /**
    * Present on assistant turns: the model that actually served the reply (after a
    * fallback hop, the backup). Display-only; providers never see it.
    */
@@ -190,7 +205,7 @@ export interface MessageUsage {
 }
 
 /** Why a run stopped short of finishing (the `limit` event's reason). */
-export type RunLimitReason = 'max-steps' | 'max-output' | 'stalled'
+export type RunLimitReason = 'max-steps' | 'max-output' | 'stalled' | 'max-cost'
 
 /** Why one run ended other than by finishing (see {@link ChatMessage.runEnds}). */
 export interface RunEndRecord {
@@ -243,6 +258,13 @@ export const SYSTEM_NOTE_PREFIX = 'Automated note from Houston (not from the use
 export function systemNoteMessage(text: string): ChatMessage {
   return { role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${text}` }
 }
+
+/**
+ * The {@link ChatMessage.taintSource} on a note quoting the reports of sessions this
+ * chat started: a child may have read attacker-written text, and its summary carries
+ * it here with no tool call behind it.
+ */
+export const CHILD_REPORT_TAINT = 'spawned session report'
 
 export interface ToolSchema {
   name: string
@@ -383,7 +405,7 @@ export interface Provider {
 
 // ---- Agent run protocol (main <-> renderer) ----
 
-import type { ApprovalPolicy, McpServerConfig } from './types'
+import type { ApprovalPolicy, McpServerConfig, PermissionRule } from './types'
 import type { ImageAttachment } from './images'
 import type { StoredQueue } from './queue'
 
@@ -517,6 +539,11 @@ export interface ConversationMeta {
   /** Id of the custom group (see AppSettings.chatGroups) this chat belongs to. */
   groupId?: string
   /**
+   * Ids of the labels (see AppSettings.chatLabels) this chat carries, in the order
+   * they were added. Ids of deleted labels are ignored wherever they show up.
+   */
+  labels?: string[]
+  /**
    * Manual sort position within its sidebar section (group / ungrouped), set by
    * drag-to-reorder. Lower sorts higher. Absent until the user reorders that
    * section, in which case the chat falls back to recency ordering. The value is
@@ -593,6 +620,8 @@ export interface ModelUsage {
   cacheReadTokens: number
   /** Portion of `inputTokens` that wrote a new cache entry (bills slightly above). */
   cacheWriteTokens: number
+  /** Set once a round on this model could not be priced: `cost` leaves it out. */
+  costUnknown?: boolean
 }
 
 /** Token usage persisted with a conversation so it survives reloads/restarts. */
@@ -663,6 +692,10 @@ export interface ConversationError {
  * v2: attachment bytes (images, documents) are stored in a media folder beside the
  * JSON and referenced as `{ mediaType, mediaRef }` (see main/conversationMedia.ts).
  * v1 files carry inline base64, which still loads as-is and moves out on the next save.
+ *
+ * Not a version bump: a v2 chat may also have a `<id>.jsonl` log beside its JSON file,
+ * holding saves made since the file was last written whole (see main/conversations.ts).
+ * The JSON file alone stays a complete, valid conversation, as of its last fold.
  */
 export const CONVERSATION_SCHEMA_VERSION = 2
 
@@ -907,6 +940,13 @@ export interface AgentRunRequest {
    * the headless client sets it; the GUI's IPC builds its requests field by field.
    */
   allowShellNetwork?: boolean
+  /**
+   * Session-scoped extra directories (`--add-dir`, the TUI's `/add-dir`): allowed roots
+   * for this run exactly as Settings' additional directories are, merged with them and
+   * never saved. Only the terminal clients set it; the GUI's IPC builds its requests
+   * field by field.
+   */
+  addDirs?: string[]
   /** Per-run setting overrides (headless flags). Applied to this run only, never persisted. */
   overrides?: RunSettingsOverrides
   /**
@@ -934,8 +974,17 @@ export interface AgentRunRequest {
    * permission rules and approval policy (see toolScope.ts).
    */
   toolScope?: ToolScope
-  /** The headless `--append-system-prompt` text, added to the system prompt in its own section. */
+  /**
+   * The headless `--append-system-prompt` text (or an ACP editor's `systemPrompt`),
+   * added to the system prompt in its own section.
+   */
   appendSystemPrompt?: string
+  /**
+   * Directories this run may read and write besides the workspace, on top of
+   * `settings.additionalRoots`: an ACP editor's `additionalDirectories`, for that
+   * session only and never saved. Each must still resolve to count.
+   */
+  additionalRoots?: string[]
   /**
    * The headless `--output-schema`: a JSON Schema the run's final answer must
    * match. The system prompt asks for a final message that is only that JSON;
@@ -946,6 +995,13 @@ export interface AgentRunRequest {
   extraMcpServers?: McpServerConfig[]
   /** Emit a `run_info` event once the run's toolset is assembled (headless `--json`). */
   announceTools?: boolean
+  /**
+   * Allow rules for this run only: a custom command's `allowed-tools`, resolved in
+   * the main process (never taken from the renderer). They sit below every saved
+   * rule, so a deny or ask the user, an admin or the project set still wins, and the
+   * guardrails that ask in every mode (sensitive files, discarding work) still ask.
+   */
+  turnAllowRules?: PermissionRule[]
 }
 
 /** One `--allowed-tools` / `--disallowed-tools` entry: a tool name (or `*` glob) and a rule pattern. */
@@ -975,6 +1031,8 @@ export interface RunSettingsOverrides {
   maxIterations?: number
   /** `costCeilingUsd`: the cost at which the run is told to wrap up. */
   costCeilingUsd?: number
+  /** `maxCostUsd`: the cost at which the run is stopped (the headless `--max-cost` flag). */
+  maxCostUsd?: number
   /** Turns the end-of-run verification gate on with this command (`verifyOnStop` + `verifyCommand`). */
   verifyCommand?: string
   /** `memoryEnabled`: false runs without saved memories (the headless `--no-memory` flag). */
@@ -993,6 +1051,8 @@ export interface AgentSendRequest {
   model: string
   approvalPolicy: ApprovalPolicy
   reasoningEffort?: ReasoningEffort
+  /** A custom command's per-turn options, by the token `commandPrepare` returned (see `InvokedTurn.grant`). */
+  commandGrant?: string
 }
 
 /**
@@ -1395,6 +1455,14 @@ export type AgentEvent =
        */
       sensitiveWrite?: boolean
       /**
+       * Present and `true` (always alongside `sensitiveWrite`) when the file is an
+       * in-project control file: `.houston/`, `.vscode/`, `.idea/`, `.envrc`, `.husky/`,
+       * `.mcp.json`, `.devcontainer/`, or CI workflows, which run code outside the
+       * sandbox later. "Allow for run" doesn't cover these, so the UI says so and gives
+       * this reason instead of the credential-file one.
+       */
+      protectedWrite?: boolean
+      /**
        * On a network call only: a readable name for what "Allow for run" grants (one
        * site, GitHub posts on one repository, one merge tool), so the card can say how
        * far the grant reaches before the user picks it.
@@ -1556,8 +1624,19 @@ export type AgentEvent =
       runId: string
       type: 'usage'
       inputTokens: number
+      /**
+       * Input a subagent, a review, or a side request billed, on a rolled-up event
+       * whose `inputTokens` is 0 so the context meter stays on the main turn. Lets a
+       * total of everything billed (the ACP turn usage) count it.
+       */
+      delegatedInputTokens?: number
       outputTokens: number
       cost: number
+      /**
+       * Set when the model that billed this round has no known price, so `cost` is 0
+       * because it is unknown, not because the round was free.
+       */
+      costUnknown?: boolean
       /** The model that billed this round; absent on older events. */
       model?: string
       /** Portion of `inputTokens` served from the prompt cache (bills lower). */

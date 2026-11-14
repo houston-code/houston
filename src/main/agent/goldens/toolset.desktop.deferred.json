@@ -70,6 +70,27 @@
     }
   },
   {
+    "name": "wait_for",
+    "description": "Wait until a background agent (a dispatch with background: true), a background shell (run_shell with background: true), or a session you started with spawn_session finishes, then get its result: an agent's report, a shell's exit code and last lines, or a session's outcome and the start of its answer. Use it when you have nothing useful to do until that work is done, instead of polling read_shell_output or ending your turn. Waits at most timeout_seconds (default 300, max 600); if it is still running then, you are told so and can wait again. The user can stop the wait with Stop.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The agent id a background dispatch returned, the shell id run_shell returned, or the session id spawn_session returned."
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "description": "How long to wait at most, in seconds (default 300, max 600)."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "view_localhost",
     "description": "Load a localhost/loopback URL (e.g. a dev server you started with run_shell) in a headless browser, take a screenshot, and capture the page's visible text and console output. The screenshot is returned as an image you can view directly, so you can see the web UI you built and iterate on it instead of guessing. Pass steps to exercise a flow before the screenshot (fill a login form, click submit, wait for the next page): each step's result is reported, the run stops at the first failing step, and the screenshot shows where it ended. Judge whether a flow worked with expect_text steps or the returned page text, not from the screenshot alone. Every call is a fresh page load: typed input and other in-page state from an earlier call are gone (cookies and localStorage persist), so put a whole flow in one call's steps. Use test data, not the user's real credentials. Pass variants to capture the page in several viewports or color schemes at once (desktop, tablet, or mobile presets, light or dark, full page); the user sees them as a gallery labelled as the running app. Steps run with at most one variant. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed; use web_fetch for public URLs. This is local network egress, so it always requires approval, and calls with steps are approved separately from plain views.",
     "parameters": {
@@ -194,6 +215,108 @@
       },
       "required": [
         "url"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "browser_session",
+    "description": "A persistent headless browser page for testing a localhost/loopback dev server you started with run_shell. Unlike view_localhost, the page stays open across calls for the rest of this run, so cookies, storage, and in-page state (a login, a half-filled form) carry over. Actions: open loads a loopback URL (in the open page when there is one); act runs steps on the current page (the same steps as view_localhost, each targeting a CSS selector or a ref from the last snapshot) and reports each result and the visible page text; snapshot returns the accessibility tree (roles, names, states, and a ref like e12 for each element) plus a screenshot; console returns recent console messages; network returns recent requests with method, URL, status, and timing; close ends the session. Prefer refs from a fresh snapshot over guessed selectors. Use test data, not the user's real credentials. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed. Each call needs approval like view_localhost: per host, with act approved separately from reading the page.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "open",
+            "act",
+            "snapshot",
+            "console",
+            "network",
+            "close"
+          ],
+          "description": "What to do."
+        },
+        "url": {
+          "type": "string",
+          "description": "open: a loopback URL to load, e.g. \"http://localhost:3000/login\"."
+        },
+        "steps": {
+          "type": "array",
+          "description": "act: steps run in order on the current page (at most 20), stopping at the first failure. Same actions as view_localhost: fill, click, dblclick, press, wait_for, expect_text, wait. Give each step a ref from the latest snapshot or a selector, not both.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "fill",
+                  "click",
+                  "dblclick",
+                  "press",
+                  "wait_for",
+                  "expect_text",
+                  "wait"
+                ]
+              },
+              "ref": {
+                "type": "string",
+                "description": "An element ref from the latest snapshot, e.g. \"e12\"."
+              },
+              "selector": {
+                "type": "string",
+                "description": "Standard CSS selector, no :contains() or :has-text(), when there is no ref."
+              },
+              "value": {
+                "type": "string",
+                "description": "Text to enter (fill), or the text to look for (expect_text)."
+              },
+              "key": {
+                "type": "string",
+                "enum": [
+                  "Enter",
+                  "Escape",
+                  "Tab",
+                  "Backspace",
+                  "Delete",
+                  "Space",
+                  "ArrowUp",
+                  "ArrowDown",
+                  "ArrowLeft",
+                  "ArrowRight",
+                  "Home",
+                  "End",
+                  "PageUp",
+                  "PageDown"
+                ],
+                "description": "Key to press (press)."
+              },
+              "absent": {
+                "type": "boolean",
+                "description": "expect_text: pass only when the text is not visible."
+              },
+              "timeout_ms": {
+                "type": "number",
+                "description": "How long wait_for or expect_text waits."
+              },
+              "ms": {
+                "type": "number",
+                "description": "How long wait pauses."
+              }
+            },
+            "required": [
+              "action"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "limit": {
+          "type": "number",
+          "description": "console and network: how many of the most recent entries to return (default 50, max 200)."
+        }
+      },
+      "required": [
+        "action"
       ],
       "additionalProperties": false
     }
@@ -505,6 +628,10 @@
         "resume": {
           "type": "string",
           "description": "Optional: the id of a writable subagent from an earlier dispatch in this chat (shown at the end of its report). Continues that agent, and `prompt` becomes your follow-up message to it. Ids last for the app session."
+        },
+        "background": {
+          "type": "boolean",
+          "description": "Optional: true returns an id at once; the report comes later."
         }
       },
       "required": [
@@ -530,7 +657,7 @@
         },
         "worktree": {
           "type": "object",
-          "description": "Optional: run the session on a new git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.",
+          "description": "Optional: the new git branch + worktree (an isolated checkout) the session runs on, so parallel sessions never collide. In a git repository the session gets one by default, on a branch named after its title; set this to choose the branch name or its base.",
           "properties": {
             "branch": {
               "type": "string",
@@ -545,6 +672,10 @@
             "branch"
           ],
           "additionalProperties": false
+        },
+        "same_checkout": {
+          "type": "boolean",
+          "description": "Optional: true runs the session in this chat's own folder instead of a new worktree. Only when the user asked for that or the session will only read: two sessions writing one checkout overwrite each other's changes. Can't be combined with worktree."
         },
         "context": {
           "type": "string",
@@ -577,7 +708,7 @@
         },
         "worktree": {
           "type": "object",
-          "description": "Optional: run the session on a new git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.",
+          "description": "Optional: the new git branch + worktree (an isolated checkout) the session runs on, so parallel sessions never collide. In a git repository the session gets one by default, on a branch named after its title; set this to choose the branch name or its base.",
           "properties": {
             "branch": {
               "type": "string",

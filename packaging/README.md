@@ -3,7 +3,9 @@
 The standalone CLI (`houston-cli.cjs`, built by `scripts/build-cli.mjs`) ships through
 these channels on top of the GitHub Release asset. Every one installs the same file,
 checked against the release's `SHA256SUMS`, and every one installs the command as
-`houston`.
+`houston`. The Homebrew and AUR wrappers and the npm package's launcher
+(`packaging/npm/houston.cjs`) also turn on Node's compile cache in the user's cache
+directory, so a start skips recompiling the bundle.
 
 | Channel | Install command | Source here | Published by |
 |---|---|---|---|

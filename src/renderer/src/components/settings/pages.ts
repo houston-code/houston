@@ -29,7 +29,7 @@ import { ScheduledRunsSection } from './sections/schedules'
 import { CustomizeSection, InstructionFilesSection } from './sections/customize'
 import { MemoriesSection, MemorySettingsSection } from './sections/memory'
 import { ImportSection } from './sections/import'
-import { ProjectHooksSection, ProjectMcpSection } from './sections/project'
+import { ProjectHooksSection, ProjectMcpSection, ProjectPluginsSection } from './sections/project'
 import {
   AdditionalFoldersSection,
   NewChatWorktreeSection,
@@ -121,15 +121,15 @@ export const PAGES: SettingsPage[] = [
       },
       {
         id: 'context-window',
-        keys: ['compactionThreshold', 'shellOutputMaxBytes'],
+        keys: ['compactionThreshold', 'compactionThresholdPercent', 'shellOutputMaxBytes'],
         Component: ContextWindowSection,
         keywords: ['compaction', 'compact', 'tokens', 'output limit', 'truncate', 'memory']
       },
       {
         id: 'loop-control',
-        keys: ['maxIterations', 'autoExtendTurns', 'maxIterationsCeiling', 'costCeilingUsd', 'stallDetection', 'verifyOnStop', 'verifyCommand', 'subagentHistoryMb'],
+        keys: ['maxIterations', 'autoExtendTurns', 'maxIterationsCeiling', 'costCeilingUsd', 'maxCostUsd', 'stallDetection', 'doneEvidenceNote', 'verifyOnStop', 'verifyCommand', 'subagentHistoryMb'],
         Component: LoopControlSection,
-        keywords: ['steps', 'iterations', 'max turns', 'budget', 'cost limit', 'stall', 'loop detection', 'verify', 'tests'],
+        keywords: ['steps', 'iterations', 'max turns', 'budget', 'cost limit', 'spend cap', 'max cost', 'stall', 'loop detection', 'verify', 'tests'],
         values: (s) => [s.verifyCommand]
       },
       {
@@ -240,6 +240,11 @@ export const PAGES: SettingsPage[] = [
         id: 'project-hooks',
         Component: ProjectHooksSection,
         keywords: ['project', 'repository', 'trusted', 'settings.json']
+      },
+      {
+        id: 'project-plugins',
+        Component: ProjectPluginsSection,
+        keywords: ['project', 'repository', 'trusted', 'plugins', 'projectPlugins']
       }
     ]
   },
@@ -310,7 +315,7 @@ export const PAGES: SettingsPage[] = [
     sections: [
       {
         id: 'appearance',
-        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning'],
+        keys: ['theme', 'chatFontSize', 'density', 'codeTheme', 'accentColor', 'htmlVisuals', 'toolOutputExpanded', 'showReasoning', 'announceReplies'],
         Component: AppearanceSection,
         keywords: [
           'theme',
@@ -332,7 +337,10 @@ export const PAGES: SettingsPage[] = [
           'expand',
           'collapse',
           'reasoning',
-          'thinking'
+          'thinking',
+          'screen reader',
+          'accessibility',
+          'announce'
         ]
       }
     ]

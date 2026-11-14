@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { promises as fsp, realpathSync } from 'node:fs'
+import { promises as fsp, realpathSync, statSync } from 'node:fs'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import {
   APPROVAL_POLICIES,
@@ -13,7 +13,7 @@ import { loadProjectConfig, parseProjectMcpServers } from './agent/projectConfig
 import { parseToolList } from './agent/toolScope'
 import { getTool } from './agent/tools'
 import { formatSchemaErrors, schemaProblems, validateJson, type JsonSchema } from '@shared/jsonSchema'
-import { stripControlChars } from './tui-wrap'
+import { stripControlChars, terminalText } from './tui-wrap'
 import { missingKeyHint } from '@shared/provider-keys'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { formatReceiptLines, type TurnReceipt } from '@shared/evidence'
@@ -21,7 +21,7 @@ import { formatReadinessLines } from '@shared/planReadiness'
 import { pickDefaultModel } from '@shared/models'
 import { assertNever } from '@shared/assert'
 import { createFindingPrinter } from '@shared/reviewFindings'
-import { formatUsd } from '@shared/usage'
+import { formatCost } from '@shared/usage'
 import {
   isReasoningEffort,
   REASONING_EFFORTS,
@@ -33,6 +33,7 @@ import {
   type ElicitationResult,
   type PlanDecision,
   type ReasoningEffort,
+  type RunLimitReason,
   type RunSettingsOverrides,
   type StopReason,
   type ToolApprovalDecision,
@@ -147,11 +148,16 @@ export interface HeadlessResult {
   /** The final `done` event's stop reason; null when the run never got that far. */
   stopReason: StopReason | null
   /** Why the loop stopped short, when a `limit` event ended it. */
-  limitReason?: 'max-steps' | 'max-output' | 'stalled'
+  limitReason?: RunLimitReason
   /** Model rounds the agent took (the unit `--max-turns` caps). */
   turns: number
   /** Estimated cost in USD, subagent and review rounds included. */
   costUsd: number
+  /**
+   * True when part of the run was on a model with no known price: `costUsd` leaves
+   * that part out, so it is a lower bound, and `--max-cost` could not be enforced for it.
+   */
+  costUnknown?: boolean
   inputTokens: number
   outputTokens: number
   durationMs: number
@@ -245,7 +251,7 @@ export interface HeadlessOptions {
   effort?: ReasoningEffort
   /** `--max-turns`: a hard step cap for this run, over settings.maxIterations. */
   maxTurns?: number
-  /** `--max-cost`: the USD cost at which the agent is told to wrap up (costCeilingUsd). */
+  /** `--max-cost`: the USD cost at which the run is stopped (maxCostUsd, a hard cap). */
   maxCostUsd?: number
   /** `--verify`: run this command at a natural stop after edits (verifyOnStop + verifyCommand). */
   verifyCommand?: string
@@ -267,6 +273,8 @@ export interface HeadlessOptions {
   appendSystemPrompt?: string[]
   /** `--mcp-config`: absolute paths of files listing MCP servers for this run only. */
   mcpConfig?: string[]
+  /** `--add-dir`: absolute paths of extra directories the run may work in, like Settings' additional directories. */
+  addDirs?: string[]
   /**
    * A flag carried a value it can't take. runHeadless reports it and exits with
    * HEADLESS_EXIT.usage before anything runs, rather than silently running with
@@ -315,7 +323,8 @@ export const HEADLESS_FLAGS = new Set([
   '--allowed-tools',
   '--disallowed-tools',
   '--append-system-prompt',
-  '--mcp-config'
+  '--mcp-config',
+  '--add-dir'
 ])
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
@@ -367,6 +376,7 @@ export function parseHeadlessArgs(
   let disallowedTools: ToolScopeEntry[] | undefined
   const appendSystemPrompt: string[] = []
   const mcpConfig: string[] = []
+  const addDirs: string[] = []
   let usageError: string | undefined
   // Keep the first bad value: it's the one the caller reads about.
   const bad = (message: string): void => {
@@ -437,6 +447,13 @@ export function parseHeadlessArgs(
       const { value, next } = flagValue(argv, i)
       if (value?.trim()) mcpConfig.push(resolvePath(defaultCwd, value.trim()))
       else bad('--mcp-config needs the path of a JSON file listing MCP servers')
+      i = next
+    } else if (name === '--add-dir') {
+      const { value, next } = flagValue(argv, i)
+      const dir = value?.trim() ? resolvePath(defaultCwd, value.trim()) : undefined
+      if (!dir) bad('--add-dir needs the path of a directory, like --add-dir ../shared')
+      else if (!isDirectory(dir)) bad(`--add-dir: ${quoted(value)} is not a directory`)
+      else if (!addDirs.includes(dir)) addDirs.push(dir)
       i = next
     } else if (name === '--continue') {
       continueSession = true
@@ -527,6 +544,7 @@ export function parseHeadlessArgs(
     ...(disallowedTools !== undefined ? { disallowedTools } : {}),
     ...(appendSystemPrompt.length ? { appendSystemPrompt } : {}),
     ...(mcpConfig.length ? { mcpConfig } : {}),
+    ...(addDirs.length ? { addDirs } : {}),
     ...(usageError !== undefined ? { usageError } : {})
   }
 }
@@ -534,6 +552,15 @@ export function parseHeadlessArgs(
 /** Runtime guard: true when `v` is a known `--input-format`. */
 export function isHeadlessInputFormat(v: unknown): v is HeadlessInputFormat {
   return typeof v === 'string' && (HEADLESS_INPUT_FORMATS as readonly string[]).includes(v)
+}
+
+/** Whether `path` is an existing directory (following symlinks, as a root does). */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
 }
 
 /** A flag value as it appears in an error message. */
@@ -546,7 +573,7 @@ export function headlessOverrides(opts: HeadlessOptions): RunSettingsOverrides |
   const o: RunSettingsOverrides = {
     ...(opts.effort !== undefined ? { reasoningEffort: opts.effort } : {}),
     ...(opts.maxTurns !== undefined ? { maxIterations: opts.maxTurns } : {}),
-    ...(opts.maxCostUsd !== undefined ? { costCeilingUsd: opts.maxCostUsd } : {}),
+    ...(opts.maxCostUsd !== undefined ? { maxCostUsd: opts.maxCostUsd } : {}),
     ...(opts.verifyCommand !== undefined ? { verifyCommand: opts.verifyCommand } : {}),
     ...(opts.noMemory ? { memoryEnabled: false } : {})
   }
@@ -915,6 +942,7 @@ interface TurnTally {
   inTok: number
   outTok: number
   cost: number
+  costUnknown?: boolean
   turns: number
   finalText: string
   receipt?: TurnReceipt
@@ -1153,8 +1181,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
   }
 
   // Trusted folders: a headless run never prompts, so an undecided (or drifted)
-  // folder's elevating project config (allow rules / hooks / MCP servers) is
-  // simply left off — the loop enforces that; this just says so once. Trust the
+  // folder's elevating project config (allow rules / hooks / MCP servers / command
+  // allowed-tools / plugins) is simply left off — the loop enforces that; this just
+  // says so once. Trust the
   // folder from the desktop app or an interactive `houston -i` session.
   try {
     const projectCfg = await loadProjectConfig(opts.cwd)
@@ -1168,7 +1197,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       const state = folderTrustState(settings.trustedFolders, path, projectCfg.elevatedHash)
       if (state !== 'trusted' && !opts.json) {
         deps.err(
-          "· ignoring this project's allow rules / hooks / MCP servers (folder not trusted; decide in the desktop app or houston -i)\n"
+          "· ignoring this project's allow rules / hooks / MCP servers / command allowed-tools / plugins (folder not trusted; decide in the desktop app or houston -i)\n"
         )
       }
     }
@@ -1217,6 +1246,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       // No one can answer ask_user here, so the loop doesn't offer it.
       unattended: true,
       ...(opts.allowShellNetwork ? { allowShellNetwork: true } : {}),
+      ...(opts.addDirs?.length ? { addDirs: opts.addDirs } : {}),
       ...(runOverrides ? { overrides: runOverrides } : {}),
       ...(inputs.toolScope ? { toolScope: inputs.toolScope } : {}),
       ...(inputs.appendSystemPrompt !== undefined ? { appendSystemPrompt: inputs.appendSystemPrompt } : {}),
@@ -1263,28 +1293,29 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           break
         case 'tool_start':
           t.finalText = ''
-          if (!opts.json) deps.err(`· ${e.name}\n`)
+          if (!opts.json) deps.err(`· ${terminalText(e.name, { lines: false })}\n`)
           break
         case 'tool_result':
           // Surface failures (successes are noise) so a script tailing stderr sees a
           // tool error instead of silence — mirrors the TUI's ✗ marker.
-          if (!opts.json && !e.ok) deps.err(`· ${e.name} failed\n`)
+          if (!opts.json && !e.ok) deps.err(`· ${terminalText(e.name, { lines: false })} failed\n`)
           break
         case 'retry':
           if (!opts.json)
             deps.err(
               e.throttle
                 ? `· ${throttleNotice(e.throttle, retryProgress(e))}\n`
-                : `· retrying (${retryProgress(e)})… ${e.message}\n`
+                : `· retrying (${retryProgress(e)})… ${terminalText(e.message)}\n`
             )
           break
         case 'model_fallback':
-          if (!opts.json) deps.err(`· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`)
+          if (!opts.json) deps.err(`· ${terminalText(`${e.from} unavailable, falling back to ${e.to}… ${e.reason}`)}\n`)
           break
         case 'usage':
           t.inTok += e.inputTokens
           t.outTok += e.outputTokens
           t.cost += e.cost
+          if (e.costUnknown) t.costUnknown = true
           // One usage event per model round of the agent itself. A subagent's or a
           // review's rounds arrive rolled up as one event with inputTokens 0 (kept off
           // the context meter), so they add cost but not turns.
@@ -1319,7 +1350,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // in unattended runs instead of being rubber-stamped ('fail' also flips
           // the exit code so a script can tell the run hit a permission wall).
           if (opts.onApproval === 'allow') {
-            if (!opts.json) deps.err(`· auto-approving ${e.name}\n`)
+            if (!opts.json) deps.err(`· auto-approving ${terminalText(e.name, { lines: false })}\n`)
             // 'allow' is plain "Allow", which runs shell offline until the run has the
             // shell-network grant, and only --allow-shell-network gives that here.
             if (e.shellOffline && !notedOffline && !opts.json) {
@@ -1329,7 +1360,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
             deps.resolveApproval(e.runId, e.callId, 'allow')
           } else {
             if (!opts.json) {
-              deps.err(`· denying ${e.name} (no interactive user; pass --on-approval allow to permit gated calls)\n`)
+              deps.err(`· denying ${terminalText(e.name, { lines: false })} (no interactive user; pass --on-approval allow to permit gated calls)\n`)
             }
             if (opts.onApproval === 'fail') t.approvalDenied = true
             deps.resolveApproval(e.runId, e.callId, 'deny')
@@ -1360,7 +1391,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
                 ? 'stopped: the agent stalled (no forward progress)'
                 : e.reason === 'max-output'
                   ? 'stopped: the model hit its output limit'
-                  : 'stopped: reached the maximum number of steps'
+                  : e.reason === 'max-cost'
+                    ? 'stopped: reached the cost limit (--max-cost)'
+                    : 'stopped: reached the maximum number of steps'
             deps.err(`· ${why}\n`)
           }
           break
@@ -1385,12 +1418,12 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           break
         case 'error':
           t.errored = true
-          deps.err(`Error: ${e.message}\n`)
+          deps.err(`Error: ${terminalText(e.message)}\n`)
           break
         case 'done':
           if (!opts.json) {
             deps.out('\n')
-            if (t.inTok || t.outTok || t.cost) deps.err(`· ${t.inTok}+${t.outTok} tok · ${formatUsd(t.cost)}\n`)
+            if (t.inTok || t.outTok || t.cost) deps.err(`· ${t.inTok}+${t.outTok} tok · ${formatCost(t.cost, t.costUnknown)}\n`)
           }
           t.stopReason = e.stopReason
           if (e.stopReason === 'error' || e.stopReason === 'aborted') t.errored = true
@@ -1401,8 +1434,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // matching the read-only intent of the default policy. Re-run with --full-auto
           // (which isn't Plan mode, so this is never reached) to actually make changes.
           if (!opts.json) {
-            deps.out(`\n${e.plan.title}\n`)
-            if (e.plan.body) deps.out(`${e.plan.body}\n`)
+            // The plan is the model's text: printed for a reader, so without its control characters.
+            deps.out(`\n${terminalText(e.plan.title, { lines: false })}\n`)
+            if (e.plan.body) deps.out(`${terminalText(e.plan.body)}\n`)
             if (e.plan.readiness) {
               for (const line of formatReadinessLines(e.plan.readiness)) deps.err(`· ${stripControlChars(line)}\n`)
             }
@@ -1416,7 +1450,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension). Meta output, so stderr —
           // stdout stays the model's answer; --json already emitted the raw event.
-          if (!opts.json) deps.err(`· ${e.message}\n`)
+          if (!opts.json) deps.err(`· ${terminalText(e.message)}\n`)
           break
         case 'runtime_missing':
           // Meta output like a notice: stderr, so stdout stays the model's answer.
@@ -1429,23 +1463,23 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // how far along it is. stderr, like the other tool activity; --json already
           // emitted the raw event.
           const line = opts.json ? null : subagentLines.line(e)
-          if (line) deps.err(`·   ${'  '.repeat(line.depth - 1)}${line.text}\n`)
+          if (line) deps.err(`·   ${'  '.repeat(line.depth - 1)}${terminalText(line.text, { lines: false })}\n`)
           break
         }
         case 'tool_progress':
           // Live progress from a long-running tool (a multi-dimension review) — without
           // it the run reads as a stall between tool_start and its result. stderr, like
           // the other tool activity.
-          if (!opts.json && e.message.trim()) deps.err(`·   ${e.message.trim()}\n`)
+          if (!opts.json && e.message.trim()) deps.err(`·   ${terminalText(e.message, { lines: false }).trim()}\n`)
           break
         case 'subagent':
           // A nested subagent row (e.g. one review dimension) starting/finishing.
-          if (!opts.json) deps.err(`·   ${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${e.label}\n`)
+          if (!opts.json) deps.err(`·   ${e.status === 'running' ? '▷' : e.status === 'done' ? '✓' : '✗'} ${terminalText(e.label, { lines: false })}\n`)
           break
         case 'review_finding': {
           // A review finding as it's raised, then its verdict. stderr, like the rows above.
           const line = opts.json ? null : printFinding(e.parentCallId, e.finding)
-          if (line) deps.err(`·     ${line}\n`)
+          if (line) deps.err(`·     ${terminalText(line, { lines: false })}\n`)
           break
         }
         case 'elicitation':
@@ -1455,7 +1489,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
           // calls; auto-accepting would send fabricated field values to an external
           // server as if the user typed them.
           if (!opts.json) {
-            deps.err(`· declining input request from MCP server "${e.serverId}" (no interactive user in headless mode)\n`)
+            deps.err(`· declining input request from MCP server "${terminalText(e.serverId, { lines: false })}" (no interactive user in headless mode)\n`)
           }
           deps.resolveElicitation(e.runId, e.elicitId, { action: 'decline' })
           break
@@ -1539,6 +1573,7 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       // Rounded past a millionth of a cent: the sum of per-round floats carries
       // representation noise (0.024000000000000004) a harness shouldn't have to strip.
       costUsd: Math.round(t.cost * 1e6) / 1e6,
+      ...(t.costUnknown ? { costUnknown: true } : {}),
       inputTokens: t.inTok,
       outputTokens: t.outTok,
       durationMs: Math.max(0, now() - startedAt),

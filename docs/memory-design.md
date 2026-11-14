@@ -164,7 +164,7 @@ change, so it never arms the verification gate, and rewinding a turn does not un
 - Taint: when the conversation log holds any call whose output may carry someone
   else's text (a `network` or MCP tool, `dispatch_agent` / `dispatch_writable_agent`,
   or a `run_shell` command that fetches: curl, wget, gh, git pull, and similar), every
-  memory write asks, in every mode. Neither an `allow` rule, "Allow for run", nor full
+  memory write asks, in every mode. Neither an `allow` rule, "Allow for this chat", nor full
   auto skips it (`memoryTainted` in `approval.ts`, `memoryTaintSource` in
   `memoryTools.ts`). The whole log counts, not just the current turn, because text
   fetched earlier is still in the model's context.

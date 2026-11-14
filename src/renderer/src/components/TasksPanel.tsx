@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { KillShellOutcome } from '@shared/agent'
 import type { BackgroundTask } from '../hooks/useBackgroundTasks'
+import { useTick } from '../hooks/useTick'
 import { copyText } from '../lib/clipboard'
 import { Icon } from './Icon'
 
@@ -46,6 +47,9 @@ function metaLine(t: BackgroundTask, now: number): string {
 /** How often an expanded live row refreshes its output tail. */
 const TAIL_POLL_MS = 2000
 
+/** How often the rows' "Started just now" / "Running for 2m" lines move on while shown. */
+const AGO_TICK_MS = 30_000
+
 /** What a Stop click did, phrased for the row's status line. */
 const STOP_RESULT: Record<KillShellOutcome, string> = {
   killed: 'Stopped.',
@@ -57,12 +61,21 @@ const STOP_RESULT: Record<KillShellOutcome, string> = {
 /** Shown when the Stop request itself failed (IPC error), so the click isn't silent. */
 const STOP_FAILED = "Couldn't stop this task. Try again."
 
-function StatusIcon({ status }: { status: BackgroundTask['status'] }): JSX.Element {
+function StatusIcon({ task }: { task: BackgroundTask }): JSX.Element {
+  const { status } = task
   if (status === 'running') return <span className="tasks__status tasks__status--running" aria-hidden="true" />
   if (status === 'leftover')
     return (
       <span className="tasks__status tasks__status--leftover" aria-hidden="true">
         <Icon name="warning" size={13} />
+      </span>
+    )
+  // A shell that was stopped (killed, so no exit code) didn't fail: a neutral mark, not
+  // the red cross a non-zero exit gets.
+  if (status === 'error' && task.exitCode === null)
+    return (
+      <span className="tasks__status tasks__status--stopped" aria-hidden="true">
+        <Icon name="stop" size={12} />
       </span>
     )
   return (
@@ -179,7 +192,7 @@ function TaskRow({
         onClick={onToggle}
         title={task.command ?? task.title}
       >
-        <StatusIcon status={task.status} />
+        <StatusIcon task={task} />
         <span className="tasks__main">
           <span className="tasks__titleline">
             <span className="tasks__name">{task.title}</span>
@@ -351,6 +364,8 @@ export function TasksPanel({
     })
   }, [])
 
+  // Re-render now and then so the "x ago" lines keep up while the tab shows.
+  useTick(active && tasks.length > 0, AGO_TICK_MS)
   const t = now()
   const live = tasks.filter((x) => x.status === 'running' || x.status === 'leftover')
   const finished = tasks.filter((x) => x.status === 'done' || x.status === 'error')

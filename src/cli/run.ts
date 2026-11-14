@@ -1,7 +1,26 @@
 import { randomUUID } from 'node:crypto'
 import { parseTuiArgs, type TuiOptions } from '../main/tui'
 import { parseHeadlessArgs, type HeadlessOptions } from '../main/headless'
-import { readAllStdin, runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from '../main/terminalEntry'
+import { parseAcpArgs } from '../main/acp'
+import {
+  readAllStdin,
+  runTuiEntry,
+  runHeadlessEntry,
+  runAcpEntry,
+  runScheduleDaemonEntry,
+  stdinIsPiped
+} from '../main/terminalEntry'
+import { realpathSync } from 'node:fs'
+import { join } from 'node:path'
+import {
+  disableScheduleDaemon,
+  installLoginAgent,
+  realLoginAgentDeps,
+  scheduleDaemonState,
+  type DaemonCommand
+} from '../main/loginAgent'
+import { runningDaemonPid } from '../main/scheduleDaemon'
+import { runScheduleDaemonCommand } from './scheduleDaemon'
 import { configureAgentHost } from '../main/agentHost'
 import {
   addPermissionRule,
@@ -34,7 +53,7 @@ import {
   cliSetMcpOAuth
 } from './credentials'
 import { runProvidersCommand, type ProvidersDeps } from './providers'
-import { trustSystemCertificates } from '../main/system-ca'
+import { deferTrustSystemCertificates } from '../main/system-ca'
 import { configureOutboundProxy } from '../main/outbound-proxy'
 import { noteRuleUsed } from '../main/ruleUsage'
 
@@ -48,13 +67,19 @@ export { flushRuleUsage } from '../main/ruleUsage'
  * answers without evaluating the agent core, the store, or the TUI.
  */
 
-/** Wire the Node-side host capabilities. Must run before any settings read. */
-export function wireCliHost(): void {
+/**
+ * Wire the Node-side host capabilities. Must run before any settings read. Returns the
+ * deferred read of the system certificate store, for the interactive client to run once
+ * its prompt is drawn.
+ */
+export function wireCliHost(): { trustCertificatesNow: () => void } {
   setUserDataDir(resolveUserDataDir())
   // Record background shells in the profile and stop any a crashed session left running.
   void startShellLedger(resolveUserDataDir())
   // Before any provider call: a TLS-inspecting network's root CA lives in the OS store.
-  trustSystemCertificates()
+  // Reading it takes tens of milliseconds, so it waits: the TUI reads it once its prompt
+  // is on screen, and until then the first TLS connection reads it before connecting.
+  const trustCertificatesNow = deferTrustSystemCertificates()
   // Provider, MCP and search traffic honours the proxy setting or HTTPS_PROXY.
   configureOutboundProxy(() => getSettings().proxyUrl)
   configureHasKey((id) => cliHasKey(id))
@@ -92,6 +117,23 @@ export function wireCliHost(): void {
     // desktop app), so Settings shows rules used from the terminal as used.
     noteRuleUsed
   })
+  return { trustCertificatesNow }
+}
+
+/**
+ * What the terminal daemon's login agent starts: this same CLI (the Node binary and
+ * the script it runs, resolved through any npm symlink) in `schedule-daemon run` mode,
+ * with the profile override when one is set.
+ */
+export function cliDaemonCommand(): DaemonCommand {
+  const script = realpathSync(process.argv[1]!)
+  const dataDir = process.env.HOUSTON_DATA_DIR?.trim()
+  return {
+    program: process.execPath,
+    args: [script, 'schedule-daemon', 'run'],
+    ...(dataDir ? { env: { HOUSTON_DATA_DIR: dataDir } } : {}),
+    logFile: join(resolveUserDataDir(), 'schedule-daemon.out.log')
+  }
 }
 
 export interface RunCliOptions {
@@ -106,7 +148,7 @@ export interface RunCliOptions {
  * Run a real CLI invocation (anything but `-h`/`-v`/`open`) and return its exit code.
  */
 export async function runCli(argv: string[], { version, usage, argvProblem }: RunCliOptions): Promise<number> {
-  wireCliHost()
+  const { trustCertificatesNow } = wireCliHost()
 
   // `houston providers …` — manage providers/keys before the run-mode parsers,
   // which only match `-i`/`-p`. Matched as the first positional so flags before it
@@ -115,6 +157,18 @@ export async function runCli(argv: string[], { version, usage, argvProblem }: Ru
   if (positionals[0] === 'providers') {
     return runProvidersCommand(argv.slice(argv.indexOf('providers') + 1), providersDeps())
   }
+  if (positionals[0] === 'schedule-daemon') {
+    const loginDeps = realLoginAgentDeps()
+    return runScheduleDaemonCommand(argv.slice(argv.indexOf('schedule-daemon') + 1), {
+      run: () => runScheduleDaemonEntry({ version }),
+      install: (cmd) => installLoginAgent(cmd, loginDeps),
+      uninstall: () => disableScheduleDaemon(loginDeps, () => runningDaemonPid()),
+      state: () => scheduleDaemonState(loginDeps, () => runningDaemonPid()),
+      command: cliDaemonCommand,
+      out: (s) => void process.stdout.write(s),
+      err: (s) => void process.stderr.write(s)
+    })
+  }
   const problem = argvProblem(argv.slice(2))
   if (problem) {
     process.stderr.write(problem)
@@ -122,8 +176,15 @@ export async function runCli(argv: string[], { version, usage, argvProblem }: Ru
   }
 
   const mode = selectRunMode(argv, process.cwd(), Boolean(process.stdin.isTTY), stdinIsPiped())
-  if (mode.kind === 'acp') return runAcpEntry({ version })
-  if (mode.kind === 'tui') return runTuiEntry(mode.options, { version })
+  if (mode.kind === 'acp') {
+    const launch = parseAcpArgs(argv.slice(2))
+    if ('error' in launch) {
+      process.stderr.write(`houston: ${launch.error}\n`)
+      return 2
+    }
+    return runAcpEntry({ version }, launch)
+  }
+  if (mode.kind === 'tui') return runTuiEntry(mode.options, { version, afterFirstPrompt: trustCertificatesNow })
   if (mode.kind === 'headless') return runHeadlessEntry(mode.options, { version })
 
   process.stderr.write(usage)

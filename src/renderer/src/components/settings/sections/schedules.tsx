@@ -3,11 +3,13 @@ import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, type ApprovalPolicy, type Pro
 import {
   scheduleLastRunFailed,
   scheduleLastRunText,
+  type ScheduleDaemonStatus,
   type SchedulePreview,
   type ScheduleView
 } from '@shared/schedules'
 import { SettingsSection } from '../fields'
 import type { SettingsCtx } from '../context'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
 
 /** "Tue, Nov 17, 9:30 AM" in the user's locale. */
 export function formatRunTime(ms: number): string {
@@ -184,6 +186,9 @@ function CreateForm({
   const [busy, setBusy] = useState(false)
   const firstRef = useRef<HTMLTextAreaElement>(null)
   useEffect(() => firstRef.current?.focus(), [])
+  // Escape cancels the new run rather than closing Settings.
+  const formRef = useRef<HTMLFormElement>(null)
+  useEscapeWithin(formRef, onCancel)
 
   // What the typed schedule means, checked by main's parser as it is typed.
   useEffect(() => {
@@ -231,6 +236,7 @@ function CreateForm({
 
   return (
     <form
+      ref={formRef}
       className="sched-form"
       aria-label="New scheduled run"
       onSubmit={(e) => {
@@ -310,6 +316,7 @@ function CreateForm({
       </div>
       <p className="field__hint">
         A run that needs your approval waits in its chat until you answer. Full auto runs without asking.
+        A run never uses a looser mode than your default approval mode at the time it runs.
       </p>
       {error && (
         <p className="sched-form__bad" role="alert">
@@ -325,6 +332,70 @@ function CreateForm({
         </button>
       </div>
     </form>
+  )
+}
+
+/**
+ * "Run scheduled runs when Houston is closed": installs or removes the per-user login
+ * agent that starts Houston's windowless schedule daemon. Hidden where no login agent
+ * is supported.
+ */
+export function ScheduleDaemonToggle(): JSX.Element | null {
+  const [status, setStatus] = useState<ScheduleDaemonStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let live = true
+    // As the list does: a status that can't be read hides the toggle rather than throwing.
+    void (async () => {
+      try {
+        const s = await window.api.getScheduleDaemon()
+        if (live) setStatus(s)
+      } catch {
+        if (live) setStatus(null)
+      }
+    })()
+    return () => {
+      live = false
+    }
+  }, [])
+  if (!status?.supported) return null
+  const change = async (on: boolean): Promise<void> => {
+    setBusy(true)
+    try {
+      setStatus(await window.api.setScheduleDaemon(on))
+    } catch (e) {
+      setStatus({ ...status, error: (e as Error).message })
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={status.installed}
+          disabled={busy}
+          onChange={(e) => void change(e.target.checked)}
+        />
+        <span>
+          Run scheduled runs when Houston is closed. Houston starts a small background
+          process when you log in that fires them on time, as background chats that decline
+          anything needing your approval. While Houston is open, it runs them itself. Off by
+          default.
+        </span>
+      </label>
+      {status.installed && (
+        <p className="field__hint" role="status">
+          {status.running ? 'Running in the background.' : 'Set up; it starts the next time you log in.'}
+        </p>
+      )}
+      {status.error && (
+        <p className="sched-form__bad" role="alert">
+          {status.installed ? "Couldn't turn it off" : "Couldn't turn it on"}: {status.error}
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -363,11 +434,12 @@ export function ScheduledRunsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
       desc={
         <>
           Tasks that start a new background chat on a schedule, in the folder, model and approval
-          mode you choose. You can also ask the agent to schedule one. They run only while Houston is
-          open.
+          mode you choose. You can also ask the agent to schedule one. They run while Houston is
+          open, and also while it is closed if you turn that on below.
         </>
       }
     >
+      <ScheduleDaemonToggle />
       {list === null ? (
         <p className="settings-empty" role="status">
           Loading…

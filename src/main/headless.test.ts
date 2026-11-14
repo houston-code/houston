@@ -218,7 +218,8 @@ describe('parseHeadlessArgs', () => {
     expect(headlessOverrides(o)).toEqual({
       reasoningEffort: 'high',
       maxIterations: 12,
-      costCeilingUsd: 1.5,
+      // A hard cap for the run, not the one-time reminder.
+      maxCostUsd: 1.5,
       verifyCommand: 'npm test'
     })
     expect(headlessOverrides(parseHeadlessArgs(['-p', 'x', '--effort', 'off'], '/d')!)).toEqual({
@@ -743,6 +744,28 @@ describe('runHeadless', () => {
     expect(approvals).toEqual([['run-1', 'f1', 'deny']])
   })
 
+  it('keeps control characters in tool names, server text, labels and the plan off the terminal', async () => {
+    const osc52 = '\x1b]52;c;eA==\x07'
+    const { d, out, err } = deps([
+      { runId: 'run-1', type: 'tool_start', callId: 't1', name: `mcp__srv__x${osc52}`, args: {}, kind: 'mcp' },
+      { runId: 'run-1', type: 'tool_result', callId: 't1', name: `mcp__srv__x${osc52}`, ok: false, output: 'no' },
+      { runId: 'run-1', type: 'tool_progress', callId: 't1', message: `half\r\x1b[2K` },
+      { runId: 'run-1', type: 'subagent', parentCallId: 't1', id: 's1', label: `dim\x1b[1A`, status: 'running' },
+      { runId: 'run-1', type: 'notice', message: `note ${osc52}` },
+      { runId: 'run-1', type: 'retry', attempt: 1, max: 3, message: `slow ${osc52}` },
+      { runId: 'run-1', type: 'plan_ready', callId: 'p1', plan: { title: `Plan ${osc52}`, body: `Body \x1b]0;t\x07` } },
+      { runId: 'run-1', type: 'error', message: `boom ${osc52}` },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ] as AgentEvent[])
+    await runHeadless(baseOpts, d)
+    const all = out.join('') + err.join('')
+    expect(all).not.toContain('\x1b')
+    expect(all).not.toContain('\r')
+    expect(all).not.toContain('\x07')
+    expect(all).toContain('Plan <U+001B>]52;c;eA==<U+0007>')
+    expect(all).toContain('boom <U+001B>]52')
+  })
+
   it('resolves a plan_ready (reject) and prints the plan so present_plan cannot hang', async () => {
     const { d, out, plans } = deps([
       { runId: 'run-1', type: 'plan_ready', callId: 'p1', plan: { title: 'My Plan', body: 'Do it.' } },
@@ -1232,7 +1255,7 @@ describe('runHeadless run request', () => {
     expect(req.overrides).toEqual({
       reasoningEffort: 'xhigh',
       maxIterations: 25,
-      costCeilingUsd: 3,
+      maxCostUsd: 3,
       verifyCommand: 'npm test'
     })
   })
@@ -1365,6 +1388,22 @@ describe('runHeadless --json result line', () => {
       finalText: 'Fixed the bug.'
     })
     expect(r).not.toHaveProperty('limitReason')
+    expect(r).not.toHaveProperty('costUnknown')
+  })
+
+  it('says the cost is unknown, not $0.00, for a model with no known price', async () => {
+    const events: AgentEvent[] = [
+      { runId: 'run-1', type: 'text', delta: 'ok' },
+      { runId: 'run-1', type: 'usage', inputTokens: 1000, outputTokens: 50, cost: 0, costUnknown: true },
+      { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+    ]
+    const json = deps(events)
+    await runHeadless({ ...baseOpts, json: true }, json.d)
+    expect(resultLine(json.out)).toMatchObject({ costUsd: 0, costUnknown: true })
+    const text = deps(events)
+    await runHeadless({ ...baseOpts, json: false }, text.d)
+    expect(text.err.join('')).toContain('1000+50 tok · cost unknown')
+    expect(text.err.join('')).not.toContain('$0.00')
   })
 
   it('keeps a reply continued past the output limit whole, and drops text answered by a failed verification', async () => {
@@ -1538,6 +1577,17 @@ describe('runHeadless --json result line', () => {
         code: 3,
         stopReason: 'end_turn',
         limitReason: 'max-steps'
+      },
+      {
+        name: 'the cost limit (--max-cost)',
+        events: [
+          { runId: 'run-1', type: 'limit', reason: 'max-cost' },
+          { runId: 'run-1', type: 'done', stopReason: 'end_turn' }
+        ],
+        status: 'limit',
+        code: 3,
+        stopReason: 'end_turn',
+        limitReason: 'max-cost'
       }
     ]
     for (const c of cases) {

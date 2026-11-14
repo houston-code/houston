@@ -20,6 +20,7 @@ export function applyRunOverrides(
     // saved "auto-extend" preference from stretching it past what the caller asked.
     ...(o.maxIterations !== undefined ? { maxIterations: o.maxIterations, autoExtendTurns: false } : {}),
     ...(o.costCeilingUsd !== undefined ? { costCeilingUsd: o.costCeilingUsd } : {}),
+    ...(o.maxCostUsd !== undefined ? { maxCostUsd: o.maxCostUsd } : {}),
     ...(o.verifyCommand !== undefined ? { verifyOnStop: true, verifyCommand: o.verifyCommand } : {}),
     ...(o.memoryEnabled !== undefined ? { memoryEnabled: o.memoryEnabled } : {})
   }

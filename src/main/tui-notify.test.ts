@@ -5,7 +5,12 @@ import {
   notifySequence,
   bellSequence,
   workingTitle,
-  idleTitle
+  idleTitle,
+  alertSequence,
+  resolveNotifyMode,
+  describeNotifyMode,
+  idleReminderSpec,
+  isNotifyMode
 } from './tui-notify'
 import type { AgentEvent } from '@shared/agent'
 
@@ -112,5 +117,45 @@ describe('OSC injection', () => {
     const out = notifySequence({ title: 'T', body: 'x'.repeat(500) })
     expect(out.length).toBeLessThan(400)
     expect(out).toContain('…')
+  })
+})
+
+describe('notification modes (/notify)', () => {
+  const spec = { title: 'Houston', body: 'Finished' }
+
+  it('auto rings the bell and sends both notification forms', () => {
+    expect(alertSequence(spec, 'auto')).toBe(bellSequence() + notifySequence(spec))
+    expect(alertSequence(spec)).toBe(alertSequence(spec, 'auto'))
+  })
+
+  it('osc sends the notification only, bell the bell only, off nothing', () => {
+    expect(alertSequence(spec, 'osc')).toBe(notifySequence(spec))
+    expect(alertSequence(spec, 'osc')).not.toContain('\x07\x1b]9')
+    expect(alertSequence(spec, 'bell')).toBe('\x07')
+    expect(alertSequence(spec, 'off')).toBe('')
+  })
+
+  it('defaults to the shared notify-me switch when the terminal has no setting of its own', () => {
+    expect(resolveNotifyMode({})).toBe('auto')
+    expect(resolveNotifyMode({ desktopNotifications: false })).toBe('off')
+    expect(resolveNotifyMode({ desktopNotifications: false, tuiNotify: 'bell' })).toBe('bell')
+    expect(resolveNotifyMode({ tuiNotify: 'nonsense' as never })).toBe('auto')
+  })
+
+  it('validates mode names', () => {
+    expect(['auto', 'osc', 'bell', 'off'].every(isNotifyMode)).toBe(true)
+    expect(isNotifyMode('loud')).toBe(false)
+  })
+
+  it('says the title still updates when off', () => {
+    expect(describeNotifyMode('off')).toContain('window title still updates')
+  })
+
+  it('names the project in the idle reminder', () => {
+    expect(idleReminderSpec('proj')).toEqual({
+      title: 'Houston · proj',
+      body: 'Houston is waiting for your next message'
+    })
+    expect(idleReminderSpec().title).toBe('Houston')
   })
 })

@@ -32,7 +32,9 @@ is closed at the approval layer instead. A command that can throw away work ther
 (`git reset --hard`, a forced `git clean`, `rm -r` of source, a forced or deleting
 push; `shellDiscardsWork` in
 [`src/main/agent/permissions.ts`](../src/main/agent/permissions.ts)) asks in every
-mode, full auto included, which is what lets a new install start in full auto where
+mode, full auto included, and an allow rule skips that only when it is exact for the
+command or names the destructive part (see `shellAllowCoversTripwires`). That is what
+lets a new install start in full auto where
 one of these backends is active. A command that destroys data outside the project
 through a server the sandbox doesn't confine (a database reset or drop over a local
 socket, a Docker volume, `terraform destroy`) asks the same way.
@@ -53,6 +55,48 @@ runtime looks missing. Windows has no
 broadly-available primitive with the same shape, which is why its backend runs
 unconfined. The rest of this document records *why* the obvious Windows candidates were
 rejected, so the decision isn't re-litigated from scratch.
+
+## File tools: containment that holds while a shell runs (all backends)
+
+The structured file tools (`write_file`, `edit_file`, `multi_edit`, `notebook_edit`,
+`apply_patch` and its rollback, `lsp_rename`, which runs as an `apply_patch`, and the
+checkpoint and Changes-view restores) run in Houston's own process, outside the shell
+sandbox. Their confinement is in code: a path that resolves outside the project roots,
+lexically or through a symlink (a dangling one included), is refused
+([`resolveInRoots`](../src/main/agent/tools.ts)).
+
+A check on a path string is not enough on its own, because a sandboxed background shell
+may create symlinks inside the project. If the write resolved the same string again
+later, a shell could replace a folder on the path with a symlink to somewhere outside
+the project in between, and the unconfined write would follow it. So every write,
+delete, and mode change goes through
+[`src/main/agent/safeWrite.ts`](../src/main/agent/safeWrite.ts), which re-derives
+containment at the moment it acts:
+
+- missing parent folders are created one at a time from the canonical in-project
+  ancestor, each re-checked after it is made;
+- the file is opened with `O_NOFOLLOW` (and `O_EXCL` when it is new), so a symlink put
+  at the file itself fails the open;
+- before any byte is written, the open file is checked against the path: the parent
+  must still resolve to the same in-project folder and the file must be the one at that
+  path (same device and inode; on Linux the open file's real location is also read). An
+  existing file is opened without truncating it and only truncated once it passes, so a
+  redirected open damages nothing. Modes are set on the open file, not by path;
+- a delete removes a symlink as a link, and refuses a parent that no longer resolves
+  inside the project. A rolled-back `apply_patch` removes the folders it created only
+  while they are empty.
+
+A symlink inside the project that was already there is still followed to its
+in-project target, as before.
+
+Residuals. Node has no `openat`, so a step that names a path resolves its folders again:
+a swap landed in the microseconds between the last check and the open can leave an
+empty file or folder outside the project (an empty file is removed again when the swap
+is detected), and a delete timed the same way could remove a same-named file elsewhere.
+On macOS, getting file contents written outside would take several swaps landed within
+microseconds, in order. Windows has no `O_NOFOLLOW`, so there the checks run but the
+open itself can follow a link planted in that window; shell commands on Windows are
+unconfined and ask every time anyway (see below).
 
 ## Git hooks and settings (all backends)
 
@@ -80,7 +124,9 @@ records as a submodule, since the root's `git status` recurses into those and ru
 their fsmonitor. For a linked worktree that covers the shared common dir, the other
 worktrees' redirects, and the main checkout's index too, because the sandbox makes the
 common dir writable (see `gitWritableRoots`). After each foreground `run_shell` (and
-when a background shell's output is read or it is stopped), it compares again:
+when a background shell's output is read or it is stopped, and after each verify-on-stop
+command, which runs the project's scripts outside the tool-approval gate), it compares
+again:
 
 - Settings that run nothing (`user.*`, remotes, upstreams, `core.fsmonitor=true`, which
   selects git's built-in daemon) are never reported.
@@ -100,9 +146,10 @@ when a background shell's output is read or it is stopped), it compares again:
   answered) is still asked about everywhere it shows up.
 
 Cost: a snapshot of an unchanged repository is a handful of `stat`s and small reads.
-git runs only to parse a config file whose bytes changed (`git config --file`, outside
-any repository, which runs nothing) or to list submodule entries when the index changed
-(through the hardened runner).
+git runs only to parse config bytes Houston hasn't parsed since it started (`git config
+--file -` fed exactly the bytes Houston read, outside any repository, which runs nothing;
+a parse is reused only for a file with those same bytes, by SHA-256) or to list submodule
+entries when the index changed (through the hardened runner).
 
 Separately, the file tools treat `.git/hooks/…`, `.git/config`, `config.worktree`,
 `commondir`, and a `.git` pointer file as sensitive writes (`isGitExecPath` in
@@ -174,10 +221,15 @@ process), Houston strips credential-bearing vars from the inherited environment
 with network could `env | curl` those secrets out, and a compromised MCP server would
 receive them all on startup.
 
-It's a **denylist** (drop names matching `/(_KEY|_TOKEN|_SECRET|PASSWORD|CREDENTIAL|_AUTH)/i`
-plus the `AWS_` namespace and the GitHub tokens), not a strict allowlist, because the
-sandbox runs an open-ended toolchain that reads an unpredictable tail of ordinary config
-vars (`NODE_ENV`, `CI`, `DATABASE_URL`, proxies, …) that must survive. This is
+It's a **denylist** (drop names containing `_KEY`, `_TOKEN`, `_SECRET`, `PASSWORD`,
+`PASSWD`, `PASSPHRASE`, `CREDENTIAL`, `_AUTH`, `APIKEY`, or `COOKIE`; names ending in
+`_PAT`, `_PASS`, `_PWD`, `_SESSION`, or `DSN`; plus the `AWS_` namespace and the GitHub
+tokens), not a strict allowlist, because the sandbox runs an open-ended toolchain that
+reads an unpredictable tail of ordinary config vars (`NODE_ENV`, `CI`, `DATABASE_URL`,
+proxies, …) that must survive. The suffixes are anchored because as substrings they
+would hit ordinary config (`_PAT` starts every `*_PATH`, `_SESSION` starts
+`XDG_SESSION_TYPE`). A var named `*_URL` or `*_URI` is kept but loses any userinfo, so
+`DATABASE_URL=postgres://user:pass@db/app` reaches the child as `postgres://db/app`. This is
 defense-in-depth: Houston's own provider keys never travel through the environment (they
 go via SDK constructor params), so it hardens the user's *ambient* shell secrets rather
 than fixing an active leak. An MCP server that legitimately needs a token still receives
@@ -195,6 +247,11 @@ OS sandbox denies every direct route out, so the proxy is the only egress path. 
 arrives at the proxy as `CONNECT host:port` and plain HTTP as an absolute-form URI;
 the hostname is visible either way, which is exactly the granularity a per-domain
 allow/deny needs. Bodies stay opaque; no masking (MITM) proxy, no trust-store changes.
+A plain-HTTP request is forwarded with its `Host` header set to the URI's host, the one
+the policy judged, and a request whose own `Host` header names another host or port
+(or repeats the header) is refused with a 400. Without that, an allowed URI sent with
+`Host: other.site` would be routed by a shared CDN edge or virtual-hosting front to an
+origin the policy never approved.
 
 The policy ([`src/shared/egress.ts`](../src/shared/egress.ts), user-visible in
 Settings → Permissions → Sandbox egress) is: deny entries win over every allow; user allow entries
@@ -238,10 +295,12 @@ rather than falling back to unrestricted egress.
 
 **When shell has network.** With the proxy in place, full auto gives shell commands
 proxied network from the start: the allowlist, not an offline default, is what bounds a
-prompt-injected command. Ask and auto-edit grant it with "Allow for run" on a shell
-command. Under mode `all` there is no proxy, so full auto runs shell offline until the
-one-time shell-network consent (`offerShellNetwork` in
-[`src/main/agent/loop.ts`](../src/main/agent/loop.ts)), as before.
+prompt-injected command. Ask and auto-edit start offline and ask the one-time
+shell-network consent (`offerShellNetwork` in
+[`src/main/agent/loop.ts`](../src/main/agent/loop.ts)) the first time a sandboxed command
+fails without network; approving a shell command, even for the chat, never grants it.
+Under mode `all` there is no proxy, so full auto also runs shell offline until that
+consent, as before.
 
 **Per-chat host grants.** Each run registers a random token with the policy
 (`registerEgressRun` in [`src/main/agent/egress.ts`](../src/main/agent/egress.ts)), and
@@ -259,7 +318,7 @@ read the user's files, a command that reads another live run's environment could
 borrow that token, and with it the hosts the user allowed in that chat; that widens
 nothing past what the user already approved. A run holds at most 20 refused hosts and
 raises at most 3 questions per tool call, naming the rest to the agent instead. Grants
-live in memory per conversation, like the other "Allow for run" grants.
+live in memory per conversation, like the other "Allow for this chat" grants.
 
 Known residuals, accepted and documented: an allowlisted collaborative host (e.g.
 github.com) still accepts authenticated writes, so exfiltration to *your own
@@ -269,7 +328,13 @@ to a private IP is not re-checked at connect time (the proxy refuses private IP
 *literals* only, unlike `web_fetch`, which vets and pins every address a name resolves
 to); and SSH/raw-TCP protocols simply
 don't traverse an HTTP proxy, so under the allowlist they are blocked, which is the
-conservative direction (SSH is an uninspectable channel). On Linux, per-command
+conservative direction (SSH is an uninspectable channel). Inside a `CONNECT` tunnel the
+TLS SNI and the inner HTTP `Host` header are encrypted, so a client can open a tunnel
+to an allowed host's edge and then ask it for a different origin served from the same
+edge (domain fronting). The proxy cannot see or correct that without TLS interception,
+which it deliberately does not do; the host-header check above covers plain HTTP only.
+Many CDNs refuse a mismatched SNI and `Host`, but that is the CDN's policy, not a
+Houston guarantee. On Linux, per-command
 network namespaces mean a sandboxed dev server is only reachable within its own
 command; users who need the old shared-namespace behavior can select mode `all`.
 
@@ -351,12 +416,13 @@ it ([`src/main/sandbox/windows.ts`](../src/main/sandbox/windows.ts),
 
 - the backend reports `sandboxed: false`;
 - the approval gate **never silently auto-approves** an unconfined shell command: each one
-  asks **even in full-auto** until you grant per-run consent ("Allow for run" on such a
-  prompt)
+  asks **even in full-auto** until you grant consent for the chat ("Allow for this chat"
+  on such a prompt)
   ([`src/main/agent/approval.ts`](../src/main/agent/approval.ts));
 - the structured file tools' JS-level path containment still holds on **every** OS, so
   `write_file` / `edit_file` / `apply_patch` stay confined to the project regardless of
-  the shell backend.
+  the shell backend (with the Windows residual noted under
+  [File tools](#file-tools-containment-that-holds-while-a-shell-runs-all-backends)).
 
 So the behavior degrades to "you are told it isn't jailed, and you must consent,"
 rather than pretending to confine.

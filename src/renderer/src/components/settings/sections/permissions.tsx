@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_HINT,
@@ -10,7 +11,7 @@ import {
 import { lintPermissionRules, moveRule, type RuleIssue } from '@shared/permissionLint'
 import { carryRuleMeta, diffRules, parseRulesText, rulesToText } from '@shared/permissionRulesText'
 import { SettingsSection } from '../fields'
-import { ReadOnlyRules, TrustBadge } from './project'
+import { ReadOnlyPlugins, ReadOnlyRules, TrustBadge } from './project'
 import { groupPermissionRules, ruleMatchesFilter, TOOL_NAMES } from '../permissionRules'
 import { ruleMetaText, testVerdictText } from '../ruleMeta'
 import type { SettingsCtx } from '../context'
@@ -22,9 +23,11 @@ function issueText(issue: RuleIssue, rule: PermissionRule, rules: PermissionRule
       return 'Matches nothing until it has a pattern.'
     case 'shadowed': {
       const by = rules[issue.by]
-      return issue.conflicting
-        ? `Never applies: rule ${issue.by + 1} (${by.action} ${by.tool || '*'} ${by.match}) matches first.`
-        : `Redundant: rule ${issue.by + 1} already covers this.`
+      const named = `rule ${issue.by + 1} (${by.action} ${by.tool || '*'} ${by.match})`
+      if (!issue.conflicting) return `Redundant: rule ${issue.by + 1} already covers this.`
+      return by.action === 'deny'
+        ? `Never applies: ${named} matches it, and a deny always wins.`
+        : `Never applies: ${named} matches first.`
     }
     case 'broad-allow':
       return rule.tool === '*' || !rule.tool
@@ -107,7 +110,7 @@ function RuleRow({
             >
               ⋮⋮
             </span>
-            <span className="rule__num" title="Rules are checked in this order; the first match wins">
+            <span className="rule__num" title="A matching deny always wins; otherwise rules are checked in this order and the first match decides">
               {n}
             </span>
           </>
@@ -187,7 +190,7 @@ function RuleRow({
 
 /**
  * The user's global permission rules. The default view is the list in the order
- * the matcher reads it (first match wins), numbered and reorderable, with lint
+ * the matcher reads it (a deny always wins, else the first match), numbered and reorderable, with lint
  * notes on rules that can never apply. "By tool" groups the same rules per tool,
  * which reads better for a long list but hides the order.
  */
@@ -215,8 +218,11 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
   // Default to 'ask', not 'allow': an all-approving rule shouldn't be one careless
   // click away (the empty match pattern would otherwise auto-approve every
   // run_shell call). New rules go last, so they never pre-empt an existing one.
-  const addRuleFor = (tool: string): void =>
+  // The filter is cleared so the new, still empty rule is in view.
+  const addRuleFor = (tool: string): void => {
+    setRuleFilter('')
     setRules([...rules, { action: 'ask', tool, match: '', addedAt: Date.now(), source: 'settings' }])
+  }
   const patchRule = (i: number, patch: Partial<PermissionRule>): void =>
     setRules(rules.map((r, idx) => (idx === i ? { ...r, ...patch } : r)))
   const removeRule = (i: number): void => setRules(rules.filter((_, idx) => idx !== i))
@@ -302,7 +308,8 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
 
   const desc = (
     <>
-      Checked top to bottom before the approval mode; the first matching rule decides.{' '}
+      Checked before the approval mode: a matching deny always wins, and otherwise the first matching rule, top
+      to bottom, decides.{' '}
       <strong>Allow</strong> runs without asking, <strong>Ask</strong> always prompts,{' '}
       <strong>Deny</strong> refuses. A pattern is a glob over the command, path, URL, or query;
       an <strong>Exact</strong> rule matches only that one target. An administrator policy or a
@@ -419,6 +426,17 @@ export function PermissionRulesSection({ ctx }: { ctx: SettingsCtx }): JSX.Eleme
               <ReadOnlyRules rules={project.allowRules} empty="" />
             </li>
           )}
+          {project && project.plugins.length > 0 && (
+            <li className="rule-tier">
+              <h4 className="rule-tier__title">This project&apos;s plugins</h4>
+              <p className="rule-tier__desc">
+                Code from <code>.houston/plugins</code> that runs inside Houston, only while you trust
+                this folder and the <code>projectPlugins</code> setting is on.{' '}
+                <TrustBadge trust={project.trust} />
+              </p>
+              <ReadOnlyPlugins plugins={project.plugins} />
+            </li>
+          )}
           <li className="rule-tier">
             <h4 className="rule-tier__title">Then the chat&apos;s approval mode</h4>
             <p className="rule-tier__desc">
@@ -521,6 +539,9 @@ function RulesTextEditor({
   onCancel: () => void
 }): JSX.Element {
   const [text, setText] = useState(() => rulesToText(rules))
+  // Escape cancels this edit rather than closing Settings.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEscapeWithin(rootRef, onCancel)
   const parsed = useMemo(() => parseRulesText(text), [text])
   const issues = useMemo(() => (parsed.ok ? lintPermissionRules(parsed.rules) : new Map<number, RuleIssue[]>()), [parsed])
   const diff = parsed.ok ? diffRules(rules, parsed.rules) : null
@@ -536,10 +557,10 @@ function RulesTextEditor({
     return `Applying ${joined}.`
   }
   return (
-    <div className="rules-text">
+    <div className="rules-text" ref={rootRef}>
       <p className="field__hint">
         One rule per line: <code>{'{"action": "allow" | "ask" | "deny", "tool": "run_shell", "match": "git *"}'}</code>
-        , with <code>{'"exact": true'}</code> to match one target only. Order matters: the first match wins.
+        , with <code>{'"exact": true'}</code> to match one target only. A matching deny always wins; otherwise order matters and the first match decides.
       </p>
       <textarea
         className="rules-text__input"

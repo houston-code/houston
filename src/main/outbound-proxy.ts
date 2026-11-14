@@ -1,4 +1,4 @@
-import { EnvHttpProxyAgent, type Dispatcher } from 'undici'
+import { Agent, EnvHttpProxyAgent, type Dispatcher } from 'undici'
 import { log } from './logger'
 
 /**
@@ -20,9 +20,23 @@ import { log } from './logger'
  *   - Shell commands. The sandbox injects its own egress proxy into the child
  *     environment; nothing here reads or writes `process.env`.
  *
- * Nothing changes when no proxy is configured: requests use the global `fetch` with
- * its default dispatcher, exactly as before.
+ * With no proxy configured, requests still go out through one shared agent of our own,
+ * which differs from fetch's default only in how long it keeps an idle connection (see
+ * {@link KEEP_ALIVE_TIMEOUT_MS}).
  */
+
+/**
+ * How long an idle connection to a provider stays open for the next request. fetch's
+ * default agent closes one after 4 s, and the model APIs send no Keep-Alive hint to
+ * stretch that, so the first request of every turn, and every request after a tool
+ * that ran longer than 4 s, paid a fresh TCP and TLS handshake (a quarter second to a
+ * second on a distant link). The servers hold an idle connection far longer than this.
+ * One they close first fails before any response and is retried like any other reset.
+ */
+export const KEEP_ALIVE_TIMEOUT_MS = 60_000
+/** The longest a server's own Keep-Alive hint may stretch {@link KEEP_ALIVE_TIMEOUT_MS} to. */
+const KEEP_ALIVE_MAX_TIMEOUT_MS = 10 * 60_000
+const KEEP_ALIVE = { keepAliveTimeout: KEEP_ALIVE_TIMEOUT_MS, keepAliveMaxTimeout: KEEP_ALIVE_MAX_TIMEOUT_MS }
 
 /** Hosts that always go direct: a remote proxy can't reach this machine's loopback. */
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]']
@@ -134,13 +148,20 @@ function currentConfig(): OutboundProxyConfig | null {
 }
 
 let cached: { key: string; dispatcher: Dispatcher } | null = null
+let direct: Dispatcher | null = null
 
-/** The dispatcher for the current configuration, or null to use fetch's default. */
-export function outboundDispatcher(config: OutboundProxyConfig | null = currentConfig()): Dispatcher | null {
+/** The agent for requests that go straight to their host, created on first use. */
+function directDispatcher(): Dispatcher {
+  direct ??= new Agent(KEEP_ALIVE)
+  return direct
+}
+
+/** The dispatcher for the current configuration: the proxy agent, or the direct one. */
+export function outboundDispatcher(config: OutboundProxyConfig | null = currentConfig()): Dispatcher {
   if (!config) {
     if (cached) retire(cached.dispatcher)
     cached = null
-    return null
+    return directDispatcher()
   }
   const key = `${config.httpProxy}\n${config.httpsProxy}\n${config.noProxy}`
   if (cached?.key === key) return cached.dispatcher
@@ -148,6 +169,7 @@ export function outboundDispatcher(config: OutboundProxyConfig | null = currentC
   // Empty strings (not undefined) so the agent never reads the environment on its own:
   // what it does must match what resolveOutboundProxy decided.
   const dispatcher = new EnvHttpProxyAgent({
+    ...KEEP_ALIVE,
     httpProxy: config.httpProxy,
     httpsProxy: config.httpsProxy,
     noProxy: config.noProxy
@@ -166,11 +188,10 @@ type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Resp
 
 /**
  * `fetch` for Houston's own API calls: the global fetch, sent through the configured
- * proxy when there is one. A drop-in for `globalThis.fetch`.
+ * proxy when there is one and through the long keep-alive agent otherwise. A drop-in
+ * for `globalThis.fetch`.
  */
 export const outboundFetch: Fetch = (input, init) => {
-  const dispatcher = outboundDispatcher()
-  if (!dispatcher) return globalThis.fetch(input, init)
   // `dispatcher` is Node's fetch extension, absent from the DOM RequestInit type.
-  return globalThis.fetch(input, { ...init, dispatcher } as RequestInit)
+  return globalThis.fetch(input, { ...init, dispatcher: outboundDispatcher() } as RequestInit)
 }

@@ -50,4 +50,12 @@ describe('context breakdown', () => {
   it('says what to do when nothing has run yet', () => {
     expect(renderContextReport(null, 0, null)).toContain('send a message')
   })
+
+  it('shows where automatic compaction kicks in, with or without a breakdown yet', () => {
+    const note = 'Compacts automatically at about 100k tokens (your setting: 50% of the window).'
+    const report = renderContextReport(parts, 21_000, 200_000, null, note).split('\n')
+    expect(report[report.length - 2]).toBe(note)
+    expect(renderContextReport(null, 0, null, null, note)).toContain(note)
+    expect(renderContextReport(parts, 21_000, 200_000)).not.toContain('Compacts')
+  })
 })

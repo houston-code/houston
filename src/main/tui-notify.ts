@@ -1,5 +1,6 @@
 import type { AgentEvent } from '@shared/agent'
 import { notificationFor, type NotifySpec } from '@shared/notify'
+import type { AppSettings } from '@shared/types'
 import { stripControlChars } from './tui-wrap'
 
 /**
@@ -30,12 +31,75 @@ import { stripControlChars } from './tui-wrap'
 const BEL = '\x07'
 const ESC = '\x1b'
 
+/**
+ * Which attention signals fire (/notify): `auto` both the bell and the terminal's
+ * notification, `osc` the notification only, `bell` the bell only, `off` neither.
+ * The title is ambient and set in every mode.
+ */
+export type NotifyMode = 'auto' | 'osc' | 'bell' | 'off'
+export const NOTIFY_MODES: readonly NotifyMode[] = ['auto', 'osc', 'bell', 'off']
+
+export function isNotifyMode(v: unknown): v is NotifyMode {
+  return typeof v === 'string' && (NOTIFY_MODES as readonly string[]).includes(v)
+}
+
+/**
+ * The session's mode: the terminal's own setting when there is one; otherwise the
+ * shared "notify me" switch, so turning notifications off in the desktop app still
+ * silences the terminal as it always has.
+ */
+export function resolveNotifyMode(settings: Pick<AppSettings, 'tuiNotify' | 'desktopNotifications'>): NotifyMode {
+  if (isNotifyMode(settings.tuiNotify)) return settings.tuiNotify
+  return settings.desktopNotifications === false ? 'off' : 'auto'
+}
+
+/** What each mode does, for /notify and /settings. */
+export function describeNotifyMode(mode: NotifyMode): string {
+  switch (mode) {
+    case 'auto':
+      return 'bell and terminal notification'
+    case 'osc':
+      return 'terminal notification only, no bell'
+    case 'bell':
+      return 'bell only'
+    case 'off':
+      return 'off, no bell or notification (the window title still updates)'
+  }
+}
+
 /** What to write to the terminal for one event. */
 export interface TerminalSignal {
   /** Ambient tab/window title (always safe to set). */
   title?: string
   /** Ring the bell + fire a notification (only when the user is away). */
   alert?: NotifySpec
+  /** Which of the two the alert uses. Absent = both (`auto`). */
+  mode?: Exclude<NotifyMode, 'off'>
+}
+
+/** The bytes an alert writes in a given mode. */
+export function alertSequence(spec: NotifySpec, mode: NotifyMode = 'auto'): string {
+  switch (mode) {
+    case 'auto':
+      return bellSequence() + notifySequence(spec)
+    case 'osc':
+      return notifySequence(spec)
+    case 'bell':
+      return bellSequence()
+    case 'off':
+      return ''
+  }
+}
+
+/** How long a finished turn waits, unanswered and unwatched, before one reminder. */
+export const IDLE_REMINDER_MS = 60_000
+
+/** The one reminder a finished turn sends if nobody comes back to it. */
+export function idleReminderSpec(workspaceName?: string): NotifySpec {
+  return {
+    title: workspaceName ? `Houston · ${workspaceName}` : 'Houston',
+    body: 'Houston is waiting for your next message'
+  }
 }
 
 /** OSC 0: set both the window and the icon/tab title. */

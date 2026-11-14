@@ -69,6 +69,7 @@ export interface ChatAttention {
 const LIMIT_NOTE: Record<Extract<AgentEvent, { type: 'limit' }>['reason'], string> = {
   'max-steps': 'Stopped at step limit',
   'max-output': 'Stopped: reply hit the output limit',
+  'max-cost': 'Stopped at cost limit',
   stalled: 'Stopped: no progress'
 }
 

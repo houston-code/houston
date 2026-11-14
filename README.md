@@ -48,9 +48,10 @@ Open source under the [Apache License 2.0](LICENSE).
   `multi_edit`, `apply_patch`, `notebook_edit`, `list_dir`, `glob`, `search_files`,
   `ast_grep`, `run_shell`, `git_status`, `git_diff`, `web_fetch`, `web_search`,
   `gh_pr_*` (pull requests), `todo_write`, `pr_sweep`, and `ask_user` to actually
-  do the work, not just describe it. When a turn is all
-  reads (e.g. open five files at once), they run **concurrently**; anything that
-  writes, runs a command, or needs approval stays sequential. Edits are matched
+  do the work, not just describe it. Reads the agent asks for together (e.g. open
+  five files at once) run **concurrently**, in a subagent too, even after an edit
+  in the same step (they wait for it to land first); anything that writes, runs a
+  command, or needs approval runs on its own, in order. Edits are matched
   **resiliently**: if the model's snippet drifts from the file by indentation or
   whitespace, Houston still locates and applies it instead of failing, and shows the
   model the lines it actually changed. Reads come back **line-numbered**, and the
@@ -92,6 +93,14 @@ Open source under the [Apache License 2.0](LICENSE).
   check that some text is or isn't shown) to try a flow such as logging in and get a
   pass or fail for each step, or capture the page at several viewports and color
   schemes in one call.
+- **Test a flow across calls.** `browser_session` keeps one localhost page open for
+  the rest of a turn, so cookies and page state carry over between calls: `open` a
+  URL, `act` with the same steps (naming elements by a ref from the last snapshot or
+  by selector), `snapshot` the accessibility tree with a screenshot, read recent
+  `console` messages and `network` requests (method, URL, status, timing), and
+  `close`. It runs in the same hardened offscreen window, loopback pin, and network
+  guards as `view_localhost`, with its own in-memory cookies, and shares its
+  per-host approvals (`act` asks separately). Desktop app only.
 - **Mockups and image galleries.** `render_mockup` turns an HTML mockup file in the
   project into screenshots at desktop, tablet, or mobile sizes, in a locked-down
   hidden browser with no network, and `show_images` shows image files the agent
@@ -266,7 +275,10 @@ Open source under the [Apache License 2.0](LICENSE).
   `model:` pins the agent to a
   (usually cheaper) sibling model from the current provider. Add a
   `.houston/skills/<name>/SKILL.md` to register a skill: its description is
-  surfaced to the agent, which reads the full instructions on demand. Agents,
+  surfaced to the agent, which reads the full instructions on demand. Skills in
+  the open Agent Skills format are read from `.agents/skills/` too, with their
+  `license`, `compatibility`, `metadata`, `allowed-tools` (which only ever narrows
+  the tools in use) and `paths:` triggers, and `/<skill-name>` runs one. Agents,
   skills, and custom commands in `~/.houston/` work in every project (a project's
   own wins a name clash). **Settings > Customize** lists them all, creates new
   ones from a template, opens them in your editor, switches them off and on, and
@@ -362,8 +374,8 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Approval flow.** Choose how much autonomy to grant: *plan mode* (read-only:
   the agent researches and proposes a plan, with writes and shell commands
   blocked), *ask every time*, *auto-approve edits*, or *full auto*. On each tool
-  call you can approve once, deny, *allow for the run* (auto-approves that kind of
-  tool for the rest of the conversation), or *always allow* / *always deny*, which
+  call you can allow once, deny, *allow for this chat* (auto-approves that kind of
+  tool for the rest of the chat, until Houston quits), or *always allow* / *always deny*, which
   saves a permission rule so the choice sticks across future runs (the app names the
   saved rule, with Undo). In the app, `Y`, `A` and `N` answer a waiting approval. File edits show
   an inline red/green **diff** so you can review exactly what changes before
@@ -417,8 +429,9 @@ Open source under the [Apache License 2.0](LICENSE).
 - **Plugins.** Drop a JS file in `.houston/plugins/` to register *observational*
   lifecycle hooks, `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
   fn)`, for logging, metrics, or notifications. Plugins are executable code, so they
-  load only after you set `"projectPlugins": true` in settings.json. Each runs in an
-  isolated context
+  load only after you set `"projectPlugins": true` in settings.json and trust the
+  folder for its current plugin files (a plugin added or edited later asks again).
+  Each runs in an isolated context
   with no `require`/`process`/network, hooks can't block or alter a call, and a
   throwing or slow plugin is caught and ignored. To *block* a tool, use a
   *PreToolUse* shell hook instead.
@@ -806,9 +819,12 @@ are never written back:
 - `--effort <off|low|medium|high|xhigh>`: the model's reasoning effort.
 - `--max-turns <n>`: the most model steps the run may take. It is a hard cap: the
   run never auto-extends past it, and hitting it exits 3.
-- `--max-cost <usd>`: once the run's estimated cost reaches this amount, the agent
-  is told to wrap up. It is a soft ceiling: the step in flight finishes and the
-  agent gets to summarize, so a run can end slightly above it.
+- `--max-cost <usd>`: a hard cost limit. The agent is told to wrap up at 80% of it,
+  and once the run's estimated cost reaches it, the agent gets one last step without
+  tools to summarize and the run stops with exit 3 (`limitReason` `max-cost`). The
+  step that crosses the limit still finishes, so a run can end slightly above it. A
+  model with no known price can't be held to it: Houston warns once, and the result
+  line sets `costUnknown`.
 - `--verify <command>`: when the agent stops after editing files, run this command
   (sandboxed like the agent's own shell). If it fails, its output goes back to the
   agent for a bounded fix-up pass. It needs a policy that can edit, such as
@@ -859,7 +875,7 @@ matching value) or `schemaErrors` (why it didn't match).
 | 0 | The agent finished on its own. | `success` |
 | 1 | The run failed: an error or an aborted run, a stalled agent, or a call refused under `--on-approval fail`. | `error`, `stalled`, `approval_denied` |
 | 2 | Usage error: a bad flag value, an unreadable flag file, or an empty prompt on stdin (nothing ran); or a bad `--input-format stream-json` line. | (no result line), `input_error` |
-| 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit) or the model's output limit. | `limit` |
+| 3 | The run hit a budget before finishing: its step cap (`--max-turns`, or your saved limit), its cost limit (`--max-cost`, or your saved limit), or the model's output limit. | `limit` |
 | 4 | The final answer still didn't match `--output-schema` after one corrective round. | `schema_invalid` |
 | 5 | The agent finished, but the last `--verify` check it ran still failed once its fix-up passes ran out. | `verify_failed` |
 | 129, 130, 143 | Stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, and the chat is saved. A second signal exits at once. | `aborted` |
@@ -886,12 +902,12 @@ is `allow`; an unrecognized value is treated as `deny`.
 
 **Shell network.** Shell commands run in a sandbox with network off until the run
 is granted it, because the sandbox can read your whole filesystem.
-Interactively that grant is "Allow for run" on a shell command, or, under full
-auto, **Allow network for this chat** on the card Houston shows once a command
-fails for lack of network (commands that need no network never ask; Houston doesn't
-re-run the failed command itself). `--on-approval allow` approves each command the way
-plain "Allow" does, so under `ask` or `auto-edit` those commands still run
-offline. Pass `--allow-shell-network` to grant shell network for the run under
+Interactively that grant is **Allow network for this chat** on the card Houston
+shows, in every mode, once a command fails for lack of network (commands that need
+no network never ask; Houston doesn't re-run the failed command itself). Approving a
+shell command, even for the whole chat, never grants it. `--on-approval allow`
+approves each command the way "Allow once" does, so under `ask` or `auto-edit` those
+commands still run offline. Pass `--allow-shell-network` to grant shell network for the run under
 any policy; granted traffic still goes through the egress allowlist. Under
 `full-auto`, `--on-approval allow` (its default) also answers that card with yes
 when a command fails without network.
@@ -1066,8 +1082,10 @@ A bare `houston` starts interactive only when it has a real terminal. With a
 prompt piped in (`echo "fix the build" | houston --json`) it runs it one-shot, as
 `-p` would; in CI with nothing piped (no TTY) it prints usage instead of hanging,
 so use `-p "<prompt>"` there.
-`npm run install:cli` symlinks the built bundle (a rebuild is picked up with no
-reinstall) and, if the target dir isn't on your PATH yet, prints the line to add.
+`npm run install:cli` symlinks the built CLI (a rebuild is picked up with no
+reinstall) through a small launcher that turns on Node's compile cache, so it
+starts faster after the first run. If the target dir isn't on your PATH yet, it
+prints the line to add.
 Prefer npm's own linking? The package exposes a `houston` `bin`, so
 `npm run build:cli && npm link` works too. On Windows use `npm link` (npm writes
 a `houston.cmd` shim) or invoke the bundle directly.
@@ -1109,6 +1127,13 @@ the interactive setup list shows them, and any endpoint added with
 server is one pick away. An unknown flag or a stray argument stops with an
 error and the usage rather than being ignored.
 
+`houston schedule-daemon` fires scheduled runs while no Houston window or terminal
+session is open: run it in the foreground, or `houston schedule-daemon install` to
+start it at login (a per-user LaunchAgent, systemd user service, or Task Scheduler
+task; `uninstall` removes it, `status` reports it). It reads keys the same way as
+every CLI command. Desktop users turn the same thing on from Settings > Scheduled
+runs, where it runs as the app and uses the app's saved keys.
+
 `houston open [dir]` hands a folder (the current one by default) to the desktop
 app as a new chat, through a `houston://open` link. The app also opens
 `houston://chat/<id>` and `houston://settings/<page>` links; it asks before opening
@@ -1136,7 +1161,7 @@ vice versa. Set `HOUSTON_DATA_DIR` to use an isolated profile (useful for CI
 and servers).
 
 **What's desktop-only.** Capabilities that genuinely need the desktop shell are
-absent: `view_localhost` and `render_mockup` (screenshots need Chromium) are not
+absent: `view_localhost`, `browser_session`, and `render_mockup` (they need Chromium) are not
 offered to the model at all in the CLI; the live Preview dock, integrated
 terminal, Files panel, diagram rendering, and auto-update are GUI features. Search tools degrade gracefully:
 `search_files` uses `ripgrep` from your `PATH` when present and falls back to a
@@ -1205,8 +1230,17 @@ in the CLI, so keys already set up with `houston providers set-key` work without
 What maps to what:
 
 - **Sessions** are ordinary Houston conversations in the editor's folder: the editor
-  can list and reopen them, and they also appear in the desktop app and in
-  `houston -i --resume <id>`.
+  can list, load (replaying the history), resume (without it), close, and delete
+  them, and they also appear in the desktop app and in `houston -i --resume <id>`.
+  A delete stops the chat's running prompt and background commands first, as in the
+  app.
+- **Extra folders** (`additionalDirectories`) are readable and writable by that
+  session's runs only, and never saved.
+- **System prompts** from the editor are appended to Houston's, as with
+  `--append-system-prompt`; they can't replace it.
+- **Requests** can be withdrawn with `$/cancel_request`; a withdrawn prompt stops as
+  if cancelled.
+- **Compaction** arrives as `compaction_update` for editors that support it.
 - **Modes** are the approval policies: Plan, Ask, Auto-edit, and Full auto. The
   mode you pick is saved on the chat and restored when it is reopened.
 - **Config options**: the model and the reasoning effort, saved on the chat.
@@ -1218,7 +1252,13 @@ What maps to what:
   deny). "Always allow" saves a permission rule, exactly as in the app. A plan from
   Plan mode is accepted or sent back the same way.
 - **Streaming**: replies, reasoning, tool calls (with before/after diffs for edits),
-  the todo list as a plan, and context and cost usage.
+  the todo list as a plan, and context and cost usage. Each prompt's reply also
+  carries the turn's token totals (input, output, and cached input).
+- **Launch flags** set defaults for a client that never changes them, such as a
+  benchmark runner or a CI job: `--approval <policy>` (or `--full-auto`) for the mode
+  new sessions start in, `--effort <level>` for their reasoning effort, and
+  `--max-turns <n>` for a hard step cap on every prompt. For example,
+  `houston --acp --full-auto --effort high --max-turns 1000`.
 - **Questions and MCP input requests** show as forms when the editor supports them;
   otherwise they resolve the way headless mode does, so a run never waits forever.
 - **MCP servers** the editor passes for a session are added for that session only.
@@ -1241,6 +1281,7 @@ npm run build    # typecheck + bundle to out/
 npm test         # unit tests (vitest: node + jsdom projects)
 npm run test:e2e # Electron e2e suite (Playwright; builds first)
 npm run test:e2e:packaged # same suite against an app already built by `npm run dist*`
+npm run test:soak # memory soak: long desktop and CLI sessions checked against e2e/soak/budgets.ts
 npm run icon     # regenerate the app icon (build/icon.png + icon.icns)
 ```
 
@@ -1355,7 +1396,8 @@ src/
 │   ├── oauth.ts       provider-account OAuth (stub; MCP-server OAuth is real
 │   │                  and lives in mcp/oauth.ts)
 │   ├── store.ts       settings persistence + migrations
-│   ├── conversations.ts  conversation persistence (one JSON per chat)
+│   ├── conversations.ts  conversation persistence (one JSON per chat, plus an
+│   │                  append-only log of recent saves, folded in as it grows)
 │   ├── tui.ts / headless.ts  the interactive terminal and one-shot clients
 │   └── ipc.ts         all IPC handlers
 ├── cli/           the standalone CLI entry (no Electron): env/file credentials,
@@ -1373,21 +1415,23 @@ the agent loop and UI never depend on a specific provider.
 - **Tool execution is sandboxed where the OS allows it.** `run_shell` runs under
   Seatbelt (`sandbox-exec`) on macOS and bubblewrap on Linux: filesystem reads
   allowed, writes restricted to the project + temp dirs, network denied until you
-  grant it (in *full auto*, a once-per-chat card after a command first fails for lack
-  of network; "Allow for run" on a shell approval; or `--allow-shell-network` on a
-  headless run). Granted network is confined to a
+  grant it (a once-per-chat question after a command first fails for lack of network,
+  in every mode; approving a shell command never grants network; or
+  `--allow-shell-network` on a headless run). Granted network is confined to a
   per-domain egress allowlist: direct sockets stay blocked and traffic flows through
   a local proxy that permits package registries, VCS hosts, and domains you add in
   Settings. Windows has no equivalent, so shell commands there run unconfined and
   always ask (see [docs/sandboxing.md](docs/sandboxing.md)).
 - **File tools are contained** to the workspace in code: any path that resolves
-  outside the project roots, including through a symlink, is rejected.
+  outside the project roots, including through a symlink, is rejected, and the check
+  is repeated at the write itself, so a symlink a running shell swaps onto the path
+  can't redirect it.
 - **Human in the loop.** Writes and shell commands require approval unless you
   opt into a more autonomous policy. A new install starts in *full auto* only where
   the OS sandbox confines shell commands (macOS, Linux with bubblewrap), and in *ask*
   elsewhere; an existing install keeps its saved mode. Network egress prompts per
   destination, even in *full auto*, since it leaves the machine (`web_fetch` once per
-  site, `web_search` once per chat, `view_localhost` once per host, GitHub writes once
+  site, `web_search` once per chat, `view_localhost` and `browser_session` once per host, GitHub writes once
   per repository); *allow-for-the-run* covers only that destination. GitHub reads run
   without asking in *full auto*, merges, closes, checkouts, and repository creation
   always ask, and MCP tool calls always ask. A shell command that can throw away
@@ -1395,7 +1439,10 @@ the agent loop and UI never depend on a specific provider.
   forced or deleting push) or wipe data outside it (a database reset or drop, Docker
   volumes, `terraform destroy`), and reading or changing a credential file (a `.env`, a
   private key), ask in every mode, since the sandbox protects everything but the
-  project itself and can read your whole filesystem.
+  project itself and can read your whole filesystem. So does changing a project
+  control file that runs code outside the sandbox later (`.houston/`, `.vscode/`,
+  `.idea/`, `.husky/`, `.devcontainer/`, CI workflows, `.envrc`, `.mcp.json`), which
+  *allow-for-the-run* doesn't cover; only an allow rule for the path does.
   `view_localhost` is restricted to loopback addresses and loads untrusted page
   content in a sandboxed, isolated, no-Node window; its main frame can't be
   navigated or redirected off loopback, and its requests can't reach
@@ -1416,6 +1463,13 @@ the agent loop and UI never depend on a specific provider.
   Houston's own network tools refuse to send a request that carries one.
 - **Keys at rest** are encrypted via the OS credential store; only ciphertext is
   written to disk (`0600`), and the renderer only ever sees a `hasKey` flag.
+- **The packaged app runs only its own code.** Its Electron fuses ignore `--inspect`
+  and `NODE_OPTIONS`, load the app only from an integrity-checked `app.asar`, and
+  (except on Linux, where the shell sandbox's network forwarder needs it) ignore
+  `ELECTRON_RUN_AS_NODE`; the macOS build doesn't accept `DYLD_*` variables. So
+  another program can't start Houston as a debugger or plain Node and run its own
+  code as Houston, which on macOS is what would let it ask the Keychain for
+  Houston's keys.
 
 Coding agents run model-authored commands. Treat *full auto* + network with the
 same caution you'd treat running untrusted code, and switch to *ask* or *auto-edit*

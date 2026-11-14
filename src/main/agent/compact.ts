@@ -6,6 +6,8 @@ import { getProvider } from '../agentHost'
 import { getConversation, peekConversation, setCompaction, setMessages } from '../conversations'
 import { log } from '../logger'
 import { activeRunForConversation } from './loop'
+import { memoryTaintSource } from './memoryTools'
+import { getTool } from './tools'
 import { describeProviderError, providerStreamError, withProviderRetry } from './retry'
 import {
   KEEP_RECENT_USER_TURNS,
@@ -79,6 +81,8 @@ export interface CompactOptions {
   deadlineMs?: number
   /** Called before each retry of a failed summarization request. */
   onRetry?: (info: CompactRetryInfo) => void
+  /** What the summary should focus on (`/compact <focus>`); see normalizeCompactFocus. */
+  focus?: string
 }
 
 export const COMPACT_ERR_CANCELLED = 'Compaction cancelled.'
@@ -126,7 +130,16 @@ function logStamp(id: string): string | null {
  * the kept tail. Pure, so it's unit-testable without a provider.
  */
 export function applyCompaction(messages: ChatMessage[], cut: number, summary: string): ChatMessage[] {
-  return [...buildSummaryMessages(summary), ...messages.slice(cut)]
+  return [...buildSummaryMessages(summary, headTaint(messages, cut)), ...messages.slice(cut)]
+}
+
+/**
+ * The taint of the messages a rewrite drops (`messages[0..cut)`), to carry onto the
+ * summary that replaces them (see buildSummaryMessages). A prior summary at the head
+ * carries its own, so the taint survives any number of compactions.
+ */
+function headTaint(messages: ChatMessage[], cut: number): string | null {
+  return memoryTaintSource(messages.slice(0, cut), (n) => getTool(n)?.kind)
 }
 
 /**
@@ -166,7 +179,7 @@ export async function compactConversationNow(
     release = () => ctl.signal.removeEventListener('abort', done)
   })
   try {
-    return await Promise.race([stopped, compactUnderSignal(id, providerId, model, ctl.signal, opts.onRetry)])
+    return await Promise.race([stopped, compactUnderSignal(id, providerId, model, ctl.signal, opts.onRetry, opts.focus)])
   } finally {
     release()
     clearTimeout(timer)
@@ -180,7 +193,8 @@ async function compactUnderSignal(
   providerId: string,
   model: string,
   signal: AbortSignal,
-  onRetry: CompactOptions['onRetry']
+  onRetry: CompactOptions['onRetry'],
+  focus: string | undefined
 ): Promise<CompactResult> {
   // A live turn is appending to this log; a summary of it would race those writes.
   if (activeRunForConversation(id)) {
@@ -240,7 +254,7 @@ async function compactUnderSignal(
         for await (const ev of provider.streamChat({
           model,
           system: summarizationSystemPrompt,
-          messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next)),
+          messages: buildSummaryRequestMessages(summaryMsgs, conv.messages.slice(cut, next), focus),
           maxTokens: summaryMaxTokens(window),
           signal
         })) {
@@ -261,7 +275,9 @@ async function compactUnderSignal(
       if (signal.aborted) return { ok: false, summarized: 0, error: COMPACT_ERR_CANCELLED }
       const summary = text.trim()
       if (!summary) return { ok: false, summarized: 0, error: 'The model returned an empty summary.' }
-      summaryMsgs = buildSummaryMessages(summary)
+      // Everything up to `next` is now stood in for by this summary, so it carries
+      // the taint of all of it.
+      summaryMsgs = buildSummaryMessages(summary, headTaint(conv.messages, next))
       cut = next
     }
   } catch (e) {

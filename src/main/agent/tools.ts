@@ -1,5 +1,6 @@
 import { promises as fs, realpathSync, lstatSync, readlinkSync } from 'node:fs'
 import { resolve, relative, isAbsolute, dirname, basename, join, sep } from 'node:path'
+import { removeEmptyDirContained, removeFileContained, writeFileContained } from './safeWrite'
 import type {
   AgentQuestion,
   ChatMessage,
@@ -79,6 +80,7 @@ import {
   runningShellsFor,
   stopShell
 } from './shells'
+import { WAIT_FOR_DEFAULT_SECONDS, WAIT_FOR_MAX_SECONDS, WAIT_FOR_NAME, waitSeconds } from './waitFor'
 import { detachedLaunchNote } from './detached'
 import { reviewGitChanges, type GitGuard } from './gitGuard'
 import { foreignListenerNote, urlPort, type PortListener } from './portOwner'
@@ -86,11 +88,13 @@ import { cwdFromRoot, runInSession, shellCwdLabel, shellCwdLine, type ShellSessi
 import {
   presentUntrusted,
   presentUntrustedInline,
+  stripBidiControls,
   untrustedPreamble,
   type UntrustedPart
 } from './untrusted'
 import type { FetchedDocument } from './webfetch'
 import { fetchUrlAsDocument, truncationNote } from './webfetch'
+import { OutputTee, SPILL_MAX_BYTES, spillNote, type SpillResult } from './shellSpill'
 import { stripAnsi } from './loopback'
 import { assertNoRedactedValues, findSecret } from './redact'
 import {
@@ -102,9 +106,19 @@ import {
   type CaptureInput,
   type LocalhostCapture
 } from './viewlocalhost'
+import {
+  BROWSER_UNAVAILABLE,
+  DEFAULT_LOG_LIMIT,
+  logLimit,
+  MAX_LOG_LIMIT,
+  MAX_SNAPSHOT_CHARS,
+  parseSessionSteps,
+  type BrowserSession,
+  type PageState
+} from './browserSession'
 import { clampSearchResults, formatHits, getSearchAdapter, NO_RESULTS } from './websearch'
 import { resolveRipgrep, searchContents } from './search'
-import { FALLBACK_SKIP_DIRS, gitListFiles, gitTrackedHidden, globTester, hasHiddenSegment } from './fileScope'
+import { FALLBACK_SKIP_DIRS, globTester, hasHiddenSegment, listScope, type ScopeCache } from './fileScope'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type EditStrategy } from './edit-match'
 import { displayLines, numberLines, numberWidth } from './line-numbers'
@@ -157,6 +171,8 @@ export interface DispatchAgentOptions {
   model?: string
   /** Id of a stored subagent to resume (shown at the end of its earlier report). */
   resume?: string
+  /** Return at once with an id; the report arrives later (a note, or wait_for). */
+  background?: boolean
 }
 
 export interface ToolContext {
@@ -258,6 +274,13 @@ export interface ToolContext {
   /** Attach an image read by the agent to the tool result (injected by the loop). */
   attachImage?: (img: ImageAttachment) => void
   /**
+   * What the current model can take in from read_file: images (vision) and PDFs (a
+   * provider that serializes documents). A false field makes read_file say the file
+   * can't be viewed instead of attaching bytes the model would never see. Unset means
+   * both are accepted.
+   */
+  modelSees?: { images: boolean; documents: boolean }
+  /**
    * Whether the model serving the run right now accepts images (injected by the loop,
    * read at call time so a fallback hop counts). MCP results show an image only when it
    * does, and say why not otherwise; absent means unknown, and the image is attached.
@@ -267,6 +290,11 @@ export interface ToolContext {
   attachDocument?: (doc: DocumentAttachment) => void
   /** Screenshot + console-capture a loopback URL (injected by the loop; Electron-backed). */
   captureLocalhost?: (input: CaptureInput) => Promise<LocalhostCapture>
+  /**
+   * The run's persistent loopback browser page (injected by the loop; Electron-backed,
+   * closed when the run ends). Backs browser_session; absent on clients without the backend.
+   */
+  browserSession?: BrowserSession
   /** Render a project HTML mockup offscreen with no network (injected by the loop; Electron-backed). */
   renderMockup?: RenderMockup
   /**
@@ -278,6 +306,12 @@ export interface ToolContext {
   shellSession?: ShellSession
   /** Max bytes of a single shell command's output kept in a tool result (context guard). */
   shellOutputMaxBytes?: number
+  /**
+   * Save a foreground run_shell command's whole output when its result had to be
+   * clamped, redacted, and say where (see shellSpill.ts). Null when the run's spill
+   * budget is spent or the write failed. Unset: clamped output is not kept.
+   */
+  spillShellOutput?: (output: string, truncatedNote?: string) => Promise<SpillResult | null>
   /**
    * The run's watch over exec-capable git state (hooks, fsmonitor, filter drivers, …)
    * that a shell command could plant for git to run outside the sandbox later (injected
@@ -342,6 +376,12 @@ export interface ToolContext {
    */
   useSkill?: (name: string, file?: string) => Promise<string>
   /**
+   * Wait for a background shell or a spawned session of this chat to finish, up to
+   * `seconds` (injected by the loop). Backs `wait_for`; resolves with what to tell the
+   * model, including when the wait timed out or the turn was stopped.
+   */
+  waitFor?: (id: string, seconds: number) => Promise<string>
+  /**
    * Spawn a separate chat seeded with `prompt` and start it running in the
    * background (injected by the loop, which fills in the run's provider, model,
    * approval policy, and workspace). Backs `spawn_session`; present only when the
@@ -351,6 +391,8 @@ export interface ToolContext {
     title?: string
     prompt: string
     worktree?: { branch: string; base?: string }
+    /** Run in this chat's own checkout rather than a new worktree (the default in a git repository). */
+    sameCheckout?: boolean
     context?: SessionContext
   }) => Promise<SpawnSessionResult>
   /**
@@ -367,6 +409,12 @@ export interface ToolContext {
    * Absent on hosts that drive the tools directly, where nothing is enforced.
    */
   fileTracker?: FileReadTracker
+  /**
+   * The run's memo of which files each search root covers (injected by the loop, which
+   * invalidates it after every call that isn't a read), so search_files, ast_grep, and
+   * glob skip re-running git to plan their scope. Absent, each call plans afresh.
+   */
+  scopeCache?: ScopeCache
   /**
    * The language servers covering this run's files (injected by the loop), behind the
    * lsp_* tools. Absent where no servers can run; the tools then say so.
@@ -404,6 +452,8 @@ export interface ToolDef {
 }
 
 const MAX_GLOB_RESULTS = 200
+/** The marker CappedOutput leaves where a stream's middle was dropped while running. */
+const STREAM_TRUNCATION_MARKER = /\n\[\.\.\. \d+ bytes truncated \.\.\.\]\n/
 /** Largest notebook read_file parses and renders; JSON has to be held whole to parse. */
 const MAX_NOTEBOOK_BYTES = 64 * 1024 * 1024
 
@@ -656,6 +706,9 @@ const readFile: ToolDef = withShellCwdHint({
       if (!ctx.attachImage) {
         return `[image: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context]`
       }
+      if (ctx.modelSees?.images === false) {
+        return `[image: ${rel} (${imageType}, ${humanSize(buf.byteLength)}): not attached, because the current model cannot view images. Describe what you need from it to the user, or inspect it with run_shell (e.g. file, exiftool).]`
+      }
       ctx.attachImage({ mediaType: imageType, data: buf.toString('base64') })
       return `[image: ${rel} (${imageType}, ${humanSize(buf.byteLength)}): attached below for viewing]`
     }
@@ -669,6 +722,9 @@ const readFile: ToolDef = withShellCwdHint({
       ctx.fileTracker?.noteRead(abs, buf)
       if (!ctx.attachDocument) {
         return `[pdf: ${rel} (${humanSize(buf.byteLength)}): cannot be displayed in this context; extract its text with run_shell (e.g. pdftotext)]`
+      }
+      if (ctx.modelSees?.documents === false) {
+        return `[pdf: ${rel} (${humanSize(buf.byteLength)}): could not be viewed, because the current model or provider does not accept PDF attachments. Extract its text with run_shell (e.g. pdftotext file.pdf -) instead.]`
       }
       ctx.attachDocument({ mediaType: 'application/pdf', data: buf.toString('base64'), name: rel })
       return `[pdf: ${rel} (${humanSize(buf.byteLength)}): attached below for viewing]`
@@ -902,8 +958,7 @@ const writeFile: ToolDef = {
         )
       }
     }
-    await fs.mkdir(dirname(abs), { recursive: true })
-    await fs.writeFile(abs, content, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, content, { display: rel })
     ctx.fileTracker?.noteWrite(abs, content)
     const done = `Wrote ${Buffer.byteLength(content)} bytes to ${rel}.`
     const feedback = previous === null ? '' : rewriteFeedback(previous, content)
@@ -1092,7 +1147,7 @@ const editFile: ToolDef = withShellCwdHint({
     const sensitive = isSensitivePath(rel)
     const result = resolveEdit(data, oldStr, newStr, replaceAll, { showCandidate: !sensitive })
     assertNoRedactedValues(data, result.content)
-    await fs.writeFile(abs, result.content, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, result.content, { display: rel })
     ctx.fileTracker?.noteWrite(abs, result.content)
     const n = result.replacements
     const fuzzy = result.strategy === 'exact' ? '' : ` [matched via ${result.strategy}]`
@@ -1205,7 +1260,7 @@ const multiEdit: ToolDef = withShellCwdHint({
       data = result.content
     })
     assertNoRedactedValues(original, data)
-    await fs.writeFile(abs, data, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, data, { display: rel })
     ctx.fileTracker?.noteWrite(abs, data)
     const done = `Edited ${rel} (${edits.length} edit${edits.length === 1 ? '' : 's'}).`
     if (flagged.length === 0) return done
@@ -1287,7 +1342,7 @@ const notebookEdit: ToolDef = withShellCwdHint({
       cellType: typeof args.cell_type === 'string' ? args.cell_type : undefined
     })
     const serialized = serializeNotebook(updated)
-    await fs.writeFile(abs, serialized, 'utf8')
+    writeFileContained(rootsOf(ctx), abs, serialized, { display: rel })
     ctx.fileTracker?.noteWrite(abs, serialized)
     const what =
       mode === 'insert'
@@ -1361,19 +1416,21 @@ async function snapshotForRollback(paths: string[]): Promise<Map<string, FileSna
  * thing is to say so — silently swallowing it would report "nothing was changed"
  * over a working tree that had in fact been changed.
  */
-async function rollbackTo(
+function rollbackTo(
+  roots: string[],
   snaps: Map<string, FileSnapshot>,
   createdDirs: string[]
-): Promise<string[]> {
+): string[] {
   const failures: string[] = []
+  // Every restore goes through the contained helpers, like the commit itself: a
+  // rollback runs after an arbitrary delay and must not follow a symlink planted on
+  // the path in the meantime any more than the patch could.
   for (const [abs, snap] of snaps) {
     try {
       if (snap.data === null) {
-        await fs.rm(abs, { force: true })
+        removeFileContained(roots, abs)
       } else {
-        await fs.mkdir(dirname(abs), { recursive: true })
-        await fs.writeFile(abs, snap.data)
-        if (snap.mode !== undefined) await fs.chmod(abs, snap.mode)
+        writeFileContained(roots, abs, snap.data, { mode: snap.mode })
       }
     } catch (e) {
       failures.push(`${abs} (${(e as Error).message})`)
@@ -1381,13 +1438,11 @@ async function rollbackTo(
   }
   // Directories this call brought into being hold nothing but files it just wrote
   // and has now removed, so they go too — otherwise a rolled-back patch would leave
-  // a scaffold of empty directories behind. Deepest first, and best-effort.
+  // a scaffold of empty directories behind. Deepest first, and best-effort. Each is
+  // removed only while empty (rmdir, never a recursive rm): anything else that
+  // appeared in one since stays, rather than being deleted on the patch's say-so.
   for (const dir of [...createdDirs].sort((a, b) => b.length - a.length)) {
-    try {
-      await fs.rm(dir, { recursive: true, force: true })
-    } catch {
-      // An empty directory left behind is untidy, not incorrect; never fail on it.
-    }
+    removeEmptyDirContained(roots, dir)
   }
   return failures
 }
@@ -1511,21 +1566,22 @@ const applyPatch: ToolDef = {
       // Phase 2: commit. Deletes first so a Move's delete can't clobber its target.
       for (const change of staged.filter((c) => c.content === null)) {
         failing = change
-        await fs.rm(change.abs, { force: true })
+        removeFileContained(roots, change.abs, { display: change.rel })
       }
       for (const change of staged.filter((c) => c.content !== null)) {
         failing = change
-        // mkdir reports the topmost directory it had to create, which is exactly what
-        // a rollback needs to remove; undefined means they all already existed.
-        const created = await fs.mkdir(dirname(change.abs), { recursive: true })
-        if (created) createdDirs.push(created)
-        await fs.writeFile(change.abs, change.content as string, 'utf8')
-        if (change.mode !== undefined) await fs.chmod(change.abs, change.mode)
+        // The helper reports every directory it had to create, which is exactly what
+        // a rollback needs to remove.
+        writeFileContained(roots, change.abs, change.content as string, {
+          display: change.rel,
+          mode: change.mode,
+          createdDirs
+        })
       }
     } catch (e) {
       const where = failing ? ` on ${failing.rel}` : ''
       const relOf = new Map(staged.map((c) => [c.abs, c.rel]))
-      const restoreFailures = (await rollbackTo(snaps, createdDirs)).map(
+      const restoreFailures = rollbackTo(roots, snaps, createdDirs).map(
         (f) => f.replace(/^(\S+)/, (abs) => relOf.get(abs) ?? abs)
       )
       if (restoreFailures.length > 0) {
@@ -1620,7 +1676,8 @@ const searchTool: ToolDef = {
       ignoreCase: args.ignore_case === true,
       glob: str(args, 'glob') || undefined,
       context: context !== undefined ? Math.max(0, Math.floor(context)) : undefined,
-      filesWithMatches: args.files_with_matches === true
+      filesWithMatches: args.files_with_matches === true,
+      scopeCache: ctx.scopeCache
     })
   }
 }
@@ -1657,7 +1714,8 @@ const astGrepTool: ToolDef = {
       // Prefer the ast-grep we bundle with the packaged app; fall back to one on PATH (dev).
       binPath: bundledAstGrep() ?? resolveAstGrep(),
       max: 100,
-      signal: ctx.signal
+      signal: ctx.signal,
+      scopeCache: ctx.scopeCache
     })
   }
 }
@@ -1699,27 +1757,39 @@ async function walkGlob(
  * either way (glob's default dot:false), except tracked ones git lists (see
  * gitTrackedHidden), which `**` and `*` then match like any other path.
  */
-async function collectGlob(base: string, pattern: string, out: { full: string; mtimeMs: number }[]): Promise<void> {
-  const listed = await gitListFiles(base)
+async function collectGlob(
+  base: string,
+  pattern: string,
+  out: { full: string; mtimeMs: number }[],
+  scopeCache?: ScopeCache
+): Promise<void> {
+  const { listed, trackedHidden: hidden } = await (scopeCache?.listing(base) ?? listScope(base))
   // Compiled once per call, not once per listed path.
   const matches = globTester(pattern)
   if (!listed) return walkGlob(base, base, matches, out)
-  const trackedHidden = new Set(await gitTrackedHidden(base))
+  const trackedHidden = new Set(hidden)
   const matchesDot = globTester(pattern, { dot: true })
-  for (const rel of listed) {
-    const ok = hasHiddenSegment(rel) ? trackedHidden.has(rel) && matchesDot(rel) : matches(rel)
-    if (!ok) continue
-    const full = join(base, rel)
-    try {
-      // lstat: like the walk, never follow a symlink. Tracked files deleted from
-      // disk and submodule entries are skipped too.
-      const st = await fs.lstat(full)
-      if (st.isFile()) out.push({ full, mtimeMs: st.mtimeMs })
-    } catch {
-      // deleted from disk but still in the index
-    }
+  const picked = listed.filter((rel) =>
+    hasHiddenSegment(rel) ? trackedHidden.has(rel) && matchesDot(rel) : matches(rel)
+  )
+  // lstat: like the walk, never follow a symlink. Tracked files deleted from disk
+  // (still in the index) and submodule entries are skipped too. A batch at a time
+  // rather than one by one, which dominated a broad pattern on a large repo; results
+  // keep the listing's order.
+  for (let i = 0; i < picked.length; i += GLOB_LSTAT_BATCH) {
+    const batch = picked.slice(i, i + GLOB_LSTAT_BATCH).map((rel) => join(base, rel))
+    const stats = await Promise.all(batch.map((full) => fs.lstat(full).catch(() => null)))
+    stats.forEach((st, j) => {
+      if (st?.isFile()) out.push({ full: batch[j], mtimeMs: st.mtimeMs })
+    })
   }
 }
+
+/**
+ * Paths glob lstats at once: enough to keep the thread pool busy, few enough that a
+ * broad match never queues tens of thousands of requests ahead of other file I/O.
+ */
+const GLOB_LSTAT_BATCH = 256
 
 const globTool: ToolDef = {
   kind: 'read',
@@ -1748,7 +1818,7 @@ const globTool: ToolDef = {
     // Collect ALL matches before sorting/capping: the cap must be applied to the
     // mtime-sorted set so "most-recently-modified first" holds and the newest file is
     // never dropped just because traversal reached it after an arbitrary 200 others.
-    await collectGlob(start, pattern, found)
+    await collectGlob(start, pattern, found, ctx.scopeCache)
     if (found.length === 0) return 'No files found.'
     found.sort((a, b) => b.mtimeMs - a.mtimeMs)
     const shown = found.slice(0, MAX_GLOB_RESULTS)
@@ -1775,8 +1845,8 @@ const NETWORK_ERROR_RE =
 /** The hint appended to a network-looking failure that ran without network access. */
 export const NETWORK_BLOCKED_HINT =
   '[note: this command ran in the sandbox WITHOUT network access. If it failed because it needs the network ' +
-  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user grants network for the rest ' +
-  'of the run by choosing "Allow for run" on a shell command\'s approval prompt. Then retry.]'
+  '(cloning, installing deps, `gh`/`curl`, etc.), this is not impossible: the user is asked whether shell ' +
+  'commands may reach the network for this chat. Retry only once they have allowed it.]'
 
 /**
  * {@link NETWORK_BLOCKED_HINT} for a headless run, which has no approval prompt to
@@ -1790,7 +1860,7 @@ export const HEADLESS_NETWORK_BLOCKED_HINT =
   'the network.]'
 
 /**
- * Replaces the network hint on a full-auto command that failed offline once the user
+ * Replaces the network hint on a command that failed offline once the user
  * has answered the shell-network question it raised (see offerShellNetwork in loop.ts).
  */
 export const SHELL_NETWORK_GRANTED_NOTE =
@@ -2190,7 +2260,7 @@ const runShell: ToolDef = {
       })
       const watching = notifyOn.length ? ` Lines containing ${notifyOn.map((p) => JSON.stringify(p)).join(', ')} will be reported as they print.` : ''
       const reported = ctx.conversationId ? ` You will be told when it exits.${watching}` : ''
-      const started = `Started background shell ${id}. Poll it with read_shell_output({ shell_id: "${id}" }) and stop it with kill_shell({ shell_id: "${id}" }).${reported}`
+      const started = `Started background shell ${id}. Read its output with read_shell_output({ shell_id: "${id}" }), wait for it to finish with wait_for({ id: "${id}" }), and stop it with kill_shell({ shell_id: "${id}" }).${reported}`
       return sandboxAvailable() ? started : `${started}\n${UNSANDBOXED_SHELL_NOTE}`
     }
 
@@ -2199,6 +2269,17 @@ const runShell: ToolDef = {
     // Route through the persistent session only when the backend's shell can run the
     // bash prelude (`cd`/env threading). On a cmd.exe fallback it can't, so run directly.
     const session = ctx.shellSession && backendSupportsSession() ? ctx.shellSession : undefined
+    // Every chunk also goes to a capped copy, so a result clamped below can point at
+    // the whole output on disk (see shellSpill.ts).
+    const tee = ctx.spillShellOutput ? new OutputTee() : null
+    const watch = ctx.onShellOutput
+    const onOutput =
+      tee || watch
+        ? (chunk: string): void => {
+            tee?.push(chunk)
+            watch?.(chunk)
+          }
+        : undefined
     const result = session
       ? await runInSession({
           command,
@@ -2209,7 +2290,7 @@ const runShell: ToolDef = {
           egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
-          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {}),
+          ...(onOutput ? { onOutput } : {}),
           run: runSandboxed
         })
       : await runSandboxed({
@@ -2221,7 +2302,7 @@ const runShell: ToolDef = {
           egressProxy: ctx.egressProxy,
           timeoutMs,
           signal: ctx.signal,
-          ...(ctx.onShellOutput ? { onOutput: ctx.onShellOutput } : {})
+          ...(onOutput ? { onOutput } : {})
         })
     const segments: string[] = []
     if (result.stdout) segments.push(result.stdout.trimEnd())
@@ -2232,8 +2313,18 @@ const runShell: ToolDef = {
     const parts: string[] = []
     // Clamp first; the network-error scan then runs over the bounded text (errors
     // surface in stderr, which the both-ends clamp keeps), not a multi-MB blob.
-    const body = clampToolResult(segments.join('\n'), ctx.shellOutputMaxBytes)
+    const joined = segments.join('\n')
+    const body = clampToolResult(joined, ctx.shellOutputMaxBytes)
     if (body) parts.push(body)
+    // Clamped here, or already cut while streaming (the per-stream memory cap): the
+    // middle is gone from the result, so say where the whole output is.
+    if (tee && ctx.spillShellOutput && (body !== joined || STREAM_TRUNCATION_MARKER.test(joined))) {
+      const spilled = await ctx.spillShellOutput(
+        tee.text(),
+        tee.overflowed ? `[output cut at ${SPILL_MAX_BYTES} bytes]` : undefined
+      )
+      if (spilled) parts.push(spillNote(spilled))
+    }
     if (result.timedOut) parts.push(shellTimeoutHint(timeoutMs ?? DEFAULT_TIMEOUT_MS))
     parts.push(`[exit code: ${result.exitCode ?? 'killed'}]`)
     // A `cd` carries over to later commands, but file tools keep resolving from the
@@ -2381,6 +2472,35 @@ const killShellTool: ToolDef = {
   }
 }
 
+const waitForTool: ToolDef = {
+  // Only waits on work the agent already started; it starts, changes, and reads nothing new.
+  kind: 'read',
+  summarize: (a) => `Wait for ${str(a, 'id') || 'background work'}`,
+  schema: {
+    name: WAIT_FOR_NAME,
+    description: `Wait until a background agent (a dispatch with background: true), a background shell (run_shell with background: true), or a session you started with spawn_session finishes, then get its result: an agent's report, a shell's exit code and last lines, or a session's outcome and the start of its answer. Use it when you have nothing useful to do until that work is done, instead of polling read_shell_output or ending your turn. Waits at most timeout_seconds (default ${WAIT_FOR_DEFAULT_SECONDS}, max ${WAIT_FOR_MAX_SECONDS}); if it is still running then, you are told so and can wait again. The user can stop the wait with Stop.`,
+    parameters: objectSchema(
+      {
+        id: {
+          type: 'string',
+          description: 'The agent id a background dispatch returned, the shell id run_shell returned, or the session id spawn_session returned.'
+        },
+        timeout_seconds: {
+          type: 'number',
+          description: `How long to wait at most, in seconds (default ${WAIT_FOR_DEFAULT_SECONDS}, max ${WAIT_FOR_MAX_SECONDS}).`
+        }
+      },
+      ['id']
+    )
+  },
+  async execute(args, ctx) {
+    const id = str(args, 'id').trim()
+    if (!id) throw new Error('id is required: an agent id from a background dispatch, a shell id from run_shell, or a session id from spawn_session.')
+    if (!ctx.waitFor) throw new Error('Waiting on background work is not available in this context.')
+    return ctx.waitFor(id, waitSeconds(args.timeout_seconds))
+  }
+}
+
 /**
  * Preamble on every fetched page. The fence tells the model where attacker-controlled
  * input starts and stops; this tells it what the fence means. Both are advisory on
@@ -2495,6 +2615,29 @@ export function sandboxedLoopbackHint(
     'started is not reachable here. Check it with HTTP requests from the same command that starts it, ' +
     'or ask the user to set Sandbox egress to "All domains" in Settings.]'
   )
+}
+
+/** The longest page title {@link envelopeTitle} keeps. */
+const MAX_ENVELOPE_TITLE_CHARS = 120
+
+/**
+ * A page's `<title>`, made fit for the trusted first line of view_localhost's result,
+ * outside the fence. The page picks its title, and a dev server can serve one built
+ * from anything (stored user input, fetched data), of any length and with line breaks,
+ * so a title could otherwise write paragraphs into the slot the agent reads as
+ * Houston's framing. Control characters and line breaks become spaces, bidi controls
+ * and the invisible zero-width characters go, whitespace runs become one space, and
+ * it is cut to {@link MAX_ENVELOPE_TITLE_CHARS}. Unlike an HTTP reason phrase, a title
+ * is often not English, so non-ASCII text is kept (the joiners emoji need included).
+ */
+function envelopeTitle(title: string): string {
+  const clean = stripBidiControls(title)
+    .replace(/[\p{Cc}\u2028\u2029]/gu, ' ')
+    .replace(/[\u200B\u2060\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const chars = [...clean]
+  return chars.length > MAX_ENVELOPE_TITLE_CHARS ? `${chars.slice(0, MAX_ENVELOPE_TITLE_CHARS).join('')}…` : clean
 }
 
 const viewLocalhost: ToolDef = {
@@ -2614,7 +2757,8 @@ const viewLocalhost: ToolDef = {
     })
 
     const lines: string[] = []
-    lines.push(`Loaded ${cap.finalUrl}${cap.title ? `: "${cap.title}"` : ''} (${cap.width}×${cap.height})`)
+    const title = envelopeTitle(cap.title)
+    lines.push(`Loaded ${cap.finalUrl}${title ? `: "${title}"` : ''} (${cap.width}×${cap.height})`)
     const note = await ownerNote
     if (note) lines.push(note)
     if (cap.loadError) {
@@ -2627,7 +2771,9 @@ const viewLocalhost: ToolDef = {
     }
     if (cap.steps) {
       lines.push('Steps:')
-      for (const r of cap.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step}: ${r.error}`)
+      // A failed step's error is fenced below rather than written here: it can be the
+      // page's own words (an exception the page threw, text it rendered).
+      for (const r of cap.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step} (its error is in "Step errors" below)`)
       const notRun = steps.length - cap.steps.length
       if (notRun > 0) lines.push(`  (${notRun} later step${notRun === 1 ? '' : 's'} not run)`)
       lines.push(`Now at ${cap.finalUrl}`)
@@ -2678,6 +2824,14 @@ const viewLocalhost: ToolDef = {
     // can carry text from anywhere (stored user input, fetched data, third-party
     // scripts), so both are fenced. Empty ones are reported in the trusted envelope.
     const parts: UntrustedPart[] = []
+    const failed = (cap.steps ?? []).filter((r) => !r.ok)
+    if (failed.length) {
+      parts.push({
+        label: 'Step errors:',
+        text: failed.map((r) => `${r.step}: ${r.error ?? 'failed'}`).join('\n'),
+        source: `${cap.finalUrl} (step errors)`
+      })
+    }
     if (cap.pageText) {
       parts.push({
         label: cap.pageTextTruncated
@@ -2703,14 +2857,251 @@ const viewLocalhost: ToolDef = {
       envelope: lines.join('\n'),
       parts,
       preamble: untrustedPreamble(
-        "the loaded page's visible text and console output",
+        "the loaded page's visible text, console output, and step errors",
         'A local dev server can serve text from anywhere (stored user input, fetched data, third-party scripts)'
       ),
       subject: 'page',
       toolNames: builtinToolNames(),
-      // The title and a failed step's error can carry the page's own words, and both
-      // render outside the fence.
-      alsoScore: [cap.title, ...(cap.steps ?? []).map((r) => r.error ?? '')].join('\n')
+      // The title carries the page's own words and renders outside the fence, clamped.
+      alsoScore: title
+    })
+  }
+}
+
+/** Tool name for the persistent loopback browser, shared so the loop can gate and key it. */
+export const BROWSER_SESSION_NAME = 'browser_session'
+
+/** The browser_session actions, in the order the schema lists them. */
+export const BROWSER_ACTIONS = ['open', 'act', 'snapshot', 'console', 'network', 'close'] as const
+
+const browserPreamble = (what: string): string =>
+  untrustedPreamble(
+    what,
+    'A local dev server can serve text from anywhere (stored user input, fetched data, third-party scripts)'
+  )
+
+/** The page's visible text as a fenced part, or a trusted "(none)" line when it has none. */
+function pageTextPart(state: PageState, lines: string[]): UntrustedPart[] {
+  if (state.pageText) {
+    return [
+      {
+        label: state.pageTextTruncated
+          ? `Visible page text (first ${MAX_PAGE_TEXT_CHARS} characters):`
+          : 'Visible page text:',
+        text: state.pageText,
+        source: `${state.finalUrl} (page text)`
+      }
+    ]
+  }
+  if (state.pageText === undefined) lines.push('', 'Visible page text: (could not be read)')
+  else lines.push('', 'Visible page text: (none)')
+  return []
+}
+
+const browserSessionTool: ToolDef = {
+  kind: 'network',
+  summarize: (a) => {
+    const action = typeof a.action === 'string' ? a.action : ''
+    if (action === 'open') return `Browser: open ${str(a, 'url')}`
+    if (action === 'act') {
+      // The approval card lists what will be clicked and typed into, never the values.
+      let steps: string[]
+      try {
+        steps = parseSessionSteps(a.steps).map(describeStep)
+      } catch {
+        steps = Array.isArray(a.steps) ? [`${a.steps.length} step(s), invalid`] : []
+      }
+      return `Browser: ${steps.length ? steps.join(', ') : 'act'}`
+    }
+    if (action === 'snapshot') return 'Browser: snapshot the page'
+    if (action === 'console') return 'Browser: read console messages'
+    if (action === 'network') return 'Browser: read network requests'
+    if (action === 'close') return 'Browser: close the session'
+    return `Browser: ${action || 'unknown action'}`
+  },
+  schema: {
+    name: BROWSER_SESSION_NAME,
+    description:
+      'A persistent headless browser page for testing a localhost/loopback dev server you started with run_shell. Unlike view_localhost, the page stays open across calls for the rest of this run, so cookies, storage, and in-page state (a login, a half-filled form) carry over. Actions: open loads a loopback URL (in the open page when there is one); act runs steps on the current page (the same steps as view_localhost, each targeting a CSS selector or a ref from the last snapshot) and reports each result and the visible page text; snapshot returns the accessibility tree (roles, names, states, and a ref like e12 for each element) plus a screenshot; console returns recent console messages; network returns recent requests with method, URL, status, and timing; close ends the session. Prefer refs from a fresh snapshot over guessed selectors. Use test data, not the user\'s real credentials. Only loopback hosts (localhost, 127.0.0.1, ::1) are allowed. Each call needs approval like view_localhost: per host, with act approved separately from reading the page.',
+    parameters: objectSchema(
+      {
+        action: { type: 'string', enum: [...BROWSER_ACTIONS], description: 'What to do.' },
+        url: { type: 'string', description: 'open: a loopback URL to load, e.g. "http://localhost:3000/login".' },
+        steps: {
+          type: 'array',
+          description:
+            'act: steps run in order on the current page (at most 20), stopping at the first failure. Same actions as view_localhost: fill, click, dblclick, press, wait_for, expect_text, wait. Give each step a ref from the latest snapshot or a selector, not both.',
+          items: {
+            type: 'object',
+            properties: {
+              action: { type: 'string', enum: [...STEP_ACTIONS] },
+              ref: { type: 'string', description: 'An element ref from the latest snapshot, e.g. "e12".' },
+              selector: {
+                type: 'string',
+                description: 'Standard CSS selector, no :contains() or :has-text(), when there is no ref.'
+              },
+              value: { type: 'string', description: 'Text to enter (fill), or the text to look for (expect_text).' },
+              key: { type: 'string', enum: [...PRESS_KEYS], description: 'Key to press (press).' },
+              absent: { type: 'boolean', description: 'expect_text: pass only when the text is not visible.' },
+              timeout_ms: { type: 'number', description: 'How long wait_for or expect_text waits.' },
+              ms: { type: 'number', description: 'How long wait pauses.' }
+            },
+            required: ['action'],
+            additionalProperties: false
+          }
+        },
+        limit: {
+          type: 'number',
+          description: `console and network: how many of the most recent entries to return (default ${DEFAULT_LOG_LIMIT}, max ${MAX_LOG_LIMIT}).`
+        }
+      },
+      ['action']
+    )
+  },
+  async execute(args, ctx) {
+    const action = typeof args.action === 'string' ? args.action : ''
+    if (!(BROWSER_ACTIONS as readonly string[]).includes(action)) {
+      throw new Error(`action must be one of ${BROWSER_ACTIONS.join(', ')}.`)
+    }
+    const browser = ctx.browserSession
+    if (!browser) return BROWSER_UNAVAILABLE
+
+    if (action === 'close') {
+      return browser.close() ? 'Closed the browser session.' : 'No browser session was open.'
+    }
+
+    if (action === 'open') {
+      const url = str(args, 'url')
+      if (!url) throw new Error('url is required for "open".')
+      const port = urlPort(url)
+      const ownerNote =
+        port !== null && ctx.portListeners
+          ? ctx.portListeners(port).then(
+              (listeners) =>
+                foreignListenerNote(port, listeners, ctx.roots ?? [ctx.workspace], backgroundShellGroups()),
+              () => null
+            )
+          : Promise.resolve(null)
+      const res = await browser.open(url, ctx.signal)
+      ctx.recordEvidence?.({
+        kind: 'browser',
+        url: res.finalUrl || url,
+        ...(res.loadError ? { loadError: res.loadError } : {}),
+        steps: [],
+        planned: 0
+      })
+      const lines = [
+        `${res.reused ? 'Loaded in the open browser session' : 'Opened a browser session at'} ${res.finalUrl}`
+      ]
+      const note = await ownerNote
+      if (note) lines.push(note)
+      if (res.loadError) {
+        lines.push(`[load warning: ${res.loadError}]`)
+        const hint = sandboxedLoopbackHint(res.loadError, activeBackendId(), {
+          allowNetwork: ctx.allowNetwork === true,
+          proxied: ctx.egressProxy !== undefined
+        })
+        if (hint) lines.push(hint)
+      }
+      lines.push('[take a snapshot to see the page and get element refs]')
+      const parts: UntrustedPart[] = [
+        ...(res.title ? [{ label: 'Page title:', text: res.title, source: `${res.finalUrl} (title)` }] : []),
+        ...pageTextPart(res, lines)
+      ]
+      if (!parts.length) return lines.join('\n')
+      return presentUntrustedInline({
+        envelope: lines.join('\n'),
+        parts,
+        preamble: browserPreamble("the loaded page's title and visible text"),
+        subject: 'page',
+        toolNames: builtinToolNames()
+      })
+    }
+
+    if (action === 'act') {
+      const steps = parseSessionSteps(args.steps)
+      if (!steps.length) throw new Error('steps is required for "act".')
+      const res = await browser.act(steps, ctx.signal)
+      ctx.recordEvidence?.({
+        kind: 'browser',
+        url: res.finalUrl,
+        steps: res.steps.map((r, i) => ({ step: r.step, ok: r.ok, action: steps[i]?.action ?? 'wait' })),
+        planned: steps.length
+      })
+      const lines = ['Steps:']
+      for (const r of res.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step}: ${r.error}`)
+      const notRun = steps.length - res.steps.length
+      if (notRun > 0) lines.push(`  (${notRun} later step${notRun === 1 ? '' : 's'} not run)`)
+      lines.push(`Now at ${res.finalUrl}`)
+      const parts = pageTextPart(res, lines)
+      if (!parts.length) return lines.join('\n')
+      return presentUntrustedInline({
+        envelope: lines.join('\n'),
+        parts,
+        preamble: browserPreamble("the page's visible text after the steps"),
+        subject: 'page',
+        toolNames: builtinToolNames(),
+        // A failed step's error can carry the page's own words, outside the fence.
+        alsoScore: res.steps.map((r) => r.error ?? '').join('\n')
+      })
+    }
+
+    if (action === 'snapshot') {
+      const snap = await browser.snapshot(ctx.signal)
+      const lines = [`Snapshot of ${snap.finalUrl} (${snap.width}×${snap.height})`]
+      const bytes = snap.png.byteLength
+      if (bytes > MAX_ATTACH_IMAGE_BYTES) {
+        lines.push(`[screenshot ${humanSize(bytes)} exceeds the ${humanSize(MAX_ATTACH_IMAGE_BYTES)} attach limit, so it is not shown]`)
+      } else if (!ctx.attachImage) {
+        lines.push(`[screenshot ${humanSize(bytes)} captured; it cannot be displayed in this context]`)
+      } else {
+        ctx.attachImage({ mediaType: 'image/png', data: snap.png.toString('base64') })
+        lines.push(`[screenshot (${humanSize(bytes)}) attached below for viewing]`)
+      }
+      lines.push('Act on an element by passing its ref (e.g. "e12") in an act step. Refs last until the page navigates.')
+      const parts: UntrustedPart[] = [
+        ...(snap.title ? [{ label: 'Page title:', text: snap.title, source: `${snap.finalUrl} (title)` }] : [])
+      ]
+      if (snap.tree) {
+        parts.push({
+          label: snap.treeTruncated
+            ? `Accessibility tree (first ${MAX_SNAPSHOT_CHARS} characters):`
+            : 'Accessibility tree:',
+          text: snap.tree,
+          source: `${snap.finalUrl} (accessibility tree)`
+        })
+      } else {
+        lines.push('', 'Accessibility tree: (empty)')
+      }
+      if (!parts.length) return lines.join('\n')
+      return presentUntrustedInline({
+        envelope: lines.join('\n'),
+        parts,
+        preamble: browserPreamble("the page's title and accessibility tree"),
+        subject: 'page',
+        toolNames: builtinToolNames()
+      })
+    }
+
+    // console / network: the page's own log, fenced like everything else it wrote.
+    const limit = logLimit(args.limit)
+    const log = action === 'console' ? browser.console(limit) : browser.network(limit)
+    const noun = action === 'console' ? 'console message' : 'request'
+    if (!log.lines.length) return `No ${noun}s recorded for ${log.finalUrl} yet.`
+    const shown = Math.min(limit, log.total)
+    const envelope = `${shown === log.total ? `All ${log.total}` : `Last ${shown} of ${log.total}`} ${noun}${log.total === 1 ? '' : 's'} in the browser session (now at ${log.finalUrl}), oldest first.`
+    return presentUntrustedInline({
+      envelope,
+      parts: [
+        {
+          label: action === 'console' ? 'Console output:' : 'Network requests:',
+          text: log.lines.join('\n'),
+          source: `${log.finalUrl} (${action})`
+        }
+      ],
+      preamble: browserPreamble(action === 'console' ? "the page's console output" : "the page's network requests"),
+      subject: 'page',
+      toolNames: builtinToolNames()
     })
   }
 }
@@ -3105,6 +3496,20 @@ const skillTool: ToolDef = {
   }
 }
 
+/**
+ * The dispatch tools' `background` parameter. Kept short: dispatch_agent is sent on
+ * every request, and the result of a background start says how its report comes back.
+ */
+const BACKGROUND_PARAM = {
+  type: 'boolean',
+  description: 'Optional: true returns an id at once; the report comes later.'
+} as const
+
+/** Whether a dispatch asked for `background` (a boolean, or the string the model sometimes sends). */
+function backgroundArg(args: Record<string, unknown>): boolean {
+  return args.background === true || args.background === 'true'
+}
+
 const dispatchAgent: ToolDef = {
   kind: 'read', // spawns a read-only subagent — no side effects, no approval needed
   summarize: (a) => `Subagent: ${str(a, 'description') || 'research task'}`,
@@ -3133,7 +3538,8 @@ const dispatchAgent: ToolDef = {
           type: 'string',
           description:
             'Optional: the id of a subagent from an earlier dispatch in this chat (shown at the end of its report, e.g. "ag1"). Continues that agent, and `prompt` becomes your follow-up message to it. Ids last for the app session.'
-        }
+        },
+        background: BACKGROUND_PARAM
       },
       ['description', 'prompt']
     )
@@ -3147,7 +3553,8 @@ const dispatchAgent: ToolDef = {
       description: str(args, 'description') || undefined,
       agent: str(args, 'agent') || undefined,
       model: str(args, 'model') || undefined,
-      resume: str(args, 'resume') || undefined
+      resume: str(args, 'resume') || undefined,
+      ...(backgroundArg(args) ? { background: true } : {})
     })
   }
 }
@@ -3188,7 +3595,8 @@ const dispatchWritableAgent: ToolDef = {
           type: 'string',
           description:
             'Optional: the id of a writable subagent from an earlier dispatch in this chat (shown at the end of its report). Continues that agent, and `prompt` becomes your follow-up message to it. Ids last for the app session.'
-        }
+        },
+        background: BACKGROUND_PARAM
       },
       ['description', 'prompt']
     )
@@ -3204,7 +3612,8 @@ const dispatchWritableAgent: ToolDef = {
       description: str(args, 'description') || undefined,
       agent: str(args, 'agent') || undefined,
       model: str(args, 'model') || undefined,
-      resume: str(args, 'resume') || undefined
+      resume: str(args, 'resume') || undefined,
+      ...(backgroundArg(args) ? { background: true } : {})
     })
   }
 }
@@ -3221,7 +3630,7 @@ function firstLine(s: string): string {
 
 /** The tool-result text for a completed spawn — shown in the card and read by the model. */
 function formatSpawnResult(r: SpawnSessionResult): string {
-  const lines = [`Started session "${r.title}", now running in the background.`]
+  const lines = [`Started session "${r.title}" (id ${r.conversationId}), now running in the background.`]
   lines.push(
     r.worktree
       ? `Worktree: branch ${r.worktree.branch} at ${r.worktree.path}`
@@ -3264,7 +3673,7 @@ export function parseContextArg(args: Record<string, unknown>): SessionContext {
 const WORKTREE_PARAM = {
   type: 'object',
   description:
-    'Optional: run the session on a new git branch + worktree (an isolated checkout) so parallel sessions never collide. Omit to reuse the current workspace.',
+    'Optional: the new git branch + worktree (an isolated checkout) the session runs on, so parallel sessions never collide. In a git repository the session gets one by default, on a branch named after its title; set this to choose the branch name or its base.',
   properties: {
     branch: {
       type: 'string',
@@ -3313,6 +3722,11 @@ const spawnSessionTool: ToolDef = {
             'Optional short title for the chat as it appears in the sidebar (a few words). Omit to derive one from the prompt.'
         },
         worktree: WORKTREE_PARAM,
+        same_checkout: {
+          type: 'boolean',
+          description:
+            "Optional: true runs the session in this chat's own folder instead of a new worktree. Only when the user asked for that or the session will only read: two sessions writing one checkout overwrite each other's changes. Can't be combined with worktree."
+        },
         context: CONTEXT_PARAM
       },
       ['prompt']
@@ -3325,11 +3739,16 @@ const spawnSessionTool: ToolDef = {
     const title = str(args, 'title').trim()
     const worktree = parseWorktreeArg(args)
     const context = parseContextArg(args)
+    const sameCheckout = args.same_checkout === true || args.same_checkout === 'true'
+    if (sameCheckout && worktree) {
+      throw new Error('Pass either worktree or same_checkout: true, not both.')
+    }
 
     const result = await ctx.spawnSession({
       prompt,
       ...(title ? { title } : {}),
       ...(worktree ? { worktree } : {}),
+      ...(sameCheckout ? { sameCheckout } : {}),
       ...(context === 'fork' ? { context } : {})
     })
     return formatSpawnResult(result)
@@ -5588,8 +6007,10 @@ export const TOOLS: ToolDef[] = [
   runShell,
   readShellOutputTool,
   killShellTool,
+  waitForTool,
   webFetch,
   viewLocalhost,
+  browserSessionTool,
   showImages,
   renderMockup,
   webSearch,
@@ -5644,6 +6065,11 @@ export function getTool(name: string): ToolDef | undefined {
 export interface BuiltinToolsetOptions {
   /** A localhost capture backend is wired (desktop only); backs view_localhost. */
   localhostCapture: boolean
+  /**
+   * A persistent browser backend is wired (desktop only); backs browser_session.
+   * Absent counts as false.
+   */
+  browserSession?: boolean
   /** The client draws show_images as a gallery (the desktop app); backs show_images. */
   imageGallery: boolean
   /** The client lists show_images as clickable file links (the terminal app). Absent counts as false. */
@@ -5695,12 +6121,15 @@ export function builtinToolset(opts: BuiltinToolsetOptions): ToolDef[] {
   return TOOLS.filter((t) => {
     const name = t.schema.name
     if (name === VIEW_LOCALHOST_NAME) return opts.localhostCapture
+    if (name === BROWSER_SESSION_NAME) return opts.browserSession === true
     if (name === SHOW_IMAGES_NAME) return opts.imageGallery || opts.imageLinks === true
     if (name === RENDER_MOCKUP_NAME) return opts.imageGallery && opts.mockupRender === true
     if (name === SPAWN_SESSION_NAME) return opts.spawn
     if (name === PROPOSE_SESSION_NAME) return opts.spawn && opts.proposals !== false
     if ((SCHEDULE_TOOL_NAMES as readonly string[]).includes(name)) return opts.scheduler
     if (name === PRESENT_PLAN_NAME) return opts.planMode
+    // Plan mode starts no shells or sessions, so there is nothing new to wait on.
+    if (name === WAIT_FOR_NAME) return !opts.planMode
     if (name === ASK_USER_NAME) return opts.askUser !== false
     if ((LSP_TOOL_NAMES as readonly string[]).includes(name)) return opts.lsp === true
     if (name === RECALL_MEMORY_NAME) return opts.memory === true

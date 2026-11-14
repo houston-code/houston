@@ -12,7 +12,9 @@ const failed = (what: 'copy' | 'save'): ViewerActionResult => ({ ok: false, mess
  * window allows, its label and caption, and arrows (or ←/→) to step through the
  * set. An image with something to compare against can switch to a slider view of
  * the two. Esc, the ✕ button, or a click on the backdrop closes it, and focus
- * returns to whatever opened it.
+ * returns to whatever opened it. "Actual size" (a click on the image, or + and 0 / -)
+ * shows the image at 100% in a scrollable stage, for a tall screenshot that fitting
+ * to the window would shrink past reading.
  */
 export function ImageViewer({
   images,
@@ -39,6 +41,7 @@ export function ImageViewer({
   const [status, setStatus] = useState<{ ok: boolean; message: string } | null>(null)
   const [comparing, setComparing] = useState(false)
   const [divider, setDivider] = useState(50)
+  const [actual, setActual] = useState(false)
   const image = images[index]
   if (!image) return null
   const many = images.length > 1
@@ -46,9 +49,22 @@ export function ImageViewer({
 
   const go = (delta: number): void => {
     setStatus(null)
+    setActual(false)
     setIndex((i) => stepIndex(i, delta, images.length))
   }
   const onKeyDown = (e: ReactKeyboardEvent): void => {
+    if (!showCompare && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault()
+        setActual(true)
+        return
+      }
+      if (e.key === '0' || e.key === '-') {
+        e.preventDefault()
+        setActual(false)
+        return
+      }
+    }
     // The comparison slider uses the arrow keys itself.
     if (!many || (e.target instanceof HTMLInputElement && e.target.type === 'range')) return
     if (e.key === 'ArrowLeft') {
@@ -99,6 +115,17 @@ export function ImageViewer({
             >
               {status.message}
             </span>
+          )}
+          {!showCompare && (
+            <button
+              type="button"
+              className="btn btn--sm"
+              aria-pressed={actual}
+              onClick={() => setActual((a) => !a)}
+              title={actual ? 'Fit to the window (0)' : 'Show at actual size (+)'}
+            >
+              Actual size
+            </button>
           )}
           {image.compare && (
             <button
@@ -170,8 +197,22 @@ export function ImageViewer({
                 aria-label={`Divider between ${image.compare!.label} and ${image.label}`}
               />
             </div>
+          ) : actual ? (
+            <div className="image-viewer__scroller" tabIndex={0} aria-label="Image at actual size">
+              <img
+                className="image-viewer__image image-viewer__image--actual"
+                src={image.src}
+                alt={image.caption ?? image.label}
+                onClick={() => setActual(false)}
+              />
+            </div>
           ) : (
-            <img className="image-viewer__image" src={image.src} alt={image.caption ?? image.label} />
+            <img
+              className="image-viewer__image image-viewer__image--fit"
+              src={image.src}
+              alt={image.caption ?? image.label}
+              onClick={() => setActual(true)}
+            />
           )}
           {many && (
             <button type="button" className="image-viewer__arrow" onClick={() => go(1)} aria-label="Next image">

@@ -174,10 +174,20 @@ for the *denied* path, not only the allowed one, and a security pass before the 
 - `src/main/agent/tools.ts`: file-tool path containment (`realpathWithinRoots`). A path
   that resolves outside the workspace roots, including through a symlink or a dangling
   one, must be refused.
+- `src/main/agent/safeWrite.ts`: every main-process write, delete, or mode change to an
+  agent-chosen path. The check above is on a string; this re-derives containment at the
+  write (component-wise mkdir, `O_NOFOLLOW` open, fd identity check before any byte), so
+  a symlink a background shell swaps onto the path can't redirect it. Never write such a
+  path with plain `fs` calls.
 - `src/main/agent/permissions.ts`: permission-rule matching. Subject and pattern are
   canonicalized per kind before comparison (paths anchored to the roots, URL authority
   lowercased, shell commands dequoted and `$'...'` decoded) so a re-spelling of a denied
-  subject cannot slip past a rule. An allow reads a shell command the other way: a
+  subject cannot slip past a rule. A matching deny wins wherever it sits in the list
+  (only allow and ask are first-match), and a deny or ask on one file-editing tool
+  covers all five. An allow skips the workspace-escape and discard tripwires only when
+  it is exact or its own text trips them (`shellAllowCoversTripwires`), so a saved
+  prefix like `git push` never approves `git push --force`. An allow reads a shell
+  command the other way: a
   quoted `*`, `~`, `$`, or space stays distinct from a bare one, and an empty `''` word
   from no word at all, so approving a literal never approves the expansion. Words split
   only on unquoted space, tab, and newline, as in bash: quoted or escaped whitespace is
@@ -223,6 +233,14 @@ for the *denied* path, not only the allowed one, and a security pass before the 
   in every mode, past allow rules and "Allow for run"; keep `memoryTaintSource` in step
   with any new tool that returns such text. The store refuses credentials, never takes a
   file name from the caller, and never reads or writes through a symlink.
+- `src/main/agent/plugins.ts`, `projectConfig.ts`, and the protected control-file check
+  in `sensitive-paths.ts`: project plugins are JavaScript the main process evaluates
+  outside the sandbox, so they load only with the `projectPlugins` switch on AND folder
+  trust whose fingerprint covers every plugin file's hash, and they run the exact bytes
+  that were hashed. A write to an in-project control file (`.houston/`, `.vscode/`,
+  `.envrc`, `.husky/`, CI workflows, ...) asks in every mode past "Allow for run"
+  (`protectedWrite`); only an allow rule for the path skips it. Keep the list in step
+  with any new file that runs code outside the sandbox or steers Houston's guardrails.
 - `src/main/agent/lsp/`: language servers run project code without an approval prompt,
   so they launch only through the sandbox (off where it can't confine them unless the user
   opts in), every location a server returns must pass `resolveInRoots`, credential-file

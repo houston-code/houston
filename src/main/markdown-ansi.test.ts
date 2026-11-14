@@ -157,6 +157,22 @@ describe('MarkdownStream', () => {
     const out = s.flush()
     expect(out).toContain('const x = 1')
   })
+
+  // A reply is the model's text: an escape in it could move the cursor, rewrite the
+  // transcript above or write the clipboard. Only the renderer's own colour survives;
+  // every other control character is shown as a <U+XXXX> code, so none is hidden.
+  it('shows the control characters a reply carries as codes, keeping its lines and tabs', () => {
+    const s = new MarkdownStream({ paint: makePainter(true), width: 0 })
+    const out =
+      s.push('Done\x1b]52;c;ZXZpbA==\x07.\r\n\n') + s.push('```\n\tcode\x1b[2J\n```\n\n') + s.push('**b**\x9b') + s.flush()
+    // Nothing but colour: no other escape, and no other control character.
+    // eslint-disable-next-line no-control-regex -- asserting no control characters survive
+    expect(out).not.toMatch(/\x1b\[(?![0-9;]*m)|\x1b\]|[\x00-\x08\x0b-\x1a\x1c-\x1f\x7f-\x9f]/)
+    expect(out).toContain('Done<U+001B>]52;c;ZXZpbA==<U+0007>.')
+    expect(out).toContain('\tcode<U+001B>[2J')
+    expect(out).toContain('\x1b[1m') // the bold it renders
+    expect(renderMarkdownAnsi('a\x1b[2Kb\rc', { paint, width: 0 })).toBe('a<U+001B>[2Kb<U+000D>c')
+  })
 })
 
 describe('MarkdownStream chunking', () => {
@@ -268,5 +284,17 @@ describe('visual blocks in the terminal', () => {
   it('leaves ordinary code, and plain html, without a hint', () => {
     expect(renderMarkdownAnsi('```ts\nconst x = 1\n```', { paint })).not.toContain('↳')
     expect(renderMarkdownAnsi('```html\n<p>x</p>\n```', { paint })).not.toContain('↳')
+  })
+})
+
+describe('renderMarkdownAnsi on hostile nesting', () => {
+  it.each([
+    ['nested bullets', '- '.repeat(5000) + 'x'],
+    ['nested quotes', '>'.repeat(8000) + ' x'],
+    ['nested ordered items', '1. '.repeat(5000) + 'x']
+  ])('renders %s without throwing', (_label, src) => {
+    expect(() => render(src)).not.toThrow()
+    expect(() => render(src, 80)).not.toThrow()
+    expect(render(src)).toContain('x')
   })
 })

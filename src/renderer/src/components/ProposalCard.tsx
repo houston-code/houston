@@ -39,15 +39,17 @@ export function ProposalCard({
   const wt = args.worktree as { branch?: unknown } | undefined
   const branch = wt && typeof wt === 'object' ? str(wt.branch) : ''
   const state = handlers?.states[item.id]
-  const [busy, setBusy] = useState(false)
+  // The choice in progress: all three wait on it, and only Start says so.
+  const [pending, setPending] = useState<'start' | 'here' | 'dismiss' | null>(null)
+  const busy = pending !== null
   const [error, setError] = useState<string | null>(null)
 
-  const act = (fn: () => Promise<void>): void => {
-    setBusy(true)
+  const act = (which: 'start' | 'here' | 'dismiss', fn: () => Promise<void>): void => {
+    setPending(which)
     setError(null)
     fn()
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setBusy(false))
+      .finally(() => setPending(null))
   }
 
   const where = branch ? `On branch ${branch}` : 'On its own worktree in a git project'
@@ -96,15 +98,15 @@ export function ProposalCard({
             type="button"
             className="btn btn--sm btn--accent"
             disabled={busy}
-            onClick={() => act(() => handlers.start(item.id))}
+            onClick={() => act('start', () => handlers.start(item.id))}
           >
-            {busy ? 'Starting…' : 'Start session'}
+            {pending === 'start' ? 'Starting…' : 'Start session'}
           </button>
           <button
             type="button"
             className="btn btn--sm"
             disabled={busy}
-            onClick={() => act(() => handlers.here(item.id, title, prompt))}
+            onClick={() => act('here', () => handlers.here(item.id, title, prompt))}
           >
             Do it here
           </button>
@@ -112,7 +114,7 @@ export function ProposalCard({
             type="button"
             className="btn btn--sm"
             disabled={busy}
-            onClick={() => act(() => handlers.dismiss(item.id))}
+            onClick={() => act('dismiss', () => handlers.dismiss(item.id))}
           >
             Dismiss
           </button>

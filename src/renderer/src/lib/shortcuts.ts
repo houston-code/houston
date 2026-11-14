@@ -32,6 +32,8 @@ export type ShortcutId =
   | 'insert-newline'
   | 'edit-last-message'
   | 'history-recall'
+  | 'history-search'
+  | 'shell-escape'
 
 export type ShortcutCategory = 'General' | 'Navigation' | 'Chat' | 'Modes'
 
@@ -221,6 +223,21 @@ export const SHORTCUTS: ShortcutDef[] = [
     category: 'Chat',
     scope: 'composer',
     display: () => '↑ / ↓'
+  },
+  {
+    id: 'history-search',
+    // Ctrl on every platform (on macOS ⌘R is left alone), as in a shell.
+    chords: [{ key: 'r', ctrl: true }],
+    label: 'Search the messages you sent before',
+    category: 'Chat',
+    scope: 'composer'
+  },
+  {
+    id: 'shell-escape',
+    chords: [{ key: '!' }],
+    label: 'Run a command in the terminal (start the message with !)',
+    category: 'Chat',
+    scope: 'composer'
   }
 ]
 
@@ -367,7 +384,7 @@ export function formatChord(c: KeyChord, mac: boolean): string {
   if (c.ctrl) parts.push(mac ? '⌃' : 'Ctrl')
   if (c.alt) parts.push(mac ? '⌥' : 'Alt')
   if (c.shift) parts.push(mac ? '⇧' : 'Shift')
-  const k = KEY_GLYPH[c.key] ?? (c.key.length === 1 ? c.key.toUpperCase() : c.key)
+  const k = (Object.hasOwn(KEY_GLYPH, c.key) ? KEY_GLYPH[c.key] : undefined) ?? (c.key.length === 1 ? c.key.toUpperCase() : c.key)
   parts.push(k)
   return mac ? parts.join('') : parts.join('+')
 }

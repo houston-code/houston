@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mentionQuery, commandQuery, completeInput, makeCompleter, COMMANDS, commandMenu, renderCommandMenu, renderMentionMenu, makeMentionMenu, MENU_LIMIT, type CommandSpec } from './tui-complete'
+import { mentionQuery, commandQuery, inlineCommandQuery, completeInput, makeCompleter, COMMANDS, commandMenu, renderCommandMenu, renderMentionMenu, makeMentionMenu, MENU_LIMIT, type CommandSpec } from './tui-complete'
 
 describe('mentionQuery', () => {
   it('extracts an @token at the end of the line', () => {
@@ -34,6 +34,14 @@ describe('completeInput', () => {
     expect(hits).toContain('/cost ')
     expect(hits).toContain('/cwd ')
     expect(sub).toBe('/c')
+  })
+
+  it('never completes an exact name into a longer one (/agent stays /agent)', () => {
+    // Tab inserts the candidates' common prefix: with /agent among them, that is
+    // /agent itself, so Tab can't turn it into /agents; Enter then runs /agent.
+    const [hits] = completeInput('/agent', [])
+    expect(hits).toEqual(expect.arrayContaining(['/agent ', '/agents ']))
+    expect(hits.every((h) => h.startsWith('/agent'))).toBe(true)
   })
 
   it('completes @-file mentions from the provided files', () => {
@@ -205,5 +213,47 @@ describe('the @ mention dropdown', () => {
     await Promise.resolve()
     await Promise.resolve()
     expect(menu('@x', () => {})).toEqual([])
+  })
+})
+
+describe('/ completion mid-message', () => {
+  const cmds: CommandSpec[] = [
+    { name: 'review', description: 'Review' },
+    { name: 'pdf', description: 'Work with PDFs', args: '[task]' }
+  ]
+
+  it('finds a /token after a space, never at the start or inside a word', () => {
+    expect(inlineCommandQuery('then run /rev')).toBe('rev')
+    expect(inlineCommandQuery('then run /')).toBe('')
+    expect(inlineCommandQuery('/rev')).toBeNull()
+    expect(inlineCommandQuery('a/b')).toBeNull()
+    expect(inlineCommandQuery('run /rev now')).toBeNull()
+  })
+
+  it('completes only the token, leaving the rest of the message alone', () => {
+    expect(completeInput('then run /rev', [], cmds)).toEqual([['/review '], '/rev'])
+    expect(completeInput('then run /RE', [], cmds)).toEqual([['/review '], '/RE'])
+    expect(completeInput('see /usr', [], cmds)).toEqual([[], '/usr'])
+  })
+
+  it('lists matches under the composer, and stays quiet for a path in prose', () => {
+    expect(commandMenu('then run /p', cmds)?.map((c) => c.name)).toEqual(['pdf'])
+    expect(commandMenu('see /usr/lib', cmds)).toBeNull()
+    expect(commandMenu('see /zz', cmds)).toBeNull()
+  })
+
+  it("shows a command's argument hint dim beside its name", () => {
+    const paint = (s: string, ...styles: string[]): string => (styles.includes('dim') ? `<${s}>` : s)
+    const rows = renderCommandMenu(cmds, paint)
+    expect(rows[1]).toContain('/pdf <[task]>')
+    // The descriptions still line up.
+    const plain = renderCommandMenu(cmds, (s: string) => s)
+    expect(plain[0].indexOf('Review')).toBe(plain[1].indexOf('Work with PDFs'))
+  })
+
+  it('drops escape sequences a command file put in its description or hint', () => {
+    const rows = renderCommandMenu([{ name: 'x', description: 'hi\x1b]52;c;ZXZpbA==\x07', args: '\x1b[31m<a>' }], (s: string) => s)
+    expect(rows.join('')).not.toContain('\x1b')
+    expect(rows.join('')).not.toContain('\x07')
   })
 })

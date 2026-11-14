@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { UnreadOutcome } from '@shared/chatStatus'
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_LABEL,
@@ -18,6 +18,9 @@ import {
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
+import type { ShellCapture } from './userShell'
+import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
+import { describeContextConsent } from './agent/commandContext'
 import { HOOK_TIMEOUT_MAX_S, HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MS } from './agent/hooks'
 import { appendUserTurn } from './agent/userTurn'
 import {
@@ -36,10 +39,12 @@ import { formatReadinessLines, planVerifySteps, readinessOk } from '@shared/plan
 import { diffStat, type FileDiffPreview } from '@shared/diff'
 import {
   BUILTIN_TEMPLATE_COMMANDS,
+  commandHasRunOptions,
   mergeCommands,
   resolveCommand,
   type Command
 } from '@shared/commands'
+import { resolveModelArg } from '@shared/modelArg'
 import {
   agentTurn,
   commandTurn,
@@ -53,25 +58,29 @@ import type { McpServerStatus } from './mcp/manager'
 import type {
   AgentEvent,
   AgentRunRequest,
+  BackgroundShellInfo,
   ChatMessage,
   ElicitationResult,
   PlanAcceptMode,
   PlanDecision,
   PlanPayload,
   QuestionOption,
+  KillShellOutcome,
   ReasoningEffort,
   ToolApprovalDecision
 } from '@shared/agent'
 import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
-import { throttleNotice } from '@shared/rateLimit'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
+import { quotaIsLow, quotaStatusText, throttleNotice, type ProviderQuota } from '@shared/rateLimit'
+import { providerQuota } from './providers/quota'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import type { ContextParts, ModelUsage, RunLimitReason } from '@shared/agent'
 import { latestRunEnd, limitNoticeText, runEndNoticeText, runOutcomePhrase, type RunOutcome } from '@shared/runEnd'
 import { renderContextReport } from '@shared/contextBreakdown'
+import { compactionLimitFrom, compactionThresholdNote } from '@shared/compactionThreshold'
 import { parseTodosSafe, type Todo } from '@shared/todos'
 import { modelDisplayName, pickDefaultModel } from '@shared/models'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
@@ -82,7 +91,18 @@ import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, deniedPromptText, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
-import { truncateVisible, stripControlChars, osc52Copy, osc8Link, visibleWidth, wrapAnsi } from './tui-wrap'
+import {
+  truncateVisible,
+  stripControlChars,
+  stripControlCharsKeepLines,
+  osc52Copy,
+  osc8Link,
+  terminalText,
+  filterTerminalOutput,
+  visibleWidth,
+  wrapAnsi
+} from './tui-wrap'
+import { approvalSubject, visibleText } from '@shared/visibleText'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -97,12 +117,43 @@ import {
   parseExportArgs,
   renderPermissionRules,
   renderRecap,
+  sessionPreviewLines,
   type ExportFormat
 } from './tui-sessions'
 import { htmlToAnsi } from './syntax'
-import type { PickerSpec, PickerOutcome } from './tui-picker'
-import { signalFor, idleTitle, type TerminalSignal } from './tui-notify'
-import { workspaceLabel } from '@shared/notify'
+import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tui-picker'
+import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
+import { renderUsageReport } from './tui-usage'
+import type { UsageReport } from '@shared/usageReport'
+import {
+  chatSubagents,
+  parseTasksArgs,
+  renderShellDetail,
+  renderSubagentDetail,
+  renderTaskList,
+  shellInChat,
+  shellKillPhrase,
+  SubagentTracker,
+  taskPickerSpec,
+  taskRows,
+  taskRunning,
+  TASK_TAIL_LINES,
+  TASKS_USAGE,
+  type TaskRow,
+  type TasksOp
+} from './tui-tasks'
+import {
+  signalFor,
+  idleTitle,
+  idleReminderSpec,
+  resolveNotifyMode,
+  describeNotifyMode,
+  isNotifyMode,
+  NOTIFY_MODES,
+  type NotifyMode,
+  type TerminalSignal
+} from './tui-notify'
+import { workspaceLabel, type NotifySpec } from '@shared/notify'
 import {
   REWIND_MODE_INFO,
   rewindConfirmText,
@@ -117,12 +168,22 @@ import {
   type UndoRewindResult
 } from '@shared/rewind'
 import { ComposerBuffer } from './tui-composer'
+import { renderTranscript, sanitizeLines, transcriptPlain, type PagerSource } from './tui-pager'
 import { parseMemoryAction, runMemoryCommand, type MemoryAction, type MemoryCommandState } from './tui-memory'
 import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
 import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
 import { formatElapsed } from '@shared/elapsed'
+import {
+  registryDelivery,
+  registryInstallOptions,
+  type RegistryGetResult,
+  type RegistrySearchResult,
+  type RegistryServer
+} from '@shared/mcpRegistry'
+import { draftInputKey, applyDraftInputs, freeServerId, serverProblem } from '@shared/mcpCatalog'
+import { stripInvisible, invisibleNote } from '@shared/invisibleChars'
 
 /**
  * Interactive terminal mode: a stay-resident REPL you converse with directly in
@@ -166,6 +227,18 @@ export interface TuiOptions {
    * used only while no theme is saved: a `/theme` choice always wins.
    */
   detectedTheme?: ThemeName
+  /** `--add-dir`: extra directories (absolute) the session's runs may work in; `/add-dir` adds more. */
+  addDirs?: string[]
+  /**
+   * Reduced motion for this session: the entry point resolves it from
+   * HOUSTON_REDUCE_MOTION and the saved setting; /reduce-motion changes it.
+   */
+  reduceMotion?: boolean
+  /**
+   * Screen-reader mode for this session (`--screen-reader`, HOUSTON_SCREEN_READER or
+   * the saved setting, resolved at the entry point); /screen-reader changes it.
+   */
+  screenReader?: boolean
   /**
    * The first bad flag value (`--approval nonsense`). runTui reports it and exits
    * with a usage error before anything runs, rather than silently ignoring it.
@@ -198,6 +271,8 @@ export function parseTuiArgs(
   let continueSession = false
   let resumeId: string | undefined
   let usageError: string | undefined
+  const addDirs: string[] = []
+  let screenReader = false
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
@@ -227,11 +302,19 @@ export function parseTuiArgs(
       i = next
     } else if (name === '--full-auto') {
       approvalPolicy = 'full-auto'
+    } else if (name === '--screen-reader') {
+      screenReader = true
     } else if (name === '--continue') {
       continueSession = true
     } else if (name === '--resume') {
       const { value, next } = flagValue(argv, i)
       resumeId = value
+      i = next
+    } else if (name === '--add-dir') {
+      const { value, next } = flagValue(argv, i)
+      const added = resolveAddDir(value, defaultCwd)
+      if ('error' in added) usageError ??= `--add-dir: ${added.error}`
+      else if (!addDirs.includes(added.dir)) addDirs.push(added.dir)
       i = next
     }
   }
@@ -245,8 +328,44 @@ export function parseTuiArgs(
     color: true,
     ...(continueSession ? { continueSession } : {}),
     ...(resumeId ? { resumeId } : {}),
+    ...(addDirs.length ? { addDirs } : {}),
+    ...(screenReader ? { screenReader } : {}),
     ...(usageError !== undefined ? { usageError } : {})
   }
+}
+
+/**
+ * Run `/add-dir`: add `path` to the session's directories (the next turn's runs may
+ * work there, as with Settings' additional directories, until the session ends), or
+ * list them when no path is given. Returns the line to print.
+ */
+export function applyAddDir(dirs: string[], path: string, base: string): string {
+  if (!path) {
+    return dirs.length
+      ? `· directories added this session: ${dirs.join(', ')}`
+      : '· no directories added this session; /add-dir <path> adds one'
+  }
+  const added = resolveAddDir(path, base)
+  if ('error' in added) return `· /add-dir ${added.error}`
+  if (dirs.includes(added.dir)) return `· ${added.dir} is already added`
+  dirs.push(added.dir)
+  return `· added ${added.dir} for this session: the agent can read and edit it from the next message`
+}
+
+/**
+ * A directory for `--add-dir` or `/add-dir`, resolved against `base` (where the
+ * command was typed, or the session's folder) and checked to exist.
+ */
+export function resolveAddDir(value: string | undefined, base: string): { dir: string } | { error: string } {
+  const v = value?.trim()
+  if (!v) return { error: 'needs the path of a directory, like ../shared' }
+  const dir = isAbsolute(v) ? v : resolvePath(base, v)
+  try {
+    if (statSync(dir).isDirectory()) return { dir }
+  } catch {
+    // reported below
+  }
+  return { error: `${JSON.stringify(v)} is not a directory` }
 }
 
 // --- Rendering ---------------------------------------------------------------
@@ -360,12 +479,25 @@ export function renderTodoList(todos: Todo[], paint: Painter): string {
  * One-line summary of a tool starting, named the way the desktop's tool row names
  * it: "· Read  src/x.ts", "· Run  npm test", not the wire name ("read_file").
  */
-export function renderToolStart(name: string, args: Record<string, unknown>, paint: Painter): string {
+export function renderToolStart(
+  name: string,
+  args: Record<string, unknown>,
+  paint: Painter,
+  /** Screen-reader mode: a plain sentence, "Using tool Read: src/x.ts". */
+  opts: { sentence?: boolean } = {}
+): string {
   const { verb, target } = describeToolCall(name, args)
   // A tool the shared labels don't know keeps the old best-effort argument hint.
-  const hint = truncate((target || (verb === name ? toolArgHint(args) : '')).replace(/\s+/g, ' ').trim(), 80)
+  // The hint is the model's argument (a command, a path) and an MCP tool's verb is its
+  // server's name for it, so both are cleaned of control characters.
+  const raw = terminalText(target || (verb === name ? toolArgHint(args) : ''), { lines: false }).replace(/\s+/g, ' ')
+  const hint = truncate(raw.trim(), 80)
+  if (opts.sentence) {
+    const label = terminalText(verb, { lines: false })
+    return hint ? `Using tool ${label}: ${hint}` : `Using tool ${label}`
+  }
   const suffix = hint ? `  ${paint(hint, 'dim')}` : ''
-  return `${paint('·', 'dim')} ${paint(verb, 'cyan')}${suffix}`
+  return `${paint('·', 'dim')} ${paint(terminalText(verb, { lines: false }), 'cyan')}${suffix}`
 }
 
 /**
@@ -376,8 +508,11 @@ export function renderToolStart(name: string, args: Record<string, unknown>, pai
  */
 export function toolCallTag(name: string, args: Record<string, unknown> | undefined): string {
   const { verb, target } = describeToolCall(name, args)
-  const hint = (target || (verb === name && args ? toolArgHint(args) : '')).replace(/\s+/g, ' ').trim()
-  return hint ? `${verb} ${truncate(hint, 40)}` : verb
+  const hint = terminalText(target || (verb === name && args ? toolArgHint(args) : ''), { lines: false })
+    .replace(/\s+/g, ' ')
+    .trim()
+  const shownVerb = terminalText(verb, { lines: false })
+  return hint ? `${shownVerb} ${truncate(hint, 40)}` : shownVerb
 }
 
 /** Prefix the first line of a rendered result with its call's tag, after the indent. */
@@ -397,35 +532,114 @@ export function tagResultLines(rendered: string, tag: string, paint: Painter): s
 export function toolArgHint(args: Record<string, unknown>): string {
   for (const key of ['path', 'file', 'file_path', 'command', 'cmd', 'query', 'url', 'pattern']) {
     const v = args[key]
-    if (typeof v === 'string' && v.trim()) return truncate(v.replace(/\s+/g, ' ').trim(), 80)
+    if (typeof v === 'string' && v.trim()) return truncate(terminalText(v, { lines: false }).replace(/\s+/g, ' ').trim(), 80)
   }
   return ''
 }
 
 /**
+ * At most this many terminal rows of a command before the approval repeats its start
+ * just above the choices. Past it, the head of the prompt (what is being approved, and
+ * the command's first line) has scrolled up out of sight, which is exactly where a
+ * command padded with dozens of lines would hide its first, dangerous one.
+ */
+export const APPROVAL_TEXT_MAX_ROWS = 16
+// A run of spaces or tabs this long inside a line is shown as a count, so padding can't
+// push the rest of a line (or the next one) off screen either.
+const APPROVAL_SPACE_RUN = new RegExp(`[ \\t]{16,}`, 'g')
+
+/**
+ * Text an approval is about (a command, a memory's body), laid out for the terminal so
+ * the user sees every character that will be used and nothing can hide:
+ *
+ *  - every control, bidi and zero-width character is shown as `<U+XXXX>`
+ *    ({@link visibleText}), a carriage return and an escape included, so the text can't
+ *    repaint itself as something harmless, and no character is cut or dropped;
+ *  - a multi-line text has numbered lines, so a line break is never mistaken for a
+ *    space and the reader can tell where each line starts;
+ *  - a run of blank lines folds to one "(N blank lines)" row, and a long run of spaces
+ *    to "<N spaces>", so padding can't scroll the start of the text out of view;
+ *  - a text still taller than {@link APPROVAL_TEXT_MAX_ROWS} rows is printed whole and
+ *    then followed by a line repeating its length and first line, next to the choices.
+ *
+ * Returns the lines, each indented by two spaces.
+ */
+export function renderApprovalText(text: string, paint: Painter, width = 80): string[] {
+  const spaced = (l: string): string => l.replace(APPROVAL_SPACE_RUN, (run) => paint(`<${run.length} spaces>`, 'dim'))
+  const lines = visibleText(text).split('\n')
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop() // a final newline ends the last line
+  if (lines.length <= 1) return [`  ${spaced(lines[0] ?? '')}`]
+  const digits = String(lines.length).length
+  const gutter = (n: string): string => paint(`${n.padStart(digits)} │`, 'dim')
+  const out: string[] = []
+  let blankFrom = -1
+  const flushBlank = (end: number): void => {
+    if (blankFrom < 0) return
+    const n = end - blankFrom
+    out.push(
+      n === 1
+        ? `  ${gutter(String(blankFrom + 1))}`
+        : `  ${paint(`${' '.repeat(digits)} ┆ (${n} blank lines, ${blankFrom + 1}-${end})`, 'dim')}`
+    )
+    blankFrom = -1
+  }
+  lines.forEach((l, i) => {
+    if (!l.trim()) {
+      if (blankFrom < 0) blankFrom = i
+      return
+    }
+    flushBlank(i)
+    out.push(`  ${gutter(String(i + 1))} ${spaced(l)}`)
+  })
+  flushBlank(lines.length)
+  const cols = Math.max(20, width)
+  const rows = out.reduce((n, l) => n + Math.max(1, Math.ceil(visibleWidth(l) / cols)), 0)
+  if (rows > APPROVAL_TEXT_MAX_ROWS) {
+    const first = spaced(lines.find((l) => l.trim()) ?? '')
+    out.push(
+      paint(`  ↑ ${lines.length} lines in all, shown above. Line 1: `, 'dim') + truncateVisible(first, Math.max(20, cols - 40))
+    )
+  }
+  return out
+}
+
+/** How many lines a text spans, for the approval header ("3 lines"); null for one line. */
+function lineCount(text: string): string | null {
+  const n = text.replace(/\n$/, '').split('\n').length
+  return n > 1 ? `${n} lines` : null
+}
+
+/**
  * The approval prompt shown for a `tool_approval` event. The kind + an unconfined
  * shell warning matter for consent, so they're surfaced prominently.
+ *
+ * What is being approved is shown whole, never cut to fit: for a shell command the
+ * command itself (from the call's arguments, so exactly what will run), for a memory
+ * its description and body, and otherwise the call's summary. All of it goes through
+ * {@link renderApprovalText}, so a carriage return, an escape, a bidi override or a
+ * page of blank lines in the model's text shows up instead of disguising it.
  */
 export function renderApprovalPrompt(
   ev: Extract<AgentEvent, { type: 'tool_approval' }>,
   paint: Painter,
   /** The arrow-key picker lists the choices itself; the typed-answer keys would repeat them. */
-  opts: { picker?: boolean } = {}
+  opts: { picker?: boolean; width?: number } = {}
 ): string {
+  const text = (t: string): string => renderApprovalText(t, paint, opts.width).join('\n')
   // The full-auto shell-network question comes after a command already failed offline.
   // It decides the chat's shell network, not the command, so frame it as a network grant
   // and "deny" as "keep offline", not "block".
   // The egress question likewise comes after the proxy refused a host the allowlist
   // doesn't name; it decides that one host for the chat.
   if (ev.egressHost) {
-    const host = stripControlChars(ev.egressHost)
+    const host = terminalText(ev.egressHost, { lines: false })
     const head = paint(`A command tried to reach ${host}, which isn't on the sandbox's allowed domains.`, 'bold')
     const note = paint(
       '  It was blocked. Allowing it applies to shell commands in the rest of this chat, for this host only.',
       'dim'
     )
     const keys = opts.picker ? '' : `\n${paint(`  [y] allow ${host} for this chat   [n] keep blocked`, 'dim')}`
-    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
+    return `\n${head}\n${text(ev.summary)}\n${note}${keys}`
   }
   if (ev.shellNetwork) {
     const head = paint('This command could not reach the network.', 'bold')
@@ -434,33 +648,44 @@ export function renderApprovalPrompt(
       'dim'
     )
     const keys = opts.picker ? '' : `\n${paint('  [y] allow network for this chat   [n] keep offline', 'dim')}`
-    return `\n${head}\n  ${ev.summary}\n${note}${keys}`
+    return `\n${head}\n${text(ev.summary)}\n${note}${keys}`
   }
   const warn =
     ev.kind === 'shell' && ev.sandboxed === false
       ? `\n${paint('⚠ runs UNSANDBOXED (no OS confinement on this host)', 'yellow', 'bold')}`
       : ev.sensitiveRead
         ? `\n${paint('⚠ reads a credential/secret file (prompting even in full-auto)', 'yellow', 'bold')}`
-        : ev.sensitiveWrite
+        : ev.sensitiveWrite && ev.protectedWrite
+          ? `\n${paint('⚠ changes a project control file that can run code outside the sandbox (asks every time; "Allow for this chat" does not cover it)', 'yellow', 'bold')}`
+          : ev.sensitiveWrite
           ? `\n${paint('⚠ changes a credential/secret file or git hook/config (prompting even in full-auto)', 'yellow', 'bold')}`
           : ''
-  // Until the run has a shell-network grant, "allow" runs the command offline; say
-  // which answer also grants network before the user picks, not after it fails.
+  // Until the chat has a shell-network grant, every answer runs the command offline;
+  // say so before the user picks, and that network is a separate question.
   const offline = ev.shellOffline
-    ? `\n${paint('  Runs without network. Choose "Allow for run" to also allow network for this run.', 'dim')}`
+    ? `\n${paint('  Runs without network. If it needs the network, Houston asks before allowing it.', 'dim')}`
     : ''
   // A network grant reaches one destination; say which before the user picks it.
   const scope = ev.networkScope
-    ? `\n${paint(`  "Allow for run" covers ${ev.networkScope} for the rest of this chat.`, 'dim')}`
+    ? `\n${paint(`  "Allow for this chat" covers ${terminalText(ev.networkScope, { lines: false })} only, for the rest of this chat.`, 'dim')}`
     : ''
+  // A command is shown from its arguments (the summary adds a "(background)" note to
+  // it); a memory shows its summary line, then what would be saved.
+  const parts = approvalSubject(ev.name, ev.args)
+  const command = ev.name === 'run_shell' && parts.length ? parts[0] : null
+  const subject = command
+    ? text(command.text)
+    : [text(ev.summary), ...parts.map((p) => `${paint(`  ${p.label}:`, 'dim')}\n${text(p.text)}`)].join('\n')
+  const extent = command ? lineCount(command.text) : null
+  const background = command && command.label !== 'Command' ? paint('  (runs in the background)', 'dim') : ''
   // Named as the call's tool line names it ("Run", "Write"), not by its wire name.
-  const head = paint(`Approve ${describeToolCall(ev.name, ev.args).verb}`, 'bold')
-  const kind = paint(`[${ev.kind}]`, 'dim')
+  const head = paint(`Approve ${terminalText(describeToolCall(ev.name, ev.args).verb, { lines: false })}`, 'bold')
+  const kind = paint(`[${ev.kind}]${extent ? ` · ${extent}` : ''}`, 'dim')
   const keys = opts.picker
     ? ''
-    : `\n${paint('  [y] allow   [n] deny   [a] allow for run   [!] always allow   [x] always deny', 'dim')}` +
+    : `\n${paint('  [y] allow once   [a] allow for this chat   [!] always allow (saves a rule)   [n] deny   [x] always deny', 'dim')}` +
       paint('\n  …or type why not, and that goes back to the agent', 'dim')
-  return `\n${head} ${kind}\n  ${ev.summary}${warn}${offline}${scope}${keys}`
+  return `\n${head} ${kind}${background}\n${subject}${warn}${offline}${scope}${keys}`
 }
 
 /**
@@ -478,14 +703,15 @@ export function approvalOutcome(
       : `Allowed ${opts.egressHost} for this chat`
   }
   if (opts.shellNetwork) {
+    // Any allow answers the chat's question, so every one grants network for the rest of it.
     if (decision === 'deny') return 'Running offline'
-    return decision === 'always' ? 'Network allowed for this run' : 'Network allowed'
+    return 'Network allowed for this chat'
   }
   switch (decision) {
     case 'allow':
       return 'Allowed'
     case 'always':
-      return 'Allowed for this run'
+      return 'Allowed for this chat'
     case 'rule-allow':
       return 'Always allowed (rule saved)'
     case 'rule-deny':
@@ -522,12 +748,16 @@ export function parseApprovalAnswer(answer: string): { decision: ToolApprovalDec
  * type them away and offer only allow/deny/always.
  */
 export const APPROVAL_OPTIONS: { label: string; value: ToolApprovalDecision | 'deny-note'; description: string }[] = [
-  { label: 'Allow', value: 'allow', description: 'run this once' },
-  { label: 'Allow for run', value: 'always', description: 'stop asking for this kind this session' },
-  { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule' },
+  { label: 'Allow once', value: 'allow', description: 'run this call only' },
+  {
+    label: 'Allow for this chat',
+    value: 'always',
+    description: 'stop asking for this kind of tool in this chat (a network call: this destination), until Houston quits'
+  },
+  { label: 'Always allow', value: 'rule-allow', description: 'save a permission rule, kept across restarts' },
   { label: 'Deny', value: 'deny', description: 'refuse this once' },
   { label: 'Deny with a reason…', value: 'deny-note', description: 'tell the agent what to do instead' },
-  { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule' }
+  { label: 'Always deny', value: 'rule-deny', description: 'save a permission rule, kept across restarts' }
 ]
 
 /**
@@ -587,7 +817,9 @@ export function extractDiff(args: Record<string, unknown>): string | null {
 
 /** Colorize a unified diff, capped at `maxLines` so a huge edit doesn't flood the terminal. */
 export function colorizeDiff(diff: string, paint: Painter, maxLines = 40): string {
-  const lines = diff.split('\n')
+  // Built from the model's arguments: no control character in it may paint over the
+  // change being approved.
+  const lines = terminalText(diff).split('\n')
   const shown = lines.slice(0, maxLines).map((l) => {
     // Header markers must be checked before +/- since `+++`/`---` also start with them.
     if (l.startsWith('+++') || l.startsWith('---') || l.startsWith('@@')) return paint(l, 'cyan')
@@ -604,6 +836,9 @@ export function colorizeDiff(diff: string, paint: Painter, maxLines = 40): strin
 export const FAILURE_LINES = 10
 /** How many lines of a subagent's report show before collapsing (all under /verbose). */
 const REPORT_LINES = 24
+
+/** How many diff lines screen-reader mode reads out before saying how many more there are. */
+const SCREEN_READER_DIFF_LINES = 200
 
 /** How many lines of a successful result `/verbose` shows before collapsing. */
 export const VERBOSE_LINES = 40
@@ -675,7 +910,9 @@ export function renderToolResult(
   // for it, so a "✗ Run failed" line over the model-facing text would only repeat it.
   if (!ok && deniedPromptText(output) !== null) return ''
   if (ok && name === PRESENT_PLAN_TOOL) return paint(`  ↳ ${PLAN_OUTCOME_LABEL[planOutcome(output)]}`, 'dim')
-  const lines = output.split('\n')
+  // A command's output (or a fetched page, or an MCP result) can carry escapes that
+  // move the cursor or write the clipboard; show its text without them working.
+  const lines = terminalText(output).split('\n')
   if (!ok) {
     // "✗ Run failed", matching the row above it, not the wire name.
     const failed = paint(`  ✗ ${describeToolCall(name, undefined).verb} failed`, 'red')
@@ -740,7 +977,7 @@ export function renderRecoveredOutput(
     return paint(`· no tool call #${index} (this conversation has ${results.length})`, 'yellow')
   }
   const picked = results[results.length - index]
-  const lines = picked.output.split('\n')
+  const lines = terminalText(picked.output).split('\n')
   const shown = lines.slice(0, OUTPUT_LINES)
   const head = paint(`▣ ${picked.name}`, 'bold') + paint(`  (${index} back, ${lines.length} lines)`, 'dim')
   const more =
@@ -753,6 +990,8 @@ export interface SessionCost {
   inputTokens: number
   outputTokens: number
   cost: number
+  /** Part of the spend came from a model with no known price (see formatCost). */
+  costUnknown?: boolean
 }
 
 /**
@@ -790,11 +1029,11 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
       : ''
     const written = t.cacheWriteTokens ? paint(`  (${n(t.cacheWriteTokens)} cache write)`, 'dim') : ''
     lines.push(
-      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatUsd(t.cost)}`
+      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatCost(t.cost, t.costUnknown)}`
     )
   }
   if (tallies.length > 1) {
-    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatUsd(total.cost)}`, 'dim'))
+    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatCost(total.cost, tallies.some((t) => t.costUnknown))}`, 'dim'))
   }
   return lines.join('\n')
 }
@@ -802,7 +1041,7 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
 /** Format a cost total, e.g. "1,234+567 tok · $0.012" (amounts as the desktop shows them). */
 export function formatSessionCost(c: SessionCost): string {
   const n = (v: number): string => v.toLocaleString('en-US')
-  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatUsd(c.cost)}`
+  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatCost(c.cost, c.costUnknown)}`
 }
 
 /** Status marker for a subagent row, printed as a discrete line in line mode. */
@@ -831,10 +1070,11 @@ export function spinnerFrame(
    * redrawn, so all of this costs no extra screen space and cannot tear the
    * transcript.
    */
-  opts: { draft?: string; queued?: number; mode?: string; status?: string } = {}
+  opts: { draft?: string; queued?: number; mode?: string; status?: string; glyph?: string } = {}
 ): string {
   const i = ((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
-  const head = `${paint(SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(formatElapsed(elapsedSec * 1000), 'dim')}`
+  // A fixed glyph (reduced motion) replaces the animation frames entirely.
+  const head = `${paint(opts.glyph ?? SPINNER_FRAMES[i], 'cyan')} ${label} ${paint(formatElapsed(elapsedSec * 1000), 'dim')}`
   // The approval mode, kept visible WHILE the turn runs: the composer's status line
   // is gone exactly when "how much is running without asking?" matters most.
   const mode = opts.mode ? paint(`  [${opts.mode}]`, 'dim') : ''
@@ -859,7 +1099,7 @@ export function renderEditSummary(preview: FileDiffPreview[], paint: Painter): s
   const files = preview.slice(0, EDIT_SUMMARY_FILES).map((f) => {
     const { added, removed } = diffStat(f.diff)
     const more = f.truncated ? '…' : ''
-    const name = f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path
+    const name = terminalText(f.renamedFrom ? `${f.renamedFrom} → ${f.path}` : f.path, { lines: false })
     const tag = f.created ? paint(' (new)', 'dim') : f.deleted ? paint(' (deleted)', 'dim') : ''
     const counts = [
       added || !removed ? paint(`+${added}${more}`, 'green') : '',
@@ -887,6 +1127,8 @@ export interface StatusState {
   contextTokens: number
   /** The checked-out git branch, or null outside a repository (or on a detached HEAD). */
   branch?: string | null
+  /** The rate-limit quota the provider reported on its latest response, when it sent one. */
+  quota?: ProviderQuota
 }
 
 /** A path under the home folder written from `~` (`~/code/app`); any other path as is. */
@@ -916,9 +1158,11 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
     paint(shortCwd(s.cwd), 'dim')
   ]
   if (s.branch) parts.push(paint(s.branch, 'magenta'))
-  parts.push(formatUsd(s.cost.cost))
+  parts.push(formatCost(s.cost.cost, s.cost.costUnknown))
   const ctx = renderContextUsage(s.contextTokens, s.model, paint)
   if (ctx) parts.push(ctx)
+  const quota = quotaStatusText(s.quota)
+  if (quota) parts.push(paint(quota, quotaIsLow(s.quota) ? 'yellow' : 'dim'))
   return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
 }
 
@@ -982,6 +1226,8 @@ export interface ResumeEntry {
   updatedAt: number
   /** Set when the desktop app has the chat unread: how its last turn ended. */
   unread?: UnreadOutcome
+  /** The folder the chat belongs to (shown when the picker lists every folder). */
+  workspace?: string
 }
 
 /** Persistence hooks, injected so the driver stays testable without a real store. */
@@ -1008,6 +1254,13 @@ export interface TuiPersist {
   get: (id: string) => ({ messages: ChatMessage[] } & ConversationSettingsPatch) | null
   /** Recent sessions in this folder whose title/content matches `query`. */
   search: (workspace: string, query: string) => ResumeEntry[]
+  /**
+   * Recent sessions in every folder, each with its `workspace`. Both absent: the
+   * resume picker has no "all folders" scope.
+   */
+  listAll?: () => ResumeEntry[]
+  /** Recent sessions in every folder whose title/content matches `query`. */
+  searchAll?: (query: string) => ResumeEntry[]
   /** Duplicate a conversation (fresh id, copied history); null if it can't be forked. */
   fork: (id: string) => { id: string } | null
   /** Give a conversation a title of the user's choosing. Absent ⇒ /rename is unavailable. */
@@ -1060,9 +1313,9 @@ export function renderBackgroundSessions(
             `${s.outcome === 'error' ? '✗' : '■'} ${runOutcomePhrase({ outcome: s.outcome, limit: s.limit })}`,
             s.outcome === 'error' ? 'red' : 'yellow'
           )
-    const branch = s.branch ? paint(`  ${s.branch}`, 'magenta') : ''
+    const branch = s.branch ? paint(`  ${terminalText(s.branch, { lines: false })}`, 'magenta') : ''
     const when = paint(formatRelativeTime(s.startedAt, now), 'dim')
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${state}  ${s.title}${branch}  ${when}`)
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${state}  ${terminalText(s.title, { lines: false })}${branch}  ${when}`)
   })
   lines.push(paint('  Enter a number to open one, or anything else to cancel', 'dim'))
   return lines.join('\n')
@@ -1098,7 +1351,7 @@ export function renderProposals(list: TuiProposal[], paint: Painter): string {
           : p.status === 'dismissed'
             ? paint('dismissed', 'dim')
             : paint('open', 'cyan')
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${p.title}  ${state}`)
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${terminalText(p.title, { lines: false })}  ${state}`)
   })
   lines.push(
     paint('  /proposals start <n> runs one as its own session · here <n> asks for it in this chat · dismiss <n>', 'dim')
@@ -1132,8 +1385,8 @@ export function renderUndoResult(files: number, paint: Painter): string {
 export function renderCheckpoint(cp: CheckpointInfo | null, paint: Painter): string {
   if (!cp) return paint('· no changes from this chat to undo yet', 'dim')
   return cp.reverted
-    ? paint(`· the last turn's ${cp.files} file change(s) are already undone (/redo puts them back)`, 'dim')
-    : paint(`· /undo would revert ${cp.files} file(s) changed by the last turn`, 'dim')
+    ? paint(`· the last turn's ${plural(cp.files, 'file change')} ${cp.files === 1 ? 'is' : 'are'} already undone (/redo puts ${cp.files === 1 ? 'it' : 'them'} back)`, 'dim')
+    : paint(`· /undo would revert ${plural(cp.files, 'file')} changed by the last turn`, 'dim')
 }
 
 /**
@@ -1145,7 +1398,7 @@ export function renderRewindPoints(points: RewindPoint[], paint: Painter, max = 
   const shown = points.slice(-max)
   const lines = [paint('Rewind to just before which message?', 'bold')]
   if (shown.length < points.length) lines.push(paint(`  (${points.length - shown.length} older not shown)`, 'dim'))
-  for (const p of shown) lines.push(`  ${paint(String(p.turn + 1).padStart(3), 'cyan')}  ${p.label}`)
+  for (const p of shown) lines.push(`  ${paint(String(p.turn + 1).padStart(3), 'cyan')}  ${terminalText(p.label, { lines: false })}`)
   lines.push(paint('  enter a number, or nothing to cancel', 'dim'))
   return lines.join('\n')
 }
@@ -1217,6 +1470,49 @@ export function runEndNotice(messages: ChatMessage[]): string | null {
   return noReply ? '· the last message got no reply: it was stopped' : '· the last run was stopped before it finished'
 }
 
+/** The desktop sidebar's state for a chat: failed in red, unread in blue, else nothing. */
+function unreadMark(c: ResumeEntry, paint: Painter): string {
+  return c.unread === 'error' ? `  ${paint('failed', 'red')}` : c.unread ? `  ${paint('● unread', 'blue')}` : ''
+}
+
+/** A chat's folder for the all-folders picker: home-relative, the last two segments. */
+export function sessionFolder(workspace: string | undefined, home = process.env.HOME): string {
+  if (!workspace) return ''
+  return shortCwd(stripControlChars(workspace).replace(/\\/g, '/'), home)
+}
+
+/**
+ * One row of the arrow-key `/resume` picker: the label (number and title, which the
+ * live filter matches) and the painted detail after it (when, unread state, folder,
+ * and a mark on the chat you're in). Pure.
+ */
+export function renderSessionRow(
+  c: ResumeEntry,
+  index: number,
+  opts: { now: number; paint: Painter; showFolder?: boolean; current?: boolean; home?: string }
+): { label: string; detail: string } {
+  const { paint } = opts
+  const num = index < 9 ? `${index + 1}.` : '  '
+  const title = stripControlChars(c.title) || 'New chat'
+  const folder = opts.showFolder ? sessionFolder(c.workspace, opts.home) : ''
+  const detail = [
+    `  ${paint(formatRelativeTime(c.updatedAt, opts.now), 'dim')}`,
+    unreadMark(c, paint),
+    opts.current ? `  ${paint('(this chat)', 'green')}` : '',
+    folder ? `  ${paint(folder, 'magenta')}` : ''
+  ].join('')
+  return { label: `${num} ${title}`, detail }
+}
+
+/** The arrow-key `/resume` picker's footer: every key it takes. */
+export function sessionPickerHint(o: { rename: boolean; remove: boolean; scope: boolean; all: boolean }): string {
+  const keys = ['↑/↓ move', 'enter open', '1-9 open row', 'type to filter']
+  if (o.rename) keys.push('ctrl-r rename')
+  if (o.remove) keys.push('ctrl-d or x delete')
+  if (o.scope) keys.push(o.all ? 'ctrl-a this folder' : 'ctrl-a all folders')
+  return [...keys, 'esc cancel'].join(' · ')
+}
+
 /** Render a numbered picker of recent conversations for `/resume`. */
 export function renderConversationList(convs: ResumeEntry[], now: number, paint: Painter): string {
   if (!convs.length) return paint('No saved sessions in this folder yet.', 'dim')
@@ -1224,12 +1520,27 @@ export function renderConversationList(convs: ResumeEntry[], now: number, paint:
   convs.forEach((c, i) => {
     const when = paint(formatRelativeTime(c.updatedAt, now), 'dim')
     // The same states the desktop sidebar shows: failed in red, unread in blue.
-    const mark =
-      c.unread === 'error' ? `  ${paint('failed', 'red')}` : c.unread ? `  ${paint('● unread', 'blue')}` : ''
-    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${c.title}  ${when}${mark}`)
+    lines.push(`  ${paint(String(i + 1), 'cyan')}. ${terminalText(c.title, { lines: false })}  ${when}${unreadMark(c, paint)}`)
   })
   lines.push(paint('  Enter a number to resume, or anything else to cancel', 'dim'))
   return lines.join('\n')
+}
+
+/**
+ * What `/resume` can and can't do in screen-reader mode, said once under the list:
+ * it opens a session by number and searches by `/resume <words>`, while the arrow-key
+ * picker's in-place rename, delete and all-folders view are left out. Pure.
+ */
+export function screenReaderResumeNote(persist: Pick<TuiPersist, 'rename' | 'remove'>, canScope: boolean): string {
+  const missing = [
+    persist.rename ? 'renaming' : '',
+    persist.remove ? 'deleting' : '',
+    canScope ? 'sessions in other folders' : ''
+  ].filter(Boolean)
+  const search = 'To search, type /resume followed by words.'
+  if (!missing.length) return search
+  const list = missing.length === 1 ? missing[0] : `${missing.slice(0, -1).join(', ')} and ${missing.at(-1)}`
+  return `${search} The arrow-key picker also offers ${list}; turn off /screen-reader to use it.`
 }
 
 /** Map a resume selection (1-based index) to a conversation id, or null to cancel. */
@@ -1280,14 +1591,14 @@ export function formatRelativeTime(then: number, now: number): string {
 
 /** The question line of an `ask_user` prompt. */
 export function renderQuestionHeader(question: string, paint: Painter): string {
-  return `\n${paint('? ', 'magenta')}${paint(question, 'bold')}`
+  return `\n${paint('? ', 'magenta')}${paint(terminalText(question), 'bold')}`
 }
 
 /** The numbered options + typing hint for answering an `ask_user` question by hand. */
 export function renderQuestionChoices(options: QuestionOption[], multiSelect: boolean, paint: Painter): string {
   const lines = options.map((o, i) => {
-    const desc = o.description ? paint(`  (${o.description})`, 'dim') : ''
-    return `  ${paint(String(i + 1), 'cyan')}. ${o.label}${desc}`
+    const desc = o.description ? paint(`  (${terminalText(o.description, { lines: false })})`, 'dim') : ''
+    return `  ${paint(String(i + 1), 'cyan')}. ${terminalText(o.label, { lines: false })}${desc}`
   })
   const hint = multiSelect
     ? 'Enter numbers (comma-separated) or type an answer'
@@ -1370,15 +1681,17 @@ export function renderPlan(
   paint: Painter,
   opts: { actions?: boolean; width?: number; highlight?: (lang: string, code: string) => string } = {}
 ): string {
-  const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(plan.title, 'bold')}`]
+  // Every part of the plan is the model's text (the body's control characters are
+  // handled by the markdown renderer).
+  const lines = [`\n${paint('▣ Plan:', 'magenta')} ${paint(terminalText(plan.title, { lines: false }), 'bold')}`]
   const body = plan.body?.trim()
   if (body) {
     lines.push('', renderMarkdownAnsi(body, { paint, width: opts.width ?? 0, highlight: opts.highlight }))
   } else {
-    if (plan.overview) lines.push('', plan.overview)
-    for (const step of plan.steps ?? []) lines.push(`  • ${step}`)
+    if (plan.overview) lines.push('', terminalText(plan.overview))
+    for (const step of plan.steps ?? []) lines.push(`  • ${terminalText(step, { lines: false })}`)
   }
-  if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.join(', ')}`, 'dim'))
+  if (plan.files?.length) lines.push('', paint(`Files: ${plan.files.map((f) => terminalText(f, { lines: false })).join(', ')}`, 'dim'))
   const verify = planVerifySteps(plan)
   if (verify.length) lines.push('', paint(`Checks: ${verify.map(stripControlChars).join('; ')}`, 'dim'))
   // Houston's own answer to whether those checks can run here, worked out from the
@@ -1442,6 +1755,11 @@ export async function planDecisionFor(
   }
 }
 
+/** "1 message", "3 messages": a count with its noun, no "(s)". */
+export function plural(n: number, word: string): string {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
+}
+
 function truncate(s: string, max: number): string {
   // Count/slice by code point so a cut never lands inside a surrogate pair (which
   // would emit a broken half-character). `.length`/`.slice` work in code units.
@@ -1495,7 +1813,8 @@ export type SlashResult =
   /** Run the last message again after its turn failed (/retry), as the desktop's Retry does. */
   | { kind: 'retry' }
   | { kind: 'set-model'; providerId: string; model: string; asDefault?: boolean }
-  | { kind: 'compact' }
+  /** Summarize older turns now (/compact [focus]), steering the summary toward `focus`. */
+  | { kind: 'compact'; focus?: string }
   /** The settings overview hub (/settings). */
   | { kind: 'settings' }
   /** Environment diagnostics (/doctor). */
@@ -1504,6 +1823,14 @@ export type SlashResult =
   | { kind: 'reasoning'; effort?: ReasoningEffort; asDefault?: boolean }
   /** Turn vim keys in the composer on or off (/vim). */
   | { kind: 'vim'; on?: boolean }
+  /** `/add-dir <path>` adds a session directory; a bare `/add-dir` lists them. */
+  | { kind: 'add-dir'; path: string }
+  /** Turn reduced motion on or off (/reduce-motion); bare toggles. */
+  | { kind: 'reduce-motion'; on?: boolean }
+  /** Turn screen-reader mode on or off (/screen-reader); bare toggles. */
+  | { kind: 'screen-reader'; on?: boolean }
+  /** Show or set which attention signals fire (/notify [auto|osc|bell|off]). */
+  | { kind: 'notify'; mode?: NotifyMode; invalid?: string }
   /** Revert (or restore) the files the last turn changed (/undo, /redo). */
   | { kind: 'undo'; redo: boolean }
   /**
@@ -1518,17 +1845,27 @@ export type SlashResult =
   | { kind: 'changes'; last?: number }
   /** Show more (or less) of each tool's output as it runs (/verbose). */
   | { kind: 'verbose'; on?: boolean }
+  /** How the model's reasoning shows as it streams (/thoughts); bare steps to the next. */
+  | { kind: 'thoughts'; mode?: ReasoningDisplay; bad?: string }
+  /** Open the transcript viewer (/transcript, Ctrl-O). */
+  | { kind: 'transcript' }
   /** Reprint a past tool result in full (/output [n]). */
   | { kind: 'output'; index: number }
+  /** Copy the n-th latest reply, or one of its code blocks, to the clipboard (/copy [n]). */
+  | { kind: 'copy'; index: number; bad?: boolean }
+  /** Spend and tokens per day and per project, from the saved chats (/usage). */
+  | { kind: 'usage' }
   /** List (and open) the background sessions the agent spawned (/spawned). */
   | { kind: 'spawned' }
+  /** This chat's background shells and subagents: list, show one, or stop one (/tasks). */
+  | { kind: 'tasks'; op: TasksOp }
   /** List or act on the sessions the agent proposed (/proposals [start|here|dismiss n]). */
   | { kind: 'proposals'; op: 'list' | 'start' | 'here' | 'dismiss'; index?: number }
   /** Ask a quick side question about this chat without adding it to the chat (/btw). */
   | { kind: 'btw'; question: string }
   /** Edit lifecycle hooks (/hooks [add|remove <n>]). */
   | { kind: 'hooks'; action: SettingsAction }
-  /** Edit MCP servers (/mcp [add|remove <n>]) — stdio only in the terminal. */
+  /** List or edit MCP servers (/mcp [add|remove|enable|disable|reconnect|tools|login|logout …]). */
   | { kind: 'mcp'; action: SettingsAction }
   /** Show or change this folder's project-config trust (/trust, /trust forget). */
   | { kind: 'trust'; op: 'status' | 'forget' | 'usage' }
@@ -1540,7 +1877,14 @@ export type SlashResult =
    * A template command (custom `.houston/commands` or first-party `/review`) or
    * `/agent`: run the prompt as a turn, recorded as the command the user typed.
    */
-  | ({ kind: 'prompt' } & InvokedTurn)
+  | ({
+      kind: 'prompt'
+      /**
+       * A custom command whose frontmatter changes how its turn runs (model, effort,
+       * agent, allowed-tools): the driver prepares it in full before sending.
+       */
+      command?: { cmd: Command; args: string }
+    } & InvokedTurn)
   | { kind: 'unknown'; name: string }
   | { kind: 'not-a-command' }
 
@@ -1549,7 +1893,10 @@ export type SlashResult =
  * never the prompt behind it (that's what the model reads, not the user).
  */
 export function invocationEcho(inv: PromptInvocation): string {
-  return inv.detail ? `· ${inv.label}: ${inv.detail}` : `· running ${inv.label}`
+  // The label and detail can come from a repository's own files (a command's or a
+  // skill's description), so they never reach the terminal with escape sequences.
+  const label = stripControlChars(inv.label)
+  return inv.detail ? `· ${label}: ${stripControlChars(inv.detail)}` : `· running ${label}`
 }
 
 /**
@@ -1578,6 +1925,9 @@ export function parseSlashCommand(
       return { kind: 'resume', query: arg }
     case 'spawned':
       return { kind: 'spawned' }
+    case 'tasks':
+    case 'bashes':
+      return { kind: 'tasks', op: parseTasksArgs(arg) }
     case 'proposals':
     case 'proposed': {
       const [op, n] = arg.trim().split(/\s+/)
@@ -1627,11 +1977,30 @@ export function parseSlashCommand(
       if (isReasoningEffort(a)) return { kind: 'reasoning', effort: a, ...(asDefault ? { asDefault } : {}) }
       return { kind: 'reasoning' } // no/invalid arg → the driver reports the current one
     }
+    case 'add-dir':
+      return { kind: 'add-dir', path: arg.trim() }
     case 'vim': {
       const a = arg.trim().toLowerCase()
       if (a === 'on') return { kind: 'vim', on: true }
       if (a === 'off') return { kind: 'vim', on: false }
       return { kind: 'vim' } // bare /vim toggles
+    }
+    case 'notify': {
+      const a = arg.trim().toLowerCase()
+      if (!a) return { kind: 'notify' }
+      return isNotifyMode(a) ? { kind: 'notify', mode: a } : { kind: 'notify', invalid: arg.trim() }
+    }
+    case 'screen-reader': {
+      const a = arg.trim().toLowerCase()
+      if (a === 'on') return { kind: 'screen-reader', on: true }
+      if (a === 'off') return { kind: 'screen-reader', on: false }
+      return { kind: 'screen-reader' }
+    }
+    case 'reduce-motion': {
+      const a = arg.trim().toLowerCase()
+      if (a === 'on') return { kind: 'reduce-motion', on: true }
+      if (a === 'off') return { kind: 'reduce-motion', on: false }
+      return { kind: 'reduce-motion' }
     }
     case 'rewind': {
       const [first, second] = arg.trim().split(/\s+/)
@@ -1657,10 +2026,26 @@ export function parseSlashCommand(
       if (a === 'off') return { kind: 'verbose', on: false }
       return { kind: 'verbose' } // bare /verbose toggles
     }
+    case 'thoughts': {
+      const a = arg.trim().toLowerCase()
+      if (!a) return { kind: 'thoughts' }
+      return isReasoningDisplay(a) ? { kind: 'thoughts', mode: a } : { kind: 'thoughts', bad: a }
+    }
+    case 'transcript':
+      return { kind: 'transcript' }
     case 'output': {
       // `/output` means "what just happened"; a number counts back from there.
       const n = Number.parseInt(arg.trim(), 10)
       return { kind: 'output', index: Number.isInteger(n) && n >= 1 ? n : 1 }
+    }
+    case 'usage':
+      return { kind: 'usage' }
+    case 'copy': {
+      // `/copy` is the last reply; a number counts back from there.
+      const a = arg.trim()
+      if (!a) return { kind: 'copy', index: 1 }
+      const n = Number(a)
+      return Number.isInteger(n) && n >= 1 ? { kind: 'copy', index: n } : { kind: 'copy', index: 1, bad: true }
     }
     case 'hooks':
       return { kind: 'hooks', action: parseSettingsAction(arg) }
@@ -1707,7 +2092,7 @@ export function parseSlashCommand(
       // Shortcut for the read-only research-and-propose policy (parity with the GUI's /plan).
       return { kind: 'set-approval', policy: 'plan' }
     case 'compact':
-      return { kind: 'compact' }
+      return arg.trim() ? { kind: 'compact', focus: arg.trim() } : { kind: 'compact' }
     case 'model': {
       const { rest, asDefault } = splitDefaultFlag(arg)
       // Bare /model: pick from a list (the desktop's model picker), or list them
@@ -1729,6 +2114,7 @@ export function parseSlashCommand(
       // custom `.houston/commands`). A match runs its expanded prompt as a turn.
       const cmd = resolveCommand(commands, name)
       const turn = cmd ? commandTurn(cmd, arg, line) : null
+      if (turn && cmd && commandHasRunOptions(cmd)) return { kind: 'prompt', ...turn, command: { cmd, args: arg } }
       if (turn) return { kind: 'prompt', ...turn }
       return { kind: 'unknown', name }
     }
@@ -1746,32 +2132,7 @@ export function splitDefaultFlag(arg: string): { rest: string; asDefault: boolea
   return { rest: words.filter((w) => w !== '--default').join(' '), asDefault }
 }
 
-/**
- * Resolve a `/model` argument into a provider + model. Accepts `providerId`,
- * `providerId/model`, or a bare model id that a configured provider offers.
- */
-export function resolveModelArg(
-  arg: string,
-  settings: AppSettings
-): { providerId: string; model: string } | null {
-  const slash = arg.indexOf('/')
-  if (slash >= 0) {
-    const providerId = arg.slice(0, slash)
-    const model = arg.slice(slash + 1)
-    const p = settings.providers.find((pr) => pr.id === providerId)
-    if (p && model) return { providerId, model }
-    return null
-  }
-  const byProvider = settings.providers.find((p) => p.id === arg)
-  if (byProvider) {
-    const model = byProvider.defaultModel ?? byProvider.models[0]?.id
-    if (model) return { providerId: byProvider.id, model }
-    return null
-  }
-  const owner = settings.providers.find((p) => p.models.some((m) => m.id === arg))
-  if (owner) return { providerId: owner.id, model: arg }
-  return null
-}
+export { resolveModelArg }
 
 export const HELP_TEXT = [
   'Commands:',
@@ -1782,12 +2143,13 @@ export const HELP_TEXT = [
   '  /plan                 plan mode: read-only research & propose',
   '  /ask /auto /full      ask every time · auto-approve edits · full auto (sandboxed)',
   '  /clear, /new          start a fresh conversation',
-  '  /compact              summarize older turns to free up context now',
+  '  /compact [focus]      summarize older turns to free up context now (focus: what the summary keeps in detail)',
   '  /retry                run your last message again after a turn that failed',
   '  /review               adversarial review of your uncommitted changes',
   '  /init                 write or improve AGENTS.md, the instructions file for this project',
-  '  /resume [query]       list (or search) and reopen a saved session',
+  '  /resume [query]       pick a saved session to reopen (also /sessions): type to filter, 1-9 open a row, ctrl-r rename, ctrl-d or x delete, ctrl-a this folder or all folders',
   '  /spawned              list the background sessions the agent started; open one',
+  '  /tasks [n|kill n]     background shells and subagents of this chat: list, show n, or stop n (works mid-turn)',
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
   '  /btw <question>       ask a quick side question; the answer stays out of this chat',
   '  /btw clear            start this chat\'s side chat over',
@@ -1797,6 +2159,7 @@ export const HELP_TEXT = [
   '  /delete               delete this chat (asks first)',
   '  /permissions [remove n]  list the saved permission rules, or remove one',
   '  /cost                 show session token + cost totals',
+  '  /usage                spend and tokens per day (last 7) and per project, from the chats on this computer',
   '  /context              what fills the context now, part by part',
   '  /skills /agents       list workspace skills / custom agents',
   '  /agent <name> <task>  hand a task to one of your .houston/agents',
@@ -1804,15 +2167,25 @@ export const HELP_TEXT = [
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
+  '  /add-dir [path]       let the agent work in another folder this session (alone: list them)',
+  '  /notify [mode]        bell and notification when it needs you: auto | osc | bell | off',
+  '  /screen-reader [on|off]  plain lines for screen readers, numbered choices',
+  '  /reduce-motion [on|off]  a still activity line instead of the spinner',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
   "  /diff last [n]        show the diff of this session's last edit (n edits back)",
   '  /verbose [on|off]     show each tool\'s full output as it runs',
+  '  /thoughts [mode]      how reasoning shows as it streams: show | summary | hide (Alt-T)',
+  '  /transcript           the whole session full screen, with reasoning and full tool output (Ctrl-O)',
   '  /output [n]           reprint a tool result in full (n back; default the last)',
+  '  /copy [n]             copy a reply (n back; default the last) or one of its code blocks',
   '  /hooks [add|remove n] list or edit lifecycle hooks',
   '  /memory [verb n]      review saved memories: show, edit, pin, unpin, forget <n>; undo, on, off, folder',
-  '  /mcp [verb n]         list MCP servers; tools · add (stdio) · remove · login · logout <n>',
+  '  /mcp [verb n]         list MCP servers (status, last error); tools · enable · disable · remove · login · logout <n>',
+  '  /mcp add [--url u]    add a stdio server (guided), or a remote one: --url <url> [name] [--sse]',
+  "  /mcp reconnect <n>    restart a server's connection now (/mcp reconnect all: every one)",
+  '  /mcp search <query>   search the MCP Registry; /mcp add-from-registry <name> reviews one to add',
   "  /trust [forget]       show this folder's project-config trust, or forget it to re-decide",
   `  /theme [name]         list or switch color theme (${Object.keys(THEMES).join(' | ')})`,
   '  /image [path]         attach an image from your clipboard, or a file',
@@ -1830,13 +2203,25 @@ export const HELP_TEXT = [
   '  Shift-Tab             cycle the approval mode, also while a turn runs',
   '  Up, Down              earlier messages (this folder)',
   '  Ctrl-R                search earlier messages',
-  '  Ctrl-X Ctrl-E         edit the message in $VISUAL or $EDITOR',
+  '  Ctrl-X Ctrl-E, Ctrl-G edit the message in $VISUAL or $EDITOR',
+  '  Ctrl-_, Ctrl-^        undo, redo the last edit (Ctrl-/ and Ctrl-6 on most keyboards)',
+  '  Ctrl-S                stash the message and clear the prompt; again on an empty prompt to restore',
+  '  Ctrl-V, Alt-V         attach the image on the clipboard (pasting image file paths attaches them too)',
+  '  Esc Esc               clear the message (Up brings it back); on an empty prompt, /rewind',
   '  Ctrl-L                clear the screen',
-  '  Ctrl-C                clear the message (twice to exit); Ctrl-D exits',
+  '  Ctrl-O                the whole session full screen: j/k, / search, { } your messages, v editor, q',
+  '  Alt-T                 cycle how reasoning shows (show, summary, hide), also while a turn runs',
+  '  Ctrl-Z                suspend to the shell (fg to come back), also while a turn runs',
+  '  Ctrl-C                clear the message (twice to exit; Up brings it back); Ctrl-D exits',
   '  ultrathink            a word in the message: think harder for that turn',
   '',
   'While a turn runs: type and press Enter to steer it; Esc or Ctrl-C stops it.',
-  'Answer approvals with y / n / a.'
+  '',
+  'Approvals:',
+  '  y                     allow this call once',
+  '  a                     allow this kind of tool for the rest of this chat, until Houston quits (a network call: that destination only)',
+  '  !                     always allow: saves a permission rule, kept across restarts',
+  '  n, x                  deny this call, or always deny (saves a rule)'
 ].join('\n')
 
 /** Short tips for keys and prefixes a new user would not find on their own. */
@@ -1846,9 +2231,19 @@ export const STARTUP_TIPS = [
   '#note saves a standing instruction to AGENTS.md',
   'Shift-Tab cycles the approval mode, even while a turn runs',
   'Ctrl-R searches your earlier messages',
-  'Ctrl-X Ctrl-E edits your message in $VISUAL or $EDITOR',
+  'Ctrl-G (or Ctrl-X Ctrl-E) edits your message in $VISUAL or $EDITOR',
+  'Ctrl-V pastes the image on your clipboard; dropping an image file attaches it',
+  'Ctrl-S stashes your message for later; Ctrl-S on an empty prompt brings it back',
+  'Ctrl-_ undoes your last edit in the prompt; Ctrl-^ redoes it',
+  'Esc Esc on an empty prompt rewinds to an earlier message',
   'type while the agent works and press Enter to steer it',
-  'Shift-Enter or Ctrl-J starts a new line'
+  '/tasks lists background shells and subagents, even while a turn runs',
+  'Shift-Enter or Ctrl-J starts a new line',
+  '/resume filters saved chats as you type; Ctrl-A shows every folder',
+  'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
+  'Alt-T cycles how the model\'s reasoning shows: in full, one line, or hidden',
+  '/copy puts the last reply, or one of its code blocks, on your clipboard',
+  'using a screen reader? /screen-reader on keeps the output to plain lines'
 ]
 
 /**
@@ -1860,6 +2255,63 @@ export function pickTips(seed: number, count = 2, tips: readonly string[] = STAR
   const start = ((Math.floor(seed) % tips.length) + tips.length) % tips.length
   const n = Math.min(count, tips.length)
   return Array.from({ length: n }, (_, i) => tips[(start + i) % tips.length])
+}
+
+/** How the model's reasoning shows as it streams (the `reasoningDisplay` setting). */
+export type ReasoningDisplay = 'show' | 'summary' | 'hide'
+export const REASONING_DISPLAYS: readonly ReasoningDisplay[] = ['show', 'summary', 'hide']
+export const DEFAULT_REASONING_DISPLAY: ReasoningDisplay = 'summary'
+
+export function isReasoningDisplay(v: unknown): v is ReasoningDisplay {
+  return typeof v === 'string' && (REASONING_DISPLAYS as readonly string[]).includes(v)
+}
+
+/** Alt-T and a bare /thoughts: show, then summary, then hide, then show again. */
+export function nextReasoningDisplay(d: ReasoningDisplay): ReasoningDisplay {
+  return REASONING_DISPLAYS[(REASONING_DISPLAYS.indexOf(d) + 1) % REASONING_DISPLAYS.length]
+}
+
+/** The line saying what a reasoning display now does. */
+export function reasoningDisplayNote(d: ReasoningDisplay): string {
+  switch (d) {
+    case 'show':
+      return '· thoughts: shown in full as they stream (Alt-T or /thoughts to change)'
+    case 'summary':
+      return '· thoughts: one line each, with how long it took (Ctrl-O shows them in full)'
+    case 'hide':
+      return '· thoughts: hidden while they stream (Ctrl-O shows them in full)'
+  }
+}
+
+/** `12s`, `1m 05s`: how long a thought took, never under a second. */
+export function formatThoughtDuration(ms: number): string {
+  const sec = Math.max(1, Math.round(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  return `${Math.floor(sec / 60)}m ${String(sec % 60).padStart(2, '0')}s`
+}
+
+/**
+ * The opening of a thought, on one line: a bold heading on its own line (how some
+ * models title a reasoning summary) or else the first sentence. '' for none.
+ */
+export function firstSentence(text: string): string {
+  const lines = sanitizeLines(text)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  if (!lines.length) return ''
+  const heading = /^(?:#+\s*)?\*\*(.+?)\*\*:?$/.exec(lines[0])
+  if (heading) return heading[1].trim()
+  const flat = lines.join(' ').replace(/\*\*|__|`/g, '').replace(/^#+\s*/, '').replace(/\s+/g, ' ').trim()
+  const m = /^(.+?[.!?])(?=\s|$)/.exec(flat)
+  return (m ? m[1] : flat).trim()
+}
+
+/** The `reasoningDisplay: 'summary'` line for a finished thought, fitted to `width`. */
+export function renderThoughtSummary(text: string, ms: number, width: number, paint: Painter): string {
+  const head = `· thought for ${formatThoughtDuration(ms)}`
+  const gist = firstSentence(text)
+  const line = gist ? `${head}: ${gist}` : head
+  return paint(truncateVisible(line, Math.max(head.length, width - 1)), 'dim')
 }
 
 /** Where /help's descriptions start: two spaces, then the command padded to 22. */
@@ -1891,10 +2343,10 @@ export function wrapHelp(text: string, width: number, column = HELP_DESC_COLUMN)
 
 // --- Settings editing (/settings, /hooks, /mcp) ------------------------------
 // A small, safe subset of settings editing for the terminal. The desktop app has
-// the full panel; here we cover lifecycle hooks and *local* (stdio) MCP servers.
-// We deliberately never touch auth: remote/URL MCP and header secrets are the
-// desktop app's job (the CLI can't persist header secrets — see store.ts), so the
-// terminal add flow builds header-free stdio configs only.
+// the full panel; here we cover lifecycle hooks and MCP servers (stdio, or a remote
+// URL with no headers). We deliberately never collect header secrets: those are the
+// desktop app's job (the CLI can't persist header secrets, see store.ts), so a remote
+// server added here authenticates with OAuth (`/mcp login`) or not at all.
 
 // Lifecycle events a hook can bind to: re-exported from @shared/types (the one
 // list validators and UIs share) so existing terminal imports keep working.
@@ -1903,27 +2355,61 @@ export { HOOK_EVENTS }
 /** What the user asked /hooks or /mcp to do. Indexed ops carry a 1-based index. */
 export type SettingsAction =
   | { op: 'list' }
-  | { op: 'add' }
+  /**
+   * Add an entry. On /mcp, `url` adds a remote server (`/mcp add --url <url> [name]`,
+   * streamable HTTP, or the legacy SSE transport with `--sse`); without it the
+   * guided stdio prompts run.
+   */
+  | { op: 'add'; url?: string; name?: string; sse?: boolean }
   | { op: 'remove'; index: number }
+  /** Switch a server on or off, kept in settings (/mcp enable|disable <n>). /mcp only. */
+  | { op: 'enable'; index: number }
+  | { op: 'disable'; index: number }
+  /** Restart a server's connection now, or every server's (/mcp reconnect <n|all>). /mcp only. */
+  | { op: 'reconnect'; index: number | 'all' }
   /** List a server's tools (/mcp tools <n>). /mcp only. */
   | { op: 'tools'; index: number }
   /** OAuth sign-in for a remote MCP server (/mcp login <n>). /mcp only. */
   | { op: 'login'; index: number }
   /** Forget a remote MCP server's OAuth tokens (/mcp logout <n>). /mcp only. */
   | { op: 'logout'; index: number }
+  /** Search the MCP Registry (/mcp search <query>; empty lists all). /mcp only. */
+  | { op: 'search'; query: string }
+  /** Review and add a registry entry by its full name (/mcp add-from-registry <name>). /mcp only. */
+  | { op: 'registry-add'; name: string }
   | { op: 'usage' }
 
 /** Parse the argument of /hooks or /mcp into an action. Bare command → list. */
 export function parseSettingsAction(arg: string): SettingsAction {
   const [verb, ...rest] = arg.trim().split(/\s+/).filter(Boolean)
   if (!verb) return { op: 'list' }
-  if (verb === 'add') return { op: 'add' }
-  const indexed = (op: 'remove' | 'login' | 'logout' | 'tools'): SettingsAction => {
+  if (verb === 'add') {
+    if (!rest.length) return { op: 'add' }
+    // `--url <url> [name] [--sse]`, the flags in any order.
+    const sse = rest.includes('--sse')
+    const words = rest.filter((w) => w !== '--sse')
+    const at = words.indexOf('--url')
+    const url = at >= 0 ? words[at + 1] : undefined
+    if (!url || url.startsWith('--')) return { op: 'usage' }
+    const others = words.filter((_, i) => i !== at && i !== at + 1)
+    if (others.length > 1 || others.some((w) => w.startsWith('--'))) return { op: 'usage' }
+    return { op: 'add', url, ...(others[0] ? { name: others[0] } : {}), ...(sse ? { sse } : {}) }
+  }
+  if (verb === 'search') return { op: 'search', query: rest.join(' ') }
+  if (verb === 'add-from-registry') return rest.length === 1 ? { op: 'registry-add', name: rest[0] } : { op: 'usage' }
+  const indexed = (op: 'remove' | 'login' | 'logout' | 'tools' | 'enable' | 'disable'): SettingsAction => {
     const n = Number.parseInt(rest[0] ?? '', 10)
     if (Number.isInteger(n) && n >= 1) return { op, index: n }
     return { op: 'usage' }
   }
   if (verb === 'tools') return indexed('tools')
+  if (verb === 'enable' || verb === 'on') return indexed('enable')
+  if (verb === 'disable' || verb === 'off') return indexed('disable')
+  if (verb === 'reconnect' || verb === 'restart') {
+    if (rest[0]?.toLowerCase() === 'all') return { op: 'reconnect', index: 'all' }
+    const n = Number(rest[0] ?? '')
+    return /^\d+$/.test(rest[0] ?? '') && n >= 1 ? { op: 'reconnect', index: n } : { op: 'usage' }
+  }
   if (verb === 'remove' || verb === 'rm' || verb === 'delete') return indexed('remove')
   if (verb === 'login' || verb === 'signin') return indexed('login')
   if (verb === 'logout' || verb === 'signout') return indexed('logout')
@@ -2009,6 +2495,44 @@ export function buildStdioMcpServer(
   }
 }
 
+/**
+ * Validate `/mcp add --url <url> [name]` into a remote MCP server config, shaped as
+ * the desktop's Settings > MCP servers stores one (`transport` http or sse, an empty
+ * `command`, the `url`). No headers: a server that needs a static token is set up in
+ * the desktop app; one that uses OAuth signs in with `/mcp login <n>`. A name left
+ * out comes from the URL's host, made unique.
+ */
+export function buildRemoteMcpServer(
+  existingIds: string[],
+  url: string,
+  name = '',
+  sse = false
+): McpServerConfig | { error: string } {
+  let parsed: URL
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(url)) return { error: 'the URL has control characters in it' }
+  try {
+    parsed = new URL(url.trim())
+  } catch {
+    return { error: `"${stripControlChars(url)}" is not a URL (use https://host/path)` }
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    return { error: 'the URL must start with http:// or https://' }
+  }
+  // settings.json is plain text: a password in the URL would sit there unencrypted.
+  if (parsed.username || parsed.password) {
+    return { error: 'leave credentials out of the URL; add a token header in the desktop app, or sign in with /mcp login' }
+  }
+  let id = name.trim()
+  if (id) {
+    if (!/^[\w-]+$/.test(id)) return { error: 'name must be letters, numbers, hyphens or underscores (no spaces)' }
+    if (existingIds.includes(id)) return { error: `an MCP server named "${id}" already exists` }
+  } else {
+    id = freeServerId(parsed.hostname, existingIds)
+  }
+  return { id, name: id, transport: sse ? 'sse' : 'http', command: '', url: url.trim(), enabled: true }
+}
+
 /** Numbered list of hooks, or a "none" note. */
 export function renderHookList(hooks: Hook[], paint: Painter): string {
   if (!hooks.length) return paint('No hooks configured.', 'dim')
@@ -2050,7 +2574,10 @@ export function renderMcpList(
           : st?.state === 'needs-auth'
             ? paint(`  ! needs sign-in (/mcp login ${i + 1})`, 'yellow')
             : st?.state === 'error'
-              ? paint(`  ✗ ${stripControlChars(st.error ?? 'failed to connect')}`, 'red')
+              ? paint(
+                  `  ✗ last error: ${truncate(stripControlChars(st.error ?? 'failed to connect').replace(/\s+/g, ' ').trim(), 160)} (/mcp reconnect ${i + 1})`,
+                  'red'
+                )
               : ''
       return `  ${paint(`${i + 1}.`, 'dim')} ${paint(s.name ?? s.id, 'cyan')}${off}${auth}  ${paint(`[${transport}]`, 'dim')}  ${detail}${badge}`
     })
@@ -2585,6 +3112,15 @@ async function runProviderSetup(
 
 // --- The interactive driver --------------------------------------------------
 
+/** An image pasted at the composer: the clipboard's, or files named by a paste. */
+export type ImagePasteRequest = { kind: 'clipboard' } | { kind: 'files'; paths: string[] }
+
+/** Whether the driver took the paste as images, and what to print about it. */
+export interface ImagePasteResult {
+  handled: boolean
+  notes: string[]
+}
+
 /** Abstract terminal I/O, so the driver runs headless in tests. */
 export interface TuiIo {
   /** Print to the main output stream (stdout). */
@@ -2655,6 +3191,14 @@ export interface TuiIo {
   setSpinnerLabel?: (label: string) => void
   stopSpinner?: () => void
   /**
+   * Switch the accessibility modes the adapter owns. `reduceMotion` keeps the spinner
+   * still: a fixed mark, its elapsed time refreshed only every few seconds.
+   * `screenReader` makes every write a plain line: no spinner (its label changes
+   * print once), no redraws, no escapes, an append-only composer, and pickers as
+   * numbered lists answered by typing the number.
+   */
+  setAccessibility?: (a: { screenReader?: boolean; reduceMotion?: boolean }) => void
+  /**
    * Emit an attention signal: set the tab/window title, and — only when the user
    * has switched away — ring the bell and fire the terminal's notification. This
    * is what makes a long unattended run trustworthy: a session that blocks on an
@@ -2662,6 +3206,12 @@ export interface TuiIo {
    * Optional; absent off-TTY and in tests.
    */
   signal?: (sig: TerminalSignal) => void
+  /**
+   * A turn just finished: if the user is away, send `spec` once more after `ms`
+   * (default about a minute) unless they type or come back to the window first.
+   * Replaces any reminder already armed. Optional; absent off-TTY and in tests.
+   */
+  remindIfIdle?: (spec: NotifySpec, mode: NotifyMode, ms?: number) => void
   /**
    * Take (and clear) the messages typed while the agent was working, for dispatch
    * as the next turn. Absent off-TTY / in tests, where nothing is queued.
@@ -2674,10 +3224,28 @@ export interface TuiIo {
   onSteer?: (handler: (text: string) => boolean) => void
   takeQueued?: () => string[]
   /**
+   * Take (and clear) the line typed while the agent was working but not yet sent:
+   * it opens the next composer, rather than being thrown away when the turn ends.
+   */
+  takeDraft?: () => string
+  /**
    * Register a handler for Shift-Tab (cycle the approval mode). Fires at the
    * composer and mid-run alike; the driver decides what cycling means.
    */
   onCycleMode?: (handler: () => void) => void
+  /**
+   * Register the handler for an image pasted at the composer: Ctrl-V / Alt-V (the
+   * clipboard image), or a paste that is nothing but image file paths (a file
+   * dragged onto the terminal arrives that way). The driver stages the images and
+   * returns the notes to print; `handled: false` means "not images after all, paste
+   * the text".
+   */
+  onImagePaste?: (handler: (req: ImagePasteRequest) => ImagePasteResult) => void
+  /**
+   * Register the handler for Esc Esc on an empty composer. The composer read then
+   * resolves null, and the driver opens the /rewind picker instead of exiting.
+   */
+  onRewindKey?: (handler: () => void) => void
   /**
    * Show the approval mode on the spinner line while a turn runs — the composer's
    * status line is gone exactly when it matters most.
@@ -2694,10 +3262,26 @@ export interface TuiIo {
    * Optional — when absent (off-TTY / tests) the driver uses the typed prompt.
    */
   select?: (spec: PickerSpec) => Promise<PickerOutcome>
+  /**
+   * The transcript viewer: `source` full screen on the alternate screen until the
+   * user closes it. Resolves false when it could not open (no terminal). Output
+   * written meanwhile is held and printed, in order, when it closes. Absent off-TTY
+   * and in tests.
+   */
+  pager?: (source: PagerSource) => Promise<boolean>
+  /**
+   * Register the handler for Ctrl-O: at the composer (which is restored as it was
+   * once the handler settles) or mid-run, as `during` says.
+   */
+  onTranscript?: (handler: (during: 'composer' | 'run') => Promise<void>) => void
+  /** Register the handler for Alt-T (cycle the reasoning display), at the composer or mid-run. */
+  onCycleThoughts?: (handler: () => void) => void
 }
 
 export interface TuiDeps {
   getSettings: () => AppSettings
+  /** Run just before the farewell on a clean exit (the host waits on background sessions). */
+  beforeExit?: () => Promise<void>
   startRun: (
     req: AgentRunRequest,
     send: (e: AgentEvent) => void,
@@ -2753,6 +3337,11 @@ export interface TuiDeps {
   capabilities?: () => Promise<CapabilitySnapshot>
   /** Load the workspace's custom `.houston/commands`, so `/<name>` runs one as a turn. */
   commands?: () => Promise<Command[]>
+  /**
+   * Run one of a command template's `` !`command` `` pieces. Absent: the user's own
+   * shell, bounded in time and output (tests inject a fake).
+   */
+  runContextShell?: (command: string) => Promise<ShellCapture>
   /** Compact the given conversation on demand (the `/compact` command). */
   compact?: (id: string, providerId: string, model: string, opts?: CompactOptions) => Promise<CompactResult>
   /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
@@ -2769,6 +3358,16 @@ export interface TuiDeps {
   }
   /** Live per-server connection status for `/mcp` (from the MCP manager). */
   mcpStatuses?: () => McpServerStatus[]
+  /** Read-only MCP Registry client for `/mcp search` and `/mcp add-from-registry`. Absent ⇒ unavailable. */
+  mcpRegistry?: {
+    search: (query: string, cursor?: string) => Promise<RegistrySearchResult>
+    get: (name: string) => Promise<RegistryGetResult>
+  }
+  /**
+   * Restart the named servers' connections now (`/mcp reconnect`), resolving to their
+   * new statuses. Absent ⇒ the verb says a changed server reconnects on the next message.
+   */
+  mcpReconnect?: (ids: string[]) => Promise<McpServerStatus[]>
   /**
    * Whether this host persists secret VALUES (headers / stdio env) from settings
    * saves. False on the standalone CLI, whose store keeps only the keys — the
@@ -2787,7 +3386,7 @@ export interface TuiDeps {
   /** Absolute path to settings.json, shown by /settings, /hooks, and /mcp. */
   settingsPath?: () => string
   /** Read + validate an image file for `/image`; returns the attachment or an error. */
-  loadImage?: (path: string) => { image: ImageAttachment } | { error: string }
+  loadImage?: (path: string) => { image: ImageAttachment } | { error: string; missing?: boolean }
   /**
    * The image on the system clipboard, for a bare `/image`. The desktop app has
    * had this forever through Electron; the terminal shells out to whatever the
@@ -2795,6 +3394,17 @@ export interface TuiDeps {
    * were missing. Absent ⇒ the command says to use `/image <path>`.
    */
   clipboardImage?: () => { image: ImageAttachment } | { error: string }
+  /**
+   * Put text on the system clipboard through the platform's own helper, for
+   * `/copy`. True when it took the text. Absent (or false, as over SSH) leaves
+   * OSC 52, which the command always sends too.
+   */
+  copyText?: (text: string) => boolean
+  /**
+   * Spend and tokens per day and per project over the chats saved on this computer,
+   * for `/usage` (the desktop usage view's report). Absent ⇒ the command says so.
+   */
+  usageReport?: () => UsageReport
   /**
    * Open `initial` text in the user's `$VISUAL`/`$EDITOR` and return the edited
    * result (null if no editor is configured or the edit was aborted). Used by the
@@ -2824,6 +3434,21 @@ export interface TuiDeps {
    * isn't available here.
    */
   backgroundSessions?: () => BackgroundSession[]
+  /**
+   * The background shell registry (`run_shell` background mode) and the subagent stop
+   * handles, for `/tasks`. Absent ⇒ /tasks lists the subagents it saw and says shells
+   * are unavailable here.
+   */
+  backgroundTasks?: {
+    /** Every background shell this process started (the driver keeps this chat's). */
+    shells: () => BackgroundShellInfo[]
+    /** A shell's last lines, secrets masked; moves no read cursor. Undefined when unknown. */
+    shellTail: (id: string, maxLines: number) => string[] | undefined
+    /** Stop a shell the way the desktop's Stop does: SIGTERM, then SIGKILL after a grace. */
+    killShell: (id: string) => KillShellOutcome
+    /** Stop one running subagent of a run; false when it can't be (finished, or a reviewer). */
+    stopSubagent: (runId: string, recordId: string) => boolean
+  }
   /**
    * The chat's `propose_session` cards and what to do with them (`/proposals`).
    * Absent ⇒ the command says proposals are unavailable here.
@@ -2886,8 +3511,12 @@ export interface TuiDeps {
    * not answer. Absent ⇒ hosts are listed without a probe.
    */
   listModels?: (provider: ProviderConfig) => Promise<ModelOption[]>
-  /** The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch shown. */
-  gitBranch?: () => Promise<string | null>
+  /**
+   * The checked-out branch for the status line; null outside a repo. Absent ⇒ no branch
+   * shown. Read before every status line and never waited for: a value shows at once, a
+   * promise shows on the status line after it settles.
+   */
+  gitBranch?: () => string | null | Promise<string | null>
   /**
    * Write an export (`/export`) to `path`, relative to the working folder, without
    * replacing an existing file. Returns the full path written; throws on failure.
@@ -2927,7 +3556,11 @@ export interface TuiDeps {
    */
   wake?: {
     register: (tryWake: (conversationId: string) => boolean) => void
-    take: (conversationId: string) => string | null
+    /**
+     * The note's text, or the note with its {@link ChatMessage.taintSource} (a note
+     * quoting spawned sessions' reports), which the turn's message keeps.
+     */
+    take: (conversationId: string) => string | Pick<ChatMessage, 'content' | 'taintSource'> | null
   }
   /**
    * Optional syntax highlighter returning highlight.js token HTML for a fenced
@@ -2998,7 +3631,9 @@ export { parseMemoryCapture, type MemoryScope }
 export { parseAgentInvocation, agentInvocationPrompt } from '@shared/commands'
 
 /** Prompt string shown for the composer, reflecting the live approval policy. */
-export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
+export function composerPrompt(policy: ApprovalPolicy, paint: Painter, screenReader = false): string {
+  // A screen reader hears who is speaking; the mode is on the status line above.
+  if (screenReader) return 'you: '
   return `${paint(policy, 'dim')} ${paint('›', 'green')} `
 }
 
@@ -3009,14 +3644,48 @@ export function composerPrompt(policy: ApprovalPolicy, paint: Painter): string {
  * id (like headless), so nothing is persisted and turns can't collide.
  */
 /** Pluralized summary of a project's elevating config, e.g. "2 hooks, 1 MCP server". */
-export function summarizeElevated(c: { allowRules: unknown[]; hooks: unknown[]; mcpServers: unknown[] }): string {
+export function summarizeElevated(c: {
+  allowRules: unknown[]
+  hooks: unknown[]
+  mcpServers: unknown[]
+  commands?: unknown[]
+  plugins?: Array<{ name: string }>
+}): string {
+  const commands = c.commands?.length ?? 0
+  const plugins = c.plugins ?? []
   return [
     c.allowRules.length ? `${c.allowRules.length} allow rule${c.allowRules.length === 1 ? '' : 's'}` : '',
     c.hooks.length ? `${c.hooks.length} hook${c.hooks.length === 1 ? '' : 's'}` : '',
-    c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : ''
+    c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : '',
+    commands
+      ? `${commands} command${commands === 1 ? '' : 's'} that pre-approve${commands === 1 ? 's' : ''} tools or run${commands === 1 ? 's' : ''} shell commands`
+      : '',
+    // Each plugin file by name: trusting the folder consents to running exactly these.
+    plugins.length
+      ? `${plugins.length} plugin${plugins.length === 1 ? '' : 's'} (${plugins.map((p) => p.name).join(', ')})`
+      : ''
   ]
     .filter(Boolean)
     .join(', ')
+}
+
+/** Which of the project's files define its elevating config, for the trust prompt. */
+export function elevatedSource(c: {
+  allowRules: unknown[]
+  hooks: unknown[]
+  mcpServers: unknown[]
+  commands?: unknown[]
+  plugins?: unknown[]
+}): string {
+  const settings = c.allowRules.length > 0 || c.hooks.length > 0 || c.mcpServers.length > 0
+  const commands = (c.commands?.length ?? 0) > 0
+  const plugins = (c.plugins?.length ?? 0) > 0
+  const sources = [
+    settings || (!commands && !plugins) ? '.houston/settings.json' : '',
+    commands ? '.houston/commands' : '',
+    plugins ? '.houston/plugins' : ''
+  ].filter(Boolean)
+  return sources.length < 3 ? sources.join(' and ') : `${sources.slice(0, -1).join(', ')}, and ${sources[sources.length - 1]}`
 }
 
 /**
@@ -3044,10 +3713,13 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
 
   deps.io.out(
     `\n${paint(state === 'changed' ? 'This project’s trusted configuration changed.' : 'This project asks for extra permissions.', 'cyan')}\n` +
-      `  Its .houston/settings.json defines ${summarizeElevated(cfg.elevated)}.\n` +
+      `  It defines ${summarizeElevated(cfg.elevated)} (in ${elevatedSource(cfg.elevated)}).\n` +
       paint(
-        '  Hooks and MCP servers run as you, and allow rules auto-approve matching actions.\n' +
-          '  Only trust folders whose authors you trust; until then Houston ignores them.\n',
+        '  Hooks, MCP servers, plugins, and command templates\' shell commands run as you, and allow rules and pre-approving commands auto-approve matching actions.\n' +
+          '  Only trust folders whose authors you trust; until then Houston ignores them.\n' +
+          (cfg.elevated.plugins.length
+            ? '  Plugins also need the projectPlugins setting on; a plugin added or edited later asks again.\n'
+            : ''),
         'dim'
       )
   )
@@ -3068,7 +3740,7 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
   deps.io.out(
     paint(
       decision === 'trusted'
-        ? '· folder trusted: its allow rules, hooks, and MCP servers now apply\n'
+        ? '· folder trusted: its allow rules, hooks, MCP servers, and plugins now apply\n'
         : '· never trusting this folder: its extra permissions stay off\n',
       'dim'
     )
@@ -3093,7 +3765,7 @@ export async function runTrustCommand(
   const cfg = await loadProjectConfig(cwd)
   if (!cfg.elevatedHash) {
     deps.io.out(
-      paint('· this project defines no extra permissions (nothing in .houston/settings.json elevates)\n', 'dim')
+      paint('· this project defines no extra permissions (nothing in its .houston folder elevates)\n', 'dim')
     )
     return
   }
@@ -3109,7 +3781,7 @@ export async function runTrustCommand(
   if (op === 'status') {
     const label =
       state === 'trusted'
-        ? 'trusted: its allow rules, hooks, and MCP servers apply'
+        ? 'trusted: its allow rules, hooks, MCP servers, and plugins apply'
         : state === 'untrusted'
           ? 'never trusted: its extra permissions are ignored'
           : state === 'changed'
@@ -3148,7 +3820,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   const settings = deps.getSettings()
   // Reassigned by /theme (takes effect from the next output); the spinner keeps the
   // initial theme since its painter lives in the terminal adapter.
-  let paint = makePainter(opts.color, resolveTheme(settings.tuiTheme ?? '') ?? opts.detectedTheme ?? 'default')
+  // Screen-reader mode drops color: nothing may depend on it, and the escapes are noise.
+  let screenReader = opts.screenReader === true
+  let theme: ThemeName = resolveTheme(settings.tuiTheme ?? '') ?? opts.detectedTheme ?? 'default'
+  const makeSessionPainter = (): Painter => makePainter(opts.color && !screenReader, theme)
+  let paint = makeSessionPainter()
+  // Reduced motion: the spinner stays still. Resolved at launch (env + setting).
+  // Applied before anything reads or prints: the trust prompt and first-run setup
+  // below are the first things a screen-reader user meets.
+  let reduceMotion = opts.reduceMotion ?? settings.reduceMotion === true
+  // Screen-reader mode implies reduced motion; the preference itself is kept apart.
+  const applyAccessibility = (): void =>
+    deps.io.setAccessibility?.({ screenReader, reduceMotion: reduceMotion || screenReader })
+  applyAccessibility()
   const newId = deps.newId ?? randomUUID
 
   // Trusted-folders gate: if this project's .houston/settings.json ELEVATES
@@ -3160,6 +3844,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
 
   // Mutable session state. providerId/model may be null until a provider is set up:
   // an interactive session never ejects for a missing key (see below).
+  // Directories added for this session (`--add-dir`, `/add-dir`), sent with every run.
+  const sessionAddDirs: string[] = [...(opts.addDirs ?? [])]
   let providerId: string | null
   let model: string | null
   const resolved = resolveHeadlessModel(settings, opts)
@@ -3287,17 +3973,36 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // Short project label, folded into titles/notifications so two terminals in two
   // projects are tellable apart at a glance.
   const workspaceName = workspaceLabel(opts.cwd)
-  // Read once: hooks, MCP servers and trust are re-read by the loop each turn, but
-  // this notification toggle is snapshotted here — re-reading it per event would
-  // cost a settings load on every streamed token, and changing it mid-session is
-  // niche enough to be the one setting that genuinely wants a restart.
-  const notifyEnabled = settings.desktopNotifications !== false
+  // Which attention signals fire (/notify). Read once rather than per event (that
+  // would cost a settings load on every streamed token); /notify changes it live.
+  let notifyMode: NotifyMode = resolveNotifyMode(settings)
   // Show each tool's full output as it runs (/verbose). Off by default: the
   // transcript is a conversation, and most results are noise until they aren't.
   // Remembered across sessions once chosen.
   let verbose = settings.tuiVerbose === true
+  // How the model's reasoning shows as it streams (/thoughts, Alt-T): one line per
+  // thought by default, since a long chain of thought buries the reply. Remembered
+  // like /verbose; the transcript viewer always has it in full.
+  let reasoningDisplay: ReasoningDisplay = isReasoningDisplay(settings.reasoningDisplay)
+    ? settings.reasoningDisplay
+    : DEFAULT_REASONING_DISPLAY
+  // Whether streamed reasoning left the cursor mid-line, so a note printed while a
+  // turn runs starts on a line of its own.
+  let thoughtLineOpen = false
+  const freshLine = (): string => {
+    const nl = thoughtLineOpen ? '\n' : ''
+    thoughtLineOpen = false
+    return nl
+  }
+  const setReasoningDisplay = (d: ReasoningDisplay): void => {
+    reasoningDisplay = d
+    deps.updateSettings?.({ reasoningDisplay: d })
+    deps.io.out(`${freshLine()}${paint(reasoningDisplayNote(d), 'dim')}\n`)
+  }
   // Follow-ups typed while the agent was working, dispatched as the next turn.
   let pendingQueued: string[] = []
+  // A line half-typed while a turn ran (never sent with Enter): the next composer opens with it.
+  let halfDraft = ''
   // What a run hands back unsent: steers it accepted but ended before reading
   // (`steers_returned`), and, when the user interrupted it, the follow-ups typed
   // while it ran. Nothing typed is dropped: after an interrupt it comes back as the
@@ -3314,23 +4019,79 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   let modelCosts: ModelCost[] = []
   // Image attachments staged via /image, attached to (and cleared by) the next turn.
   let pendingImages: ImageAttachment[] = []
+  // Stage an image for the next turn, from the clipboard or a file. Each returns the
+  // note to print; shared by /image, /paste, Ctrl-V, and a pasted image path.
+  const MAX_STAGED_IMAGES = 8
+  const fullNote = (): string => paint(`· already have ${MAX_STAGED_IMAGES} images staged (the max)`, 'yellow')
+  const stageClipboardImage = (): string => {
+    if (!deps.clipboardImage) return paint('· pasting images is unavailable here; use /image <path>', 'dim')
+    if (pendingImages.length >= MAX_STAGED_IMAGES) return fullNote()
+    const img = deps.clipboardImage()
+    if ('error' in img) return paint(`· ${stripControlChars(img.error)}`, 'dim')
+    pendingImages.push(img.image)
+    return paint(`· attached the image from your clipboard (${pendingImages.length} staged)`, 'dim')
+  }
+  const stageLoadedImage = (path: string, loaded: ReturnType<NonNullable<TuiDeps['loadImage']>>): string => {
+    if (pendingImages.length >= MAX_STAGED_IMAGES) return fullNote()
+    if ('error' in loaded) return paint(`· ${stripControlChars(loaded.error)}`, 'yellow')
+    pendingImages.push(loaded.image)
+    return paint(`· attached ${stripControlChars(path)} (${pendingImages.length} staged)`, 'dim')
+  }
+  deps.io.onImagePaste?.((req) => {
+    if (req.kind === 'clipboard') return { handled: true, notes: [stageClipboardImage()] }
+    if (!deps.loadImage) return { handled: false, notes: [] }
+    // Only a paste that names real files is images: a path that does not exist
+    // means it was text that happened to end in .png, and pastes as text.
+    const loaded = req.paths.map((p) => ({ path: p, result: deps.loadImage!(p) }))
+    if (loaded.some((l) => 'error' in l.result && l.result.missing)) return { handled: false, notes: [] }
+    return { handled: true, notes: loaded.map((l) => stageLoadedImage(l.path, l.result)) }
+  })
+  // Esc Esc on an empty composer: run /rewind once the composer read closes.
+  let rewindRequested = false
+  deps.io.onRewindKey?.(() => {
+    rewindRequested = true
+  })
   // Estimated current context size (last turn's input tokens), for the status line.
   let contextTokens = 0
   // This session's landed edits (newest last), for `/diff last [n]`.
   let recentEdits: FileDiffPreview[][] = []
   // The checked-out branch, re-read before each status line (a turn or `!git`
-  // may switch it).
+  // may switch it). Never waited for: the prompt, and a queued turn's request behind
+  // it, must not sit behind a git process. A slow answer shows on the next status line.
   let branch: string | null = null
-  const refreshBranch = async (): Promise<void> => {
+  let branchReads = 0
+  const refreshBranch = (): void => {
     if (!deps.gitBranch) return
+    const read = ++branchReads
     try {
-      branch = await deps.gitBranch()
+      const got = deps.gitBranch()
+      if (got === null || typeof got === 'string') {
+        branch = got
+        return
+      }
+      got.then(
+        (b) => {
+          if (read === branchReads) branch = b
+        },
+        () => {
+          if (read === branchReads) branch = null
+        }
+      )
     } catch {
       branch = null
     }
   }
   // What filled the context on the last main round, for /context (estimated parts).
   let contextParts: ContextParts | null = null
+  // What belongs to the chat on screen rather than the session: the staged /image, the
+  // context meter and the run /undo falls back to. Reset whenever another chat (or a
+  // fresh one) takes its place, or the status bar, /context and /undo act on the old one.
+  const resetChatState = (): void => {
+    pendingImages = []
+    contextTokens = 0
+    contextParts = null
+    lastRunId = null
+  }
   const nowFn = deps.now ?? Date.now
   const columns = deps.columns ?? (() => 80)
 
@@ -3364,17 +4125,107 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     wakeRequested = true
     return true
   })
+  // The subagents this session's runs dispatched, for /tasks (shells come from the
+  // registry each time; agents only exist as the events that described them).
+  const subagentTracker = new SubagentTracker()
+  // /tasks: this chat's background shells and subagents, numbered oldest first.
+  const currentTasks = (): TaskRow[] => {
+    const shells = deps.backgroundTasks
+      ? deps.backgroundTasks
+          .shells()
+          .filter((sh) => shellInChat(sh, conversationId, opts.cwd))
+          .map((sh) => ({ ...sh, lastLine: deps.backgroundTasks?.shellTail(sh.id, 1)?.[0] }))
+      : []
+    const agents = chatSubagents(messages, subagentTracker.forChat(conversationId), conversationId)
+    return taskRows(shells, agents)
+  }
+  const showTask = (rows: TaskRow[], n: number): void => {
+    const r = rows[n - 1]
+    if (!r) {
+      deps.io.out(paint(`· no task ${n}; /tasks lists them\n`, 'dim'))
+      return
+    }
+    const text =
+      r.kind === 'shell'
+        ? renderShellDetail(r, n, deps.backgroundTasks?.shellTail(r.shell.id, TASK_TAIL_LINES), nowFn(), paint)
+        : renderSubagentDetail(r, n, nowFn(), paint, columns())
+    deps.io.out(`${text}\n`)
+  }
+  const killTask = (rows: TaskRow[], n: number): void => {
+    const r = rows[n - 1]
+    if (!r) {
+      deps.io.out(paint(`· no task ${n}; /tasks lists them\n`, 'dim'))
+      return
+    }
+    if (!taskRunning(r)) {
+      deps.io.out(paint(`· task ${n} already finished; nothing to stop\n`, 'dim'))
+      return
+    }
+    if (r.kind === 'shell') {
+      if (!deps.backgroundTasks) {
+        deps.io.out(paint('· stopping background shells is unavailable here\n', 'dim'))
+        return
+      }
+      const outcome = deps.backgroundTasks.killShell(r.shell.id)
+      deps.io.out(paint(`${shellKillPhrase(n, outcome)}\n`, outcome === 'not-found' ? 'yellow' : 'dim'))
+      return
+    }
+    const a = r.agent
+    const stopped = a.runId ? (deps.backgroundTasks?.stopSubagent(a.runId, a.recordId) ?? false) : false
+    deps.io.out(
+      stopped
+        ? paint(`· stopping task ${n}: the subagent ends at its next step and the turn goes on without it\n`, 'dim')
+        : paint(`· task ${n} can't be stopped on its own; Esc stops the whole turn\n`, 'yellow')
+    )
+  }
+  /**
+   * Run /tasks. Mid-run (typed while a turn streams) it only prints, with no prompt or
+   * picker: the run owns the screen and the input, and an approval may need them.
+   */
+  const runTasks = async (op: TasksOp, midRun: boolean): Promise<void> => {
+    // Mid-run the cursor sits on the spinner row: start below it, as steering does.
+    if (midRun) deps.io.out('\n')
+    if (op.op === 'usage') {
+      deps.io.out(paint(`${TASKS_USAGE}\n`, 'dim'))
+      return
+    }
+    const rows = currentTasks()
+    if (op.op === 'show') return showTask(rows, op.index)
+    if (op.op === 'kill') return killTask(rows, op.index)
+    if (!deps.backgroundTasks) {
+      deps.io.out(paint('· background shells are unavailable here; listing subagents only\n', 'dim'))
+    }
+    if (midRun || !rows.length || !deps.io.select) {
+      deps.io.out(`${renderTaskList(rows, nowFn(), paint, columns())}\n`)
+      return
+    }
+    const r = await deps.io.select(taskPickerSpec(rows, nowFn(), columns()))
+    if (r.kind === 'commit') showTask(rows, Number(r.value) + 1)
+    else if (r.kind === 'action' && r.id === 'kill' && r.value !== null) killTask(rows, Number(r.value) + 1)
+    else if (r.kind === 'type') deps.io.out(`${renderTaskList(rows, nowFn(), paint, columns())}\n`)
+  }
   // A line typed mid-run goes to the turn that is running, so "no, not that" lands
   // while it can still change the outcome. With no live run there is nothing to
   // steer, and the io layer queues it as a follow-up instead. A slash command is
   // never steering: injected into the run it reached the model as the literal text
   // "/plan" and the command never ran. Declining it queues it, so it runs as a
   // command once the turn ends.
-  deps.io.onSteer?.((text) => {
+  deps.io.onSteer?.((typed) => {
     if (!activeRunId) return false
-    const slash = parseSlashCommand(text.trim(), deps.getSettings(), customCommands)
+    const slash = parseSlashCommand(typed.trim(), deps.getSettings(), templateCommands)
+    // /tasks only reads the task lists or stops one task, so it runs now rather than
+    // waiting for the turn: that is when you want to see what the turn started.
+    if (slash.kind === 'tasks') {
+      runTasks(slash.op, true).catch(() => {})
+      return true
+    }
     if (slash.kind !== 'not-a-command' && slash.kind !== 'unknown') return false
-    return deps.steerRun?.(activeRunId, text) ?? false
+    // The same invisible-character strip as a message sent from the composer.
+    const cleaned = stripInvisible(typed)
+    if (!cleaned.text.trim()) return false
+    const took = deps.steerRun?.(activeRunId, cleaned.text) ?? false
+    if (took && cleaned.removed) deps.io.out(paint(`\n· ${invisibleNote(cleaned.removed)}\n`, 'dim'))
+    return took
   })
   deps.io.onInterrupt?.(() => {
     if (compactAbort) {
@@ -3468,7 +4319,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       conversationId = entry!.id
       messages = conv.messages
       deps.io.out(
-        paint(`· continuing "${entry!.title}" (${messages.length} message(s))\n`, 'dim')
+        paint(`· continuing "${terminalText(entry!.title, { lines: false })}" (${plural(messages.length, 'message')})\n`, 'dim')
       )
       const recap = renderRecap(messages, paint, { width: columns() })
       if (recap) deps.io.out(`${recap}\n`)
@@ -3490,6 +4341,41 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     }
   }
 
+  // Alt-T, at the composer or mid-run: the live turn's next thought already follows it.
+  deps.io.onCycleThoughts?.(() => setReasoningDisplay(nextReasoningDisplay(reasoningDisplay)))
+  // Ctrl-O and /transcript: the whole session full screen. Not while a turn runs:
+  // the viewer would have to hold back the run's output and its approval prompts,
+  // so it says when it can open instead. In screen-reader mode there is no full
+  // screen: the transcript is printed as plain lines, in order, for the reader.
+  const openTranscript = async (): Promise<void> => {
+    if (screenReader) {
+      const plainDoc = transcriptPlain([...messages], currentTitle() ?? 'Houston chat').replace(/\n*$/, '')
+      deps.io.out(`\n${plainDoc}\n\nend of transcript\n`)
+      return
+    }
+    if (!deps.io.pager) {
+      deps.io.out(paint('· the transcript viewer needs an interactive terminal; /export writes the chat to a file\n', 'dim'))
+      return
+    }
+    const title = currentTitle() ?? 'Houston chat'
+    const shown = [...messages]
+    const opened = await deps.io.pager({
+      title,
+      render: (width) => renderTranscript(shown, paint, { width }),
+      plain: () => transcriptPlain(shown, title)
+    })
+    if (!opened) {
+      deps.io.out(paint('· the transcript viewer could not open here; /export writes the chat to a file\n', 'dim'))
+    }
+  }
+  deps.io.onTranscript?.(async (during) => {
+    if (during === 'run') {
+      deps.io.out(`${freshLine()}${paint('· the transcript opens at the prompt once this turn ends (Ctrl-O or /transcript)', 'dim')}\n`)
+      return
+    }
+    await openTranscript()
+  })
+
   // Shift-Tab, at the composer or mid-run. Mid-run it also retargets the live run,
   // so you can loosen the mode to get past an approval without killing the turn.
   deps.io.setMode?.(policy)
@@ -3499,6 +4385,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (activeRunId) {
       deps.setRunPolicy?.(activeRunId, policy)
       deps.io.out(paint(`\n· approval → ${APPROVAL_POLICY_LABEL[policy]} (this run too)\n`, 'dim'))
+    } else if (screenReader) {
+      // The arrow-key composer shows the mode in its prompt; a screen reader is told.
+      deps.io.out(`approval: ${APPROVAL_POLICY_LABEL[policy]}\n`)
     }
   })
 
@@ -3519,6 +4408,154 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         .map((t) => `${paint(`  tip: ${t}`, 'dim')}\n`)
         .join('')
   )
+
+  // After the chat you're in is deleted (/delete, or from the /resume picker): what
+  // was this chat's is dropped, and the next turn starts a fresh one.
+  const forgetDeletedChat = (): void => {
+    messages = []
+    conversationId = null
+    persistedSettings = null
+    resetChatState() // /context and /undo must not act on the deleted chat
+  }
+
+  /**
+   * The arrow-key `/resume` picker: rows filter live as you type (a title and content
+   * search), the highlighted chat is previewed under the list, Ctrl-R renames and
+   * Ctrl-D or `x` deletes in place, 1-9 open a row, and Ctrl-A switches between this
+   * folder and every folder. Resolves the chosen id, null on cancel, or undefined when
+   * the terminal can't show a picker (the caller falls back to the numbered list).
+   */
+  const pickSession = async (
+    persist: TuiPersist,
+    select: (spec: PickerSpec) => Promise<PickerOutcome>,
+    query: string,
+    initial: ResumeEntry[]
+  ): Promise<string | null | undefined> => {
+    const canScope = Boolean(persist.listAll && persist.searchAll)
+    let all = false
+    let deletedCurrent: string | null = null
+    const byId = new Map<string, ResumeEntry>()
+    // Each chat is read once per picker for its preview (and the delete question).
+    const read = new Map<string, ChatMessage[] | null>()
+    const messagesOf = (id: string): ChatMessage[] | null => {
+      if (!read.has(id)) {
+        try {
+          read.set(id, persist.get(id)?.messages ?? null)
+        } catch {
+          read.set(id, null)
+        }
+      }
+      return read.get(id) ?? null
+    }
+    const fetch = (q: string): ResumeEntry[] =>
+      all
+        ? q
+          ? persist.searchAll!(q)
+          : persist.listAll!()
+        : q
+          ? persist.search(opts.cwd, q)
+          : persist.list(opts.cwd)
+    const toOptions = (list: ResumeEntry[]): PickerOption[] => {
+      byId.clear()
+      const now = nowFn()
+      return list.map((c, i) => {
+        byId.set(c.id, c)
+        const row = renderSessionRow(c, i, { now, paint, showFolder: all, current: c.id === conversationId })
+        return { value: c.id, label: row.label, detail: row.detail }
+      })
+    }
+    const titleOf = (id: string | null): string =>
+      stripControlChars((id && byId.get(id)?.title) || '') || 'New chat'
+    const heading = (): string => (all ? 'Sessions in all folders' : 'Sessions in this folder')
+    const rows = (q: string): PickerOption[] => {
+      try {
+        return toOptions(fetch(q))
+      } catch {
+        return toOptions([])
+      }
+    }
+    const actions: PickerAction[] = []
+    if (persist.rename) {
+      actions.push({ id: 'rename', keys: ['ctrl-r'], input: { label: 'new title', initial: (o) => titleOf(o.value) } })
+    }
+    if (persist.remove) {
+      actions.push({
+        id: 'delete',
+        keys: ['ctrl-d', 'x'],
+        confirm: (o) => {
+          const title = titleOf(o.value)
+          if (o.value === conversationId) {
+            return `Delete "${title}"? It's the chat you're in: you'll be in a new chat. This cannot be undone.`
+          }
+          const msgs = messagesOf(o.value)
+          const count = msgs ? ` and its ${plural(msgs.length, 'message')}` : ''
+          return `Delete "${title}"${count}? This cannot be undone.`
+        }
+      })
+    }
+    if (canScope) actions.push({ id: 'scope', keys: ['ctrl-a'], global: true })
+    const hint = (): string =>
+      sessionPickerHint({ rename: !!persist.rename, remove: !!persist.remove, scope: canScope, all })
+    const outcome = await select({
+      title: heading(),
+      options: toOptions(initial),
+      filter: true,
+      initialQuery: query,
+      onQuery: rows,
+      digitCommits: true,
+      maxRows: 9,
+      empty: query ? 'no sessions match' : 'no saved sessions here yet',
+      hint: hint(),
+      actions,
+      preview: (o, width) => {
+        const c = byId.get(o.value)
+        if (!c) return []
+        return sessionPreviewLines(c, messagesOf(c.id), {
+          width,
+          paint,
+          when: formatRelativeTime(c.updatedAt, nowFn()),
+          ...(all && c.workspace ? { folder: sessionFolder(c.workspace) } : {})
+        })
+      },
+      onAction: (req) => {
+        if (req.id === 'scope') {
+          all = !all
+          // The hint names the other scope, so it changes too.
+          return {
+            options: rows(req.query.trim()),
+            title: heading(),
+            hint: hint(),
+            notice: all ? 'showing all folders' : 'showing this folder'
+          }
+        }
+        const id = req.value
+        if (!id) return { notice: 'nothing selected' }
+        const title = titleOf(id)
+        if (req.id === 'rename') {
+          const next = stripControlChars(req.text ?? '').trim()
+          if (!next || next === title) return { notice: 'title unchanged' }
+          persist.rename!(id, next)
+          return { options: rows(req.query.trim()), notice: `renamed to "${next}"` }
+        }
+        if (req.id === 'delete') {
+          persist.remove!(id)
+          read.delete(id)
+          if (id === conversationId) {
+            forgetDeletedChat()
+            deletedCurrent = title
+            return { options: rows(req.query.trim()), notice: `deleted "${title}", the chat you were in` }
+          }
+          return { options: rows(req.query.trim()), notice: `deleted "${title}"` }
+        }
+        return {}
+      }
+    })
+    // Say it in the transcript too: the picker's notice goes with the picker.
+    if (deletedCurrent) deps.io.out(paint(`· deleted "${deletedCurrent}"; this is a new chat\n`, 'dim'))
+    if (outcome.kind === 'commit') return outcome.value
+    if (outcome.kind === 'type') return undefined
+    return null
+  }
 
   for (;;) {
     // The update check resolves whenever it resolves; print it HERE, between turns,
@@ -3549,12 +4586,21 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // A persistent status line above the composer: model, policy, cwd, cost, and
     // context-window fill — so live session state is always visible. Before a
     // provider is set up it shows a "no model" prompt pointing at /login instead.
-    await refreshBranch()
+    refreshBranch()
     deps.io.out(
       `${
         providerId && model
           ? renderStatusLine(
-              { providerId, model, policy, cwd: opts.cwd, cost: sessionCost, contextTokens, branch },
+              {
+                providerId,
+                model,
+                policy,
+                cwd: opts.cwd,
+                cost: sessionCost,
+                contextTokens,
+                branch,
+                quota: providerQuota(providerId)
+              },
               columns(),
               paint
             )
@@ -3567,6 +4613,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // trailing backslash or an open code fence continues onto the next line.
     let raw: string | null = null
     let resetComposer = false
+    // Set when a key (Esc Esc) stood in for typing a command: nothing to save to history.
+    let fromKey = false
     atComposer = true // Ctrl-C now means "clear/exit the composer" (see onInterrupt)
     // Ctrl-C settles either read: 'reset' discards this entry and re-prompts, 'exit'
     // (a second Ctrl-C) leaves like Ctrl-D; otherwise a null is a real EOF.
@@ -3578,16 +4626,26 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     if (pendingQueued.length) {
       // Typed while the last turn ran. Dispatch it instead of prompting: waiting for
       // an Enter they already pressed would be the exact tax queueing removes.
-      raw = pendingQueued.join('\n\n')
-      pendingQueued = []
-      deps.io.out(`${composerPrompt(policy, paint)}${raw}\n`)
+      // A command among them runs as itself, one entry per pass: joined, "/compact" then
+      // "/cost" became one message the second command vanished into, and a steer
+      // followed by "/plan" reached the model as text.
+      if (pendingQueued.some((q) => /^[/!#]/.test(q.trim()))) {
+        raw = pendingQueued[0]
+        pendingQueued = pendingQueued.slice(1)
+      } else {
+        raw = pendingQueued.join('\n\n')
+        pendingQueued = []
+      }
+      deps.io.out(`${composerPrompt(policy, paint, screenReader)}${raw}\n`)
     } else if (deps.io.readComposer) {
       // A thunk, not a string: Shift-Tab can change the policy WHILE this read is
       // open, and the prompt has to say what will actually happen when you hit Enter.
       const draft = restoreDraft
       restoreDraft = ''
+      const half = halfDraft
+      halfDraft = ''
       if (draft) deps.io.out(paint('· not sent (the turn was interrupted): back in the prompt to edit or send\n', 'dim'))
-      const text = await deps.io.readComposer(() => composerPrompt(policy, paint), draft || undefined, {
+      const text = await deps.io.readComposer(() => composerPrompt(policy, paint, screenReader), draft || half || undefined, {
         // Read on each redraw: what the keyword would do on this chat's model right now.
         ultrathinkEffect: () =>
           ultrathinkEffect(
@@ -3596,7 +4654,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             activeModelSendsXhigh(deps, providerId, model)
           )
       })
-      if (text === null) {
+      if (text === null && rewindRequested) {
+        // Esc Esc on an empty composer: the same picker /rewind opens.
+        rewindRequested = false
+        raw = '/rewind'
+        fromKey = true
+      } else if (text === null) {
         resetComposer = consumeInterrupt() === 'reset'
       } else {
         raw = text
@@ -3613,7 +4676,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // composer with no visible way out (typing the closing ``` submits).
         const p = composer.pending
           ? paint(composer.inFence ? '… (``` to close and send) ' : '… ', 'dim')
-          : composerPrompt(policy, paint)
+          : composerPrompt(policy, paint, screenReader)
         const line = await deps.io.readLine(p)
         if (line === null) {
           const flag = consumeInterrupt()
@@ -3636,25 +4699,43 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     // Background work finished while the composer was idle: its news is this turn's
     // input. Taken now, not when it arrived, so a draft typed meanwhile still wins.
     let wakeTurn = false
+    // What the wake note carries from outside (see ChatMessage.taintSource), kept on
+    // the turn's message so the memory taint rule still sees it.
+    let wakeTaint: string | undefined
     if (wakeRequested) {
       wakeRequested = false
-      const note = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const taken = raw === null && !resetComposer && conversationId ? deps.wake?.take(conversationId) : null
+      const note = typeof taken === 'string' ? taken : (taken?.content ?? null)
       if (note) {
         raw = note
         wakeTurn = true
+        if (taken && typeof taken === 'object') wakeTaint = taken.taintSource
         deps.io.out(paint('· background work finished; continuing on its own\n', 'dim'))
       } else if (raw === null && !resetComposer) continue
     }
     if (resetComposer) continue // Ctrl-C discarded the input — draw a fresh prompt
     if (raw === null) break // clean Ctrl-D (or a second Ctrl-C) at the composer → exit
     let text = raw.trim()
+    // Characters that draw nothing (zero-width, bidi overrides, tag characters) can
+    // hide text the user never saw; send what they reviewed. Not on a message
+    // Houston wrote itself (a background wake).
+    if (!wakeTurn && !fromKey) {
+      const cleaned = stripInvisible(text)
+      if (cleaned.removed) {
+        text = cleaned.text.trim()
+        deps.io.out(paint(`· ${invisibleNote(cleaned.removed)}\n`, 'dim'))
+      }
+    }
     if (!text) continue
     // Set when this turn's text is a prompt Houston wrote for a command (/review,
     // /agent): saved on the message so every client shows the command, not the prompt.
     let invokedAs: PromptInvocation | undefined
+    // A custom command's per-turn model, effort and pre-approved tools (its
+    // frontmatter): this one turn only, never saved as the chat's settings.
+    let turnRun: PreparedCommandRun | null = null
     // Persist composer submissions (commands included) for cross-restart recall;
     // approval/question answers go through a different read and aren't saved.
-    if (!wakeTurn) deps.persistHistory?.(text)
+    if (!wakeTurn && !fromKey) deps.persistHistory?.(text)
 
     // `#note` — remember this for next time. Checked with the other prefixes, before
     // the line is treated as something to say to the model.
@@ -3665,6 +4746,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       let scope: MemoryScope | null = null
+      let typedScope: string | undefined
       if (deps.io.select) {
         const r = await deps.io.select({
           title: 'Remember this where?',
@@ -3675,11 +4757,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         })
         if (r.kind === 'commit') scope = r.value as MemoryScope
         else if (r.kind === 'cancel') scope = null
+        else typedScope = r.text
       }
       if (scope === null) {
-        const ans = await deps.io.readLine('Remember for [p]roject or [e]verywhere? ', {
-          discardPending: true
-        })
+        const ans =
+          typedScope ??
+          (await deps.io.readLine('Remember for [p]roject or [e]verywhere? ', {
+            discardPending: true
+          }))
         const a = (ans ?? '').trim().toLowerCase()
         if (a === 'p' || a === 'project') scope = 'project'
         else if (a === 'e' || a === 'everywhere' || a === 'g' || a === 'global') scope = 'global'
@@ -3710,8 +4795,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       let code: number
       try {
         code = await deps.runUserShell(shellCmd, (chunk) => {
-          // Stream it: a build or a test run should look alive, not hung.
-          deps.io.out(chunk)
+          // Stream it: a build or a test run should look alive, not hung. Its colours
+          // stay, but nothing else in it (a file it printed, say) can drive the terminal.
+          deps.io.out(filterTerminalOutput(chunk))
           captured += chunk
         })
       } catch (e) {
@@ -3731,12 +4817,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       let result = parseSlashCommand(text, deps.getSettings(), templateCommands)
       if (result.kind === 'exit') break
       if (result.kind === 'clear') {
+        subagentTracker.forget(conversationId)
         messages = []
         conversationId = null // next turn starts (and persists) a fresh conversation
         persistedSettings = null // stored meta belongs to the old conversation
-        pendingImages = [] // don't carry a staged /image into the fresh conversation
-        contextTokens = 0 // the context meter belongs to the old conversation
-        contextParts = null
+        resetChatState()
         deps.io.out(paint('· conversation cleared\n', 'dim'))
         continue
       }
@@ -3753,11 +4838,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`· couldn't list sessions: ${(e as Error).message}\n`, 'dim'))
           continue
         }
-        deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
-        if (!convs.length) continue
-        // discardPending like the other prompts, so type-ahead can't auto-select.
-        const ans = await deps.io.readLine('> ', { discardPending: true })
-        const id = ans === null ? null : parseResumeSelection(ans, convs)
+        // The arrow-key picker when the terminal has one: live filter, preview, and
+        // rename/delete in place. `undefined` means it isn't available here, so fall
+        // back to the numbered list and a typed answer. Screen-reader mode always takes
+        // the numbered list: the picker's live filter, preview and in-place actions
+        // all redraw, and its rows carry their own numbers, so the numbered rendering
+        // of it would read "1. 1. title".
+        let id: string | null | undefined
+        const canScope = Boolean(deps.persist.listAll && deps.persist.searchAll)
+        if (deps.io.select && !screenReader && (convs.length || canScope)) {
+          id = await pickSession(deps.persist, deps.io.select, query, convs)
+        }
+        if (id === undefined) {
+          deps.io.out(`${renderConversationList(convs, nowFn(), paint)}\n`)
+          if (screenReader) deps.io.out(`${screenReaderResumeNote(deps.persist, canScope)}\n`)
+          if (!convs.length) continue
+          // discardPending like the other prompts, so type-ahead can't auto-select.
+          const ans = await deps.io.readLine('> ', { discardPending: true })
+          id = ans === null ? null : parseResumeSelection(ans, convs)
+        }
         if (!id) {
           deps.io.out(paint('· cancelled\n', 'dim'))
           continue
@@ -3775,7 +4874,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         conversationId = id
         messages = conv.messages
-        deps.io.out(paint(`· resumed: ${messages.length} message(s)\n`, 'dim'))
+        resetChatState()
+        deps.io.out(paint(`· resumed: ${plural(messages.length, 'message')}\n`, 'dim'))
         const recap = renderRecap(messages, paint, { width: columns() })
         if (recap) deps.io.out(`${recap}\n`)
         const ended = runEndNotice(messages)
@@ -3799,7 +4899,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const target = result.path ?? defaultExportName(title, at, result.format)
         try {
           const written = deps.writeExport(target, content)
-          deps.io.out(paint(`· exported ${messages.length} message(s) to ${written}\n`, 'dim'))
+          deps.io.out(paint(`· exported ${plural(messages.length, 'message')} to ${written}\n`, 'dim'))
         } catch (e) {
           deps.io.out(paint(`· couldn't export: ${(e as Error).message}\n`, 'yellow'))
         }
@@ -3821,7 +4921,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         try {
           deps.persist.rename(conversationId, result.title)
-          deps.io.out(paint(`· renamed to "${result.title}"\n`, 'dim'))
+          deps.io.out(paint(`· renamed to "${terminalText(result.title, { lines: false })}"\n`, 'dim'))
         } catch (e) {
           deps.io.out(paint(`· couldn't rename: ${(e as Error).message}\n`, 'yellow'))
         }
@@ -3837,10 +4937,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           )
           continue
         }
-        const title = currentTitle() ?? 'this chat'
+        const title = terminalText(currentTitle() ?? 'this chat', { lines: false })
         // discardPending: type-ahead must not answer a question about deleting.
         const ans = await deps.io.readLine(
-          paint(`Delete "${title}" and its ${messages.length} message(s)? This cannot be undone. [y/N] `, 'yellow'),
+          paint(`Delete "${title}" and its ${plural(messages.length, 'message')}? This cannot be undone. [y/N] `, 'yellow'),
           { discardPending: true }
         )
         if (!/^y(es)?$/i.test(ans?.trim() ?? '')) {
@@ -3853,13 +4953,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`· couldn't delete: ${(e as Error).message}\n`, 'yellow'))
           continue
         }
-        messages = []
-        conversationId = null
-        persistedSettings = null
-        pendingImages = []
-        contextTokens = 0
-        contextParts = null // /context must not show the deleted chat
-        lastRunId = null // /undo must not restore files from the deleted chat's run
+        forgetDeletedChat()
         deps.io.out(paint(`· deleted "${title}"; this is a new chat\n`, 'dim'))
         continue
       }
@@ -3929,7 +5023,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'settings') {
-        renderSettingsOverview(deps, paint)
+        renderSettingsOverview(deps, paint, { reduceMotion, screenReader, notifyMode })
+        continue
+      }
+      if (result.kind === 'add-dir') {
+        deps.io.out(paint(`${applyAddDir(sessionAddDirs, result.path, opts.cwd)}\n`, 'dim'))
         continue
       }
       if (result.kind === 'vim') {
@@ -3949,6 +5047,69 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         )
         continue
       }
+      if (result.kind === 'thoughts') {
+        if (result.bad) {
+          deps.io.out(
+            paint(`· no thoughts mode "${stripControlChars(result.bad)}": use /thoughts show, summary or hide\n`, 'yellow')
+          )
+          continue
+        }
+        setReasoningDisplay(result.mode ?? nextReasoningDisplay(reasoningDisplay))
+        continue
+      }
+      if (result.kind === 'transcript') {
+        await openTranscript()
+        continue
+      }
+      if (result.kind === 'reduce-motion') {
+        reduceMotion = result.on ?? !reduceMotion
+        deps.updateSettings?.({ reduceMotion })
+        applyAccessibility()
+        deps.io.out(
+          paint(
+            reduceMotion
+              ? '· reduced motion on: the activity line holds still and its timer updates every few seconds\n'
+              : '· reduced motion off: the spinner animates again\n',
+            'dim'
+          )
+        )
+        continue
+      }
+      if (result.kind === 'notify') {
+        if (result.invalid !== undefined) {
+          deps.io.out(
+            paint(`· unknown notification mode "${stripControlChars(result.invalid)}" (use ${NOTIFY_MODES.join(' | ')})\n`, 'yellow')
+          )
+          continue
+        }
+        if (result.mode) {
+          notifyMode = result.mode
+          deps.updateSettings?.({ tuiNotify: notifyMode })
+        }
+        deps.io.out(
+          paint(
+            `· notifications${result.mode ? ' →' : ':'} ${notifyMode}, ${describeNotifyMode(notifyMode)}\n` +
+              (result.mode ? '' : `  /notify ${NOTIFY_MODES.join(' | ')} to change it\n`),
+            'dim'
+          )
+        )
+        continue
+      }
+      if (result.kind === 'screen-reader') {
+        screenReader = result.on ?? !screenReader
+        deps.updateSettings?.({ tuiScreenReader: screenReader })
+        applyAccessibility()
+        paint = makeSessionPainter()
+        deps.io.out(
+          paint(
+            screenReader
+              ? '· screen-reader mode on: plain lines, no spinner or redraws, and numbered choices\n'
+              : '· screen-reader mode off: the spinner, colors and arrow-key pickers are back\n',
+            'dim'
+          )
+        )
+        continue
+      }
       if (result.kind === 'verbose') {
         verbose = result.on ?? !verbose
         deps.updateSettings?.({ tuiVerbose: verbose })
@@ -3960,6 +5121,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             'dim'
           )
         )
+        continue
+      }
+      if (result.kind === 'tasks') {
+        await runTasks(result.op, false)
         continue
       }
       if (result.kind === 'spawned') {
@@ -3997,12 +5162,13 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         const stillRunning = list.find((x) => x.id === id)?.running
         conversationId = id
         messages = conv.messages
+        resetChatState()
         adoptChatSettings(conv)
         deps.io.out(
           paint(
             stillRunning
-              ? `· opened a running session (${messages.length} message(s) so far); it keeps going in the background\n`
-              : `· opened: ${messages.length} message(s)\n`,
+              ? `· opened a running session (${plural(messages.length, 'message')} so far); it keeps going in the background\n`
+              : `· opened: ${plural(messages.length, 'message')}\n`,
             'dim'
           )
         )
@@ -4010,6 +5176,22 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'output') {
         deps.io.out(`${renderRecoveredOutput(toolResultsFrom(messages), result.index, paint)}\n`)
+        continue
+      }
+      if (result.kind === 'copy') {
+        await runCopyCommand(result, messages, deps, paint)
+        continue
+      }
+      if (result.kind === 'usage') {
+        if (!deps.usageReport) {
+          deps.io.out(paint('· usage totals are unavailable here\n', 'dim'))
+          continue
+        }
+        try {
+          deps.io.out(`${renderUsageReport(deps.usageReport(), paint)}\n`)
+        } catch (e) {
+          deps.io.out(paint(`· couldn't read usage: ${(e as Error).message}\n`, 'yellow'))
+        }
         continue
       }
       if (result.kind === 'reasoning') {
@@ -4055,8 +5237,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // The meter measured the log before the undo; the next turn reports the real size.
           contextTokens = 0
           contextParts = null
-          const left = res.conflicts.length ? `; left ${res.conflicts.length} file(s) that changed since: ${res.conflicts.join(', ')}` : ''
-          deps.io.out(paint(`· undid the rewind (${res.reapplied} file(s) put back${left})\n`, 'dim'))
+          const left = res.conflicts.length ? `; left ${plural(res.conflicts.length, 'file')} that changed since: ${res.conflicts.join(', ')}` : ''
+          deps.io.out(paint(`· undid the rewind (${plural(res.reapplied, 'file')} put back${left})\n`, 'dim'))
           continue
         }
         const points = rewindPoints(messages)
@@ -4096,7 +5278,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint(`· ${preview.error}\n`, 'yellow'))
           continue
         }
-        deps.io.out(`${paint(`Rewind to “${point.label}”?`, 'bold')} ${rewindConfirmText(mode, preview)}\n`)
+        deps.io.out(`${paint(`Rewind to “${terminalText(point.label, { lines: false })}”?`, 'bold')} ${rewindConfirmText(mode, preview)}\n`)
         const yes = await deps.io.readLine('Rewind? [y/N] ', { discardPending: true })
         if (!yes || !/^y(es)?$/i.test(yes.trim())) {
           deps.io.out(paint('· cancelled\n', 'dim'))
@@ -4141,7 +5323,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           : await deps.checkpoint.undo(runId)
         deps.io.out(
           result.redo
-            ? paint(`· put back ${files} file(s) the last turn had changed\n`, 'dim')
+            ? paint(`· put back ${plural(files, 'file')} the last turn had changed\n`, 'dim')
             : `${renderUndoResult(files, paint)}\n`
         )
         continue
@@ -4160,7 +5342,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         const html = deps.highlightHtml
-        const view = renderPreviewView(
+        const plainEdit = screenReader ? renderPreviewDiff(edit) : null
+        const view = plainEdit ? colorizeDiff(plainEdit, paint, SCREEN_READER_DIFF_LINES) : renderPreviewView(
           edit,
           paint,
           html
@@ -4238,21 +5421,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'paste-image') {
-        if (!deps.clipboardImage) {
-          deps.io.out(paint('· pasting images is unavailable here; use /image <path>\n', 'dim'))
-          continue
-        }
-        if (pendingImages.length >= 8) {
-          deps.io.out(paint('· already have 8 images staged (the max)\n', 'yellow'))
-          continue
-        }
-        const img = deps.clipboardImage()
-        if ('error' in img) {
-          deps.io.out(paint(`· ${img.error}\n`, 'dim'))
-          continue
-        }
-        pendingImages.push(img.image)
-        deps.io.out(paint(`· attached the image from your clipboard (${pendingImages.length} staged)\n`, 'dim'))
+        deps.io.out(`${stageClipboardImage()}\n`)
         continue
       }
       if (result.kind === 'image') {
@@ -4260,17 +5429,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· image attachments are unavailable\n', 'dim'))
           continue
         }
-        if (pendingImages.length >= 8) {
-          deps.io.out(paint('· already have 8 images staged (the max)\n', 'yellow'))
+        if (pendingImages.length >= MAX_STAGED_IMAGES) {
+          deps.io.out(`${fullNote()}\n`)
           continue
         }
-        const loaded = deps.loadImage(result.path)
-        if ('error' in loaded) {
-          deps.io.out(paint(`· ${loaded.error}\n`, 'yellow'))
-          continue
-        }
-        pendingImages.push(loaded.image)
-        deps.io.out(paint(`· attached ${result.path} (${pendingImages.length} staged)\n`, 'dim'))
+        deps.io.out(`${stageLoadedImage(result.path, deps.loadImage(result.path))}\n`)
         continue
       }
       if (result.kind === 'set-approval') {
@@ -4323,7 +5486,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         continue
       }
       if (result.kind === 'set-theme') {
-        paint = makePainter(opts.color, result.theme)
+        theme = result.theme
+        paint = makeSessionPainter()
         // Persist it: a theme you have to re-pick on every launch is not a setting,
         // it is a party trick.
         deps.updateSettings?.({ tuiTheme: result.theme })
@@ -4343,6 +5507,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         try {
           res = await deps.compact(conversationId, providerId, model, {
             signal: ctl.signal,
+            ...(result.focus ? { focus: result.focus } : {}),
             onRetry: ({ attempt, max }) =>
               deps.io.setSpinnerLabel?.(`Compacting (retrying, attempt ${attempt}${max ? ` of ${max}` : ''})`)
           })
@@ -4354,7 +5519,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         if (res.ok && res.messages) {
           messages = res.messages
-          deps.io.out(paint(`· compacted ${res.summarized} earlier message(s)\n`, 'dim'))
+          // The meter measured the log before it was summarized; the next turn reports
+          // the real size, as after a rewind.
+          contextTokens = 0
+          contextParts = null
+          deps.io.out(paint(`· compacted ${plural(res.summarized, 'earlier message')}\n`, 'dim'))
         } else if (res.ok) {
           deps.io.out(
             paint(
@@ -4368,6 +5537,17 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.out(paint('· compaction cancelled; nothing changed\n', 'dim'))
         } else {
           deps.io.out(paint(`· couldn't compact: ${res.error ?? 'unknown error'}\n`, 'yellow'))
+        }
+        // A line sent while it compacted was queued (there was no run to steer): send it
+        // next, as /btw does, rather than after the user's next turn. A cancel hands it
+        // back as the draft instead, and a line still being typed stays a draft.
+        const typedWhile = deps.io.takeQueued?.() ?? []
+        const halfTyped = deps.io.takeDraft?.() ?? ''
+        if (res.reason === 'cancelled') {
+          restoreDraft = [restoreDraft, ...typedWhile, halfTyped].filter(Boolean).join('\n\n')
+        } else {
+          pendingQueued = [...pendingQueued, ...typedWhile]
+          if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
         }
         continue
       }
@@ -4416,12 +5596,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             deps.io.stopSpinner?.()
             deps.io.out(paint('\n^C side chat stopped\n', 'dim'))
           } else if (turn.answer !== undefined) {
-            deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${turn.answer.trim()}\n`)
+            // The model's answer, rendered as a reply is: markdown, wrapped, and with its
+            // control characters dropped (line by line, so its lines stay).
+            const clean = turn.answer.trim().split('\n').map(stripControlChars).join('\n')
+            const body = renderMarkdownAnsi(clean, { paint, width: columns() })
+            deps.io.out(`${paint('side chat (not added to this chat):', 'dim')}\n${body}\n`)
           } else {
-            deps.io.out(paint(`· side chat failed: ${turn.error ?? 'no answer'}\n`, 'red'))
+            deps.io.out(paint(`· side chat failed: ${stripControlChars(turn.error ?? 'no answer')}\n`, 'red'))
           }
         } catch (e) {
-          deps.io.out(paint(`· side chat failed: ${(e as Error).message}\n`, 'red'))
+          deps.io.out(paint(`· side chat failed: ${stripControlChars((e as Error).message)}\n`, 'red'))
         } finally {
           stopSideChat = null
           deps.io.stopSpinner?.()
@@ -4429,9 +5613,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // A line typed while the side chat worked was queued (there was no run to
         // steer): send it as the next turn, or after a stop, offer it as the draft.
         const typed = deps.io.takeQueued?.() ?? []
-        if (typed.length) {
-          if (stopped) restoreDraft = [restoreDraft, ...typed].filter(Boolean).join('\n\n')
-          else pendingQueued = [...pendingQueued, ...typed]
+        const halfTyped = deps.io.takeDraft?.() ?? ''
+        if (stopped) restoreDraft = [restoreDraft, ...typed, halfTyped].filter(Boolean).join('\n\n')
+        else {
+          pendingQueued = [...pendingQueued, ...typed]
+          if (halfTyped) halfDraft = [halfDraft, halfTyped].filter(Boolean).join('\n\n')
         }
         continue
       }
@@ -4461,7 +5647,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         try {
           if (result.op === 'start') {
             const started = await deps.proposals.start(conversationId, picked.callId, policy)
-            deps.io.out(paint(`· started "${started.title}" in the background; /spawned opens it\n`, 'green'))
+            deps.io.out(paint(`· started "${terminalText(started.title, { lines: false })}" in the background; /spawned opens it\n`, 'green'))
             continue
           }
           deps.proposals.decide(conversationId, picked.callId, result.op === 'here' ? 'here' : 'dismissed')
@@ -4470,7 +5656,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           continue
         }
         if (result.op === 'dismiss') {
-          deps.io.out(paint(`· dismissed "${picked.title}"\n`, 'dim'))
+          deps.io.out(paint(`· dismissed "${terminalText(picked.title, { lines: false })}"\n`, 'dim'))
           continue
         }
         // "here": ask for it in this chat, as a normal turn. Fall through.
@@ -4496,9 +5682,37 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // run its expanded prompt as a normal turn. Fall through — don't `continue`.
         // The typed line is already on screen; one dim line says what it runs, and
         // the prompt itself stays out of the scrollback.
+        if (result.command) {
+          const commandName = `/${result.command.cmd.name}`
+          const prepared = await prepareCommandRun(result.command.cmd, result.command.args, text, {
+            settings: deps.getSettings(),
+            trusted: await workspaceTrusted(opts.cwd, deps.getSettings().trustedFolders).catch(() => false),
+            workspace: opts.cwd,
+            // A template's shell commands (or a credential file it reads): shown
+            // exactly, and run only on a yes.
+            confirmContext: async (consent) => {
+              const { title, lines } = describeContextConsent(commandName, consent)
+              deps.io.out(
+                `${paint(stripControlChars(title), 'cyan')}\n${lines.map((l) => `  ${stripControlChars(l)}`).join('\n')}\n`
+              )
+              const ans = await deps.io.readLine('Allow? [y/N] ', { discardPending: true })
+              return /^(y|yes)$/i.test(ans?.trim() ?? '')
+            },
+            ...(deps.runContextShell ? { runShell: deps.runContextShell } : {})
+          })
+          if (prepared && !prepared.ok) {
+            deps.io.out(paint(`· ${stripControlChars(prepared.error)}\n`, 'yellow'))
+            continue
+          }
+          if (prepared) {
+            turnRun = prepared.run
+            result = { kind: 'prompt', ...prepared.run.turn }
+          }
+        }
         text = result.text
         invokedAs = result.invokedAs
         deps.io.out(paint(`${invocationEcho(result.invokedAs)}\n`, 'dim'))
+        for (const note of turnRun?.notes ?? []) deps.io.out(paint(`· ${stripControlChars(note)}\n`, 'dim'))
       } else {
         // 'handled' — informational commands print here where the state lives.
         handleInfoCommand(
@@ -4535,7 +5749,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       role: 'user',
       content: text,
       ...(pendingImages.length ? { images: pendingImages } : {}),
-      ...(invokedAs ? { invokedAs } : {})
+      ...(invokedAs ? { invokedAs } : {}),
+      ...(wakeTurn && wakeTaint ? { taintSource: wakeTaint } : {})
     })
     pendingImages = [] // consumed by this turn
     // Lazily open a persisted conversation on the first turn so the session
@@ -4573,13 +5788,15 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       runId,
       ...(conversationId ? { conversationId } : {}),
       workspace: opts.cwd,
-      providerId,
-      model,
+      providerId: turnRun?.model?.providerId ?? providerId,
+      model: turnRun?.model?.model ?? model,
       approvalPolicy: policy,
-      reasoningEffort: effort,
+      reasoningEffort: turnRun?.effort ?? effort,
+      ...(turnRun?.turnAllowRules?.length ? { turnAllowRules: turnRun.turnAllowRules } : {}),
       messages,
       // show_images results print as clickable file links (see renderImageLinks).
       imageLinks: true,
+      ...(sessionAddDirs.length ? { addDirs: [...sessionAddDirs] } : {}),
       ...(wakeTurn ? { wake: true } : {})
     }
     // Serialize interactive prompts (approvals/questions) so two readLine calls
@@ -4624,6 +5841,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let turnInputTokens = 0
     let turnOutputTokens = 0
     let turnCost = 0
+    let turnCostUnknown = false
     // Assistant text streams through a markdown renderer that emits whole blocks
     // as they finalize. Any non-text event flushes the pending block first, so
     // text always renders before the tool line / prompt that follows it.
@@ -4646,9 +5864,29 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
     }
     flushStreamedText = flushMd
+    // The streaming round's reasoning: when it began and what it said, for the
+    // one-line summary ('summary') printed when the next thing arrives.
+    let thought: { start: number; text: string } | null = null
+    // Screen-reader mode: who the streamed text belongs to, so each stretch is labeled.
+    let speaking: 'reply' | 'thinking' | null = null
+    const endThought = (discard: boolean): void => {
+      if (!thought) return
+      const t = thought
+      thought = null
+      // A dropped round's thought is dropped with it: its redo thinks again.
+      if (discard || reasoningDisplay !== 'summary') return
+      // A screen reader hears whose line it is, as it would for streamed thinking.
+      const label = screenReader ? '\nhouston, thinking:\n' : ''
+      deps.io.out(`${freshLine()}${label}${renderThoughtSummary(t.text, nowFn() - t.start, columns(), paint)}\n`)
+      roundShown = true
+    }
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
+    // Set once a text delta has relabelled the spinner, so the rest of the reply
+    // doesn't relabel it on every delta; any other event clears it.
+    let saysResponding = false
+    const turnStartedAt = nowFn()
 
     const send = (e: AgentEvent): void => {
       // Attention signals ride the event stream itself, so anything that blocks the
@@ -4657,15 +5895,38 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // terminal without touching the renderer below.
       const sig = signalFor(e, workspaceName)
       // The title is ambient (it just describes the tab) so it is always set; the
-      // bell + notification honor the user's existing "notify me" setting.
-      if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
+      // bell and notification follow /notify (which defaults to the "notify me" setting).
+      if (sig) deps.io.signal?.(notifyMode !== 'off' ? { ...sig, mode: notifyMode } : sig.title ? { title: sig.title } : {})
+      // A finished turn nobody has come back to gets one more nudge later.
+      if (e.type === 'done' && sig?.alert && notifyMode !== 'off') {
+        deps.io.remindIfIdle?.(idleReminderSpec(workspaceName), notifyMode)
+      }
+      // Anything but more reasoning ends the thought in progress.
+      if (e.type !== 'reasoning') {
+        endThought(e.type === 'turn_discarded')
+        thoughtLineOpen = false
+      }
       if (e.type === 'text') {
         retryStreak = 0 // the request got through
+        // The reply is streaming: whatever the spinner said before (a tool that has
+        // finished, Thinking) is over. Same word the desktop app's status bar uses. A
+        // screen reader already hears the "houston:" speaker line instead.
+        if (!saysResponding) {
+          if (!screenReader) deps.io.setSpinnerLabel?.('Responding')
+          saysResponding = true
+        }
         const s = md.push(e.delta)
         if (s) roundShown = true
+        // Who is speaking, once per stretch of reply, for a screen reader.
+        if (s && screenReader && speaking !== 'reply') {
+          speaking = 'reply'
+          deps.io.out('\nhouston:\n')
+        }
         deps.io.out(s)
         return
       }
+      saysResponding = false
+      if (e.type !== 'reasoning' && e.type !== 'usage') speaking = null
       // A discarded round's unfinished block is dropped unrendered, never flushed:
       // its redo will print the whole reply again.
       if (e.type === 'turn_discarded') md.discard()
@@ -4678,11 +5939,24 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         retryStreak = 0
       }
       switch (e.type) {
-        case 'reasoning':
-          deps.io.setSpinnerLabel?.('Thinking')
-          deps.io.out(paint(e.delta, 'dim'))
+        case 'reasoning': {
+          // A screen reader hears the "houston, thinking:" label instead of a spinner.
+          if (!screenReader) deps.io.setSpinnerLabel?.('Thinking')
+          thought ??= { start: nowFn(), text: '' }
+          thought.text += e.delta
+          if (reasoningDisplay !== 'show') break
+          // Model text, so it can't carry a terminal control of its own.
+          const safe = terminalText(e.delta)
+          if (!safe) break
+          if (screenReader && speaking !== 'thinking') {
+            deps.io.out(`${freshLine()}\nhouston, thinking:\n`)
+            speaking = 'thinking'
+          }
+          deps.io.out(paint(safe, 'dim'))
+          thoughtLineOpen = !safe.endsWith('\n')
           roundShown = true
           break
+        }
         case 'turn_discarded':
           // What already reached the terminal can't be erased in line mode, so strike
           // it out in words; the retry or fallback line that follows says why.
@@ -4691,7 +5965,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           }
           break
         case 'tool_start': {
-          deps.io.setSpinnerLabel?.(describeToolCall(e.name, e.args).verb)
+          // A screen reader hears the tool line below; the label would say it twice.
+          if (!screenReader) deps.io.setSpinnerLabel?.(describeToolCall(e.name, e.args).verb)
           toolArgs.set(e.callId, e.args)
           if (liveCalls.size > 0) {
             for (const id of liveCalls.keys()) parallelCalls.add(id)
@@ -4710,13 +5985,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // line in front of it is only the wire name.
           if (e.name === ASK_USER_TOOL || e.name === PRESENT_PLAN_TOOL) break
           if (e.kind === 'write' && e.preview?.length) writePreviews.set(e.callId, e.preview)
-          deps.io.out(`\n${renderToolStart(e.name, e.args, paint)}\n`)
+          deps.io.out(`\n${renderToolStart(e.name, e.args, paint, { sentence: screenReader })}\n`)
           break
         }
         case 'tool_result': {
           const tag = callTag(e.callId)
           liveCalls.delete(e.callId)
           parallelCalls.delete(e.callId)
+          // With no tool left running the model is writing again, so the spinner stops
+          // naming the last tool ("Run 45s"). In screen-reader mode it never named one.
+          if (liveCalls.size === 0 && !screenReader) deps.io.setSpinnerLabel?.('Working')
           // The list was just drawn from the call's args; its result is only the
           // model-facing summary of what we already showed.
           if (todoCalls.delete(e.callId) && e.ok) {
@@ -4729,7 +6007,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             const title = toolArgs.get(e.callId)?.title
             deps.io.out(
               paint(
-                `  · proposed a session${typeof title === 'string' ? `: ${title}` : ''}. /proposals to start it, ask for it here, or dismiss it\n`,
+                `  · proposed a session${typeof title === 'string' ? `: ${terminalText(title, { lines: false })}` : ''}. /proposals to start it, ask for it here, or dismiss it\n`,
                 'cyan'
               )
             )
@@ -4763,15 +6041,16 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_progress': {
           if (!e.message.trim()) break
           const tag = callTag(e.callId)
-          deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(e.message.trim(), 80)}\n`, 'dim'))
+          deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(terminalText(e.message, { lines: false }).trim(), 80)}\n`, 'dim'))
           break
         }
         case 'subagent_start':
         case 'subagent_step':
         case 'subagent_end': {
+          subagentTracker.apply(e, conversationId)
           const line = subagentLines.line(e)
           if (line) {
-            const text = `  ${'  '.repeat(line.depth)}${truncate(line.text, Math.max(40, columns() - 6))}\n`
+            const text = `  ${'  '.repeat(line.depth)}${truncate(terminalText(line.text, { lines: false }), Math.max(40, columns() - 6))}\n`
             deps.io.out(line.tone === 'plain' ? text : paint(text, line.tone))
           }
           break
@@ -4779,14 +6058,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'subagent':
           // Line mode can't update a row in place, so print discrete markers: a
           // start line, then a done/error line, indented under the parent tool.
-          deps.io.out(paint(`    ${subagentGlyph(e.status)} ${e.label}\n`, 'dim'))
+          deps.io.out(paint(`    ${subagentGlyph(e.status)} ${terminalText(e.label, { lines: false })}\n`, 'dim'))
           break
         case 'review_finding': {
           const line = printFinding(e.parentCallId, e.finding)
           if (line) {
             const s = e.finding.status
             const tone = s === 'confirmed' ? 'yellow' : s === 'candidate' ? undefined : 'dim'
-            const text = `      ${truncate(line, 120)}\n`
+            const text = `      ${truncate(terminalText(line, { lines: false }), 120)}\n`
             deps.io.out(tone ? paint(text, tone) : text)
           }
           break
@@ -4795,19 +6074,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           deps.io.setSpinnerLabel?.(`Retrying ${retryProgress(e)}`)
           if (retryStreak === 0) {
             const line = e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `retrying (${retryProgress(e)})… ${e.message}`
-            deps.io.out(paint(`\n· ${line}\n`, 'yellow'))
+            deps.io.out(paint(`\n· ${terminalText(line)}\n`, 'yellow'))
           }
           retryStreak = e.attempt
           break
         case 'model_fallback':
           deps.io.setSpinnerLabel?.('Switching model')
-          deps.io.out(paint(`\n· ${e.from} unavailable, falling back to ${e.to}… ${e.reason}\n`, 'yellow'))
+          deps.io.out(paint(`\n· ${terminalText(`${e.from} unavailable, falling back to ${e.to}… ${e.reason}`)}\n`, 'yellow'))
           break
         case 'tool_approval':
           if (e.kind === 'write') promptedWrites.add(e.callId)
           enqueue(async () => {
+            if (screenReader) deps.io.out('\nwaiting for approval\n')
             // Context (name, kind, unsandboxed warning) + the diff for a write.
-            deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select })}\n`)
+            deps.io.out(`${renderApprovalPrompt(e, paint, { picker: !!deps.io.select, width: columns() })}\n`)
             if (e.kind === 'write') {
               // Prefer the main process's preview: it is diffed against the files'
               // actual contents, so an overwrite shows what changed rather than the
@@ -4817,7 +6097,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               // The preview is diffed against the files' real contents and already
               // folded to the change; render it with numbers + word marks. Only fall
               // back to deriving a diff from the args when there is no preview.
+              // A screen reader gets the unified diff: a +/- sign on every line, no
+              // gutter or color to depend on.
+              const plainPreview = screenReader && e.preview ? renderPreviewDiff(e.preview) : null
               const view =
+                (plainPreview ? colorizeDiff(plainPreview, paint, SCREEN_READER_DIFF_LINES) : null) ??
                 (e.preview ? renderPreviewView(e.preview, paint, deps.highlightHtml ? highlight : undefined) : null) ??
                 (() => {
                   const raw = extractDiff(e.args ?? toolArgs.get(e.callId) ?? {})
@@ -4827,6 +6111,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             }
             let decision: ToolApprovalDecision | null = null
             let note: string | undefined
+            // An answer the picker already took as typed text (the numbered list).
+            let typed: string | undefined
             if (deps.io.select) {
               // The shell-network consent is a yes/no question about egress, not a
               // permission rule about a command — offering "always allow"/"deny with a
@@ -4863,10 +6149,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                   decision = r.value as ToolApprovalDecision
                 }
               } else if (r.kind === 'cancel') decision = 'deny' // safe default
+              else typed = r.text
               // 'type' → fall through to the typed prompt below
             }
             if (decision === null) {
-              const ans = await deps.io.readLine('> ', { discardPending: true })
+              const ans = typed ?? (await deps.io.readLine('> ', { discardPending: true }))
               const parsed = parseApprovalAnswer(ans ?? '')
               decision = parsed.decision
               note = parsed.note
@@ -4882,6 +6169,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         case 'tool_question':
           enqueue(async () => {
+            if (screenReader) deps.io.out('\nwaiting for your answer\n')
             const multi = e.multiSelect ?? false
             // Only offer the arrow-key picker when there's something to pick: an
             // options-less question is a free-text prompt, so go straight to typing.
@@ -4893,18 +6181,25 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               `${usePicker ? renderQuestionHeader(e.question, paint) : renderQuestion(e.question, e.options, multi, paint)}\n`
             )
             let answer: string | null = null
+            let typedAnswer: string | undefined
             if (usePicker && deps.io.select) {
               const r = await deps.io.select({
                 title: '',
                 multiSelect: multi,
-                options: e.options.map((o) => ({ label: o.label, value: o.label, description: o.description }))
+                // Shown cleaned; the answer is still the label as the agent wrote it.
+                options: e.options.map((o) => ({
+                  label: terminalText(o.label, { lines: false }),
+                  value: o.label,
+                  ...(o.description ? { description: terminalText(o.description, { lines: false }) } : {})
+                }))
               })
               if (r.kind === 'commit') answer = r.value
+              else if (r.kind === 'type' && r.text !== undefined) typedAnswer = r.text
               // cancel/type → fall through so the user can still type a custom answer
               else deps.io.out(`${renderQuestionChoices(e.options, multi, paint)}\n`)
             }
             if (answer === null) {
-              const ans = await deps.io.readLine('> ', { discardPending: true })
+              const ans = typedAnswer ?? (await deps.io.readLine('> ', { discardPending: true }))
               answer = resolveQuestionAnswer(ans ?? '', e.options, e.multiSelect ?? false)
             }
             deps.resolveQuestion(e.runId, e.callId, answer)
@@ -4915,8 +6210,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           // values go to that external server), offer a decline, then collect one
           // line per field, re-prompting on invalid values.
           enqueue(async () => {
+            // Everything here but the field values is the remote server's text.
+            if (screenReader) deps.io.out('\nwaiting for your input\n')
             deps.io.out(
-              `\n${paint(`MCP server "${e.serverId}" requests input:`, 'cyan')} ${e.message}\n`
+              `\n${paint(`MCP server "${terminalText(e.serverId, { lines: false })}" requests input:`, 'cyan')} ${terminalText(e.message)}\n`
             )
             const proceed = await deps.io.readLine('Provide it? [y/N] ', { discardPending: true })
             if (proceed === null || !/^y(es)?$/i.test(proceed.trim())) {
@@ -4928,7 +6225,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             }
             const raw: Record<string, string> = {}
             for (const f of e.fields) {
-              if (f.description) deps.io.out(paint(`  ${f.name}: ${f.description}\n`, 'dim'))
+              if (f.description) {
+                deps.io.out(paint(`  ${terminalText(f.name, { lines: false })}: ${terminalText(f.description)}\n`, 'dim'))
+              }
               for (;;) {
                 const hints = [
                   f.kind === 'enum' ? (f.options ?? []).join(' | ') : f.kind !== 'string' ? f.kind : '',
@@ -4936,7 +6235,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                 ]
                   .filter(Boolean)
                   .join('; ')
-                const ans = await deps.io.readLine(`${f.title ?? f.name}${hints ? ` (${hints})` : ''}: `, {
+                const label = terminalText(`${f.title ?? f.name}${hints ? ` (${hints})` : ''}`, { lines: false })
+                const ans = await deps.io.readLine(`${label}: `, {
                   discardPending: true
                 })
                 if (ans === null) {
@@ -4949,7 +6249,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
                   raw[f.name] = ans
                   break
                 }
-                deps.io.out(paint(`· ${check.error}\n`, 'yellow'))
+                deps.io.out(paint(`· ${terminalText(check.error, { lines: false })}\n`, 'yellow'))
               }
             }
             const built = buildElicitationContent(e.fields, raw)
@@ -4970,6 +6270,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           turnInputTokens += e.inputTokens
           turnOutputTokens += e.outputTokens
           turnCost += e.cost
+          if (e.costUnknown) {
+            sessionCost.costUnknown = true
+            turnCostUnknown = true
+          }
           // Current context size ≈ the last MAIN round's input tokens; feeds the
           // status line. Subagent usage events carry inputTokens: 0, so guard
           // against them resetting the meter to zero mid-turn.
@@ -4987,18 +6291,18 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               paint(`\n· tried ${retryStreak} more time${retryStreak === 1 ? '' : 's'}, then stopped\n`, 'yellow')
             )
           }
-          deps.io.out(paint(`\nError: ${e.message}\n`, 'red'))
+          deps.io.out(paint(`\nError: ${terminalText(e.message)}\n`, 'red'))
           break
         case 'limit':
           deps.io.out(paint(`\n· ${limitNoticeText(e.reason)}\n`, 'yellow'))
           break
         case 'compaction':
-          deps.io.out(paint(`\n· compacted ${e.summarized} messages\n`, 'dim'))
+          deps.io.out(paint(`\n· compacted ${plural(e.summarized, 'message')}\n`, 'dim'))
           break
         case 'notice':
           // A user-addressed note (a hook's systemMessage, a budget extension) — display-only, never
           // part of the model's context.
-          deps.io.out(paint(`\n· ${e.message}\n`, 'dim'))
+          deps.io.out(paint(`\n· ${terminalText(e.message)}\n`, 'dim'))
           break
         case 'runtime_missing':
           // Display-only: the model already got the hint in the run_shell result.
@@ -5012,7 +6316,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             const turnTally: SessionCost = {
               inputTokens: turnInputTokens,
               outputTokens: turnOutputTokens,
-              cost: turnCost
+              cost: turnCost,
+              ...(turnCostUnknown ? { costUnknown: true } : {})
             }
             deps.io.out(
               paint(
@@ -5035,17 +6340,20 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               `${renderPlan(e.plan, paint, { actions: !deps.io.select, width: columns(), highlight })}\n`
             )
             let action: PlanAction | null = null
+            let typedAction: string | undefined
+            if (screenReader) deps.io.out('waiting for your decision on the plan\n')
             if (deps.io.select) {
               const r = await deps.io.select({
                 title: 'Your decision:',
                 options: PLAN_ACTIONS.map((a) => ({ label: a.label, value: a.action, description: a.description }))
               })
               if (r.kind === 'commit') action = r.value as PlanAction
+              else if (r.kind === 'type' && r.text !== undefined) typedAction = r.text
               // cancel/type → fall through to the typed prompt, with its keys shown
               else deps.io.out(`${renderPlanActions(paint)}\n`)
             }
             if (action === null) {
-              const ans = await deps.io.readLine('> ', { discardPending: true })
+              const ans = typedAction ?? (await deps.io.readLine('> ', { discardPending: true }))
               action = parsePlanAction(ans ?? '')
             }
             const decision = await planDecisionFor(action, e.plan, deps, paint)
@@ -5106,19 +6414,31 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // can't crash the run (a throw here has no catch on the startRun side).
       persistMessages(m)
     })
+    // A run that ended mid-thought (no event after it) still gets its line.
+    endThought(false)
     flushStreamedText = () => {}
     deps.io.stopSpinner?.()
     // Drain any approval/question prompts still in flight before the next composer read.
     await prompts
     activeRunId = null
+    // The spinner's end, said once (an interrupt already said "interrupted").
+    if (screenReader && interruptedQueued === null) {
+      deps.io.out(`done in ${formatElapsed(nowFn() - turnStartedAt)}\n`)
+    }
     // Anything typed while that turn ran (steers it never read included) becomes the
     // next one, or after an interrupt, the next prompt's draft.
     const unsent = [...returnedSteers, ...(interruptedQueued ?? []), ...(deps.io.takeQueued?.() ?? [])]
     const interrupted = interruptedQueued !== null
     returnedSteers = []
     interruptedQueued = null
-    if (interrupted) restoreDraft = unsent.join('\n\n')
-    else pendingQueued = unsent
+    // A line still being typed when the turn ended was never sent: it stays a draft.
+    const typing = deps.io.takeDraft?.() ?? ''
+    if (interrupted) restoreDraft = [...unsent, typing].filter(Boolean).join('\n\n')
+    else {
+      // Appended: entries still queued from before (one command per pass) go first.
+      pendingQueued = [...pendingQueued, ...unsent]
+      if (typing) halfDraft = [halfDraft, typing].filter(Boolean).join('\n\n')
+    }
 
     // A plan-mode turn hands off to execution through the present_plan flow: the agent
     // calls present_plan, the plan_ready case above renders it and collects an
@@ -5140,6 +6460,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       )
     )
   }
+  // Anything the host still has to finish (background sessions) prints its wait first.
+  await deps.beforeExit?.()
   deps.io.out(paint('\nBye.\n', 'dim'))
   return 0
 }
@@ -5224,7 +6546,8 @@ function handleInfoCommand(
   if (name === 'context') {
     const window = state.model ? contextWindowFor(state.model) : null
     const tier = state.model ? longContextTierAbove(state.model) : null
-    deps.io.out(`${renderContextReport(state.contextParts ?? null, state.contextTokens ?? 0, window, tier)}\n`)
+    const compaction = compactionThresholdNote(compactionLimitFrom(deps.getSettings()), window, tier)
+    deps.io.out(`${renderContextReport(state.contextParts ?? null, state.contextTokens ?? 0, window, tier, compaction)}\n`)
     return
   }
   if (name === 'theme') {
@@ -5275,7 +6598,11 @@ function handleInfoCommand(
  * and the safe subset editable from the terminal. Read-only — the editing verbs live
  * on /hooks and /mcp.
  */
-function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
+function renderSettingsOverview(
+  deps: TuiDeps,
+  paint: Painter,
+  live: { reduceMotion: boolean; screenReader: boolean; notifyMode: NotifyMode }
+): void {
   const path = deps.settingsPath?.() ?? '(unknown)'
   const lines = [
     paint('Settings', 'bold'),
@@ -5289,9 +6616,114 @@ function renderSettingsOverview(deps: TuiDeps, paint: Painter): void {
     `    ${paint('/trust', 'cyan')}   this folder's project-config trust  ·  /trust forget re-decides`,
     `    ${paint('/memory', 'cyan')}  saved memories  ·  /memory show|edit|pin|forget <n>  ·  /memory on|off`,
     '',
+    '  This terminal:',
+    `    notifications:  ${live.notifyMode}, ${describeNotifyMode(live.notifyMode)}  (/notify ${NOTIFY_MODES.join('|')})`,
+    `    screen reader:  ${live.screenReader ? 'on' : 'off'}  (/screen-reader on|off)`,
+    `    reduced motion: ${live.reduceMotion || live.screenReader ? 'on' : 'off'}${
+      live.screenReader && !live.reduceMotion ? ' (with screen-reader mode)' : ''
+    }  (/reduce-motion on|off)`,
+    '',
     paint('  Changes here apply on your next message, no restart needed.', 'dim')
   ]
   deps.io.out(`${lines.join('\n')}\n`)
+}
+
+/** How many lines of the highlighted row's text the /copy picker previews. */
+const COPY_PREVIEW_LINES = 6
+
+/** The /copy picker's preview: the first lines of the text, dimmed and control-stripped. */
+export function copyPreviewLines(text: string, paint: Painter): string[] {
+  const lines = stripControlCharsKeepLines(text).replace(/\n+$/, '').split('\n')
+  const shown = lines.slice(0, COPY_PREVIEW_LINES).map((l) => paint(`  ${l}`, 'dim'))
+  const rest = lines.length - COPY_PREVIEW_LINES
+  if (rest > 0) shown.push(paint(`  … ${rest} more line${rest === 1 ? '' : 's'}`, 'dim'))
+  return shown
+}
+
+/**
+ * /copy [n]: copy the n-th latest reply to the clipboard. A reply with fenced code
+ * blocks offers the whole reply or one block. OSC 52 goes out every time (it works
+ * over SSH, where the terminal allows it); the platform's own clipboard helper is
+ * used too when this is a local session.
+ */
+async function runCopyCommand(
+  cmd: { index: number; bad?: boolean },
+  messages: readonly ChatMessage[],
+  deps: TuiDeps,
+  paint: Painter
+): Promise<void> {
+  if (cmd.bad) {
+    deps.io.out(paint('· usage: /copy, or /copy <n> for the n-th latest reply\n', 'yellow'))
+    return
+  }
+  const total = copyableReplies(messages).length
+  const reply = nthLatestReply(messages, cmd.index)
+  if (reply === null) {
+    deps.io.out(
+      paint(
+        total === 0
+          ? '· no reply to copy yet\n'
+          : `· no reply ${cmd.index} back (there ${total === 1 ? 'is 1' : `are ${total}`})\n`,
+        'yellow'
+      )
+    )
+    return
+  }
+  const which = cmd.index === 1 ? 'the last reply' : `reply ${cmd.index} back`
+  const blocks = extractCodeBlocks(reply)
+  let text = reply
+  let what = which
+  if (blocks.length) {
+    const options = [
+      { label: 'Whole reply', value: '0', description: describeCopied(reply) },
+      ...blocks.map((b, i) => ({
+        label: stripControlChars(codeBlockLabel(b)),
+        value: String(i + 1),
+        description: `${b.lang ? `${stripControlChars(b.lang)}, ` : ''}${describeCopied(b.code)}`
+      }))
+    ]
+    let picked: string | null = null
+    if (deps.io.select) {
+      const r = await deps.io.select({
+        title: `Copy from ${which}:`,
+        options,
+        maxRows: 9,
+        // The first lines of what the highlighted row would copy.
+        preview: (o) => copyPreviewLines(o.value === '0' ? reply : (blocks[Number(o.value) - 1]?.code ?? ''), paint)
+      })
+      if (r.kind === 'cancel') return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      if (r.kind === 'commit') picked = r.value
+    }
+    if (picked === null) {
+      const list = options.map((o) => `  ${paint(`${o.value})`, 'dim')} ${o.label}  ${paint(o.description, 'dim')}`)
+      deps.io.out(`Copy from ${which}:\n${list.join('\n')}\n`)
+      const ans = await deps.io.readLine(`copy which? [0-${blocks.length}, Enter for the whole reply] `, {
+        discardPending: true
+      })
+      if (ans === null) return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      const a = ans.trim() || '0'
+      if (!options.some((o) => o.value === a)) return void deps.io.out(paint('· nothing copied\n', 'dim'))
+      picked = a
+    }
+    const n = Number(picked)
+    if (n >= 1) {
+      text = blocks[n - 1].code
+      what = `code block ${n}${blocks.length > 1 ? ` of ${blocks.length}` : ''} from ${which}`
+    }
+  }
+  // The reply goes on the clipboard as the model wrote it: OSC 52 carries it base64'd,
+  // so nothing in it reaches the terminal as an escape sequence.
+  deps.io.out(osc52Copy(text))
+  const native = deps.copyText?.(text) === true
+  const size = describeCopied(text)
+  deps.io.out(
+    paint(
+      native
+        ? `✓ copied ${what} (${size})\n`
+        : `✓ copied ${what} (${size}), if your terminal allows clipboard access\n`,
+      'green'
+    )
+  )
 }
 
 /** /hooks: list, add (guided), or remove a lifecycle hook. Persists via deps.updateSettings. */
@@ -5303,9 +6735,15 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
     action.op === 'usage' ||
     action.op === 'login' ||
     action.op === 'logout' ||
-    action.op === 'tools'
+    action.op === 'tools' ||
+    action.op === 'search' ||
+    action.op === 'registry-add' ||
+    action.op === 'enable' ||
+    action.op === 'disable' ||
+    action.op === 'reconnect' ||
+    (action.op === 'add' && action.url !== undefined)
   ) {
-    // login/logout/tools are /mcp verbs; on /hooks they just fall to usage.
+    // These are /mcp verbs; on /hooks they just fall to usage.
     deps.io.out(paint('usage: /hooks   ·   /hooks add   ·   /hooks remove <n>\n', 'yellow'))
     return
   }
@@ -5355,19 +6793,109 @@ async function runHooksCommand(action: SettingsAction, deps: TuiDeps, paint: Pai
 }
 
 /**
- * /mcp: list (with live connection status), add (guided, stdio only), remove, or
- * OAuth sign-in/out for a remote server. Persists via deps.updateSettings. The
- * add flow never collects a URL or auth headers; remote servers are added in the
- * desktop app and authenticated here with `/mcp login <n>`.
+ * `/mcp search` results. Registry text is the publisher's, already stripped of
+ * control characters by the normalizer; it is printed as data and never sent anywhere.
+ */
+export function renderRegistryResults(servers: RegistryServer[], query: string, paint: Painter): string {
+  if (!servers.length) return paint(query ? `· no MCP Registry servers match "${query}"` : '· the MCP Registry listed no servers', 'dim')
+  const lines = [paint(`MCP Registry${query ? `: "${query}"` : ''}`, 'bold')]
+  servers.forEach((s, i) => {
+    lines.push(`  ${i + 1}) ${paint(s.name, 'cyan')}${s.version ? `  v${s.version}` : ''}${s.status && s.status !== 'active' ? paint(`  (${s.status})`, 'yellow') : ''}`)
+    if (s.description) lines.push(`     ${s.description}`)
+    lines.push(paint(`     ${registryDelivery(s)}`, 'dim'))
+    if (s.repositoryUrl) lines.push(paint(`     ${s.repositoryUrl}`, 'dim'))
+  })
+  lines.push(paint('Add one with /mcp add-from-registry <name>. It is saved switched off.', 'dim'))
+  return lines.join('\n')
+}
+
+/**
+ * /mcp add-from-registry <name>: convert the entry's first installable local package
+ * (pinned npx, uvx or docker) into a stdio server, ask for its variables, show it,
+ * and add it switched off on a yes. Remote entries need headers, which the terminal
+ * can't store, so they are pointed at the desktop app.
+ */
+async function addFromRegistry(name: string, servers: McpServerConfig[], deps: TuiDeps, paint: Painter): Promise<void> {
+  if (!deps.mcpRegistry) return void deps.io.out(paint('· the MCP Registry is unavailable in this client\n', 'dim'))
+  const res = await deps.mcpRegistry.get(name)
+  if (!res.ok) return void deps.io.out(paint(`· ${res.error}\n`, 'yellow'))
+  const options = registryInstallOptions(res.server)
+  const local = options.find((o) => o.kind === 'stdio' && 'draft' in o)
+  if (!local || !('draft' in local)) {
+    const why = options.find((o) => o.kind === 'stdio' && 'unsupported' in o)
+    if (why && 'unsupported' in why) deps.io.out(paint(`· ${why.label}: ${why.unsupported}\n`, 'yellow'))
+    deps.io.out(
+      paint(
+        options.some((o) => o.kind === 'remote' && 'draft' in o)
+          ? '· this server is remote: add it in the desktop app (Settings > MCP Servers > Browse registry)\n'
+          : '· no package here that Houston can install\n',
+        'yellow'
+      )
+    )
+    return
+  }
+  const draft = local.draft
+  const id = freeServerId(draft.server.id, servers.map((s) => s.id))
+  deps.io.out(`${paint(draft.name, 'bold')}  ${paint(`from ${draft.publisher}`, 'dim')}\n`)
+  if (draft.note) deps.io.out(paint(`${draft.note}\n`, 'dim'))
+  if (draft.needs) deps.io.out(paint(`Needs ${draft.needs} installed.\n`, 'dim'))
+  deps.io.out(`${paint('command:', 'dim')} ${draft.server.command} ${(draft.server.args ?? []).join(' ')}\n`)
+  const argsAns = await deps.io.readLine('arguments (space-separated; Enter keeps them as shown): ')
+  if (argsAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+  const args = argsAns.trim() ? argsAns.trim().split(/\s+/) : (draft.server.args ?? [])
+  const readSecret = deps.io.readSecret ?? deps.io.readLine
+  const values: Record<string, string> = {}
+  for (const input of draft.inputs ?? []) {
+    const what = [input.description, input.default && !input.required ? `empty uses ${input.default}` : ''].filter(Boolean).join('; ')
+    if (what) deps.io.out(paint(`  ${input.name}: ${what}\n`, 'dim'))
+    const label = `${input.name}${input.required ? '' : ' (optional, Enter to skip)'}${input.secret ? ' (hidden)' : ''}: `
+    const v = await (input.secret ? readSecret(label) : deps.io.readLine(label))
+    if (v === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
+    values[draftInputKey(input)] = v
+  }
+  const built = { ...applyDraftInputs({ ...draft.server, id, args }, draft.inputs ?? [], values), name: id, enabled: false }
+  const problem = serverProblem(built, servers.map((s) => s.id))
+  if (problem) return void deps.io.out(paint(`· not added: ${problem}\n`, 'yellow'))
+  const envNote = built.env ? `  env: ${Object.keys(built.env).join(', ')}` : ''
+  deps.io.out(`\n${paint('server:', 'dim')} ${id}  [stdio, switched off]  ${built.command} ${(built.args ?? []).join(' ')}${envNote}\n`)
+  const ok = await deps.io.readLine('Add this server? [y/N] ', { discardPending: true })
+  if (parseApprovalAnswer(ok ?? '').decision !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
+  deps.updateSettings?.({ mcpServers: [...servers, built] })
+  deps.io.out(
+    paint(
+      `· added ${id}, switched off. Switch it on in the desktop app, or set "enabled": true for it in settings.json.\n`,
+      'dim'
+    )
+  )
+  if (built.env && deps.canStoreHeaderSecrets === false) {
+    deps.io.out(
+      paint(`· this terminal cannot store env values; put them in cli-headers.json under the scope "mcp-env:${id}"\n`, 'yellow')
+    )
+  }
+}
+
+/**
+ * /mcp: list (with live connection status and each server's last error), add
+ * (guided stdio, or `--url` for a remote server), enable/disable, reconnect,
+ * remove, or OAuth sign-in/out for a remote server. Persists via
+ * deps.updateSettings. It never collects auth headers: a server that needs a token
+ * header is set up in the desktop app, one that uses OAuth signs in with `/mcp login`.
  */
 async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Painter): Promise<void> {
   const servers = deps.getSettings().mcpServers ?? []
   const path = deps.settingsPath?.() ?? '(unknown)'
 
+  const noServer = (n: number): void =>
+    deps.io.out(
+      paint(`· no MCP server #${n} (there ${servers.length === 1 ? 'is 1' : `are ${servers.length}`})\n`, 'yellow')
+    )
+
   if (action.op === 'usage') {
     deps.io.out(
       paint(
-        'usage: /mcp   ·   /mcp add   ·   /mcp tools <n>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>\n',
+        'usage: /mcp   ·   /mcp add   ·   /mcp add --url <url> [name] [--sse]   ·   /mcp tools <n>   ·   /mcp enable|disable <n>\n' +
+          '       /mcp reconnect <n|all>   ·   /mcp remove <n>   ·   /mcp login <n>   ·   /mcp logout <n>\n' +
+          '       /mcp search <query>   ·   /mcp add-from-registry <name>\n',
         'yellow'
       )
     )
@@ -5376,8 +6904,60 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
   if (action.op === 'list') {
     deps.io.out(`${renderMcpList(servers, paint, deps.mcpStatuses?.() ?? [])}\n${renderSettingsFooter(path, paint)}\n`)
     deps.io.out(
-      paint('Remote (URL) servers: add them in the desktop app, then sign in with /mcp login <n> if needed.\n', 'dim')
+      paint(
+        'Remote servers: /mcp add --url <url>, then /mcp login <n> if it asks you to sign in. One that needs a token header is set up in the desktop app.\n',
+        'dim'
+      )
     )
+    return
+  }
+
+  if (action.op === 'search') {
+    if (!deps.mcpRegistry) return void deps.io.out(paint('· the MCP Registry is unavailable in this client\n', 'dim'))
+    const res = await deps.mcpRegistry.search(action.query)
+    if (!res.ok) return void deps.io.out(paint(`· ${res.error}\n`, 'yellow'))
+    deps.io.out(`${renderRegistryResults(res.page.servers, action.query.trim(), paint)}\n`)
+    return
+  }
+
+  if (action.op === 'reconnect') {
+    if (action.index !== 'all' && !servers[action.index - 1]) return noServer(action.index)
+    if (!deps.mcpReconnect) {
+      deps.io.out(paint('· reconnecting is unavailable here; the next message reconnects a changed server\n', 'dim'))
+      return
+    }
+    const targets = action.index === 'all' ? servers.filter((s) => s.enabled) : [servers[action.index - 1]]
+    if (!targets.length) {
+      deps.io.out(paint('· no enabled MCP servers to reconnect\n', 'dim'))
+      return
+    }
+    const off = targets.find((s) => !s.enabled)
+    if (off) {
+      deps.io.out(paint(`· "${off.name ?? off.id}" is disabled; /mcp enable ${action.index} first\n`, 'yellow'))
+      return
+    }
+    deps.io.startSpinner?.('Reconnecting')
+    let statuses: McpServerStatus[]
+    try {
+      statuses = await deps.mcpReconnect(targets.map((s) => s.id))
+    } catch (e) {
+      deps.io.out(paint(`· reconnect failed: ${stripControlChars((e as Error).message)}\n`, 'yellow'))
+      return
+    } finally {
+      deps.io.stopSpinner?.()
+    }
+    for (const s of targets) {
+      const st = statuses.find((x) => x.id === s.id)
+      const label = s.name ?? s.id
+      if (st?.state === 'connected') {
+        deps.io.out(paint(`· "${label}" reconnected, ${st.tools ?? 0} tool${st.tools === 1 ? '' : 's'}\n`, 'green'))
+      } else if (st?.state === 'needs-auth') {
+        deps.io.out(paint(`· "${label}" needs sign-in (/mcp login ${servers.indexOf(s) + 1})\n`, 'yellow'))
+      } else {
+        const why = truncate(stripControlChars(st?.error ?? 'did not connect').replace(/\s+/g, ' ').trim(), 160)
+        deps.io.out(paint(`· "${label}" failed to connect: ${why}\n`, 'red'))
+      }
+    }
     return
   }
 
@@ -5444,9 +7024,49 @@ async function runMcpCommand(action: SettingsAction, deps: TuiDeps, paint: Paint
     deps.io.out(paint(`· removed MCP server ${action.index} (${removed.name ?? removed.id}). Applies on your next message.\n`, 'dim'))
     return
   }
+  if (action.op === 'enable' || action.op === 'disable') {
+    const target = servers[action.index - 1]
+    if (!target) return noServer(action.index)
+    const on = action.op === 'enable'
+    const label = target.name ?? target.id
+    if (target.enabled === on) {
+      deps.io.out(paint(`· "${label}" is already ${on ? 'enabled' : 'disabled'}\n`, 'dim'))
+      return
+    }
+    // The same `enabled` switch as the desktop's Settings > MCP servers checkbox; the
+    // run start connects only enabled servers and closes a disabled one's connection.
+    deps.updateSettings({ mcpServers: servers.map((s, i) => (i === action.index - 1 ? { ...s, enabled: on } : s)) })
+    deps.io.out(
+      paint(
+        on
+          ? `· enabled "${label}". It connects on your next message.\n`
+          : `· disabled "${label}". Its tools are off from your next message.\n`,
+        'dim'
+      )
+    )
+    return
+  }
+
+  if (action.op === 'registry-add') return addFromRegistry(action.name, servers, deps, paint)
+
+  if (action.url !== undefined) {
+    const built = buildRemoteMcpServer(servers.map((s) => s.id), action.url, action.name, action.sse)
+    if ('error' in built) return void deps.io.out(paint(`· ${built.error}\n`, 'yellow'))
+    deps.io.out(`\n${paint('server:', 'dim')} ${built.name}  [${built.transport}]  ${built.url}\n`)
+    const ok = await deps.io.readLine('Add this server? [y/N] ', { discardPending: true })
+    if (parseApprovalAnswer(ok ?? '').decision !== 'allow') return void deps.io.out(paint('· not added\n', 'dim'))
+    deps.updateSettings({ mcpServers: [...servers, built] })
+    deps.io.out(
+      paint(
+        `· MCP server added as #${servers.length + 1}. It connects on your next message; if it asks you to sign in, run /mcp login ${servers.length + 1}.\n`,
+        'dim'
+      )
+    )
+    return
+  }
 
   // op === 'add' — local stdio servers only.
-  deps.io.out(paint('Add a local (stdio) MCP server. For remote servers, use the desktop app (then /mcp login here if needed).\n', 'dim'))
+  deps.io.out(paint('Add a local (stdio) MCP server. For a remote one, use /mcp add --url <url> [name].\n', 'dim'))
   const nameAns = await deps.io.readLine('name (letters, numbers, - or _): ')
   if (nameAns === null) return void deps.io.out(paint('· cancelled\n', 'dim'))
   const cmdAns = await deps.io.readLine('command to spawn (e.g. npx): ')

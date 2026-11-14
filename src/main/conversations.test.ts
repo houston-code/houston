@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { COMPACTION_SUMMARY_PREFIX, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import {
   CHILD_REPORT_SUMMARY_CHARS,
@@ -31,16 +31,20 @@ import {
   setAnnouncedPolicy,
   saveSideChat,
   setProposalState,
+  takeChildReport,
   takeChildReports,
   deriveTitle,
   getConversation,
   mergeRunningTotals,
   needsGeneratedTitle,
   organizeConversation,
+  reorderConversations,
   otherConversationsInWorktree,
+  detachConversationWorktree,
   setConversationError,
   setConversationSettings,
   setMessages,
+  flushConversation,
   updateConversationMeta
 } from './conversations'
 import { setUserDataDir, resetUserDataDir } from './userData'
@@ -422,6 +426,21 @@ describe('proposals and child reports (persisted)', () => {
     expect(getConversation(parent.id)!.childReports).toBeUndefined()
   })
 
+  it('takes one child report, leaving the others queued', () => {
+    const parent = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const a = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const b = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    reportChildToParent(parent.id, a.id)
+    reportChildToParent(parent.id, b.id)
+    expect(takeChildReport(parent.id, 'not-a-child')).toBeNull()
+    expect(takeChildReport(parent.id, a.id)).toMatchObject({ conversationId: a.id })
+    expect(takeChildReport(parent.id, a.id)).toBeNull()
+    expect(getConversation(parent.id)!.childReports?.map((r) => r.conversationId)).toEqual([b.id])
+    expect(takeChildReport(parent.id, b.id)).toMatchObject({ conversationId: b.id })
+    expect(getConversation(parent.id)!.childReports).toBeUndefined()
+    expect(takeChildReport('missing-parent', a.id)).toBeNull()
+  })
+
   it('caps the pending reports, dropping the oldest', () => {
     const parent = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
     const ids: string[] = []
@@ -605,7 +624,12 @@ describe('per-chat settings (persisted)', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  // The chat's JSON file with any saved log folded in, so it is the whole chat: these
+  // tests read or rewrite it as another process would.
+  const file = (id: string): string => {
+    flushConversation(id)
+    return join(dir, 'conversations', `${id}.json`)
+  }
   const rewrite = (id: string, patch: Record<string, unknown>): void => {
     const raw = JSON.parse(readFileSync(file(id), 'utf8')) as Record<string, unknown>
     writeFileSync(file(id), JSON.stringify({ ...raw, ...patch }))
@@ -774,7 +798,12 @@ describe('listConversations metadata cache', () => {
     resetUserDataDir()
     rmSync(dir, { recursive: true, force: true })
   })
-  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  // The chat's JSON file with any saved log folded in, so it is the whole chat: these
+  // tests read or rewrite it as another process would.
+  const file = (id: string): string => {
+    flushConversation(id)
+    return join(dir, 'conversations', `${id}.json`)
+  }
   const titles = (): string[] => listConversations().map((c) => c.title)
 
   it('lists the same metadata as reading every chat, across every kind of change', () => {
@@ -794,6 +823,30 @@ describe('listConversations metadata cache', () => {
 
     deleteConversation(a.id)
     expect(titles()).toEqual(['Second chat'])
+  })
+
+  it('sets, cleans, and clears a chat’s labels without touching its recency or order', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    reorderConversations([c.id])
+    const before = listConversations().find((x) => x.id === c.id)!
+    organizeConversation(c.id, { labels: ['l-a', 'l-b', 'l-a', 7 as unknown as string, ''] })
+    const labeled = listConversations().find((x) => x.id === c.id)!
+    expect(labeled.labels).toEqual(['l-a', 'l-b'])
+    expect(labeled.updatedAt).toBe(before.updatedAt)
+    expect(labeled.order).toBe(0)
+    organizeConversation(c.id, { labels: [] })
+    const cleared = listConversations().find((x) => x.id === c.id)!
+    expect('labels' in cleared).toBe(false)
+    expect(JSON.parse(readFileSync(file(c.id), 'utf8'))).not.toHaveProperty('labels')
+  })
+
+  it('lists only well-formed label ids from a hand-edited chat file', () => {
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const raw = JSON.parse(readFileSync(file(c.id), 'utf8')) as Record<string, unknown>
+    writeFileSync(file(c.id), JSON.stringify({ ...raw, labels: ['ok', { bad: true }, 'ok', 3] }))
+    expect(listConversations().find((x) => x.id === c.id)?.labels).toEqual(['ok'])
+    writeFileSync(file(c.id), JSON.stringify({ ...raw, labels: 'nope' }))
+    expect(listConversations().find((x) => x.id === c.id)).not.toHaveProperty('labels')
   })
 
   it('reuses a chat whose file has not changed instead of reading it again', () => {
@@ -859,7 +912,12 @@ describe('saving from the remembered write', () => {
     resetUserDataDir()
     rmSync(dir, { recursive: true, force: true })
   })
-  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  // The chat's JSON file with any saved log folded in, so it is the whole chat: these
+  // tests read or rewrite it as another process would.
+  const file = (id: string): string => {
+    flushConversation(id)
+    return join(dir, 'conversations', `${id}.json`)
+  }
   const onDisk = (id: string): Record<string, unknown> =>
     JSON.parse(readFileSync(file(id), 'utf8')) as Record<string, unknown>
 
@@ -962,6 +1020,26 @@ describe('saving from the remembered write', () => {
     addUsage(c.id, { inputTokens: 1, outputTokens: 1, cost: 1 })
     expect(statSync(file(c.id)).mode & 0o777).toBe(0o600)
   })
+
+  it('keeps the conversations folder owner-only, tightening one left 0755', () => {
+    if (process.platform === 'win32') return
+    const c = createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+    const folder = dirname(file(c.id))
+    expect(statSync(folder).mode & 0o777).toBe(0o700)
+    // A folder an earlier version created world-readable, under a fresh profile path
+    // (the tightening runs once per folder per process).
+    const other = mkdtempSync(join(tmpdir(), 'houston-conv-perm-'))
+    try {
+      mkdirSync(join(other, 'conversations'), { mode: 0o755 })
+      chmodSync(join(other, 'conversations'), 0o755)
+      setUserDataDir(other)
+      resetConversationListCache()
+      createConversation({ workspace: '/ws', providerId: 'p', model: 'm' })
+      expect(statSync(join(other, 'conversations')).mode & 0o777).toBe(0o700)
+    } finally {
+      rmSync(other, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('searchConversations cache', () => {
@@ -976,7 +1054,12 @@ describe('searchConversations cache', () => {
     resetUserDataDir()
     rmSync(dir, { recursive: true, force: true })
   })
-  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  // The chat's JSON file with any saved log folded in, so it is the whole chat: these
+  // tests read or rewrite it as another process would.
+  const file = (id: string): string => {
+    flushConversation(id)
+    return join(dir, 'conversations', `${id}.json`)
+  }
   const ids = (q: string): string[] => searchConversations(q).map((c) => c.id)
   /** The answer a search gave before the cache: read every chat and test it. */
   const reference = (q: string): string[] =>
@@ -1106,6 +1189,19 @@ describe('otherConversationsInWorktree', () => {
       worktree: { ...worktree, path: '/repo/.houston/worktrees/other', branch: 'other' }
     })
     expect(otherConversationsInWorktree(fork.id, worktree.path)).toBe(1)
+  })
+
+  it('moves a chat whose worktree was removed back to the repo root, keeping its messages', () => {
+    const worktree = { path: '/repo/.houston/worktrees/feat', branch: 'feat', repoRoot: '/repo' }
+    const c = createConversation({ workspace: worktree.path, providerId: 'p', model: 'm', worktree })
+    setMessages(c.id, [{ role: 'user', content: 'hi' }])
+    detachConversationWorktree(c.id, worktree.repoRoot)
+    const after = getConversation(c.id)!
+    expect(after.workspace).toBe('/repo')
+    expect(after.worktree).toBeUndefined()
+    expect(after.messages).toHaveLength(1)
+    // Unknown ids are a no-op.
+    expect(() => detachConversationWorktree('nope', '/repo')).not.toThrow()
   })
 })
 

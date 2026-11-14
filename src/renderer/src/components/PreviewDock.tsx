@@ -4,13 +4,14 @@ import { MAX_PREVIEW_PANES } from '@shared/preview'
 import { normalizeManualUrl, selectPreviewPanes } from '../lib/preview'
 import { copyText } from '../lib/clipboard'
 import { describeShell } from '../lib/taskLabel'
+import { PanelResizer, type PanelSize } from './PanelResizer'
 
 /**
  * The right-hand dock. With `onTabChange` it has tabs: Tasks (the background-tasks
  * list, passed in as `tasks`) and Preview always, plus Changes, Files and Plan review
- * when their content is given; without, it is Preview-only. Changes renders only while
- * it shows (it reads git); Files and Plan review are mounted the first time they show
- * and then kept (hidden) so their state survives a switch.
+ * when their content is given; without, it is Preview-only. Changes, Files and Plan
+ * review are mounted the first time they show and then kept (hidden) so their state
+ * survives a switch (Changes is told whether it shows, and reads git only then).
  *
  * Preview: a resizable right-hand panel that shows the dev servers the
  * agent started (each one's loopback URL, auto-detected from its output) as live,
@@ -38,6 +39,20 @@ const TAB_LABEL: Record<DockTab, string> = {
 }
 
 /**
+ * What the user set up in Preview that outlives the dock: the addresses they added by
+ * hand and the server panes they closed. Hiding the side panel unmounts the dock, and
+ * reopening it shouldn't bring back closed panes or drop added ones. Kept for this
+ * window's session only.
+ */
+const remembered: { manualUrls: string[]; closed: ReadonlySet<string> } = { manualUrls: [], closed: new Set() }
+
+/** Forget the remembered Preview setup (tests start each case clean). */
+export function resetPreviewMemory(): void {
+  remembered.manualUrls = []
+  remembered.closed = new Set()
+}
+
+/**
  * A comparable fingerprint of one sync: each pane's id, URL and bounds rounded to
  * whole pixels (main positions views in whole pixels, so sub-pixel jitter moves
  * nothing), plus whether the views are shown.
@@ -53,6 +68,7 @@ export function PreviewDock({
   servers,
   occluded,
   onResizeMouseDown,
+  size,
   onClose,
   tab = 'preview',
   onTabChange,
@@ -68,6 +84,8 @@ export function PreviewDock({
   /** An overlay (modal, palette, find bar) is on top — hide the native views. */
   occluded: boolean
   onResizeMouseDown: (e: React.MouseEvent) => void
+  /** The panel's width, for the resizer's keyboard and double-click controls. */
+  size?: PanelSize
   onClose: () => void
   /** Which tab the dock shows. Defaults to Preview. */
   tab?: DockTab
@@ -75,7 +93,7 @@ export function PreviewDock({
   onTabChange?: (tab: DockTab) => void
   /** The Tasks tab's content (the TasksPanel). */
   tasks?: ReactNode
-  /** The Changes tab's content. Rendered only while that tab shows (it reads git). */
+  /** The Changes tab's content. Kept mounted once shown, like Files. */
   changes?: ReactNode
   /** The Files tab's content (the docked FilesPanel); no tab without it. */
   files?: ReactNode
@@ -95,19 +113,23 @@ export function PreviewDock({
   const tabRefs = useRef<Partial<Record<DockTab, HTMLButtonElement | null>>>({})
   const content: Partial<Record<DockTab, ReactNode>> = { tasks, changes, files, plan }
   const tabs = DOCK_TABS.filter((id) => id === 'tasks' || id === 'preview' || content[id] !== undefined)
-  // Files and Plan review stay mounted (hidden) once they have shown.
+  // Changes, Files and Plan review stay mounted (hidden) once they have shown.
   const [visited, setVisited] = useState<ReadonlySet<DockTab>>(() => new Set([tab]))
   useEffect(() => {
     setVisited((v) => (v.has(tab) ? v : new Set(v).add(tab)))
   }, [tab])
-  const [manualUrls, setManualUrls] = useState<string[]>([])
+  const [manualUrls, setManualUrls] = useState<string[]>(() => remembered.manualUrls)
   const [draft, setDraft] = useState('')
   const [draftError, setDraftError] = useState(false)
   // Which of a server's printed URLs each pane shows, when the user switched it.
   const [chosen, setChosen] = useState<Record<string, string>>({})
   // Servers whose pane the user closed. The server keeps running (Tasks stops it); its
   // pane just stops taking a slot until reopened.
-  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => remembered.closed)
+  useEffect(() => {
+    remembered.manualUrls = manualUrls
+    remembered.closed = closed
+  }, [manualUrls, closed])
   // The pane whose URL was just copied, for a moment of "Copied" feedback.
   const [copied, setCopied] = useState<string | null>(null)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -225,11 +247,11 @@ export function PreviewDock({
 
   return (
     <aside className="preview-dock" ref={dockRef} aria-label={onTabChange ? 'Side panel' : 'Preview'}>
-      <div
+      <PanelResizer
         className="preview-dock__resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize preview panel"
+        label={onTabChange ? 'Resize side panel' : 'Resize preview panel'}
+        edge="left"
+        size={size}
         onMouseDown={onResizeMouseDown}
       />
       <header className="preview-dock__header">
@@ -446,11 +468,17 @@ export function PreviewDock({
             }}
             aria-label="Add a localhost URL to preview"
             aria-invalid={draftError}
+            aria-describedby={draftError ? 'preview-dock-add-error' : undefined}
           />
           <button type="submit" className="btn btn--sm" disabled={!draft.trim()}>
             Add
           </button>
         </form>
+        {draftError && (
+          <p className="preview-dock__add-error" id="preview-dock-add-error" role="alert">
+            Only localhost addresses (localhost, 127.0.0.1, [::1]) or a port number can be previewed.
+          </p>
+        )}
       </div>
 
       {onTabChange && (
@@ -476,8 +504,7 @@ export function PreviewDock({
               aria-labelledby={`dock-tab-${id}`}
               hidden={tab !== id}
             >
-              {/* Changes reads git, so it renders only while it shows. */}
-              {(tab === id || (id !== 'changes' && visited.has(id))) && content[id]}
+              {(tab === id || visited.has(id)) && content[id]}
             </div>
           ))}
     </aside>

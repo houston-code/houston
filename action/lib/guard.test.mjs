@@ -9,9 +9,12 @@ import {
   changedControlFiles,
   containsSecret,
   fixBranchName,
+  implementBranchName,
+  hasPersistedCredential,
   logSafe,
   secretValues,
-  snapshotGitControl
+  snapshotGitControl,
+  withEncodedForms
 } from './guard.mjs'
 
 function repo() {
@@ -34,6 +37,21 @@ describe('snapshotGitControl', () => {
     mkdirSync(join(dir, '.git/info'), { recursive: true })
     writeFileSync(join(dir, '.git/info/attributes'), '* filter=evil\n')
     expect(changedControlFiles(before, snapshotGitControl(dir))).toEqual(['config', 'hooks/pre-commit', 'info/attributes'])
+  })
+
+  it('catches a commondir redirect, a config.worktree, and anything under worktrees/', () => {
+    const dir = repo()
+    const before = snapshotGitControl(dir)
+    writeFileSync(join(dir, '.git/commondir'), '/tmp/evil-git\n')
+    writeFileSync(join(dir, '.git/config.worktree'), '[core]\n\tfsmonitor = touch /tmp/pwned\n')
+    mkdirSync(join(dir, '.git/worktrees/x'), { recursive: true })
+    writeFileSync(join(dir, '.git/worktrees/x/commondir'), '/tmp/evil-git\n')
+    expect(changedControlFiles(before, snapshotGitControl(dir))).toEqual([
+      'commondir',
+      'config.worktree',
+      'worktrees',
+      'worktrees/x/commondir'
+    ])
   })
 
   it('catches the hooks directory swapped for a symlink, without following it', () => {
@@ -60,6 +78,21 @@ describe('secrets', () => {
     expect(values).not.toContain('/usr/bin')
     expect(values).not.toContain('abc')
     expect(values).not.toContain('/tmp/agent.sock')
+  })
+
+  it('adds the base64 form a persisted checkout credential takes', () => {
+    const values = withEncodedForms(['ghs_123456789'])
+    const encoded = Buffer.from('x-access-token:ghs_123456789').toString('base64')
+    expect(values).toEqual(['ghs_123456789', encoded])
+    expect(containsSecret(`AUTHORIZATION: basic ${encoded}`, values)).toBe(true)
+  })
+
+  it('finds a persisted http extraheader in git config output', () => {
+    expect(hasPersistedCredential('http.https://github.com/.extraheader AUTHORIZATION: basic abc\n')).toBe(true)
+    expect(hasPersistedCredential('core.bare false\nhttp.extraheader AUTHORIZATION: basic abc\n')).toBe(true)
+    expect(hasPersistedCredential('HTTP.https://github.com/.EXTRAHEADER x\n')).toBe(true)
+    expect(hasPersistedCredential('')).toBe(false)
+    expect(hasPersistedCredential('http.https://github.com/.sslverify true\nuser.name extraheader\n')).toBe(false)
   })
 
   it('finds a secret anywhere in the text', () => {
@@ -90,6 +123,26 @@ describe('fix branches', () => {
     expect(() => assertPushTarget('main', o)).toThrow(/not under houston/)
     expect(() => assertPushTarget('houston/x', { ...o, defaultBranch: 'houston/x' })).toThrow(/refusing to push/)
     expect(() => assertPushTarget('houston/x', { ...o, failedBranch: 'houston/x' })).toThrow(/refusing to push/)
+  })
+})
+
+describe('implement branches', () => {
+  it('names an issue run and a task run only from numbers, under the prefix', () => {
+    expect(implementBranchName('houston/', 12, 900, 2)).toBe('houston/implement-12-900-2')
+    expect(implementBranchName('bots/h/', null, 900, 1)).toBe('bots/h/task-900-1')
+  })
+
+  it('refuses a bad prefix, a missing run id, and a non-number issue', () => {
+    expect(() => implementBranchName('main', 1, 1, 1)).toThrow(/branch-prefix/)
+    expect(() => implementBranchName('houston/', 1, Number.NaN, 1)).toThrow(/run id/)
+    expect(() => implementBranchName('houston/', 1, 5, 0)).toThrow(/run attempt/)
+    expect(() => implementBranchName('houston/', '1/../main', 5, 1)).toThrow(/issue number/)
+  })
+
+  it('never names the default branch or the base it starts from', () => {
+    const branch = implementBranchName('houston/', 3, 4, 1)
+    expect(() => assertPushTarget(branch, { prefix: 'houston/', defaultBranch: 'main', failedBranch: 'main' })).not.toThrow()
+    expect(() => assertPushTarget('main', { prefix: 'houston/', defaultBranch: 'main', failedBranch: 'main' })).toThrow()
   })
 })
 

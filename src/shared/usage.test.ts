@@ -3,6 +3,8 @@ import {
   accumulateModelUsage,
   contextPercent,
   contextWindowFor,
+  isPriced,
+  formatCost,
   formatTokens,
   formatUsd,
   modelCapabilities,
@@ -29,7 +31,13 @@ describe('formatTokens', () => {
     expect(formatTokens(1000)).toBe('1k')
     expect(formatTokens(1500)).toBe('1.5k')
     expect(formatTokens(12_345)).toBe('12.3k')
-    expect(formatTokens(999_999)).toBe('1000k')
+    expect(formatTokens(999_949)).toBe('999.9k')
+  })
+
+  it('rolls a count that would round to 1000k (or 1000) over to the next unit', () => {
+    expect(formatTokens(999_950)).toBe('1M')
+    expect(formatTokens(999_999)).toBe('1M')
+    expect(formatTokens(999.6)).toBe('1k')
   })
 
   it('uses M for millions', () => {
@@ -346,12 +354,40 @@ describe('turnCostUsd', () => {
   })
 })
 
+describe('isPriced / formatCost', () => {
+  it('knows a listed model or a host-listed price, and nothing else', () => {
+    expect(isPriced('claude-opus-4-8')).toBe(true)
+    expect(isPriced('my-local-model')).toBe(false)
+    expect(isPriced('my-local-model', { inputPrice: 0.1, outputPrice: 0.2 })).toBe(true)
+  })
+
+  it('says "cost unknown" instead of $0.00, and marks a partly known total', () => {
+    expect(formatCost(0)).toBe('$0.00')
+    expect(formatCost(0, true)).toBe('cost unknown')
+    expect(formatCost(1.234, true)).toBe('$1.23 + unknown')
+    expect(formatCost(1.234, false)).toBe('$1.23')
+  })
+
+  it('keeps a model marked unknown once any of its rounds was', () => {
+    let t = accumulateModelUsage([], { model: 'm', inputTokens: 1, outputTokens: 1, cost: 0, costUnknown: true })
+    t = accumulateModelUsage(t, { model: 'm', inputTokens: 1, outputTokens: 1, cost: 0 })
+    expect(t[0].costUnknown).toBe(true)
+    expect(accumulateModelUsage([], { model: 'p', inputTokens: 1, outputTokens: 1, cost: 1 })[0].costUnknown).toBeUndefined()
+  })
+})
+
 describe('formatUsd', () => {
   it('scales precision to the magnitude', () => {
     expect(formatUsd(0)).toBe('$0.00')
     expect(formatUsd(0.0042)).toBe('$0.0042')
     expect(formatUsd(0.071)).toBe('$0.071')
     expect(formatUsd(1.234)).toBe('$1.23')
+  })
+
+  it('groups thousands', () => {
+    expect(formatUsd(999.99)).toBe('$999.99')
+    expect(formatUsd(1234.56)).toBe('$1,234.56')
+    expect(formatUsd(1_234_567.891)).toBe('$1,234,567.89')
   })
 })
 

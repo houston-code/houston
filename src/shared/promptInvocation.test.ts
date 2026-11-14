@@ -161,3 +161,18 @@ describe('reviewCommentsTurn', () => {
     expect(turn.text).toMatch(/^I left a comment on the changes in this project\. Address it,/)
   })
 })
+
+describe('commandTurn with frontmatter', () => {
+  const cmd: Command = { name: 'deploy', description: 'Ship it', template: 'Deploy $1' }
+
+  it('dispatches the expanded prompt to the named agent', () => {
+    const turn = commandTurn({ ...cmd, agent: 'deployer' }, 'prod', '/deploy prod')
+    expect(turn?.text).toMatch(/^Use the `deployer` subagent/)
+    expect(turn?.text).toContain('Deploy prod')
+    expect(turn?.invokedAs.label).toBe('/deploy')
+  })
+
+  it('uses text the caller already expanded', () => {
+    expect(commandTurn(cmd, 'prod', '/deploy prod', 'Deploy prod with context')?.text).toBe('Deploy prod with context')
+  })
+})

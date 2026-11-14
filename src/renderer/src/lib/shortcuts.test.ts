@@ -205,6 +205,20 @@ describe('where Shift+Tab and Esc act on the chat', () => {
 })
 
 describe('SHORTCUTS registry', () => {
+  it('lists history search and the ! terminal line in the Chat section, for the composer only', () => {
+    const search = SHORTCUTS.find((s) => s.id === 'history-search')
+    const shell = SHORTCUTS.find((s) => s.id === 'shell-escape')
+    expect(search && shortcutDisplays(search, true)).toEqual(['⌃R'])
+    expect(search && shortcutDisplays(search, false)).toEqual(['Ctrl+R'])
+    expect(shell && shortcutDisplays(shell, false)).toEqual(['!'])
+    for (const def of [search, shell]) {
+      expect(def?.category).toBe('Chat')
+      expect(def?.scope).toBe('composer')
+    }
+    // Composer keys never fire as app shortcuts.
+    expect(matchShortcut({ key: 'r', ctrlKey: true, metaKey: false })).toBeNull()
+  })
+
   it('has a unique id per entry', () => {
     const ids = SHORTCUTS.map((s) => s.id)
     expect(new Set(ids).size).toBe(ids.length)
@@ -249,5 +263,12 @@ describe('isCustomizable', () => {
     expect(isCustomizable(byId('send-message'))).toBe(false) // composer scope
     expect(isCustomizable(byId('show-help'))).toBe(false) // two chords
     expect(isCustomizable(byId('select-chat-n'))).toBe(false) // custom display (range)
+  })
+})
+
+describe('formatChord with a prototype-member key', () => {
+  it('prints the key name, not an inherited function', () => {
+    expect(formatChord({ key: 'constructor' }, false)).toBe('constructor')
+    expect(formatChord({ key: 'toString', mod: true }, true)).toBe('⌘toString')
   })
 })

@@ -19,8 +19,35 @@ describe('lintPermissionRules', () => {
   })
 
   it('flags a later rule a same-tool `*` catches first, as a conflict when the action differs', () => {
-    const issues = lintPermissionRules([r('allow', 'run_shell', '*'), r('deny', 'run_shell', 'rm *')])
+    const issues = lintPermissionRules([r('allow', 'run_shell', '*'), r('ask', 'run_shell', 'rm *')])
     expect(issues.get(1)).toEqual([{ kind: 'shadowed', by: 0, conflicting: true }])
+  })
+
+  it('never lets an earlier allow or ask shadow a later deny, which wins wherever it sits', () => {
+    for (const first of ['allow', 'ask'] as const) {
+      expect(lintPermissionRules([r(first, 'run_shell', '*'), r('deny', 'run_shell', 'rm *')]).has(1)).toBe(false)
+    }
+  })
+
+  it('flags an allow or ask a later deny covers, since the deny wins', () => {
+    const issues = lintPermissionRules([r('allow', 'run_shell', 'rm *'), r('deny', 'run_shell', '*')])
+    expect(issues.get(0)).toEqual([{ kind: 'shadowed', by: 1, conflicting: true }])
+    // Between two denies only the earlier one counts, so a duplicate is flagged once.
+    const twice = lintPermissionRules([r('deny', 'run_shell', '*'), r('deny', 'run_shell', '*')])
+    expect(twice.has(0)).toBe(false)
+    expect(twice.get(1)).toEqual([{ kind: 'shadowed', by: 0, conflicting: false }])
+  })
+
+  it('reads a deny or ask on one file-editing tool as covering the others, an allow as not', () => {
+    expect(lintPermissionRules([r('deny', 'write_file', '*'), r('allow', 'edit_file', 'src/a.ts')]).get(1)).toEqual([
+      { kind: 'shadowed', by: 0, conflicting: true }
+    ])
+    expect(lintPermissionRules([r('ask', 'apply_patch', '*'), r('allow', 'multi_edit', 'x')]).get(1)?.[0]).toMatchObject({
+      kind: 'shadowed',
+      by: 0
+    })
+    expect(lintPermissionRules([r('allow', 'write_file', '*'), r('ask', 'edit_file', 'x')]).has(1)).toBe(false)
+    expect(lintPermissionRules([r('deny', 'write_file', '*'), r('allow', 'read_file', 'x')]).has(1)).toBe(false)
   })
 
   it('flags a duplicate of an earlier rule as redundant, not conflicting', () => {
@@ -51,9 +78,13 @@ describe('lintPermissionRules', () => {
     expect(lintPermissionRules([r('deny', 'read_file', 'a.txt', true), r('allow', 'read_file', 'a.txt')]).has(1)).toBe(false)
   })
 
-  it('names the first rule that shadows, once', () => {
+  it('names the rule that shadows, once, a covering deny first', () => {
     const issues = lintPermissionRules([r('ask', 'glob', '*'), r('deny', 'glob', '*'), r('allow', 'glob', 'x')])
-    expect(issues.get(2)).toEqual([{ kind: 'shadowed', by: 0, conflicting: true }])
+    // The deny wins over both, so it is the one named, though the ask comes first.
+    expect(issues.get(2)).toEqual([{ kind: 'shadowed', by: 1, conflicting: true }])
+    expect(issues.get(0)).toEqual([{ kind: 'shadowed', by: 1, conflicting: true }])
+    const noDeny = lintPermissionRules([r('ask', 'glob', '*'), r('allow', 'glob', '*'), r('allow', 'glob', 'x')])
+    expect(noDeny.get(2)).toEqual([{ kind: 'shadowed', by: 0, conflicting: true }])
   })
 
   it('never lets an earlier empty rule shadow anything, since it matches nothing', () => {

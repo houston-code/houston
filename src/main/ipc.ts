@@ -84,6 +84,7 @@ import { isDirectory, LastChatStore, launchChat } from './lastChat'
 import { applyAppBadge, attentionCount, dotPng } from './appBadge'
 import { listModels } from './providers'
 import { ollamaSupportsTools } from './providers/ollama'
+import { providerQuotas } from './providers/quota'
 import {
   cancelRun,
   resolveApproval,
@@ -101,8 +102,17 @@ import {
   chatStatusSnapshot,
   onChatStatusChanged
 } from './agent/loop'
-import { killShell, killShellsFor, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
-import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
+import {
+  killShell,
+  listShells,
+  listPreviewServers,
+  onShellsChanged,
+  runningShellsFor,
+  shellTail
+} from './agent/shells'
+import { removeWorktreeOnArchive } from './archiveWorktree'
+import { stopAndDeleteConversation } from './deleteChat'
+import { addToQueue, removeFromQueue, clearQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, startWakeTurn, type DrainIO } from './agent/drain'
 import { setWakeHost } from './agent/backgroundEvents'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
@@ -128,6 +138,7 @@ import {
 } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal, killTerminalsOf } from './terminal'
 import { log } from './logger'
+import { createRendererErrorLogger } from './crashRecovery'
 import { dismissEnvKeyOffers, dismissedEnvKeyOffers, envKeyOffers, envKeyValue } from './envKeys'
 import { setMenuState, setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
@@ -142,10 +153,16 @@ import {
   windowShowing
 } from './windows'
 import { cancelCompaction, compactConversationNow } from './agent/compact'
+import { normalizeCompactFocus } from './agent/compaction'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
-import { loadCommands } from './agent/commands'
+import { loadCommands, loadSlashCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
+import { prepareCommandRun, workspaceTrusted } from './agent/commandRun'
+import { describeContextConsent } from './agent/commandContext'
+import { putCommandGrant, takeCommandGrant } from './commandGrants'
+import { resolveCommand } from '@shared/commands'
+import type { CommandPrepareResult } from '@shared/promptInvocation'
 import { loadAgents } from './agent/agents'
 import { registerCustomizeIpc } from './customizeIpc'
 import {
@@ -157,6 +174,8 @@ import {
 import { collectWorkingTreeChanges, collectWorkingTreeStats } from './agent/workingTree'
 import { branchSyncFor, commitAll, lookupPr, pushBranch, suggestCommitMessage } from './agent/gitActions'
 import { isKnownWorkspace } from './knownWorkspace'
+import type { OpenResult } from '@shared/editors'
+import type { FilePreview } from '@shared/files'
 import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import { collectChatChanges, revertChange } from './agent/changes'
 import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
@@ -172,8 +191,8 @@ import {
   createConversation,
   forkConversation,
   forkConversationAt,
-  deleteConversation,
   otherConversationsInWorktree,
+  detachConversationWorktree,
   importConversation,
   organizeConversation,
   reorderConversations,
@@ -209,11 +228,27 @@ import {
 } from '@shared/rewind'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
 import { registerScheduleIpc } from './scheduleIpc'
+import {
+  appDaemonCommand,
+  ensureScheduleDaemon,
+  markAppScheduler,
+  registerScheduleDaemonIpc,
+  type ScheduleDaemonHostDeps
+} from './scheduleDaemonHost'
+import { realLoginAgentDeps } from './loginAgent'
+import { guardIpcHandle, guardIpcOn } from './ipcSender'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 import { wireMediaProtocol } from './mediaProtocol'
+import { searchMcpRegistry } from './mcpRegistry'
+import { noteThrottle, onRateLimitChange, rateLimitSnapshot } from './rateLimitStore'
 
 /** A preferences export is a few KB; anything past this is not one. */
 const MAX_SETTINGS_FILE_BYTES = 2_000_000
+
+/** Whether a renderer-supplied workspace is a non-empty string naming a known project. */
+function knownWorkspaceArg(workspace: unknown): boolean {
+  return typeof workspace === 'string' && workspace !== '' && isKnownWorkspace(workspace)
+}
 
 /** Whether a usable key is stored for the provider, as settings report it. */
 function providerHasKey(providerId: string): boolean {
@@ -289,6 +324,7 @@ export function applyRunningUsage(conversationId: string, e: AgentEvent): AgentE
     ...(e.model ? { model: e.model } : {}),
     ...(e.cacheReadTokens ? { cacheReadTokens: e.cacheReadTokens } : {}),
     ...(e.cacheWriteTokens ? { cacheWriteTokens: e.cacheWriteTokens } : {}),
+    ...(e.costUnknown ? { costUnknown: true } : {}),
     ...(e.context ? { contextParts: e.context } : {})
   })
   return mergeRunningTotals(e, total)
@@ -336,8 +372,18 @@ function runOutputTargets(sender: WebContents): WebContents[] {
   return out
 }
 
+/**
+ * Keep what a throttled retry said about the provider's quota, filed under the chat's
+ * provider, so it outlives the retry notice (see rateLimitStore.ts).
+ */
+export function noteRetryThrottle(conversationId: string, e: AgentEvent): void {
+  if (e.type !== 'retry' || !e.throttle) return
+  noteThrottle(peekConversation(conversationId)?.providerId, e.throttle)
+}
+
 /** Stream one agent event to the renderers, persisting usage totals along the way. */
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
+  noteRetryThrottle(conversationId, e)
   const ev = applyRunningUsage(conversationId, e)
   for (const wc of runOutputTargets(sender)) wc.send(IPC.agentEvent, ev)
   maybeNotify(sender, conversationId, ev)
@@ -461,6 +507,7 @@ function makeBroadcastIo(): DrainIO {
     imageGallery: true,
     liveShellOutput: true,
     emit: coalescedEmit((conversationId, e) => {
+      noteRetryThrottle(conversationId, e)
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))
       const notifyVia = (windowShowing(conversationId) ?? targetWindow())?.webContents
@@ -622,9 +669,15 @@ export function registerIpc(ready?: Promise<unknown>): void {
       open = true
     }
   )
-  /** `ipcMain.handle`, with the request held until startup has finished. */
+  /**
+   * `ipcMain.handle`, refusing any request that isn't from a chat window's own page
+   * (see ipcSender.ts), and holding the rest until startup has finished. Every
+   * handler in the app is registered through this or `on` below, including the
+   * ones customizeIpc, importIpc and scheduleIpc register.
+   */
+  const guardedHandle = guardIpcHandle((channel, listener) => ipcMain.handle(channel, listener))
   const handle: typeof ipcMain.handle = (channel, listener) =>
-    ipcMain.handle(channel, (event, ...args) =>
+    guardedHandle(channel, (event, ...args) =>
       open || !opened ? listener(event, ...args) : opened.then(() => listener(event, ...args))
     )
   /**
@@ -632,8 +685,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
    * screen, the menu's state), and handling one can read settings, which must not
    * happen before the credential store is ready (see index.ts).
    */
+  const guardedOn = guardIpcOn((channel, listener) => ipcMain.on(channel, listener))
   const on: typeof ipcMain.on = (channel, listener) =>
-    ipcMain.on(channel, (event, ...args) => afterReady(() => listener(event, ...args)))
+    guardedOn(channel, (event, ...args) => afterReady(() => listener(event, ...args)))
   /** Run `fn` now, or as soon as startup has finished. */
   const afterReady = (fn: () => void): void => {
     if (open || !opened) fn()
@@ -646,12 +700,37 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Scheduled runs: persist under userData, fire through the spawn backend just
   // wired above (a fired occurrence is an ordinary background session in the
   // sidebar). start() also catches up occurrences missed while the app was closed.
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
+  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask') })
   setSchedulerBackend(scheduler)
+  // Scheduled runs while the app is closed: a login agent starts this app in its
+  // windowless --schedule-daemon mode (Settings > Scheduled runs).
+  const daemonDeps: ScheduleDaemonHostDeps = {
+    command: () =>
+      appDaemonCommand(
+        {
+          execPath: process.execPath,
+          isPackaged: app.isPackaged,
+          appPath: app.getAppPath(),
+          platform: process.platform,
+          ...(process.env.APPIMAGE ? { appImage: process.env.APPIMAGE } : {})
+        },
+        getUserDataDir()
+      ),
+    login: realLoginAgentDeps()
+  }
   // Its catch-up run needs the provider keys, so not before the credential store is ready.
-  afterReady(() => scheduler.start())
+  afterReady(() => {
+    scheduler.start()
+    // While the app is open it fires scheduled runs itself (they can ask for approvals
+    // in its window), so a daemon defers to it until it quits.
+    app.on('will-quit', markAppScheduler())
+    // An update can move the executable the login agent starts; keep it current. Only
+    // a packaged build: a dev run's Electron path is not one to leave installed.
+    if (app.isPackaged) void ensureScheduleDaemon(daemonDeps)
+  })
   // Settings > Scheduled runs: list, create, pause/resume, run now, delete.
   registerScheduleIpc(handle, scheduler)
+  registerScheduleDaemonIpc(handle, daemonDeps)
 
   // Use the bundled package.json version (inlined at build): `app.getVersion()`
   // reports Electron's own version in an unpackaged dev run, not Houston's.
@@ -668,10 +747,15 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Opening rebuilds the text in main rather than taking it from the renderer, so the
   // URL can only ever carry what issueReportBody allows.
   handle(IPC.logsReveal, () => revealLogs())
+  // Not held for startup: logging needs no credential, and an error during startup is
+  // exactly the one worth keeping. Still sender-checked, so only a chat window's own
+  // page can write to houston.log through it.
+  const logRendererError = createRendererErrorLogger()
+  guardedOn(IPC.rendererError, (event, raw: unknown) => logRendererError(event.sender.id, raw))
   handle(IPC.issueReportPreview, (): string => issueReportText())
   handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
-  ipcMain.handle(
+  guardedHandle(
     IPC.sandboxStatus,
     (): SandboxStatus => ({ backend: activeBackendId(), enforced: isSandboxed() })
   )
@@ -796,29 +880,30 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // One directory level for the Finder-like Files panel. The renderer expands
   // folders lazily, so each call lists only a directory's immediate children;
   // listDirectory realpaths the workspace and confines the subpath to it.
+  // The workspace must be one the app already knows (a recent project or a chat's
+  // folder), so a renderer bug or a compromised renderer can't browse, read or open
+  // files in an arbitrary folder through these handlers.
   handle(IPC.workspaceListDir, async (_event, workspace: string, relPath: string) =>
-    listDirectory(
-      typeof workspace === 'string' ? workspace : '',
-      typeof relPath === 'string' ? relPath : ''
-    )
+    knownWorkspaceArg(workspace)
+      ? listDirectory(workspace as string, typeof relPath === 'string' ? relPath : '')
+      : []
   )
 
   // Read a file selected in the Files panel for in-app preview. Confined to the
   // workspace; returns a text/image payload or a note kind for binary/oversize.
-  handle(IPC.workspaceReadFile, async (_event, workspace: string, relPath: string) =>
-    readWorkspaceFile(
-      typeof workspace === 'string' ? workspace : '',
-      typeof relPath === 'string' ? relPath : ''
-    )
+  handle(IPC.workspaceReadFile, async (_event, workspace: string, relPath: string): Promise<FilePreview> =>
+    knownWorkspaceArg(workspace)
+      ? readWorkspaceFile(workspace as string, typeof relPath === 'string' ? relPath : '')
+      : { kind: 'error', message: 'That folder is not an open project.' }
   )
 
   // Open a file selected in the Files panel in its OS default app. A user
-  // gesture; the target is confined to the workspace before shell.openPath.
-  handle(IPC.workspaceOpenPath, (_event, workspace: string, relPath: string) =>
-    openWorkspacePath(
-      typeof workspace === 'string' ? workspace : '',
-      typeof relPath === 'string' ? relPath : ''
-    )
+  // gesture; the target is confined to the workspace, and openWorkspacePath refuses
+  // links to another file type and shows launchable files in their folder instead.
+  handle(IPC.workspaceOpenPath, (_event, workspace: string, relPath: string): OpenResult =>
+    knownWorkspaceArg(workspace)
+      ? openWorkspacePath(workspace as string, typeof relPath === 'string' ? relPath : '')
+      : { ok: false, error: 'That folder is not an open project.' }
   )
 
   // Composer "+" menu: pick files in a native dialog and return their (capped)
@@ -975,7 +1060,9 @@ export function registerIpc(ready?: Promise<unknown>): void {
   )
 
   // Trusted folders: whether this workspace's project config elevates anything
-  // (allow rules / hooks / MCP servers), and where the user's consent stands.
+  // (allow rules / hooks / MCP servers / command allowed-tools / plugin files), and
+  // where the user's consent stands. Plugin sources never leave main; only their
+  // names do.
   handle(IPC.folderTrustStatus, async (_event, workspace: string): Promise<FolderTrustStatus> => {
     if (typeof workspace !== 'string' || !workspace) return { state: 'none' }
     const cfg = await loadProjectConfig(workspace)
@@ -985,8 +1072,11 @@ export function registerIpc(ready?: Promise<unknown>): void {
       counts: {
         allowRules: cfg.elevated.allowRules.length,
         hooks: cfg.elevated.hooks.length,
-        mcpServers: cfg.elevated.mcpServers.length
-      }
+        mcpServers: cfg.elevated.mcpServers.length,
+        ...(cfg.elevated.commands?.length ? { commands: cfg.elevated.commands.length } : {}),
+        plugins: cfg.elevated.plugins.length
+      },
+      ...(cfg.elevated.plugins.length ? { plugins: cfg.elevated.plugins.map((p) => p.name) } : {})
     }
   })
   // Persist a trust decision. The fingerprint is recomputed here from the file on
@@ -1003,11 +1093,71 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.commandsList, async (_event, workspace: string) => {
     if (!workspace) return []
     try {
-      return await loadCommands(realpathSync(workspace))
+      return await loadSlashCommands(realpathSync(workspace))
     } catch {
       return []
     }
   })
+
+  // A custom command whose frontmatter changes how its turn runs: prepared here, from
+  // the file on disk and this folder's trust, never from what the renderer says.
+  // The per-turn options stay in main under a one-time token (see commandGrants.ts).
+  handle(
+    IPC.commandPrepare,
+    async (event, workspace: string, name: string, args: string, typed: string): Promise<CommandPrepareResult> => {
+      if (typeof workspace !== 'string' || !workspace || typeof name !== 'string') {
+        return { ok: false, error: 'No folder is open.' }
+      }
+      let root: string
+      try {
+        root = realpathSync(workspace)
+      } catch {
+        return { ok: false, error: "This chat's folder no longer exists." }
+      }
+      const cmd = resolveCommand(await loadCommands(root).catch(() => []), name)
+      if (!cmd) return { ok: false, error: `No command /${name} in this folder any more.` }
+      const settings = getSettings()
+      const prepared = await prepareCommandRun(
+        cmd,
+        typeof args === 'string' ? args : '',
+        typeof typed === 'string' ? typed : `/${name}`,
+        {
+          settings,
+          trusted: await workspaceTrusted(root, settings.trustedFolders).catch(() => false),
+          workspace: root,
+          // A template's shell commands (or a credential file it reads), shown exactly
+          // in a native dialog the renderer can't answer for. Cancel is the default.
+          confirmContext: async (consent) => {
+            const { title, lines } = describeContextConsent(`/${cmd.name}`, consent)
+            const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+            const opts = {
+              type: 'warning' as const,
+              buttons: ['Cancel', 'Allow'],
+              defaultId: 0,
+              cancelId: 0,
+              message: title,
+              detail: `${lines.join('\n')}\n\nCommands run in your shell, as a ! command in the message box does.`
+            }
+            const res = win ? await dialog.showMessageBox(win, opts) : await dialog.showMessageBox(opts)
+            return res.response === 1
+          }
+        }
+      )
+      if (!prepared) return { ok: false, error: `/${cmd.name} is not a prompt command.` }
+      if (!prepared.ok) return prepared
+      const { turn, model, effort, turnAllowRules, notes } = prepared.run
+      const grant =
+        model || effort || turnAllowRules?.length
+          ? putCommandGrant({
+              workspace: root,
+              ...(model ? { model } : {}),
+              ...(effort ? { effort } : {}),
+              ...(turnAllowRules?.length ? { turnAllowRules } : {})
+            })
+          : undefined
+      return { ok: true, turn: { ...turn, ...(grant ? { grant } : {}) }, notes }
+    }
+  )
 
   // Read-only listing of the workspace's skills / custom agents for /skills and
   // /agents. Project to {name, description} only — the agent's full systemPrompt
@@ -1152,6 +1302,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
     testProviderKey(providerId, key)
   )
 
+  // The quota each provider's latest response reported (its ratelimit headers), for a
+  // quota readout. In-memory and read-only: it carries no key or request content.
+  handle(IPC.providerQuotas, () => providerQuotas())
+
   // Preflight: does this local model support tool calling? Only meaningful for an
   // Ollama-style (openai-compatible) provider; anything else returns null (unknown)
   // so the UI never shows a false warning.
@@ -1196,6 +1350,11 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Live per-server connection status (connected / needs-auth / error) for Settings.
   handle(IPC.mcpStatus, () => getMcpStatuses())
 
+  // Browse the MCP Registry: read-only GETs to its fixed origin, nothing saved or run.
+  handle(IPC.mcpRegistrySearch, (_e, query: unknown, cursor: unknown) =>
+    searchMcpRegistry(typeof query === 'string' ? query : '', typeof cursor === 'string' ? cursor : undefined)
+  )
+
   // Optional-integrations status (gh CLI, formatters) for the Settings hint.
   handle(IPC.integrationsGet, () =>
     getIntegrations({ languageServers: () => languageServerIntegration(getSettings()) })
@@ -1224,6 +1383,14 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.conversationScorecard, () => computeScorecard())
   // Local-only spend and tokens per day and per project, for the usage view.
   handle(IPC.conversationUsageReport, () => computeUsageReport())
+  // The last rate-limit state per provider, read once by each window and then followed
+  // through the broadcast (every window's status bar shows it).
+  handle(IPC.rateLimitList, () => rateLimitSnapshot())
+  onRateLimitChange((states) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.rateLimitChanged, states)
+    }
+  })
   handle(
     IPC.conversationCreate,
     async (
@@ -1289,8 +1456,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // of a failed summary request are pushed back so the UI can say it's retrying.
   handle(
     IPC.conversationCompact,
-    (event, id: string, providerId: string, model: string) =>
+    (event, id: string, providerId: string, model: string, focus?: unknown) =>
       compactConversationNow(id, providerId, model, {
+        // The composer's `/compact <focus>` text, normalized (trimmed, capped) here at the boundary.
+        ...(normalizeCompactFocus(focus) ? { focus: normalizeCompactFocus(focus) } : {}),
         onRetry: (info) => {
           if (!event.sender.isDestroyed()) event.sender.send(IPC.conversationCompactProgress, { id, ...info })
         }
@@ -1385,27 +1554,46 @@ export function registerIpc(ready?: Promise<unknown>): void {
       // Stop what the chat still has running before it goes: its live run (which would
       // otherwise keep writing to a deleted chat) and its background shells (whose dev
       // servers would keep their ports, inside a worktree about to be removed).
-      const liveRun = activeRunForConversation(id)
-      if (liveRun) cancelRun(liveRun)
-      killShellsFor(id)
-      deleteConversation(id)
-      // Drop the cached queue too: it went with the file, and must not linger in memory.
-      forgetQueue(id)
+      stopAndDeleteConversation(id)
       attention?.forget(id)
       const worktree =
         action.removeWorktree && conv?.worktree ? await removeWorktree(conv.worktree) : null
       return { deleted: true, worktree }
     }
   )
-  // Rename / pin / move-to-group. Does not affect the recency ordering.
+  // Rename / pin / archive / move-to-group / set labels. Does not affect the recency ordering.
+  // Archiving also removes the chat's worktree when that loses nothing (clean and
+  // merged); awaited so the list the renderer re-reads next already shows the chat
+  // back at its repo root.
   handle(
     IPC.conversationOrganize,
-    (
+    async (
       _event,
       id: string,
-      patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
+      patch: {
+        title?: string
+        pinned?: boolean
+        archived?: boolean
+        groupId?: string | null
+        labels?: string[]
+      }
     ) => {
       organizeConversation(id, patch)
+      if (patch.archived !== true) return
+      await removeWorktreeOnArchive(id, {
+        peek: (cid) => peekConversation(cid) ?? undefined,
+        sharedCount: otherConversationsInWorktree,
+        busy: (cid) => {
+          const conv = peekConversation(cid)
+          return (
+            activeRunForConversation(cid) !== null ||
+            (conv !== null && runningShellsFor(cid, conv.workspace).length > 0)
+          )
+        },
+        isDisposable: (wt) => isWorktreeDisposable(wt),
+        remove: (wt) => removeWorktree(wt),
+        detach: detachConversationWorktree
+      })
     }
   )
   // Drag-to-reorder within a sidebar section. Also does not affect recency.
@@ -1507,6 +1695,17 @@ export function registerIpc(ready?: Promise<unknown>): void {
     // Refusing that send used to drop the message (the bubble was never saved), so
     // queue it instead, and tell the renderer which run it's waiting on.
     const liveRunId = activeRunForConversation(conv.id)
+    if (liveRunId && req.commandGrant) {
+      // A command's per-turn options can't ride a queued follow-up (queued messages
+      // merge into one turn), and dropping them quietly would run it differently.
+      takeCommandGrant(req.commandGrant, '')
+      emitEvent(event.sender, conv.id, {
+        runId: req.runId,
+        type: 'error',
+        message: 'That command runs once the current turn ends. Send it again then.'
+      })
+      return
+    }
     if (liveRunId) {
       const items = addToQueue({
         conversationId: conv.id,
@@ -1563,16 +1762,30 @@ export function registerIpc(ready?: Promise<unknown>): void {
       log.warn(`could not record the recent model: ${(e as Error).message}`)
     }
 
+    // A custom command's per-turn model, effort and pre-approved tools, from main's
+    // own record (the chat keeps the settings recorded above).
+    let grant: ReturnType<typeof takeCommandGrant> = null
+    if (req.commandGrant) {
+      let root = conv.workspace
+      try {
+        root = realpathSync(conv.workspace)
+      } catch {
+        // A folder that's gone matches no grant.
+      }
+      grant = takeCommandGrant(req.commandGrant, root)
+    }
+
     void runAndDrain(
       makeIo(event.sender),
       conv.id,
       {
         runId: req.runId,
         workspace: conv.workspace,
-        providerId: req.providerId,
-        model: req.model,
+        providerId: grant?.model?.providerId ?? req.providerId,
+        model: grant?.model?.model ?? req.model,
         approvalPolicy,
-        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(grant?.effort ? { reasoningEffort: grant.effort } : reasoningEffort ? { reasoningEffort } : {}),
+        ...(grant?.turnAllowRules?.length ? { turnAllowRules: grant.turnAllowRules } : {}),
         messages
       },
       // Record the starting window so only it can approve/answer/cancel this run.

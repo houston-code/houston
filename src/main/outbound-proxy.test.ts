@@ -6,9 +6,11 @@ import { join } from 'node:path'
 
 vi.mock('./logger', () => ({ log: { warn: vi.fn(), info: vi.fn() } }))
 
+import { Agent } from 'undici'
 import {
   configureOutboundProxy,
   isValidProxyUrl,
+  KEEP_ALIVE_TIMEOUT_MS,
   outboundDispatcher,
   outboundFetch,
   redactProxyUrl,
@@ -112,19 +114,66 @@ describe('isValidProxyUrl / redactProxyUrl', () => {
 describe('outboundDispatcher', () => {
   afterEach(() => configureOutboundProxy(() => undefined))
 
-  it('is null with no proxy, so fetch keeps its default dispatcher', () => {
-    expect(outboundDispatcher(null)).toBeNull()
+  it('uses one shared direct agent with no proxy', () => {
+    const direct = outboundDispatcher(null)
+    expect(direct).toBeInstanceOf(Agent)
+    expect(outboundDispatcher(null)).toBe(direct)
   })
 
   it('reuses one agent per configuration and replaces it when the configuration changes', () => {
     const a = resolveOutboundProxy('http://p:1', {})
     const b = resolveOutboundProxy('http://q:2', {})
+    const direct = outboundDispatcher(null)
     const first = outboundDispatcher(a)
-    expect(first).not.toBeNull()
+    expect(first).not.toBe(direct)
     expect(outboundDispatcher(a)).toBe(first)
     expect(outboundDispatcher(b)).not.toBe(first)
-    expect(outboundDispatcher(null)).toBeNull()
+    expect(outboundDispatcher(null)).toBe(direct)
   })
+})
+
+/**
+ * fetch's default agent drops a connection idle for 4 s, and a model API sends no
+ * Keep-Alive hint to stretch that, so every request after a slow tool paid a new TCP and
+ * TLS handshake. The server here, like the APIs, sends no hint.
+ */
+describe('outboundFetch keeps an idle connection open', () => {
+  let server: Server
+  let base: string
+  const ports: number[] = []
+  const hints: string[] = []
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      ports.push(req.socket.remotePort ?? -1)
+      hints.push(String(res.getHeader('keep-alive') ?? ''))
+      res.end('ok')
+    })
+    // 0: never time out an idle connection, and so send no `Keep-Alive: timeout=` hint
+    // (the APIs send none either; a hint would set the client's idle limit instead).
+    server.keepAliveTimeout = 0
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+  })
+
+  afterAll(async () => {
+    server.closeAllConnections()
+    await new Promise((r) => server.close(r))
+  })
+
+  it(
+    'reuses the connection after an idle gap longer than fetch’s 4 s default',
+    async () => {
+      expect(KEEP_ALIVE_TIMEOUT_MS).toBeGreaterThanOrEqual(30_000)
+      await (await outboundFetch(`${base}/a`, { method: 'POST', body: '{}' })).text()
+      await new Promise((r) => setTimeout(r, 4_500))
+      await (await outboundFetch(`${base}/b`, { method: 'POST', body: '{}' })).text()
+      expect(ports).toHaveLength(2)
+      expect(ports[1]).toBe(ports[0])
+      expect(hints).toEqual(['', ''])
+    },
+    15_000
+  )
 })
 
 /**

@@ -17,7 +17,7 @@ import type { TurnReceipt } from '@shared/evidence'
 import type { ImageAttachment } from '@shared/images'
 import { sanitizeInvocation, type PromptInvocation } from '@shared/promptInvocation'
 import { prNoticeFromToolResult, prNoticeText } from '@shared/prNotice'
-import { planOutcome } from '@shared/promptOutcome'
+import { planOutcome, stoppedPromptText } from '@shared/promptOutcome'
 import { rendersAsReply } from '@shared/chatStatus'
 import { upsertFinding } from '@shared/reviewFindings'
 import { capSteps, upsertStep, type SubagentRecord } from '@shared/subagents'
@@ -26,7 +26,20 @@ import { addRound, type TurnStats } from './messageMeta'
 
 /** Display model for the transcript, built from streamed AgentEvents or saved messages. */
 
-export type ToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied'
+/**
+ * Where a tool call stands. `stopped` is an approval the run was stopped in front of:
+ * it never ran, and nobody refused it, so it is neither an error nor a denial.
+ */
+export type ToolStatus = 'awaiting-approval' | 'running' | 'done' | 'error' | 'denied' | 'stopped'
+
+/** The status a finished call's result means (`ok` from a live result, absent on a saved one). */
+function resultStatus(output: string, ok?: boolean): ToolStatus {
+  if (ok) return 'done'
+  if (stoppedPromptText(output) !== null) return 'stopped'
+  if (output.startsWith('Denied') || output.startsWith('Blocked')) return 'denied'
+  // A saved result carries no ok flag, so only an explicit error reads as one.
+  return ok === false || output.startsWith('Error:') ? 'error' : 'done'
+}
 
 export interface UserItem {
   kind: 'user'
@@ -128,6 +141,8 @@ export interface ToolItem {
   sensitiveRead?: boolean
   /** The awaited call writes a credential / secret file, so it prompts even in full auto. */
   sensitiveWrite?: boolean
+  /** With sensitiveWrite: the file is an in-project control file (.houston/, .vscode/, …). */
+  protectedWrite?: boolean
   /** On a network prompt: what "Allow for run" grants (see the tool_approval event). */
   networkScope?: string
   output?: string
@@ -345,6 +360,23 @@ function planFromArgs(args: Record<string, unknown>): PlanPayload {
 
 const nowIso = (): string => new Date().toISOString()
 
+/** The notice a run the user stopped ends on, live and after a reload. */
+export const STOPPED_NOTICE = 'Stopped.'
+
+/**
+ * A "retrying (N/6)" line put in the past tense once the run is over, so it doesn't
+ * read as still retrying above how the run ended.
+ */
+function settleRetry(items: DisplayItem[], ending: string): DisplayItem[] {
+  const last = items[items.length - 1]
+  if (last?.kind !== 'notice' || !last.retry) return items
+  const n = last.retry.attempt
+  return [
+    ...items.slice(0, -1),
+    { ...last, text: `⟳ Connection issue: tried ${n} more time${n === 1 ? '' : 's'}${ending}`, retry: undefined }
+  ]
+}
+
 /**
  * The index of the user message that started the turn ending before `end`: the
  * latest one that is neither steered into a running turn nor the compaction summary.
@@ -419,6 +451,7 @@ function retractStreamed(items: DisplayItem[], textChars: number, reasoningChars
   if (!text && !reasoning) return items.slice(0, -1)
   const kept: AssistantItem = { kind: 'assistant', id: last.id, text, streaming: true }
   if (reasoning) kept.reasoning = reasoning
+  if (last.at) kept.at = last.at
   return [...items.slice(0, -1), kept]
 }
 
@@ -486,6 +519,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           shellOffline: e.shellOffline === true,
           sensitiveRead: e.sensitiveRead === true,
           sensitiveWrite: e.sensitiveWrite === true,
+          protectedWrite: e.protectedWrite === true,
           ...(e.networkScope ? { networkScope: e.networkScope } : {}),
           status: 'awaiting-approval'
         })
@@ -505,6 +539,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
           ...(e.shellOffline ? { shellOffline: true } : {}),
           ...(e.sensitiveRead ? { sensitiveRead: true } : {}),
           ...(e.sensitiveWrite ? { sensitiveWrite: true } : {}),
+          ...(e.protectedWrite ? { protectedWrite: true } : {}),
           ...(e.networkScope ? { networkScope: e.networkScope } : {}),
           status: 'awaiting-approval'
         }
@@ -668,11 +703,7 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         const status = planOutcome(e.output)
         return items.map((it) => (it.kind === 'plan' && it.id === e.callId ? { ...it, status } : it))
       }
-      const status: ToolStatus = e.ok
-        ? 'done'
-        : e.output.startsWith('Denied') || e.output.startsWith('Blocked')
-          ? 'denied'
-          : 'error'
+      const status = resultStatus(e.output, e.ok)
       const patched = updateTool(items, e.callId, {
         status,
         output: e.output,
@@ -811,26 +842,16 @@ export function reduceEvent(items: DisplayItem[], e: AgentEvent): DisplayItem[] 
         it.kind === 'elicitation' && !it.outcome ? { ...it, outcome: 'cancelled' as const } : it
       )
       if (e.stopReason === 'aborted') {
-        return [...finalized, { kind: 'notice', id: nextId(), text: 'Stopped.', tone: 'info' }]
+        // Stopped while a "retrying (3/6)" line was the last thing shown: the retries
+        // are over too.
+        return [...settleRetry(finalized, '.'), { kind: 'notice', id: nextId(), text: STOPPED_NOTICE, tone: 'info' }]
       }
       return finalized
     }
     case 'error': {
-      const finalized = finalizeStreaming(items)
       // The run gave up while a "retrying (6/6)" line was the last thing shown: say
       // the retries are over, so it doesn't read as still in progress above the error.
-      const last = finalized[finalized.length - 1]
-      const settled =
-        last?.kind === 'notice' && last.retry
-          ? [
-              ...finalized.slice(0, -1),
-              {
-                ...last,
-                text: `⟳ Connection issue: tried ${last.retry.attempt} more time${last.retry.attempt === 1 ? '' : 's'}, then stopped.`,
-                retry: undefined
-              }
-            ]
-          : finalized
+      const settled = settleRetry(finalizeStreaming(items), ', then stopped.')
       return [...settled, { kind: 'notice', id: nextId(), text: e.message, tone: 'error' }]
     }
     case 'usage': {
@@ -963,13 +984,7 @@ export function itemsFromMessages(
           continue
         }
         const output = res?.output
-        const status: ToolStatus = !output
-          ? 'done'
-          : output.startsWith('Denied') || output.startsWith('Blocked')
-            ? 'denied'
-            : output.startsWith('Error:')
-              ? 'error'
-              : 'done'
+        const status: ToolStatus = output ? resultStatus(output) : 'done'
         items.push({
           kind: 'tool',
           id: tc.id,
@@ -997,7 +1012,7 @@ export function itemsFromMessages(
         r.reason === 'limit'
           ? { kind: 'notice', id: nextId(), text: `⚠ ${runEndNoticeText(r)}`, tone: 'error' }
           : r.reason === 'aborted' || !r.message
-            ? { kind: 'notice', id: nextId(), text: 'Stopped.', tone: 'info' }
+            ? { kind: 'notice', id: nextId(), text: STOPPED_NOTICE, tone: 'info' }
             : { kind: 'notice', id: nextId(), text: r.message, tone: 'error' }
       )
     }

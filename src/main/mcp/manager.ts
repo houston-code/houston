@@ -4,7 +4,7 @@ import { mcpEnvScope, mcpHeaderScope } from '@shared/types'
 export type { McpServerStatus }
 import { parseElicitationFields, type McpImageOptions } from '@shared/mcp'
 import { builtinToolNames, type ToolContext, type ToolDef } from '../agent/tools'
-import { presentUntrusted, untrustedPreamble } from '../agent/untrusted'
+import { presentUntrusted, presentUntrustedInline, untrustedPreamble } from '../agent/untrusted'
 import { getMcpOAuth, getSecretHeaders, setMcpOAuth } from '../agentHost'
 import { McpClient, McpUnauthorizedError, type McpConnection } from './client'
 import { McpHttpClient } from './http-client'
@@ -339,7 +339,12 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
   // config order, so the connection map, and with it the order of the tools sent to
   // the model, comes out the same as connecting one at a time.
   const outcomes = await Promise.all(enabled.map((c) => connectServer(c)))
-  enabled.forEach((c, i) => {
+  applyOutcomes(enabled, outcomes)
+}
+
+/** Record each server's reconcile outcome in the shared maps, in config order. */
+function applyOutcomes(configs: McpServerConfig[], outcomes: Outcome[]): void {
+  configs.forEach((c, i) => {
     const o = outcomes[i]
     if (o.kind === 'reused') {
       statuses.set(c.id, o.status)
@@ -358,6 +363,35 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
       statuses.set(c.id, o.status)
     }
   })
+}
+
+/**
+ * Restart the connection of each named server now (`/mcp reconnect`): close its
+ * client, forget its failure backoff, and connect it afresh, so a server that was
+ * fixed (or hung) is tried at once instead of on a later run. Only enabled servers
+ * with a command or URL are connected; a disabled one just loses its connection.
+ * Serialized with the run-start reconcile so the two never interleave on the
+ * shared maps. Resolves to the new status of each server it connected.
+ */
+export function reconnectMcpServers(configs: McpServerConfig[], ids: readonly string[]): Promise<McpServerStatus[]> {
+  const want = new Set(ids)
+  const run = async (): Promise<McpServerStatus[]> => {
+    for (const id of want) {
+      connections.get(id)?.client.close()
+      connections.delete(id)
+      recentFailures.delete(id)
+      statuses.delete(id)
+    }
+    const targets = configs.filter((c) => want.has(c.id) && c.enabled && c.id && (c.command || c.url))
+    applyOutcomes(targets, await Promise.all(targets.map((c) => connectServer(c))))
+    return targets.flatMap((c) => statuses.get(c.id) ?? [])
+  }
+  const p = ensureLock.catch(() => undefined).then(run)
+  ensureLock = p.then(
+    () => undefined,
+    () => undefined
+  )
+  return p
 }
 
 /**
@@ -470,8 +504,10 @@ export async function getMcpToolDefs(
 
   const defs: ToolDef[] = []
   // Only this run's servers: another live run's may be connected too, and are not
-  // this run's to call.
-  const own = [...connections].filter(([id]) => mine.has(id))
+  // this run's to call. Sorted, with each server's tools sorted below, so the tool
+  // list is the same on every request whatever order servers connected in or listed
+  // their tools: a reordered list would miss the provider's prompt cache.
+  const own = [...connections].filter(([id]) => mine.has(id)).sort(([a], [b]) => byCodeUnit(a, b))
   const exposed = exposeMcpTools(
     own.map(([serverId, conn]) => ({ serverId, tools: conn.client.tools })),
     warnOnce
@@ -483,7 +519,7 @@ export async function getMcpToolDefs(
     }
   }
   for (const { serverId, tools } of exposed) {
-    for (const t of tools) {
+    for (const t of [...tools].sort((a, b) => byCodeUnit(a.name, b.name))) {
       const fullName = t.name
       const original = t.original
       defs.push({
@@ -508,11 +544,16 @@ export async function getMcpToolDefs(
   // If any connected server exposes resources or prompts, add meta-tools so the
   // agent can discover and fetch them. Listing is local + side-effect-free (kind
   // 'read'); fetching hits the external server, so it's gated like an MCP call.
+  //
+  // Both are bound to this run's servers (`mine`), exactly as its tools are: another
+  // run's server may be connected right now (a trusted project's `proj-*` server
+  // while this chat sits in an untrusted folder), and its resources and prompts are
+  // no more this run's to read than its tools are to call.
   if (own.some(([, c]) => c.client.resources.length > 0)) {
-    defs.push(...resourceMetaTools())
+    defs.push(...resourceMetaTools(mine))
   }
   if (own.some(([, c]) => c.client.prompts.length > 0)) {
-    defs.push(...promptMetaTools())
+    defs.push(...promptMetaTools(mine))
   }
   return defs
 }
@@ -618,6 +659,11 @@ function liveMcpToolNames(): string[] {
   return exposed.flatMap((s) => s.tools.map((t) => t.name))
 }
 
+/** Plain code-unit order: locale-independent, so every machine sorts the same. */
+function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
 /** Problems already logged for a server's tool list, so a reused list doesn't log them every run. */
 const warnedToolProblems = new Set<string>()
 const MAX_WARNED_TOOL_PROBLEMS = 500
@@ -631,8 +677,56 @@ function warnOnce(serverId: string, problem: string): void {
   log.warn(`MCP server "${serverId}" ${problem}`)
 }
 
-/** The `mcp_list_resources` / `mcp_read_resource` meta-tools (added only when some server has resources). */
-function resourceMetaTools(): ToolDef[] {
+/**
+ * The connections a run's meta-tools may see: those of its own servers, in connection
+ * order. Resolved at call time, so a server that reconnected or went away since the
+ * tool list was built is read as it is now.
+ */
+function ownConnections(mine: ReadonlySet<string>): [string, Connection][] {
+  return [...connections].filter(([id]) => mine.has(id))
+}
+
+/**
+ * Why a meta-tool call naming `server` is refused, or null when the server is one of
+ * the run's own. A server the run doesn't use gets the same answer whether or not it is
+ * connected for some other run, so the refusal doesn't reveal which servers other
+ * chats have open.
+ */
+function foreignServer(server: string, mine: ReadonlySet<string>, lister: string): string | null {
+  if (mine.has(server)) return null
+  return `[MCP server "${server}" is not one of this chat's servers. Call ${lister} to see what is available here.]`
+}
+
+/**
+ * Fence a resource or prompt listing, one part per server. The server id on each
+ * label is the user's own configuration, but everything in the lines (uris, names,
+ * mime types, argument names, descriptions) is text the server wrote, and a
+ * description is free prose a server can fill with instructions. Kept inline rather
+ * than isolated: the agent needs the exact uris and names to call the fetch tool.
+ */
+function presentListing(what: 'resources' | 'prompts', perServer: { id: string; lines: string[] }[]): string {
+  return presentUntrustedInline({
+    envelope: `MCP ${what} of this chat's servers:`,
+    parts: perServer.map(({ id, lines }) => ({
+      label: `Server "${id}":`,
+      text: lines.join('\n'),
+      source: `MCP ${what} list from ${id}`
+    })),
+    preamble: untrustedPreamble(
+      `a list of MCP ${what}`,
+      'Each MCP server writes its own names, uris, and descriptions, and a description can say anything'
+    ),
+    subject: `MCP ${what} list`,
+    toolNames: [...builtinToolNames(), ...liveMcpToolNames()]
+  })
+}
+
+/**
+ * The `mcp_list_resources` / `mcp_read_resource` meta-tools (added only when one of
+ * the run's servers has resources). Both see only `mine`, the run's own servers: the
+ * listing skips every other connection and a read naming another server is refused.
+ */
+function resourceMetaTools(mine: ReadonlySet<string>): ToolDef[] {
   return [
     {
       kind: 'read',
@@ -644,21 +738,24 @@ function resourceMetaTools(): ToolDef[] {
         parameters: { type: 'object', properties: {} }
       },
       execute: () => {
-        const lines: string[] = []
-        for (const [id, conn] of connections) {
+        const perServer: { id: string; lines: string[] }[] = []
+        for (const [id, conn] of ownConnections(mine)) {
+          const lines: string[] = []
           for (const r of conn.client.resources) {
             const bits = [`server="${id}"`, `uri="${r.uri}"`]
             if (r.name) bits.push(`name="${r.name}"`)
             if (r.mimeType) bits.push(`mime="${r.mimeType}"`)
             lines.push(`- ${bits.join(' ')}${r.description ? ` — ${r.description}` : ''}`)
           }
+          if (lines.length) perServer.push({ id, lines })
         }
-        return Promise.resolve(lines.length ? lines.join('\n') : 'No MCP resources are available.')
+        return Promise.resolve(perServer.length ? presentListing('resources', perServer) : 'No MCP resources are available.')
       }
     },
     {
       kind: 'mcp',
-      summarize: (a) => `Read MCP resource: ${typeof a.uri === 'string' ? a.uri : '?'}`,
+      // The server leads: the user is approving what that server is asked for.
+      summarize: (a) => `Read MCP resource from ${metaArg(a.server)}: ${metaArg(a.uri)}`,
       schema: {
         name: 'mcp_read_resource',
         description:
@@ -676,6 +773,8 @@ function resourceMetaTools(): ToolDef[] {
         const server = typeof args.server === 'string' ? args.server : ''
         const uri = typeof args.uri === 'string' ? args.uri : ''
         if (!server || !uri) return Promise.resolve('Both "server" and "uri" are required.')
+        const refused = foreignServer(server, mine, 'mcp_list_resources')
+        if (refused) return Promise.resolve(refused)
         return callLive(server, ctx, (client) => client.readResource(uri, ctx?.signal), {
           envelope: `Resource from MCP server "${server}":`,
           source: `MCP resource ${uri}`
@@ -685,8 +784,16 @@ function resourceMetaTools(): ToolDef[] {
   ]
 }
 
-/** The `mcp_list_prompts` / `mcp_get_prompt` meta-tools (added only when some server has prompts). */
-function promptMetaTools(): ToolDef[] {
+/** An approval summary's rendering of a model-chosen string argument. */
+function metaArg(v: unknown): string {
+  return typeof v === 'string' && v ? v : '?'
+}
+
+/**
+ * The `mcp_list_prompts` / `mcp_get_prompt` meta-tools (added only when one of the
+ * run's servers has prompts), bound to `mine` as the resource tools are.
+ */
+function promptMetaTools(mine: ReadonlySet<string>): ToolDef[] {
   return [
     {
       kind: 'read',
@@ -698,8 +805,9 @@ function promptMetaTools(): ToolDef[] {
         parameters: { type: 'object', properties: {} }
       },
       execute: () => {
-        const lines: string[] = []
-        for (const [id, conn] of connections) {
+        const perServer: { id: string; lines: string[] }[] = []
+        for (const [id, conn] of ownConnections(mine)) {
+          const lines: string[] = []
           for (const p of conn.client.prompts) {
             const bits = [`server="${id}"`, `name="${p.name}"`]
             const args = (p.arguments ?? [])
@@ -708,13 +816,14 @@ function promptMetaTools(): ToolDef[] {
             if (args) bits.push(`arguments=(${args})`)
             lines.push(`- ${bits.join(' ')}${p.description ? ` — ${p.description}` : ''}`)
           }
+          if (lines.length) perServer.push({ id, lines })
         }
-        return Promise.resolve(lines.length ? lines.join('\n') : 'No MCP prompts are available.')
+        return Promise.resolve(perServer.length ? presentListing('prompts', perServer) : 'No MCP prompts are available.')
       }
     },
     {
       kind: 'mcp',
-      summarize: (a) => `Get MCP prompt: ${typeof a.name === 'string' ? a.name : '?'}`,
+      summarize: (a) => `Get MCP prompt from ${metaArg(a.server)}: ${metaArg(a.name)}`,
       schema: {
         name: 'mcp_get_prompt',
         description:
@@ -737,6 +846,8 @@ function promptMetaTools(): ToolDef[] {
         const server = typeof args.server === 'string' ? args.server : ''
         const name = typeof args.name === 'string' ? args.name : ''
         if (!server || !name) return Promise.resolve('Both "server" and "name" are required.')
+        const refused = foreignServer(server, mine, 'mcp_list_prompts')
+        if (refused) return Promise.resolve(refused)
         const promptArgs: Record<string, string> = {}
         if (args.arguments && typeof args.arguments === 'object') {
           for (const [k, v] of Object.entries(args.arguments as Record<string, unknown>)) {

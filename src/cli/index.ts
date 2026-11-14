@@ -59,12 +59,16 @@ Usage:
   houston -p "<prompt>" [options]      one-shot run; assistant text on stdout (also --prompt)
   houston -p - [options] < task.md     one-shot run with the prompt read from stdin
   houston --acp                        serve the Agent Client Protocol on stdio, for editors
+                                       (--approval, --effort, --max-turns set its defaults)
 
   houston providers [...]              manage model providers and their API keys
+  houston schedule-daemon [...]        fire scheduled runs while Houston is closed
   houston open [dir]                   open a folder in the Houston desktop app
 
 Options:
   -C, --cwd <dir>       project folder (default: the current directory)
+  --add-dir <dir>       another folder the agent may read and edit this session
+                        (repeatable; like Settings' additional directories, not saved)
   --provider <id>       provider id from your settings (default: your selection)
   --model <id>          model id (default: your selection)
   --approval <policy>   plan | ask | auto-edit | full-auto
@@ -77,9 +81,9 @@ Options:
                         --on-approval allow)
   --json                (-p) machine-readable: an init line, one JSON event per
                         line, then a {"type":"result",...} summary line
-  --effort <level>      (-p) reasoning effort for this run: off | low | medium | high | xhigh
-  --max-turns <n>       (-p) hard cap on model steps for this run
-  --max-cost <usd>      (-p) tell the agent to wrap up once the run costs this much
+  --effort <level>      (-p, --acp) reasoning effort for this run: off | low | medium | high | xhigh
+  --max-turns <n>       (-p, --acp) hard cap on model steps for each turn
+  --max-cost <usd>      (-p) stop the run once its estimated cost reaches this (exit 3)
   --verify <command>    (-p) after the agent edits, run this check and send failures back
   --no-memory           (-p) run without the memories saved in earlier sessions
   --allowed-tools <list>
@@ -98,6 +102,9 @@ Options:
                         line per turn from stdin until end of input
   --continue            reopen the folder's most recent session
   --resume <id>         reopen a specific session
+  --screen-reader       interactive: plain lines for a screen reader (no spinner,
+                        redraws or color; numbered choices). Also
+                        HOUSTON_SCREEN_READER=1, or /screen-reader on to keep it
   -h, --help            this help
   -v, --version         print the version
 
@@ -115,6 +122,12 @@ Providers:
   houston providers remove <id>        remove a provider you added
   houston providers set-key <id> [key] store an API key (key from arg or stdin)
   houston providers remove-key <id>    forget a stored API key
+
+Scheduled runs while Houston is closed:
+  houston schedule-daemon              run the scheduler in the foreground until stopped
+  houston schedule-daemon install      start it at login, and now (per user)
+  houston schedule-daemon uninstall    stop it and remove it from login
+  houston schedule-daemon status       whether it is installed and running
 
 Credentials (checked in this order):
   ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY / HOUSTON_API_KEY_<ID>
@@ -154,7 +167,8 @@ const VALUE_FLAGS = new Set([
   '--append-system-prompt',
   '--output-schema',
   '--mcp-config',
-  '--input-format'
+  '--input-format',
+  '--add-dir'
 ])
 /** Flags that stand alone. */
 const SWITCH_FLAGS = new Set([
@@ -164,6 +178,7 @@ const SWITCH_FLAGS = new Set([
   '--acp',
   '--full-auto',
   '--continue',
+  '--screen-reader',
   '--json',
   '--allow-shell-network',
   '--no-memory',
@@ -292,7 +307,13 @@ function isDirectRun(): boolean {
   return typeof require !== 'undefined' && require.main === module
 }
 
-if (isDirectRun()) {
+/**
+ * Start the CLI as a program: install the fatal handlers, run the invocation in
+ * `process.argv`, flush, and exit. The bundle calls this itself when run directly; the
+ * npm package's launcher (packaging/npm/houston.cjs) requires the bundle and calls it
+ * once Node's compile cache is on.
+ */
+export function startCli(): void {
   // Mirror the desktop headless path's fatal handling: log, one-line stderr, exit.
   process.on('uncaughtException', (err) => {
     logFatal('uncaughtException', err)
@@ -316,3 +337,5 @@ if (isDirectRun()) {
     exit(1)
   })
 }
+
+if (isDirectRun()) startCli()

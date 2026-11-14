@@ -10,6 +10,7 @@ import {
   type ScheduledRunInput
 } from './agent/scheduler'
 import type { RunOutcome } from '@shared/runEnd'
+import type { ApprovalPolicy } from '@shared/types'
 import { resetSpawnBackend, setSpawnBackend, type SpawnSessionInput } from './agent/spawn'
 
 let dir: string
@@ -99,6 +100,46 @@ describe('createSchedulerService', () => {
     // Second occurrence fires from the re-armed timer.
     await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 5)
     expect(fired).toHaveLength(2)
+  })
+
+  it('leaves due occurrences to another host while shouldFire says no, without spinning, then fires', async () => {
+    let mayFire = false
+    let asked = 0
+    const fired: ScheduledRunInfo[] = []
+    const service = createSchedulerService({
+      file,
+      fire: async (s) => void fired.push({ ...s }),
+      warn: (m) => warns.push(m),
+      shouldFire: () => {
+        asked++
+        return mayFire
+      }
+    })
+    service.create(input({ spec: 'every 30m' }))
+    service.start()
+    asked = 0
+    // Due, but deferred: nothing fires and the next occurrence is untouched.
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 5)
+    expect(fired).toHaveLength(0)
+    expect(service.list()[0].lastFiredAt).toBeUndefined()
+    // An overdue occurrence is rechecked once per poll, not in a tight loop.
+    asked = 0
+    await vi.advanceTimersByTimeAsync(POLL_MS * 3)
+    expect(asked).toBeLessThanOrEqual(4)
+    expect(asked).toBeGreaterThanOrEqual(2)
+    // Once it may fire, the overdue occurrence goes at the next poll.
+    mayFire = true
+    await vi.advanceTimersByTimeAsync(POLL_MS + 5)
+    expect(fired).toHaveLength(1)
+    service.stop()
+  })
+
+  it("leaves 'run now' to the user even while deferring", async () => {
+    const fired: ScheduledRunInfo[] = []
+    const service = createSchedulerService({ file, fire: async (s) => void fired.push({ ...s }), shouldFire: () => false })
+    const info = service.create(input())
+    await service.runNow(info.id)
+    expect(fired).toHaveLength(1)
   })
 
   it('records a failed fire (message kept, schedule keeps recurring)', async () => {
@@ -319,6 +360,9 @@ describe('createSchedulerService', () => {
   })
 })
 
+// The user's default left at the least restrictive mode, so a stored policy shows through.
+const FULL_AUTO_DEFAULT = (): ApprovalPolicy => 'full-auto'
+
 describe('fireViaSpawn', () => {
   const spawned: SpawnSessionInput[] = []
   beforeEach(() => {
@@ -341,17 +385,46 @@ describe('fireViaSpawn', () => {
   })
 
   it("starts each occurrence on the schedule's stored effort and policy", async () => {
-    await fireViaSpawn(() => undefined)(stored({ reasoningEffort: 'low', approvalPolicy: 'auto-edit' }))
+    await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)(stored({ reasoningEffort: 'low', approvalPolicy: 'auto-edit' }))
     expect(spawned[0]).toMatchObject({ reasoningEffort: 'low', approvalPolicy: 'auto-edit', model: 'claude-test' })
   })
 
   it('leaves the effort to the default for a schedule without one', async () => {
-    await fireViaSpawn(() => undefined)(stored())
+    await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)(stored())
     expect(spawned[0]).not.toHaveProperty('reasoningEffort')
   })
 
+  it('caps a schedule created in full auto at the default mode the user has now', async () => {
+    await fireViaSpawn(() => undefined, () => 'auto-edit')(stored({ approvalPolicy: 'full-auto' }))
+    expect(spawned[0].approvalPolicy).toBe('auto-edit')
+    await fireViaSpawn(() => undefined, () => 'ask')(stored({ approvalPolicy: 'full-auto' }))
+    expect(spawned[1].approvalPolicy).toBe('ask')
+  })
+
+  it('never raises a stored policy above what was stored', async () => {
+    await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)(stored({ approvalPolicy: 'ask' }))
+    expect(spawned[0].approvalPolicy).toBe('ask')
+  })
+
+  it('treats an unreadable or unknown default as ask', async () => {
+    const broken = (): ApprovalPolicy => {
+      throw new Error('settings unreadable')
+    }
+    await fireViaSpawn(() => undefined, broken)(stored({ approvalPolicy: 'full-auto' }))
+    expect(spawned[0].approvalPolicy).toBe('ask')
+    await fireViaSpawn(() => undefined, () => 'yolo' as never)(stored({ approvalPolicy: 'full-auto' }))
+    expect(spawned[1].approvalPolicy).toBe('ask')
+  })
+
+  it("hands the schedule's taint to each fired session", async () => {
+    await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)(stored({ taintSource: 'web_fetch' }))
+    expect(spawned[0].taintSource).toBe('web_fetch')
+    await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)(stored())
+    expect(spawned[1]).not.toHaveProperty('taintSource')
+  })
+
   it('coerces a hand-edited unknown policy to plan and drops an unknown effort', async () => {
-    await fireViaSpawn(() => undefined)(stored({ approvalPolicy: 'yolo' as never, reasoningEffort: 'max' as never }))
+    await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)(stored({ approvalPolicy: 'yolo' as never, reasoningEffort: 'max' as never }))
     expect(spawned[0].approvalPolicy).toBe('plan')
     expect(spawned[0]).not.toHaveProperty('reasoningEffort')
   })
@@ -555,6 +628,15 @@ describe('how a fired run ended', () => {
   })
 })
 
+describe('taint on a stored schedule', () => {
+  it('survives the store round trip, so a fire after a restart still carries it', () => {
+    const { service } = makeService()
+    service.create(input({ taintSource: 'web_fetch' }))
+    expect(service.list()[0].taintSource).toBe('web_fetch')
+    expect(JSON.parse(readFileSync(file, 'utf8')).schedules[0].taintSource).toBe('web_fetch')
+  })
+})
+
 describe('fireViaSpawn run outcome', () => {
   afterEach(() => resetSpawnBackend())
 
@@ -567,7 +649,7 @@ describe('fireViaSpawn run outcome', () => {
       }
     })
     const outcomes: Record<string, RunOutcome> = { 'c-9': { outcome: 'limit', limit: 'max-output' } }
-    const handle = await fireViaSpawn((id) => outcomes[id])({ ...input(), id: 'sch-1', nextRunAt: null, createdAt: 0 })
+    const handle = await fireViaSpawn((id) => outcomes[id], FULL_AUTO_DEFAULT)({ ...input(), id: 'sch-1', nextRunAt: null, createdAt: 0 })
     expect(handle.conversationId).toBe('c-9')
     let settled: RunOutcome | undefined
     void handle.ended!.then((o) => (settled = o))
@@ -585,7 +667,7 @@ describe('fireViaSpawn run outcome', () => {
         return { conversationId: 'c-gone', title: '', workspace: i.workspace }
       }
     })
-    const handle = await fireViaSpawn(() => undefined)({ ...input(), id: 'sch-1', nextRunAt: null, createdAt: 0 })
+    const handle = await fireViaSpawn(() => undefined, FULL_AUTO_DEFAULT)({ ...input(), id: 'sch-1', nextRunAt: null, createdAt: 0 })
     expect(await handle.ended).toEqual({ outcome: 'stopped' })
   })
 })

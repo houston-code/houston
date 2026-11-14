@@ -26,6 +26,8 @@ export const IPC = {
   /** Gather the /doctor health facts (sandbox, provider keys, MCP, binaries). */
   doctorFacts: 'app:doctorFacts',
   logsReveal: 'app:logsReveal',
+  /** A renderer error (uncaught, unhandled rejection, or an error boundary's catch) for the main log. */
+  rendererError: 'app:rendererError',
   issueReportPreview: 'app:issueReportPreview',
   issueReportOpen: 'app:issueReportOpen',
   /** Whether an OS sandbox confines shell commands on this host. */
@@ -103,6 +105,7 @@ export const IPC = {
   /** Keep an interactive HTML visual for its sandboxed frame to load; returns its id. */
   visualRegisterHtml: 'visual:registerHtml',
   commandsList: 'commands:list',
+  commandPrepare: 'commands:prepare',
   /** A verification command inferred from the project's files (Settings > Agent Behavior). */
   verifyInfer: 'verify:infer',
   /** List the workspace's skills (.houston/skills) as {name, description}, for /skills. */
@@ -170,10 +173,14 @@ export const IPC = {
   settingsTestKey: 'settings:testKey',
   /** Whether a local (Ollama) model supports tool calling — true / false / null (unknown). */
   ollamaSupportsTools: 'ollama:supportsTools',
+  /** The rate-limit quota each provider reported on its latest response, by provider id. */
+  providerQuotas: 'providers:quotas',
   // MCP: remote-server OAuth sign-in/out + live connection status (Settings UI).
   mcpOAuthLogin: 'mcp:oauthLogin',
   mcpOAuthLogout: 'mcp:oauthLogout',
   mcpStatus: 'mcp:status',
+  /** Read-only search of the official MCP Registry (Settings > MCP Servers, Browse registry). */
+  mcpRegistrySearch: 'mcp:registrySearch',
   // Optional integrations status (gh CLI, formatters) — for the Settings UI hint.
   integrationsGet: 'integrations:get',
   /** Settings > Scheduled runs over the scheduler service. */
@@ -183,6 +190,8 @@ export const IPC = {
   schedulesSetPaused: 'schedules:setPaused',
   schedulesRunNow: 'schedules:runNow',
   schedulesDelete: 'schedules:delete',
+  schedulesDaemonGet: 'schedules:daemonGet',
+  schedulesDaemonSet: 'schedules:daemonSet',
   // "Open project in…" — launch an external editor / reveal in the file manager.
   // A user gesture (not the agent); see main/openInEditor.ts.
   editorsList: 'editors:list',
@@ -212,6 +221,10 @@ export const IPC = {
   conversationScorecard: 'conversation:scorecard',
   /** Spend and tokens per day and per project over every saved chat (local only). */
   conversationUsageReport: 'conversation:usageReport',
+  /** The last rate-limit state each provider reported (remaining quota, reset time). */
+  rateLimitList: 'rateLimit:list',
+  /** Main → renderer: a provider reported a new rate-limit state. */
+  rateLimitChanged: 'rateLimit:changed',
   /** Main → renderer: a chat got a model-generated title (live sidebar/header update). */
   conversationTitleChanged: 'conversation:titleChanged',
   conversationSuggestion: 'conversation:suggestion',

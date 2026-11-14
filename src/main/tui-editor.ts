@@ -35,6 +35,20 @@ export interface SearchState {
   index: number | null
 }
 
+/** The draft as it stood at one moment: what undo, redo and the Ctrl-S stash hold. */
+export interface DraftSnapshot {
+  lines: string[]
+  row: number
+  col: number
+  blobs: PasteBlob[]
+}
+
+/**
+ * What the last edit was, so a run of the same kind collapses into one undo step:
+ * typing a word and then undoing should take back the word, not one letter.
+ */
+export type EditKind = 'type' | 'erase'
+
 export interface EditorState {
   /** Logical lines of the draft (never empty: always at least one, possibly ''). */
   lines: string[]
@@ -54,6 +68,14 @@ export interface EditorState {
   blobs: PasteBlob[]
   /** Last killed text (Ctrl-K/U/W), for Ctrl-Y. */
   kill: string
+  /** Drafts before each edit step, oldest first, for Ctrl-_. */
+  undo: DraftSnapshot[]
+  /** Drafts undo took back, newest last, for Ctrl-^. Cleared by any new edit. */
+  redo: DraftSnapshot[]
+  /** The kind of the previous key's edit, or null when it was not a coalescing edit. */
+  lastEdit: EditKind | null
+  /** The draft Ctrl-S put aside, restored by Ctrl-S on an empty composer. */
+  stashed: DraftSnapshot | null
 }
 
 export type EditorOutcome =
@@ -68,12 +90,35 @@ export type EditorOutcome =
   | { kind: 'clear-screen' }
   /** Shift-Tab: the adapter cycles the approval mode and redraws the prompt. */
   | { kind: 'cycle-mode' }
+  /** Ctrl-O: the adapter opens the transcript viewer, then restores the composer as it was. */
+  | { kind: 'transcript' }
+  /** Alt-T: the adapter steps the reasoning display and redraws. */
+  | { kind: 'cycle-thoughts' }
+  /**
+   * Not the end of the read: `text` left the buffer without being sent (Esc Esc
+   * cleared it, or a newer Ctrl-S stash displaced it). The adapter saves it to
+   * history so Up brings it back, and keeps editing.
+   */
+  | { kind: 'remember'; text: string }
+  /** Esc Esc on an empty composer: the adapter closes the read and opens the rewind picker. */
+  | { kind: 'rewind' }
+  /** Ctrl-V / Alt-V: the adapter attaches the clipboard image; the buffer is unchanged. */
+  | { kind: 'paste-image' }
+  /** Ctrl-Z: the adapter hands the terminal back and stops the process. */
+  | { kind: 'suspend' }
+
+/** Deepest undo history a read keeps. A draft is short; this is already generous. */
+export const UNDO_LIMIT = 100
 
 /** A paste at least this many lines (or this many characters) collapses to a token. */
 export const PASTE_COLLAPSE_LINES = 5
 export const PASTE_COLLAPSE_CHARS = 800
 
-export function initialEditorState(history: string[] = [], draft = ''): EditorState {
+export function initialEditorState(
+  history: string[] = [],
+  draft = '',
+  stashed: DraftSnapshot | null = null
+): EditorState {
   // A pre-filled draft opens with the cursor at its end, ready to edit or send.
   const lines = draft.split('\n')
   return {
@@ -85,7 +130,111 @@ export function initialEditorState(history: string[] = [], draft = ''): EditorSt
     stash: null,
     search: null,
     blobs: [],
-    kill: ''
+    kill: '',
+    undo: [],
+    redo: [],
+    lastEdit: null,
+    stashed
+  }
+}
+
+/** Whether the draft has nothing in it. */
+export function editorEmpty(s: EditorState): boolean {
+  return s.lines.every((l) => l.length === 0)
+}
+
+function snapshotOf(s: EditorState): DraftSnapshot {
+  return { lines: [...s.lines], row: s.row, col: s.col, blobs: [...s.blobs] }
+}
+
+/** Put a snapshot back into the buffer. Leaves history browsing: this is a live draft. */
+function restoreSnapshot(s: EditorState, snap: DraftSnapshot): EditorState {
+  return { ...s, lines: [...snap.lines], row: snap.row, col: snap.col, blobs: [...snap.blobs], histIndex: null, stash: null }
+}
+
+/** An empty buffer (history, kill ring and undo history untouched). */
+function clearedBuffer(s: EditorState): EditorState {
+  return { ...s, lines: [''], row: 0, col: 0, blobs: [], histIndex: null, stash: null }
+}
+
+/** `text` appended to the in-read history (so Up reaches it now), skipping a repeat. */
+function withHistoryEntry(history: string[], text: string): string[] {
+  const t = text.trim()
+  if (!t || history[history.length - 1] === t) return history
+  return [...history, t]
+}
+
+/** The keys that change the draft's text, and so make an undo step. */
+const EDIT_KEYS = new Set<EditorKey['type']>([
+  'char',
+  'paste',
+  'newline',
+  'backspace',
+  'delete',
+  'kill-line',
+  'kill-to-start',
+  'kill-word',
+  'yank',
+  'eof' // Ctrl-D on a non-empty draft deletes forward
+])
+
+function sameDraft(a: EditorState, b: EditorState): boolean {
+  if (a.blobs.length !== b.blobs.length || a.lines.length !== b.lines.length) return false
+  return a.lines.every((l, i) => l === b.lines[i]) && a.blobs.every((x, i) => x === b.blobs[i])
+}
+
+/**
+ * Record an edit step: `before` goes on the undo stack unless this key continues a
+ * run of the same kind (typing, or erasing) that is already one step.
+ */
+function recordEdit(before: EditorState, after: EditorState, kind: EditKind | null): EditorState {
+  const coalesce = kind !== null && before.lastEdit === kind && before.undo.length > 0
+  const undo = coalesce ? before.undo : [...before.undo, snapshotOf(before)].slice(-UNDO_LIMIT)
+  return { ...after, undo, redo: [], lastEdit: kind }
+}
+
+/**
+ * Ctrl-_ / Ctrl-^ / Ctrl-S / Esc Esc: the draft-level keys, handled around the
+ * per-key editing below so they can see each step as a whole.
+ */
+function reduceDraftKey(s: EditorState, key: EditorKey): { state: EditorState; outcome?: EditorOutcome } | null {
+  switch (key.type) {
+    case 'undo': {
+      const prev = s.undo[s.undo.length - 1]
+      if (!prev) return { state: { ...s, lastEdit: null } }
+      const back = restoreSnapshot(s, prev)
+      return { state: { ...back, undo: s.undo.slice(0, -1), redo: [...s.redo, snapshotOf(s)], lastEdit: null } }
+    }
+    case 'redo': {
+      const next = s.redo[s.redo.length - 1]
+      if (!next) return { state: { ...s, lastEdit: null } }
+      const fwd = restoreSnapshot(s, next)
+      return { state: { ...fwd, undo: [...s.undo, snapshotOf(s)].slice(-UNDO_LIMIT), redo: s.redo.slice(0, -1), lastEdit: null } }
+    }
+    case 'stash': {
+      if (editorEmpty(s)) {
+        // Nothing typed: bring the stash back, if there is one.
+        if (!s.stashed) return { state: s }
+        const back = restoreSnapshot(s, s.stashed)
+        return { state: recordEdit(s, { ...back, stashed: null }, null) }
+      }
+      // Put this draft aside. An older stash is not thrown away: it goes to
+      // history, where Up finds it.
+      const older = s.stashed ? expandBlobs(s.stashed.lines.join('\n'), s.stashed.blobs) : ''
+      const cleared = clearedBuffer({ ...s, stashed: snapshotOf(s), history: withHistoryEntry(s.history, older) })
+      const state = recordEdit(s, cleared, null)
+      return older.trim() ? { state, outcome: { kind: 'remember', text: older } } : { state }
+    }
+    case 'escape': {
+      if (!key.double) return null
+      if (editorEmpty(s)) return { state: s, outcome: { kind: 'rewind' } }
+      // Clear the draft, keeping it in history so Up brings it back (and undo too).
+      const text = editorText(s)
+      const cleared = clearedBuffer({ ...s, history: withHistoryEntry(s.history, text) })
+      return { state: recordEdit(s, cleared, null), outcome: { kind: 'remember', text } }
+    }
+    default:
+      return null
   }
 }
 
@@ -182,7 +331,9 @@ export function insertText(s: EditorState, text: string): EditorState {
  * an $EDITOR round trip, where the returned text is already blob-expanded.
  */
 export function setEditorText(s: EditorState, text: string): EditorState {
-  return loadBuffer({ ...s, blobs: [], stash: null }, text, null)
+  const next = loadBuffer({ ...s, blobs: [], stash: null }, text, null)
+  // An $EDITOR round trip is one step: undo takes the whole edit back.
+  return sameDraft(s, next) ? next : recordEdit(s, next, null)
 }
 
 /** Load a history entry (or the stashed draft) into the buffer, cursor at the end. */
@@ -251,6 +402,21 @@ function reduceSearch(s: EditorState, key: EditorKey): { state: EditorState; out
  */
 export function reduceEditor(s: EditorState, key: EditorKey): { state: EditorState; outcome?: EditorOutcome } {
   if (s.search) return reduceSearch(s, key)
+  const draftKey = reduceDraftKey(s, key)
+  if (draftKey) return draftKey
+  const r = reduceKey(s, key)
+  if (!EDIT_KEYS.has(key.type) || sameDraft(s, r.state)) {
+    // Moving the cursor (or a key that changed nothing) ends a typing run, so the
+    // next letters are a step of their own.
+    return r.state.lastEdit === null ? r : { ...r, state: { ...r.state, lastEdit: null } }
+  }
+  const kind: EditKind | null =
+    key.type === 'char' ? 'type' : key.type === 'backspace' || key.type === 'delete' ? 'erase' : null
+  return { ...r, state: recordEdit(s, r.state, kind) }
+}
+
+/** One key's effect on the buffer, before undo bookkeeping. */
+function reduceKey(s: EditorState, key: EditorKey): { state: EditorState; outcome?: EditorOutcome } {
   const line = s.lines[s.row] ?? ''
   const lastRow = s.lines.length - 1
 
@@ -395,10 +561,22 @@ export function reduceEditor(s: EditorState, key: EditorKey): { state: EditorSta
       // Ctrl-D on a non-empty draft deletes forward (readline's behavior); only an
       // empty composer treats it as end-of-input.
       if (s.lines.length === 1 && s.lines[0] === '') return { state: s, outcome: { kind: 'eof' } }
-      return reduceEditor(s, { type: 'delete' })
+      return reduceKey(s, { type: 'delete' })
 
     case 'external-edit':
       return { state: s, outcome: { kind: 'external-edit', text: editorText(s) } }
+
+    case 'paste-image':
+      return { state: s, outcome: { kind: 'paste-image' } }
+
+    case 'suspend':
+      return { state: s, outcome: { kind: 'suspend' } }
+
+    // Handled in reduceDraftKey; listed so the switch stays exhaustive.
+    case 'undo':
+    case 'redo':
+    case 'stash':
+      return { state: s }
 
     case 'clear-screen':
       return { state: s, outcome: { kind: 'clear-screen' } }
@@ -415,6 +593,17 @@ export function reduceEditor(s: EditorState, key: EditorKey): { state: EditorSta
       // The draft survives: changing how much runs without asking has nothing to do
       // with what you were typing.
       return { state: s, outcome: { kind: 'cycle-mode' } }
+
+    case 'transcript':
+      // The draft survives the viewer: it is a look back, not an edit.
+      return { state: s, outcome: { kind: 'transcript' } }
+
+    case 'cycle-thoughts':
+      return { state: s, outcome: { kind: 'cycle-thoughts' } }
+
+    case 'page-up':
+    case 'page-down':
+      return { state: s }
   }
 }
 
@@ -539,4 +728,73 @@ export function renderEditor(
   // The menu goes after that guard: it must never be mistaken for a buffer line.
   if (opts.below?.length) rows.push(...opts.below)
   return { rows, cursorRow, cursorCol }
+}
+
+/** Extensions a pasted or dropped path must end in to be taken as an image. */
+const IMAGE_PATH_RE = /\.(png|jpe?g|gif|webp)$/i
+
+/**
+ * The paths in a paste that is nothing but image file paths, or null when it is
+ * anything else (which then pastes as text, exactly as before).
+ *
+ * A file dragged onto a terminal arrives as a paste of its path, spelled the way
+ * the terminal's shell would want it: quoted ('…' or "…"), with spaces escaped by
+ * a backslash, or as a file:// URL. Several files arrive separated by spaces or
+ * line breaks. On Windows a backslash is a path separator, never an escape.
+ *
+ * Pure: whether each path exists is the caller's question (a path that does not
+ * name a real file means the paste was text after all).
+ */
+export function parseImagePaths(text: string, opts: { windows?: boolean } = {}): string[] | null {
+  const src = text.trim()
+  if (!src) return null
+  const tokens: string[] = []
+  let cur = ''
+  let quote: '"' | "'" | null = null
+  let started = false
+  const cs = [...src]
+  for (let i = 0; i < cs.length; i++) {
+    const ch = cs[i]
+    if (quote) {
+      if (ch === quote) quote = null
+      else cur += ch
+      continue
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch
+      started = true
+      continue
+    }
+    if (ch === '\\' && !opts.windows && i + 1 < cs.length) {
+      cur += cs[++i]
+      started = true
+      continue
+    }
+    if (/\s/.test(ch)) {
+      if (started) tokens.push(cur)
+      cur = ''
+      started = false
+      continue
+    }
+    cur += ch
+    started = true
+  }
+  if (quote) return null // an unbalanced quote is prose, not a path
+  if (started) tokens.push(cur)
+  const paths: string[] = []
+  for (const raw of tokens) {
+    let p = raw
+    if (/^file:\/\//i.test(p)) {
+      try {
+        p = decodeURIComponent(p.replace(/^file:\/\/(localhost)?/i, ''))
+      } catch {
+        return null
+      }
+      // file:///C:/x.png on Windows.
+      if (opts.windows) p = p.replace(/^\/([A-Za-z]:)/, '$1')
+    }
+    if (!p || !IMAGE_PATH_RE.test(p)) return null
+    paths.push(p)
+  }
+  return paths.length ? paths : null
 }

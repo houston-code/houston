@@ -1,9 +1,9 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ProviderConfig } from '@shared/types'
-import type { ScheduleView } from '@shared/schedules'
+import type { ScheduleDaemonStatus, ScheduleView } from '@shared/schedules'
 import type { SettingsCtx } from '../context'
-import { RUNNING_POLL_MS, ScheduledRunsSection, usableModels } from './schedules'
+import { RUNNING_POLL_MS, ScheduleDaemonToggle, ScheduledRunsSection, usableModels } from './schedules'
 
 afterEach(cleanup)
 
@@ -55,7 +55,13 @@ function installApi(list: ScheduleView[]) {
     setSchedulePaused: vi.fn(ok),
     runScheduleNow: vi.fn(ok),
     deleteSchedule: vi.fn(ok),
-    pickDirectory: vi.fn(() => Promise.resolve('/w/other'))
+    pickDirectory: vi.fn(() => Promise.resolve('/w/other')),
+    getScheduleDaemon: vi.fn(
+      (): Promise<ScheduleDaemonStatus> => Promise.resolve({ supported: false, installed: false, running: false })
+    ),
+    setScheduleDaemon: vi.fn(
+      (on: boolean): Promise<ScheduleDaemonStatus> => Promise.resolve({ supported: true, installed: on, running: on })
+    )
   }
   window.api = api as unknown as typeof window.api
   return api
@@ -169,5 +175,64 @@ describe('ScheduledRunsSection', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create' }))
     expect((await screen.findByRole('alert')).textContent).toBe('Choose a folder that exists.')
     expect(screen.getByRole('form', { name: 'New scheduled run' })).toBeTruthy()
+  })
+})
+
+describe('ScheduleDaemonToggle', () => {
+  const status = (over: Partial<ScheduleDaemonStatus> = {}): ScheduleDaemonStatus => ({
+    supported: true,
+    installed: false,
+    running: false,
+    ...over
+  })
+  const label = /Run scheduled runs when Houston is closed/
+
+  it('is hidden where no login agent is supported', async () => {
+    const api = installApi([])
+    render(<ScheduleDaemonToggle />)
+    await waitFor(() => expect(api.getScheduleDaemon).toHaveBeenCalled())
+    expect(screen.queryByLabelText(label)).toBeNull()
+  })
+
+  it('stays hidden, without breaking the page, when the status cannot be read', async () => {
+    const api = installApi([])
+    api.getScheduleDaemon.mockRejectedValue(new Error('no handler'))
+    render(<ScheduleDaemonToggle />)
+    await waitFor(() => expect(api.getScheduleDaemon).toHaveBeenCalled())
+    expect(screen.queryByLabelText(label)).toBeNull()
+  })
+
+  it('turns on and says it is running, then off', async () => {
+    const api = installApi([])
+    api.getScheduleDaemon.mockResolvedValue(status())
+    render(<ScheduleDaemonToggle />)
+    const box = (await screen.findByLabelText(label)) as HTMLInputElement
+    expect(box.checked).toBe(false)
+    fireEvent.click(box)
+    await waitFor(() => expect(box.checked).toBe(true))
+    expect(api.setScheduleDaemon).toHaveBeenCalledWith(true)
+    expect(screen.getByRole('status').textContent).toBe('Running in the background.')
+    fireEvent.click(box)
+    await waitFor(() => expect(box.checked).toBe(false))
+    expect(api.setScheduleDaemon).toHaveBeenLastCalledWith(false)
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('shows an installed agent that is not running yet, and a failed change', async () => {
+    const api = installApi([])
+    api.getScheduleDaemon.mockResolvedValue(status({ installed: true }))
+    api.setScheduleDaemon.mockResolvedValue(status({ installed: true, error: 'systemctl --user disable failed' }))
+    render(<ScheduleDaemonToggle />)
+    expect((await screen.findByRole('status')).textContent).toBe('Set up; it starts the next time you log in.')
+    fireEvent.click(screen.getByLabelText(label))
+    expect((await screen.findByRole('alert')).textContent).toBe("Couldn't turn it off: systemctl --user disable failed")
+  })
+
+  it('sits in the Scheduled runs section, whose text no longer says runs need Houston open', async () => {
+    const api = installApi([])
+    api.getScheduleDaemon.mockResolvedValue(status())
+    render(<ScheduledRunsSection ctx={ctx()} />)
+    expect(await screen.findByLabelText(label)).toBeTruthy()
+    expect(screen.queryByText(/They run only while Houston is open/)).toBeNull()
   })
 })

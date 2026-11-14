@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { EARLIER_MODELS_LABEL, formatTokens, formatUsd, unattributedUsage, type SessionUsage } from '@shared/usage'
+import { EARLIER_MODELS_LABEL, formatCost, formatTokens, formatUsd, unattributedUsage, type SessionUsage } from '@shared/usage'
 import type { SubagentSpend } from '@shared/subagents'
 import { ContextBreakdown } from './ContextBreakdown'
 
@@ -21,6 +21,7 @@ export function CostBreakdown({
   usage,
   contextWindow,
   priceTierAbove = null,
+  compactionNote = null,
   meterPct,
   meterClass,
   agents = [],
@@ -32,6 +33,8 @@ export function CostBreakdown({
   contextWindow: number | null
   /** Prompt size past which the model bills at its long-context rate, when it has one. */
   priceTierAbove?: number | null
+  /** Where automatic compaction kicks in, for the context breakdown. */
+  compactionNote?: string | null
   /** Context-fill percent for the inline meter, or null when the window is unknown. */
   meterPct: number | null
   /** Extra class for the meter fill at warn/danger fill levels. */
@@ -41,8 +44,14 @@ export function CostBreakdown({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  // Open only on a bump made while the chip is on screen. The counter never resets, so
+  // a chip that mounts later (a new chat's first reply) must not read an old request
+  // as a new one.
+  const seenSignal = useRef(openSignal)
   useEffect(() => {
-    if (openSignal > 0) setOpen(true)
+    if (openSignal === seenSignal.current) return
+    seenSignal.current = openSignal
+    setOpen(true)
   }, [openSignal])
 
   // One row per model, plus one for whatever the per-model tallies don't cover (usage
@@ -89,10 +98,13 @@ export function CostBreakdown({
 
   const tooltip =
     (contextWindow
-      ? `Context: ${usage.context.toLocaleString()} / ${contextWindow.toLocaleString()} tokens (${meterPct}%)`
+      ? `Context: ${usage.context.toLocaleString()} / ${contextWindow.toLocaleString()} tokens${
+          meterPct !== null ? ` (${meterPct}%)` : ''
+        }`
       : `Context: ${usage.context.toLocaleString()} tokens`) +
     `\nOutput this conversation: ${usage.output.toLocaleString()} tokens` +
     (usage.cost > 0 ? `\nEstimated cost: ${formatUsd(usage.cost)} (approximate)` : '') +
+    ((usage.perModel ?? []).some((m) => m.costUnknown) ? '\nCost unknown for a model with no known price' : '') +
     '\nClick for what fills the context and the per-model breakdown'
 
   return (
@@ -118,6 +130,7 @@ export function CostBreakdown({
             measured={usage.context}
             contextWindow={contextWindow}
             priceTierAbove={priceTierAbove}
+            compactionNote={compactionNote}
           />
           <div className="usage-panel__head">
             <span>Model</span>
@@ -141,7 +154,9 @@ export function CostBreakdown({
               <span>{m === earlier ? '–' : formatTokens(m.inputTokens)}</span>
               <span>{formatTokens(m.outputTokens)}</span>
               <span>{m.cacheReadTokens > 0 ? formatTokens(m.cacheReadTokens) : '–'}</span>
-              <span>{m.cost > 0 ? formatUsd(m.cost) : '–'}</span>
+              <span title={m.costUnknown ? 'No known price for this model' : undefined}>
+                {m.costUnknown ? formatCost(m.cost, true) : m.cost > 0 ? formatUsd(m.cost) : '–'}
+              </span>
             </div>
           ))}
           <div className="usage-panel__row usage-panel__row--total">

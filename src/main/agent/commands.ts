@@ -3,6 +3,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { isDisabledFlag, parseFrontmatter } from '@shared/frontmatter'
 import { mergeCommands, type Command } from '@shared/commands'
+import { isReasoningEffort } from '@shared/agent'
+import { loadSkills, skillCommands } from './skills'
 
 /**
  * Load custom slash commands.
@@ -26,6 +28,47 @@ export const COMMANDS_DIR = '.houston/commands'
 export const USER_COMMANDS_DIR = join('.houston', 'commands')
 const MAX_COMMANDS = 100
 const MAX_TEMPLATE_CHARS = 16_000
+/** Longest `argument-hint`, `model`, `agent` or `allowed-tools` value kept from frontmatter. */
+const MAX_HINT_CHARS = 80
+const MAX_FIELD_CHARS = 200
+const MAX_ALLOWED_TOOLS_CHARS = 2000
+
+/** A short single-line frontmatter value, or undefined when it is empty. */
+function field(value: string | undefined, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined
+  const v = value.replace(/\s+/g, ' ').trim()
+  return v ? v.slice(0, max) : undefined
+}
+
+/**
+ * The frontmatter keys that change how a command runs, beyond its description:
+ *
+ *  - `argument-hint`: what may follow the name, shown beside it in the menus.
+ *  - `model`: the model this one turn runs on (`provider/model`, a model id, or a provider).
+ *  - `effort`: the thinking effort for this one turn (off, low, medium, high, xhigh).
+ *  - `agent`: dispatch the expanded prompt to that `.houston/agents` subagent.
+ *  - `allowed-tools`: tools pre-approved for this one turn, in permission-rule
+ *    syntax. Honored only where it is safe to (see commandRun.ts).
+ *
+ * An unknown effort or a malformed agent name is dropped here, so the clients only
+ * ever see values they can act on.
+ */
+export function commandOptions(data: Record<string, string>): Partial<Command> {
+  const out: Partial<Command> = {}
+  const hint = field(data['argument-hint'], MAX_HINT_CHARS)
+  if (hint) out.args = hint
+  const model = field(data.model, MAX_FIELD_CHARS)
+  if (model) out.model = model
+  const effort = field(data.effort, MAX_FIELD_CHARS)?.toLowerCase()
+  if (isReasoningEffort(effort)) out.effort = effort
+  const agent = field(data.agent, MAX_FIELD_CHARS)
+  if (agent && /^[\w-]+$/.test(agent)) out.agent = agent
+  let tools = field(data['allowed-tools'], MAX_ALLOWED_TOOLS_CHARS)
+  // A YAML-style list on one line (`[read_file, glob]`) reads the same as a plain one.
+  if (tools?.startsWith('[') && tools.endsWith(']')) tools = tools.slice(1, -1).trim() || undefined
+  if (tools) out.allowedTools = tools
+  return out
+}
 
 function firstLine(s: string): string {
   const line = (s.split('\n', 1)[0] ?? '').replace(/^#+\s*/, '').trim()
@@ -33,7 +76,7 @@ function firstLine(s: string): string {
 }
 
 /** Read one directory of `*.md` command files. Missing directory ⇒ no commands. */
-async function loadFrom(dir: string): Promise<Command[]> {
+async function loadFrom(dir: string, source: 'project' | 'user'): Promise<Command[]> {
   let entries
   try {
     entries = await fs.readdir(dir, { withFileTypes: true })
@@ -71,7 +114,9 @@ async function loadFrom(dir: string): Promise<Command[]> {
     commands.push({
       name,
       description: (described || firstLine(template) || name).slice(0, 80),
-      template: template.slice(0, MAX_TEMPLATE_CHARS)
+      template: template.slice(0, MAX_TEMPLATE_CHARS),
+      source,
+      ...commandOptions(data)
     })
   }
   return commands
@@ -86,8 +131,24 @@ async function loadFrom(dir: string): Promise<Command[]> {
  */
 export async function loadCommands(workspace: string, home: string = homedir()): Promise<Command[]> {
   const [project, user] = await Promise.all([
-    loadFrom(join(workspace, COMMANDS_DIR)),
-    loadFrom(join(home, USER_COMMANDS_DIR))
+    loadProjectCommands(workspace),
+    loadFrom(join(home, USER_COMMANDS_DIR), 'user')
   ])
   return mergeCommands(project, user).sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** Just the workspace's own `.houston/commands` (what its trust fingerprint covers). */
+export function loadProjectCommands(workspace: string): Promise<Command[]> {
+  return loadFrom(join(workspace, COMMANDS_DIR), 'project')
+}
+
+/**
+ * Everything a client offers after a slash beyond its built-ins: the custom commands
+ * from {@link loadCommands}, then one `/<skill-name>` per loaded skill. A custom
+ * command wins a name clash with a skill, as the built-ins win over both where the
+ * clients merge them in.
+ */
+export async function loadSlashCommands(workspace: string, home: string = homedir()): Promise<Command[]> {
+  const [commands, skills] = await Promise.all([loadCommands(workspace, home), loadSkills(workspace, home)])
+  return mergeCommands(commands, skillCommands(skills))
 }

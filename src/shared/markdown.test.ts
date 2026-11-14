@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseInline, parseMarkdown, safeHref, type Block, type Inline } from './markdown'
+import { MAX_BLOCK_NESTING, parseInline, parseMarkdown, safeHref, type Block, type Inline } from './markdown'
 
 /** Collapse an inline tree to a compact string for readable assertions. */
 function inlineStr(nodes: Inline[]): string {
@@ -305,5 +305,66 @@ describe('parser is bounded on adversarial input (no O(n^2) freeze)', () => {
     expect(kinds).toContain('link')
     expect(kinds).toContain('strong')
     expect(kinds).toContain('code')
+  })
+})
+
+describe('block nesting is capped (no stack overflow, linear work)', () => {
+  // Each blockquote / list level recursed with no limit, so a deep enough reply threw
+  // RangeError (crashing the row in the app and the turn in the TUI), and a few
+  // thousand nested quote lines took seconds, redone on every streamed delta.
+  const time = (src: string): { blocks: Block[]; ms: number } => {
+    const t0 = performance.now()
+    const blocks = parseMarkdown(src)
+    return { blocks, ms: performance.now() - t0 }
+  }
+
+  /** How deep the tree goes through blockquotes and list items. */
+  const depthOf = (blocks: Block[]): number => {
+    let max = 0
+    for (const b of blocks) {
+      if (b.type === 'blockquote') max = Math.max(max, 1 + depthOf(b.children))
+      if (b.type === 'list') for (const it of b.items) max = Math.max(max, 1 + depthOf(it.blocks))
+    }
+    return max
+  }
+
+  it.each([
+    ['one line of nested bullets', '- '.repeat(1954) + 'x'],
+    ['ten thousand nested bullets', '- '.repeat(10_000) + 'x'],
+    ['nested ordered items', '1. '.repeat(5000) + 'x'],
+    ['one line of nested quote markers', '>'.repeat(6122) + ' x'],
+    ['alternating quotes and bullets', '> - '.repeat(5000) + 'x']
+  ])('%s parses without throwing, quickly, and no deeper than the cap', (_label, src) => {
+    const { blocks, ms } = time(src)
+    expect(ms).toBeLessThan(100)
+    expect(depthOf(blocks)).toBe(MAX_BLOCK_NESTING)
+  })
+
+  it('keeps the text past the cap as a paragraph', () => {
+    const { blocks } = time('>'.repeat(MAX_BLOCK_NESTING + 3) + ' deep')
+    let cur: Block = blocks[0]
+    for (let d = 0; d < MAX_BLOCK_NESTING; d++) {
+      expect(cur.type).toBe('blockquote')
+      cur = (cur as Extract<Block, { type: 'blockquote' }>).children[0]
+    }
+    expect(cur).toEqual({ type: 'paragraph', children: [{ type: 'text', value: '>>> deep' }] })
+  })
+
+  it('stays linear on thousands of increasingly nested quote lines (2 MB)', () => {
+    const src = Array.from({ length: 2000 }, (_, i) => '>'.repeat(i + 1) + ' x').join('\n')
+    const { ms } = time(src)
+    // ~150ms here; the uncapped parser took several seconds.
+    expect(ms).toBeLessThan(2000)
+  })
+
+  it('stays linear on deeply indented list lines', () => {
+    const src = Array.from({ length: 1000 }, (_, i) => ' '.repeat(i * 2) + '- x').join('\n')
+    expect(time(src).ms).toBeLessThan(2000)
+  })
+
+  it('still nests to the cap normally', () => {
+    const { blocks } = time('> > > quoted\n\n- a\n  - b\n    - c')
+    expect(depthOf([blocks[0]])).toBe(3)
+    expect(depthOf([blocks[1]])).toBe(3)
   })
 })

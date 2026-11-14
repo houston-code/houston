@@ -115,7 +115,7 @@ describe('runHooks', () => {
   it('no matching hooks → not blocked, not approved, no spawn', async () => {
     const seen: SandboxRunOptions[] = []
     const r = await runHooks([], 'PreToolUse', { tool: 'read_file', input: {} }, '/ws', sig, runnerFrom({}, seen))
-    expect(r).toEqual({ blocked: false, approved: false, message: '' })
+    expect(r).toEqual({ blocked: false, approved: false, approvedBy: [], message: '' })
     expect(seen).toHaveLength(0)
   })
 
@@ -219,6 +219,23 @@ describe('runHooks', () => {
       )
       expect(r.blocked).toBe(true)
       expect(r.approved).toBe(false)
+      expect(r.approvedBy).toEqual([])
+    })
+
+    it('names, by identity, exactly the hooks that approved', async () => {
+      const user = { event: 'PreToolUse' as const, matcher: '*', command: 'ok' }
+      const silent = { event: 'PreToolUse' as const, matcher: '*', command: 'quiet' }
+      const r = await runHooks(
+        [user, silent],
+        'PreToolUse',
+        { tool: 'run_shell', input: {} },
+        '/ws',
+        sig,
+        runnerFrom({ ok: { stdout: JSON.stringify({ decision: 'approve' }) }, quiet: { stdout: '' } })
+      )
+      expect(r.approved).toBe(true)
+      expect(r.approvedBy).toHaveLength(1)
+      expect(r.approvedBy[0]).toBe(user)
     })
 
     it('collects additionalContext across hooks and returns updatedInput (last wins)', async () => {
@@ -618,5 +635,38 @@ describe('observational events (Notification, SessionEnd)', () => {
 
   it('covers every blocking event type', () => {
     expect([...BLOCKING_EVENT_TYPES].sort()).toEqual(['elicitation', 'plan_ready', 'tool_approval', 'tool_question'])
+  })
+})
+
+describe('runHooks: the transcript a hook reads', () => {
+  it('brings the transcript file up to date before a matching hook runs, and only then', async () => {
+    const order: string[] = []
+    const session = {
+      id: 'c',
+      transcriptPath: '/data/conversations/c.json',
+      flushTranscript: () => order.push('flush')
+    }
+    const run = async (): Promise<SandboxRunResult> => {
+      order.push('hook')
+      return { stdout: '', stderr: '', exitCode: 0, timedOut: false, sandboxed: true }
+    }
+    await runHooks([{ event: 'PreToolUse', matcher: 'other', command: 'h' }], 'PreToolUse', { tool: 't', input: {}, session }, '/ws', sig, run)
+    expect(order).toEqual([])
+    await runHooks([{ event: 'PreToolUse', matcher: '*', command: 'h' }], 'PreToolUse', { tool: 't', input: {}, session }, '/ws', sig, run)
+    expect(order).toEqual(['flush', 'hook'])
+  })
+
+  it('still runs the hook when bringing the transcript up to date fails', async () => {
+    const seen: SandboxRunOptions[] = []
+    const session = {
+      id: 'c',
+      transcriptPath: '/data/conversations/c.json',
+      flushTranscript: () => {
+        throw new Error('disk full')
+      }
+    }
+    const r = await runHooks([{ event: 'Stop', matcher: '', command: 'h' }], 'Stop', { tool: 'Stop', input: {}, session }, '/ws', sig, runnerFrom({}, seen))
+    expect(seen).toHaveLength(1)
+    expect(r.blocked).toBe(false)
   })
 })

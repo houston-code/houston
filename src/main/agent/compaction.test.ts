@@ -17,6 +17,8 @@ import {
   buildAnchorMessages,
   buildSummaryMessages,
   buildSummaryRequestMessages,
+  normalizeCompactFocus,
+  COMPACT_FOCUS_MAX_CHARS,
   compactionAnchor,
   compactionCandidates,
   elideStaleToolArguments,
@@ -118,9 +120,15 @@ describe('resolveCompactionThreshold', () => {
     expect(resolveCompactionThreshold(undefined, 0)).toBe(DEFAULT_COMPACTION_THRESHOLD)
   })
 
-  it('lets an explicit setting override the window-relative sizing', () => {
+  it('lets an explicit setting lower the window-relative sizing', () => {
     expect(resolveCompactionThreshold(50_000, 1_000_000)).toBe(50_000)
     expect(resolveCompactionThreshold(50_000, null)).toBe(50_000)
+  })
+
+  it('never lets an explicit setting raise the threshold past the window margin', () => {
+    expect(resolveCompactionThreshold(900_000, 1_000_000)).toBe(
+      Math.floor(1_000_000 * COMPACTION_WINDOW_FRACTION)
+    )
   })
 
   it('keeps 0 meaning "compaction disabled", window or not', () => {
@@ -161,8 +169,10 @@ describe('resolveCompactionThreshold with a long-context price tier', () => {
     expect(resolveCompactionThreshold(undefined, 1_000_000, Number.NaN)).toBe(800_000)
   })
 
-  it('never overrides an explicit setting, including 0 (disabled)', () => {
-    expect(resolveCompactionThreshold(500_000, 1_000_000, 100_000)).toBe(500_000)
+  it('treats an explicit setting as one more minimum, and 0 still disables', () => {
+    expect(resolveCompactionThreshold(500_000, 1_000_000, 100_000)).toBe(90_000)
+    expect(resolveCompactionThreshold(50_000, 1_000_000, 100_000)).toBe(50_000)
+    expect(resolveCompactionThreshold(500_000, null, 100_000)).toBe(90_000)
     expect(resolveCompactionThreshold(0, 1_000_000, 100_000)).toBe(0)
   })
 
@@ -187,6 +197,12 @@ describe('resolveEvictionTrigger', () => {
     expect(resolveEvictionTrigger(700_000, 700_000)).toBe(700_000)
     expect(resolveEvictionTrigger(0, 0)).toBe(0)
     expect(resolveEvictionTrigger(undefined, 0)).toBe(0)
+  })
+
+  it('follows a share of the window when the window is known, and ignores it otherwise', () => {
+    expect(resolveEvictionTrigger({ percent: 60 }, 600_000, 1_000_000)).toBe(600_000)
+    expect(resolveEvictionTrigger({ percent: 60 }, 800_000, null)).toBe(EARLY_EVICTION_TOKENS)
+    expect(resolveEvictionTrigger({}, 800_000, 1_000_000)).toBe(EARLY_EVICTION_TOKENS)
   })
 })
 
@@ -609,6 +625,12 @@ describe('findCompactionCut', () => {
 })
 
 describe('buildSummaryMessages', () => {
+  it('marks the summary with the head taint it is given, and only then', () => {
+    expect(buildSummaryMessages('S', 'web_fetch')[0]).toMatchObject({ role: 'user', taintSource: 'web_fetch' })
+    expect(buildSummaryMessages('S', null)[0]).not.toHaveProperty('taintSource')
+    expect(buildSummaryMessages('S')[0]).not.toHaveProperty('taintSource')
+  })
+
   it('returns a user/assistant pair so role alternation stays valid', () => {
     const pair = buildSummaryMessages('did stuff')
     expect(pair).toHaveLength(2)
@@ -628,6 +650,26 @@ describe('buildSummaryRequestMessages', () => {
     expect(req[0].content).toContain('older summary')
     expect(req[req.length - 1].role).toBe('user')
     expect(req.length).toBe(prior.length + head.length + 1)
+  })
+
+  it('adds a /compact focus to the closing instruction, and leaves it as it was without one', () => {
+    const head = conversation(2)
+    const plain = buildSummaryRequestMessages([], head).at(-1)!.content
+    expect(plain).toBe('Produce the summary now, following your instructions. Output only the summary text.')
+    expect(buildSummaryRequestMessages([], head, '   ').at(-1)!.content).toBe(plain)
+    const focused = buildSummaryRequestMessages([], head, 'the failing migration').at(-1)!.content
+    expect(focused.startsWith(plain)).toBe(true)
+    expect(focused).toContain('<focus>\nthe failing migration\n</focus>')
+    expect(focused).toContain('still keep the goal, the current state and the next steps')
+  })
+
+  it('normalizeCompactFocus trims, caps, and drops what is not text', () => {
+    expect(normalizeCompactFocus('  x  ')).toBe('x')
+    expect(normalizeCompactFocus('')).toBeUndefined()
+    expect(normalizeCompactFocus('   ')).toBeUndefined()
+    expect(normalizeCompactFocus(42)).toBeUndefined()
+    expect(normalizeCompactFocus(undefined)).toBeUndefined()
+    expect([...normalizeCompactFocus('é'.repeat(COMPACT_FOCUS_MAX_CHARS + 50))!]).toHaveLength(COMPACT_FOCUS_MAX_CHARS)
   })
 
   it('works with no prior summary (first compaction)', () => {

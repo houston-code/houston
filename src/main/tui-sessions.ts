@@ -38,6 +38,49 @@ function clip(text: string, max: number, width: number): string[] {
   return out
 }
 
+/**
+ * The resume picker's preview of the highlighted chat: its title, when it was last
+ * updated (and where, when given), how many messages it has, the first thing you asked
+ * and the start of the last reply (`lines` lines each). Every line is sanitized and cut
+ * to `width`; `messages` is null when the chat couldn't be read. Pure.
+ */
+export function sessionPreviewLines(
+  entry: { title: string; updatedAt: number },
+  messages: ChatMessage[] | null,
+  opts: { width: number; paint: Painter; when: string; folder?: string; lines?: number }
+): string[] {
+  const { paint } = opts
+  const per = opts.lines ?? 3
+  // Indent 4, and a column to spare so a line at the limit never wraps.
+  const width = Math.max(10, opts.width - 5)
+  const cut = (l: string): string => ([...l].length > width ? `${[...l].slice(0, width - 1).join('')}…` : l)
+  const rule = paint(`  ${'─'.repeat(Math.max(4, Math.min(40, opts.width - 4)))}`, 'dim')
+  const out = [rule, `  ${paint(cut(stripControlChars(entry.title) || 'New chat'), 'bold')}`]
+  const facts = [`updated ${opts.when}`]
+  if (messages) facts.push(`${messages.length} message${messages.length === 1 ? '' : 's'}`)
+  if (opts.folder) facts.push(stripControlChars(opts.folder))
+  out.push(`  ${paint(cut(facts.join(' · ')), 'dim')}`)
+  if (!messages) {
+    out.push(`  ${paint("couldn't read this chat", 'yellow')}`)
+    return out
+  }
+  const first = messages.find(isPersonTurn)
+  const reply = messages.filter((m) => m.role === 'assistant' && m.content.trim()).at(-1)
+  if (!first && !reply) {
+    out.push(`  ${paint('(no messages yet)', 'dim')}`)
+    return out
+  }
+  if (first) {
+    out.push(`  ${paint('you ›', 'green')}`)
+    for (const l of clip(personText(first), per, width)) out.push(`    ${l}`)
+  }
+  if (reply) {
+    out.push(`  ${paint('houston ›', 'cyan')}`)
+    for (const l of clip(reply.content, per, width)) out.push(`    ${paint(l, 'dim')}`)
+  }
+  return out
+}
+
 /** How many of the last exchanges a resumed chat replays. */
 export const RECAP_EXCHANGES = 3
 
@@ -210,13 +253,16 @@ export function renderPermissionRules(rules: PermissionRule[], paint: Painter, n
   }
   const tone = { allow: 'green', deny: 'red', ask: 'yellow' } as const
   const lines = [paint('Saved permission rules (checked before the approval mode):', 'bold')]
-  const width = Math.max(...rules.map((r) => (r.tool || '*').length))
+  // A rule's tool and pattern can come from a project's settings file, so neither
+  // reaches the terminal with its control characters.
+  const toolOf = (r: PermissionRule): string => stripControlChars(r.tool || '*')
+  const width = Math.max(...rules.map((r) => toolOf(r).length))
   rules.forEach((r, i) => {
     const subject = r.match ? stripControlChars(r.match) : paint('(nothing)', 'dim')
     const source = r.source === 'prompt' ? 'from a prompt' : r.source === 'settings' ? 'from settings' : ''
     const how = [r.exact ? 'exact' : '', source, r.addedAt ? ago(now - r.addedAt) : ''].filter(Boolean).join(', ')
     lines.push(
-      `  ${paint(String(i + 1).padStart(2), 'cyan')}. ${paint(r.action.padEnd(5), tone[r.action])} ${(r.tool || '*').padEnd(width)}  ${subject}${how ? paint(`  (${how})`, 'dim') : ''}`
+      `  ${paint(String(i + 1).padStart(2), 'cyan')}. ${paint(r.action.padEnd(5), tone[r.action])} ${toolOf(r).padEnd(width)}  ${subject}${how ? paint(`  (${how})`, 'dim') : ''}`
     )
   })
   lines.push(paint('/permissions remove <n> deletes one. Project rules in .houston/settings.json are edited in that file.', 'dim'))

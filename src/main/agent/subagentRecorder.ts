@@ -28,6 +28,8 @@ export interface SubagentStart {
   /** The parent's step that dispatched this agent (nested agents). */
   parentStep?: number
   resumed?: boolean
+  /** The background agent's id, when it was dispatched with `background: true`. */
+  backgroundId?: string
 }
 
 /** The handle the loop drives one agent's record through. */
@@ -90,6 +92,7 @@ export class SubagentRecorder {
       ...(s.systemPrompt ? { systemPrompt: clipText(this.redact(s.systemPrompt), SUBAGENT_CAPS.systemPrompt).text } : {}),
       tools: s.tools.slice(0, 64),
       ...(s.resumed ? { resumed: true } : {}),
+      ...(s.backgroundId ? { backgroundId: s.backgroundId } : {}),
       status: 'running',
       startedAt: this.now(),
       steps: []
@@ -201,6 +204,16 @@ export class SubagentRecorder {
       record.stepsOmitted = capped.stepsOmitted
     }
     this.emit({ type: 'subagent_step', parentCallId, recordId: record.id, step })
+  }
+
+  /**
+   * Copies of the records under `parentCallId` as they stand, left in the recorder: a
+   * background agent's result is saved while it still works, with this snapshot, and
+   * {@link take} replaces it once the agent is done.
+   */
+  peek(parentCallId: string): SubagentRecord[] | undefined {
+    const list = this.records.get(parentCallId)
+    return list?.length ? list.map((r) => ({ ...r, steps: r.steps.slice() })) : undefined
   }
 
   /** The records under `parentCallId`, removed from the recorder (they go on the tool result). */

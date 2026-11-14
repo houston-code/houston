@@ -4,6 +4,9 @@ import { join } from 'node:path'
 import { HOOK_EVENTS, type Hook, type McpServerConfig, type PermissionRule } from '@shared/types'
 import { sanitizeServerId } from '@shared/mcp'
 import { parseTightenOnlyRules } from './permissions'
+import { loadProjectCommands } from './commands'
+import { readPluginFiles, type ProjectPluginFile } from './plugins'
+import { contextCommands } from '@shared/commandContext'
 
 /**
  * Per-project config from `.houston/settings.json` in the workspace.
@@ -17,6 +20,12 @@ import { parseTightenOnlyRules } from './permissions'
  * fingerprint of the elevating subset, so a later change to it (e.g. a `git pull`
  * that adds a hook) drops back to untrusted and re-prompts instead of silently
  * running new commands.
+ *
+ * The project's plugin files (`.houston/plugins/*.js`, see plugins.ts) belong to the
+ * same elevating subset: they are JavaScript the main process evaluates, outside the
+ * sandbox. Each one's name and content hash is part of the fingerprint, so trusting
+ * a folder consents to exactly those files, and a plugin added or edited later (by a
+ * pull, or by the agent itself) un-trusts the folder until the user looks again.
  *
  * The same tighten-only shape is reused, one tier up, by the admin-locked managed
  * policy (see managedPolicy.ts), which outranks both this file and the user.
@@ -41,6 +50,27 @@ export interface ProjectElevatedConfig {
   allowRules: PermissionRule[]
   hooks: Hook[]
   mcpServers: McpServerConfig[]
+  /**
+   * The project's `.houston/commands` that ask for more than a prompt: tools
+   * pre-approved for their turn (`allowed-tools`), or shell commands their template
+   * runs (`` !`command` ``). Part of the fingerprint, so a pull that adds or widens
+   * one drops a trusted folder back to asking.
+   */
+  commands?: ProjectCommandGrant[]
+  /**
+   * The `.houston/plugins/*.js` files that would load, with their sources. They run
+   * only when the `projectPlugins` setting is on AND the folder is trusted for this
+   * exact set (see loadTrustedPlugins).
+   */
+  plugins: ProjectPluginFile[]
+}
+
+/** One project command's elevating parts, as the trust fingerprint sees them. */
+export interface ProjectCommandGrant {
+  name: string
+  allowedTools?: string
+  /** The shell commands its template runs, in order. */
+  shell?: string[]
 }
 
 /**
@@ -186,14 +216,59 @@ export function mergeRunMcpServers(
  * Fingerprint of the parsed elevating subset, binding a trust decision to what
  * was actually shown/consented to. Computed over the NORMALIZED (parsed) config,
  * so cosmetic file changes (whitespace, key order of ignored fields) don't churn
- * it, while any change to an allow rule, hook, or MCP server does. Empty string
- * when the project elevates nothing (then there is nothing to consent to).
+ * it, while any change to an allow rule, hook, MCP server, command
+ * `allowed-tools`, or plugin file does.
+ * Empty string when the project elevates nothing (then there is nothing to
+ * consent to).
+ *
+ * Plugins enter as `name` + content `sha256` (never the source text itself), and
+ * only when there are any, so a folder without plugins keeps the fingerprint an
+ * earlier version recorded and its trust survives the upgrade. A folder that does
+ * have plugins gets a new fingerprint, so a trust recorded before plugins were
+ * covered reads as changed and is asked again with the plugins listed.
  */
 export function elevatedConfigHash(elevated: ProjectElevatedConfig): string {
-  if (!elevated.allowRules.length && !elevated.hooks.length && !elevated.mcpServers.length) return ''
-  return createHash('sha256')
-    .update(JSON.stringify([elevated.allowRules, elevated.hooks, elevated.mcpServers]))
-    .digest('hex')
+  const commands = elevated.commands ?? []
+  const plugins = elevated.plugins ?? []
+  if (
+    !elevated.allowRules.length &&
+    !elevated.hooks.length &&
+    !elevated.mcpServers.length &&
+    !commands.length &&
+    !plugins.length
+  ) {
+    return ''
+  }
+  // Commands and plugins each join the hashed tuple only when there are any, so a
+  // folder trusted before they were fingerprinted keeps its trust until one
+  // appears. Commands keep the bare position they were first hashed at (existing
+  // trust in a commands-only folder survives); plugins go in tagged, so the tuple
+  // stays unambiguous whichever of the two is present.
+  const parts: unknown[] = [elevated.allowRules, elevated.hooks, elevated.mcpServers]
+  if (commands.length) parts.push(commands)
+  if (plugins.length) parts.push({ plugins: plugins.map((p) => ({ name: p.name, sha256: p.sha256 })) })
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
+}
+
+/** The project's commands that carry elevating frontmatter, sorted by name. */
+export async function projectCommandGrants(workspace: string): Promise<ProjectCommandGrant[]> {
+  let commands
+  try {
+    commands = await loadProjectCommands(workspace)
+  } catch {
+    return []
+  }
+  const grants: ProjectCommandGrant[] = []
+  for (const c of commands) {
+    const shell = c.template ? contextCommands(c.template) : []
+    if (!c.allowedTools && !shell.length) continue
+    grants.push({
+      name: c.name,
+      ...(c.allowedTools ? { allowedTools: c.allowedTools } : {}),
+      ...(shell.length ? { shell } : {})
+    })
+  }
+  return grants.sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export interface ProjectConfig {
@@ -205,7 +280,10 @@ export interface ProjectConfig {
   elevatedHash: string
 }
 
-/** Read + validate the workspace's `.houston/settings.json`. Never throws. */
+/**
+ * Read + validate the workspace's `.houston/settings.json` and its plugin files.
+ * Never throws.
+ */
 export async function loadProjectConfig(workspace: string): Promise<ProjectConfig> {
   let raw: unknown
   try {
@@ -213,10 +291,13 @@ export async function loadProjectConfig(workspace: string): Promise<ProjectConfi
   } catch {
     raw = undefined // missing or malformed — no project config
   }
+  const commands = await projectCommandGrants(workspace)
   const elevated: ProjectElevatedConfig = {
     allowRules: parseProjectAllowRules(raw),
     hooks: parseProjectHooks(raw),
-    mcpServers: parseProjectMcpServers(raw)
+    mcpServers: parseProjectMcpServers(raw),
+    ...(commands.length ? { commands } : {}),
+    plugins: (await readPluginFiles(workspace)).files
   }
   return {
     permissionRules: parseProjectRules(raw),

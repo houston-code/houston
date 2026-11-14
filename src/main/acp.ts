@@ -24,6 +24,7 @@ import {
   type PlanDecision,
   type PlanPayload,
   type ReasoningEffort,
+  type RunLimitReason,
   type ToolApprovalDecision,
   type ConversationSettingsPatch,
   REASONING_EFFORTS,
@@ -32,8 +33,10 @@ import {
 import { throttleNotice } from '@shared/rateLimit'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
-import { agentTurn, commandTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
+import { agentTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
 import { builtinCommands, mergeCommands, parseSlashCommand, resolveCommand, type Command } from '@shared/commands'
+import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
+import type { ShellCapture } from './userShell'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { modelDisplayName } from '@shared/models'
 import { limitNoticeText, runEndNoticeText, runEndRecords } from '@shared/runEnd'
@@ -44,6 +47,7 @@ import { formatReadinessLines } from '@shared/planReadiness'
 import { runtimeMissingLine } from '@shared/runtimes'
 import { assertNever } from '@shared/assert'
 import { SubagentTermLines } from '@shared/subagents'
+import { approvalSubject, visibleText, type ApprovalSubjectPart } from '@shared/visibleText'
 import { resolveHeadlessModel } from './headless'
 
 /**
@@ -76,8 +80,15 @@ export const ACP_ERROR = {
   invalidParams: -32602,
   internal: -32603,
   authRequired: -32000,
-  notFound: -32002
+  notFound: -32002,
+  /** A request the client withdrew with `$/cancel_request`. */
+  cancelled: -32800
 } as const
+
+/** Most extra directories one session takes (`additionalDirectories`). */
+export const ACP_MAX_ADDITIONAL_DIRECTORIES = 32
+/** Longest editor-supplied system prompt accepted, in characters. */
+export const ACP_MAX_SYSTEM_PROMPT_CHARS = 64 * 1024
 
 /** The modes offered on every session: Houston's approval policies, one to one. */
 export const ACP_MODES: { id: ApprovalPolicy; name: string; description: string }[] = [
@@ -86,6 +97,52 @@ export const ACP_MODES: { id: ApprovalPolicy; name: string; description: string 
   { id: 'auto-edit', name: 'Auto-edit', description: 'Apply edits automatically, ask before commands' },
   { id: 'full-auto', name: 'Full auto', description: 'Run edits and sandboxed commands without asking' }
 ]
+
+/** Launch flags for `--acp`: defaults a client that never sets them still gets. */
+export interface AcpLaunchOptions {
+  /** `--approval <policy>` / `--full-auto`: the mode new sessions start in. */
+  defaultPolicy?: ApprovalPolicy
+  /** `--effort <level>`: the reasoning effort new sessions start with. */
+  defaultEffort?: ReasoningEffort
+  /** `--max-turns <n>`: a hard step cap on every prompt turn. */
+  maxIterations?: number
+}
+
+/**
+ * Read the `--acp` launch flags from argv. A client that launches Houston from a
+ * fixed command line and never switches the mode or effort (a benchmark runner,
+ * a CI job) configures the session this way. Other flags are ignored, as before.
+ * Returns an error message for a bad value.
+ */
+export function parseAcpArgs(argv: string[]): AcpLaunchOptions | { error: string } {
+  const out: AcpLaunchOptions = {}
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i]
+    const eq = arg.indexOf('=')
+    const name = eq > 0 ? arg.slice(0, eq) : arg
+    if (name === '--full-auto') {
+      out.defaultPolicy = 'full-auto'
+      continue
+    }
+    if (name !== '--approval' && name !== '--effort' && name !== '--max-turns') continue
+    const value = eq > 0 ? arg.slice(eq + 1) : argv[++i]
+    const shown = value === undefined ? 'nothing' : JSON.stringify(value)
+    if (name === '--approval') {
+      if (!isApprovalPolicy(value)) return { error: `--approval must be one of ${APPROVAL_POLICIES.join(', ')} (got ${shown})` }
+      out.defaultPolicy = value
+    } else if (name === '--effort') {
+      if (!isReasoningEffort(value)) return { error: `--effort must be one of ${REASONING_EFFORTS.join(', ')} (got ${shown})` }
+      out.defaultEffort = value
+    } else {
+      const n = Number(value)
+      if (!value || !Number.isSafeInteger(n) || n < 1) {
+        return { error: `--max-turns must be a whole number of at least 1 (got ${shown})` }
+      }
+      out.maxIterations = n
+    }
+  }
+  return out
+}
 
 // The mode list is the policy list; this fails to compile if they drift apart.
 const _modesCoverPolicies: (typeof APPROVAL_POLICIES)[number] extends (typeof ACP_MODES)[number]['id'] ? true : never =
@@ -134,7 +191,7 @@ export interface AcpClientCapabilities {
   fs?: { readTextFile?: boolean; writeTextFile?: boolean }
   terminal?: boolean
   auth?: { terminal?: boolean }
-  session?: { notices?: object | null } | null
+  session?: { notices?: object | null; compaction?: object | null } | null
   elicitation?: { form?: object | null } | null
 }
 
@@ -196,24 +253,44 @@ export interface AcpDeps {
     title?: (id: string) => string | undefined
     /** Save a setting the user changed on this chat (model, reasoning effort, approval mode). */
     setSettings?: (id: string, patch: ConversationSettingsPatch) => void
+    /**
+     * Delete a chat the way the desktop app does: stop its live run and its shells,
+     * then remove it. Returns false when there was no such chat. Absent: no
+     * `session/delete`.
+     */
+    remove?: (id: string) => boolean
   }
   /** The workspace's own slash commands (`.houston/commands`), offered next to the built-ins. */
   commands?: (cwd: string) => Promise<Command[]>
   /** The workspace's skills and agents, for `/skills` and `/agents`. */
   skills?: (cwd: string) => Promise<{ name: string; description: string }[]>
+  /** Run a command template's `` !`command` `` piece (tests inject it); the user's shell otherwise. */
+  runContextShell?: (command: string) => Promise<ShellCapture>
   agents?: (cwd: string) => Promise<{ name: string; description: string }[]>
-  /** Summarize a stored chat's older turns now (`/compact`). */
-  compact?: (conversationId: string, providerId: string, model: string) => Promise<AcpCompactResult>
+  /** Summarize a stored chat's older turns now (`/compact [focus]`). */
+  compact?: (conversationId: string, providerId: string, model: string, focus?: string) => Promise<AcpCompactResult>
   /** One protocol frame (a JSON line, newline included). The only thing written to stdout. */
   write: (frame: string) => void
   /** Diagnostics for the operator (stderr / log file), never the protocol stream. */
   log?: (message: string) => void
   /** Default approval policy for new sessions; settings.approvalPolicy when absent. */
   defaultPolicy?: ApprovalPolicy
+  /** Default reasoning effort for new sessions; settings.reasoningEffort when absent. */
+  defaultEffort?: ReasoningEffort
+  /** Hard step cap for every prompt turn (`--max-turns`), over settings.maxIterations. */
+  maxIterations?: number
   version: string
   newId?: () => string
   /** Read a workspace file for an edit's before/after diff; injected so tests stay off disk. */
   readFile?: (path: string) => string | null
+}
+
+/** A request from the client this server is still answering. */
+interface InboundRequest {
+  method: string
+  params: unknown
+  /** Withdrawn by `$/cancel_request`. */
+  cancelled: boolean
 }
 
 interface Session {
@@ -242,6 +319,12 @@ interface Session {
   title?: string
   /** A `/compact` in progress, which holds off prompts like a run does. */
   compacting?: boolean
+  /** Extra directories the editor gave this session (`additionalDirectories`), as given. */
+  additionalRoots: string[]
+  /** The editor's system prompt for this session, appended to Houston's own. */
+  appendSystemPrompt?: string
+  /** Closed or deleted: no longer served, even by a prompt still unwinding. */
+  closed?: boolean
 }
 
 // ---- Pure mapping helpers (exported for tests) ----
@@ -300,6 +383,18 @@ function argHint(args: Record<string, unknown>): string {
     }
   }
   return ''
+}
+
+/**
+ * One part of what an approval is about, as permission-request text: its label, then the
+ * text in a code fence (longer than any backtick run inside it, so the text can't close
+ * it early), with invisible characters shown as <U+XXXX>.
+ */
+export function acpSubjectText(part: ApprovalSubjectPart): string {
+  const body = visibleText(part.text)
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((r) => r.length))
+  const fence = '`'.repeat(Math.max(3, longest + 1))
+  return `${part.label}:\n${fence}\n${body}\n${fence}`
 }
 
 export function acpToolTitle(name: string, args: Record<string, unknown>): string {
@@ -705,6 +800,39 @@ export interface AcpConfigOption {
   options: { value: string; name: string; description?: string }[]
 }
 
+/** Tokens one prompt turn billed, summed over its model rounds. */
+interface TurnTokens {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+}
+
+/**
+ * `PromptResponse.usage`: the turn's token totals. `inputTokens` includes the
+ * cached portions, which are also broken out. Absent when the turn billed nothing
+ * (a slash command Houston answered itself, or a run cancelled before its first
+ * model round).
+ */
+export interface AcpPromptUsage {
+  totalTokens: number
+  inputTokens: number
+  outputTokens: number
+  cachedReadTokens?: number
+  cachedWriteTokens?: number
+}
+
+export function acpPromptUsage(t: TurnTokens): AcpPromptUsage | undefined {
+  if (t.input === 0 && t.output === 0) return undefined
+  return {
+    totalTokens: t.input + t.output,
+    inputTokens: t.input,
+    outputTokens: t.output,
+    ...(t.cacheRead ? { cachedReadTokens: t.cacheRead } : {}),
+    ...(t.cacheWrite ? { cachedWriteTokens: t.cacheWrite } : {})
+  }
+}
+
 /** A model's config value: provider and model id, which together name what runs. */
 export function modelConfigValue(providerId: string, model: string): string {
   return `${providerId}/${model}`
@@ -790,6 +918,67 @@ export function resolveAcpModel(
   return pick ? { providerId: pick.providerId, model: pick.model } : null
 }
 
+/**
+ * The `additionalDirectories` of a session request: absolute paths to existing
+ * directories, deduplicated, without the session's own folder. They widen this
+ * session's runs only, exactly as far as listed, and are never saved.
+ */
+export function acpAdditionalDirectories(params: unknown, cwd: string): string[] {
+  const raw = (params as { additionalDirectories?: unknown } | undefined)?.additionalDirectories
+  if (raw === undefined || raw === null) return []
+  if (!Array.isArray(raw)) throw new AcpError(ACP_ERROR.invalidParams, 'additionalDirectories must be an array of paths')
+  if (raw.length > ACP_MAX_ADDITIONAL_DIRECTORIES) {
+    throw new AcpError(ACP_ERROR.invalidParams, `At most ${ACP_MAX_ADDITIONAL_DIRECTORIES} additionalDirectories`)
+  }
+  const out: string[] = []
+  for (const dir of raw) {
+    if (typeof dir !== 'string' || !isAbsolute(dir)) {
+      throw new AcpError(ACP_ERROR.invalidParams, `additionalDirectories must be absolute paths: ${String(dir)}`)
+    }
+    let ok: boolean
+    try {
+      ok = statSync(dir).isDirectory()
+    } catch {
+      ok = false
+    }
+    if (!ok) throw new AcpError(ACP_ERROR.invalidParams, `Not a directory: ${dir}`)
+    const normal = resolve(dir)
+    if (normal !== resolve(cwd) && !out.includes(normal)) out.push(normal)
+  }
+  return out
+}
+
+/**
+ * The editor's `systemPrompt` for a session: the text of its blocks, appended to
+ * Houston's prompt the way headless `--append-system-prompt` is. Only `append` is
+ * offered; replacing Houston's instructions is not.
+ */
+export function acpSystemPrompt(params: unknown): string | undefined {
+  const raw = (params as { systemPrompt?: unknown } | undefined)?.systemPrompt
+  if (raw === undefined || raw === null) return undefined
+  const sp = raw as { mode?: unknown; content?: unknown }
+  if (typeof raw !== 'object' || sp.mode !== 'append') {
+    throw new AcpError(ACP_ERROR.invalidParams, 'systemPrompt supports only the append mode')
+  }
+  if (!Array.isArray(sp.content) || sp.content.length === 0) {
+    throw new AcpError(ACP_ERROR.invalidParams, 'systemPrompt.content must be a non-empty array of text blocks')
+  }
+  const parts: string[] = []
+  for (const block of sp.content as unknown[]) {
+    const b = block as { type?: unknown; text?: unknown } | null
+    if (!b || b.type !== 'text' || typeof b.text !== 'string') {
+      throw new AcpError(ACP_ERROR.invalidParams, 'systemPrompt.content takes text blocks only')
+    }
+    parts.push(b.text)
+  }
+  const text = parts.join('\n\n').trim()
+  if (!text) return undefined
+  if (text.length > ACP_MAX_SYSTEM_PROMPT_CHARS) {
+    throw new AcpError(ACP_ERROR.invalidParams, `systemPrompt is longer than ${ACP_MAX_SYSTEM_PROMPT_CHARS} characters`)
+  }
+  return text
+}
+
 // ---- The server ----
 
 export interface AcpServer {
@@ -827,6 +1016,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   // Requests this server sent to the client, awaiting a response.
   let nextRequestId = 1
   const outgoing = new Map<JsonRpcId, { resolve: (v: unknown) => void; reject: (e: Error) => void }>()
+  // Requests from the client still being answered, for `$/cancel_request`.
+  const inflight = new Map<JsonRpcId, InboundRequest>()
 
   let peerGone = false
   const frame = (m: JsonRpcMessage): void => {
@@ -864,6 +1055,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
    * progress, or whose latest messages did not reach the store, keeps its log.
    */
   const touch = (s: Session): void => {
+    // A closed session stays gone, even when a prompt it ran finishes later.
+    if (s.closed) return
     sessions.delete(s.id)
     sessions.set(s.id, s)
     let resident = 0
@@ -940,7 +1133,15 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         loadSession: true,
         promptCapabilities: { image: true, audio: false, embeddedContext: true },
         mcpCapabilities: { http: true, sse: true },
-        sessionCapabilities: { list: {} }
+        // Each one only once it is handled below.
+        sessionCapabilities: {
+          list: {},
+          resume: {},
+          close: {},
+          ...(deps.store.remove ? { delete: {} } : {}),
+          additionalDirectories: {},
+          systemPrompt: {}
+        }
       },
       // Credentials resolve the way the CLI does (environment, then the profile's
       // credential store). An editor that can run a terminal gets a way to set one up:
@@ -962,6 +1163,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
 
   const newSession = (params: unknown): unknown => {
     const cwd = requireCwd(params)
+    const additionalRoots = acpAdditionalDirectories(params, cwd)
+    const appendSystemPrompt = acpSystemPrompt(params)
     const mcpServers = clientServers(params)
     const { providerId, model } = resolveModel()
     const { id } = deps.store.create({ workspace: cwd, providerId, model })
@@ -972,13 +1175,16 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       providerId,
       model,
       mode,
+      ...(deps.defaultEffort ? { effort: deps.defaultEffort } : {}),
       messages: [],
       saved: true,
       mcpServers,
       runId: null,
       cancelled: false,
       costUsd: 0,
-      context: null
+      context: null,
+      additionalRoots,
+      ...(appendSystemPrompt ? { appendSystemPrompt } : {})
     }
     sessions.set(id, session)
     touch(session)
@@ -986,10 +1192,16 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     return { sessionId: id, modes: modeState(mode), configOptions: configOptionsOf(session) }
   }
 
-  const loadSession = (params: unknown): unknown => {
+  /**
+   * `session/load` (replays the chat to the editor) and `session/resume` (does not:
+   * the editor already shows it). Both continue the stored chat in this server.
+   */
+  const openSession = (params: unknown, replay: boolean): unknown => {
     const p = (params ?? {}) as { sessionId?: unknown }
     if (typeof p.sessionId !== 'string') throw new AcpError(ACP_ERROR.invalidParams, 'sessionId is required')
     const cwd = requireCwd(params)
+    const additionalRoots = acpAdditionalDirectories(params, cwd)
+    const appendSystemPrompt = acpSystemPrompt(params)
     const live = sessions.get(p.sessionId)
     if (live?.runId) throw new AcpError(ACP_ERROR.invalidRequest, 'That session is running a prompt')
     const stored = deps.store.get(p.sessionId)
@@ -1026,12 +1238,16 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       runId: null,
       cancelled: false,
       costUsd: live?.costUsd ?? 0,
-      context: live?.context ?? null
+      context: live?.context ?? null,
+      additionalRoots,
+      ...(appendSystemPrompt ? { appendSystemPrompt } : {})
     }
     sessions.set(stored.id, session)
     touch(session)
-    const notices = Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.notices)
-    for (const u of replayUpdates(stored.messages, cwd, { notices })) update(stored.id, u)
+    if (replay) {
+      const notices = Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.notices)
+      for (const u of replayUpdates(stored.messages, cwd, { notices })) update(stored.id, u)
+    }
     if (stored.title) sendTitle(session, stored.title, stored.updatedAt)
     announce(session)
     return { modes: modeState(mode), configOptions: configOptionsOf(session) }
@@ -1166,6 +1382,32 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     deps.cancelRun(s.runId)
   }
 
+  /** Stop serving a session: cancel its prompt, as `session/cancel` would, and forget it. */
+  const release = (s: Session): void => {
+    if (s.runId) {
+      s.cancelled = true
+      deps.cancelRun(s.runId)
+    }
+    s.closed = true
+    s.messages = null
+    sessions.delete(s.id)
+  }
+
+  const closeSession = (params: unknown): unknown => {
+    release(sessionOf(params))
+    return {}
+  }
+
+  const deleteSession = (params: unknown): unknown => {
+    const id = (params as { sessionId?: unknown } | undefined)?.sessionId
+    if (typeof id !== 'string') throw new AcpError(ACP_ERROR.invalidParams, 'sessionId is required')
+    const live = sessions.get(id)
+    if (live) release(live)
+    // The desktop app's delete: its run is cancelled and its shells stopped there too.
+    if (!deps.store.remove?.(id)) throw new AcpError(ACP_ERROR.notFound, `No saved session ${id}`)
+    return {}
+  }
+
   /** Show the editor a reply Houston wrote itself (a command's answer), not the model. */
   const reply = (s: Session, textOut: string): { stopReason: 'end_turn' } => {
     update(s.id, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: textOut } })
@@ -1183,7 +1425,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   const runCommand = async (
     s: Session,
     line: string
-  ): Promise<{ kind: 'turn'; turn: InvokedTurn } | { kind: 'reply'; text: string } | null> => {
+  ): Promise<
+    { kind: 'turn'; turn: InvokedTurn; run?: PreparedCommandRun } | { kind: 'reply'; text: string } | null
+  > => {
     const parsed = parseSlashCommand(line)
     if (!parsed || !/^[\w:-]+$/.test(parsed.name)) return null
     const commands = acpCommands(await loadCustomCommands(s.cwd))
@@ -1248,7 +1492,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         } catch (e) {
           log(`acp: could not list the workspace ${cmd.name}: ${String(e)}`)
         }
-        const where = cmd.name === 'skills' ? '.houston/skills' : '.houston/agents'
+        const where = cmd.name === 'skills' ? '.houston/skills or .agents/skills' : '.houston/agents'
         if (!items.length) return { kind: 'reply', text: `No ${cmd.name} in this workspace (${where}).` }
         return { kind: 'reply', text: items.map((i) => `- ${i.name}${i.description ? `: ${i.description}` : ''}`).join('\n') }
       }
@@ -1258,22 +1502,43 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           text: commands.map((c) => `- /${c.name}${c.args ? ` ${c.args}` : ''}: ${c.description}`).join('\n')
         }
       case 'compact':
-        return { kind: 'reply', text: await compactNow(s) }
+        return { kind: 'reply', text: await compactNow(s, arg.trim() || undefined) }
       case 'agent': {
         const turn = agentTurn(arg, line)
         return turn ? { kind: 'turn', turn } : { kind: 'reply', text: 'Use /agent <name> <task>. /agents lists them.' }
       }
       default: {
-        // A template command: first-party (`/review`, `/init`) or the workspace's own.
-        const turn = commandTurn(cmd, arg, line)
-        return turn ? { kind: 'turn', turn } : null
+        // A template command: first-party (`/review`, `/init`), the workspace's own, or
+        // a skill's `/<skill-name>`, with whatever its frontmatter asks of this one turn.
+        // No confirmContext: an editor's prompt has no way to show the exact commands
+        // and ask, so a template's shell context runs only for the user's own command
+        // or a trusted folder, and a credential-file read is refused.
+        const prepared = await prepareCommandRun(cmd, arg, line, {
+          settings,
+          trusted: await workspaceTrusted(s.cwd, settings.trustedFolders).catch(() => false),
+          workspace: s.cwd,
+          ...(deps.runContextShell ? { runShell: deps.runContextShell } : {})
+        })
+        if (!prepared) return null
+        if (!prepared.ok) return { kind: 'reply', text: prepared.error }
+        return { kind: 'turn', turn: prepared.run.turn, run: prepared.run }
       }
     }
   }
 
-  /** `/compact`: summarize the stored chat's older turns, then reload it. */
-  const compactNow = async (s: Session): Promise<string> => {
+  /** Whether the editor takes `compaction_update`s (it must say so). */
+  const compactionUpdates = (): boolean =>
+    Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.compaction)
+
+  /** `/compact [focus]`: summarize the stored chat's older turns, then reload it. */
+  const compactNow = async (s: Session, focus?: string): Promise<string> => {
     if (!deps.compact) return 'Compacting is not available here.'
+    const compactionId = newId()
+    // The editor's view of this compaction, for an editor that takes compaction updates.
+    const status = (state: 'in_progress' | 'completed' | 'failed' | 'cancelled', error?: string): void => {
+      if (!compactionUpdates()) return
+      update(s.id, { sessionUpdate: 'compaction_update', compactionId, status: state, ...(error ? { error } : {}) })
+    }
     // The store is what gets summarized, so it must hold the latest turns first.
     if (!s.saved && s.messages) {
       try {
@@ -1284,32 +1549,46 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       }
     }
     s.compacting = true
+    status('in_progress')
     try {
-      const r = await deps.compact(s.id, s.providerId, s.model)
-      if (!r.ok) return `Nothing was compacted${r.error ? `: ${r.error}` : '.'}`
-      if (r.summarized === 0) return 'Nothing to compact yet.'
+      const r = focus ? await deps.compact(s.id, s.providerId, s.model, focus) : await deps.compact(s.id, s.providerId, s.model)
+      if (!r.ok) {
+        status('failed', r.error)
+        return `Nothing was compacted${r.error ? `: ${r.error}` : '.'}`
+      }
+      if (r.summarized === 0) {
+        status('cancelled')
+        return 'Nothing to compact yet.'
+      }
       // Reloaded from the store on the next prompt.
       s.messages = null
       s.saved = true
+      status('completed')
       return `Summarized ${r.summarized} earlier message${r.summarized === 1 ? '' : 's'}.`
     } catch (e) {
+      status('failed', String(e))
       return `Compacting failed: ${String(e)}`
     } finally {
       s.compacting = false
     }
   }
 
-  const prompt = async (params: unknown): Promise<unknown> => {
+  const prompt = async (params: unknown, inbound?: InboundRequest): Promise<unknown> => {
     const s = sessionOf(params)
     if (busy(s)) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
     const { text: typed, images } = promptFromBlocks((params as { prompt?: unknown }).prompt)
     if (!typed.trim() && images.length === 0) throw new AcpError(ACP_ERROR.invalidParams, 'The prompt is empty')
     const command = typed.trimStart().startsWith('/') ? await runCommand(s, typed.trim()) : null
     if (command?.kind === 'reply') return reply(s, command.text)
+    // Withdrawn while the command lookup read the disk: nothing has run yet.
+    if (inbound?.cancelled) return { stopReason: 'cancelled' }
     // The command lookup read the disk: another prompt may have started meanwhile.
     if (busy(s)) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
     const text = command ? command.turn.text : typed
     const invokedAs = command ? command.turn.invokedAs : undefined
+    // What the command's frontmatter applied or ignored, said before the turn runs.
+    const run = command?.run
+    if (run?.notes.length) update(s.id, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: `${run.notes.join('\n')}\n\n` } })
     const prior = messagesOf(s)
 
     const runId = newId()
@@ -1328,14 +1607,21 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       runId,
       conversationId: s.id,
       workspace: s.cwd,
-      providerId: s.providerId,
-      model: s.model,
+      // A command's model and effort apply to this turn only; the session keeps its own.
+      providerId: run?.model?.providerId ?? s.providerId,
+      model: run?.model?.model ?? s.model,
       approvalPolicy: s.mode,
-      ...(s.effort ? { reasoningEffort: s.effort } : {}),
+      ...(run?.effort ? { reasoningEffort: run.effort } : s.effort ? { reasoningEffort: s.effort } : {}),
+      ...(run?.turnAllowRules?.length ? { turnAllowRules: run.turnAllowRules } : {}),
+      ...(deps.maxIterations !== undefined ? { overrides: { maxIterations: deps.maxIterations } } : {}),
       messages,
       // Per-run servers, like the headless --mcp-config: merged as `run-<id>`, values
       // used as given, never saved to settings.
-      ...(s.mcpServers.length ? { extraMcpServers: s.mcpServers } : {})
+      ...(s.mcpServers.length ? { extraMcpServers: s.mcpServers } : {}),
+      // The editor's extra folders, for this session's runs only.
+      ...(s.additionalRoots.length ? { additionalRoots: s.additionalRoots } : {}),
+      // The editor's system prompt, in the same section headless --append-system-prompt uses.
+      ...(s.appendSystemPrompt ? { appendSystemPrompt: s.appendSystemPrompt } : {})
     }
     try {
       await deps.startRun(req, turn.send, (m) => {
@@ -1356,11 +1642,18 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       touch(s)
     }
     refreshTitle(s)
-    if (s.cancelled || turn.state.stopReason === 'aborted') return { stopReason: 'cancelled' }
+    // The turn's token totals ride the response (`PromptResponse.usage`), so a client
+    // that scores or bills runs gets them without summing `usage_update`s itself.
+    const usage = acpPromptUsage(turn.state.tokens)
+    const done = (stopReason: string): { stopReason: string; usage?: AcpPromptUsage } => ({
+      stopReason,
+      ...(usage ? { usage } : {})
+    })
+    if (s.cancelled || turn.state.stopReason === 'aborted') return done('cancelled')
     if (turn.state.error) throw new AcpError(ACP_ERROR.internal, turn.state.error)
-    if (turn.state.limit === 'max-steps') return { stopReason: 'max_turn_requests' }
-    if (turn.state.limit === 'max-output' || turn.state.stopReason === 'max_tokens') return { stopReason: 'max_tokens' }
-    return { stopReason: 'end_turn' }
+    if (turn.state.limit === 'max-steps' || turn.state.limit === 'max-cost') return done('max_turn_requests')
+    if (turn.state.limit === 'max-output' || turn.state.stopReason === 'max_tokens') return done('max_tokens')
+    return done('end_turn')
   }
 
   // ---- One prompt turn: the AgentEvent → session/update mapping ----
@@ -1369,8 +1662,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     const state: {
       stopReason: string | null
       error: string | null
-      limit: 'max-steps' | 'max-output' | 'stalled' | null
-    } = { stopReason: null, error: null, limit: null }
+      limit: RunLimitReason | null
+      tokens: TurnTokens
+    } = { stopReason: null, error: null, limit: null, tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } }
     // Tool calls already announced to the editor (a gated call is announced at its
     // approval prompt, before `tool_start`).
     const announced = new Set<string>()
@@ -1458,12 +1752,21 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         warnings.push('Runs UNSANDBOXED: this host has no OS confinement for shell commands.')
       } else if (e.sensitiveRead) {
         warnings.push('Reads a credential or secret file (asked even in full auto).')
+      } else if (e.sensitiveWrite && e.protectedWrite) {
+        warnings.push(
+          'Changes a project control file (such as .houston, .vscode, .envrc, or a CI workflow) that can run code outside the sandbox later (asked every time, even in full auto, unless an allow rule covers this path).'
+        )
       } else if (e.sensitiveWrite) {
         warnings.push('Changes a credential or secret file (asked even in full auto).')
       }
       if (e.shellOffline) warnings.push('The command runs without network access.')
+      // What is being approved, whole: the command exactly as it will run, or the memory
+      // about to be saved (its summary only names it). Invisible and display-altering
+      // characters are shown as <U+XXXX>, so the editor can't render it as something else.
+      const subject = e.egressHost || e.shellNetwork ? [] : approvalSubject(e.name, args).map(acpSubjectText)
       const content: AcpToolCallContent[] = [
         ...warnings.map((t) => ({ type: 'content' as const, content: { type: 'text' as const, text: t } })),
+        ...subject.map((t) => ({ type: 'content' as const, content: { type: 'text' as const, text: t } })),
         ...(e.preview ? previewToDiffContent(s.cwd, e.preview) : [])
       ]
       if (!announced.has(e.callId)) announce(e.callId, e.name, args, e.kind, 'pending', content, e.preview)
@@ -1471,16 +1774,16 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       // command, so it gets no "always" choices.
       const options = e.egressHost
         ? [
-            { optionId: 'allow', name: `Allow ${e.egressHost}`, kind: 'allow_once' },
+            { optionId: 'allow', name: `Allow ${e.egressHost} for this chat`, kind: 'allow_once' },
             { optionId: 'deny', name: 'Keep blocked', kind: 'reject_once' }
           ]
         : e.shellNetwork
         ? [
-            { optionId: 'allow', name: 'Allow network', kind: 'allow_once' },
+            { optionId: 'allow', name: 'Allow network for this chat', kind: 'allow_once' },
             { optionId: 'deny', name: 'No network', kind: 'reject_once' }
           ]
         : [
-            { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+            { optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
             { optionId: 'rule-allow', name: 'Always allow', kind: 'allow_always' },
             { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
             { optionId: 'rule-deny', name: 'Always deny', kind: 'reject_always' }
@@ -1489,7 +1792,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       try {
         const res = (await request('session/request_permission', {
           sessionId: s.id,
-          toolCall: { toolCallId: e.callId, title: e.summary, kind: acpToolKind(e.name, e.kind), status: 'pending', content },
+          toolCall: { toolCallId: e.callId, title: visibleText(e.summary), kind: acpToolKind(e.name, e.kind), status: 'pending', content },
           options
         })) as { outcome?: { outcome?: string; optionId?: string } } | null
         const picked = res?.outcome?.outcome === 'selected' ? res.outcome.optionId : undefined
@@ -1701,8 +2004,13 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           break
         case 'usage': {
           s.costUsd += e.cost
+          state.tokens.input += e.inputTokens + (e.delegatedInputTokens ?? 0)
+          state.tokens.output += e.outputTokens
+          state.tokens.cacheRead += e.cacheReadTokens ?? 0
+          state.tokens.cacheWrite += e.cacheWriteTokens ?? 0
           // One event per model round of the agent itself; a subagent's or a
-          // review's rounds arrive rolled up with inputTokens 0 and add only cost.
+          // review's rounds arrive rolled up with inputTokens 0 (their input is in
+          // delegatedInputTokens), so they count in the totals but not the context.
           if (e.inputTokens > 0) {
             const model = e.model ?? s.model
             const caps = deps
@@ -1723,7 +2031,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
           break
         }
         case 'compaction':
-          notice(`Compacted ${e.summarized} earlier messages to free up context.`)
+          if (compactionUpdates()) {
+            up({ sessionUpdate: 'compaction_update', compactionId: newId(), status: 'completed' })
+          } else notice(`Compacted ${e.summarized} earlier messages to free up context.`)
           break
         case 'retry':
           notice(e.throttle ? throttleNotice(e.throttle, retryProgress(e)) : `Retrying (${retryProgress(e)}): ${e.message}`, 'warning')
@@ -1772,7 +2082,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
 
   // ---- Dispatch ----
 
-  const handleRequest = async (method: string, params: unknown): Promise<unknown> => {
+  const handleRequest = async (method: string, params: unknown, req: InboundRequest): Promise<unknown> => {
     switch (method) {
       case 'initialize':
         return initialize(params)
@@ -1782,7 +2092,14 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       case 'session/new':
         return newSession(params)
       case 'session/load':
-        return loadSession(params)
+        return openSession(params, true)
+      case 'session/resume':
+        return openSession(params, false)
+      case 'session/close':
+        return closeSession(params)
+      case 'session/delete':
+        if (!deps.store.remove) throw new AcpError(ACP_ERROR.methodNotFound, `Method not found: ${method}`)
+        return deleteSession(params)
       case 'session/list':
         return listSessions(params)
       case 'session/set_mode':
@@ -1790,7 +2107,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       case 'session/set_config_option':
         return setConfigOption(params)
       case 'session/prompt':
-        return prompt(params)
+        return prompt(params, req)
       default:
         throw new AcpError(ACP_ERROR.methodNotFound, `Method not found: ${method}`)
     }
@@ -1822,12 +2139,21 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     // A notification.
     if (msg.id === undefined || msg.id === null) {
       if (msg.method === 'session/cancel') cancel(msg.params)
+      else if (msg.method === '$/cancel_request') cancelRequest(msg.params)
       return
     }
     const id = msg.id
+    const inbound: InboundRequest = { method: msg.method, params: msg.params, cancelled: false }
+    inflight.set(id, inbound)
     void track(
-      handleRequest(msg.method, msg.params).then(
-        (result) => frame({ id, result: result ?? null }),
+      handleRequest(msg.method, msg.params, inbound).then(
+        (result) => {
+          // A prompt answers a cancel with its own stopReason; anything else still
+          // running when it was withdrawn says so instead of returning a result.
+          if (inbound.cancelled && inbound.method !== 'session/prompt') {
+            frame({ id, error: { code: ACP_ERROR.cancelled, message: 'Request cancelled' } })
+          } else frame({ id, result: result ?? null })
+        },
         (err: unknown) => {
           if (err instanceof AcpError) {
             frame({ id, error: { code: err.code, message: err.message, ...(err.data ? { data: err.data } : {}) } })
@@ -1836,8 +2162,22 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
             frame({ id, error: { code: ACP_ERROR.internal, message: (err as Error)?.message ?? String(err) } })
           }
         }
-      )
+      ).finally(() => inflight.delete(id))
     )
+  }
+
+  /**
+   * `$/cancel_request`: the client withdrew a request still in flight. A prompt is
+   * stopped as `session/cancel` would stop it; another request ends with a
+   * cancelled error once it settles. An id that is not in flight is ignored.
+   */
+  const cancelRequest = (params: unknown): void => {
+    const requestId = (params as { requestId?: unknown } | undefined)?.requestId
+    if (typeof requestId !== 'string' && typeof requestId !== 'number') return
+    const inbound = inflight.get(requestId)
+    if (!inbound || inbound.cancelled) return
+    inbound.cancelled = true
+    if (inbound.method === 'session/prompt') cancel(inbound.params)
   }
 
   const stop = (opts: { peerGone?: boolean } = {}): void => {

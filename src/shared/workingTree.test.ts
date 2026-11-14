@@ -130,6 +130,37 @@ describe('parseUnifiedDiff', () => {
     expect(f.removed).toBe(1)
   })
 
+  it('notes why a rename, a mode change, or an empty file has no lines to show', () => {
+    const diff = [
+      'diff --git a/old.ts b/new.ts',
+      'similarity index 100%',
+      'rename from old.ts',
+      'rename to new.ts',
+      'diff --git a/run.sh b/run.sh',
+      'old mode 100644',
+      'new mode 100755',
+      'diff --git a/empty.txt b/empty.txt',
+      'new file mode 100644',
+      'index 0000000..e69de29',
+      'diff --git a/edited.ts b/edited.ts',
+      'old mode 100644',
+      'new mode 100755',
+      '--- a/edited.ts',
+      '+++ b/edited.ts',
+      '@@ -1 +1 @@',
+      '-a',
+      '+b'
+    ].join('\n')
+    const [renamed, mode, empty, edited] = parseUnifiedDiff(diff)
+    expect(renamed).toMatchObject({ status: 'renamed', oldPath: 'old.ts', path: 'new.ts', note: 'Renamed, no content changes' })
+    expect(mode).toMatchObject({ status: 'modified', path: 'run.sh', note: 'Only the file mode changed' })
+    expect(empty).toMatchObject({ status: 'added', path: 'empty.txt', note: 'Empty file' })
+    // A mode change alongside an edit still shows the edit.
+    expect(edited.note).toBeUndefined()
+    expect(edited.hunks).toHaveLength(1)
+    expect(Object.keys(mode)).not.toContain('_modeChanged')
+  })
+
   it('flags a binary change and recovers the path from the diff --git header', () => {
     const diff = [
       'diff --git a/img.png b/img.png',

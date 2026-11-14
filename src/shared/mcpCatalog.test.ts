@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { MCP_CATALOG, PROJECT_PLACEHOLDER, addPastedServers, catalogServer, freeServerId, serverProblem } from './mcpCatalog'
+import { MCP_CATALOG, PROJECT_PLACEHOLDER, addPastedServers, catalogServer, freeServerId, serverIdProblem, serverProblem } from './mcpCatalog'
 import { sanitizeServerId } from './mcp'
 
 describe('MCP_CATALOG', () => {
@@ -10,6 +10,20 @@ describe('MCP_CATALOG', () => {
       expect(sanitizeServerId(e.id)).toBe(e.id)
       if (e.transport === 'http') expect(e.url).toMatch(/^https:\/\//)
       else expect(e.command).toMatch(/^(npx|uvx)$/)
+    }
+  })
+
+  it('pins every package it runs to an exact version', () => {
+    // npx -y / uvx run whatever the registry calls newest; a pin runs the reviewed
+    // release. An exact version only: no tag (`latest`), range, or wildcard.
+    const exact = /@\d+\.\d+\.\d+$/
+    for (const e of MCP_CATALOG) {
+      if (e.transport !== 'stdio') continue
+      const pkg = e.command === 'npx' ? e.args.find((a) => a !== '-y' && !a.startsWith('-')) : e.args[0]
+      expect(pkg, e.id).toBeDefined()
+      expect(pkg!, e.id).toMatch(exact)
+      // A scoped npm name keeps its leading `@`; the version is the part after the last one.
+      expect(pkg!.lastIndexOf('@'), e.id).toBeGreaterThan(0)
     }
   })
 
@@ -30,14 +44,14 @@ describe('catalogServer', () => {
       id: 'filesystem',
       transport: 'stdio',
       command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-filesystem', '/w/my app'],
+      args: ['-y', '@modelcontextprotocol/server-filesystem@2.3.0', '/w/my app'],
       enabled: false
     })
   })
 
   it('leaves the placeholder with no project, which review then asks to replace', () => {
     const s = catalogServer(fs, null)
-    expect(s.args).toEqual(['-y', '@modelcontextprotocol/server-filesystem', '{project}'])
+    expect(s.args).toEqual(['-y', '@modelcontextprotocol/server-filesystem@2.3.0', '{project}'])
     expect(serverProblem(s, [])).toBe('Replace {project} with a folder path.')
     expect(serverProblem({ ...s, args: ['-y', ' '] }, [])).toBe('Fill in every argument, or remove the empty ones.')
   })
@@ -59,6 +73,14 @@ describe('serverProblem', () => {
     expect(serverProblem({ ...base, env: { TOKEN: '' } }, [])).toBe('Fill in the TOKEN variable.')
     expect(serverProblem({ ...base, transport: 'http', command: '', url: 'ftp://x' }, [])).toMatch(/URL/)
     expect(serverProblem(base, [])).toBeNull()
+  })
+})
+
+describe('serverIdProblem', () => {
+  it('flags only an empty or taken id', () => {
+    expect(serverIdProblem('', [])).toMatch(/Give it an id/)
+    expect(serverIdProblem('github', ['github'])).toBe('There is already a server with the id github.')
+    expect(serverIdProblem('github', ['linear'])).toBeNull()
   })
 })
 

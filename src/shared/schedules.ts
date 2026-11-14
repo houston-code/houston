@@ -52,7 +52,9 @@ export function scheduleLastRunText(
         ? 'stopped because it stalled without making progress'
         : s.lastLimit === 'max-output'
           ? 'was cut off at the model’s output limit'
-          : 'stopped at the step limit'
+          : s.lastLimit === 'max-cost'
+            ? 'stopped at the cost limit'
+            : 'stopped at the step limit'
     case 'error': {
       const why = s.lastError ?? 'unknown error'
       return s.lastRunConversationId ? `failed (${why})` : `couldn't start (${why})`
@@ -78,6 +80,21 @@ export interface ScheduleCreateRequest {
 }
 
 export type ScheduleResult = { ok: true; schedule?: ScheduleView } | { ok: false; error: string }
+
+/**
+ * Whether scheduled runs fire while Houston is closed (Settings > Scheduled runs). The
+ * installed login agent is the setting itself, so the two can't disagree. `error`
+ * says why the last change didn't take.
+ */
+export interface ScheduleDaemonStatus {
+  /** This platform can run the daemon from a login agent. */
+  supported: boolean
+  /** The login agent is installed (the setting is on). */
+  installed: boolean
+  /** A daemon is running for this profile. */
+  running: boolean
+  error?: string
+}
 
 /** What a typed schedule means: its normalized form and next run, or why it isn't one. */
 export type SchedulePreview = { ok: true; spec: string; nextRunAt: number | null } | { ok: false; error: string }

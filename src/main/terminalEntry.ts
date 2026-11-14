@@ -1,10 +1,11 @@
 import { createHash } from 'node:crypto'
 import { clearChildReportFlag, setWakeHost, takeBackgroundEvents, wakeNote } from './agent/backgroundEvents'
+import { getMcpRegistryServer, searchMcpRegistry } from './mcpRegistry'
 import { fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { isatty } from 'node:tty'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { McpServerConfig } from '@shared/types'
 import {
@@ -25,25 +26,29 @@ import {
   cancelAllRuns,
   waitForRunsToEnd
 } from './agent/loop'
-import { killAllShells } from './agent/shells'
+import { killAllShells, killShell, listShells, shellTail } from './agent/shells'
+import { stopSubagent } from './agent/subagentStops'
 import { lspManager } from './agent/lsp/manager'
 import { flushRuleUsage } from './ruleUsage'
 import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
-import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
+import { disconnectAllMcp, getMcpStatuses, reconnectMcpServers } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
-import type { AgentEvent } from '@shared/agent'
+import type { AgentEvent, ConversationMeta } from '@shared/agent'
 import { setSpawnBackend } from './agent/spawn'
 import { setSchedulerBackend } from './agent/scheduler'
 import { createSpawnBackend } from './spawnSession'
-import { createSchedulerService, fireViaSpawn, schedulesFilePath } from './schedulerService'
+import { createSchedulerService, fireViaSpawn, schedulesFilePath, type SchedulerService } from './schedulerService'
+import { appSchedulerRunning, daemonPidPath, holdPidFile } from './scheduleDaemon'
 import { createWorktree, removeWorktree } from './agent/worktree'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
 import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
+import { runUserShell } from './userShell'
 import { loadAgents } from './agent/agents'
-import { loadCommands } from './agent/commands'
+import { loadSlashCommands } from './agent/commands'
+import { stopAndDeleteConversation } from './deleteChat'
 import { compactConversationNow } from './agent/compact'
 import {
   getConversationCheckpoint,
@@ -54,6 +59,7 @@ import { previewRewind, rewindConversation, undoRewind } from './agent/rewind'
 import { collectWorkingTreeChanges } from './agent/workingTree'
 import { listModels } from './providers'
 import { runGitCapture } from './agent/gitRead'
+import { readHeadBranch } from './headBranch'
 import { writeExportFile } from './tui-sessions'
 import {
   canPersistHeaderSecrets,
@@ -72,6 +78,7 @@ import {
   mediaTypeForImagePath,
   type BackgroundSession,
   type ResumeEntry,
+  type TuiIo,
   type TuiOptions
 } from './tui'
 import { detectTerminalBackground } from './tui-background'
@@ -92,6 +99,7 @@ import { currentInstallMethod, upgradeHint } from './install-method'
 /** The interactive update check runs alongside the session, so it can wait longer than -p's. */
 const INTERACTIVE_UPDATE_TIMEOUT_MS = 10_000
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
+import { writeClipboardText } from './clipboard-text'
 import {
   HEADLESS_SIGNAL_EXIT,
   HEADLESS_SIGNALS,
@@ -99,8 +107,9 @@ import {
   type HeadlessOptions,
   type HeadlessSignal
 } from './headless'
-import { serveAcp } from './acp'
+import { serveAcp, type AcpLaunchOptions } from './acp'
 import { createTerminalIo, resolveColor } from './tui-io'
+import { resolveAccessibility } from './tui-a11y'
 import {
   makeCompleter,
   commandMenu,
@@ -112,7 +121,8 @@ import {
 import { mergeCommands } from '@shared/commands'
 import { runOutcome, runOutcomePhrase } from '@shared/runEnd'
 import { parseHistory, serializeHistory, appendHistory } from './tui-history'
-import { highlightToHtml } from './syntax'
+import { highlightToHtml, type HljsLike } from './syntax'
+import { filterTerminalOutput } from './tui-wrap'
 import {
   createConversation,
   setMessages,
@@ -125,22 +135,33 @@ import {
   searchConversations,
   forkConversation,
   organizeConversation,
-  deleteConversation,
+  conversationExists,
   setGeneratedTitle,
   reportChildToParent,
   takeChildReports,
-  saveSideChat
+  saveSideChat,
+  computeUsageReport
 } from './conversations'
 
 /** Resume-picker rows, each marked with the desktop app's unread state for it. */
-function withUnread(convs: { id: string; title: string; updatedAt: number }[]): ResumeEntry[] {
+function withUnread(convs: { id: string; title: string; updatedAt: number; workspace?: string }[]): ResumeEntry[] {
   const unread = new ReadStateStore(join(getUserDataDir(), 'read-state.json')).snapshot()
   return convs.map((c) => ({
     id: c.id,
     title: c.title,
     updatedAt: c.updatedAt,
+    ...(c.workspace ? { workspace: c.workspace } : {}),
     ...(unread[c.id] ? { unread: unread[c.id].outcome } : {})
   }))
+}
+
+/** How many chats the resume picker lists: per folder, and across every folder. */
+const RESUME_LIMIT = 20
+const RESUME_ALL_LIMIT = 50
+
+/** Newest first, `limit` at most, with the desktop's unread state. */
+function resumeEntries(convs: ConversationMeta[], limit: number): ResumeEntry[] {
+  return withUnread([...convs].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit))
 }
 
 /**
@@ -167,6 +188,34 @@ export interface TerminalHost {
    * own exit step; a normal exit leaves it to the host.
    */
   flush?: () => Promise<unknown>
+  /**
+   * Start-up work the host put off so it doesn't delay the interactive client's first
+   * paint (the CLI's read of the system certificate store). Run once, right after the
+   * first prompt is drawn.
+   */
+  afterFirstPrompt?: () => void
+}
+
+/**
+ * `io` that runs `afterFirstPrompt` once, on the turn of the event loop after its first
+ * composer read starts. That read draws the prompt before it returns, so work moved here
+ * lands just after the first paint instead of ahead of it.
+ */
+export function onFirstPrompt<T extends Pick<TuiIo, 'readComposer'>>(io: T, afterFirstPrompt: () => void): T {
+  const read = io.readComposer
+  if (!read) return io
+  let fired = false
+  return {
+    ...io,
+    readComposer: (...args: Parameters<NonNullable<TuiIo['readComposer']>>) => {
+      const reading = read(...args)
+      if (!fired) {
+        fired = true
+        setImmediate(afterFirstPrompt)
+      }
+      return reading
+    }
+  }
 }
 
 /** Longest an exit waits for cancelled runs to unwind (recording why they stopped). */
@@ -274,7 +323,8 @@ async function editInEditor(initial: string, filename = 'PLAN.md'): Promise<stri
   const dir = mkdtempSync(join(tmpdir(), 'houston-edit-'))
   const file = join(dir, filename)
   try {
-    writeFileSync(file, initial, 'utf8')
+    // Owner-only: a draft or a transcript can hold anything pasted into the chat.
+    writeFileSync(file, initial, { encoding: 'utf8', mode: 0o600 })
     const [cmd, ...args] = editor.split(/\s+/)
     const res = spawnSync(cmd, [...args, file], { stdio: 'inherit' })
     if (res.error || res.status !== 0) return null
@@ -347,7 +397,11 @@ export function wireTerminalSessionBackends(opts: {
   notify?: (message: string) => void
   /** Start the scheduler's timers (TUI). The headless one-shot manages schedules without firing them. */
   startScheduler: boolean
+  /** Whether the scheduler may fire now (the daemon defers to the open desktop app). Absent: always. */
+  shouldFire?: () => boolean
 }): {
+  /** The scheduler this host wired (the daemon stops it on exit). */
+  scheduler: SchedulerService
   pendingBackgroundSessions: () => number
   waitForBackgroundSessions: () => Promise<void>
   /**
@@ -411,11 +465,16 @@ export function wireTerminalSessionBackends(opts: {
     })
   })
 
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
+  const scheduler = createSchedulerService({
+    file: schedulesFilePath(),
+    fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask'),
+    ...(opts.shouldFire ? { shouldFire: opts.shouldFire } : {})
+  })
   setSchedulerBackend(scheduler)
   if (opts.startScheduler) scheduler.start()
 
   return {
+    scheduler,
     pendingBackgroundSessions: () => pending.size,
     waitForBackgroundSessions: async (): Promise<void> => {
       // Settle everything, including sessions spawned by sessions while we wait.
@@ -438,43 +497,6 @@ export function wireTerminalSessionBackends(opts: {
         }
       })
   }
-}
-
-/**
- * Run a command in the user's own shell for the composer's `!` escape.
- *
- * Unsandboxed on purpose. The sandbox exists to confine the AGENT, which can be
- * steered by a prompt injection into running something the user never wanted. A
- * command the user typed at their own prompt is not that: it is exactly as
- * trusted as the shell they launched Houston from, and confining it would only
- * break the obvious cases (`!git push` with no network, `!npm i` unable to write
- * outside the workspace).
- *
- * `shell: true` is intended here — the string IS a shell command, typed by the
- * person the shell belongs to. Their $SHELL is used so aliases-free but familiar
- * syntax works; output is streamed so a build looks alive rather than hung.
- */
-function runUserShell(
-  workspace: string,
-  command: string,
-  onOutput: (chunk: string) => void
-): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, {
-      cwd: workspace,
-      shell: process.platform === 'win32' ? true : (process.env.SHELL ?? '/bin/sh'),
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-    // Decode as streams, so a multibyte character split across two pipe chunks
-    // prints as itself rather than as two replacement characters.
-    child.stdout?.setEncoding('utf8')
-    child.stderr?.setEncoding('utf8')
-    child.stdout?.on('data', (d: string) => onOutput(d))
-    child.stderr?.on('data', (d: string) => onOutput(d))
-    child.on('error', reject)
-    child.on('close', (code) => resolve(code ?? 0))
-  })
 }
 
 /**
@@ -558,11 +580,27 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   }
   // Colorize only when the environment says so (TTY, NO_COLOR, TERM, FORCE_COLOR).
   tui.color = resolveColor(process.env, Boolean(process.stdout.isTTY))
+  // Screen-reader mode (--screen-reader, HOUSTON_SCREEN_READER, the saved setting) and
+  // reduced motion (HOUSTON_REDUCE_MOTION, the saved setting, or implied by the first).
+  const a11y = resolveAccessibility({ screenReader: tui.screenReader }, process.env, getSettings())
+  tui.screenReader = a11y.screenReader
+  tui.reduceMotion = a11y.reduceMotion
   // Load highlight.js lazily (dynamic import) so it stays out of the module graph
   // that index.test.ts loads — only the real interactive path pulls it in.
   // `./syntax` itself carries no heavy deps (highlight.js is injected below), so
   // it's imported statically at the top; the dynamic wrapper bought no chunk split.
-  const { default: hljs } = await import('highlight.js/lib/common')
+  // Loaded once the first prompt is drawn, not before it: nothing is highlighted
+  // until a reply, plan or write preview arrives, and a bundled import finishes in the
+  // same turn of the event loop it starts in, ahead of any keystroke or reply.
+  let hljs: HljsLike | null = null
+  const loadHighlighter = (): void => {
+    import('highlight.js/lib/common').then(
+      (m) => {
+        hljs = m.default
+      },
+      (e) => log.warn(`syntax highlighting unavailable: ${String(e)}`)
+    )
+  }
 
   // Per-workspace composer history (Up/Down recall across restarts). Keyed by a
   // hash of the cwd so each project keeps its own history under userData.
@@ -595,11 +633,12 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // already knew their names. Loaded once; the menu redraws on every keystroke and
   // must not touch the disk.
   let menuCommands: CommandSpec[] = [...COMMANDS]
-  void loadCommands(tui.cwd)
+  void loadSlashCommands(tui.cwd)
     .then((custom) => {
       menuCommands = mergeCommands(COMMANDS, custom).map((c) => ({
         name: c.name,
-        description: c.description
+        description: c.description,
+        ...(c.args ? { args: c.args } : {})
       }))
     })
     .catch(() => {
@@ -615,7 +654,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // Typing `@` lists matching files under the composer, as `/` lists commands.
   const mentionMenu = makeMentionMenu((q) => findFiles(tui.cwd, q), paint as never)
 
-  const io = createTerminalIo({
+  const terminalIo = createTerminalIo({
     menuFor: (line, redraw) => {
       const matches = commandMenu(line, menuCommands)
       if (matches) return renderCommandMenu(matches, paint as never)
@@ -625,13 +664,27 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     // Read live: an entry submitted this session must be recallable on the next
     // composer read, not just the ones loaded at launch.
     history: () => history,
+    // A draft discarded unsent (Ctrl-C, Esc Esc) joins the same history, so Up
+    // brings it back in this session and the next.
+    remember: persistHistory,
     columns: () => process.stdout.columns || 80,
     // Ctrl-X Ctrl-E in the composer, same editor hand-off plan review uses.
     editText: (initial) => editInEditor(initial, 'MESSAGE.md'),
     // Read live, like the menu: the workspace's commands load after startup.
     completer: makeCompleter((q) => findFiles(tui.cwd, q), () => menuCommands),
     // Read live, so /vim applies at the next prompt rather than the next launch.
-    editorMode: () => (getSettings().tuiEditor === 'vim' ? 'vim' : 'emacs')
+    editorMode: () => (getSettings().tuiEditor === 'vim' ? 'vim' : 'emacs'),
+    rows: () => process.stdout.rows || 24,
+    // The transcript viewer's `v`: the same hand-off, read-only (the edit is dropped).
+    viewText: async (text) => {
+      if (!(process.env.VISUAL || process.env.EDITOR)) return false
+      await editInEditor(text, 'TRANSCRIPT.md')
+      return true
+    }
+  })
+  const io = onFirstPrompt(terminalIo, () => {
+    host.afterFirstPrompt?.()
+    loadHighlighter()
   })
 
   // spawn_session + scheduled runs work in the TUI too: background sessions run
@@ -646,11 +699,27 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   // SIGTERM, comes from outside (`kill -INT`, a supervisor): stop the runs, restore
   // the terminal and exit rather than die with the terminal modes still on.
   const exitGuard = guardTerminalExit(['SIGHUP', 'SIGTERM', 'SIGINT'], host)
+  // Exiting would kill background sessions mid-run; finish them first (their
+  // conversations are what a later /resume opens). Ctrl-C still force-quits.
+  const waitForBackground = async (): Promise<void> => {
+    const outstanding = sessions.pendingBackgroundSessions()
+    if (outstanding === 0) return
+    io.out(
+      paint(
+        `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish (Ctrl-C to abandon)…\n`,
+        'dim'
+      )
+    )
+    await sessions.waitForBackgroundSessions()
+  }
   let code = 1
   try {
     code = await runTui(tui, {
       getSettings,
       version,
+      // Exiting now would kill background sessions mid-run; finish them first, before
+      // the farewell, so "Bye." is the last line rather than above the wait.
+      beforeExit: () => waitForBackground(),
       // /doctor: probe on demand, reusing whatever the update check already found
       // rather than making the report wait on the network.
       // Roll a turn's writes back: the snapshots exist for every write already,
@@ -670,11 +739,16 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // doesn't answer quickly is reported as not running rather than holding up
       // the menu (the SDK's own retries can take far longer).
       listModels: (provider) => withTimeout(listModels(provider), HOST_PROBE_MS),
-      // symbolic-ref names the branch (even an unborn one) and fails on a detached
-      // HEAD or outside a repository, where the status line shows no branch.
-      gitBranch: async () => {
-        const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd)
-        return head.ok ? head.stdout.trim() || null : null
+      // Read from the repository's HEAD file, so drawing the status line runs no git.
+      // Only a HEAD the file can't answer for asks git: symbolic-ref names the branch
+      // (even an unborn one) and fails on a detached HEAD or outside a repository,
+      // where the status line shows no branch.
+      gitBranch: () => {
+        const fromFile = readHeadBranch(tui.cwd)
+        if (fromFile !== undefined) return fromFile
+        return runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], tui.cwd).then((head) =>
+          head.ok ? head.stdout.trim() || null : null
+        )
       },
       writeExport: (path, content) => writeExportFile(tui.cwd, path, content),
       workingTree: async () => {
@@ -697,6 +771,13 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       saveMemory: (scope, text) => saveMemory(tui.cwd, scope, text),
       memoryStore: () => memoryStore({ workspace: tui.cwd }),
       backgroundSessions: () => sessions.backgroundSessions(),
+      backgroundTasks: {
+        shells: () => listShells(),
+        shellTail: (id, maxLines) => shellTail(id, maxLines),
+        // `user`: the agent hears of it with the next message rather than being woken.
+        killShell: (id) => killShell(id, { by: 'user' }),
+        stopSubagent: (runId, recordId) => stopSubagent(runId, recordId)
+      },
       proposals: {
         list: (conversationId) => {
           const conv = getConversation(conversationId)
@@ -727,7 +808,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           setWakeHost({ enabled: () => getSettings().backgroundWake !== false, start: tryWake }),
         take: (id) => {
           clearChildReportFlag(id)
-          return wakeNote(takeBackgroundEvents(id), takeChildReports(id))?.content ?? null
+          const note = wakeNote(takeBackgroundEvents(id), takeChildReports(id))
+          return note ? { content: note.content, ...(note.taintSource ? { taintSource: note.taintSource } : {}) } : null
         }
       },
       checkUpdate: async () => {
@@ -750,6 +832,11 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       steerRun,
       editText: (initial) => editInEditor(initial),
       persistHistory,
+      // /copy: the platform's clipboard helper when this is a local session (never
+      // over SSH, where OSC 52 is the way to the user's own clipboard).
+      copyText: (text) => writeClipboardText(text),
+      // /usage: the desktop usage view's report, summed locally from the saved chats.
+      usageReport: () => computeUsageReport(),
       clipboardImage: () => {
         const img = readClipboardImage()
         if (!img) return { error: `no image on the clipboard (${noClipboardHint(process.platform)})` }
@@ -765,8 +852,11 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           const data = readFileSync(isAbsolute(p) ? p : join(tui.cwd, p)).toString('base64')
           if (exceedsImageSizeLimit(data)) return { error: 'image is too large' }
           return { image: { mediaType, data } }
-        } catch {
-          return { error: `could not read ${p}` }
+        } catch (e) {
+          // `missing` lets a pasted path that names no file paste as plain text.
+          const code = (e as NodeJS.ErrnoException).code
+          const missing = code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR'
+          return { error: `could not read ${p}`, ...(missing ? { missing } : {}) }
         }
       },
       capabilities: async () => {
@@ -780,7 +870,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         }
       },
       // Custom slash commands from the workspace's .houston/commands (for /<name>).
-      commands: () => loadCommands(tui.cwd),
+      commands: () => loadSlashCommands(tui.cwd),
       // On-demand context compaction for the /compact command.
       compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts),
       // Settings editing for /hooks and /mcp (writes the shared settings.json, 0600).
@@ -791,6 +881,11 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       // interactive flow (discovery, registration, browser, exchange) and persists
       // the tokens through the wired host store.
       mcpStatuses: () => getMcpStatuses(),
+      // Read-only MCP Registry browsing for /mcp search and /mcp add-from-registry.
+      mcpRegistry: { search: searchMcpRegistry, get: getMcpRegistryServer },
+      // /mcp reconnect: the user's own servers from settings (the manager reads their
+      // header and env values from the secret store itself).
+      mcpReconnect: (ids) => reconnectMcpServers(getSettings().mcpServers ?? [], ids),
       ...(canStoreMcpOAuth()
         ? {
             mcpOAuth: {
@@ -810,7 +905,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       isMac: process.platform === 'darwin',
       settingsPath: () => join(getUserDataDir(), 'settings.json'),
       io,
-      highlightHtml: (lang, codeStr) => highlightToHtml(hljs, lang, codeStr),
+      highlightHtml: (lang, codeStr) => (hljs ? highlightToHtml(hljs, lang, codeStr) : null),
       persist: {
         create: (input) => createConversation(input),
         setMessages,
@@ -821,19 +916,18 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         // marked with the desktop app's unread state (read fresh each time, and only
         // read: the app owns that file and would overwrite a write from here).
         list: (workspace) =>
-          withUnread(
-            listConversations()
-              .filter((c) => c.workspace === workspace)
-              .sort((a, b) => b.updatedAt - a.updatedAt)
-              .slice(0, 20)
+          resumeEntries(
+            listConversations().filter((c) => c.workspace === workspace),
+            RESUME_LIMIT
           ),
         search: (workspace, query) =>
-          withUnread(
-            searchConversations(query)
-              .filter((c) => c.workspace === workspace)
-              .sort((a, b) => b.updatedAt - a.updatedAt)
-              .slice(0, 20)
+          resumeEntries(
+            searchConversations(query).filter((c) => c.workspace === workspace),
+            RESUME_LIMIT
           ),
+        // The picker's Ctrl-A scope: every folder's chats, each with its folder.
+        listAll: () => resumeEntries(listConversations(), RESUME_ALL_LIMIT),
+        searchAll: (query) => resumeEntries(searchConversations(query), RESUME_ALL_LIMIT),
         fork: (id) => {
           const forked = forkConversation(id)
           return forked ? { id: forked.id } : null
@@ -841,7 +935,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         // The desktop sidebar's rename: marks the title as chosen, so it is never
         // replaced by a generated one.
         rename: (id, title) => organizeConversation(id, { title }),
-        remove: (id) => deleteConversation(id),
+        remove: (id) => stopAndDeleteConversation(id),
         get: (id) => {
           const conv = getConversation(id)
           return conv
@@ -856,18 +950,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         }
       }
     })
-    // Exiting now would kill background sessions mid-run; finish them first (their
-    // conversations are what a later /resume opens). Ctrl-C still force-quits.
-    const outstanding = sessions.pendingBackgroundSessions()
-    if (outstanding > 0) {
-      io.out(
-        paint(
-          `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish (Ctrl-C to abandon)…\n`,
-          'dim'
-        )
-      )
-      await sessions.waitForBackgroundSessions()
-    }
+    // Normally done before the farewell (beforeExit); here too in case the TUI left
+    // without it.
+    await waitForBackground()
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
   } finally {
@@ -904,6 +989,85 @@ export function watchTerminationSignals(
   return () => {
     for (const [signal, handler] of handlers) proc.off(signal, handler)
   }
+}
+
+/**
+ * The schedule daemon: fire scheduled runs while no Houston window or terminal session
+ * is open, as background sessions (approvals declined, as for any terminal-hosted
+ * background session). Runs until a signal stops it. One per profile (a pid file), and
+ * it leaves firing to the desktop app while that is open (see scheduleDaemon.ts).
+ * Returns the exit code: 0 when another daemon already runs.
+ */
+export async function runScheduleDaemonEntry(
+  host: TerminalHost & {
+    /** Ends the daemon without a signal (tests). */
+    signal?: AbortSignal
+    /** Signals to stop on; the default is SIGHUP, SIGTERM and SIGINT. */
+    proc?: SignalProcess
+    out?: (s: string) => void
+    /** Whether the desktop app's scheduler is up (tests). */
+    appRunning?: () => boolean
+  } = {}
+): Promise<number> {
+  const out = host.out ?? ((s: string) => void process.stdout.write(s))
+  const held = holdPidFile(daemonPidPath())
+  if (!held.ok) {
+    out(`The schedule daemon is already running (pid ${held.pid}).\n`)
+    return 0
+  }
+  const appRunning = host.appRunning ?? (() => appSchedulerRunning())
+  let deferring = false
+  const backends = wireTerminalSessionBackends({
+    startScheduler: true,
+    notify: (m) => log.info(`schedule daemon: ${m}`),
+    shouldFire: () => {
+      const app = appRunning()
+      if (app !== deferring) {
+        deferring = app
+        log.info(app ? 'schedule daemon: the desktop app is open; leaving scheduled runs to it' : 'schedule daemon: firing scheduled runs')
+      }
+      return !app
+    }
+  })
+  log.info(`schedule daemon${host.version ? ` ${host.version}` : ''} started (pid ${process.pid})`)
+  out(`Houston schedule daemon running (pid ${process.pid}). Stop it with Ctrl-C.\n`)
+
+  let stop: () => void = () => {}
+  const stopped = new Promise<void>((resolve) => (stop = resolve))
+  host.signal?.addEventListener('abort', () => stop(), { once: true })
+  // The scheduler's timers don't hold the process open; this does, until stopped.
+  const keepAlive = setInterval(() => {}, 1 << 30)
+  const cleanup = installSignalCleanup(
+    async () => {
+      stop()
+      backends.scheduler.stop()
+      // Runs in flight record that they were stopped; then their commands and servers go.
+      await stopLiveRuns()
+      killAllShells()
+      disconnectAllMcp()
+      await lspManager.stopAll()
+      held.release()
+    },
+    {
+      signals: ['SIGHUP', 'SIGTERM', 'SIGINT'],
+      ...(host.proc ? { proc: host.proc } : {}),
+      beforeSignalExit: async () => {
+        flushRuleUsage()
+        await host.flush?.()
+      },
+      onSignal: (sig) => log.info(`schedule daemon: received ${sig}; stopping`)
+    }
+  )
+  try {
+    await stopped
+    await cleanup.run()
+  } finally {
+    clearInterval(keepAlive)
+    cleanup.dispose()
+    held.release()
+  }
+  log.info('schedule daemon stopped')
+  return 0
 }
 
 /** Run the one-shot headless client to completion. Returns the exit code. */
@@ -948,8 +1112,11 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
           interrupted = true
           handler(signal)
         }),
-      out: (s) => process.stdout.write(s),
-      err: (s) => process.stderr.write(s),
+      // On a terminal, the answer and the progress lines are text the model and its
+      // tools wrote, so they pass the TUI's output filter: no escape in them can drive
+      // the terminal. Piped output stays byte-exact for the script reading it.
+      out: (s) => process.stdout.write(process.stdout.isTTY ? filterTerminalOutput(s) : s),
+      err: (s) => process.stderr.write(process.stderr.isTTY ? filterTerminalOutput(s) : s),
       readStdin: readAllStdin,
       readStdinLines,
       ...(opts.version ? { version: opts.version } : {}),
@@ -1030,7 +1197,7 @@ export function reserveStdoutForProtocol(): (frame: string) => void {
  * Run Houston as an Agent Client Protocol server on stdio (`--acp`) until the
  * editor closes the connection. Returns the exit code.
  */
-export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
+export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOptions = {}): Promise<number> {
   const writeFrame = reserveStdoutForProtocol()
   // The editor went away mid-write: there is no one left to serve, so live prompts
   // are cancelled rather than left editing files for a reader that is gone.
@@ -1066,6 +1233,7 @@ export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
           process.stderr.write(`${m}\n`)
         },
         version: host.version ?? 'dev',
+        ...launch,
         store: {
           create: ({ workspace, providerId, model }) => createConversation({ workspace, providerId, model }),
           get: (id) => {
@@ -1096,13 +1264,20 @@ export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
           // A setting the user changed on the chat (model, effort, approval mode), saved
           // as they change it, the way the desktop app and the terminal keep it.
           setSettings: (id, patch) => void setConversationSettings(id, patch),
-          title: (id) => peekConversation(id)?.title
+          title: (id) => peekConversation(id)?.title,
+          // session/delete: the desktop app's delete, so a live run and shells stop too.
+          remove: (id) => {
+            if (!conversationExists(id)) return false
+            stopAndDeleteConversation(id)
+            return true
+          }
         },
         // The workspace's own slash commands, skills and agents, read fresh each time.
-        commands: (cwd) => loadCommands(cwd),
+        commands: (cwd) => loadSlashCommands(cwd),
         skills: async (cwd) => (await loadSkills(cwd)).map((k) => ({ name: k.name, description: k.description })),
         agents: async (cwd) => (await loadAgents(cwd)).map((a) => ({ name: a.name, description: a.description })),
-        compact: (id, providerId, model) => compactConversationNow(id, providerId, model)
+        compact: (id, providerId, model, focus) =>
+          compactConversationNow(id, providerId, model, focus ? { focus } : {})
       },
       { shutdown: shutdown.signal, outputClosed: outputClosed.signal }
     )

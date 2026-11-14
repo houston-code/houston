@@ -46,6 +46,8 @@ export async function describePermissionPolicy(
       allowRules,
       hooks,
       mcpServers: mcpServers.map(describeServer),
+      // Name and hash only: the source stays in main.
+      plugins: cfg.elevated.plugins.map((p) => ({ name: p.name, sha256: p.sha256 })),
       trust: cfg.elevatedHash ? deps.trustFor(workspace, cfg.elevatedHash) : 'none'
     }
   }
@@ -95,8 +97,10 @@ export async function testPermission(
   const userMatches = input.userRules.flatMap((r, i) =>
     valid(r) && matchRule([r], tool, subject, roots) !== null ? [i] : []
   )
-  // The first tier that reaches a verdict on its own, which (the tiers being matched in
-  // order) is the one that decided.
+  // The tier that decided. A deny wins wherever it sits, so a deny decision belongs to
+  // the first tier holding a matching deny (one with an allow or ask earlier in the
+  // list did not decide it). Otherwise the first tier that reaches a verdict on its own,
+  // which (the tiers being matched in order) is the one whose allow or ask came first.
   const tiers: Array<[NonNullable<PermissionTestResult['tier']>, PermissionRule[]]> = [
     ['managed', managed],
     ['project', projectRules],
@@ -106,7 +110,8 @@ export async function testPermission(
   let tier: PermissionTestResult['tier'] = null
   if (decision !== null) {
     for (const [name, rules] of tiers) {
-      if (rules.length > 0 && matchRule(rules, tool, subject, roots) !== null) {
+      const verdict = rules.length > 0 ? matchRule(rules, tool, subject, roots) : null
+      if (decision === 'deny' ? verdict === 'deny' : verdict !== null) {
         tier = name
         break
       }

@@ -4,13 +4,15 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import type { ITheme } from '@xterm/xterm'
+import { ansiPalette } from '../lib/terminalPalette'
 
 /** Read the current palette from the app's CSS variables so the terminal matches
- * the active (dark/light) theme. */
+ * the active (dark/light) theme, with ANSI colours made for that background. */
 function themeFromCss(): ITheme {
   const css = getComputedStyle(document.documentElement)
   const v = (name: string, fallback: string): string => css.getPropertyValue(name).trim() || fallback
   return {
+    ...ansiPalette(document.documentElement.dataset.theme),
     background: v('--bg-code', '#08090b'),
     foreground: v('--text', '#e8e9ec'),
     cursor: v('--accent', '#4f8cff'),

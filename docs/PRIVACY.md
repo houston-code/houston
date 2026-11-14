@@ -7,7 +7,7 @@
 
 # Privacy
 
-**Last updated: October 23, 2026**
+**Last updated: November 14, 2026**
 
 Houston is a locally installed coding agent. You bring your own model and
 credentials, so almost every privacy question comes down to one thing: which
@@ -42,6 +42,12 @@ directory and sends none of it anywhere:
   or from plain-text credential files in Houston's application-data directory, which
   it writes readable only by your user account.
 - **Window and interface state**: window size, panel layout, and the like.
+- **Crash dumps**: if the desktop app crashes, it saves a crash dump (a snapshot of
+  the crashed process, which can include part of what was in memory) in a
+  `Crashpad` folder in Houston's application-data directory. Crash dumps are never
+  uploaded.
+  Report an Issue lists the file names of recent dumps so you can decide whether to
+  attach one yourself.
 - **Memories**: facts the agent saves between conversations (your preferences and
   corrections, and things about a project the code doesn't show), one file each in
   `~/.houston/memory` in your home folder, readable only by your user account. You
@@ -67,6 +73,9 @@ only to the destination you configured:
   flow.
 - **External tools (Model Context Protocol servers).** Data needed for a tool's
   calls goes to the server you configured.
+- **MCP Registry.** When you search it from Settings > MCP Servers or with
+  `/mcp search`, your search words go to the official MCP Registry
+  (registry.modelcontextprotocol.io). Nothing is sent until you search.
 - **GitHub.** If you have the GitHub CLI (`gh`) installed and signed in, the GitHub
   tools send their requests (for example, opening a pull request or reading an
   issue) to GitHub through your own `gh`, under your GitHub account.

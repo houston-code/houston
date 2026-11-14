@@ -284,7 +284,11 @@ vi.mock('../github', async (importActual) => ({
 }))
 vi.mock('../plugins', () => {
   const inert = { has: () => false, size: 0, emit: async () => {} }
-  return { loadPlugins: async () => inert, loadPluginsIfEnabled: async () => inert }
+  return {
+    loadPlugins: async () => inert,
+    loadTrustedPlugins: async () => inert,
+    readPluginFiles: async () => ({ files: [], skipped: [] })
+  }
 })
 
 // Imported after the mocks are registered.

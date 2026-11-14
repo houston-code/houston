@@ -12,7 +12,17 @@ import { ultrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
-import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel, SidebarGroupBy } from '@shared/types'
+import type {
+  AppSettings,
+  ApprovalPolicy,
+  ChatGroup,
+  ChatLabel,
+  LabelColor,
+  SandboxStatus,
+  SelectedModel,
+  SidebarGroupBy
+} from '@shared/types'
+import { cleanLabelName, newLabelId, nextLabelColor, readChatLabels, readLabelFilters } from '@shared/chatLabels'
 import type {
   ConversationMeta,
   PlanDecision,
@@ -62,15 +72,22 @@ import {
   shiftTabCyclesMode,
   escapeStopsRun
 } from './lib/shortcuts'
-import { chatAtIndex, cycleChatId } from './lib/sessionNav'
+import { chatAtIndex, cycleChatId, windowTitle } from './lib/sessionNav'
 import { coalesced } from './lib/coalesce'
 import { nextApprovalPolicy } from './lib/policyCycle'
 import { resolveShortcuts } from './lib/keybindingOverrides'
-import { modelPaletteItems, type PaletteItem } from './lib/palette'
+import { chatPlace, modelPaletteItems, type PaletteItem } from './lib/palette'
+import { useChatGap } from './lib/chatGap'
 import { statusText } from './lib/statusLine'
 import { playAttentionSound } from './lib/attentionSound'
 import { RunMeterText } from './components/RunMeterText'
-import { newGroupId } from './lib/chatGroups'
+import {
+  collapsedAfterGroupDelete,
+  newGroupId,
+  sidebarChatOrder,
+  sidebarSections,
+  type SidebarLayoutInput
+} from './lib/chatGroups'
 import { checkpointNotice } from './lib/checkpointNotice'
 import { occludesPreview, ownsShiftTab, shortcutAllowedOverModal, suppressesTips, type OverlayFlags } from './lib/overlays'
 import { baseName } from './lib/paths'
@@ -83,9 +100,15 @@ import {
   SIDEBAR_NUDGE_STEP,
   SIDEBAR_RAIL_WIDTH
 } from './lib/sidebar'
-import { clampTerminalHeight, TERMINAL_DEFAULT_HEIGHT } from './lib/terminalPanel'
-import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH } from './lib/previewPanel'
-import { clampPlanWidth, PLAN_DEFAULT_WIDTH } from './lib/planPanel'
+import {
+  clampTerminalHeight,
+  TERMINAL_DEFAULT_HEIGHT,
+  TERMINAL_MAX_HEIGHT,
+  TERMINAL_MIN_HEIGHT
+} from './lib/terminalPanel'
+import { clampPreviewWidth, PREVIEW_DEFAULT_WIDTH, PREVIEW_MAX_WIDTH, PREVIEW_MIN_WIDTH } from './lib/previewPanel'
+import { clampPlanWidth, PLAN_DEFAULT_WIDTH, PLAN_MAX_WIDTH, PLAN_MIN_WIDTH } from './lib/planPanel'
+import type { PanelSize } from './components/PanelResizer'
 import { afterPlan, forgetDockTab, readDockTab, rememberDockTab, type DockState } from './lib/dockLayout'
 import { usePreviewServers } from './hooks/usePreviewServers'
 import { ownedByChat } from './lib/chatScope'
@@ -114,6 +137,7 @@ import { TerminalChip } from './components/TerminalChip'
 import { TasksPanel } from './components/TasksPanel'
 import { ProjectCard } from './components/ProjectCard'
 import type { DockTab } from './components/PreviewDock'
+import { ItemBoundary } from './components/ItemBoundary'
 import { ControlBar, POLICY_LABEL } from './components/ControlBar'
 import { chatSettingsFor, defaultChatSettings, differsFromDefaults, withChatSettings, type ChatSettings } from './lib/chatSettings'
 import { Transcript, type RewindHandlers } from './components/Transcript'
@@ -135,6 +159,7 @@ import { ImportNotice } from './components/ImportNotice'
 import { EnvKeyNotice } from './components/EnvKeyNotice'
 import { saveMemoryAndNotify } from './lib/memorySave'
 import { TrustFolderBanner } from './components/TrustFolderBanner'
+import { Toast, ToastStack } from './components/Toasts'
 import { UpdateBanner } from './components/UpdateBanner'
 import { useUpdateBanner } from './hooks/useUpdateBanner'
 import { GetStarted } from './components/GetStarted'
@@ -164,6 +189,8 @@ import {
 import { isAnyPopoverOpen } from './components/Popover'
 import { Icon } from './components/Icon'
 import { StatusBarInfo } from './components/StatusBarInfo'
+import { RateLimitChip } from './components/RateLimitChip'
+import { useRateLimits } from './hooks/useRateLimits'
 import { TurnErrorBar } from './components/TurnErrorBar'
 import type { TurnErrorAction } from '@shared/turnError'
 import { CommandPalette } from './components/CommandPalette'
@@ -300,7 +327,14 @@ export default function App(): JSX.Element {
   // Tagged with its chat: the Composer remounts per chat and applies a prefill on
   // mount, so one meant for another chat must never reach it.
   const [composerPrefill, setComposerPrefill] = useState<
-    { text: string; images?: ImageAttachment[]; seq: number; conversationId: string | null } | undefined
+    | {
+        text: string
+        images?: ImageAttachment[]
+        seq: number
+        conversationId: string | null
+        kind?: 'edit' | 'suggestion'
+      }
+    | undefined
   >()
   const [canUndoRewind, setCanUndoRewind] = useState(false)
   // The full-size image viewer (a show_images gallery or a tool-card screenshot).
@@ -378,6 +412,9 @@ export default function App(): JSX.Element {
   // true only when the user dismisses it (×), hiding it without discarding the plan.
   const [planClosed, setPlanClosed] = useState(false)
   const appRef = useRef<HTMLDivElement>(null)
+  // The chat column: its gutter follows its own width, not the window's (see chatGap.ts).
+  const mainRef = useRef<HTMLElement>(null)
+  useChatGap(mainRef, settings !== null)
   // True while the first message of a new chat is creating its conversation/worktree,
   // to reject a concurrent second send (see sendNow).
   const creatingConvRef = useRef(false)
@@ -572,11 +609,8 @@ export default function App(): JSX.Element {
     link?: { label: string; open: () => void }
     ms?: number
   } | null>(null)
-  useEffect(() => {
-    if (!undoToast) return
-    const t = setTimeout(() => setUndoToast(null), undoToast.ms ?? 6000)
-    return () => clearTimeout(t)
-  }, [undoToast])
+  // It leaves on its own after `ms` (6s by default): see Toast, which holds it while
+  // hovered or focused.
 
   // Answer an approval. After "Always allow / deny", name the rule that was saved, with
   // Undo and a way to the Permissions page.
@@ -675,6 +709,11 @@ export default function App(): JSX.Element {
     () => conversations.find((c) => c.id === currentId) ?? null,
     [conversations, currentId]
   )
+  // Name the window after its chat (the native window title follows the document's).
+  const currentTitle = currentConv?.title
+  useEffect(() => {
+    document.title = windowTitle(currentTitle)
+  }, [currentTitle])
   const workspace = currentConv?.workspace ?? lastWorkspace
   // File paths in the transcript (tool rows, the receipt, relative links in replies)
   // open in the Files tab's preview, at the line when one is known. The tab is opened
@@ -839,7 +878,7 @@ export default function App(): JSX.Element {
   // Start a turn immediately with the given text/images, creating a conversation
   // first if this is the very first message — in a fresh worktree when set up.
   const sendNow = useCallback(
-    async (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation) => {
+    async (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation, commandGrant?: string) => {
       if (!settings?.selected || !workspace) return
       let convId = currentId
       if (!convId) {
@@ -888,7 +927,8 @@ export default function App(): JSX.Element {
             providerId: settings.selected.providerId,
             model: settings.selected.model,
             approvalPolicy: settings.approvalPolicy,
-            reasoningEffort: settings.reasoningEffort
+            reasoningEffort: settings.reasoningEffort,
+            ...(commandGrant ? { commandGrant } : {})
           })
           if (!started) giveBackText(conv.id, text, images)
           void refreshConversations()
@@ -910,7 +950,8 @@ export default function App(): JSX.Element {
         providerId: settings.selected.providerId,
         model: settings.selected.model,
         approvalPolicy: settings.approvalPolicy,
-        reasoningEffort: settings.reasoningEffort
+        reasoningEffort: settings.reasoningEffort,
+        ...(commandGrant ? { commandGrant } : {})
       })
       void refreshConversations()
     },
@@ -935,6 +976,8 @@ export default function App(): JSX.Element {
   // Uncommitted-change counts for the titlebar Changes badge (refreshes on run
   // completion / window focus).
   const workingTreeStats = useWorkingTreeStats(workspace, chat.running)
+  // The last rate-limit state each provider reported, for the status bar.
+  const rateLimits = useRateLimits()
   // The branch's pull request for the composer chip; gh is asked only for a GitHub remote.
   const prStatus = usePrStatus(workspace, workingTreeStats.ship?.remote?.host === 'github', chat.running)
 
@@ -1114,12 +1157,8 @@ export default function App(): JSX.Element {
   }, [enterNewChat, refreshRecentFolders])
 
   // A short note for a folder that could not be opened (a vanished recent, a dropped file).
+  // Shown for 4s as a toast.
   const [folderNotice, setFolderNotice] = useState<string | null>(null)
-  useEffect(() => {
-    if (!folderNotice) return
-    const t = setTimeout(() => setFolderNotice(null), 4000)
-    return () => clearTimeout(t)
-  }, [folderNotice])
 
   // Open a folder by path: a recent from the welcome screen or folder menu, or the
   // paths of a drop on the window (the first that is a folder wins). Main checks each.
@@ -1158,13 +1197,19 @@ export default function App(): JSX.Element {
       saveComposerDraft(id, '') // drop the deleted conversation's lingering draft
       if (res.worktree?.message) alert(res.worktree.message)
       if (id === currentId) {
-        nav.begin()
-        setCurrentId(null)
-        chat.reset([])
+        // Land on a new chat in the deleted chat's project, never its worktree
+        // checkout, which the delete may just have removed.
+        const meta = conversations.find((c) => c.id === id)
+        if (meta) enterNewChat(newChatFolder(meta))
+        else {
+          nav.begin()
+          setCurrentId(null)
+          chat.reset([])
+        }
       }
       await refreshConversations()
     },
-    [currentId, chat, refreshConversations, nav]
+    [currentId, conversations, chat, refreshConversations, nav, enterNewChat]
   )
 
   // "Fork from here": a new chat holding the conversation up to a message. From one
@@ -1338,12 +1383,31 @@ export default function App(): JSX.Element {
     setSettings(await window.api.saveSettings(next))
   }, [])
 
+  // Archiving the open chat takes its row out of the list, so it also leaves the chat
+  // for a new one in the same project (as marking it unread does). An Undo toast
+  // brings it back and reopens it. A search still lists archived chats, so the chat
+  // stays open then.
   const onSetArchived = useCallback(
     async (id: string, archived: boolean) => {
       await window.api.organizeConversation(id, { archived })
+      if (archived && id === currentId && !search) {
+        const meta = conversations.find((c) => c.id === id)
+        if (meta) {
+          enterNewChat(newChatFolder(meta))
+          setUndoToast({
+            text: `Archived “${meta.title}”.`,
+            undo: () => {
+              void window.api
+                .organizeConversation(id, { archived: false })
+                .then(() => refreshConversations())
+                .then(() => selectConversation(id))
+            }
+          })
+        }
+      }
       await refreshConversations()
     },
-    [refreshConversations]
+    [refreshConversations, currentId, search, conversations, enterNewChat, selectConversation]
   )
 
   const onMoveConversation = useCallback(
@@ -1433,11 +1497,90 @@ export default function App(): JSX.Element {
       const members = conversations.filter((c) => c.groupId === groupId)
       await Promise.all(members.map((c) => window.api.organizeConversation(c.id, { groupId: null })))
       const current = await window.api.getSettings()
-      await saveGroups((current.chatGroups ?? []).filter((g) => g.id !== groupId))
+      const chatGroups = (current.chatGroups ?? []).filter((g) => g.id !== groupId)
+      // The last group gone, Ungrouped loses its header (and with it the controls to
+      // expand it or clear its label filter), so it can't stay collapsed or filtered.
+      const collapsedSections = collapsedAfterGroupDelete(current.collapsedSections, chatGroups.length)
+      const filters = { ...(current.sectionLabelFilters ?? {}) }
+      delete filters[groupId]
+      if (chatGroups.length === 0) delete filters.ungrouped
+      setSettings(
+        await window.api.saveSettings({
+          ...current,
+          chatGroups,
+          sectionLabelFilters: filters,
+          ...(collapsedSections ? { collapsedSections } : {})
+        })
+      )
       await refreshConversations()
     },
-    [conversations, saveGroups, refreshConversations]
+    [conversations, refreshConversations]
   )
+
+  // ---- Chat labels (definitions and section filters persisted in settings) ----
+
+  // settings.json is user-editable: read both through the sanitizers.
+  const chatLabels = useMemo(() => readChatLabels(settings?.chatLabels), [settings?.chatLabels])
+  const labelFilters = useMemo(
+    () => readLabelFilters(settings?.sectionLabelFilters, new Set(chatLabels.map((l) => l.id))),
+    [settings?.sectionLabelFilters, chatLabels]
+  )
+
+  const onCreateLabel = useCallback(async (name: string): Promise<string> => {
+    const current = await window.api.getSettings()
+    const labels = readChatLabels(current.chatLabels)
+    const label: ChatLabel = { id: newLabelId(), name: cleanLabelName(name) || 'New label', color: nextLabelColor(labels) }
+    setSettings(await window.api.saveSettings({ ...current, chatLabels: [...labels, label] }))
+    return label.id
+  }, [])
+
+  const onUpdateLabel = useCallback(async (id: string, patch: { name?: string; color?: LabelColor }) => {
+    const current = await window.api.getSettings()
+    const name = patch.name === undefined ? undefined : cleanLabelName(patch.name)
+    const labels = readChatLabels(current.chatLabels).map((l) =>
+      l.id === id ? { ...l, ...(name ? { name } : {}), ...(patch.color ? { color: patch.color } : {}) } : l
+    )
+    setSettings(await window.api.saveSettings({ ...current, chatLabels: labels }))
+  }, [])
+
+  const onDeleteLabel = useCallback(
+    async (id: string) => {
+      // Take the label off every chat (archived ones too) before dropping it.
+      const all = await window.api.listConversations()
+      await Promise.all(
+        all
+          .filter((c) => c.labels?.includes(id))
+          .map((c) => window.api.organizeConversation(c.id, { labels: (c.labels ?? []).filter((l) => l !== id) }))
+      )
+      const current = await window.api.getSettings()
+      const labels = readChatLabels(current.chatLabels).filter((l) => l.id !== id)
+      setSettings(
+        await window.api.saveSettings({
+          ...current,
+          chatLabels: labels,
+          sectionLabelFilters: readLabelFilters(current.sectionLabelFilters, new Set(labels.map((l) => l.id)))
+        })
+      )
+      await refreshConversations()
+    },
+    [refreshConversations]
+  )
+
+  const onSetChatLabels = useCallback(
+    async (id: string, labels: string[]) => {
+      await window.api.organizeConversation(id, { labels })
+      await refreshConversations()
+    },
+    [refreshConversations]
+  )
+
+  const onSetSectionLabelFilter = useCallback(async (sectionId: string, ids: string[]) => {
+    const current = await window.api.getSettings()
+    const filters = { ...(current.sectionLabelFilters ?? {}) }
+    if (ids.length > 0) filters[sectionId] = ids
+    else delete filters[sectionId]
+    setSettings(await window.api.saveSettings({ ...current, sectionLabelFilters: filters }))
+  }, [])
 
   // Change the open chat's own settings: shown at once, saved to that chat only (the
   // defaults stay as they are). Without an open chat, the change goes to the defaults.
@@ -1670,6 +1813,22 @@ export default function App(): JSX.Element {
     [terminals, persistTerminal, selectConversation]
   )
 
+  // The keyboard and double-click side of the terminal's resizer.
+  const terminalSize = useMemo<PanelSize>(
+    () => ({
+      value: terminalHeight,
+      min: TERMINAL_MIN_HEIGHT,
+      max: TERMINAL_MAX_HEIGHT,
+      defaultValue: TERMINAL_DEFAULT_HEIGHT,
+      onChange: (px) => {
+        const h = clampTerminalHeight(px)
+        setTerminalHeight(h)
+        void persistTerminal({ terminalHeight: h })
+      }
+    }),
+    [terminalHeight, persistTerminal]
+  )
+
   // Drag the panel's top edge: update the height CSS variable live (no re-render of
   // the transcript while dragging), then commit to state/settings on release.
   // Dragging up grows the panel, so height increases as the cursor's Y decreases.
@@ -1728,12 +1887,19 @@ export default function App(): JSX.Element {
   const togglePreview = useCallback(() => toggleDockTab('preview'), [toggleDockTab])
   const toggleChanges = useCallback(() => toggleDockTab('changes'), [toggleDockTab])
   // A dev server the agent started in this chat showed its address: open the Preview
-  // once per chat (not persisted, so the next launch keeps the user's own choice).
+  // once per chat (not persisted, so the next launch keeps the user's own choice). A
+  // side panel that is already open keeps its tab (see useAutoOpenPreview).
   const autoOpenPreview = useCallback(() => {
     setDockTabState('preview')
     setPreviewOpen(true)
   }, [])
-  useAutoOpenPreview(allPreviewServers, currentId, settings?.previewAutoOpen !== false, autoOpenPreview)
+  useAutoOpenPreview(
+    allPreviewServers,
+    currentId,
+    settings?.previewAutoOpen !== false,
+    autoOpenPreview,
+    previewOpen
+  )
   const toggleTasks = useCallback(() => toggleDockTab('tasks'), [toggleDockTab])
   const closeDock = useCallback(() => {
     setPreviewOpen(false)
@@ -1812,6 +1978,21 @@ export default function App(): JSX.Element {
     [previewWidth, persistPreview]
   )
 
+  const previewSize = useMemo<PanelSize>(
+    () => ({
+      value: previewWidth,
+      min: PREVIEW_MIN_WIDTH,
+      max: PREVIEW_MAX_WIDTH,
+      defaultValue: PREVIEW_DEFAULT_WIDTH,
+      onChange: (px) => {
+        const w = clampPreviewWidth(px)
+        setPreviewWidth(w)
+        void persistPreview({ previewWidth: w })
+      }
+    }),
+    [previewWidth, persistPreview]
+  )
+
   // ---- Plan-review panel (Plan mode: docked, resizable width, persisted) ----
 
   const pendingPlan = chat.pendingPlan
@@ -1875,6 +2056,21 @@ export default function App(): JSX.Element {
       window.addEventListener('mousemove', onMove)
       window.addEventListener('mouseup', onUp)
     },
+    [planWidth, persistPlan]
+  )
+
+  const planSize = useMemo<PanelSize>(
+    () => ({
+      value: planWidth,
+      min: PLAN_MIN_WIDTH,
+      max: PLAN_MAX_WIDTH,
+      defaultValue: PLAN_DEFAULT_WIDTH,
+      onChange: (px) => {
+        const w = clampPlanWidth(px)
+        setPlanWidth(w)
+        void persistPlan({ planWidth: w })
+      }
+    }),
     [planWidth, persistPlan]
   )
 
@@ -1948,8 +2144,14 @@ export default function App(): JSX.Element {
   }, [chat])
 
   const dispatch = useCallback(
-    (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation) => {
-      // Defer messages typed mid-run; main combines and sends them when it ends.
+    (text: string, images?: ImageAttachment[], invokedAs?: PromptInvocation, commandGrant?: string) => {
+      // Defer messages typed mid-run; main combines and sends them when it ends. (A
+      // command with per-turn options never queues: the composer holds it until the
+      // turn ends, and main refuses one that races a run.)
+      if (chat.running && commandGrant) {
+        chat.notify('That command runs once the current turn ends. Send it again then.', 'error')
+        return
+      }
       if (chat.running && settings?.selected) {
         queue.enqueue({
           text,
@@ -1960,20 +2162,23 @@ export default function App(): JSX.Element {
           approvalPolicy: settings.approvalPolicy,
           reasoningEffort: settings.reasoningEffort
         })
-      } else void sendNow(text, images, invokedAs)
+      } else void sendNow(text, images, invokedAs, commandGrant)
     },
-    [chat.running, settings, queue, sendNow]
+    [chat, settings, queue, sendNow]
   )
 
   // ---- Rewind ----
 
+  // `edit` sets the composer's draft aside until the edit ends; `suggestion` (a
+  // starter or example task) never replaces a draft the user has typed.
   const prefillComposer = useCallback(
-    (text: string, images?: ImageAttachment[]) => {
+    (text: string, images?: ImageAttachment[], kind?: 'edit' | 'suggestion') => {
       setComposerPrefill((prev) => ({
         text,
         ...(images?.length ? { images } : {}),
         seq: (prev?.seq ?? 0) + 1,
-        conversationId: currentId
+        conversationId: currentId,
+        ...(kind ? { kind } : {})
       }))
     },
     [currentId]
@@ -2032,7 +2237,7 @@ export default function App(): JSX.Element {
       setRewindConfirm(null)
       setRewindPickerOpen(false)
       setEditing({ target, mode: 'both' })
-      prefillComposer(target.text, target.images)
+      prefillComposer(target.text, target.images, 'edit')
     },
     [prefillComposer]
   )
@@ -2180,9 +2385,30 @@ export default function App(): JSX.Element {
   const onInvoke = useCallback(
     (turn: InvokedTurn) =>
       void sendAfterEdit(turn.invokedAs.typed ?? turn.text, undefined, () =>
-        dispatch(turn.text, undefined, turn.invokedAs)
+        dispatch(turn.text, undefined, turn.invokedAs, turn.grant)
       ),
     [dispatch, sendAfterEdit]
+  )
+
+  // A custom command whose frontmatter sets its turn's model, effort, agent or tools:
+  // main reads it from disk and decides what this folder's trust allows, then the
+  // turn goes out like any invoked one, carrying main's token for those options.
+  const onRunCommand = useCallback(
+    (cmd: Command, args: string, typed: string) => {
+      if (!workspace) return
+      void window.api
+        .prepareCommand(workspace, cmd.name, args, typed)
+        .then((res) => {
+          if (!res.ok) {
+            chat.notify(res.error, 'error')
+            return
+          }
+          if (res.notes.length) chat.notify(res.notes.join('. ').concat('.'))
+          onInvoke(res.turn)
+        })
+        .catch(() => chat.notify(`Couldn't run /${cmd.name}.`, 'error'))
+    },
+    [workspace, chat, onInvoke]
   )
 
   // The project card's "Write one with /init": the same turn as typing /init.
@@ -2228,7 +2454,7 @@ export default function App(): JSX.Element {
       if (!run) return
       shellEscapes.current.delete(id)
       if (!run.conversationId) {
-        chat.notify('Ran in the terminal. Its output is in the chat only once a chat has started.')
+        chat.notify("Ran in the terminal. Its output wasn't added because this chat hasn't started yet.")
         return
       }
       void window.api
@@ -2380,7 +2606,7 @@ export default function App(): JSX.Element {
     })
   }, [])
 
-  const onCompact = useCallback(async () => {
+  const onCompact = useCallback(async (focus?: string) => {
     if (!currentId || !settings?.selected) return
     if (compacting) {
       chat.notify('A compaction is already in progress.')
@@ -2391,7 +2617,12 @@ export default function App(): JSX.Element {
     setCompacting({ id })
     let res: Awaited<ReturnType<typeof window.api.compactConversation>>
     try {
-      res = await window.api.compactConversation(id, settings.selected.providerId, settings.selected.model)
+      res = await window.api.compactConversation(
+        id,
+        settings.selected.providerId,
+        settings.selected.model,
+        focus?.trim() || undefined
+      )
     } catch (e) {
       res = { ok: false, summarized: 0, error: (e as Error)?.message }
     } finally {
@@ -2586,7 +2817,7 @@ export default function App(): JSX.Element {
       // Only built-in action commands reach here; custom (template) commands are
       // expanded into the composer by the Composer itself.
       if (cmd.name === 'new' || cmd.name === 'clear') void onNewChat()
-      else if (cmd.name === 'compact') void onCompact()
+      else if (cmd.name === 'compact') void onCompact(args)
       else if (cmd.name === 'skills') void onListCapability('skills')
       else if (cmd.name === 'agents') void onListCapability('agents')
       else if (cmd.name === 'agent') {
@@ -2627,21 +2858,56 @@ export default function App(): JSX.Element {
   // applied. Drives global matching, the help overlay, and palette key hints.
   const shortcuts = useMemo(() => resolveShortcuts(settings?.keybindings), [settings?.keybindings])
 
-  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the currently visible list.
+  // What the sidebar lays its sections out from. The Sidebar gets exactly these, and
+  // keyboard chat-switching reads the same layout, so a shortcut lands on the row the
+  // user sees. A search lists every hit outside the groups.
+  const sidebarLayout = useMemo<SidebarLayoutInput>(
+    () => ({
+      conversations: visibleConversations,
+      groups: search ? [] : settings?.chatGroups ?? [],
+      search,
+      collapsedSections: settings?.collapsedSections ?? {},
+      chatStatus,
+      currentId,
+      unreadFirst: settings?.sidebarUnreadFirst ?? false,
+      ...(settings?.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {}),
+      labelFilters
+    }),
+    [
+      visibleConversations,
+      search,
+      settings?.chatGroups,
+      settings?.collapsedSections,
+      settings?.sidebarUnreadFirst,
+      settings?.sidebarGroupBy,
+      labelFilters,
+      chatStatus,
+      currentId
+    ]
+  )
+  // The chats top to bottom as the sidebar shows them (collapsed sections, chats a
+  // label filter hides, and folded spawned chats left out), read when a shortcut fires
+  // so the date sections are current.
+  const sidebarOrder = useCallback(
+    () => sidebarChatOrder(sidebarSections(sidebarLayout), collapsedParents, currentId),
+    [sidebarLayout, collapsedParents, currentId]
+  )
+
+  // Keyboard chat-switching (⌘1–9, ⌃Tab / ⌃⇧Tab) over the sidebar's rows, in its order.
   const jumpToChat = useCallback(
     (index: number) => {
-      const id = chatAtIndex(visibleConversations, index)
+      const id = chatAtIndex(sidebarOrder(), index)
       if (id && id !== currentId) void selectConversation(id)
     },
-    [visibleConversations, currentId, selectConversation]
+    [sidebarOrder, currentId, selectConversation]
   )
 
   const cycleChat = useCallback(
     (dir: 1 | -1) => {
-      const id = cycleChatId(visibleConversations, currentId, dir)
+      const id = cycleChatId(sidebarOrder(), currentId, dir)
       if (id && id !== currentId) void selectConversation(id)
     },
-    [visibleConversations, currentId, selectConversation]
+    [sidebarOrder, currentId, selectConversation]
   )
 
   // Shift+Tab steps to the next approval mode and confirms it in the transcript
@@ -2688,10 +2954,10 @@ export default function App(): JSX.Element {
       },
       {
         id: 'act-toggle-terminal',
-        title: 'Toggle the integrated terminal',
+        title: terminalOpen ? 'Hide terminal' : 'Show terminal',
         section: 'Actions',
         hint: shortcutHint('toggle-terminal', mac, shortcuts),
-        keywords: 'shell console',
+        keywords: 'toggle integrated shell console',
         run: toggleTerminal
       },
       {
@@ -2880,7 +3146,7 @@ export default function App(): JSX.Element {
       items.push({
         id: `chat-${c.id}`,
         title: c.title || 'Untitled chat',
-        subtitle: baseName(c.workspace),
+        subtitle: chatPlace(c),
         section: 'Switch chat',
         run: () => void selectConversation(c.id)
       })
@@ -2895,6 +3161,7 @@ export default function App(): JSX.Element {
     workspace,
     currentId,
     sidebarCollapsed,
+    terminalOpen,
     previewOpen,
     dockTab,
     sideChatOpen,
@@ -3131,7 +3398,12 @@ export default function App(): JSX.Element {
   ])
 
   if (!settings) {
-    return <div className="loading">Loading…</div>
+    return (
+      <div className="loading">
+        <div className="window-drag" aria-hidden="true" />
+        Loading…
+      </div>
+    )
   }
 
   // The composer is usable only when the *selected* provider is actually ready —
@@ -3211,18 +3483,14 @@ export default function App(): JSX.Element {
       }
     >
       <Sidebar
-        conversations={visibleConversations}
-        groups={search ? [] : settings.chatGroups ?? []}
-        search={search}
+        {...sidebarLayout}
         onSearch={setSearch}
         focusSearchSignal={searchFocusSignal}
-        currentId={currentId}
         collapsed={sidebarCollapsed}
         onToggleCollapse={toggleSidebar}
         toggleShortcut={shortcutHint('toggle-sidebar', mac, shortcuts)}
         newChatShortcut={shortcutHint('new-chat', mac, shortcuts)}
         settingsShortcut={shortcutHint('open-settings', mac, shortcuts)}
-        chatStatus={chatStatus}
         onSelect={selectConversation}
         onNew={onNewChat}
         onDelete={onDeleteConversation}
@@ -3237,9 +3505,7 @@ export default function App(): JSX.Element {
         onSetArchived={onSetArchived}
         onSetUnread={onSetUnread}
         onMarkAllRead={onMarkAllRead}
-        unreadFirst={settings.sidebarUnreadFirst ?? false}
         onToggleUnreadFirst={onToggleUnreadFirst}
-        {...(settings.sidebarGroupBy ? { groupBy: settings.sidebarGroupBy } : {})}
         onSetGroupBy={(by) => void onSetSidebarGroupBy(by)}
         statusFilter={statusFilter}
         onStatusFilterChange={setStatusFilter}
@@ -3250,10 +3516,15 @@ export default function App(): JSX.Element {
         onRenameGroup={onRenameGroup}
         onDeleteGroup={onDeleteGroup}
         onToggleGroupCollapsed={onToggleGroupCollapsed}
-        collapsedSections={settings.collapsedSections ?? {}}
         onToggleSectionCollapsed={onToggleSectionCollapsed}
         collapsedParents={collapsedParents}
         onToggleParentCollapsed={(id) => void onToggleParentCollapsed(id)}
+        labels={chatLabels}
+        onSetSectionLabelFilter={(sectionId, ids) => void onSetSectionLabelFilter(sectionId, ids)}
+        onSetChatLabels={(id, ids) => void onSetChatLabels(id, ids)}
+        onCreateLabel={onCreateLabel}
+        onUpdateLabel={(id, patch) => void onUpdateLabel(id, patch)}
+        onDeleteLabel={(id) => void onDeleteLabel(id)}
       />
 
       {!sidebarCollapsed && (
@@ -3272,7 +3543,7 @@ export default function App(): JSX.Element {
         />
       )}
 
-      <div className="main">
+      <main className="main" ref={mainRef}>
         <Titlebar
           title={currentConv?.title ?? 'Houston'}
           tasks={backgroundTasks}
@@ -3310,8 +3581,17 @@ export default function App(): JSX.Element {
           onDismiss={updateBanner.dismiss}
         />
 
+        {/* Anchored under the titlebar and the update banner (when one shows), so the
+            find bar never covers the banner's buttons. */}
         {findOpen && (
-          <FindBar getRoots={getFindRoots} onClose={() => setFindOpen(false)} focusRequest={findRequest} />
+          <div className="find-anchor">
+            <FindBar
+              getRoots={getFindRoots}
+              onClose={() => setFindOpen(false)}
+              focusRequest={findRequest}
+              searchKey={currentId}
+            />
+          </div>
         )}
 
         {!launchSettled ? (
@@ -3340,7 +3620,7 @@ export default function App(): JSX.Element {
                 }
                 folderSummary={workspace ? baseName(workspace) : undefined}
                 taskExample={firstTaskExample(workspaceKind)}
-                onUseExample={(task) => prefillComposer(task)}
+                onUseExample={(task) => prefillComposer(task, undefined, 'suggestion')}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
                 recentFolders={recentFolders(settings.recentWorkspaces, workspace)}
@@ -3358,7 +3638,10 @@ export default function App(): JSX.Element {
                   />
                 )}
                 {canChat && currentId === null && (
-                  <StarterPrompts prompts={starterPrompts(workspaceKind)} onPick={(task) => prefillComposer(task)} />
+                  <StarterPrompts
+                    prompts={starterPrompts(workspaceKind)}
+                    onPick={(task) => prefillComposer(task, undefined, 'suggestion')}
+                  />
                 )}
                 {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
                 {currentId === null && (
@@ -3391,6 +3674,7 @@ export default function App(): JSX.Element {
             {...(currentId ? { onForkFrom: (n: number) => void forkFrom({ kind: 'reply', n }) } : {})}
             toolsExpanded={settings?.toolOutputExpanded === true}
             showReasoning={settings?.showReasoning === true}
+            announceReplies={settings?.announceReplies === true}
             {...(currentId && lastTurn && !chat.running ? { onRetryLast: () => void onRetryLast() } : {})}
             {...(currentId && (chatStatus[currentId]?.pending.length ?? 0) === 0
               ? { onMarkUnreadFrom: (n: number) => onSetUnread(currentId, true, n) }
@@ -3400,6 +3684,10 @@ export default function App(): JSX.Element {
           </FileLinkContext.Provider>
         )}
 
+        {/* The first-run notices share a capped, scrolling strip, so on a short window
+            a stack of them never pushes the message box off-screen or squeezes the
+            conversation to nothing. */}
+        <div className="notices">
         <TrustFolderBanner
           // Re-evaluate cleanly per workspace: a new folder gets its own banner state.
           key={`trust-${workspace ?? 'none'}`}
@@ -3440,6 +3728,7 @@ export default function App(): JSX.Element {
           onDismissed={setSettings}
           recheckSignal={gitInitRecheck}
         />
+        </div>
 
         {chat.errored && !chat.running && currentId && (
           <TurnErrorBar failure={chat.failure} onAction={onTurnErrorAction} />
@@ -3520,14 +3809,69 @@ export default function App(): JSX.Element {
           </div>
         )}
 
+        {/* Toasts float just above the terminal and the message box, never over them. */}
+        <ToastStack>
+          {folderNotice && (
+            <Toast ms={4000} resetKey={folderNotice} onDone={() => setFolderNotice(null)}>
+              <span>{folderNotice}</span>
+            </Toast>
+          )}
+          {undoToast && (
+            <Toast
+              ms={undoToast.ms ?? 6000}
+              resetKey={undoToast}
+              onDone={() => setUndoToast(null)}
+              className={undoToast.rules?.length ? 'undo-toast--rules' : ''}
+            >
+              <span className="undo-toast__text">{undoToast.text}</span>
+              {undoToast.rules && undoToast.rules.length > 0 && (
+                <ul className="undo-toast__rules">
+                  {undoToast.rules.map((r, i) => (
+                    <li key={i}>
+                      <code title={r}>{r}</code>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {undoToast.undo && (
+                <button
+                  type="button"
+                  className="undo-toast__btn"
+                  onClick={() => {
+                    undoToast.undo?.()
+                    setUndoToast(null)
+                  }}
+                >
+                  Undo
+                </button>
+              )}
+              {undoToast.link && (
+                <button
+                  type="button"
+                  className="undo-toast__btn"
+                  onClick={() => {
+                    undoToast.link?.open()
+                    setUndoToast(null)
+                  }}
+                >
+                  {undoToast.link.label}
+                </button>
+              )}
+            </Toast>
+          )}
+        </ToastStack>
+
         {terminalMounted && (
           <Suspense fallback={null}>
-            <TerminalDock
-              controller={terminals}
-              visible={terminalOpen}
-              onResizeMouseDown={onTerminalResizeMouseDown}
-              onClose={toggleTerminal}
-            />
+            <ItemBoundary>
+              <TerminalDock
+                controller={terminals}
+                visible={terminalOpen}
+                onResizeMouseDown={onTerminalResizeMouseDown}
+                size={terminalSize}
+                onClose={toggleTerminal}
+              />
+            </ItemBoundary>
           </Suspense>
         )}
 
@@ -3585,6 +3929,7 @@ export default function App(): JSX.Element {
             onSend={onSend}
             onShellEscape={runShellEscape}
             onInvoke={onInvoke}
+            onRunCommand={onRunCommand}
             onSteer={onSteer}
             answering={openQuestion !== null}
             onSaveMemory={onSaveMemory}
@@ -3619,18 +3964,21 @@ export default function App(): JSX.Element {
             branch={workspace ? workingTreeStats.branch : undefined}
             policy={canChat ? settings.approvalPolicy : null}
           />
+          <RateLimitChip state={rateLimits.find((s) => s.providerId === settings.selected?.providerId)} />
           {settings.selected && <span className="statusbar__model">{settings.selected.model}</span>}
         </footer>
-      </div>
+      </main>
 
       {previewOpen && (
         <Suspense fallback={null}>
+          <ItemBoundary>
           <PreviewDock
             servers={previewServers}
             // The native preview views paint above every HTML overlay; hide them (but
             // keep them alive) while one is open so a preview can't cover it.
             occluded={occludesPreview(overlays)}
             onResizeMouseDown={onPreviewResizeMouseDown}
+            size={previewSize}
             onClose={closeDock}
             // A tab whose content is gone (Files with no folder, a plan already
             // answered) falls back to Preview rather than an empty panel.
@@ -3640,20 +3988,25 @@ export default function App(): JSX.Element {
             focusRequest={previewFocus}
             taskCount={activeTaskCount(backgroundTasks)}
             changes={
+              <ItemBoundary>
               <DiffPanel
                 // A fresh view per chat and folder: its scope data belongs to them.
                 key={`${currentId ?? ''}:${workspace ?? ''}`}
                 workspace={workspace}
                 conversationId={currentId}
                 running={chat.running}
+                // Kept mounted behind the other tabs; it reads git only while it shows.
+                active={dockTab === 'changes'}
                 onShip={canChat ? onShip : undefined}
                 creating={chat.running}
                 commitForm
                 onSendComments={canChat ? onSendReviewComments : undefined}
               />
+              </ItemBoundary>
             }
             files={
               workspace ? (
+                <ItemBoundary>
                 <FilesPanel
                   // A new "Show in Files" target (or line) remounts the tree to reveal it.
                   key={filesPanelKey(workspace, filesTarget, filesLine, filesOpenSeq)}
@@ -3662,11 +4015,15 @@ export default function App(): JSX.Element {
                   initialLine={filesLine}
                   onClose={closeDock}
                   docked
+                  running={chat.running}
+                  active={dockTab === 'files'}
                 />
+                </ItemBoundary>
               ) : undefined
             }
             plan={
               planPanelOpen && pendingPlan ? (
+                <ItemBoundary>
                 <PlanPanel
                   plan={pendingPlan.plan}
                   revising={pendingPlan.revising === true}
@@ -3674,9 +4031,11 @@ export default function App(): JSX.Element {
                   onClose={() => setPlanClosed(true)}
                   docked
                 />
+                </ItemBoundary>
               ) : undefined
             }
             tasks={
+              <ItemBoundary>
               <TasksPanel
                 tasks={backgroundTasks}
                 currentId={currentId}
@@ -3690,8 +4049,10 @@ export default function App(): JSX.Element {
                 onOpenTerminal={openBackgroundTask}
                 onClearFinished={clearFinishedTasks}
               />
+              </ItemBoundary>
             }
           />
+          </ItemBoundary>
         </Suspense>
       )}
 
@@ -3709,6 +4070,7 @@ export default function App(): JSX.Element {
           onSendToMain={(question, answer) => onInvoke(sideChatTurn(question, answer))}
           onContinueInNewChat={(question, answer) => void onSideChatContinue(sideChatExchangeText(question, answer))}
           onResizeMouseDown={onPlanResizeMouseDown}
+          size={planSize}
         />
       )}
 
@@ -3792,49 +4154,6 @@ export default function App(): JSX.Element {
       {folderDragOver && (
         <div className="folder-drop" aria-hidden="true">
           <span className="folder-drop__label">Drop a folder to open it as the project</span>
-        </div>
-      )}
-      {folderNotice && (
-        <div className="undo-toast" role="status">
-          <span>{folderNotice}</span>
-        </div>
-      )}
-      {undoToast && (
-        <div className={`undo-toast${undoToast.rules?.length ? ' undo-toast--rules' : ''}`} role="status">
-          <span className="undo-toast__text">{undoToast.text}</span>
-          {undoToast.rules && undoToast.rules.length > 0 && (
-            <ul className="undo-toast__rules">
-              {undoToast.rules.map((r, i) => (
-                <li key={i}>
-                  <code title={r}>{r}</code>
-                </li>
-              ))}
-            </ul>
-          )}
-          {undoToast.undo && (
-            <button
-              type="button"
-              className="undo-toast__btn"
-              onClick={() => {
-                undoToast.undo?.()
-                setUndoToast(null)
-              }}
-            >
-              Undo
-            </button>
-          )}
-          {undoToast.link && (
-            <button
-              type="button"
-              className="undo-toast__btn"
-              onClick={() => {
-                undoToast.link?.open()
-                setUndoToast(null)
-              }}
-            >
-              {undoToast.link.label}
-            </button>
-          )}
         </div>
       )}
       <TipHost

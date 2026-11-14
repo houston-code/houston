@@ -26,16 +26,22 @@ export function chatToAutoOpen(
  * Open the Preview dock once per chat when the agent starts a dev server whose URL is
  * detected in that chat (Settings > Tools > Preview turns this off). Servers already
  * running when the window loads don't count, and a chat the user closed the Preview
- * in after an auto-open isn't reopened by a later server.
+ * in after an auto-open isn't reopened by a later server. With the side panel already
+ * open (`dockOpen`) nothing happens: switching it to Preview would pull the user out
+ * of Changes or Files mid-task, losing their place, and the Preview tab is one click.
  */
 export function useAutoOpenPreview(
   servers: readonly PreviewServer[],
   currentId: string | null,
   enabled: boolean,
-  open: () => void
+  open: () => void,
+  dockOpen = false
 ): void {
   const seen = useRef<Set<string> | null>(null)
   const opened = useRef(new Set<string>())
+  // Read when a server appears, so opening or closing the panel doesn't re-run the check.
+  const dockOpenNow = useRef(dockOpen)
+  dockOpenNow.current = dockOpen
   useEffect(() => {
     // Main hasn't answered yet: an empty list here says nothing about what is running.
     if (servers === PREVIEW_SERVERS_UNSEEDED) return
@@ -44,6 +50,6 @@ export function useAutoOpenPreview(
       return
     }
     const target = chatToAutoOpen(servers, currentId, seen.current, opened.current)
-    if (target && enabled) open()
+    if (target && enabled && !dockOpenNow.current) open()
   }, [servers, currentId, enabled, open])
 }

@@ -165,9 +165,22 @@ describe('decodeInput — navigation and editing keys', () => {
   })
 
   it('swallows unbound sequences instead of inserting their bytes', () => {
-    // Page-up and an unbound Alt-combo must not leak "[5~" / "z" into the buffer.
-    expect(feed('\x1b[5~')).toEqual([])
+    // A function key and an unbound Alt-combo must not leak "[15~" / "z" into the buffer.
+    expect(feed('\x1b[15~')).toEqual([])
     expect(feed('\x1bz')).toEqual([])
+  })
+
+  it('decodes the transcript viewer and reasoning display keys', () => {
+    expect(feed('\x0f')).toEqual([{ type: 'transcript' }])
+    expect(feed('\x1bt')).toEqual([{ type: 'cycle-thoughts' }])
+    expect(feed('\x1bT')).toEqual([{ type: 'cycle-thoughts' }])
+    expect(feed('\x1b[5~')).toEqual([{ type: 'page-up' }])
+    expect(feed('\x1b[6~')).toEqual([{ type: 'page-down' }])
+  })
+
+  it('drops Ctrl-O riding in on a paste, like any other action key', () => {
+    const { keys } = decodeInput('\x1b[200~text\x1b[201~\x0f', initialDecoderState())
+    expect(sanitizePastedKeys(keys, -Infinity, 1000).keys.map((k) => k.type)).toEqual(['paste'])
   })
 })
 
@@ -337,5 +350,46 @@ describe('decodeInput: OSC replies', () => {
   it('gives up on an unterminated reply that grows past the cap', () => {
     const keys = feed('\x1b]11;', 'x'.repeat(2000))
     expect(keys.some((k) => k.type === 'char')).toBe(true)
+  })
+})
+
+describe('decodeInput: composer keys for undo, stash, images, suspend', () => {
+  it('maps the control bytes', () => {
+    expect(feed('\x1f')).toEqual([{ type: 'undo' }]) // Ctrl-_ (Ctrl-/)
+    expect(feed('\x1e')).toEqual([{ type: 'redo' }]) // Ctrl-^ (Ctrl-6)
+    expect(feed('\x13')).toEqual([{ type: 'stash' }]) // Ctrl-S
+    expect(feed('\x16')).toEqual([{ type: 'paste-image' }]) // Ctrl-V
+    expect(feed('\x1a')).toEqual([{ type: 'suspend' }]) // Ctrl-Z
+    expect(feed('\x07')).toEqual([{ type: 'external-edit' }]) // Ctrl-G
+  })
+
+  it('takes Alt-V as the image paste key', () => {
+    expect(feed('\x1bv')).toEqual([{ type: 'paste-image' }])
+    expect(feed('\x1bV')).toEqual([{ type: 'paste-image' }])
+  })
+
+  it('decodes undo and redo from the modified-key report forms', () => {
+    expect(feed('\x1b[27;5;47~')).toEqual([{ type: 'undo' }]) // Ctrl-/ under modifyOtherKeys
+    expect(feed('\x1b[47;5u')).toEqual([{ type: 'undo' }]) // Ctrl-/ as CSI-u
+    expect(feed('\x1b[27;5;54~')).toEqual([{ type: 'redo' }]) // Ctrl-6
+    expect(feed('\x1b[94;5u')).toEqual([{ type: 'redo' }]) // Ctrl-^
+    // Another modifier on the same key means nothing here.
+    expect(feed('\x1b[27;6;47~')).toEqual([])
+  })
+
+  it('reads two Escapes in one chunk as two presses', () => {
+    expect(feed('\x1b\x1b')).toEqual([{ type: 'escape' }, { type: 'escape' }])
+    expect(feed('\x1b', '\x1b')).toEqual([{ type: 'escape' }, { type: 'escape' }])
+  })
+
+  it('drops the new action keys when they ride in on a paste', () => {
+    const keys: EditorKey[] = [
+      { type: 'paste', value: 'x' },
+      { type: 'paste-image' },
+      { type: 'suspend' },
+      { type: 'stash' },
+      { type: 'undo' }
+    ]
+    expect(sanitizePastedKeys(keys, -Infinity, 100).keys).toEqual([{ type: 'paste', value: 'x' }])
   })
 })

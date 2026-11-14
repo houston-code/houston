@@ -2,13 +2,10 @@ import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKe
 import { MAX_SIDE_TURNS, type SideChatView } from '@shared/agent'
 import { Icon } from './Icon'
 import { Markdown } from './Markdown'
+import { PanelResizer, type PanelSize } from './PanelResizer'
+import { ipcErrorMessage } from '../lib/ipcError'
 
 const EMPTY: SideChatView = { turns: [] }
-
-/** The message an IPC rejection carries, without Electron's "Error invoking remote method" prefix. */
-function ipcMessage(e: unknown): string {
-  return e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e)
-}
 
 /**
  * The side chat: a docked panel for quick questions about the open chat, answered
@@ -31,7 +28,8 @@ export function SideChatPanel({
   onClose,
   onSendToMain,
   onContinueInNewChat,
-  onResizeMouseDown
+  onResizeMouseDown,
+  size
 }: {
   conversationId: string
   /** The model answering; absent until one is picked (asking then says so). */
@@ -44,6 +42,8 @@ export function SideChatPanel({
   onSendToMain: (question: string, answer: string) => void
   onContinueInNewChat: (question: string, answer: string) => void
   onResizeMouseDown: (e: React.MouseEvent) => void
+  /** The panel's width, for the resizer's keyboard and double-click controls. */
+  size?: PanelSize
 }): JSX.Element {
   const [view, setView] = useState<SideChatView>(EMPTY)
   const [draft, setDraft] = useState('')
@@ -70,10 +70,19 @@ export function SideChatPanel({
     if (!hidden) inputRef.current?.focus()
   }, [hidden])
 
+  // Follow the conversation as it grows, unless the user scrolled up to reread: then
+  // only a new question (theirs, just asked) brings the list back to the bottom.
+  const pinnedToBottom = useRef(true)
+  const exchanges = view.turns.length + (view.pending ? 1 : 0)
+  const seenExchanges = useRef(exchanges)
   useEffect(() => {
     const el = listRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [view])
+    const started = exchanges > seenExchanges.current
+    seenExchanges.current = exchanges
+    if (!el || !(pinnedToBottom.current || started)) return
+    el.scrollTop = el.scrollHeight
+    pinnedToBottom.current = true
+  }, [view, exchanges])
 
   const pending = view.pending
 
@@ -97,7 +106,7 @@ export function SideChatPanel({
     window.api.askSideChat(conversationId, question, providerId, model).catch((e: unknown) => {
       // Only a question that was never asked rejects: put it back to edit.
       setDraft(question)
-      setInputError(ipcMessage(e))
+      setInputError(ipcErrorMessage(e))
       refresh()
     })
   }
@@ -111,11 +120,11 @@ export function SideChatPanel({
 
   return (
     <aside className="side-chat" aria-label="Side chat" hidden={hidden}>
-      <div
+      <PanelResizer
         className="plan-panel__resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize side chat"
+        label="Resize side chat"
+        edge="left"
+        size={size}
         onMouseDown={onResizeMouseDown}
       />
       <header className="plan-panel__head">
@@ -152,7 +161,15 @@ export function SideChatPanel({
         Sees this chat so far and can read the project. It can't change anything, and nothing here goes into
         the main chat unless you send it. It's kept with this chat.
       </p>
-      <div className="side-chat__list" ref={listRef} aria-live="polite">
+      <div
+        className="side-chat__list"
+        ref={listRef}
+        aria-live="polite"
+        onScroll={(e) => {
+          const el = e.currentTarget
+          pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
+        }}
+      >
         {view.turns.length === 0 && !pending && (
           <p className="side-chat__empty">Ask anything about this chat or the code.</p>
         )}

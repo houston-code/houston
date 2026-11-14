@@ -231,6 +231,54 @@ function forwardableHeaders(headers: IncomingMessage['headers']): Record<string,
   return out
 }
 
+/** A header map without its Host entry (any case), so the caller can set its own. */
+function withoutHost(headers: Record<string, string | string[]>): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {}
+  for (const [k, v] of Object.entries(headers)) if (k.toLowerCase() !== 'host') out[k] = v
+  return out
+}
+
+/** A Host header value: a hostname, IPv4, or bracketed IPv6, with an optional port. */
+const HOST_HEADER = /^(\[[0-9a-f:.]+\]|[a-z0-9._~!$&'()*+,;=%-]+)(?::(\d{1,5}))?$/i
+
+/**
+ * Whether a plain-HTTP request's `Host` header names the same authority as its
+ * absolute-form URI, which is what the egress policy judged.
+ *
+ * The allow/deny decision reads the URI's hostname, but the upstream server routes
+ * by the Host header. A shared CDN edge or virtual-hosting front serves many origins
+ * from one address, so `GET http://registry.npmjs.org/` sent with `Host: other.site`
+ * would pass the policy for the allowed name and then be served (or receive a POST
+ * body) as the unapproved one. RFC 9112 (3.2.2) says a proxy must ignore the Host
+ * header in favor of the URI; this proxy goes further and refuses the request, so a
+ * client that disagrees with itself gets a clear 400 instead of a silently rewritten
+ * request. The upstream Host is always set from the URI (see onRequest), so this
+ * check is the second of two locks.
+ *
+ * `rawHost` is every Host value the client sent (a repeated header is refused: which
+ * one the upstream would read is up to it). A missing header (HTTP/1.0) is fine, the
+ * proxy supplies one. The comparison folds case and treats the scheme's default port
+ * as equal to no port, the way `URL.host` writes it.
+ */
+export function hostHeaderMatchesUri(rawHost: string[], url: URL): boolean {
+  if (rawHost.length === 0) return true
+  if (rawHost.length > 1) return false
+  const m = rawHost[0].trim().match(HOST_HEADER)
+  if (!m) return false
+  const defaultPort = url.protocol === 'https:' ? '443' : '80'
+  const port = m[2] !== undefined && Number(m[2]) !== Number(defaultPort) ? `:${Number(m[2])}` : ''
+  return `${m[1].toLowerCase()}${port}` === url.host.toLowerCase()
+}
+
+/** Every value of the Host header in a request, as sent (repeats preserved). */
+function rawHostValues(req: IncomingMessage): string[] {
+  const out: string[] = []
+  for (let i = 0; i + 1 < req.rawHeaders.length; i += 2) {
+    if (req.rawHeaders[i].toLowerCase() === 'host') out.push(req.rawHeaders[i + 1])
+  }
+  return out
+}
+
 /** Grace for the upstream TCP connect before the attempt is reported as unreachable. */
 const UPSTREAM_CONNECT_TIMEOUT_MS = 15_000
 /**
@@ -291,6 +339,16 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
       res.end('Bad request: this is an HTTP proxy; use absolute-form request URIs.\n')
       return
     }
+    // The policy judges the URI's host, so the request must not name another one in
+    // its Host header (see hostHeaderMatchesUri).
+    if (!hostHeaderMatchesUri(rawHostValues(req), url)) {
+      res.writeHead(400, { 'content-type': 'text/plain' })
+      res.end(
+        `Bad request: the Host header does not match the request URI's host (${url.host}). ` +
+          'This proxy only forwards a request to the host named in its URI.\n'
+      )
+      return
+    }
     const host = url.hostname.toLowerCase()
     const port = url.port ? Number(url.port) : 80
     const check = decide(host, port, 'http', req)
@@ -305,7 +363,9 @@ export function startEgressProxy(opts: StartEgressProxyOptions): Promise<EgressP
         port,
         method: req.method,
         path: `${url.pathname}${url.search}`,
-        headers: forwardableHeaders(req.headers)
+        // The upstream routes by Host, so it always names the authority the policy
+        // allowed (the URI's), never whatever the client wrote.
+        headers: { ...withoutHost(forwardableHeaders(req.headers)), host: url.host }
       },
       (upRes) => {
         // Strip hop-by-hop headers here too: a forwarded `Connection: keep-alive`

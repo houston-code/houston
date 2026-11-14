@@ -14,10 +14,16 @@ import { join } from 'node:path'
  */
 export const SAFE_GIT = ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false']
 
-/** The files under `.git` that change what a git command executes. */
+/**
+ * The files under `.git` that change what a git command executes: the config, hooks, and
+ * attributes, plus the files that point git somewhere else for them. `commondir` makes git
+ * read its config and hooks from another directory (one the run could have filled), and
+ * `config.worktree` and the `worktrees/` tree are read as config or followed the same way,
+ * so a redirect is refused before the action's own git runs in the checkout.
+ */
 function controlFiles(gitDir) {
   // The directories themselves too, so swapping one for a symlink shows up.
-  const files = ['config', 'info', 'info/attributes', 'hooks']
+  const files = ['config', 'config.worktree', 'commondir', 'info', 'info/attributes', 'hooks', 'worktrees']
   const walk = (rel) => {
     const abs = join(gitDir, rel)
     if (!lstatSync(abs, { throwIfNoEntry: false })?.isDirectory()) return
@@ -29,6 +35,7 @@ function controlFiles(gitDir) {
     }
   }
   walk('hooks')
+  walk('worktrees')
   return files
 }
 
@@ -74,6 +81,29 @@ export function secretValues(env, extra = []) {
   return [...out]
 }
 
+/**
+ * The secrets plus the form a persisted checkout credential takes: actions/checkout writes
+ * `AUTHORIZATION: basic <base64 of x-access-token:TOKEN>` into the git config, so a run that
+ * read the config would carry the token in that encoding, not verbatim.
+ */
+export function withEncodedForms(secrets) {
+  const out = new Set(secrets)
+  for (const s of secrets) out.add(Buffer.from(`x-access-token:${s}`).toString('base64'))
+  return [...out]
+}
+
+/** The `git config --get-regexp` pattern for an HTTP extra header, with or without a URL. */
+export const EXTRAHEADER_KEYS = '^http\\.(.+\\.)?extraheader$'
+
+/**
+ * Whether `git config --get-regexp` output lists an `http.*.extraheader`: a credential the
+ * caller's checkout persisted (actions/checkout without `persist-credentials: false`). The
+ * agent can read the checkout's git config, so such a run could echo the token. Pure.
+ */
+export function hasPersistedCredential(configOutput) {
+  return /^http\.(.+\.)?extraheader(\s|$)/im.test(configOutput)
+}
+
 /** True when `text` contains any of the secret values verbatim. */
 export function containsSecret(text, secrets) {
   return secrets.some((s) => text.includes(s))
@@ -97,10 +127,29 @@ export function logSafe(text) {
  * branch that failed.
  */
 export function fixBranchName(prefix, runId, attempt) {
+  checkPrefix(prefix)
+  return `${prefix}fix-ci-${runId}-${attempt}`
+}
+
+function checkPrefix(prefix) {
   if (!/^[A-Za-z0-9._/-]+\/$/.test(prefix) || prefix.includes('..')) {
     throw new Error(`branch-prefix must be a plain path ending in "/", like houston/ (got ${JSON.stringify(prefix)})`)
   }
-  return `${prefix}fix-ci-${runId}-${attempt}`
+}
+
+/**
+ * The branch an implement run pushes: under the prefix, named only from numbers (the
+ * issue, when there is one, and this workflow run's id and attempt), so it is always new
+ * and never the default branch or the branch it starts from.
+ */
+export function implementBranchName(prefix, issue, runId, attempt) {
+  checkPrefix(prefix)
+  for (const [what, n] of [['run id', runId], ['run attempt', attempt]]) {
+    if (!Number.isSafeInteger(n) || n < 1) throw new Error(`the workflow ${what} is not a positive number (got ${JSON.stringify(n)})`)
+  }
+  if (issue === null) return `${prefix}task-${runId}-${attempt}`
+  if (!Number.isSafeInteger(issue) || issue < 1) throw new Error(`not an issue number: ${JSON.stringify(issue)}`)
+  return `${prefix}implement-${issue}-${runId}-${attempt}`
 }
 
 /** Refuse a push target that is the default branch or outside the fix prefix. */

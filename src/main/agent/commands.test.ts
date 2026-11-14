@@ -115,3 +115,58 @@ describe('loadCommands, switched off', () => {
     }
   })
 })
+
+describe('loadCommands, frontmatter options', () => {
+  const home = (): string => mkdtempSync(join(tmpdir(), 'houston-cmds-home-'))
+
+  it('reads argument-hint, model, effort, agent and allowed-tools', async () => {
+    const h = home()
+    try {
+      cmdFile(
+        'deploy.md',
+        '---\ndescription: Ship it\nargument-hint: <env> [version]\nmodel: anthropic/claude-haiku-5-5\neffort: LOW\nagent: deployer\nallowed-tools: read_file, run_shell(npm test*)\n---\nDeploy $1'
+      )
+      const [cmd] = await loadCommands(workspace, h)
+      expect(cmd).toMatchObject({
+        name: 'deploy',
+        args: '<env> [version]',
+        model: 'anthropic/claude-haiku-5-5',
+        effort: 'low',
+        agent: 'deployer',
+        allowedTools: 'read_file, run_shell(npm test*)',
+        source: 'project'
+      })
+    } finally {
+      rmSync(h, { recursive: true, force: true })
+    }
+  })
+
+  it('drops an unknown effort and a malformed agent name, and reads a one-line list', async () => {
+    const h = home()
+    try {
+      cmdFile('x.md', '---\neffort: maximum\nagent: ../evil\nallowed-tools: [read_file, glob]\n---\nGo')
+      const [cmd] = await loadCommands(workspace, h)
+      expect(cmd.effort).toBeUndefined()
+      expect(cmd.agent).toBeUndefined()
+      expect(cmd.allowedTools).toBe('read_file, glob')
+    } finally {
+      rmSync(h, { recursive: true, force: true })
+    }
+  })
+
+  it('tags where each command came from', async () => {
+    const h = home()
+    try {
+      cmdFile('mine.md', 'project one')
+      mkdirSync(join(h, '.houston/commands'), { recursive: true })
+      writeFileSync(join(h, '.houston/commands', 'theirs.md'), 'user one')
+      const cmds = await loadCommands(workspace, h)
+      expect(cmds.map((c) => [c.name, c.source])).toEqual([
+        ['mine', 'project'],
+        ['theirs', 'user']
+      ])
+    } finally {
+      rmSync(h, { recursive: true, force: true })
+    }
+  })
+})

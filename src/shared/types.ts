@@ -238,6 +238,14 @@ export function isApprovalPolicy(v: unknown): v is ApprovalPolicy {
 }
 
 /**
+ * The more restrictive of two approval policies, by their order in
+ * {@link APPROVAL_POLICIES} (plan is the most restrictive, full auto the least).
+ */
+export function leastPermissivePolicy(a: ApprovalPolicy, b: ApprovalPolicy): ApprovalPolicy {
+  return APPROVAL_POLICIES.indexOf(a) <= APPROVAL_POLICIES.indexOf(b) ? a : b
+}
+
+/**
  * Each policy's name as the user sees it, in both clients: the desktop's approval
  * menu and the terminal's `/approval` both print these, never the ids.
  */
@@ -399,9 +407,10 @@ export const HOOK_EVENTS: Hook['event'][] = [
 
 /**
  * A per-folder decision about honoring that project's ELEVATING config — the
- * `allow` rules, hooks, and MCP servers a `.houston/settings.json` may define
- * but which are ignored until the user trusts the folder (they auto-approve
- * actions or run processes, so an untrusted clone must not get them).
+ * `allow` rules, hooks, and MCP servers a `.houston/settings.json` may define,
+ * and its `.houston/plugins/*.js` files, all ignored until the user trusts the
+ * folder (they auto-approve actions or run code, so an untrusted clone must not
+ * get them).
  *
  * `hash` fingerprints the elevating subset the decision covered: when a trusted
  * folder's project file later changes that subset, the trust no longer applies
@@ -429,7 +438,14 @@ export type FolderTrustState = 'trusted' | 'untrusted' | 'undecided' | 'changed'
  */
 export interface FolderTrustStatus {
   state: FolderTrustState | 'none'
-  counts?: { allowRules: number; hooks: number; mcpServers: number }
+  /** `commands`: the project's commands that pre-approve tools or run shell commands (absent when none). */
+  counts?: { allowRules: number; hooks: number; mcpServers: number; commands?: number; plugins?: number }
+  /**
+   * The names of the project's plugin files (`.houston/plugins/*.js`) the decision
+   * would cover, listed on the prompt so the user sees exactly which code they trust.
+   * Names are restricted to letters, digits, `_`, `.`, and `-` by the loader.
+   */
+  plugins?: string[]
 }
 
 /**
@@ -449,6 +465,11 @@ export interface PermissionPolicyView {
     allowRules: PermissionRule[]
     hooks: Hook[]
     mcpServers: Array<{ id: string; transport: 'stdio' | 'http' | 'sse'; target: string }>
+    /**
+     * The project's plugin files with their content hashes: run only while `trust` is
+     * 'trusted' and the `projectPlugins` setting is on.
+     */
+    plugins: Array<{ name: string; sha256: string }>
     trust: FolderTrustState | 'none'
   } | null
 }
@@ -494,7 +515,10 @@ export function removeFolderTrust(
 /**
  * A fine-grained permission rule, consulted before the approval policy. Matches a
  * tool (by name, or `*` for any) and a glob over the call's subject (shell
- * command, path, URL, or query). First match wins.
+ * command, path, URL, or query). A matching deny always wins; otherwise the first
+ * matching allow or ask decides. A deny or ask naming one file-editing tool
+ * (`write_file`, `edit_file`, `multi_edit`, `apply_patch`, `notebook_edit`) applies to
+ * all of them.
  */
 export interface PermissionRule {
   action: 'allow' | 'deny' | 'ask'
@@ -555,6 +579,20 @@ export interface ChatGroup {
   name: string
   /** Whether the group is collapsed in the sidebar. */
   collapsed?: boolean
+}
+
+/** The colors a chat label can take (see `LABEL_COLORS` in shared/chatLabels). */
+export type LabelColor = 'blue' | 'green' | 'orange' | 'purple' | 'red' | 'teal' | 'yellow' | 'pink'
+
+/**
+ * A user-defined chat label. Unlike a group, a chat can carry any number of labels.
+ * Definitions are app-level and persisted in settings; which labels a chat carries is
+ * stored on the conversation itself (ConversationMeta.labels).
+ */
+export interface ChatLabel {
+  id: string
+  name: string
+  color: LabelColor
 }
 
 /**
@@ -649,9 +687,18 @@ export interface AppSettings {
    * Compact the conversation when the estimated context exceeds this many tokens.
    * Unset means automatic: a fraction of the selected model's context window
    * (COMPACTION_WINDOW_FRACTION), falling back to a fixed default when the window
-   * is unknown. Set a number to override that sizing; 0 disables compaction.
+   * is unknown. Set a number to compact sooner; it can lower the automatic
+   * threshold but never raise it (see resolveCompactionThreshold). 0 disables
+   * compaction.
    */
   compactionThreshold?: number
+  /**
+   * Compact when the estimated context exceeds this share (1 to 100) of the selected
+   * model's context window. Like `compactionThreshold` it only lowers the automatic
+   * threshold; when both are set the lower one applies. Ignored when the window is
+   * unknown. 0 disables compaction.
+   */
+  compactionThresholdPercent?: number
   /**
    * Cap (bytes) on a single shell command's output fed back to the model, keeping
    * both ends. Guards the context window from one runaway command. Must be > 0;
@@ -746,12 +793,26 @@ export interface AppSettings {
    */
   costCeilingUsd?: number
   /**
+   * Hard USD cost cap for a single run. Once the run's estimated cost (its own turns
+   * plus subagents and provider-run searches) reaches this, the next step is the last:
+   * tools off, the model summarizes, and the run ends with a `max-cost` limit. A run on
+   * a model with no known price can't be held to it and is warned once. 0/unset: no cap.
+   */
+  maxCostUsd?: number
+  /**
    * Enable stall / loop detection. When the model cycles unproductively (repeats
    * the same tool call, keeps hitting the same error, or makes no file change for
    * several turns), inject one corrective reminder; if it persists, stop the run.
    * On by default.
    */
   stallDetection?: boolean
+  /**
+   * When the model ends a turn after making edits and Houston's record of the turn
+   * shows a gap (open todo items, no passing check after the last change, a failed
+   * last test run, a todo marked done with nothing behind it, a loosened test), send
+   * it one note listing them before it finishes. On by default.
+   */
+  doneEvidenceNote?: boolean
   /**
    * End-of-run verification gate (opt-in). When the model stops naturally after
    * modifying files, run {@link verifyCommand} and, if it fails, feed the output
@@ -783,6 +844,12 @@ export interface AppSettings {
    */
   showReasoning?: boolean
   /**
+   * Screen readers hear each finished reply's text (and the name of a tool that failed)
+   * through the transcript's polite live region, instead of only "Response ready".
+   * Off by default.
+   */
+  announceReplies?: boolean
+  /**
    * Cross-session memory: the agent sees the memories saved in earlier sessions and
    * can read them (docs/memory-design.md). On unless set to false.
    */
@@ -805,7 +872,9 @@ export interface AppSettings {
    * Execute the opened project's `.houston/plugins/*.js` files. OFF by default and
    * deliberately opt-in: plugins are evaluated in-process and `vm` is NOT a security
    * boundary, so a plugin file shipped in an untrusted repo is arbitrary code
-   * execution in the main process. Only enable this for projects you fully trust.
+   * execution in the main process. A master switch only: even when on, a folder's
+   * plugins run only while the user trusts that folder for its current plugin files
+   * (see {@link FolderTrust}; each file's hash is in the trust fingerprint).
    */
   projectPlugins?: boolean
   /** Extra directories (beyond the project folder) the agent may read and write. */
@@ -867,8 +936,45 @@ export interface AppSettings {
   tuiEditor?: 'emacs' | 'vim'
   /** The terminal's /verbose: show each tool's output as it runs. Absent = off. */
   tuiVerbose?: boolean
+  /**
+   * How the terminal shows the model's reasoning as it streams (/thoughts, Alt-T):
+   * 'show' prints it as it arrives, 'summary' one line per thought when it ends,
+   * 'hide' nothing. The transcript viewer (Ctrl-O) always has it in full. Absent =
+   * 'summary'.
+   */
+  reasoningDisplay?: 'show' | 'summary' | 'hide'
+  /**
+   * The terminal's reduced motion (/reduce-motion): the activity line shows a still
+   * mark instead of an animated spinner and refreshes its timer only every few
+   * seconds. Also on with HOUSTON_REDUCE_MOTION=1, and implied by screen-reader mode.
+   * Absent = off.
+   */
+  reduceMotion?: boolean
+  /**
+   * The terminal's screen-reader mode (/screen-reader): plain lines only, with no
+   * spinner, no in-place redraws, no color or decorative glyphs, speaker labels on
+   * messages, and pickers as numbered lists. Also on with --screen-reader or
+   * HOUSTON_SCREEN_READER=1. Absent = off.
+   */
+  tuiScreenReader?: boolean
+  /**
+   * Which attention signals the terminal sends when a run needs you or finishes while
+   * you are away (/notify): 'auto' the bell plus the terminal's notification (OSC 9 and
+   * OSC 777), 'osc' the notification only, 'bell' the bell only, 'off' neither. The
+   * window title updates in every mode. Absent = 'auto', or 'off' when
+   * `desktopNotifications` is false.
+   */
+  tuiNotify?: 'auto' | 'osc' | 'bell' | 'off'
   /** User-defined sidebar groups, in display order. */
   chatGroups?: ChatGroup[]
+  /** User-defined chat labels, in display order. */
+  chatLabels?: ChatLabel[]
+  /**
+   * Each sidebar section's label filter, keyed by section id (a group's id, or
+   * 'pinned', 'ungrouped', or an automatic section's id): the section shows only the
+   * chats carrying any of these labels. Absent or empty = the section is unfiltered.
+   */
+  sectionLabelFilters?: Record<string, string[]>
   /**
    * Collapsed state for the sidebar's built-in sections, keyed by section id
    * ('pinned', 'ungrouped'). Custom groups keep their own collapsed flag on the

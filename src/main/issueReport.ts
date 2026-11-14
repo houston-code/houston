@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { shell } from 'electron'
+import { app, shell } from 'electron'
 import { issueReportBody, issueReportUrl } from '@shared/issueReport'
 import { version as APP_VERSION } from '../../package.json'
 import { gatherDoctorFacts } from './doctor'
 import { log, logFilePath } from './logger'
+import { recentCrashDumps } from './crashRecovery'
 import { openExternalSafely } from './safeExternal'
 import { getUserDataDir } from './userData'
 
@@ -37,7 +38,16 @@ export async function revealLogs(): Promise<void> {
  * project's files are looked at and no project path can reach the report.
  */
 export function issueReportText(): string {
-  return issueReportBody(gatherDoctorFacts(getUserDataDir(), { version: APP_VERSION, update: null }))
+  return issueReportBody(gatherDoctorFacts(getUserDataDir(), { version: APP_VERSION, update: null }), crashDumpNames())
+}
+
+/** Names of recent crash dumps (see crashRecovery.ts); none when the folder can't be found. */
+function crashDumpNames(): string[] {
+  try {
+    return recentCrashDumps(app.getPath('crashDumps'))
+  } catch {
+    return []
+  }
 }
 
 /**

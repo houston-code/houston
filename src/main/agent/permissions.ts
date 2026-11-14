@@ -1,16 +1,18 @@
+import { realpathSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { resolve, relative, isAbsolute, posix, sep } from 'node:path'
 import type { AppSettings, PermissionRule } from '@shared/types'
 import { parsePatch } from './apply-patch'
-import { isSensitivePath, writesSensitivePath } from './sensitive-paths'
+import { isProtectedControlPath, isSensitivePath, writesProtectedPath, writesSensitivePath } from './sensitive-paths'
 import type { ToolKind } from './tools'
 
 /**
  * User-defined permission rules, consulted before the coarse approval policy.
  * Each rule matches a tool (by name, or `*` for any) and a glob over the call's
  * "subject" — the shell command, file path, URL, or query the call targets — and
- * resolves to allow (auto-approve), deny (refuse), or ask (always prompt). The
- * first matching rule wins; if none match, the approval policy decides.
+ * resolves to allow (auto-approve), deny (refuse), or ask (always prompt). A
+ * matching deny always wins, wherever it sits in the list; otherwise the first
+ * matching allow or ask decides; if none match, the approval policy decides.
  *
  * Examples: allow `run_shell` matching `git status*`; deny `run_shell` matching
  * `* rm -rf *`; ask `write_file` matching `**` (review every write).
@@ -90,6 +92,9 @@ export function networkDestination(
     return ghOwnGrant(toolName, args) ? `${repo}:${toolName}` : `${repo}:write`
   }
   if (toolName === 'web_search') return 'web_search'
+  // Without the session's page in hand (the loop passes it; see browserSessionDestination),
+  // only an open's own URL is known.
+  if (toolName === 'browser_session') return browserSessionDestination(args, null)
   const url = typeof args.url === 'string' ? args.url : ''
   if (url) {
     try {
@@ -107,6 +112,26 @@ export function networkDestination(
     }
   }
   return toolName
+}
+
+/**
+ * The destination a `browser_session` call is gated under, keyed exactly like
+ * view_localhost so one grant covers both: `open` loads its URL's host (`<host>`),
+ * `act` clicks and types on the page the session is on (`<host> (interactive)`), and
+ * the other actions read that page (`<host>`). `sessionUrl` is the URL the session's
+ * page is on now, which a page can change by navigating itself (only to loopback).
+ * With no page open, and so nothing to reach, the key is the tool name.
+ */
+export function browserSessionDestination(args: Record<string, unknown>, sessionUrl: string | null): string {
+  const raw = args.action === 'open' ? (typeof args.url === 'string' ? args.url : '') : (sessionUrl ?? '')
+  let host = ''
+  try {
+    host = raw ? new URL(raw).hostname.toLowerCase() : ''
+  } catch {
+    // Malformed: the open itself reports the parse error.
+  }
+  if (!host) return 'browser_session'
+  return args.action === 'act' ? `${host} (interactive)` : host
 }
 
 /** Whether a `view_localhost` call clicks or types (it passes `steps`). */
@@ -212,6 +237,16 @@ export function permissionSubject(toolName: string, args: Record<string, unknown
       // `path` left a patch with no subject: no file rule, not even `*` over a path,
       // could match the files it wrote or deleted. Each is matched (see matchRule).
       return patchTargets(args.patch).join(PATCH_SUBJECT_SEPARATOR)
+    case 'mcp_read_resource':
+      // The server's namespace, then what is asked of it: `mcp__<server>__<uri>`, so
+      // a rule over a server's tools (`mcp__proj-db__*`) covers its resources and
+      // prompts too, and one uri can be singled out. Blank before this, so no rule but
+      // the tool's own `*` reached these calls, whichever server they named. A blank
+      // argument still yields a non-empty subject, so "Always allow" on a malformed
+      // call saves a rule that matches nothing rather than the tool-wide `*`.
+      return `mcp__${s('server')}__${s('uri')}`
+    case 'mcp_get_prompt':
+      return `mcp__${s('server')}__${s('name')}`
     default:
       // Namespaced MCP tools (mcp__<id>__<tool>) take arbitrary args, so match on
       // the tool name itself — lets rules target a server/tool, e.g. `mcp__github__*`.
@@ -557,6 +592,20 @@ function isScratchTarget(abs: string): boolean {
 }
 
 /**
+ * Whether one `/`-separated part of a relative path is, or may expand to, `..`: the
+ * part itself, or one holding a glob or brace character (`*?[{`) and a `.` that starts
+ * with `.`, `[`, or `{`. bash expands `.[.]` and `{..,x}` to `..`, and `.*` matches it
+ * (with `globskipdots` off, as before bash 5.2), so a part read that way climbs. The
+ * rule over-counts (`..?` or `.git*` can't match `..`), which only asks. A part that
+ * starts with another character (`*.ts`, `a?.d`) never matches `..`: a glob matches a
+ * leading `.` only when it spells one.
+ */
+function partMayClimb(part: string): boolean {
+  if (part === '..') return true
+  return /[*?[{]/.test(part) && part.includes('.') && /^[.[{]/.test(part)
+}
+
+/**
  * Whether a single path-like segment escapes the workspace `roots`.
  *
  * - An absolute / home / Windows path escapes only when it resolves OUTSIDE every
@@ -583,17 +632,23 @@ function segmentEscapesWorkspace(seg: string, roots: string[]): boolean {
   // does a name no account starts with (prose like `~15` or `~1s`).
   if (seg === '~+' || seg.startsWith('~+/')) seg = `.${seg.slice(2)}`
   else if (seg === '~-' || seg.startsWith('~-/') || /^~[A-Za-z_]/.test(seg)) return true
+  // `$PWD` is the working directory too, read as `.` like `~+` (so `$PWD/../x`
+  // climbs), and `$OLDPWD` is the previous one, which this can't resolve.
+  const pwd = /^(?:\$PWD|\$\{PWD\})(?=\/|$)/.exec(seg)
+  if (pwd) seg = `.${seg.slice(pwd[0].length)}`
+  else if (/^(?:\$OLDPWD|\$\{OLDPWD\})(?![A-Za-z0-9_])/.test(seg)) return true
   const abs = absoluteTarget(seg)
   if (abs !== null) return !isWithinRoots(abs, roots) && !isScratchTarget(abs)
   // Relative. Treat backslashes as separators too, so Windows-style relative climbs
   // (`..\x`) are analysed the same as POSIX ones. A token with no separator and no
-  // ".." can't climb out.
+  // ".." can't climb out. (A lone `.*` may expand to `..`, but read alone it is far
+  // more often a regex, `grep '.*x'`; a `cd` into one is gated by namesItsDirectory.)
   const norm = seg.replace(/\\/g, '/')
   if (!norm.includes('/') && norm !== '..') return false
   let depth = 0
   for (const part of norm.split('/')) {
     if (part === '' || part === '.') continue
-    if (part === '..') {
+    if (partMayClimb(part)) {
       depth -= 1
       if (depth < 0) return true
     } else {
@@ -642,10 +697,50 @@ function commandReferencesExternalPath(command: string, roots: string[], depth: 
     if (tokenEscapesWorkspace(token, roots)) return true
   }
   for (const words of commands) {
+    if (changesToUnnamedDirectory(words)) return true
     const nested = nestedCommandString(words)
     if (nested !== null && commandReferencesExternalPath(nested, roots, depth + 1)) return true
   }
   return false
+}
+
+/**
+ * Whether a simple command (its words as bash builds them) is a `cd`, `pushd`, or
+ * `popd` whose words don't name the directory it moves to (see
+ * {@link namesItsDirectory}): a bare `cd` (to `$HOME`), `cd -` (to `$OLDPWD`), `popd`,
+ * a `pushd` with no directory, or one bash expands (`cd "$DIR"`, `cd .[.]`). Where it
+ * lands, and so where every relative path after it points, is somewhere no check can
+ * see, so it counts as leaving the workspace. Keywords in front (`then cd`, `{ cd`) and
+ * `builtin`/`command` are looked past.
+ */
+function changesToUnnamedDirectory(words: string[]): boolean {
+  let i = 0
+  while (i < words.length && (LEADING_KEYWORDS.has(words[i]!) || words[i] === 'builtin' || words[i] === 'command')) i++
+  const prog = words[i]
+  return prog !== undefined && CWD_BUILTINS.has(prog) && !namesItsDirectory(words.slice(i))
+}
+
+/**
+ * Whether the shell session's working directory, which carries over from one
+ * `run_shell` call to the next, sits outside the workspace `roots` (and outside the
+ * scratch directories commands may use). While it does, every relative path a command
+ * names points outside, so the loop treats every command as escaping the workspace
+ * until one moves back. Read lexically first, then with symlinks resolved on both
+ * sides, so a workspace reached through a symlink (`/var` on macOS is `/private/var`)
+ * still counts as inside.
+ */
+export function shellCwdOutsideRoots(cwd: string, roots: string[]): boolean {
+  if (!cwd) return false
+  if (isWithinRoots(cwd, roots) || isScratchTarget(cwd)) return false
+  const real = (p: string): string => {
+    try {
+      return realpathSync.native(p)
+    } catch {
+      return p
+    }
+  }
+  const realCwd = real(cwd)
+  return !isWithinRoots(realCwd, roots.map(real)) && !isScratchTarget(realCwd)
 }
 
 /** Commands that create, overwrite, or remove the files named in their arguments. */
@@ -678,6 +773,24 @@ const COMMAND_PREFIXES = new Set(['sudo', 'env', 'command', 'exec', 'nohup', 'ti
  * it is a static tripwire: a path built from variables or substitutions isn't seen.
  */
 export function shellWritesSensitivePath(command: string): boolean {
+  return shellWritesPathMatching(command, isSensitivePath)
+}
+
+/**
+ * Whether a `run_shell` command writes to, or removes, an in-project control file
+ * (see isProtectedControlPath: `.houston/`, `.vscode/`, `.envrc`, `.husky/`, CI
+ * workflows, …) the same ways {@link shellWritesSensitivePath} reads for credential
+ * files (`echo x > .envrc`, `cp evil.json .vscode/tasks.json`, `sed -i … .husky/pre-commit`).
+ * Paths are resolved against the first root, as the command's working directory is.
+ * The same static tripwire: a command that first `cd`s into one of those folders, or
+ * builds the path from variables, isn't seen.
+ */
+export function shellWritesProtectedPath(command: string, roots: string[]): boolean {
+  return shellWritesPathMatching(command, (p) => isProtectedControlPath(p, roots))
+}
+
+/** The shared reading behind the two `shellWrites…Path` tripwires: does a write name a path `hit` flags? */
+function shellWritesPathMatching(command: string, hit: (path: string) => boolean): boolean {
   for (const segment of splitShellCommand(command)) {
     // Bash's words (`\.env` and `".e"nv` are `.env`) and the plain ones (a Windows
     // path keeps its backslashes): either reading naming a credential file flags it.
@@ -688,11 +801,11 @@ export function shellWritesSensitivePath(command: string): boolean {
         // descriptor duplication, not a file.
         if (/^\d*(?:>>|>\||&>>|&>|>)$/.test(token)) {
           const target = tokens[i + 1]
-          if (target !== undefined && isSensitivePath(stripSurroundingQuotes(target))) return true
+          if (target !== undefined && hit(stripSurroundingQuotes(target))) return true
           continue
         }
         const glued = /^\d*(?:>>|>\||&>>|&>|>)([^&].*)$/.exec(token)
-        if (glued && isSensitivePath(stripSurroundingQuotes(glued[1]!))) return true
+        if (glued && hit(stripSurroundingQuotes(glued[1]!))) return true
       }
       // The command word: past `FOO=bar` assignments and prefixes like `sudo`.
       let c = 0
@@ -711,7 +824,7 @@ export function shellWritesSensitivePath(command: string): boolean {
           if (a.startsWith('-')) return false
           // `dd of=.env`, `--target=.env`: the path may follow an `=`.
           const eq = a.indexOf('=')
-          return isSensitivePath(a) || (eq >= 0 && isSensitivePath(a.slice(eq + 1)))
+          return hit(a) || (eq >= 0 && hit(a.slice(eq + 1)))
         })
       if (FILE_WRITING_COMMANDS.has(cmd) && namesSensitive()) return true
       if (
@@ -955,15 +1068,45 @@ function findDiscardsWork(args: string[]): boolean {
   })
 }
 
+/** `git checkout` options that take the next word as their value (a branch name). */
+const CHECKOUT_VALUE_OPTIONS = new Set(['-b', '-B', '--orphan'])
+
+/**
+ * Whether `git checkout` with these arguments overwrites files in the working tree
+ * from the index or a commit, throwing away their uncommitted changes: a `--` or `.`
+ * pathspec, a forced checkout, a pathspec file, a tree-ish followed by paths (two or
+ * more operands, `git checkout HEAD src`), or a lone operand that is a path rather
+ * than a branch (a glob, or a name `pathExists` finds in the workspace; `git checkout
+ * src` restores `src`). A lone branch name (`git checkout main`) switches branches,
+ * which git refuses to do over uncommitted changes it would lose.
+ */
+function checkoutDiscardsWork(args: string[], pathExists?: (p: string) => boolean): boolean {
+  if (args.includes('--') || args.includes('.') || hasFlag(args, 'f', '--force')) return true
+  if (args.some((a) => a.startsWith('--pathspec-from-file'))) return true
+  const operands: string[] = []
+  for (let k = 0; k < args.length; k++) {
+    const a = args[k]!
+    if (a.startsWith('-')) {
+      if (CHECKOUT_VALUE_OPTIONS.has(a)) k++
+      continue
+    }
+    operands.push(a)
+  }
+  if (operands.length >= 2) return true
+  const [only] = operands
+  return only !== undefined && (/[*?[]/.test(only) || pathExists?.(only) === true)
+}
+
 /**
  * Whether a `git` invocation (the words after `git`) discards uncommitted work, deletes
  * a branch or stash, or rewrites a remote or history in a way the reflog can't undo for
- * the user: `reset --hard`, a forced `clean`, `checkout -- …`/`checkout .`, `restore` of
- * the working tree, a forced `switch`, `stash drop`/`clear`, `branch -D`, a forced or
- * deleting `push`, `filter-branch`/`filter-repo`, `reflog expire`/`delete`, a forced
- * `worktree remove`, and a forced `rm`.
+ * the user: `reset --hard`, a forced `clean`, a `checkout` of paths (see
+ * {@link checkoutDiscardsWork}), `restore` of the working tree, a forced `switch`,
+ * `stash drop`/`clear`, `branch -D`, a deleting or scripted `update-ref` (`-d`,
+ * `--stdin`), a forced or deleting `push`, `filter-branch`/`filter-repo`, `reflog
+ * expire`/`delete`, a forced `worktree remove`, and a forced `rm`.
  */
-function gitDiscardsWork(words: string[]): boolean {
+function gitDiscardsWork(words: string[], pathExists?: (p: string) => boolean): boolean {
   let i = 0
   // Global options before the subcommand; these four take their value as the next word.
   while (i < words.length && words[i]!.startsWith('-')) {
@@ -977,7 +1120,9 @@ function gitDiscardsWork(words: string[]): boolean {
     case 'clean':
       return hasFlag(args, 'f', '--force') && !hasFlag(args, 'n', '--dry-run')
     case 'checkout':
-      return args.includes('--') || args.includes('.') || hasFlag(args, 'f', '--force')
+      return checkoutDiscardsWork(args, pathExists)
+    case 'update-ref':
+      return hasFlag(args, 'd') || args.includes('--stdin')
     case 'restore': {
       const staged = hasFlag(args, 'S', '--staged')
       const worktree = hasFlag(args, 'W', '--worktree')
@@ -1016,8 +1161,11 @@ function gitDiscardsWork(words: string[]): boolean {
   }
 }
 
-/** Whether one simple command (its words as bash builds them) discards work. */
-function wordsDiscardWork(words: string[]): boolean {
+/**
+ * Whether one simple command (its words as bash builds them) discards work. `pathExists`
+ * says whether a name is a path in the workspace (see {@link shellDiscardsWork}).
+ */
+function wordsDiscardWork(words: string[], pathExists?: (p: string) => boolean): boolean {
   let i = 0
   while (
     i < words.length &&
@@ -1032,14 +1180,16 @@ function wordsDiscardWork(words: string[]): boolean {
     // The wrapped command starts at some later word; try each known discarding program.
     for (let k = i + 1; k < words.length; k++) {
       const w = words[k]!
-      if (DISCARDING_PROGRAMS.has(w.slice(w.lastIndexOf('/') + 1)) && wordsDiscardWork(words.slice(k))) return true
+      if (DISCARDING_PROGRAMS.has(w.slice(w.lastIndexOf('/') + 1)) && wordsDiscardWork(words.slice(k), pathExists)) {
+        return true
+      }
     }
     return false
   }
   const args = words.slice(i + 1)
   switch (program) {
     case 'git':
-      return gitDiscardsWork(args)
+      return gitDiscardsWork(args, pathExists)
     case 'rm':
       return rmDiscardsWork(args)
     case 'find':
@@ -1052,14 +1202,14 @@ function wordsDiscardWork(words: string[]): boolean {
 }
 
 /** {@link shellDiscardsWork} for a command string nested `depth` shells deep. */
-function commandDiscardsWork(command: string, depth: number): boolean {
+function commandDiscardsWork(command: string, depth: number, pathExists?: (p: string) => boolean): boolean {
   // Too deep to read: over-flagging only asks.
   const commands = depth <= MAX_NESTED_SHELL_DEPTH ? shellRunCommands(command) : null
   if (commands === null) return true
   for (const words of commands) {
-    if (wordsDiscardWork(words)) return true
+    if (wordsDiscardWork(words, pathExists)) return true
     const nested = nestedCommandString(words)
-    if (nested !== null && commandDiscardsWork(nested, depth + 1)) return true
+    if (nested !== null && commandDiscardsWork(nested, depth + 1, pathExists)) return true
   }
   return false
 }
@@ -1083,11 +1233,15 @@ function commandDiscardsWork(command: string, depth: number): boolean {
  * shell (`bash -c`, `eval`), and with line continuations joined as well as written, so
  * quoting or splitting a word can't hide one. Like {@link shellReferencesExternalPath}
  * it is a static tripwire: a command assembled from variables isn't seen.
+ *
+ * `pathExists`, when given, says whether a name is a file or directory in the
+ * workspace, so a `git checkout <name>` that restores a path (and drops its changes)
+ * is told apart from one that switches to a branch of that name.
  */
-export function shellDiscardsWork(command: string): boolean {
-  if (commandDiscardsWork(command, 0) || statementFedToClient(command)) return true
+export function shellDiscardsWork(command: string, pathExists?: (p: string) => boolean): boolean {
+  if (commandDiscardsWork(command, 0, pathExists) || statementFedToClient(command)) return true
   const joined = joinLineContinuations(command)
-  return joined !== command && commandDiscardsWork(joined, 0)
+  return joined !== command && commandDiscardsWork(joined, 0, pathExists)
 }
 
 /** A database client reading its statements from a pipe or a here-document. */
@@ -1119,6 +1273,31 @@ export function isSensitiveWrite(kind: ToolKind, toolName: string, args: Record<
     toolName === 'run_shell' &&
     typeof args.command === 'string' &&
     shellWritesSensitivePath(args.command)
+  )
+}
+
+/**
+ * Whether a tool call creates, overwrites, or removes an in-project control file
+ * (`.houston/`, `.vscode/`, `.idea/`, `.envrc`, `.husky/`, `.mcp.json`,
+ * `.devcontainer/`, CI workflows; see isProtectedControlPath): a write tool targeting
+ * one, or a `run_shell` command writing one. Such a file runs code outside the
+ * sandbox later (an editor task, a direnv script, a git hook, a Houston plugin) or
+ * steers the agent's own guardrails, so the gate asks in every mode and "Allow for
+ * run" does not cover it; only an explicit `allow` rule does (see decideApproval).
+ * Shared by the main loop's gate, the subagent gate, and a subagent with no gate.
+ */
+export function isProtectedWrite(
+  kind: ToolKind,
+  toolName: string,
+  args: Record<string, unknown>,
+  roots: string[]
+): boolean {
+  if (kind === 'write') return writesProtectedPath(toolName, args, roots)
+  return (
+    kind === 'shell' &&
+    toolName === 'run_shell' &&
+    typeof args.command === 'string' &&
+    shellWritesProtectedPath(args.command, roots)
   )
 }
 
@@ -1314,27 +1493,85 @@ function escapeRegExp(s: string): string {
  * Which flavour of subject a tool's permission pattern is matched against, so the
  * matcher can canonicalize both sides consistently before comparing:
  * - `shell`  — a command line (handled by {@link matchShellRule}, dequoted).
- * - `url`    — an http(s) URL; scheme + host are case-folded (see {@link lowerUrlAuthority}).
+ * - `url`    — an http(s) URL; its authority is canonicalized (see {@link canonicalUrlAuthority}).
  * - `path`   — a filesystem path/glob; canonicalized + anchored to the roots.
  * - `opaque` — a free-form string (a search query, an MCP tool name); matched verbatim.
  */
 function subjectKind(toolName: string): 'shell' | 'url' | 'path' | 'opaque' {
   if (toolName === 'run_shell') return 'shell'
   if (toolName === 'web_fetch') return 'url'
-  if (toolName === 'web_search' || toolName.startsWith('mcp__')) return 'opaque'
+  // The MCP meta-tools' subjects are `mcp__<server>__<uri or name>` (see
+  // permissionSubject), not paths: read as one, a `..` in the uri would climb out of
+  // the server prefix and dodge a deny on the server.
+  if (
+    toolName === 'web_search' ||
+    toolName.startsWith('mcp__') ||
+    toolName === 'mcp_read_resource' ||
+    toolName === 'mcp_get_prompt'
+  ) {
+    return 'opaque'
+  }
   return 'path'
 }
 
 // The leading `scheme://authority` of a URL (authority = optional userinfo, host,
-// optional :port — everything up to the first `/`, `?`, or `#`). Scheme and host
-// are case-insensitive per RFC 3986, so both are lowercased before matching; the
-// path/query/fragment that follow stay case-sensitive. Anchored, so only the
-// leading authority is touched — a `*`-only pattern (no scheme) is left alone.
-const URL_AUTHORITY_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^/?#]*/
+// optional :port — everything up to the first `/`, `?`, or `#`). Anchored, so only
+// the leading authority is touched — a `*`-only pattern (no scheme) is left alone.
+const URL_AUTHORITY_RE = /^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/([^/?#]*)/
 
-/** Lowercase a URL's scheme + host so `HTTPS://Evil.COM/x` and `https://evil.com/x` match. */
-function lowerUrlAuthority(s: string): string {
-  return s.replace(URL_AUTHORITY_RE, (m) => m.toLowerCase())
+/** The port a scheme uses when a URL names none, which an explicit `:<port>` only restates. */
+const DEFAULT_PORTS: Record<string, string> = { http: '80', https: '443', ws: '80', wss: '443', ftp: '21' }
+
+/**
+ * A URL's leading `scheme://authority` in one spelling per server, so a deny on
+ * `https://blocked.example/*` can't be dodged by naming the same server another way:
+ * scheme and host lowercased (both are case-insensitive, RFC 3986), the userinfo
+ * dropped (`https://u@blocked.example/x` fetches from `blocked.example`), the scheme's
+ * default port dropped (`:443` on https), and the host's trailing dots stripped
+ * (`blocked.example.` is the same fully-qualified name). The path, query, and fragment
+ * that follow stay as written (they are case-sensitive). Applied to subjects and
+ * patterns alike; a pattern's `*` survives, so `https://*.example/*` still reads as a
+ * glob.
+ */
+function canonicalUrlAuthority(s: string): string {
+  return s.replace(URL_AUTHORITY_RE, (_m, scheme: string, authority: string) => {
+    const lowerScheme = scheme.toLowerCase()
+    let host = authority.slice(authority.lastIndexOf('@') + 1).toLowerCase()
+    let port = ''
+    // The last `:` outside an IPv6 literal's brackets starts the port.
+    const portMatch = /:([^:\]]*)$/.exec(host)
+    if (portMatch) {
+      port = portMatch[1]
+      host = host.slice(0, portMatch.index)
+    }
+    host = host.replace(/\.+$/, '')
+    if (port === DEFAULT_PORTS[lowerScheme]) port = ''
+    return `${lowerScheme}://${host}${port ? `:${port}` : ''}`
+  })
+}
+
+/**
+ * A URL SUBJECT (what web_fetch will request) in the spelling a rule pattern is
+ * compared with. Where the WHATWG parser (the one fetch uses) reads it, its reading
+ * wins: the host it would connect to, IDNA-mapped and percent-decoded
+ * (`https://%62locked.example/` is `blocked.example`), a backslash read as `/` as fetch
+ * reads it (`https://evil.example\@good.example/` goes to `evil.example`), and the
+ * path's `.`/`..` segments resolved. Then {@link canonicalUrlAuthority}. A string the
+ * parser rejects just gets the latter.
+ */
+function canonicalUrlSubject(subject: string): string {
+  const auth = URL_AUTHORITY_RE.exec(subject)
+  if (!auth) return subject
+  try {
+    const u = new URL(subject)
+    // A subject with no path keeps that shape (`https://host`, not `https://host/`) so an
+    // exact rule naming it still matches. Once the parser has a path, its reading stands.
+    const rest = subject.slice(auth[0].length)
+    const tail = rest === '' ? '' : `${u.pathname}${u.search}${u.hash}`
+    return canonicalUrlAuthority(`${u.protocol}//${u.host}${tail}`)
+  } catch {
+    return canonicalUrlAuthority(subject)
+  }
 }
 
 /**
@@ -1441,7 +1678,7 @@ function exactSubjectMatches(
 ): boolean {
   if (!pattern.trim()) return false
   if (kind === 'path') return candidatePatternPaths(pattern, roots).includes(subject)
-  if (kind === 'url') return lowerUrlAuthority(pattern) === subject
+  if (kind === 'url') return canonicalUrlAuthority(pattern) === subject
   return pattern === subject
 }
 
@@ -1459,12 +1696,37 @@ function patternMatches(pattern: string, subject: string): boolean {
 }
 
 /**
- * First matching rule's action for a single (non-shell) subject, or null. Both the
- * subject and each rule pattern are canonicalized by kind before comparing — URLs
- * case-folded on scheme+host, filesystem paths resolved and anchored to the roots —
- * so a rule can't be dodged (deny) or widened (allow) by a spelling that resolves
- * to the same target. An `exact` rule matches only its one literal subject (see
- * {@link exactSubjectMatches}).
+ * The file-editing tools. Each changes a file's content, so a deny or ask rule naming
+ * any one of them is a rule about changing that file, and applies to all of them: a
+ * deny on `write_file` for `src/secret/**` that `edit_file` or `apply_patch` could walk
+ * past would guard nothing. An allow stays on the one tool it names (see
+ * {@link ruleAppliesToTool}).
+ */
+const FILE_EDIT_TOOLS: ReadonlySet<string> = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch', 'notebook_edit'])
+
+/**
+ * Whether rule `r` speaks to a call of `toolName`: a rule for every tool (`*` or none),
+ * one naming the tool, or a deny or ask naming another file-editing tool (see
+ * {@link FILE_EDIT_TOOLS}).
+ */
+function ruleAppliesToTool(r: PermissionRule, toolName: string): boolean {
+  if (!r.tool || r.tool === '*' || r.tool === toolName) return true
+  return r.action !== 'allow' && FILE_EDIT_TOOLS.has(r.tool) && FILE_EDIT_TOOLS.has(toolName)
+}
+
+/**
+ * The verdict the rules give one (non-shell) subject, or null when none matches. A
+ * matching deny always wins, wherever it sits in the list: "Always allow" puts its new
+ * rule at the top of the user's rules, and a first-match reading let that rule shadow
+ * an older deny the user had written for the same target. Otherwise the first matching
+ * allow or ask decides, so their order still means something (an "Always allow" saved
+ * from an `ask` prompt answers that prompt).
+ *
+ * Both the subject and each rule pattern are canonicalized by kind before comparing
+ * (URLs to one spelling of their server, see {@link canonicalUrlSubject}; filesystem
+ * paths resolved and anchored to the roots) so a rule can't be dodged (deny) or widened
+ * (allow) by a spelling that resolves to the same target. An `exact` rule matches only
+ * its one literal subject (see {@link exactSubjectMatches}).
  */
 function matchOne(
   rules: PermissionRule[],
@@ -1474,20 +1736,23 @@ function matchOne(
 ): PermissionRule['action'] | null {
   const kind = subjectKind(toolName)
   const canonSubject =
-    kind === 'url' ? lowerUrlAuthority(subject) : kind === 'path' ? canonicalizePath(subject, roots) : subject
+    kind === 'url' ? canonicalUrlSubject(subject) : kind === 'path' ? canonicalizePath(subject, roots) : subject
+  let first: PermissionRule['action'] | null = null
   for (const r of rules) {
-    if (r.tool && r.tool !== '*' && r.tool !== toolName) continue
+    if (!ruleAppliesToTool(r, toolName)) continue
     const match = r.match ?? ''
     const hit = r.exact
       ? exactSubjectMatches(kind, match, roots, canonSubject)
       : kind === 'path'
         ? pathPatternMatches(match, roots, canonSubject)
         : kind === 'url'
-          ? patternMatches(lowerUrlAuthority(match), canonSubject)
+          ? patternMatches(canonicalUrlAuthority(match), canonSubject)
           : patternMatches(match, canonSubject)
-    if (hit) return r.action
+    if (!hit) continue
+    if (r.action === 'deny') return 'deny'
+    first ??= r.action
   }
-  return null
+  return first
 }
 
 /**
@@ -1923,29 +2188,37 @@ function shellAllowEquals(pattern: string, command: string): boolean {
   return p !== '' && p === literalShellUnits(command).join('')
 }
 
+/** Whether allow rule `r` (a `run_shell` or any-tool rule) matches one sub-command. */
+function shellAllowHits(r: PermissionRule, command: string): boolean {
+  const match = r.match ?? ''
+  return r.exact ? shellAllowEquals(match, command) : shellAllowMatches(match, command)
+}
+
 /**
- * First matching rule's action for a single shell sub-command, or null. An allow rule
- * reads the command as written, through {@link literalShellUnits}; a deny or ask rule
- * reads it with all its whitespace collapsed (see {@link normalizeShellCommand}) and
- * through {@link dequoteShell}: a quoted `*`, `~`, or space is the bare one to a deny,
- * never to an allow.
+ * The verdict the rules give a single shell sub-command, or null: a matching deny
+ * wherever it sits, else the first matching allow or ask (as {@link matchOne} reads
+ * the rules). An allow rule reads the command as written, through
+ * {@link literalShellUnits}; a deny or ask rule reads it with all its whitespace
+ * collapsed (see {@link normalizeShellCommand}) and through {@link dequoteShell}: a
+ * quoted `*`, `~`, or space is the bare one to a deny, never to an allow.
  */
 function matchOneShell(rules: PermissionRule[], command: string): PermissionRule['action'] | null {
   const norm = normalizeShellCommand(command)
+  let first: PermissionRule['action'] | null = null
   for (const r of rules) {
     if (r.tool && r.tool !== '*' && r.tool !== 'run_shell') continue
     const match = r.match ?? ''
     const hit =
       r.action === 'allow'
-        ? r.exact
-          ? shellAllowEquals(match, command)
-          : shellAllowMatches(match, command)
+        ? shellAllowHits(r, command)
         : r.exact
           ? shellCommandEquals(match, norm)
           : shellCommandMatches(match, norm)
-    if (hit) return r.action
+    if (!hit) continue
+    if (r.action === 'deny') return 'deny'
+    first ??= r.action
   }
-  return null
+  return first
 }
 
 /**
@@ -2294,9 +2567,72 @@ export function matchShellRule(
   return anyAsk ? 'ask' : null
 }
 
+/** A shell pattern with its `*` wildcards taken out: the command text it names itself. */
+function patternWithoutStars(match: string): string {
+  return match.replaceAll('*', ' ').replace(/\s+/g, ' ').trim()
+}
+
 /**
- * Resolve permission rules for a call. Returns the first matching rule's action,
- * or null when no rule matches (caller falls back to the approval policy). For
+ * How the allow rules stand toward a command's tripwires (leaving the workspace, see
+ * {@link shellReferencesExternalPath}; throwing away work, see {@link shellDiscardsWork}):
+ * `none` when no sub-command trips one on its own, `covered` when every sub-command
+ * that does has an allow rule that names what it trips, else `uncovered`. See
+ * {@link shellAllowCoversTripwires}.
+ */
+function tripwireCoverage(
+  rules: PermissionRule[],
+  command: string,
+  roots: string[],
+  pathExists?: (p: string) => boolean
+): 'none' | 'covered' | 'uncovered' {
+  let tripped = false
+  for (const seg of shellSegments(command)) {
+    if (isWorkspaceCwdChange(seg, roots)) continue
+    const escapes = shellReferencesExternalPath(seg.text, roots)
+    const discards = shellDiscardsWork(seg.text, pathExists)
+    if (!escapes && !discards) continue
+    tripped = true
+    const named = rules.some((r) => {
+      if (r.action !== 'allow' || (r.tool && r.tool !== '*' && r.tool !== 'run_shell')) return false
+      if (!shellAllowHits(r, seg.text)) return false
+      if (r.exact) return true
+      const own = patternWithoutStars(r.match ?? '')
+      return (!escapes || shellReferencesExternalPath(own, roots)) && (!discards || shellDiscardsWork(own, pathExists))
+    })
+    if (!named) return 'uncovered'
+  }
+  return tripped ? 'covered' : 'none'
+}
+
+/**
+ * Whether the allow rules that approve `command` also approve the tripwires it sets
+ * off, so the loop may let an allow skip the prompt those tripwires otherwise force in
+ * every mode. "Always allow" saves a two-token prefix (`git push`, `git diff`, `ssh
+ * myhost`), and a prefix covers every command that starts with it: without this,
+ * approving `git push origin x` once ran `git push --force` unprompted, and `git diff`
+ * ran `git diff --no-index /dev/null ~/.ssh/id_rsa`.
+ *
+ * Each sub-command (a `cd` into the workspace aside) that itself escapes the workspace
+ * or discards work needs a matching allow rule that is `exact` (the user approved that
+ * one command), or whose pattern, with its `*` taken out, trips the same check itself:
+ * the user named the dangerous part (`git push --force*`, `cat ~/.ssh/*`). A pattern
+ * of just `*` names nothing. When no sub-command trips anything on its own, the
+ * command's tripwire came from context no rule names (a reading of the whole line, or
+ * a working directory outside the workspace), and this returns false.
+ */
+export function shellAllowCoversTripwires(
+  rules: PermissionRule[],
+  command: string,
+  roots: string[],
+  pathExists?: (p: string) => boolean
+): boolean {
+  return tripwireCoverage(rules, command, roots, pathExists) === 'covered'
+}
+
+/**
+ * Resolve permission rules for a call: a matching deny wins wherever it sits, else the
+ * first matching allow or ask, or null when no rule matches (caller falls back to the
+ * approval policy). For
  * `run_shell`, the command is split into its chained sub-commands and an `allow`
  * is honored only when every one is allowed (see {@link matchShellRule}).
  */
@@ -2437,11 +2773,39 @@ function isCountOnlyPager(tokens: string[]): boolean {
  *   the count mints a new rule per number. One with a file operand stays exact, so a
  *   rule for paging stdin is never broadened into one naming a file.
  *
+ * - A sub-command that sets off a tripwire on its own (it leaves the workspace, given
+ *   `roots`, see {@link shellReferencesExternalPath}, or throws away work, see
+ *   {@link shellDiscardsWork}) is kept verbatim and saved exact. A prefix never covers
+ *   a tripwire (see {@link shellAllowCoversTripwires}), so `git push` saved from
+ *   `git push --force origin x` would ask again every time; the exact command is what
+ *   the user approved, and nothing wider.
+ * - So is a program that runs a command string or an arbitrary workload: a shell
+ *   (`bash script.sh`, `sh -c '...'`), `eval`, `ssh` and `watch` (which join their
+ *   words into a command), and `docker`/`podman` `run`/`exec`, `kubectl`
+ *   `exec`/`run`/`debug` (see {@link runsArbitraryCommand}). As a prefix, `ssh myhost`
+ *   would allow `ssh myhost 'anything'`, and `docker run` any image doing anything.
+ *
  * Used only for the ALLOW case; a deny is always stored exactly (a broadened deny is
  * dangerous). Never returns an empty list.
  */
-export function shellRulePatterns(command: string, roots?: string[]): string[] {
-  const patterns = new Set<string>()
+export function shellRulePatterns(command: string, roots?: string[], pathExists?: (p: string) => boolean): string[] {
+  return shellRuleEntries(command, roots, pathExists).map((e) => e.match)
+}
+
+/**
+ * The patterns {@link shellRulePatterns} returns, each with whether it must be saved
+ * exact for a reason its text alone doesn't show (it sets off a tripwire, or runs an
+ * arbitrary command; see {@link shellAllowRule} for the reasons it does show).
+ */
+function shellRuleEntries(
+  command: string,
+  roots?: string[],
+  pathExists?: (p: string) => boolean
+): Array<{ match: string; exact: boolean }> {
+  const patterns = new Map<string, boolean>()
+  const add = (match: string, exact: boolean): void => {
+    patterns.set(match, exact || patterns.get(match) === true)
+  }
   for (const seg of shellSegments(command)) {
     const text = shellRuleText(seg.text)
     const tokens = tokenizeShellCommand(text)
@@ -2449,10 +2813,14 @@ export function shellRulePatterns(command: string, roots?: string[]): string[] {
     // An empty program (`'' rm -rf x`) is still a sub-command to cover, not one to drop.
     if (prog === undefined || isWorkspaceCwdChange(seg, roots)) continue
     const verb = tokens[1]
-    if (CWD_BUILTINS.has(prog)) {
-      patterns.add(text)
+    const trips =
+      (roots !== undefined && shellReferencesExternalPath(seg.text, roots)) || shellDiscardsWork(seg.text, pathExists)
+    if (trips || runsArbitraryCommand(tokens)) {
+      add(text, true)
+    } else if (CWD_BUILTINS.has(prog)) {
+      add(text, false)
     } else if (isCountOnlyPager(tokens)) {
-      patterns.add(prog)
+      add(prog, false)
     } else if (
       !ENV_ASSIGN.test(prog) &&
       !COMMAND_WRAPPERS.has(prog) &&
@@ -2461,13 +2829,39 @@ export function shellRulePatterns(command: string, roots?: string[]): string[] {
       SUBCOMMAND_VERB.test(verb) &&
       shellAllowMatches(`${prog} ${verb}`, text)
     ) {
-      patterns.add(`${prog} ${verb}`)
+      add(`${prog} ${verb}`, false)
     } else {
-      patterns.add(text)
+      add(text, false)
     }
   }
-  if (patterns.size === 0) patterns.add(shellRuleText(command))
-  return [...patterns]
+  if (patterns.size === 0) add(shellRuleText(command), false)
+  return [...patterns].map(([match, exact]) => ({ match, exact }))
+}
+
+/** `docker`/`podman` and `kubectl` verbs that run a workload the rest of the line picks. */
+const CONTAINER_RUN_VERBS: Record<string, ReadonlySet<string>> = {
+  docker: new Set(['run', 'exec']),
+  podman: new Set(['run', 'exec']),
+  kubectl: new Set(['exec', 'run', 'debug'])
+}
+
+/**
+ * Whether a sub-command (its words as bash builds them) hands what follows to something
+ * that runs it: a shell or `su` (see {@link SHELL_PROGRAMS}), a program that joins its
+ * words into a command (see {@link JOINED_COMMAND_PROGRAMS}), or a container or pod
+ * runner's `run`/`exec` (`docker container run` and `docker compose exec` too). Its
+ * two-token prefix would allow any command at all.
+ */
+function runsArbitraryCommand(tokens: string[]): boolean {
+  const prog = tokens[0]
+  if (prog === undefined) return false
+  const base = prog.slice(prog.lastIndexOf('/') + 1)
+  if (SHELL_PROGRAMS.has(base) || JOINED_COMMAND_PROGRAMS.has(base)) return true
+  const verbs = CONTAINER_RUN_VERBS[base]
+  if (!verbs) return false
+  const [verb, next] = [tokens[1], tokens[2]]
+  if (verb !== undefined && verbs.has(verb)) return true
+  return (verb === 'container' || verb === 'compose') && next !== undefined && verbs.has(next)
 }
 
 /**
@@ -2485,11 +2879,12 @@ function holdsShellStar(s: string): boolean {
  * `rm -rf ~`, and approving `find . -name "*.ts"` would allow
  * `find . -name x -delete -name y.ts`. So it is `exact`, covering the approved
  * sub-command only. So is a directory change: as a prefix, `cd` would cover every
- * `cd` and `cd -` would cover `cd - x`. Every other pattern keeps its prefix meaning
- * (`git status` also covers `git status -s`).
+ * `cd` and `cd -` would cover `cd - x`. So is one {@link shellRuleEntries} marks
+ * (`forceExact`). Every other pattern keeps its prefix meaning (`git status` also
+ * covers `git status -s`).
  */
-function shellAllowRule(match: string): PermissionRule {
-  return holdsShellStar(match) || isCwdOnly(match)
+function shellAllowRule(match: string, forceExact = false): PermissionRule {
+  return forceExact || holdsShellStar(match) || isCwdOnly(match)
     ? { action: 'allow', tool: 'run_shell', match, exact: true }
     : { action: 'allow', tool: 'run_shell', match }
 }
@@ -2525,9 +2920,9 @@ function subjectArgKeys(toolName: string): string[] {
  *
  * - An ALLOW on `run_shell` stores generalized per-sub-command prefixes (see
  *   {@link shellRulePatterns}, given the run's `roots` so a `cd` out of them is kept),
- *   except that a sub-command kept verbatim and holding `*`, or changing directory, is
- *   exact (see {@link shellAllowRule}); a shell deny stays as typed (a broadened deny
- *   is risky).
+ *   except that a sub-command kept verbatim and holding `*`, changing directory,
+ *   setting off a tripwire, or running an arbitrary command is exact (see
+ *   {@link shellAllowRule}); a shell deny stays as typed (a broadened deny is risky).
  * - Any other ALLOW (but the web tools below) is `exact` (see
  *   {@link PermissionRule.exact}): it covers the one path the user approved. Saved as a glob instead, a model-chosen
  *   path would widen it: a file named `*` would allow every write, and a directory
@@ -2553,7 +2948,8 @@ export function persistedRules(
   action: 'allow' | 'deny',
   toolName: string,
   args: Record<string, unknown>,
-  roots?: string[]
+  roots?: string[],
+  pathExists?: (p: string) => boolean
 ): PermissionRule[] {
   const exact = action === 'allow' && toolName !== 'run_shell'
   const rule = (match: string): PermissionRule =>
@@ -2566,7 +2962,9 @@ export function persistedRules(
   }
   const subject = permissionSubject(toolName, args)
   if (subject.trim()) {
-    if (action === 'allow' && toolName === 'run_shell') return shellRulePatterns(subject, roots).map(shellAllowRule)
+    if (action === 'allow' && toolName === 'run_shell') {
+      return shellRuleEntries(subject, roots, pathExists).map((e) => shellAllowRule(e.match, e.exact))
+    }
     return [rule(subject)]
   }
   if (action === 'allow' && subjectArgKeys(toolName).some((k) => typeof args[k] === 'string')) return []
@@ -2579,14 +2977,23 @@ export function persistedRules(
  * broader rule already covers, so "Always allow" never piles up redundant entries.
  * Pass the run's `roots`, the same ones the gate matches with, so a relative path
  * resolves to the file the gate would check (without them it anchors at the cwd).
+ *
+ * For `run_shell`, a sample that sets off a tripwire counts as allowed only when the
+ * rules also cover that tripwire (see {@link shellAllowCoversTripwires}): a `git diff`
+ * prefix matches `git diff --no-index /dev/null ~/.ssh/id_rsa` but no longer lets it
+ * run unasked, so the exact rule "Always allow" saves for it is not redundant. Without
+ * `roots` every absolute path reads as outside, which only keeps a rule.
  */
 export function alreadyAllowedAsRule(
   rules: PermissionRule[],
   toolName: string,
   sample: string,
-  roots: string[] = []
+  roots: string[] = [],
+  pathExists?: (p: string) => boolean
 ): boolean {
-  if (toolName === 'run_shell') return matchOneShell(rules, sample) === 'allow'
+  if (toolName === 'run_shell') {
+    return matchOneShell(rules, sample) === 'allow' && tripwireCoverage(rules, sample, roots, pathExists) !== 'uncovered'
+  }
   return matchOne(rules, toolName, sample, roots) === 'allow'
 }
 
@@ -2624,7 +3031,7 @@ function isDeadShellPattern(match: string): boolean {
  *   prefix allow it extends: an exact rule or a glob can match the piece's text and
  *   still miss its extensions.
  * - Drops any allow rule already covered by an earlier kept allow rule, and any exact
- *   duplicate — preserving order, so first-match-wins semantics are unchanged.
+ *   duplicate — preserving order, so the order of allow and ask rules keeps its meaning.
  * - Drops a `run_shell` allow covered by a LATER, broader allow (`ls -la "dir"` before
  *   `ls -la`) when no deny/ask rule overlaps it, since nothing between the two can then
  *   change its verdict.
@@ -2693,9 +3100,12 @@ export function cleanupPermissionRules(rules: PermissionRule[]): PermissionRule[
     if (isShellAllow(r) && isDeadShellPattern(r.match ?? '')) continue
     let expanded: PermissionRule[] = [r]
     if (isShellAllow(r) && !r.exact) {
-      const pats = shellRulePatterns(r.match ?? '')
+      const entries = shellRuleEntries(r.match ?? '')
+      const pats = entries.map((e) => e.match)
       const own = shellRuleText(r.match ?? '')
-      const pieces = pats.map((match) => (match === own ? { ...r, match } : { ...r, ...shellAllowRule(match) }))
+      const pieces = entries.map((e) =>
+        e.match === own ? { ...r, match: e.match } : { ...r, ...shellAllowRule(e.match, e.exact) }
+      )
       // Saved apart, the commands a chain runs, or a substitution's body and the command
       // it was lifted out of, would each be allowed on their own.
       const splits = pats.length > 1 || SHELL_SUBSTITUTION_OPENER.test(joinLineContinuations(r.match ?? ''))

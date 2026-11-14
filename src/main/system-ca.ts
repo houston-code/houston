@@ -1,4 +1,6 @@
-import * as tls from 'node:tls'
+// The module object itself, not a namespace import: deferTrustSystemCertificates swaps
+// its `connect`, and a bundled namespace import is a read-only copy.
+import tls from 'node:tls'
 import { log } from './logger'
 
 /**
@@ -41,4 +43,38 @@ export function trustSystemCertificates(api: CaApi = tls): number {
 export interface CaApi {
   getCACertificates?: (type: 'default' | 'system') => string[]
   setDefaultCACertificates?: (certs: string[]) => void
+}
+
+/** {@link CaApi} plus the `connect` every TLS client in the process opens its sockets with. */
+export interface DeferredCaApi extends CaApi {
+  connect: (...args: never[]) => unknown
+}
+
+/**
+ * {@link trustSystemCertificates}, moved off the start-up path without letting any TLS
+ * connection start before it. Reading the store takes tens of milliseconds, which an
+ * interactive client would rather spend after its prompt is on screen; it calls the
+ * returned function then. Until that call, the first `tls.connect()` runs it before
+ * connecting: fetch, `node:https`, HTTP/2 and WebSockets all open their sockets through
+ * `tls.connect`, so no request can reach a server ahead of the system roots. Runs once;
+ * the wrapper puts `connect` back as soon as it has.
+ *
+ * `api` must be the `node:tls` module object itself (or a stand-in), not a namespace
+ * import's read-only copy.
+ */
+export function deferTrustSystemCertificates(api: DeferredCaApi = tls as unknown as DeferredCaApi): () => void {
+  const connect = api.connect
+  let trusted = false
+  const trustNow = (): void => {
+    if (trusted) return
+    trusted = true
+    if (api.connect === gated) api.connect = connect
+    trustSystemCertificates(api)
+  }
+  const gated = function (this: unknown, ...args: never[]): unknown {
+    trustNow()
+    return connect.apply(this, args)
+  }
+  api.connect = gated
+  return trustNow
 }

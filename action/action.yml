@@ -1,7 +1,8 @@
 name: Houston
 description: >-
   Run the Houston coding agent on your own runner with your own model API key: answer
-  @houston mentions, review pull requests, or fix failed CI runs. No hosted service.
+  @houston mentions, review pull requests, fix failed CI runs, implement issues, or run
+  scheduled tasks. No hosted service.
 author: The Houston Authors
 branding:
   icon: terminal
@@ -11,13 +12,19 @@ inputs:
   mode:
     description: >-
       respond (answer an @houston mention from a collaborator with write access), review
-      (one review comment on a pull request), or fix-ci (fix a failed workflow run on a new
-      branch and open a pull request). Defaults from the event: issue_comment, issues and
-      pull_request_review_comment respond, pull_request reviews, workflow_run fixes.
+      (one review on a pull request, with findings inline on the diff), fix-ci (fix a failed
+      workflow run on a new branch and open a pull request), implement (make the change an
+      issue asks for, or a scheduled or manual run's prompt, on a new branch and open a pull
+      request), or task (a read-only scheduled or manual run). Defaults from the event:
+      issue_comment, issues and pull_request_review_comment respond, pull_request reviews,
+      workflow_run fixes, schedule and workflow_dispatch run a task. implement is never a
+      default: a workflow opts in to it by setting mode.
     required: false
     default: ''
   prompt:
-    description: Extra instructions added to the task, such as house review rules.
+    description: >-
+      Extra instructions added to the task, such as house review rules. For task mode, and
+      implement on schedule or workflow_dispatch, it is the task itself and is required.
     required: false
     default: ''
   provider:
@@ -42,8 +49,8 @@ inputs:
     default: ''
   approval:
     description: >-
-      Approval policy: default (plan, read-only, for respond and review; auto-edit with
-      sandboxed, offline shell allowed for fix-ci), plan, auto-edit, or full-auto. Anything a policy
+      Approval policy: default (plan, read-only, for respond, review, and task; auto-edit
+      with sandboxed, offline shell allowed for fix-ci and implement), plan, auto-edit, or full-auto. Anything a policy
       would ask about is refused, since no one is there to answer.
     required: false
     default: default
@@ -60,7 +67,7 @@ inputs:
     required: false
     default: ''
   verify:
-    description: A check Houston must pass after editing, like "npm test". Used by fix-ci.
+    description: A check Houston must pass after editing, like "npm test". Used by fix-ci and implement.
     required: false
     default: ''
   allowed-tools:
@@ -71,11 +78,15 @@ inputs:
     required: false
     default: ''
   trigger:
-    description: The mention that starts a respond run.
+    description: The mention that starts a respond run (and, followed by implement, an implement run).
     required: false
     default: '@houston'
+  label:
+    description: The issue label whose addition starts an implement run.
+    required: false
+    default: houston
   branch-prefix:
-    description: Prefix for fix-ci branches. The action only ever pushes a new branch under it.
+    description: Prefix for fix-ci and implement branches. The action only ever pushes a new branch under it.
     required: false
     default: houston/
   working-directory:
@@ -114,7 +125,7 @@ outputs:
     description: The posted comment, review, or pull request.
     value: ${{ steps.run.outputs.url }}
   branch:
-    description: The fix-ci branch that was pushed.
+    description: The fix-ci or implement branch that was pushed.
     value: ${{ steps.run.outputs.branch }}
   reply-file:
     description: Path of the reply, review, or pull request body Houston wrote.
@@ -164,6 +175,7 @@ runs:
         HOUSTON_INPUT_VERIFY: ${{ inputs.verify }}
         HOUSTON_INPUT_ALLOWED_TOOLS: ${{ inputs.allowed-tools }}
         HOUSTON_INPUT_TRIGGER: ${{ inputs.trigger }}
+        HOUSTON_INPUT_LABEL: ${{ inputs.label }}
         HOUSTON_INPUT_BRANCH_PREFIX: ${{ inputs.branch-prefix }}
         HOUSTON_INPUT_WORKING_DIRECTORY: ${{ inputs.working-directory }}
         HOUSTON_INPUT_POST: ${{ inputs.post }}

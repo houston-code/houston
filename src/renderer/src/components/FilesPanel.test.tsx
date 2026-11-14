@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { FileEntry, FilePreview } from '@shared/files'
 import { FilesPanel, normalizeRelPath } from './FilesPanel'
@@ -121,6 +121,52 @@ describe('FilesPanel', () => {
     expect(api.openWorkspacePath).toHaveBeenCalledWith('/repo', 'README.md')
   })
 
+  it('says why "Open" failed, in the panel', async () => {
+    const api = installApi({ '': [file('README.md', 'README.md')] })
+    api.openWorkspacePath.mockResolvedValue({ ok: false, error: 'No app is set to open .md files.' })
+    render(<FilesPanel workspace="/repo" onClose={vi.fn()} docked />)
+    fireEvent.click(await screen.findByText('README.md'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Open' }))
+    expect(await screen.findByRole('status')).toHaveTextContent('No app is set to open .md files.')
+  })
+
+  it('tells a folder that could not be listed apart from an empty one', async () => {
+    const api = installApi({ '': [dir('locked', 'locked'), dir('blank', 'blank')], blank: [] })
+    api.listWorkspaceDir.mockImplementation((_ws: string, rel: string) =>
+      rel === 'locked' ? Promise.reject(new Error('EACCES')) : Promise.resolve(rel === '' ? [dir('locked', 'locked'), dir('blank', 'blank')] : [])
+    )
+    render(<FilesPanel workspace="/repo" onClose={vi.fn()} docked />)
+    fireEvent.click(await screen.findByText('locked'))
+    expect(await screen.findByText('Couldn’t read this folder.')).toBeInTheDocument()
+    fireEvent.click(screen.getByText('blank'))
+    expect(await screen.findByText('Empty folder')).toBeInTheDocument()
+  })
+
+  it('re-reads the tree and the open file on Refresh, when a run ends, and on window focus', async () => {
+    const api = installApi(
+      { '': [file('notes.txt', 'notes.txt')] },
+      { kind: 'text', text: 'before', truncated: false, bytes: 6 }
+    )
+    const { rerender } = render(<FilesPanel workspace="/repo" onClose={vi.fn()} docked running />)
+    fireEvent.click(await screen.findByText('notes.txt'))
+    expect(await screen.findByText('before')).toBeInTheDocument()
+
+    api.readWorkspaceFile.mockResolvedValue({ kind: 'text', text: 'after the run', truncated: false, bytes: 13 })
+    rerender(<FilesPanel workspace="/repo" onClose={vi.fn()} docked running={false} />)
+    expect(await screen.findByText('after the run')).toBeInTheDocument()
+    expect(api.listWorkspaceDir).toHaveBeenCalledTimes(2)
+
+    api.readWorkspaceFile.mockResolvedValue({ kind: 'text', text: 'after Refresh', truncated: false, bytes: 13 })
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh' }))
+    expect(await screen.findByText('after Refresh')).toBeInTheDocument()
+
+    api.readWorkspaceFile.mockResolvedValue({ kind: 'text', text: 'after focus', truncated: false, bytes: 11 })
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(await screen.findByText('after focus', undefined, { timeout: 2000 })).toBeInTheDocument()
+  })
+
   it('renders an image preview for an image file', async () => {
     installApi(
       { '': [file('logo.png', 'logo.png')] },
@@ -139,7 +185,7 @@ describe('FilesPanel', () => {
     await screen.findByText('src')
 
     fireEvent.change(screen.getByLabelText('Filter files'), { target: { value: 'widget' } })
-    expect(await screen.findByText('src/deep/widget.ts')).toBeInTheDocument()
+    expect((await screen.findAllByTitle('src/deep/widget.ts'))[0]).toBeInTheDocument()
     expect(api.listWorkspaceFiles).toHaveBeenCalledWith('/repo', 'widget')
     // The tree is replaced by results while a query is active.
     expect(screen.queryByText('src')).not.toBeInTheDocument()

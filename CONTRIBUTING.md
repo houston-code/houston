@@ -333,6 +333,22 @@ and turns the updater off:
 npm run test:e2e
 ```
 
+The memory soak in [`e2e/soak/`](e2e/soak/) runs long, heavy sessions in the
+desktop app and the CLI against a local scripted model, and fails when memory grows
+turn after turn, is not given back once a chat closes or a session goes idle, or
+when a shell, terminal or subagent process is left running. Its limits are per
+platform, in [`e2e/soak/budgets.ts`](e2e/soak/budgets.ts). CI runs it nightly on
+Linux, macOS and Windows, weekly as a longer session, and on any PR that changes
+it. `SOAK_TURNS` and `SOAK_STEPS` set the session length:
+
+```bash
+npm run test:soak
+SOAK_TURNS=4 SOAK_STEPS=6 npm run test:soak
+```
+
+If a change moves a soak number on purpose, update the measured value and its
+limit in `budgets.ts` in the same PR.
+
 ## Before opening a PR
 
 ```bash

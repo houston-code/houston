@@ -45,6 +45,7 @@ import { estimateTokens, estimateToolTokens } from './compaction'
 import { FIND_TOOLS_NAME } from './lazy-mcp'
 import { getTool } from './tools'
 import { resetCaptureBackend, setCaptureBackend } from './viewlocalhost'
+import { resetBrowserBackend, setBrowserBackend, type BrowserBackend } from './browserSession'
 import { resetMockupBackend, setMockupBackend } from './mockupRender'
 import { resetSpawnBackend, setSpawnBackend } from './spawn'
 import { resetSchedulerBackend, setSchedulerBackend } from './scheduler'
@@ -144,7 +145,11 @@ vi.mock('../conversations', () => ({
 }))
 vi.mock('./plugins', () => {
   const inert = { has: () => false, size: 0, emit: async () => {} }
-  return { loadPlugins: async () => inert, loadPluginsIfEnabled: async () => inert }
+  return {
+    loadPlugins: async () => inert,
+    loadTrustedPlugins: async () => inert,
+    readPluginFiles: async () => ({ files: [], skipped: [] })
+  }
 })
 
 // Imported after the mocks are registered.
@@ -221,6 +226,7 @@ let desktopClient = false
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true })
   resetCaptureBackend()
+  resetBrowserBackend()
   resetMockupBackend()
   desktopClient = false
   resetSpawnBackend()
@@ -232,6 +238,7 @@ afterEach(() => {
 function configureDesktopBackends(): void {
   desktopClient = true
   setCaptureBackend({} as CaptureDeps)
+  setBrowserBackend({} as BrowserBackend)
   setMockupBackend(async () => [])
   setSpawnBackend({} as SpawnBackend)
   setSchedulerBackend({} as SchedulerBackend)
@@ -685,7 +692,9 @@ const OVERHEAD_BUDGET_TOKENS: Record<string, number> = {
   desktop: 9_300,
   cli: 8_700,
   headless: 8_400,
-  'plan-mode': 10_000
+  // 10_050: background dispatch (dispatch_agent's `background` flag, ~30 tokens) is
+  // most useful for read-only research, which is what plan mode does.
+  'plan-mode': 10_050
 }
 
 describe('fixed per-request overhead', () => {
@@ -706,6 +715,7 @@ describe('fixed per-request overhead', () => {
     const over: string[] = []
     for (const c of configs) {
       resetCaptureBackend()
+      resetBrowserBackend()
       resetMockupBackend()
       resetSpawnBackend()
       resetSchedulerBackend()
@@ -830,6 +840,7 @@ function wireBackends(c: Omit<BackendConfig, 'label'>): void {
   // The browser engine comes only with the desktop app, which also draws galleries.
   if (c.capture) {
     setCaptureBackend({} as CaptureDeps)
+    setBrowserBackend({} as BrowserBackend)
     setMockupBackend(async () => [])
     desktopClient = true
   }

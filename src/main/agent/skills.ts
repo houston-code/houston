@@ -1,10 +1,14 @@
 import { promises as fs, realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, sep } from 'node:path'
-import { isDisabledFlag, parseFrontmatter } from '@shared/frontmatter'
+import { isDisabledFlag, parseFrontmatter, parseStructuredFrontmatter } from '@shared/frontmatter'
 import { HOUSTON_GUIDE } from './guide-content'
 import { RENDER_UI_SKILL } from './render-ui-skill'
 import { isSensitivePath } from './sensitive-paths'
+import { parseSkillFields, skillMatchesPath, workspaceRelative, type SkillSpecFields } from './skillSpec'
+import { touchedFilePaths } from './workingMemory'
+import type { ChatMessage } from '@shared/agent'
+import type { Command } from '@shared/commands'
 
 /**
  * Skills: reusable instruction bundles in `.houston/skills/<name>/SKILL.md`. Each
@@ -24,14 +28,23 @@ import { isSensitivePath } from './sensitive-paths'
 export const SKILLS_DIR = '.houston/skills'
 /** Skills available in every project, under the home folder (`~/.houston/skills`). */
 export const USER_SKILLS_DIR = join('.houston', 'skills')
+/**
+ * The Agent Skills format's own folder (agentskills.io), read in a project and under
+ * the home folder (`~/.agents/skills`) alongside `.houston/skills`. Skills found here
+ * are held to the format: one whose name or description breaks it is not loaded.
+ */
+export const AGENTS_SKILLS_DIR = '.agents/skills'
+export const USER_AGENTS_SKILLS_DIR = join('.agents', 'skills')
 const MAX_SKILLS = 50
 /** Bound the per-skill resource walk so a huge skill directory can't blow up load. */
 const MAX_SKILL_RESOURCES = 100
 const MAX_SKILL_DEPTH = 8
 
-export interface Skill {
+export interface Skill extends SkillSpecFields {
   name: string
   description: string
+  /** Where it was found: `.agents/skills` (the open format's folder), else `.houston/skills`. */
+  source?: 'agents'
   /**
    * Path to the skill's instructions, for the agent to read: workspace-relative for a
    * project skill, absolute for one of the user's own (see `root`).
@@ -59,6 +72,11 @@ export interface Skill {
    * that can't call it.
    */
   requiresTools?: readonly string[]
+  /**
+   * False when the frontmatter says `user-invocable: false`: the model can still
+   * load it, but the clients don't offer it as a `/name` slash command.
+   */
+  userInvocable?: false
 }
 
 /**
@@ -168,7 +186,8 @@ async function loadSkillsFrom(
   dir: string,
   confine: string,
   display: (name: string) => string,
-  root?: string
+  root?: string,
+  source?: 'agents'
 ): Promise<Skill[]> {
   let entries
   try {
@@ -194,38 +213,61 @@ async function loadSkillsFrom(
       continue // a dir without a SKILL.md isn't a skill
     }
     if (!raw) continue
-    const { data } = parseFrontmatter(raw)
+    const { fields } = parseStructuredFrontmatter(raw)
     // Switched off (Settings > Customize writes `disabled: true`): kept on disk, not offered.
-    if (isDisabledFlag(data.disabled)) continue
+    if (isDisabledFlag(typeof fields.disabled === 'string' ? fields.disabled : undefined)) continue
+    // `.agents/skills` is held to the format; `.houston/skills` predates it and keeps
+    // loading what it always did.
+    const spec = parseSkillFields(fields, e.name, source === 'agents')
+    if (!spec) continue
+    const { problems: _problems, ...parsed } = spec
     const skillDir = display(e.name)
+    const invocable = fields['user-invocable']
     const resources = await collectSkillResources(join(dir, e.name), skillDir)
     skills.push({
-      name: data.name || e.name,
-      description: data.description || 'No description.',
+      ...parsed,
       path: `${skillDir}/SKILL.md`,
       ...(root ? { root } : {}),
-      ...(resources.length ? { resources } : {})
+      ...(resources.length ? { resources } : {}),
+      ...(source ? { source } : {}),
+      ...(typeof invocable === 'string' && /^(false|no|off|0)$/i.test(invocable.trim())
+        ? { userInvocable: false as const }
+        : {})
     })
   }
   return skills
 }
 
 /**
- * The workspace's skills (`.houston/skills`), plus the user's own from
- * `~/.houston/skills`. The workspace wins a name clash, as it does for commands: a
- * project's own definition is the one its contributors mean.
+ * The workspace's skills (`.houston/skills` and `.agents/skills`), plus the user's
+ * own from `~/.houston/skills` and `~/.agents/skills`. On a name clash the project
+ * wins over the user, as it does for commands (a project's own definition is the one
+ * its contributors mean), and within each place `.houston` wins over `.agents`.
  */
 export async function loadSkills(workspace: string, home: string = homedir()): Promise<Skill[]> {
   const userDir = join(home, USER_SKILLS_DIR)
-  const [project, user] = await Promise.all([
+  const userAgentsDir = join(home, USER_AGENTS_SKILLS_DIR)
+  // In precedence order: the first skill to take a name keeps it.
+  const tiers = await Promise.all([
     loadSkillsFrom(join(workspace, SKILLS_DIR), workspace, (name) => `${SKILLS_DIR}/${name}`),
-    loadSkillsFrom(userDir, userDir, (name) => join(userDir, name), userDir)
+    loadSkillsFrom(
+      join(workspace, AGENTS_SKILLS_DIR),
+      workspace,
+      (name) => `${AGENTS_SKILLS_DIR}/${name}`,
+      undefined,
+      'agents'
+    ),
+    loadSkillsFrom(userDir, userDir, (name) => join(userDir, name), userDir),
+    loadSkillsFrom(userAgentsDir, userAgentsDir, (name) => join(userAgentsDir, name), userAgentsDir, 'agents')
   ])
-  const taken = new Set(project.map((s) => s.name.toLowerCase()))
-  const skills = [...project]
-  for (const s of user) {
+  const taken = new Set<string>()
+  const skills: Skill[] = []
+  for (const s of tiers.flat()) {
     if (skills.length >= MAX_SKILLS) break
-    if (!taken.has(s.name.toLowerCase())) skills.push(s)
+    const key = s.name.toLowerCase()
+    if (taken.has(key)) continue
+    taken.add(key)
+    skills.push(s)
   }
   skills.sort((a, b) => a.name.localeCompare(b.name))
   return skills
@@ -270,22 +312,95 @@ export async function resolveSkillInstructions(
   skills: Skill[],
   name: string
 ): Promise<string> {
-  const wanted = name.trim().toLowerCase()
-  const skill = skills.find((s) => s.name.toLowerCase() === wanted)
+  const skill = findSkill(skills, name)
   if (!skill) {
     const available = skills.map((s) => s.name).join(', ') || '(none defined for this project)'
     return `Unknown skill: "${name}". Available skills: ${available}.`
   }
   const body = await loadSkillBody(workspace, skill)
   if (body === null) return `Skill "${skill.name}" has no readable instructions.`
-  if (!skill.resources?.length) return body
+  const tail: string[] = []
+  if (skill.compatibility) tail.push(`Compatibility: ${skill.compatibility}`)
+  if (skill.allowedTools?.length) {
+    tail.push(
+      `While this skill is active (the rest of this turn), only these tools run: ${skill.allowedTools.join(' ')}. Other tool calls are refused.`
+    )
+  }
   // List the bundled files after the instructions so the agent knows what it can
   // reach for (read or run), without paying to inline them up front.
-  const list = skill.resources.map((r) => `- ${r}`).join('\n')
-  return (
-    `${body}\n\n---\nBundled files for this skill. Read one with skill({ name: "${skill.name}", file: "<path>" }), ` +
-    `passing the path as listed; run scripts as the instructions direct:\n${list}`
-  )
+  if (skill.resources?.length) {
+    const list = skill.resources.map((r) => `- ${r}`).join('\n')
+    tail.push(
+      `Bundled files for this skill. Read one with skill({ name: "${skill.name}", file: "<path>" }), ` +
+        `passing the path as listed; run scripts as the instructions direct:\n${list}`
+    )
+  }
+  return tail.length ? `${body}\n\n---\n${tail.join('\n\n')}` : body
+}
+
+/**
+ * Skills whose `paths:` globs match a file one of `calls` works on, each at most once:
+ * a skill already in `noted` is skipped, and every match is added to it. Paths
+ * outside the workspace never match.
+ */
+export function pathTriggeredSkills(
+  skills: readonly Skill[],
+  workspace: string,
+  calls: ReadonlyArray<NonNullable<ChatMessage['toolCalls']>[number]>,
+  noted: Set<string>
+): Array<{ name: string; description: string; file: string }> {
+  const out: Array<{ name: string; description: string; file: string }> = []
+  const files = calls
+    .flatMap((c) => touchedFilePaths(c))
+    .map((p) => workspaceRelative(workspace, p))
+    .filter((p): p is string => p !== null)
+  if (!files.length) return out
+  for (const s of skills) {
+    if (!s.paths?.length || noted.has(s.name.toLowerCase())) continue
+    const file = files.find((f) => skillMatchesPath(s.paths!, f))
+    if (!file) continue
+    noted.add(s.name.toLowerCase())
+    out.push({ name: s.name, description: s.description, file })
+  }
+  return out
+}
+
+/** A loaded skill by name (case-insensitive), or undefined. */
+export function findSkill(skills: readonly Skill[], name: string): Skill | undefined {
+  const wanted = name.trim().toLowerCase()
+  return skills.find((s) => s.name.toLowerCase() === wanted)
+}
+
+/**
+ * The template that `/<skill-name>` runs: Houston's own words asking the agent to
+ * load the skill and apply it, with whatever the user typed after the name appended.
+ * The skill's description (repository text) is never part of it.
+ */
+export function skillCommandTemplate(name: string): string {
+  return `Use the "${name}" skill for this request: load its instructions with the skill tool, then follow them.`
+}
+
+/**
+ * Slash commands for the loaded skills (`/<skill-name>`), for the command menus.
+ * Only names that are safe as a command (letters, digits, `-`, `_`) are offered, and
+ * never a built-in skill's name or one whose frontmatter says `user-invocable: false`
+ * (the model can still load that one with the skill tool).
+ */
+export function skillCommands(skills: readonly Skill[]): Command[] {
+  const reserved = new Set(BUILTIN_SKILLS.map((s) => s.name.toLowerCase()))
+  return skills
+    .filter(
+      (s) =>
+        s.userInvocable !== false && /^[A-Za-z0-9][\w-]{0,63}$/.test(s.name) && !reserved.has(s.name.toLowerCase())
+    )
+    .map((s) => ({
+      name: s.name,
+      description: s.description.slice(0, 80),
+      args: '[task]',
+      template: skillCommandTemplate(s.name),
+      autoRun: true,
+      skill: true
+    }))
 }
 
 /** Largest bundled skill file the `skill` tool returns. */

@@ -1,4 +1,4 @@
-import { app, screen, BrowserWindow, nativeTheme, systemPreferences } from 'electron'
+import { app, crashReporter, screen, BrowserWindow, nativeTheme, systemPreferences } from 'electron'
 import type { Event as ElectronEvent } from 'electron'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -19,6 +19,7 @@ import { clearCheckpoints } from './agent/checkpoints'
 import { disconnectAllMcp } from './mcp/manager'
 import { initUpdates, setInstallGuard } from './updater'
 import { log } from './logger'
+import { startLocalCrashReporter, watchRendererCrashes } from './crashRecovery'
 import { getSettings, onSettingsSaved, pruneRecentWorkspaces } from './store'
 import { setUserDataDir } from './userData'
 import { wireAgentHost } from './wireAgentHost'
@@ -27,6 +28,7 @@ import { wireLocalhostCapture } from './localhostCapture'
 import { wireMockupCapture } from './mockupCapture'
 import { registerPrivilegedSchemes } from './schemes'
 import { wireDeepLinks } from './deepLinkHost'
+import { configureIpcSenderPolicy } from './ipcSender'
 import { isAllowedChatFrameUrl } from './visualRender'
 import { appWindows, destroyHelperWindows } from './helperWindows'
 import { chatWindows, isPrimaryWindow, registerAppWindow, setWindowOpener, targetWindow } from './windows'
@@ -35,11 +37,13 @@ import { confirmRestartForUpdate, guardQuitWithLiveWork, resetQuitConfirmation }
 import { parseHeadlessArgs } from './headless'
 import { drainStdio } from './stdioDrain'
 import { parseTuiArgs } from './tui'
-import { runTuiEntry, runHeadlessEntry, runAcpEntry, stdinIsPiped } from './terminalEntry'
-import { activeBackendId, isSandboxed } from './sandbox'
+import { parseAcpArgs } from './acp'
+import { runTuiEntry, runHeadlessEntry, runAcpEntry, runScheduleDaemonEntry, stdinIsPiped } from './terminalEntry'
+import { activeBackendId } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
 import { configureOutboundProxy } from './outbound-proxy'
 import { flushRuleUsage } from './ruleUsage'
+import { flushOpenConversations } from './conversations'
 import { windowBackground } from './windowBackground'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
@@ -54,6 +58,11 @@ process.on('unhandledRejection', (reason) => log.error('unhandledRejection', rea
 // resolved userData/Keychain, so stored keys would land in / be read from an
 // inconsistent location and silently fail to persist.
 app.setName(APP_NAME)
+
+// Keep a minidump when a process crashes, on this computer only: uploading is off, so
+// nothing is sent anywhere (docs/PRIVACY.md). Started early, as Electron asks, and
+// after setName so the dumps land in this app's profile.
+startLocalCrashReporter(crashReporter)
 
 // Keep scrollbars slim and auto-hiding, even for users whose macOS "Show scroll
 // bars" setting is "Always" — which forces the chunky ~15px legacy bar that never
@@ -130,6 +139,16 @@ function followThemeInWindowBackgrounds(): void {
  * window-state.ts). Only the primary window (the oldest one open) saves its bounds, so
  * a second window never overwrites where the main one reopens.
  */
+/**
+ * The document every chat window loads: the Vite dev server in development, else the
+ * bundled index.html. Navigation is pinned to it and IPC is only answered from it.
+ */
+function rendererDocument(): { devUrl: string | undefined; indexFile: string; startUrl: string } {
+  const devUrl = process.env['ELECTRON_RENDERER_URL']
+  const indexFile = join(__dirname, '../renderer/index.html')
+  return { devUrl, indexFile, startUrl: devUrl ?? pathToFileURL(indexFile).toString() }
+}
+
 function createWindow(): BrowserWindow {
   // A window opened beside others (File > New Window, Open in New Window) cascades
   // from the one in use, on that window's display.
@@ -172,6 +191,9 @@ function createWindow(): BrowserWindow {
   })
   // ...and when the page reloads or crashes, which leaves the window but drops the dock.
   watchPreviewHost(win)
+  // A crashed or hung renderer is logged and its page reloaded (with a loop guard); the
+  // reloaded page re-adopts any run still going.
+  watchRendererCrashes(win)
 
   // On Windows/Linux, closing the last window quits the app (window-all-closed →
   // app.quit()), so the live-run confirmation has to happen here, while the window
@@ -208,9 +230,7 @@ function createWindow(): BrowserWindow {
     return { action: 'deny' }
   })
 
-  const devUrl = process.env['ELECTRON_RENDERER_URL']
-  const indexFile = join(__dirname, '../renderer/index.html')
-  const startUrl = devUrl ?? pathToFileURL(indexFile).toString()
+  const { devUrl, indexFile, startUrl } = rendererDocument()
 
   // Pin the main frame to its own document. The renderer holds the privileged
   // `window.api` bridge, so a top-level navigation to any other origin must never
@@ -250,10 +270,16 @@ function createWindow(): BrowserWindow {
 // Checked first, since the editor owns the whole session from here.
 const acp = process.argv.includes('--acp')
 
+// Schedule daemon mode: `Houston --schedule-daemon`, started by the login agent that
+// Settings > Scheduled runs installs. No window; fires scheduled runs while the app is
+// closed, reading keys from this app's credential store. Checked before the
+// single-instance lock, which belongs to the window app (the daemon keeps its own).
+const scheduleDaemon = !acp && process.argv.includes('--schedule-daemon')
+
 // Interactive terminal mode: `Houston -i [--cwd dir] [--approval policy] ...`.
 // A stay-resident REPL with no window; checked before headless so a lone `-i`
 // (no `-p`) picks the interactive path.
-const tui = acp ? null : parseTuiArgs(process.argv, process.cwd())
+const tui = acp || scheduleDaemon ? null : parseTuiArgs(process.argv, process.cwd())
 
 // One-shot headless mode: `Houston -p "<prompt>" [--cwd dir] [--full-auto] [--json]`.
 // Runs the agent without a window and exits with a status code; everything else
@@ -261,7 +287,8 @@ const tui = acp ? null : parseTuiArgs(process.argv, process.cwd())
 // edit, so it needs `--full-auto` (or `--approval auto-edit`) headless. `-p -` (or
 // a bare `-p` with input piped in) reads the prompt from stdin; with no `-p` at all
 // a launch opens the window, whatever stdin holds.
-const headless = acp || tui ? null : parseHeadlessArgs(process.argv, process.cwd(), { stdinPiped: stdinIsPiped() })
+const headless =
+  acp || scheduleDaemon || tui ? null : parseHeadlessArgs(process.argv, process.cwd(), { stdinPiped: stdinIsPiped() })
 
 // Each mode below verifies outbound TLS against the OS certificate store too, by calling
 // trustSystemCertificates(). Without it, a network that re-signs TLS with a root CA
@@ -281,7 +308,22 @@ if (acp) {
   app.whenReady().then(async () => {
     trustSystemCertificates()
     await initSecrets()
-    const code = await runAcpEntry({ version: app.getVersion() })
+    const launch = parseAcpArgs(process.argv.slice(1))
+    if ('error' in launch) {
+      process.stderr.write(`Houston: ${launch.error}\n`)
+      app.exit(await flushBeforeExit(2))
+      return
+    }
+    const code = await runAcpEntry({ version: app.getVersion() }, launch)
+    app.exit(await flushBeforeExit(code))
+  })
+} else if (scheduleDaemon) {
+  // Background-only: no Dock icon for a process with no window.
+  app.dock?.hide()
+  app.whenReady().then(async () => {
+    trustSystemCertificates()
+    await initSecrets()
+    const code = await runScheduleDaemonEntry({ version: app.getVersion(), flush: flushSecrets })
     app.exit(await flushBeforeExit(code))
   })
 } else if (tui) {
@@ -309,6 +351,10 @@ if (acp) {
   // Resolved once the credential store is ready; links wait on it (they read settings).
   let markStarted: () => void = () => {}
   const startedForLinks = new Promise<void>((done) => (markStarted = done))
+  // Only a chat window's main frame showing this document may call an IPC handler
+  // (ipcSender.ts). Set before anything registers a handler or loads a window.
+  const renderer = rendererDocument()
+  configureIpcSenderPolicy({ startUrl: renderer.startUrl, devUrl: renderer.devUrl })
   // Before ready: macOS delivers a launch link through `open-url` during startup.
   wireDeepLinks({ started: startedForLinks, createWindow })
   app.whenReady().then(async () => {
@@ -320,7 +366,9 @@ if (acp) {
     // rest of this function runs after it.
     const started = initSecrets().then(() => {
       log.info(`Houston ${app.getVersion()} starting`)
-      log.info(`sandbox backend = ${activeBackendId()} (sandboxed=${isSandboxed()})`)
+      // Selects the sandbox backend now rather than on the first command; the
+      // selection logs which one this process got (sandbox/index.ts).
+      activeBackendId()
       // Drop recents whose folder vanished since last launch (e.g. a worktree removed
       // with its chat) so a deleted dir can't seed the next new chat's workspace.
       // Before any request is answered: this is the first thing queued on `started`.
@@ -369,6 +417,7 @@ if (!acp && !tui && !headless) app.on('before-quit', (e) => guardQuitWithLiveWor
  */
 async function flushBeforeExit(code: number): Promise<number> {
   flushRuleUsage()
+  flushOpenConversations()
   let exitCode = code
   try {
     await flushSecrets()
@@ -393,6 +442,8 @@ app.on('will-quit', (e) => {
     return
   }
   flushRuleUsage()
+  // Each open chat's JSON file becomes the whole chat again (see conversations.ts).
+  flushOpenConversations()
   destroyAllPreviewPanes()
   killAllShells()
   killAllTerminals()
