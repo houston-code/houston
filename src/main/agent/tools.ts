@@ -104,7 +104,7 @@ import {
 } from './viewlocalhost'
 import { clampSearchResults, formatHits, getSearchAdapter, NO_RESULTS } from './websearch'
 import { resolveRipgrep, searchContents } from './search'
-import { FALLBACK_SKIP_DIRS, gitListFiles, globTester, hasHiddenSegment } from './fileScope'
+import { FALLBACK_SKIP_DIRS, gitListFiles, gitTrackedHidden, globTester, hasHiddenSegment } from './fileScope'
 import { resolveAstGrep, searchStructural } from './astgrep'
 import { EditNotFoundError, resolveEdit, type EditRegion, type EditResult, type EditStrategy } from './edit-match'
 import { displayLines, numberLines, numberWidth } from './line-numbers'
@@ -1565,15 +1565,19 @@ async function walkGlob(
  * Files under `base` whose base-relative path matches `pattern`. In a git repo the
  * candidates are git's listing (every tracked file, untracked ones the ignore rules
  * allow); elsewhere a walk that skips FALLBACK_SKIP_DIRS. Dotfiles are skipped
- * either way (glob's default dot:false).
+ * either way (glob's default dot:false), except tracked ones git lists (see
+ * gitTrackedHidden), which `**` and `*` then match like any other path.
  */
 async function collectGlob(base: string, pattern: string, out: { full: string; mtimeMs: number }[]): Promise<void> {
   const listed = await gitListFiles(base)
   // Compiled once per call, not once per listed path.
   const matches = globTester(pattern)
   if (!listed) return walkGlob(base, base, matches, out)
+  const trackedHidden = new Set(await gitTrackedHidden(base))
+  const matchesDot = globTester(pattern, { dot: true })
   for (const rel of listed) {
-    if (hasHiddenSegment(rel) || !matches(rel)) continue
+    const ok = hasHiddenSegment(rel) ? trackedHidden.has(rel) && matchesDot(rel) : matches(rel)
+    if (!ok) continue
     const full = join(base, rel)
     try {
       // lstat: like the walk, never follow a symlink. Tracked files deleted from
@@ -1592,7 +1596,7 @@ const globTool: ToolDef = {
   schema: {
     name: 'glob',
     description:
-      'Find files whose path matches a glob pattern (e.g. "**/*.ts", "src/**/*.test.tsx"). Returns matching paths relative to the project root, most-recently-modified first. Skips dotfiles and .gitignored files.',
+      'Find files whose path matches a glob pattern (e.g. "**/*.ts", "src/**/*.test.tsx"). Returns matching paths relative to the project root, most-recently-modified first. Skips untracked dotfiles and .gitignored files.',
     parameters: objectSchema(
       {
         pattern: { type: 'string', description: 'A glob pattern, e.g. "**/*.ts" or "src/*.json".' },
