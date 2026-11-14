@@ -1,3 +1,4 @@
+import { outboundFetch } from '../outbound-proxy'
 import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
 import {
   McpUnauthorizedError,
@@ -135,7 +136,7 @@ export class McpHttpClient implements McpConnection {
   resources: McpResourceInfo[] = []
   prompts: McpPromptInfo[] = []
 
-  constructor(private readonly fetchFn: FetchFn = fetch) {}
+  constructor(private readonly fetchFn: FetchFn = outboundFetch) {}
 
   get isClosed(): boolean {
     return this.closed

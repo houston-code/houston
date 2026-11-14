@@ -1,3 +1,4 @@
+import { outboundFetch } from '../outbound-proxy'
 import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
 import {
   McpUnauthorizedError,
@@ -168,7 +169,7 @@ export const openEventSourceStream: SseConnectFn = (url, headers, { onEvent, onE
   let cancelled = false
   void (async () => {
     try {
-      const res = await fetch(url, {
+      const res = await outboundFetch(url, {
         method: 'GET',
         headers: { ...headers, accept: 'text/event-stream' },
         signal: controller.signal
@@ -240,7 +241,7 @@ export class McpSseClient implements McpConnection {
 
   constructor(
     private readonly connectStream: SseConnectFn = openEventSourceStream,
-    private readonly fetchFn: FetchFn = fetch
+    private readonly fetchFn: FetchFn = outboundFetch
   ) {}
 
   get isClosed(): boolean {

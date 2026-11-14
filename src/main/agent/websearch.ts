@@ -10,6 +10,8 @@
  * in the main process.
  */
 
+import { outboundFetch } from '../outbound-proxy'
+
 export interface SearchOptions {
   signal?: AbortSignal
   maxResults?: number
@@ -61,7 +63,7 @@ interface TavilyResponse {
 }
 
 export const tavilySearch: SearchFn = async (query, apiKey, opts = {}) => {
-  const doFetch = opts.fetchImpl ?? fetch
+  const doFetch = opts.fetchImpl ?? outboundFetch
   const res = await doFetch(TAVILY_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -87,7 +89,7 @@ interface BraveResponse {
 }
 
 export const braveSearch: SearchFn = async (query, apiKey, opts = {}) => {
-  const doFetch = opts.fetchImpl ?? fetch
+  const doFetch = opts.fetchImpl ?? outboundFetch
   const url = `${BRAVE_URL}?q=${encodeURIComponent(query)}&count=${clampSearchResults(opts.maxResults)}`
   const res = await doFetch(url, {
     method: 'GET',
@@ -111,7 +113,7 @@ interface ExaResponse {
 }
 
 export const exaSearch: SearchFn = async (query, apiKey, opts = {}) => {
-  const doFetch = opts.fetchImpl ?? fetch
+  const doFetch = opts.fetchImpl ?? outboundFetch
   const res = await doFetch(EXA_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json', 'x-api-key': apiKey },

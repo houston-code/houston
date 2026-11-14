@@ -13,6 +13,8 @@
  * `ping` events, the Responses API streams progress and summary events).
  */
 
+import { outboundFetch } from '../outbound-proxy'
+
 /**
  * Longest silence a response body may keep before it's treated as stalled. Generous on
  * purpose: cutting a stream that was only slow throws its turn away, and a host that
@@ -66,7 +68,7 @@ type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Resp
  */
 export function idleTimeoutFetch(
   idleMs: number = STREAM_IDLE_TIMEOUT_MS,
-  base: Fetch = (input, init) => globalThis.fetch(input, init)
+  base: Fetch = outboundFetch
 ): Fetch {
   return async (input, init) => {
     const res = await base(input, init)

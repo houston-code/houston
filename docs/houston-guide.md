@@ -471,6 +471,23 @@ retries the turn with a growing pause between attempts and tells you it's retryi
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.
 
+### Behind a proxy
+
+On a network where traffic must go through an HTTP proxy, Houston sends its own API
+requests through it: model providers, MCP servers reached over HTTP or SSE (and their
+sign-in endpoints), and web search APIs. It uses the **Network proxy** setting
+(Settings → Providers & Models, or `proxyUrl` in `settings.json`) when set, and otherwise the
+`HTTPS_PROXY` and `HTTP_PROXY` environment variables (either case), in the desktop
+app and the terminal alike. `NO_PROXY` lists hosts that connect directly (`NO_PROXY=*`
+turns the proxy off), and `localhost`, `127.0.0.1` and `::1` always do, so a local
+model server keeps working. Only `http://` and `https://` proxy URLs are supported;
+credentials can ride in the URL (`http://user:pass@proxy:8080`).
+
+Two things never use it: `web_fetch`, which connects straight to an address it has
+checked so it can't be pointed at a private network, and shell commands, which the
+sandbox's own network proxy governs. Houston also trusts certificates in your
+operating system's store, so a proxy that re-signs TLS with a company root works too.
+
 ### When a turn fails
 
 In the desktop app, a failed turn leaves a bar above the message box that says what

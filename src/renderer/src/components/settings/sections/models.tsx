@@ -769,3 +769,42 @@ export function ScorecardSection({ ctx }: { ctx: SettingsCtx }): JSX.Element | n
     </SettingsSection>
   )
 }
+
+export function NetworkProxySection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
+  const { settings, setSettings } = ctx
+  const value = settings.proxyUrl ?? ''
+  const invalid = value.trim() !== '' && !/^https?:\/\/[^\s/]+/i.test(value.trim())
+  return (
+    <SettingsSection
+      title="Network proxy"
+      desc={
+        <>
+          Send model provider, MCP server and web search requests through an HTTP
+          proxy. Leave empty to use the <code>HTTPS_PROXY</code> and{' '}
+          <code>HTTP_PROXY</code> environment variables, if set. Hosts listed in{' '}
+          <code>NO_PROXY</code> and this computer&apos;s own addresses always connect
+          directly. Web page fetches and shell commands don&apos;t use this proxy.
+        </>
+      }
+    >
+      <label className="field">
+        <span>Proxy URL</span>
+        <input
+          type="text"
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="http://proxy.example.com:8080"
+          aria-invalid={invalid || undefined}
+          value={value}
+          onChange={(e) => {
+            const next = e.target.value
+            setSettings((s) => ({ ...s, proxyUrl: next.trim() === '' ? undefined : next }))
+          }}
+        />
+        {invalid && (
+          <span className="field__hint">Use an http:// or https:// URL. Until then, this setting is ignored.</span>
+        )}
+      </label>
+    </SettingsSection>
+  )
+}
