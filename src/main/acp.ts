@@ -25,12 +25,17 @@ import {
   type PlanPayload,
   type ReasoningEffort,
   type ToolApprovalDecision,
+  type ConversationSettingsPatch,
+  REASONING_EFFORTS,
   retryProgress,
 } from '@shared/agent'
 import { throttleNotice } from '@shared/rateLimit'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
-import { invocationText } from '@shared/promptInvocation'
+import { agentTurn, commandTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
+import { builtinCommands, mergeCommands, parseSlashCommand, resolveCommand, type Command } from '@shared/commands'
+import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
+import { modelDisplayName } from '@shared/models'
 import { limitNoticeText, runEndNoticeText, runEndRecords } from '@shared/runEnd'
 import { parseTodosSafe } from '@shared/todos'
 import { resolveContextWindow } from '@shared/usage'
@@ -156,6 +161,15 @@ export interface AcpStoredSession {
   providerId?: string
   model?: string
   reasoningEffort?: ReasoningEffort
+  /** The approval mode the user chose for this chat, when they chose one. */
+  approvalPolicy?: ApprovalPolicy
+}
+
+/** What `/compact` reports back. */
+export interface AcpCompactResult {
+  ok: boolean
+  summarized: number
+  error?: string
 }
 
 export interface AcpDeps {
@@ -178,7 +192,18 @@ export interface AcpDeps {
     list: () => Omit<AcpStoredSession, 'messages'>[]
     setMessages: (id: string, messages: ChatMessage[]) => void
     setModel: (id: string, providerId: string, model: string) => void
+    /** The chat's current title, read without loading its messages. */
+    title?: (id: string) => string | undefined
+    /** Save a setting the user changed on this chat (model, reasoning effort, approval mode). */
+    setSettings?: (id: string, patch: ConversationSettingsPatch) => void
   }
+  /** The workspace's own slash commands (`.houston/commands`), offered next to the built-ins. */
+  commands?: (cwd: string) => Promise<Command[]>
+  /** The workspace's skills and agents, for `/skills` and `/agents`. */
+  skills?: (cwd: string) => Promise<{ name: string; description: string }[]>
+  agents?: (cwd: string) => Promise<{ name: string; description: string }[]>
+  /** Summarize a stored chat's older turns now (`/compact`). */
+  compact?: (conversationId: string, providerId: string, model: string) => Promise<AcpCompactResult>
   /** One protocol frame (a JSON line, newline included). The only thing written to stdout. */
   write: (frame: string) => void
   /** Diagnostics for the operator (stderr / log file), never the protocol stream. */
@@ -213,6 +238,10 @@ interface Session {
   costUsd: number
   /** Last known context fill and window, re-sent with each cost update. */
   context: { used: number; size: number } | null
+  /** The chat's title as last sent to the editor. */
+  title?: string
+  /** A `/compact` in progress, which holds off prompts like a run does. */
+  compacting?: boolean
 }
 
 // ---- Pure mapping helpers (exported for tests) ----
@@ -602,6 +631,165 @@ function insideWorkspace(cwd: string, path: string): boolean {
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
 }
 
+// ---- Slash commands and session config options ----
+
+/**
+ * The built-in commands an editor gets: the ones that make sense without a terminal
+ * (no `/vim`, `/theme`, `/resume`: the editor has its own ways to do those).
+ */
+export const ACP_COMMAND_NAMES = [
+  'review',
+  'init',
+  'compact',
+  'agent',
+  'plan',
+  'ask',
+  'auto',
+  'full',
+  'approval',
+  'model',
+  'reasoning',
+  'skills',
+  'agents',
+  'help'
+] as const
+
+/** The slash commands offered in an editor: those built-ins, then the workspace's own. */
+export function acpCommands(custom: Command[] = []): Command[] {
+  const names: readonly string[] = ACP_COMMAND_NAMES
+  return mergeCommands(
+    builtinCommands('tui').filter((c) => names.includes(c.name)),
+    custom
+  )
+}
+
+/** The `available_commands_update` entries for `commands`. */
+export function acpAvailableCommands(
+  commands: Command[]
+): { name: string; description: string; input?: { hint: string } }[] {
+  return commands.map((c) => ({
+    name: c.name,
+    description: c.description,
+    ...(c.args ? { input: { hint: c.args } } : {})
+  }))
+}
+
+/** The approval mode each mode command (and `/approval <word>`) selects. */
+const MODE_COMMANDS: Readonly<Record<string, ApprovalPolicy>> = {
+  plan: 'plan',
+  ask: 'ask',
+  auto: 'auto-edit',
+  'auto-edit': 'auto-edit',
+  full: 'full-auto',
+  'full-auto': 'full-auto'
+}
+
+/** The config option ids this server offers. */
+export const ACP_CONFIG = { model: 'model', effort: 'reasoning_effort' } as const
+
+const EFFORT_NAMES: Record<ReasoningEffort, string> = {
+  off: 'Off',
+  low: 'Low',
+  medium: 'Medium',
+  high: 'High',
+  xhigh: 'Extra high'
+}
+
+export interface AcpConfigOption {
+  id: string
+  name: string
+  description?: string
+  category: 'model' | 'thought_level'
+  type: 'select'
+  currentValue: string
+  options: { value: string; name: string; description?: string }[]
+}
+
+/** A model's config value: provider and model id, which together name what runs. */
+export function modelConfigValue(providerId: string, model: string): string {
+  return `${providerId}/${model}`
+}
+
+/**
+ * The models an editor can pick: every model of a provider that is ready to use (a
+ * key is set where one is needed), as the terminal's model picker lists them, plus
+ * the session's own model when it is not among them.
+ */
+export function acpModelOptions(
+  settings: AppSettings,
+  current: { providerId: string; model: string }
+): { value: string; name: string; description?: string; providerId: string; model: string }[] {
+  const out: { value: string; name: string; description?: string; providerId: string; model: string }[] = []
+  for (const p of settings.providers) {
+    if (p.requiresKey && !p.hasKey) continue
+    for (const m of p.models) {
+      if (m.unavailableAt) continue
+      const name = m.label ?? modelDisplayName(p.kind, m.id)
+      out.push({
+        value: modelConfigValue(p.id, m.id),
+        name,
+        ...(p.label ? { description: p.label } : {}),
+        providerId: p.id,
+        model: m.id
+      })
+    }
+  }
+  const currentValue = modelConfigValue(current.providerId, current.model)
+  if (!out.some((o) => o.value === currentValue)) {
+    out.unshift({ value: currentValue, name: current.model, providerId: current.providerId, model: current.model })
+  }
+  return out
+}
+
+/** The session config options: the chat's model and its reasoning effort. */
+export function acpConfigOptions(
+  settings: AppSettings,
+  s: { providerId: string; model: string; effort?: ReasoningEffort }
+): AcpConfigOption[] {
+  const effort = s.effort ?? (isReasoningEffort(settings.reasoningEffort) ? settings.reasoningEffort : DEFAULT_REASONING_EFFORT)
+  return [
+    {
+      id: ACP_CONFIG.model,
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: modelConfigValue(s.providerId, s.model),
+      options: acpModelOptions(settings, s).map(({ value, name, description }) => ({
+        value,
+        name,
+        ...(description ? { description } : {})
+      }))
+    },
+    {
+      id: ACP_CONFIG.effort,
+      name: 'Reasoning effort',
+      description: 'How hard the model thinks before it answers',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: effort,
+      options: REASONING_EFFORTS.map((e) => ({ value: e, name: EFFORT_NAMES[e] }))
+    }
+  ]
+}
+
+/**
+ * Resolve a `/model` argument against the models on offer: a config value
+ * (`provider/model`), a bare model id, or a provider id (its default model).
+ */
+export function resolveAcpModel(
+  arg: string,
+  settings: AppSettings,
+  current: { providerId: string; model: string }
+): { providerId: string; model: string } | null {
+  const options = acpModelOptions(settings, current)
+  const exact = options.find((o) => o.value === arg) ?? options.find((o) => o.model === arg)
+  if (exact) return { providerId: exact.providerId, model: exact.model }
+  const provider = settings.providers.find((p) => p.id === arg)
+  const model = provider ? (provider.defaultModel ?? provider.models[0]?.id) : undefined
+  const pick = model ? options.find((o) => o.providerId === provider!.id && o.model === model) : undefined
+  return pick ? { providerId: pick.providerId, model: pick.model } : null
+}
+
 // ---- The server ----
 
 export interface AcpServer {
@@ -794,7 +982,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     }
     sessions.set(id, session)
     touch(session)
-    return { sessionId: id, modes: modeState(mode) }
+    announce(session)
+    return { sessionId: id, modes: modeState(mode), configOptions: configOptionsOf(session) }
   }
 
   const loadSession = (params: unknown): unknown => {
@@ -821,7 +1010,9 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     if (stored.workspace !== cwd) {
       log(`acp: session ${stored.id} was saved for ${stored.workspace}; continuing it in ${cwd}`)
     }
-    const mode = live?.mode ?? defaultMode()
+    // The mode the user last chose for this chat, as the terminal restores it; a chat
+    // that never had one starts on the default.
+    const mode = live?.mode ?? (isApprovalPolicy(stored.approvalPolicy) ? stored.approvalPolicy : defaultMode())
     const session: Session = {
       id: stored.id,
       cwd,
@@ -841,7 +1032,103 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     touch(session)
     const notices = Boolean(clientCaps.session && typeof clientCaps.session === 'object' && clientCaps.session.notices)
     for (const u of replayUpdates(stored.messages, cwd, { notices })) update(stored.id, u)
-    return { modes: modeState(mode) }
+    if (stored.title) sendTitle(session, stored.title, stored.updatedAt)
+    announce(session)
+    return { modes: modeState(mode), configOptions: configOptionsOf(session) }
+  }
+
+  const configOptionsOf = (s: Session): AcpConfigOption[] => acpConfigOptions(deps.getSettings(), s)
+
+  /** Save a setting the user changed on this chat. Best-effort, like every store write here. */
+  const saveSettings = (s: Session, patch: ConversationSettingsPatch): void => {
+    try {
+      if (deps.store.setSettings) deps.store.setSettings(s.id, patch)
+      else if (patch.providerId && patch.model) deps.store.setModel(s.id, patch.providerId, patch.model)
+    } catch (e) {
+      log(`acp: failed to save the settings of session ${s.id}: ${String(e)}`)
+    }
+  }
+
+  const sendTitle = (s: Session, title: string, updatedAt?: number): void => {
+    s.title = title
+    update(s.id, {
+      sessionUpdate: 'session_info_update',
+      title,
+      ...(updatedAt ? { updatedAt: new Date(updatedAt).toISOString() } : {})
+    })
+  }
+
+  /** The chat's title once a turn has given it one (or a new one): tell the editor. */
+  const refreshTitle = (s: Session): void => {
+    let title: string | undefined
+    try {
+      title = deps.store.title?.(s.id)
+    } catch {
+      return
+    }
+    if (title && title !== s.title) sendTitle(s, title, Date.now())
+  }
+
+  const loadCustomCommands = async (cwd: string): Promise<Command[]> => {
+    try {
+      return (await deps.commands?.(cwd)) ?? []
+    } catch (e) {
+      log(`acp: could not load the workspace commands: ${String(e)}`)
+      return []
+    }
+  }
+
+  /**
+   * Tell the editor which slash commands the session has. Sent after the response
+   * that created or loaded the session, so the editor already knows its id.
+   */
+  const announce = (s: Session): void => {
+    setImmediate(() => {
+      void loadCustomCommands(s.cwd).then((custom) => {
+        if (!sessions.has(s.id)) return
+        update(s.id, { sessionUpdate: 'available_commands_update', availableCommands: acpAvailableCommands(acpCommands(custom)) })
+      })
+    })
+  }
+
+  /** Switch a session's approval mode, as the user asked: the session, its live run, the chat. */
+  const applyMode = (s: Session, mode: ApprovalPolicy): void => {
+    s.mode = mode
+    if (s.runId) deps.setRunPolicy(s.runId, mode)
+    saveSettings(s, { approvalPolicy: mode })
+  }
+
+  const applyModel = (s: Session, providerId: string, model: string): void => {
+    s.providerId = providerId
+    s.model = model
+    saveSettings(s, { providerId, model })
+  }
+
+  const applyEffort = (s: Session, effort: ReasoningEffort): void => {
+    s.effort = effort
+    saveSettings(s, { reasoningEffort: effort })
+  }
+
+  const setConfigOption = (params: unknown): unknown => {
+    const s = sessionOf(params)
+    const { configId, value } = (params ?? {}) as { configId?: unknown; value?: unknown }
+    if (configId === ACP_CONFIG.model) {
+      const picked =
+        typeof value === 'string' ? acpModelOptions(deps.getSettings(), s).find((o) => o.value === value) : undefined
+      if (!picked) throw new AcpError(ACP_ERROR.invalidParams, `Unknown model: ${String(value)}`)
+      applyModel(s, picked.providerId, picked.model)
+    } else if (configId === ACP_CONFIG.effort) {
+      if (!isReasoningEffort(value)) {
+        throw new AcpError(
+          ACP_ERROR.invalidParams,
+          `Unknown reasoning effort: ${String(value)} (use ${REASONING_EFFORTS.join(', ')})`
+        )
+      }
+      applyEffort(s, value)
+    } else {
+      throw new AcpError(ACP_ERROR.invalidParams, `Unknown config option: ${String(configId)}`)
+    }
+    return { configOptions: configOptionsOf(s) }
   }
 
   const listSessions = (params: unknown): unknown => {
@@ -867,8 +1154,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     if (!isApprovalPolicy(modeId)) {
       throw new AcpError(ACP_ERROR.invalidParams, `Unknown mode: ${String(modeId)} (use ${APPROVAL_POLICIES.join(', ')})`)
     }
-    s.mode = modeId
-    if (s.runId) deps.setRunPolicy(s.runId, modeId)
+    applyMode(s, modeId)
     return {}
   }
 
@@ -880,11 +1166,150 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     deps.cancelRun(s.runId)
   }
 
+  /** Show the editor a reply Houston wrote itself (a command's answer), not the model. */
+  const reply = (s: Session, textOut: string): { stopReason: 'end_turn' } => {
+    update(s.id, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: textOut } })
+    return { stopReason: 'end_turn' }
+  }
+
+  const busy = (s: Session): boolean => Boolean(s.runId || s.compacting)
+
+  /**
+   * A prompt that starts with one of the session's slash commands: either a turn to
+   * run (a template command, `/agent`), labelled with what the user typed, or a
+   * command handled here, which answers with a reply. Null for anything else, which
+   * runs as the user wrote it (a path like `/tmp/x` is not a command).
+   */
+  const runCommand = async (
+    s: Session,
+    line: string
+  ): Promise<{ kind: 'turn'; turn: InvokedTurn } | { kind: 'reply'; text: string } | null> => {
+    const parsed = parseSlashCommand(line)
+    if (!parsed || !/^[\w:-]+$/.test(parsed.name)) return null
+    const commands = acpCommands(await loadCustomCommands(s.cwd))
+    const cmd = resolveCommand(commands, parsed.name)
+    if (!cmd) return null
+    const arg = parsed.args
+    const settings = deps.getSettings()
+    switch (cmd.name) {
+      case 'plan':
+      case 'ask':
+      case 'auto':
+      case 'full': {
+        const mode = MODE_COMMANDS[cmd.name]
+        applyMode(s, mode)
+        update(s.id, { sessionUpdate: 'current_mode_update', currentModeId: mode })
+        return { kind: 'reply', text: `Approval mode: ${ACP_MODES.find((m) => m.id === mode)?.name ?? mode}.` }
+      }
+      case 'approval': {
+        const word = arg.trim().toLowerCase()
+        if (!word) {
+          const lines = ACP_MODES.map((m) => `- ${m.id}${m.id === s.mode ? ' (current)' : ''}: ${m.description}`)
+          return { kind: 'reply', text: `Approval mode: ${s.mode}\n\n${lines.join('\n')}` }
+        }
+        const mode = isApprovalPolicy(word) ? word : MODE_COMMANDS[word]
+        if (!mode) return { kind: 'reply', text: `Unknown approval mode: ${word} (use ${APPROVAL_POLICIES.join(', ')})` }
+        applyMode(s, mode)
+        update(s.id, { sessionUpdate: 'current_mode_update', currentModeId: mode })
+        return { kind: 'reply', text: `Approval mode: ${ACP_MODES.find((m) => m.id === mode)?.name ?? mode}.` }
+      }
+      case 'model': {
+        const want = arg.trim()
+        if (!want) {
+          const current = modelConfigValue(s.providerId, s.model)
+          const lines = acpModelOptions(settings, s).map(
+            (o) => `- ${o.value}${o.name !== o.model ? ` (${o.name})` : ''}${o.value === current ? ', current' : ''}`
+          )
+          return { kind: 'reply', text: `Model: ${current}\n\n${lines.join('\n')}` }
+        }
+        const picked = resolveAcpModel(want, settings, s)
+        if (!picked) return { kind: 'reply', text: `No model named ${want} is set up. Run /model to list them.` }
+        applyModel(s, picked.providerId, picked.model)
+        update(s.id, { sessionUpdate: 'config_option_update', configOptions: configOptionsOf(s) })
+        return { kind: 'reply', text: `Model: ${modelConfigValue(picked.providerId, picked.model)}.` }
+      }
+      case 'reasoning': {
+        const want = arg.trim().toLowerCase()
+        const current = configOptionsOf(s).find((o) => o.id === ACP_CONFIG.effort)?.currentValue
+        if (!want) return { kind: 'reply', text: `Reasoning effort: ${current} (${REASONING_EFFORTS.join(', ')})` }
+        if (!isReasoningEffort(want)) {
+          return { kind: 'reply', text: `Unknown reasoning effort: ${want} (use ${REASONING_EFFORTS.join(', ')})` }
+        }
+        applyEffort(s, want)
+        update(s.id, { sessionUpdate: 'config_option_update', configOptions: configOptionsOf(s) })
+        return { kind: 'reply', text: `Reasoning effort: ${want}.` }
+      }
+      case 'skills':
+      case 'agents': {
+        const list = cmd.name === 'skills' ? deps.skills : deps.agents
+        let items: { name: string; description: string }[] = []
+        try {
+          items = (await list?.(s.cwd)) ?? []
+        } catch (e) {
+          log(`acp: could not list the workspace ${cmd.name}: ${String(e)}`)
+        }
+        const where = cmd.name === 'skills' ? '.houston/skills' : '.houston/agents'
+        if (!items.length) return { kind: 'reply', text: `No ${cmd.name} in this workspace (${where}).` }
+        return { kind: 'reply', text: items.map((i) => `- ${i.name}${i.description ? `: ${i.description}` : ''}`).join('\n') }
+      }
+      case 'help':
+        return {
+          kind: 'reply',
+          text: commands.map((c) => `- /${c.name}${c.args ? ` ${c.args}` : ''}: ${c.description}`).join('\n')
+        }
+      case 'compact':
+        return { kind: 'reply', text: await compactNow(s) }
+      case 'agent': {
+        const turn = agentTurn(arg, line)
+        return turn ? { kind: 'turn', turn } : { kind: 'reply', text: 'Use /agent <name> <task>. /agents lists them.' }
+      }
+      default: {
+        // A template command: first-party (`/review`, `/init`) or the workspace's own.
+        const turn = commandTurn(cmd, arg, line)
+        return turn ? { kind: 'turn', turn } : null
+      }
+    }
+  }
+
+  /** `/compact`: summarize the stored chat's older turns, then reload it. */
+  const compactNow = async (s: Session): Promise<string> => {
+    if (!deps.compact) return 'Compacting is not available here.'
+    // The store is what gets summarized, so it must hold the latest turns first.
+    if (!s.saved && s.messages) {
+      try {
+        deps.store.setMessages(s.id, s.messages)
+        s.saved = true
+      } catch (e) {
+        return `Could not save the chat before compacting it: ${String(e)}`
+      }
+    }
+    s.compacting = true
+    try {
+      const r = await deps.compact(s.id, s.providerId, s.model)
+      if (!r.ok) return `Nothing was compacted${r.error ? `: ${r.error}` : '.'}`
+      if (r.summarized === 0) return 'Nothing to compact yet.'
+      // Reloaded from the store on the next prompt.
+      s.messages = null
+      s.saved = true
+      return `Summarized ${r.summarized} earlier message${r.summarized === 1 ? '' : 's'}.`
+    } catch (e) {
+      return `Compacting failed: ${String(e)}`
+    } finally {
+      s.compacting = false
+    }
+  }
+
   const prompt = async (params: unknown): Promise<unknown> => {
     const s = sessionOf(params)
-    if (s.runId) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
-    const { text, images } = promptFromBlocks((params as { prompt?: unknown }).prompt)
-    if (!text.trim() && images.length === 0) throw new AcpError(ACP_ERROR.invalidParams, 'The prompt is empty')
+    if (busy(s)) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
+    const { text: typed, images } = promptFromBlocks((params as { prompt?: unknown }).prompt)
+    if (!typed.trim() && images.length === 0) throw new AcpError(ACP_ERROR.invalidParams, 'The prompt is empty')
+    const command = typed.trimStart().startsWith('/') ? await runCommand(s, typed.trim()) : null
+    if (command?.kind === 'reply') return reply(s, command.text)
+    // The command lookup read the disk: another prompt may have started meanwhile.
+    if (busy(s)) throw new AcpError(ACP_ERROR.invalidRequest, 'A prompt is already running in this session')
+    const text = command ? command.turn.text : typed
+    const invokedAs = command ? command.turn.invokedAs : undefined
     const prior = messagesOf(s)
 
     const runId = newId()
@@ -893,7 +1318,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
     touch(s)
     const messages: ChatMessage[] = [
       ...prior,
-      { role: 'user', content: text, ...(images.length ? { images } : {}) }
+      { role: 'user', content: text, ...(invokedAs ? { invokedAs } : {}), ...(images.length ? { images } : {}) }
     ]
     s.messages = messages
     // The new turn is not in the store until the run saves it.
@@ -930,6 +1355,7 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       // Other sessions may have been held past the bound while this one ran.
       touch(s)
     }
+    refreshTitle(s)
     if (s.cancelled || turn.state.stopReason === 'aborted') return { stopReason: 'cancelled' }
     if (turn.state.error) throw new AcpError(ACP_ERROR.internal, turn.state.error)
     if (turn.state.limit === 'max-steps') return { stopReason: 'max_turn_requests' }
@@ -1361,6 +1787,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
         return listSessions(params)
       case 'session/set_mode':
         return setMode(params)
+      case 'session/set_config_option':
+        return setConfigOption(params)
       case 'session/prompt':
         return prompt(params)
       default:

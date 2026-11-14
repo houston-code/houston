@@ -318,7 +318,17 @@ and cost as usage.
 
 - **Modes** are the approval policies: Plan, Ask, Auto-edit, Full auto. A new session
   starts in your default policy, and the editor's mode picker switches it for the
-  rest of the session, a running prompt included.
+  rest of the session, a running prompt included. The mode you pick is saved on the
+  chat, so reopening it later starts in that mode, as in the terminal.
+- **Model and reasoning effort** are session options the editor can show as pickers.
+  A change applies from the next prompt and is saved on the chat.
+- **Slash commands** the editor can offer: `/review`, `/init`, `/compact`,
+  `/agent <name> <task>`, `/plan`, `/ask`, `/auto`, `/full`, `/approval [mode]`,
+  `/model [name]`, `/reasoning [level]`, `/skills`, `/agents` and `/help`, plus the
+  workspace's own `.houston/commands`. A prompt that starts with another `/word` is
+  sent as written.
+- **Titles**: the chat's title is shown to the editor when a session opens and once
+  a turn gives it one.
 - **Approvals** appear as the editor's permission prompt: Allow (this call), Always
   allow (saves a permission rule, as in the app), Deny, or Always deny. Dismissing the
   prompt denies the call. The sandbox and your permission rules apply exactly as in
