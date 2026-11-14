@@ -1,9 +1,11 @@
+import type { Middleware } from '@anthropic-ai/sdk'
 import type { Provider } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { BEDROCK_MODELS } from '@shared/provider-catalog'
 import { createMessagesProvider, type MessagesClient } from './anthropic'
 import { idleTimeoutFetch } from './idle-fetch'
 import { ProviderError, SDK_MAX_RETRIES } from '../agent/retry'
+import { AWS_CREDENTIALS, boundCredentialLookup, findCredentialLookupError } from './cloud-credentials'
 
 /**
  * Claude on Amazon Bedrock.
@@ -43,19 +45,25 @@ export function createBedrockProvider(opts: BedrockOptions = {}): Provider {
   // import, and a user who never selects this provider never pays for it.
   let clientPromise: Promise<MessagesClient> | undefined
   const getClient = (): Promise<MessagesClient> =>
-    (clientPromise ??= import('@anthropic-ai/bedrock-sdk').then(
-      (m) =>
-        new m.AnthropicBedrockMantle({
-          fetch: idleTimeoutFetch(),
-          maxRetries: SDK_MAX_RETRIES,
-          ...(opts.region ? { awsRegion: opts.region } : {}),
-          ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
-          ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
-          ...(opts.headers && Object.keys(opts.headers).length
-            ? { defaultHeaders: opts.headers }
-            : {})
-        })
-    ))
+    (clientPromise ??= import('@anthropic-ai/bedrock-sdk').then((m) => {
+      // The SigV4 credential lookup runs before the SDK's request timer and ignores
+      // the abort signal, so bound it here (see cloud-credentials.ts).
+      class BoundedMantle extends m.AnthropicBedrockMantle {
+        protected override backendMiddleware(): ReadonlyArray<Middleware> {
+          return boundCredentialLookup(super.backendMiddleware(), AWS_CREDENTIALS)
+        }
+      }
+      return new BoundedMantle({
+        fetch: idleTimeoutFetch(),
+        maxRetries: SDK_MAX_RETRIES,
+        ...(opts.region ? { awsRegion: opts.region } : {}),
+        ...(opts.apiKey ? { apiKey: opts.apiKey } : {}),
+        ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
+        ...(opts.headers && Object.keys(opts.headers).length
+          ? { defaultHeaders: opts.headers }
+          : {})
+      })
+    }))
 
   const inner = createMessagesProvider(getClient)
   return {
@@ -63,6 +71,12 @@ export function createBedrockProvider(opts: BedrockOptions = {}): Provider {
       try {
         yield* inner.streamChat(req)
       } catch (err) {
+        const lookup = findCredentialLookupError(err)
+        if (lookup) {
+          // Start the next turn from a fresh client, in case the stuck lookup is cached.
+          clientPromise = undefined
+          throw lookup
+        }
         throw explainLegacyModelError(err, req.model)
       }
     }
