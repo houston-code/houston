@@ -125,6 +125,45 @@ jobs:
           REPLY_FILE: ${{ steps.fix.outputs.reply-file }}
         run: node action/test/assert.mjs fix-ci "$FIXTURE"
 
+      # An implement run builds on the default branch, as a workflow checking it out would.
+      - run: git -C "$FIXTURE/repo" switch --quiet main
+      # post: false commits the change on its new branch but pushes nothing.
+      - name: implement a labelled issue
+        id: implement
+        uses: ./action
+        env:
+          HOUSTON_ACTION_EVENT_NAME: issues
+          HOUSTON_ACTION_EVENT_PATH: ${{ env.FIXTURE }}/events/implement.json
+          FAKE_GH_LOG: ${{ env.FIXTURE }}/gh-implement.jsonl
+        with:
+          mode: implement
+          provider: mock
+          model: mock-model
+          base-url: ${{ env.MOCK_URL }}
+          working-directory: ${{ env.FIXTURE }}/repo
+          post: 'false'
+      - env:
+          BRANCH: ${{ steps.implement.outputs.branch }}
+          REPLY_FILE: ${{ steps.implement.outputs.reply-file }}
+        run: node action/test/assert.mjs implement "$FIXTURE"
+
+      - name: run a scheduled task, read-only
+        id: task
+        uses: ./action
+        env:
+          HOUSTON_ACTION_EVENT_NAME: schedule
+          HOUSTON_ACTION_EVENT_PATH: ${{ env.FIXTURE }}/events/task.json
+          FAKE_GH_LOG: ${{ env.FIXTURE }}/gh-task.jsonl
+        with:
+          provider: mock
+          model: mock-model
+          base-url: ${{ env.MOCK_URL }}
+          working-directory: ${{ env.FIXTURE }}/repo
+          prompt: Write a short weekly report on what the scripts print.
+      - env:
+          REPLY_FILE: ${{ steps.task.outputs.reply-file }}
+        run: node action/test/assert.mjs task "$FIXTURE"
+
       - name: Show the mock model's log on failure
         if: failure()
         run: cat "$RUNNER_TEMP/mock.out" || true

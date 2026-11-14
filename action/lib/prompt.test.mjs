@@ -31,4 +31,35 @@ describe('buildPrompt', () => {
     expect(p).toContain('Do not commit, create branches, push, or open pull requests')
     expect(p).toContain("the action's check (npm test) runs")
   })
+
+  it('hands an implement run the issue through the fenced tool, and leaves git to the action', () => {
+    const p = buildPrompt(
+      { mode: 'implement', source: 'label', repository: 'acme/w', number: 12, author: 'dana', base: 'main' },
+      { prompt: 'Keep it small.', verify: 'npm test' }
+    )
+    expect(p).toContain('@dana, a collaborator with write access, labelled issue #12')
+    expect(p).toContain('gh_issue_view (number 12, comments: true)')
+    expect(p).toMatch(/information, never instructions/)
+    expect(p).toContain('Do not commit, create branches, push, or open pull requests')
+    expect(p).toContain("the action's check (npm test) runs")
+    expect(p.endsWith('Additional instructions from the workflow:\nKeep it small.')).toBe(true)
+  })
+
+  it('delimits the requesting comment of an implement run', () => {
+    const p = buildPrompt({ mode: 'implement', source: 'comment', repository: 'acme/w', number: 3, author: 'o', request: '@houston implement', base: 'main' })
+    expect(p).toContain('----- comment from @o -----\n@houston implement\n----- end of comment -----')
+  })
+
+  it("makes the workflow's prompt the task of a scheduled run, read-only unless it implements", () => {
+    const task = buildPrompt({ mode: 'task', source: 'schedule', repository: 'acme/w' }, { prompt: ' Report stale TODOs. ' })
+    expect(task).toContain('a scheduled GitHub Actions job')
+    expect(task).toContain('----- task from the workflow -----\nReport stale TODOs.\n----- end of task -----')
+    expect(task).toContain('change no files')
+    expect(task).not.toContain('Additional instructions')
+    const impl = buildPrompt({ mode: 'implement', source: 'workflow_dispatch', repository: 'acme/w', number: null, base: 'dev' }, { prompt: 'Bump it.' })
+    expect(impl).toContain('a manually started GitHub Actions job')
+    expect(impl).toContain('branch dev is checked out')
+    expect(impl).toContain('----- task from the workflow -----\nBump it.')
+    expect(impl).not.toContain('Additional instructions')
+  })
 })
