@@ -40,6 +40,7 @@ import {
 import { commandTurn, type InvokedTurn } from '@shared/promptInvocation'
 import { parseMemoryCapture, type MemoryScope } from '@shared/memory'
 import { parseShellEscape } from '@shared/shellEscape'
+import { stripInvisible, invisibleNote } from '@shared/invisibleChars'
 import {
   MAX_ATTACHMENTS,
   exceedsImageSizeLimit,
@@ -960,10 +961,27 @@ export function Composer({
     setHistPos(null)
   }
 
+  /**
+   * The draft with characters that draw nothing (zero-width, bidi overrides, tag
+   * characters) removed, so what is sent is what was reviewed; says so when any were.
+   */
+  const visibleDraft = (): string => {
+    const cleaned = stripInvisible(text.trim())
+    if (cleaned.removed) {
+      const note = invisibleNote(cleaned.removed)
+      flashNotice(`${note[0].toUpperCase()}${note.slice(1)}.`)
+    }
+    return cleaned.text.trim()
+  }
+
   const submit = (): void => {
-    const trimmed = text.trim()
     const hasAttachments = images.length > 0 || context.length > 0
-    if ((!trimmed && !hasAttachments) || disabled) return
+    if ((!text.trim() && !hasAttachments) || disabled) return
+    const trimmed = visibleDraft()
+    if (!trimmed && !hasAttachments) {
+      setText('')
+      return
+    }
     // Slash commands run whether or not a turn is in flight. Queuing one as text
     // (as this used to while running) sent the model a literal "/plan" or "/new" and
     // the command never ran; the same actions are already live mid-run from the mode
@@ -1088,8 +1106,12 @@ export function Composer({
   // (steerRun carries no images), so a message with images queues whole instead, the
   // way one of images alone does. No-op without text.
   const steer = (): void => {
-    const trimmed = text.trim()
-    if (!trimmed || disabled) return
+    if (!text.trim() || disabled) return
+    const trimmed = visibleDraft()
+    if (!trimmed) {
+      setText('')
+      return
+    }
     // A command is run, a `!` line runs in the terminal, and a `#` line is saved as a
     // rule, not steered: as steering each would reach the model as plain text.
     const parsed = parseSlashCommand(trimmed)

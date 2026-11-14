@@ -52,9 +52,23 @@ export type EditorKey =
   | { type: 'interrupt' }
   /** Ctrl-D on an empty buffer. */
   | { type: 'eof' }
-  | { type: 'escape' }
-  /** Ctrl-X Ctrl-E: hand the draft to $VISUAL/$EDITOR. */
+  /**
+   * Esc. `double` is set by the composer (not the decoder, which has no clock) when
+   * this press follows another within the double-press window.
+   */
+  | { type: 'escape'; double?: boolean }
+  /** Ctrl-X Ctrl-E or Ctrl-G: hand the draft to $VISUAL/$EDITOR. */
   | { type: 'external-edit' }
+  /** Ctrl-_ (Ctrl-/ on most keyboards): undo the last edit. */
+  | { type: 'undo' }
+  /** Ctrl-^ (Ctrl-6 on most keyboards): redo what undo took back. */
+  | { type: 'redo' }
+  /** Ctrl-S: stash the draft and clear the composer, or restore the stash on an empty one. */
+  | { type: 'stash' }
+  /** Ctrl-V / Alt-V: attach the image on the clipboard. */
+  | { type: 'paste-image' }
+  /** Ctrl-Z: suspend Houston to the shell (job control). */
+  | { type: 'suspend' }
   /**
    * The terminal reporting that its window gained/lost focus (DEC mode 1004).
    * Not a keystroke: it lets attention signals fire only when the user is away.
@@ -239,10 +253,34 @@ function modifiedEnter(params: string, final: string): EditorKey | null {
   return Number(mod) > 1 ? { type: 'newline' } : { type: 'enter' }
 }
 
+/**
+ * Undo and redo reported in the extended forms (`CSI 27;5;<code>~` from
+ * modifyOtherKeys, `CSI <code>;5u` from CSI-u). A terminal can switch Ctrl-/ and
+ * Ctrl-6 to these once modified-key reporting is on, and then the undo key would go
+ * dead on exactly the terminals that report Shift-Enter. Only Ctrl alone (modifier
+ * 5), and only the keys that mean undo (`/`, `-`, `_`) or redo (`6`, `^`): every
+ * other modified key stays ignored.
+ */
+function modifiedUndoKey(params: string, final: string): EditorKey | null {
+  let code: number | undefined
+  if (final === '~') {
+    const m = /^27;5;([0-9]+)$/.exec(params)
+    if (m) code = Number(m[1])
+  } else if (final === 'u') {
+    const m = /^([0-9]+);5$/.exec(params)
+    if (m) code = Number(m[1])
+  }
+  if (code === 0x2f || code === 0x2d || code === 0x5f) return { type: 'undo' }
+  if (code === 0x36 || code === 0x5e) return { type: 'redo' }
+  return null
+}
+
 /** CSI final-byte lookup for the cursor/edit keys the composer cares about. */
 function csiKey(params: string, final: string): EditorKey | null {
   const enter = modifiedEnter(params, final)
   if (enter) return enter
+  const ctrl = modifiedUndoKey(params, final)
+  if (ctrl) return ctrl
   // Modified keys arrive as `1;<mod><final>`: 5 = Ctrl, 3 = Alt. Both mean word-wise.
   const mod = /^1;([0-9]+)$/.exec(params)?.[1]
   const wordwise = mod === '5' || mod === '3'
@@ -317,6 +355,8 @@ function controlKey(ch: string, pasted: boolean): EditorKey | null {
       return { type: 'end' }
     case '\x06':
       return { type: 'right' }
+    case '\x07':
+      return { type: 'external-edit' } // Ctrl-G
     case '\x0b':
       return { type: 'kill-line' }
     case '\x0c':
@@ -329,12 +369,22 @@ function controlKey(ch: string, pasted: boolean): EditorKey | null {
       return { type: 'up' }
     case '\x12':
       return { type: 'search' }
+    case '\x13':
+      return { type: 'stash' } // Ctrl-S (raw mode turns XON/XOFF flow control off)
     case '\x15':
       return { type: 'kill-to-start' }
     case '\x17':
       return { type: 'kill-word' }
+    case '\x16':
+      return { type: 'paste-image' } // Ctrl-V
     case '\x19':
       return { type: 'yank' }
+    case '\x1a':
+      return { type: 'suspend' } // Ctrl-Z (raw mode turns the tty's own SIGTSTP off)
+    case '\x1e':
+      return { type: 'redo' } // Ctrl-^
+    case '\x1f':
+      return { type: 'undo' } // Ctrl-_
     default:
       return null
   }
@@ -420,11 +470,19 @@ export function decodeInput(
         next.pending = buf
         break
       }
+      // Two Escapes in one read (a fast double press): both are the Escape key.
+      if (buf === ESC + ESC) {
+        keys.push({ type: 'escape' }, { type: 'escape' })
+        buf = ''
+        continue
+      }
       // ESC + char = Alt-<char>.
       const alt = buf[1]
       if (alt !== undefined) {
         buf = buf.slice(2)
         if (alt === 'b' || alt === 'B') keys.push({ type: 'word-left' })
+        // Alt-V: the image-paste key where the terminal keeps Ctrl-V for itself.
+        else if (alt === 'v' || alt === 'V') keys.push({ type: 'paste-image' })
         else if (alt === 'f' || alt === 'F') keys.push({ type: 'word-right' })
         else if (alt === '\x7f' || alt === '\b') keys.push({ type: 'kill-word' })
         else if (alt === '\r' || alt === '\n') keys.push({ type: 'newline' })
@@ -440,7 +498,8 @@ export function decodeInput(
 
     if (ch < ' ' || ch === '\x7f') {
       buf = buf.slice(1)
-      // Ctrl-X Ctrl-E hands the draft to $EDITOR; Ctrl-X alone is a dead prefix.
+      // Ctrl-X Ctrl-E hands the draft to $EDITOR (Ctrl-G does too, see controlKey);
+      // Ctrl-X alone is a dead prefix.
       if (ch === '\x18') {
         next.ctrlX = true
         continue

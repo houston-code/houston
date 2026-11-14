@@ -638,6 +638,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     // Read live: an entry submitted this session must be recallable on the next
     // composer read, not just the ones loaded at launch.
     history: () => history,
+    // A draft discarded unsent (Ctrl-C, Esc Esc) joins the same history, so Up
+    // brings it back in this session and the next.
+    remember: persistHistory,
     columns: () => process.stdout.columns || 80,
     // Ctrl-X Ctrl-E in the composer, same editor hand-off plan review uses.
     editText: (initial) => editInEditor(initial, 'MESSAGE.md'),
@@ -802,8 +805,11 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           const data = readFileSync(isAbsolute(p) ? p : join(tui.cwd, p)).toString('base64')
           if (exceedsImageSizeLimit(data)) return { error: 'image is too large' }
           return { image: { mediaType, data } }
-        } catch {
-          return { error: `could not read ${p}` }
+        } catch (e) {
+          // `missing` lets a pasted path that names no file paste as plain text.
+          const code = (e as NodeJS.ErrnoException).code
+          const missing = code === 'ENOENT' || code === 'ENOTDIR' || code === 'EISDIR'
+          return { error: `could not read ${p}`, ...(missing ? { missing } : {}) }
         }
       },
       capabilities: async () => {

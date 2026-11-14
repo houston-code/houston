@@ -121,6 +121,8 @@ import {
   renderMcpList,
   type TuiDeps,
   type TuiIo,
+  type ImagePasteRequest,
+  type ImagePasteResult,
   type TuiPersist,
   type ResumeEntry,
   renderRewindPoints,
@@ -7767,5 +7769,154 @@ describe('the transcript viewer (Ctrl-O, /transcript)', () => {
     expect(HELP_TEXT).toContain('Ctrl-O')
     expect(HELP_TEXT).toContain('Alt-T')
     expect(STARTUP_TIPS.some((tip) => tip.startsWith('Ctrl-O'))).toBe(true)
+  })
+})
+
+// Composer keys whose effect lives in the driver: images staged from the composer,
+// Esc Esc opening /rewind, and the invisible-character strip on send.
+describe('composer keys handled by the driver', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+  const img = { mediaType: 'image/png', data: 'aGk=' }
+  type Step = string | null | { image: ImagePasteRequest } | 'rewind'
+
+  /** A composer that can press Ctrl-V, paste paths, or press Esc Esc between reads. */
+  function keyIo(steps: Step[]) {
+    const out: string[] = []
+    const results: ImagePasteResult[] = []
+    let onImage: ((req: ImagePasteRequest) => ImagePasteResult) | null = null
+    let onRewind: (() => void) | null = null
+    let idx = 0
+    const io: TuiIo = {
+      out: (s) => out.push(s),
+      readLine: async () => null,
+      readComposer: async () => {
+        for (;;) {
+          const next = idx < steps.length ? steps[idx++] : null
+          if (next !== null && typeof next === 'object') {
+            if (onImage) results.push(onImage(next.image))
+            continue
+          }
+          if (next === 'rewind') {
+            onRewind?.()
+            return null
+          }
+          return next
+        }
+      },
+      onImagePaste: (h) => (onImage = h),
+      onRewindKey: (h) => (onRewind = h)
+    }
+    return { io, results, text: () => out.join('') }
+  }
+
+  it('Ctrl-V stages the clipboard image for the next turn', async () => {
+    const { d, rec } = deps(done)
+    const t = keyIo([{ image: { kind: 'clipboard' } }, 'what is this?', null])
+    d.io = t.io
+    d.clipboardImage = () => ({ image: img })
+    await runTui(opts, d)
+    expect(t.results[0].handled).toBe(true)
+    expect(t.results[0].notes.join('')).toContain('attached the image from your clipboard (1 staged)')
+    expect(rec.runs[0].messages.at(-1)?.images).toEqual([img])
+  })
+
+  it('says so when the clipboard holds no image, staging nothing', async () => {
+    const { d, rec } = deps(done)
+    const t = keyIo([{ image: { kind: 'clipboard' } }, 'hi', null])
+    d.io = t.io
+    d.clipboardImage = () => ({ error: 'no image on the clipboard' })
+    await runTui(opts, d)
+    expect(t.results[0].notes.join('')).toContain('no image on the clipboard')
+    expect(rec.runs[0].messages.at(-1)?.images).toBeUndefined()
+  })
+
+  it('pasted image paths that exist are attached', async () => {
+    const { d, rec } = deps(done)
+    const t = keyIo([{ image: { kind: 'files', paths: ['a.png', 'b.png'] } }, 'compare', null])
+    d.io = t.io
+    const loaded: string[] = []
+    d.loadImage = (p) => {
+      loaded.push(p)
+      return { image: img }
+    }
+    await runTui(opts, d)
+    expect(loaded).toEqual(['a.png', 'b.png'])
+    expect(t.results[0]).toEqual({ handled: true, notes: [expect.stringContaining('attached a.png'), expect.stringContaining('attached b.png (2 staged)')] })
+    expect(rec.runs[0].messages.at(-1)?.images).toHaveLength(2)
+  })
+
+  it('a pasted path that names no file is text after all', async () => {
+    const { d, rec } = deps(done)
+    const t = keyIo([{ image: { kind: 'files', paths: ['real.png', 'gone.png'] } }, 'hi', null])
+    d.io = t.io
+    d.loadImage = (p) => (p === 'gone.png' ? { error: 'could not read gone.png', missing: true } : { image: img })
+    await runTui(opts, d)
+    expect(t.results[0]).toEqual({ handled: false, notes: [] })
+    expect(rec.runs[0].messages.at(-1)?.images).toBeUndefined()
+  })
+
+  it('an image file that exists but cannot be used says why', async () => {
+    const { d } = deps(done)
+    const t = keyIo([{ image: { kind: 'files', paths: ['huge.png'] } }, null])
+    d.io = t.io
+    d.loadImage = () => ({ error: 'image is too large' })
+    await runTui(opts, d)
+    expect(t.results[0].handled).toBe(true)
+    expect(t.results[0].notes.join('')).toContain('image is too large')
+  })
+
+  it('Esc Esc on an empty composer opens /rewind without saving it to history or exiting', async () => {
+    const { d } = deps(done)
+    const t = keyIo(['rewind', 'still here', null])
+    d.io = t.io
+    const saved: string[] = []
+    d.persistHistory = (l) => saved.push(l)
+    await runTui(opts, d)
+    expect(t.text()).toContain('rewind is unavailable here')
+    expect(saved).toEqual(['still here'])
+  })
+
+  it('strips invisible characters from a sent message and says how many', async () => {
+    const { d, rec } = deps(done)
+    const zw = String.fromCodePoint(0x200b)
+    const rlo = String.fromCodePoint(0x202e)
+    const tags = String.fromCodePoint(0xe0069, 0xe0067)
+    const t = keyIo([`fix${zw} the ${rlo}bug${tags}`, null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0].messages.at(-1)?.content).toBe('fix the bug')
+    expect(t.text()).toContain('removed 4 invisible characters')
+  })
+
+  it('leaves an emoji ZWJ sequence alone and prints no note', async () => {
+    const { d, rec } = deps(done)
+    const family = String.fromCodePoint(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467)
+    const t = keyIo([`ship it ${family}`, null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(rec.runs[0].messages.at(-1)?.content).toBe(`ship it ${family}`)
+    expect(t.text()).not.toContain('invisible')
+  })
+
+  it('strips invisible characters from a line that steers a running turn', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    const steers: string[] = []
+    d.steerRun = (_runId, text) => {
+      steers.push(text)
+      return true
+    }
+    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    d.startRun = async (req, send) => {
+      hold.steer?.(`use YAML${String.fromCodePoint(0x2066)}`)
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    expect(steers).toEqual(['use YAML'])
+    expect(t.text()).toContain('removed 1 invisible character')
   })
 })

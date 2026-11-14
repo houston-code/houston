@@ -276,6 +276,42 @@ describe('u', () => {
   it('does nothing with nothing to undo', () => {
     expect(keys(at('abc', 0, 0), 'u').text).toBe('abc')
   })
+
+  it('is still vim undo alongside the composer undo key', () => {
+    // Ctrl-_ in insert mode takes back the typing; `u` in normal mode its own stack.
+    const s = { vim: initialVimState(), state: initialEditorState() }
+    const typed = keys(s, 'hello', { type: 'undo' })
+    expect(typed.text).toBe('')
+    // In normal mode the undo key is `u`, so it takes back vim's own changes.
+    expect(keys(at('abcd', 0, 0), 'x', 'x', { type: 'undo' }).text).toBe('bcd')
+    expect(keys(at('abc', 0, 0), 'x', 'u').text).toBe('abc')
+  })
+
+  it('starts a fresh composer undo step after leaving insert', () => {
+    const s = { vim: initialVimState(), state: initialEditorState() }
+    const r = keys(s, 'one', { type: 'escape' }, 'a', ' two', { type: 'undo' })
+    expect(r.text).toBe('one')
+  })
+})
+
+describe('Esc Esc in vim', () => {
+  const dbl: EditorKey = { type: 'escape', double: true }
+
+  it('opens rewind from normal mode on an empty composer', () => {
+    expect(keys(at(''), dbl).outcome).toEqual({ kind: 'rewind' })
+  })
+
+  it('never clears text', () => {
+    const r = keys(at('keep this'), dbl)
+    expect(r.text).toBe('keep this')
+    expect(r.outcome).toBeUndefined()
+  })
+
+  it('is only the switch to normal mode from insert', () => {
+    const r = keys({ vim: initialVimState(), state: initialEditorState() }, dbl)
+    expect(r.vim.mode).toBe('normal')
+    expect(r.outcome).toBeUndefined()
+  })
 })
 
 describe('pending commands', () => {

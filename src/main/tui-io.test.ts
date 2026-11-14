@@ -1481,3 +1481,273 @@ describe('synchronized output (DEC 2026)', () => {
     expect(t.text()).not.toContain(SYNC_END)
   })
 })
+
+describe('composer: drafts, images, rewind and suspend', () => {
+  function harness(over: Parameters<typeof createTerminalIo>[0] = {}) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    const remembered: string[] = []
+    let history: string[] = []
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      now: () => clock,
+      history: () => history,
+      remember: (t) => {
+        remembered.push(t)
+        history = [...history, t]
+      },
+      schedule: () => () => {},
+      ...over
+    })
+    return {
+      io,
+      stdin,
+      written,
+      remembered,
+      text: () => written.join(''),
+      tick: (ms = 500) => {
+        clock += ms
+      }
+    }
+  }
+
+  it('Ctrl-C keeps the discarded draft in history, and Up brings it back', async () => {
+    const t = harness()
+    let interrupts = 0
+    t.io.onInterrupt!(() => interrupts++)
+    const first = t.io.readComposer!('> ')
+    t.stdin.push('a draft I did not mean to lose')
+    t.stdin.push('\x03')
+    await expect(first).resolves.toBeNull()
+    expect(interrupts).toBe(1)
+    expect(t.remembered).toEqual(['a draft I did not mean to lose'])
+    const second = t.io.readComposer!('> ')
+    t.stdin.push('\x1b[A')
+    t.stdin.push('\r')
+    await expect(second).resolves.toBe('a draft I did not mean to lose')
+  })
+
+  it('Ctrl-C on an empty composer remembers nothing', async () => {
+    const t = harness()
+    t.io.onInterrupt!(() => {})
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x03')
+    await read
+    expect(t.remembered).toEqual([])
+  })
+
+  it('Esc Esc clears the draft into history; a slow second Esc does not', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('keep typing')
+    t.tick()
+    t.stdin.push('\x1b')
+    t.tick(700) // past the double-press window
+    t.stdin.push('\x1b')
+    expect(t.remembered).toEqual([])
+    t.tick(100)
+    t.stdin.push('\x1b')
+    expect(t.remembered).toEqual(['keep typing'])
+    t.tick()
+    t.stdin.push('\x1b[A\r')
+    await expect(read).resolves.toBe('keep typing')
+  })
+
+  it('Esc Esc on an empty composer closes the read and asks for rewind', async () => {
+    const t = harness()
+    let rewinds = 0
+    t.io.onRewindKey!(() => rewinds++)
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1b')
+    t.tick(100)
+    t.stdin.push('\x1b')
+    await expect(read).resolves.toBeNull()
+    expect(rewinds).toBe(1)
+  })
+
+  it('in vim mode, Esc Esc from insert only reaches normal mode; again from normal opens rewind', async () => {
+    const t = harness({ editorMode: () => 'vim' })
+    let rewinds = 0
+    t.io.onRewindKey!(() => rewinds++)
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1b')
+    t.tick(100)
+    t.stdin.push('\x1b') // first press left insert; this is the first in normal
+    expect(rewinds).toBe(0)
+    t.tick(100)
+    t.stdin.push('\x1b')
+    await expect(read).resolves.toBeNull()
+    expect(rewinds).toBe(1)
+  })
+
+  it('in vim mode, Esc Esc never clears text', async () => {
+    const t = harness({ editorMode: () => 'vim' })
+    t.io.onRewindKey!(() => {})
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('words')
+    t.tick()
+    for (let i = 0; i < 3; i++) {
+      t.stdin.push('\x1b')
+      t.tick(100)
+    }
+    expect(t.remembered).toEqual([])
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('words')
+  })
+
+  it('a Ctrl-S stash survives into the next read, with a hint on the empty prompt', async () => {
+    const t = harness()
+    const first = t.io.readComposer!('> ')
+    t.stdin.push('the long question')
+    t.stdin.push('\x13')
+    t.stdin.push('quick one\r')
+    await expect(first).resolves.toBe('quick one')
+    const second = t.io.readComposer!('> ')
+    expect(t.text()).toContain('stashed draft: Ctrl-S brings it back')
+    t.stdin.push('\x13')
+    t.stdin.push('\r')
+    await expect(second).resolves.toBe('the long question')
+  })
+
+  it('Ctrl-V attaches the clipboard image and leaves the draft alone', async () => {
+    const t = harness()
+    const reqs: unknown[] = []
+    t.io.onImagePaste!((req) => {
+      reqs.push(req)
+      return { handled: true, notes: ['· attached the image from your clipboard (1 staged)'] }
+    })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('what is this')
+    t.stdin.push('\x16')
+    expect(reqs).toEqual([{ kind: 'clipboard' }])
+    expect(t.text()).toContain('attached the image from your clipboard')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('what is this')
+  })
+
+  it('says so when there is no image handler', async () => {
+    const t = harness()
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1bv')
+    expect(t.text()).toContain('pasting images is unavailable here')
+    t.stdin.push('\r')
+    await read
+  })
+
+  it('a pasted image path attaches it instead of inserting text', async () => {
+    const t = harness()
+    const reqs: unknown[] = []
+    t.io.onImagePaste!((req) => {
+      reqs.push(req)
+      return { handled: true, notes: ['· attached shot.png (1 staged)'] }
+    })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push("\x1b[200~'/tmp/my shot.png'\x1b[201~")
+    expect(reqs).toEqual([{ kind: 'files', paths: ['/tmp/my shot.png'] }])
+    t.tick()
+    t.stdin.push('describe it\r')
+    await expect(read).resolves.toBe('describe it')
+  })
+
+  it('pastes as text when the driver says the paths are not images after all', async () => {
+    const t = harness()
+    t.io.onImagePaste!(() => ({ handled: false, notes: [] }))
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1b[200~/tmp/nope.png\x1b[201~')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('/tmp/nope.png')
+  })
+
+  it('pastes ordinary text without asking about images', async () => {
+    const t = harness()
+    let asked = 0
+    t.io.onImagePaste!(() => {
+      asked++
+      return { handled: true, notes: [] }
+    })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1b[200~see shot.png for details\x1b[201~')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('see shot.png for details')
+    expect(asked).toBe(0)
+  })
+
+  it('Ctrl-Z at the composer hands the terminal back, then takes it again on resume', async () => {
+    let resume: (() => void) | null = null
+    const t = harness({ platform: 'darwin', suspendProcess: (cb) => (resume = cb) })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('draft')
+    const before = t.written.length
+    t.stdin.push('\x1a')
+    const handedBack = t.written.slice(before).join('')
+    expect(handedBack).toContain('\x1b[?2004l') // bracketed paste off
+    expect(handedBack).toContain('\x1b[>4;0m') // modified keys off
+    expect(t.stdin.rawModes.at(-1)).toBe(false) // cooked mode for the shell
+    expect(resume).not.toBeNull()
+    const mid = t.written.length
+    resume!()
+    const retaken = t.written.slice(mid).join('')
+    expect(retaken).toContain('\x1b[?2004h')
+    expect(retaken).toContain('draft') // repainted
+    expect(t.stdin.rawModes.at(-1)).toBe(true)
+    // Keys still arrive exactly once after resuming.
+    t.stdin.push('!\r')
+    await expect(read).resolves.toBe('draft!')
+  })
+
+  it('Ctrl-Z resets the vim cursor shape and restores it on resume', async () => {
+    let resume: (() => void) | null = null
+    const t = harness({ platform: 'linux', editorMode: () => 'vim', suspendProcess: (cb) => (resume = cb) })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('\x1b') // normal mode: block cursor
+    const before = t.written.length
+    t.stdin.push('\x1a')
+    expect(t.written.slice(before).join('')).toContain('\x1b[0 q')
+    const mid = t.written.length
+    resume!()
+    expect(t.written.slice(mid).join('')).toContain('\x1b[2 q')
+    t.stdin.push('\r')
+    await read
+  })
+
+  it('Ctrl-Z while a turn runs suspends without stopping the run', () => {
+    let resume: (() => void) | null = null
+    let interrupts = 0
+    const t = harness({ platform: 'linux', suspendProcess: (cb) => (resume = cb) })
+    t.io.onInterrupt!(() => interrupts++)
+    t.io.startSpinner!('Working')
+    const before = t.written.length
+    t.stdin.push('\x1a')
+    expect(t.written.slice(before).join('')).toContain('\x1b[?1004l') // focus reporting off
+    expect(t.stdin.rawModes.at(-1)).toBe(false)
+    expect(interrupts).toBe(0)
+    resume!()
+    expect(t.stdin.rawModes.at(-1)).toBe(true)
+    // Watching again: typing still lands in the mid-run draft.
+    t.stdin.push('more\r')
+    expect(t.io.takeQueued!()).toEqual(['more'])
+    t.io.stopSpinner!()
+  })
+
+  it('Ctrl-Z on Windows is a note, not a suspend', async () => {
+    let suspends = 0
+    const t = harness({ platform: 'win32', suspendProcess: () => suspends++ })
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('x\x1a')
+    expect(suspends).toBe(0)
+    expect(t.text()).toContain('not available on Windows')
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('x')
+    t.io.startSpinner!('Working')
+    t.stdin.push('\x1a')
+    expect(suspends).toBe(0)
+    t.io.stopSpinner!()
+  })
+})

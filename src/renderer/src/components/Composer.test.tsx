@@ -123,6 +123,15 @@ describe('Composer', () => {
     expect(props.onSend).toHaveBeenCalledWith('!npm test', undefined)
   })
 
+  it('removes invisible characters before sending and says so', () => {
+    const props = baseProps()
+    render(<Composer {...props} />)
+    const hidden = `fix${String.fromCodePoint(0x200b)} it${String.fromCodePoint(0xe0068, 0xe0069)}`
+    fireEvent.keyDown(type(hidden), { key: 'Enter' })
+    expect(props.onSend).toHaveBeenCalledWith('fix it', undefined)
+    expect(screen.getByText('Removed 3 invisible characters.')).toBeTruthy()
+  })
+
   it('sends a lone ! as ordinary text', () => {
     const onShellEscape = vi.fn()
     const props = baseProps({ onShellEscape })
