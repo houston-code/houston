@@ -12,7 +12,17 @@ import { ultrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import { subagentSpend } from '@shared/subagents'
 import { APPROVAL_POLICIES } from '@shared/types'
-import type { AppSettings, ApprovalPolicy, ChatGroup, SandboxStatus, SelectedModel, SidebarGroupBy } from '@shared/types'
+import type {
+  AppSettings,
+  ApprovalPolicy,
+  ChatGroup,
+  ChatLabel,
+  LabelColor,
+  SandboxStatus,
+  SelectedModel,
+  SidebarGroupBy
+} from '@shared/types'
+import { cleanLabelName, newLabelId, nextLabelColor, readChatLabels, readLabelFilters } from '@shared/chatLabels'
 import type {
   ConversationMeta,
   PlanDecision,
@@ -1448,11 +1458,84 @@ export default function App(): JSX.Element {
       const members = conversations.filter((c) => c.groupId === groupId)
       await Promise.all(members.map((c) => window.api.organizeConversation(c.id, { groupId: null })))
       const current = await window.api.getSettings()
-      await saveGroups((current.chatGroups ?? []).filter((g) => g.id !== groupId))
+      const filters = { ...(current.sectionLabelFilters ?? {}) }
+      delete filters[groupId]
+      setSettings(
+        await window.api.saveSettings({
+          ...current,
+          chatGroups: (current.chatGroups ?? []).filter((g) => g.id !== groupId),
+          sectionLabelFilters: filters
+        })
+      )
       await refreshConversations()
     },
-    [conversations, saveGroups, refreshConversations]
+    [conversations, refreshConversations]
   )
+
+  // ---- Chat labels (definitions and section filters persisted in settings) ----
+
+  // settings.json is user-editable: read both through the sanitizers.
+  const chatLabels = useMemo(() => readChatLabels(settings?.chatLabels), [settings?.chatLabels])
+  const labelFilters = useMemo(
+    () => readLabelFilters(settings?.sectionLabelFilters, new Set(chatLabels.map((l) => l.id))),
+    [settings?.sectionLabelFilters, chatLabels]
+  )
+
+  const onCreateLabel = useCallback(async (name: string): Promise<string> => {
+    const current = await window.api.getSettings()
+    const labels = readChatLabels(current.chatLabels)
+    const label: ChatLabel = { id: newLabelId(), name: cleanLabelName(name) || 'New label', color: nextLabelColor(labels) }
+    setSettings(await window.api.saveSettings({ ...current, chatLabels: [...labels, label] }))
+    return label.id
+  }, [])
+
+  const onUpdateLabel = useCallback(async (id: string, patch: { name?: string; color?: LabelColor }) => {
+    const current = await window.api.getSettings()
+    const name = patch.name === undefined ? undefined : cleanLabelName(patch.name)
+    const labels = readChatLabels(current.chatLabels).map((l) =>
+      l.id === id ? { ...l, ...(name ? { name } : {}), ...(patch.color ? { color: patch.color } : {}) } : l
+    )
+    setSettings(await window.api.saveSettings({ ...current, chatLabels: labels }))
+  }, [])
+
+  const onDeleteLabel = useCallback(
+    async (id: string) => {
+      // Take the label off every chat (archived ones too) before dropping it.
+      const all = await window.api.listConversations()
+      await Promise.all(
+        all
+          .filter((c) => c.labels?.includes(id))
+          .map((c) => window.api.organizeConversation(c.id, { labels: (c.labels ?? []).filter((l) => l !== id) }))
+      )
+      const current = await window.api.getSettings()
+      const labels = readChatLabels(current.chatLabels).filter((l) => l.id !== id)
+      setSettings(
+        await window.api.saveSettings({
+          ...current,
+          chatLabels: labels,
+          sectionLabelFilters: readLabelFilters(current.sectionLabelFilters, new Set(labels.map((l) => l.id)))
+        })
+      )
+      await refreshConversations()
+    },
+    [refreshConversations]
+  )
+
+  const onSetChatLabels = useCallback(
+    async (id: string, labels: string[]) => {
+      await window.api.organizeConversation(id, { labels })
+      await refreshConversations()
+    },
+    [refreshConversations]
+  )
+
+  const onSetSectionLabelFilter = useCallback(async (sectionId: string, ids: string[]) => {
+    const current = await window.api.getSettings()
+    const filters = { ...(current.sectionLabelFilters ?? {}) }
+    if (ids.length > 0) filters[sectionId] = ids
+    else delete filters[sectionId]
+    setSettings(await window.api.saveSettings({ ...current, sectionLabelFilters: filters }))
+  }, [])
 
   // Change the open chat's own settings: shown at once, saved to that chat only (the
   // defaults stay as they are). Without an open chat, the change goes to the defaults.
@@ -3285,6 +3368,13 @@ export default function App(): JSX.Element {
         onToggleSectionCollapsed={onToggleSectionCollapsed}
         collapsedParents={collapsedParents}
         onToggleParentCollapsed={(id) => void onToggleParentCollapsed(id)}
+        labels={chatLabels}
+        labelFilters={labelFilters}
+        onSetSectionLabelFilter={(sectionId, ids) => void onSetSectionLabelFilter(sectionId, ids)}
+        onSetChatLabels={(id, ids) => void onSetChatLabels(id, ids)}
+        onCreateLabel={onCreateLabel}
+        onUpdateLabel={(id, patch) => void onUpdateLabel(id, patch)}
+        onDeleteLabel={(id) => void onDeleteLabel(id)}
       />
 
       {!sidebarCollapsed && (

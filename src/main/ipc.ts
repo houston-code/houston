@@ -1432,7 +1432,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return { deleted: true, worktree }
     }
   )
-  // Rename / pin / archive / move-to-group. Does not affect the recency ordering.
+  // Rename / pin / archive / move-to-group / set labels. Does not affect the recency ordering.
   // Archiving also removes the chat's worktree when that loses nothing (clean and
   // merged); awaited so the list the renderer re-reads next already shows the chat
   // back at its repo root.
@@ -1441,7 +1441,13 @@ export function registerIpc(ready?: Promise<unknown>): void {
     async (
       _event,
       id: string,
-      patch: { title?: string; pinned?: boolean; archived?: boolean; groupId?: string | null }
+      patch: {
+        title?: string
+        pinned?: boolean
+        archived?: boolean
+        groupId?: string | null
+        labels?: string[]
+      }
     ) => {
       organizeConversation(id, patch)
       if (patch.archived !== true) return

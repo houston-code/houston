@@ -71,6 +71,15 @@ The full GUI:
   Yesterday, This week, Older) to split the chats outside your own groups into
   sections. Pinned chats and your groups stay as they are, and each section collapses
   on its own. **Your groups only** (the default) turns it off. The choice is remembered.
+- **Labels.** A chat can carry any number of labels, on top of the one group it's in.
+  Tick them under **Labels** in its ⋯ menu, or make a new one there; the first two show
+  beside the title. The tag button on a section's header (Pinned, a group, Ungrouped, or
+  an automatic section) filters that section to the chats carrying any of the labels you
+  tick, and the count reads "2 of 5" while it's on. Each section keeps its own filter,
+  and it's remembered. A spawned chat that matches keeps the chat that started it on
+  screen. **Manage labels** in the filter menu renames, recolors, and deletes them;
+  deleting a label takes it off every chat. Dragging into a filtered section moves the
+  chat in but doesn't reorder it, and search ignores label filters.
 - **Right-click menus.** Right-click a chat in the sidebar for the same actions as its
   ⋯ menu. Right-click a message to copy it (or just the text you selected) and for that
   message's own actions: rewind or edit one of yours, or mark unread from a reply.

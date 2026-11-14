@@ -45,6 +45,16 @@
   --sig-input-text: var(--sig-input);
   --sig-error-text: #e8737b;
   --sig-unread-text: var(--sig-unread);
+  /* Chat label colors, as text on a sidebar row: each clears 4.5:1 on the row's
+     sidebar, hover and selected surfaces (themeContrast.test.ts). */
+  --label-blue: #6ea8ff;
+  --label-green: #5cc98a;
+  --label-orange: #f0954a;
+  --label-purple: #b39dff;
+  --label-red: #f27a80;
+  --label-teal: #4fc4c4;
+  --label-yellow: #e0bf45;
+  --label-pink: #f283c0;
   /* Shadows read as noise on a near-black canvas — Graphite stays flat. */
   --shadow-card: none;
   --shadow-accent: none;
@@ -105,6 +115,14 @@
   --sig-input-text: #8a5c00;
   --sig-error-text: var(--danger);
   --sig-unread-text: #1d4ed8;
+  --label-blue: #1d4ed8;
+  --label-green: #17703a;
+  --label-orange: #a3420b;
+  --label-purple: #6a3dc4;
+  --label-red: #b42318;
+  --label-teal: #0e6767;
+  --label-yellow: #805a00;
+  --label-pink: #a3285f;
   /* Soft warm elevation for cards, and an indigo glow for accent buttons/bubbles. */
   --shadow-card: 0 1px 3px rgba(47, 40, 30, 0.08);
   --shadow-accent: 0 4px 12px rgba(79, 70, 229, 0.25);
@@ -857,6 +875,103 @@ body.is-resizing {
 .section-head--pinned .section-head__name {
   color: var(--warn);
 }
+.section__clear-filter {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  font-style: normal;
+  cursor: pointer;
+  text-decoration: underline;
+}
+/* A section header's label filter: shown on hover or focus, and always while on. */
+.section-head__labels {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  visibility: hidden;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.section-head:hover .section-head__labels,
+.section-head:focus-within .section-head__labels,
+.section-head__labels--on,
+.section-head__labels[aria-expanded='true'] {
+  visibility: visible;
+}
+.section-head__labels:hover {
+  color: var(--text);
+  background: var(--bg-input);
+}
+.section-head__labels--on {
+  color: var(--accent);
+}
+.section-head__labels:focus-visible,
+.label-edit__color:focus-visible,
+.label-edit__delete:focus-visible,
+.section__clear-filter:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+/* The label manager: one row per label (color, name, delete). */
+.label-manager {
+  width: 260px;
+}
+.label-edit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+}
+.label-edit__color,
+.label-edit__delete {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  border-radius: 5px;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.label-edit__color .label-dot {
+  width: 12px;
+  height: 12px;
+}
+.label-edit__color:hover,
+.label-edit__delete:hover {
+  background: var(--bg-hover);
+}
+.label-edit__delete:hover {
+  color: var(--danger);
+}
+.label-edit__name {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  padding: 3px 6px;
+}
+.label-edit__name:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.menu__inline-edit {
+  padding: 4px 6px;
+}
 .section__empty {
   color: var(--text-dim);
   font-size: 11px;
@@ -1003,6 +1118,77 @@ body.is-resizing {
 .conv__main {
   flex: 1;
   min-width: 0;
+}
+/* The title line: the title truncates first, so the label chips stay readable. */
+.conv__title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.conv__title-row .conv__title {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+.conv__labels {
+  display: inline-flex;
+  gap: 3px;
+  flex-shrink: 0;
+  max-width: 55%;
+  overflow: hidden;
+}
+/* A label chip: the label's color as text, with a tinted border and wash. */
+.label-chip {
+  --label: var(--text-dim);
+  display: inline-block;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--label) 45%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--label) 10%, transparent);
+  color: var(--label);
+  font-size: 10px;
+  line-height: 14px;
+}
+.label-chip--more {
+  flex-shrink: 0;
+}
+.label-dot {
+  --label: var(--text-dim);
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--label);
+  vertical-align: 0;
+  flex-shrink: 0;
+}
+[data-color='blue'] {
+  --label: var(--label-blue);
+}
+[data-color='green'] {
+  --label: var(--label-green);
+}
+[data-color='orange'] {
+  --label: var(--label-orange);
+}
+[data-color='purple'] {
+  --label: var(--label-purple);
+}
+[data-color='red'] {
+  --label: var(--label-red);
+}
+[data-color='teal'] {
+  --label: var(--label-teal);
+}
+[data-color='yellow'] {
+  --label: var(--label-yellow);
+}
+[data-color='pink'] {
+  --label: var(--label-pink);
 }
 .conv__title {
   font-size: 13px;
