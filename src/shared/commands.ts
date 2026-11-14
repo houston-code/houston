@@ -407,7 +407,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'mcp', group: 'Extend',
-    description: 'List MCP servers (add, remove, login, logout, registry search)',
+    description: 'List MCP servers (add, remove, enable, disable, reconnect, login, logout, registry search)',
     clients: ['gui', 'tui'],
     gui: { description: 'Manage MCP servers in Settings' }
   },

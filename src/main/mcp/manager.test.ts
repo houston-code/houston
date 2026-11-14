@@ -53,7 +53,8 @@ import {
   disconnectAllMcp,
   getMcpStatuses,
   getMcpToolDefs,
-  mcpUnavailableNotice
+  mcpUnavailableNotice,
+  reconnectMcpServers
 } from './manager'
 
 /**
@@ -538,6 +539,44 @@ describe('mcp manager: a server that keeps failing', () => {
     useFactory(okSpawn())
     const defs = await getMcpToolDefs([cfg({ args: ['--fixed'] })])
     expect(defs.map((d) => d.schema.name)).toEqual([mcpToolName('srv', 'echo')])
+  })
+})
+
+describe('mcp manager: reconnecting on request', () => {
+  it('retries a failed server at once, past the backoff, and reports its new status', async () => {
+    useFactory(failingSpawn())
+    await getMcpToolDefs([cfg()])
+    expect(getMcpStatuses()[0]).toMatchObject({ state: 'error' })
+    useFactory(okSpawn('echo'))
+    const statuses = await reconnectMcpServers([cfg()], ['srv'])
+    expect(statuses).toEqual([{ id: 'srv', state: 'connected', tools: 1, toolNames: ['echo'] }])
+    expect(created).toHaveLength(1)
+    // The next run reuses the fresh connection instead of starting another.
+    const defs = await getMcpToolDefs([cfg()])
+    expect(defs.map((d) => d.schema.name)).toEqual([mcpToolName('srv', 'echo')])
+    expect(created).toHaveLength(1)
+  })
+
+  it('closes a live connection and opens a new one, touching only the named servers', async () => {
+    useFactory(okSpawn())
+    const other = cfg({ id: 'other', command: 'other' })
+    await getMcpToolDefs([cfg(), other])
+    const [first, second] = created
+    await reconnectMcpServers([cfg(), other], ['srv'])
+    expect(first.isClosed).toBe(true)
+    expect(second.isClosed).toBe(false)
+    expect(created).toHaveLength(3)
+    expect(created[2].isClosed).toBe(false)
+  })
+
+  it('does not connect a disabled server, and drops its connection', async () => {
+    useFactory(okSpawn())
+    await getMcpToolDefs([cfg()])
+    const statuses = await reconnectMcpServers([cfg({ enabled: false })], ['srv'])
+    expect(statuses).toEqual([])
+    expect(created[0].isClosed).toBe(true)
+    expect(created).toHaveLength(1)
+    expect(getMcpStatuses()).toEqual([])
   })
 })
 

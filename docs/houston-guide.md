@@ -2901,6 +2901,22 @@ Under the server list in Settings > MCP Servers:
 Nothing runs until a server is saved and switched on; `npx` and `uvx` servers then
 download their package the first time they start.
 
+In the terminal, `/mcp` lists the servers, numbered, and edits them:
+
+- `/mcp add` asks for a local (stdio) server's name, command, arguments, working
+  directory, and environment.
+- `/mcp add --url <url> [name]` adds a remote streamable HTTP server (add `--sse` for
+  the older HTTP+SSE transport), switched on, after you confirm it. Without a name, it
+  is named after the URL's host. It carries no headers: if the server asks you to sign
+  in, run `/mcp login <n>`; one that needs a token header is set up in the desktop app.
+- `/mcp enable <n>` and `/mcp disable <n>` switch a server on or off, the same switch
+  as the checkbox in Settings, and it is saved. A disabled server isn't started and its
+  tools are off from your next message.
+- `/mcp reconnect <n>` (or `/mcp reconnect all`) restarts a server's connection now and
+  says whether it came back, without waiting for the 30 seconds Houston otherwise
+  leaves a failed server alone.
+- `/mcp remove <n>` deletes one.
+
 ### Signing in
 
 Remote servers take custom headers (such as a static `Authorization: Bearer` token),
@@ -2959,7 +2975,8 @@ Houston also:
 - `/mcp tools <n>` lists exactly which tools a server exposes. A count tells you it
   works; the names tell you what you just handed the agent.
 - `/mcp` in the terminal and the Settings panel show each server's live status:
-  connected with a tool count, needs sign-in, or the connection error.
+  connected with a tool count, needs sign-in, or the last connection error (with the
+  `/mcp reconnect <n>` that retries it, in the terminal).
 - When a server is down at the start of a turn (it failed to start, timed out, or needs
   sign-in), the chat shows a notice naming it, once per chat until its status changes.
   The turn goes on without that server's tools.

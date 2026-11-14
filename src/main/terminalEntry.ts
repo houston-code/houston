@@ -30,7 +30,7 @@ import { killAllShells } from './agent/shells'
 import { lspManager } from './agent/lsp/manager'
 import { flushRuleUsage } from './ruleUsage'
 import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
-import { disconnectAllMcp, getMcpStatuses } from './mcp/manager'
+import { disconnectAllMcp, getMcpStatuses, reconnectMcpServers } from './mcp/manager'
 import { runMcpOAuthFlow } from './mcp/oauth'
 import { canStoreMcpOAuth, setMcpOAuth } from './agentHost'
 import type { AgentEvent, ConversationMeta } from '@shared/agent'
@@ -888,6 +888,9 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       mcpStatuses: () => getMcpStatuses(),
       // Read-only MCP Registry browsing for /mcp search and /mcp add-from-registry.
       mcpRegistry: { search: searchMcpRegistry, get: getMcpRegistryServer },
+      // /mcp reconnect: the user's own servers from settings (the manager reads their
+      // header and env values from the secret store itself).
+      mcpReconnect: (ids) => reconnectMcpServers(getSettings().mcpServers ?? [], ids),
       ...(canStoreMcpOAuth()
         ? {
             mcpOAuth: {

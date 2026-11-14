@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import type { AppSettings, Hook, McpServerConfig, ProviderConfig } from '@shared/types'
+import type { AppSettings, Hook, McpServerConfig, McpServerStatus, ProviderConfig } from '@shared/types'
 import { catalogForPlatform } from '@shared/provider-catalog'
 import type {
   AgentEvent,
@@ -118,6 +118,7 @@ import {
   resolveHookEventInput,
   buildHook,
   buildStdioMcpServer,
+  buildRemoteMcpServer,
   renderHookList,
   renderMcpList,
   type TuiDeps,
@@ -507,6 +508,53 @@ describe('parseSlashCommand', () => {
     expect(parseSlashCommand('/mcp', s)).toEqual({ kind: 'mcp', action: { op: 'list' } })
     expect(parseSlashCommand('/mcp add', s)).toEqual({ kind: 'mcp', action: { op: 'add' } })
     expect(parseSlashCommand('/mcp remove 1', s)).toEqual({ kind: 'mcp', action: { op: 'remove', index: 1 } })
+  })
+
+  it('parses the /mcp enable, disable, reconnect and add --url verbs', () => {
+    const mcp = (line: string): unknown => (parseSlashCommand(line, s) as { action: unknown }).action
+    expect(mcp('/mcp enable 2')).toEqual({ op: 'enable', index: 2 })
+    expect(mcp('/mcp disable 1')).toEqual({ op: 'disable', index: 1 })
+    expect(mcp('/mcp disable')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp reconnect 3')).toEqual({ op: 'reconnect', index: 3 })
+    expect(mcp('/mcp reconnect all')).toEqual({ op: 'reconnect', index: 'all' })
+    expect(mcp('/mcp reconnect')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp reconnect x')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp add --url https://h/mcp')).toEqual({ op: 'add', url: 'https://h/mcp' })
+    expect(mcp('/mcp add --url https://h/mcp linear')).toEqual({ op: 'add', url: 'https://h/mcp', name: 'linear' })
+    expect(mcp('/mcp add linear --sse --url https://h/sse')).toEqual({
+      op: 'add',
+      url: 'https://h/sse',
+      name: 'linear',
+      sse: true
+    })
+    expect(mcp('/mcp add --url')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp add --url https://h a b')).toEqual({ op: 'usage' })
+    expect(mcp('/mcp add files')).toEqual({ op: 'usage' })
+    // The /mcp-only verbs are not hook verbs.
+    expect((parseSlashCommand('/hooks enable 1', s) as { kind: string }).kind).toBe('hooks')
+  })
+
+  it('buildRemoteMcpServer shapes a remote server as Settings stores one, and validates the URL', () => {
+    expect(buildRemoteMcpServer([], 'https://mcp.example.com/mcp', 'ex')).toEqual({
+      id: 'ex',
+      name: 'ex',
+      transport: 'http',
+      command: '',
+      url: 'https://mcp.example.com/mcp',
+      enabled: true
+    })
+    expect(buildRemoteMcpServer([], 'http://localhost:3000/sse', '', true)).toMatchObject({
+      id: 'localhost',
+      transport: 'sse'
+    })
+    // A name left out comes from the host, made unique.
+    expect(buildRemoteMcpServer(['mcp-example-com'], 'https://mcp.example.com/x')).toMatchObject({ id: 'mcp-example-com-2' })
+    expect(buildRemoteMcpServer(['ex'], 'https://h/mcp', 'ex')).toEqual({ error: 'an MCP server named "ex" already exists' })
+    expect(buildRemoteMcpServer([], 'https://h/mcp', 'bad name!')).toHaveProperty('error')
+    expect(buildRemoteMcpServer([], 'ftp://h/mcp')).toEqual({ error: 'the URL must start with http:// or https://' })
+    expect(buildRemoteMcpServer([], 'not a url')).toHaveProperty('error')
+    expect(buildRemoteMcpServer([], 'https://user:pw@h/mcp')).toHaveProperty('error')
+    expect(buildRemoteMcpServer([], 'https://h/\x1b]52;c;x\x07')).toEqual({ error: 'the URL has control characters in it' })
   })
 
   it('sets a valid theme, else stays informational', () => {
@@ -3446,6 +3494,88 @@ describe('runTui', () => {
     await runTui(opts, d)
     expect(outs).toEqual(['linear'])
     expect(t.text()).toContain('signed out of "linear"')
+  })
+
+  describe('/mcp enable, disable, reconnect, add --url', () => {
+    const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+    const two: McpServerConfig[] = [
+      { id: 'files', name: 'files', transport: 'stdio', command: 'npx', enabled: true },
+      { id: 'remote', name: 'remote', transport: 'http', command: '', url: 'https://r/mcp', enabled: false }
+    ]
+
+    it('switches the enabled flag in settings, leaving the other servers alone', async () => {
+      const { d } = deps(done, { mcpServers: two })
+      const saved: Array<Partial<AppSettings>> = []
+      d.updateSettings = (p) => saved.push(p)
+      const t = fakeIo(['/mcp disable 1', '/mcp enable 2', '/mcp enable 1', '/mcp disable 9', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(saved).toHaveLength(2)
+      expect(saved[0].mcpServers!.map((s) => s.enabled)).toEqual([false, false])
+      expect(saved[1].mcpServers!.map((s) => s.enabled)).toEqual([true, true])
+      expect(saved[1].mcpServers![1]).toEqual({ ...two[1], enabled: true })
+      expect(t.text()).toContain('disabled "files". Its tools are off from your next message.')
+      expect(t.text()).toContain('enabled "remote". It connects on your next message.')
+      // getSettings is fixed in this harness, so the third is "already enabled".
+      expect(t.text()).toContain('"files" is already enabled')
+      expect(t.text()).toContain('no MCP server #9 (there are 2)')
+    })
+
+    it('reconnects one server or all enabled ones, and reports how each came back', async () => {
+      const { d } = deps(done, {
+        mcpServers: [two[0], { ...two[1], enabled: true }, { id: 'off', command: 'x', enabled: false }]
+      })
+      const asked: string[][] = []
+      d.mcpReconnect = async (ids) => {
+        asked.push(ids)
+        return [
+          { id: 'files', state: 'connected', tools: 3 },
+          { id: 'remote', state: 'error', error: 'connect ECONNREFUSED\n\x1b[31mred' }
+        ].filter((s) => ids.includes(s.id)) as McpServerStatus[]
+      }
+      const t = fakeIo(['/mcp reconnect 1', '/mcp reconnect all', '/mcp reconnect 3', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(asked).toEqual([['files'], ['files', 'remote']])
+      expect(t.text()).toContain('"files" reconnected, 3 tools')
+      expect(t.text()).toContain('"remote" failed to connect: connect ECONNREFUSED')
+      expect(t.text()).not.toContain('\x1b[31mred')
+      expect(t.text()).toContain('"off" is disabled; /mcp enable 3 first')
+      expect(t.spinner).toContain('start:Reconnecting')
+    })
+
+    it('says reconnecting is unavailable without the host capability', async () => {
+      const { d } = deps(done, { mcpServers: two })
+      const t = fakeIo(['/mcp reconnect 1', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(t.text()).toContain('reconnecting is unavailable here')
+    })
+
+    it('adds a remote server from --url after confirming, with no headers', async () => {
+      const { d } = deps(done, { mcpServers: [two[0]] })
+      const saved: Array<Partial<AppSettings>> = []
+      d.updateSettings = (p) => saved.push(p)
+      const t = fakeIo(['/mcp add --url https://mcp.linear.app/mcp linear', 'y', '/mcp add --url ftp://x', null])
+      d.io = t.io
+      await runTui(opts, d)
+      expect(saved).toHaveLength(1)
+      expect(saved[0].mcpServers).toEqual([
+        two[0],
+        { id: 'linear', name: 'linear', transport: 'http', command: '', url: 'https://mcp.linear.app/mcp', enabled: true }
+      ])
+      expect(t.text()).toContain('linear  [http]  https://mcp.linear.app/mcp')
+      expect(t.text()).toContain('run /mcp login 2')
+      expect(t.text()).toContain('the URL must start with http:// or https://')
+    })
+
+    it('shows the last connection error in the list, on one line, with the retry verb', () => {
+      const out = renderMcpList(two, makePainter(false), [
+        { id: 'files', state: 'error', error: 'spawn npx ENOENT\n  at line 2' }
+      ])
+      expect(out).toContain('✗ last error: spawn npx ENOENT at line 2 (/mcp reconnect 1)')
+      expect(out).toContain('remote (disabled)')
+    })
   })
 
   it('/mcp list shows live connection status and sign-in badges', async () => {

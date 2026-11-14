@@ -339,7 +339,12 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
   // config order, so the connection map, and with it the order of the tools sent to
   // the model, comes out the same as connecting one at a time.
   const outcomes = await Promise.all(enabled.map((c) => connectServer(c)))
-  enabled.forEach((c, i) => {
+  applyOutcomes(enabled, outcomes)
+}
+
+/** Record each server's reconcile outcome in the shared maps, in config order. */
+function applyOutcomes(configs: McpServerConfig[], outcomes: Outcome[]): void {
+  configs.forEach((c, i) => {
     const o = outcomes[i]
     if (o.kind === 'reused') {
       statuses.set(c.id, o.status)
@@ -358,6 +363,35 @@ async function reconcileConnections(configs: McpServerConfig[]): Promise<void> {
       statuses.set(c.id, o.status)
     }
   })
+}
+
+/**
+ * Restart the connection of each named server now (`/mcp reconnect`): close its
+ * client, forget its failure backoff, and connect it afresh, so a server that was
+ * fixed (or hung) is tried at once instead of on a later run. Only enabled servers
+ * with a command or URL are connected; a disabled one just loses its connection.
+ * Serialized with the run-start reconcile so the two never interleave on the
+ * shared maps. Resolves to the new status of each server it connected.
+ */
+export function reconnectMcpServers(configs: McpServerConfig[], ids: readonly string[]): Promise<McpServerStatus[]> {
+  const want = new Set(ids)
+  const run = async (): Promise<McpServerStatus[]> => {
+    for (const id of want) {
+      connections.get(id)?.client.close()
+      connections.delete(id)
+      recentFailures.delete(id)
+      statuses.delete(id)
+    }
+    const targets = configs.filter((c) => want.has(c.id) && c.enabled && c.id && (c.command || c.url))
+    applyOutcomes(targets, await Promise.all(targets.map((c) => connectServer(c))))
+    return targets.flatMap((c) => statuses.get(c.id) ?? [])
+  }
+  const p = ensureLock.catch(() => undefined).then(run)
+  ensureLock = p.then(
+    () => undefined,
+    () => undefined
+  )
+  return p
 }
 
 /**
