@@ -105,7 +105,10 @@ of `npm test`) uses the scripted driver and gates every PR;
 `evals/baselines/` and runs weekly instead, on `claude-haiku-5-5` (named in
 `eval-live.yml`, which `baselines.test.ts` reads to require its baseline). Changing a
 provider's `defaultModel` breaks nothing in CI; scoring the new default, on demand or in a
-local live run with no `HOUSTON_EVAL_MODEL`, needs a baseline recorded for it first.
+local live run with no `HOUSTON_EVAL_MODEL`, needs a baseline recorded for it first. A pull
+request that changes the prompt, tool descriptions, guide or goldens (or carries the
+`eval-ab` label) also gets a non-gating live A/B of the harder tasks from `eval-ab.yml`,
+posted as a comment; it has its own concurrency group so it never cancels `eval-live.yml`.
 
 [CONTRIBUTING.md](CONTRIBUTING.md#task-level-evals) covers what each guard catches and
 how to author a task. The invariants to preserve when changing this code:
