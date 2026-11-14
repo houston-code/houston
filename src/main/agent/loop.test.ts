@@ -4388,6 +4388,49 @@ describe('ask_user', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  it("lets a run read a request's own extra root, and no other run", async () => {
+    // An ACP editor's additionalDirectories: they widen only the run that carries them.
+    const extra = realpathSync(mkdtempSync(join(tmpdir(), 'houston-extra-root-')))
+    writeFileSync(join(extra, 'note.txt'), 'from the extra root\n')
+    const readIt = (): void => {
+      h.provider = scripted([
+        [
+          { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: join(extra, 'note.txt') } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+    }
+    const go = async (runId: string, additionalRoots?: string[]): Promise<{ ok: boolean; output: string }> => {
+      const events: AgentEvent[] = []
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'read it' }],
+          ...(additionalRoots ? { additionalRoots } : {})
+        },
+        (e) => events.push(e)
+      )
+      return events.find((e) => e.type === 'tool_result' && e.callId === 'r1') as unknown as { ok: boolean; output: string }
+    }
+    readIt()
+    const widened = await go('run-extra-root', [extra])
+    expect(widened.ok).toBe(true)
+    expect(widened.output).toContain('from the extra root')
+    readIt()
+    const plain = await go('run-no-extra-root')
+    expect(plain.output).not.toContain('from the extra root')
+    // A listed folder that no longer exists is skipped, not an error.
+    readIt()
+    const gone = await go('run-gone-root', [join(extra, 'missing')])
+    expect(gone.output).not.toContain('from the extra root')
+    rmSync(extra, { recursive: true, force: true })
+  })
+
   it('unblocks a pending question when the run is cancelled', async () => {
     // Drive startRun directly so the runId is in scope to cancel: with no answer,
     // the question must still resolve (via cancelRun) instead of hanging forever.

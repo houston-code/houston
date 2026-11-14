@@ -2168,11 +2168,11 @@ export async function startRun(
     }
 
     // Allowed roots: the workspace plus any configured additional directories
-    // that still resolve (deduped), and the session's own (`--add-dir`, `/add-dir`),
-    // which are the same thing scoped to the session. This is the file-tool + sandbox
-    // boundary.
+    // that still resolve (deduped), and the session's own (`--add-dir`, `/add-dir`, or
+    // the folders an ACP client passed for its session), which are the same thing scoped
+    // to the session. This is the file-tool + sandbox boundary.
     const roots = [workspace]
-    for (const dir of [...(settings.additionalRoots ?? []), ...(req.addDirs ?? [])]) {
+    for (const dir of [...(settings.additionalRoots ?? []), ...(req.addDirs ?? []), ...(req.additionalRoots ?? [])]) {
       try {
         const real = realpathSync(dir)
         if (!roots.includes(real)) roots.push(real)

@@ -1223,8 +1223,17 @@ in the CLI, so keys already set up with `houston providers set-key` work without
 What maps to what:
 
 - **Sessions** are ordinary Houston conversations in the editor's folder: the editor
-  can list and reopen them, and they also appear in the desktop app and in
-  `houston -i --resume <id>`.
+  can list, load (replaying the history), resume (without it), close, and delete
+  them, and they also appear in the desktop app and in `houston -i --resume <id>`.
+  A delete stops the chat's running prompt and background commands first, as in the
+  app.
+- **Extra folders** (`additionalDirectories`) are readable and writable by that
+  session's runs only, and never saved.
+- **System prompts** from the editor are appended to Houston's, as with
+  `--append-system-prompt`; they can't replace it.
+- **Requests** can be withdrawn with `$/cancel_request`; a withdrawn prompt stops as
+  if cancelled.
+- **Compaction** arrives as `compaction_update` for editors that support it.
 - **Modes** are the approval policies: Plan, Ask, Auto-edit, and Full auto. The
   mode you pick is saved on the chat and restored when it is reopened.
 - **Config options**: the model and the reasoning effort, saved on the chat.

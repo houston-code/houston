@@ -45,6 +45,7 @@ import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
 import { loadSlashCommands } from './agent/commands'
+import { stopAndDeleteConversation } from './deleteChat'
 import { compactConversationNow } from './agent/compact'
 import {
   getConversationCheckpoint,
@@ -126,7 +127,7 @@ import {
   searchConversations,
   forkConversation,
   organizeConversation,
-  deleteConversation,
+  conversationExists,
   setGeneratedTitle,
   reportChildToParent,
   takeChildReports,
@@ -879,7 +880,7 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
         // The desktop sidebar's rename: marks the title as chosen, so it is never
         // replaced by a generated one.
         rename: (id, title) => organizeConversation(id, { title }),
-        remove: (id) => deleteConversation(id),
+        remove: (id) => stopAndDeleteConversation(id),
         get: (id) => {
           const conv = getConversation(id)
           return conv
@@ -1126,7 +1127,13 @@ export async function runAcpEntry(host: TerminalHost = {}, launch: AcpLaunchOpti
           // A setting the user changed on the chat (model, effort, approval mode), saved
           // as they change it, the way the desktop app and the terminal keep it.
           setSettings: (id, patch) => void setConversationSettings(id, patch),
-          title: (id) => peekConversation(id)?.title
+          title: (id) => peekConversation(id)?.title,
+          // session/delete: the desktop app's delete, so a live run and shells stop too.
+          remove: (id) => {
+            if (!conversationExists(id)) return false
+            stopAndDeleteConversation(id)
+            return true
+          }
         },
         // The workspace's own slash commands, skills and agents, read fresh each time.
         commands: (cwd) => loadSlashCommands(cwd),
