@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { writeFileAtomicSync, writeFileAtomic } from './atomic-write'
+import { closeSync, openSync } from 'node:fs'
+import { writeFileAtomicSync, writeFileAtomicStampedSync, writeFileAtomic, writeStringChunked } from './atomic-write'
 
 function withDir(fn: (dir: string) => void): void {
   const dir = mkdtempSync(join(tmpdir(), 'houston-atomic-'))
@@ -53,6 +54,57 @@ describe('writeFileAtomicSync', () => {
       // Only the pre-existing directory remains — no stray *.tmp.
       expect(readdirSync(dir)).toEqual(['target'])
     })
+  })
+})
+
+describe('writeStringChunked', () => {
+  function roundTrip(data: string, chunkChars: number): string {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-chunk-'))
+    try {
+      const path = join(dir, 'f.txt')
+      const fd = openSync(path, 'w')
+      try {
+        writeStringChunked(fd, data, chunkChars)
+      } finally {
+        closeSync(fd)
+      }
+      return readFileSync(path, 'utf8')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  it('writes text longer than one slice intact', () => {
+    const data = Array.from({ length: 5000 }, (_, i) => `line ${i} héllo wörld 日本語`).join('\n')
+    expect(roundTrip(data, 97)).toBe(data)
+  })
+
+  it('never splits a surrogate pair across slices', () => {
+    // Every slice boundary of 3 characters lands inside an emoji somewhere in here.
+    const data = 'a' + '😀b😀'.repeat(300) + '🎉'
+    for (const size of [1, 2, 3, 4, 5]) expect(roundTrip(data, size)).toBe(data)
+  })
+
+  it('writes nothing for an empty string', () => {
+    expect(roundTrip('', 8)).toBe('')
+  })
+})
+
+describe('writeFileAtomicStampedSync', () => {
+  it('writes a large file intact with its mode and a stamp that matches the file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'houston-stamped-'))
+    try {
+      const path = join(dir, 'chat.json')
+      const data = JSON.stringify({ messages: Array.from({ length: 20000 }, (_, i) => ({ text: `message ${i} 😀` })) })
+      expect(data.length).toBeGreaterThan(256 * 1024)
+      const stamp = writeFileAtomicStampedSync(path, data, 0o600)
+      expect(readFileSync(path, 'utf8')).toBe(data)
+      const st = statSync(path)
+      expect(stamp).toBe(`${st.ino}:${st.mtimeMs}:${st.size}`)
+      if (process.platform !== 'win32') expect(st.mode & 0o777).toBe(0o600)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 

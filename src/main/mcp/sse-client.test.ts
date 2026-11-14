@@ -85,6 +85,48 @@ function fakeSseServer(opts: { tool?: string; endpoint?: string } = {}): {
 }
 
 describe('McpSseClient', () => {
+  it('follows nextCursor through every page of tools, resources and prompts', async () => {
+    let emit: ((e: SseEvent) => void) | null = null
+    const connect: SseConnectFn = (_url, _headers, handlers) => {
+      emit = handlers.onEvent
+      queueMicrotask(() => emit?.({ event: 'endpoint', data: '/messages?session=abc' }))
+      return { close: () => {} }
+    }
+    const asked: string[] = []
+    const fetch: FetchFn = async (_url, init) => {
+      const req = JSON.parse(init.body as string) as { id?: number; method: string; params?: { cursor?: unknown } }
+      if (req.id !== undefined) {
+        if (req.method.endsWith('/list')) asked.push(`${req.method}:${String(req.params?.cursor)}`)
+        const kind = req.method.split('/')[0]
+        const entry = (n: string): unknown => (kind === 'resources' ? { uri: `file:///${n}` } : { name: n })
+        const result =
+          req.method === 'initialize'
+            ? { capabilities: { resources: {}, prompts: {} } }
+            : req.method.endsWith('/list')
+              ? req.params?.cursor === undefined
+                ? { [kind]: [entry('one')], nextCursor: 'page-2' }
+                : { [kind]: [entry('two')] }
+              : {}
+        queueMicrotask(() => emit?.({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) }))
+      }
+      return new Response('', { status: 202 })
+    }
+    const client = new McpSseClient(connect, fetch)
+    await client.connect({ url: 'https://x/sse' })
+    expect(client.tools.map((t) => t.name)).toEqual(['one', 'two'])
+    expect(client.resources.map((r) => r.uri)).toEqual(['file:///one', 'file:///two'])
+    expect(client.prompts.map((p) => p.name)).toEqual(['one', 'two'])
+    expect(asked).toEqual([
+      'tools/list:undefined',
+      'tools/list:page-2',
+      'resources/list:undefined',
+      'resources/list:page-2',
+      'prompts/list:undefined',
+      'prompts/list:page-2'
+    ])
+    client.close()
+  })
+
   it('handshakes via the endpoint event, lists tools, and calls a tool', async () => {
     const srv = fakeSseServer({ tool: 'search' })
     const client = new McpSseClient(srv.connect, srv.fetch)

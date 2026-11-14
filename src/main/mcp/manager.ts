@@ -478,6 +478,9 @@ export async function getMcpToolDefs(
   )
   for (const [serverId, conn] of own) {
     for (const reason of conn.client.droppedTools ?? []) warnOnce(serverId, `listed a tool it can't offer: ${reason}; it was skipped`)
+    for (const [kind, note] of Object.entries(conn.client.listNotes ?? {})) {
+      warnOnce(serverId, `sent a ${kind} list Houston did not read in full: ${note}`)
+    }
   }
   for (const { serverId, tools } of exposed) {
     for (const t of tools) {

@@ -71,6 +71,44 @@ function fakeServer(
 }
 
 describe('McpHttpClient', () => {
+  it('follows nextCursor through every page of tools, resources and prompts', async () => {
+    const asked: Array<{ method: string; cursor?: unknown }> = []
+    const fetch: FetchFn = async (_url, init) => {
+      if (init.method === 'GET') return new Response('', { status: 405 })
+      const req = JSON.parse(init.body as string) as { id?: number; method: string; params?: { cursor?: unknown } }
+      if (req.id === undefined) return new Response('', { status: 202 })
+      if (req.method.endsWith('/list')) asked.push({ method: req.method, cursor: req.params?.cursor })
+      const kind = req.method.split('/')[0]
+      const entry = (n: string): unknown => (kind === 'resources' ? { uri: `file:///${n}` } : { name: n })
+      const result =
+        req.method === 'initialize'
+          ? { capabilities: { resources: {}, prompts: {} } }
+          : req.method.endsWith('/list')
+            ? req.params?.cursor === undefined
+              ? { [kind]: [entry('one')], nextCursor: 'page-2' }
+              : { [kind]: [entry('two')] }
+            : {}
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }), {
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' })
+      })
+    }
+    const client = new McpHttpClient(fetch)
+    await client.connect({ url: 'https://x/mcp' })
+    expect(client.tools.map((t) => t.name)).toEqual(['one', 'two'])
+    expect(client.resources.map((r) => r.uri)).toEqual(['file:///one', 'file:///two'])
+    expect(client.prompts.map((p) => p.name)).toEqual(['one', 'two'])
+    expect(asked.map((a) => `${a.method}:${String(a.cursor)}`)).toEqual([
+      'tools/list:undefined',
+      'tools/list:page-2',
+      'resources/list:undefined',
+      'resources/list:page-2',
+      'prompts/list:undefined',
+      'prompts/list:page-2'
+    ])
+    client.close()
+  })
+
   it('initializes, lists tools, and calls a tool (JSON transport)', async () => {
     const { fetch } = fakeServer({ tool: 'search' })
     const client = new McpHttpClient(fetch)

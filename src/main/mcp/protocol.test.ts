@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   ListRefresher,
   PendingRequests,
+  MAX_LIST_ITEMS,
+  MAX_LIST_PAGES,
   capMcpOutput,
+  listAllPages,
   handleServerMessage,
   keepAliveDuring,
   kindOf,
@@ -311,5 +314,100 @@ describe('capMcpOutput', () => {
     const capped = capMcpOutput(big, 50_000)
     expect(capped.length).toBeLessThan(51_000)
     expect(capped).toContain('[truncated: the MCP server returned 60000 chars]')
+  })
+})
+
+describe('listAllPages', () => {
+  /** A server whose pages are `pages`, linked by cursors `c1`, `c2`, ... */
+  function paged(pages: unknown[][], key = 'tools'): {
+    fetch: (params: Record<string, unknown>) => Promise<unknown>
+    params: Array<Record<string, unknown>>
+  } {
+    const params: Array<Record<string, unknown>> = []
+    const fetch = async (p: Record<string, unknown>): Promise<unknown> => {
+      params.push(p)
+      const i = p.cursor === undefined ? 0 : Number(String(p.cursor).slice(1))
+      return { [key]: pages[i], ...(i + 1 < pages.length ? { nextCursor: `c${i + 1}` } : {}) }
+    }
+    return { fetch, params }
+  }
+
+  it('returns a single page as is, asking without a cursor', async () => {
+    const { fetch, params } = paged([[{ name: 'a' }]])
+    expect(await listAllPages(fetch, 'tools')).toEqual({ tools: [{ name: 'a' }] })
+    expect(params).toEqual([{}])
+  })
+
+  it('follows nextCursor and merges every page, in order', async () => {
+    const { fetch, params } = paged([[{ uri: 'a' }], [{ uri: 'b' }, { uri: 'c' }], [{ uri: 'd' }]], 'resources')
+    expect(await listAllPages(fetch, 'resources')).toEqual({
+      resources: [{ uri: 'a' }, { uri: 'b' }, { uri: 'c' }, { uri: 'd' }]
+    })
+    expect(params).toEqual([{}, { cursor: 'c1' }, { cursor: 'c2' }])
+  })
+
+  it('treats an empty or null nextCursor as the last page', async () => {
+    for (const nextCursor of ['', null]) {
+      const fetch = vi.fn(async () => ({ prompts: [{ name: 'p' }], nextCursor }))
+      expect(await listAllPages(fetch, 'prompts')).toEqual({ prompts: [{ name: 'p' }] })
+      expect(fetch).toHaveBeenCalledTimes(1)
+    }
+  })
+
+  it('omits the key when the first page has no array (callers keep their old list)', async () => {
+    expect(await listAllPages(async () => ({}), 'tools')).toEqual({})
+    expect(await listAllPages(async () => null, 'tools')).toEqual({})
+    expect(await listAllPages(async () => ({ tools: 'nope' }), 'tools')).toEqual({})
+  })
+
+  it('keeps what it has when a later page has no array', async () => {
+    let n = 0
+    const fetch = async (): Promise<unknown> => (n++ === 0 ? { tools: [{ name: 'a' }], nextCursor: 'x' } : {})
+    expect(await listAllPages(fetch, 'tools')).toEqual({ tools: [{ name: 'a' }] })
+  })
+
+  it('stops on a repeated cursor instead of looping forever', async () => {
+    const fetch = vi.fn(async () => ({ tools: [{ name: 'a' }], nextCursor: 'same' }))
+    const out = await listAllPages(fetch, 'tools')
+    expect(fetch).toHaveBeenCalledTimes(2)
+    expect(out.tools).toHaveLength(2)
+    expect(out.truncated).toMatch(/repeated a page cursor/)
+  })
+
+  it('stops on a cursor that is not a short string', async () => {
+    for (const nextCursor of [42, { a: 1 }, 'x'.repeat(5000)]) {
+      const fetch = vi.fn(async () => ({ tools: [{ name: 'a' }], nextCursor }))
+      const out = await listAllPages(fetch, 'tools')
+      expect(fetch).toHaveBeenCalledTimes(1)
+      expect(out).toEqual({ tools: [{ name: 'a' }], truncated: expect.stringMatching(/malformed page cursor/) })
+    }
+  })
+
+  it(`reads at most ${MAX_LIST_PAGES} pages`, async () => {
+    let n = 0
+    const fetch = vi.fn(async () => ({ tools: [{ name: `t${n}` }], nextCursor: `c${++n}` }))
+    const out = await listAllPages(fetch, 'tools')
+    expect(fetch).toHaveBeenCalledTimes(MAX_LIST_PAGES)
+    expect(out.tools).toHaveLength(MAX_LIST_PAGES)
+    expect(out.truncated).toBe(`only the first ${MAX_LIST_PAGES} pages were read`)
+  })
+
+  it(`keeps at most ${MAX_LIST_ITEMS} entries across pages`, async () => {
+    const page = Array.from({ length: 2_000 }, (_, i) => ({ name: `t${i}` }))
+    let n = 0
+    const fetch = vi.fn(async () => ({ tools: page, nextCursor: `c${++n}` }))
+    const out = await listAllPages(fetch, 'tools')
+    expect(fetch).toHaveBeenCalledTimes(3)
+    expect(out.tools).toHaveLength(MAX_LIST_ITEMS)
+    expect(out.truncated).toBe(`the list was cut at ${MAX_LIST_ITEMS} entries`)
+  })
+
+  it('fails the walk when any page fails', async () => {
+    let n = 0
+    const fetch = async (): Promise<unknown> => {
+      if (n++ === 0) return { tools: [{ name: 'a' }], nextCursor: 'x' }
+      throw new Error('MCP tools/list timed out')
+    }
+    await expect(listAllPages(fetch, 'tools')).rejects.toThrow('timed out')
   })
 })

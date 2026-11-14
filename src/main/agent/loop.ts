@@ -206,6 +206,7 @@ import {
   subagentHistoryBytes,
   type SubagentBudget,
   type SubagentModelSource,
+  type SubagentOutcome,
   type SubagentStatus
 } from '@shared/subagents'
 import {
@@ -781,6 +782,30 @@ export function cancelRun(runId: string): void {
   run.elicitations.clear()
   run.pendingElicitations.clear()
   run.abort.abort()
+}
+
+/**
+ * Cancel every live run in this process, foreground and background alike: a terminal
+ * client stopping on a signal, which would otherwise exit with runs mid-step and their
+ * stop never recorded. Returns how many runs were cancelled.
+ */
+export function cancelAllRuns(): number {
+  const ids = [...runs.keys()]
+  for (const id of ids) cancelRun(id)
+  return ids.length
+}
+
+/**
+ * Resolve once no run is live (each cancelled run has unwound and released its slot),
+ * or after `timeoutMs`, whichever is first. Resolves true when every run ended.
+ */
+export async function waitForRunsToEnd(timeoutMs: number, pollMs = 25): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (runs.size > 0) {
+    if (Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, pollMs))
+  }
+  return true
 }
 
 /**
@@ -2549,10 +2574,13 @@ export async function startRun(
       let subOutput = 0
       let subCacheRead = 0
       let subCacheWrite = 0
+      // Priced per turn, as the main loop prices its own: a request's size can pick its
+      // rate (a long-context tier), so pricing the summed tokens once would overbill.
+      let subCost = 0
       let storedId: string | undefined
       // This agent's record, started once runSubAgent has assembled its system prompt.
       let handle: SubagentHandle | undefined
-      let ending: { status: SubagentStatus; budget: SubagentBudget } | undefined
+      let ending: { status: SubagentStatus; outcome: SubagentOutcome; budget: SubagentBudget } | undefined
       const result = await runSubAgent({
         // Pinned to the run's configured provider, not the fallback route: a
         // dispatch's `model` override is validated against `req.providerId`'s
@@ -2620,7 +2648,9 @@ export async function startRun(
           maxIterations: settings.maxIterations,
           autoExtend: autoExtendTurnsEnabled(settings),
           ceiling: settings.maxIterationsCeiling,
-          ...(hardCap ? { hardCap } : {})
+          ...(hardCap ? { hardCap } : {}),
+          // The run's cost ceiling reaches the agent too (see spentUsd below).
+          costCeilingUsd: settings.costCeilingUsd
         },
         stall:
           settings.stallDetection === false
@@ -2687,11 +2717,24 @@ export async function startRun(
                 })
             }
           : {}),
+        // What the run has spent against that ceiling: the main turns, every subagent's
+        // turns as they bill (this one's included), and side requests.
+        spentUsd: () => cumulativeCostUsd + delegatedCostUsd,
         onUsage: (u) => {
           subInput += u.inputTokens ?? 0
           subOutput += u.outputTokens ?? 0
           subCacheRead += u.cacheReadTokens ?? 0
           subCacheWrite += u.cacheWriteTokens ?? 0
+          const turnCost = turnCostUsd(
+            model,
+            u.inputTokens ?? 0,
+            u.outputTokens ?? 0,
+            { readTokens: u.cacheReadTokens, writeTokens: u.cacheWriteTokens },
+            modelCaps
+          )
+          subCost += turnCost
+          // Counted as it bills, so the cost ceiling sees a long dispatch while it runs.
+          delegatedCostUsd += turnCost
           handle?.usage(u)
         }
       }).finally(() => {
@@ -2700,19 +2743,11 @@ export async function startRun(
         // inputTokens: 0 keeps the context-size meter on the main turn (this is
         // an ephemeral subagent context), while output + cost accumulate.
         if (subInput || subOutput) {
-          const cost = turnCostUsd(
-            model,
-            subInput,
-            subOutput,
-            { readTokens: subCacheRead, writeTokens: subCacheWrite },
-            modelCaps
-          )
-          delegatedCostUsd += cost
           emit({
             type: 'usage',
             inputTokens: 0,
             outputTokens: subOutput,
-            cost,
+            cost: subCost,
             // A subagent can run on its own (often cheaper) model; attribute it there.
             model,
             ...(subCacheRead ? { cacheReadTokens: subCacheRead } : {}),
@@ -2723,8 +2758,8 @@ export async function startRun(
 
       handle?.end({
         status: ending?.status ?? (abort.signal.aborted ? 'aborted' : 'error'),
+        ...(ending ? { outcome: ending.outcome, budget: ending.budget } : {}),
         report: result,
-        ...(ending ? { budget: ending.budget } : {}),
         ...(storedId ? { resumeId: storedId } : {})
       })
 
@@ -2972,6 +3007,7 @@ export async function startRun(
         let reviewOutput = 0
         let reviewCacheRead = 0
         let reviewCacheWrite = 0
+        let reviewCost = 0
         return reviewWorkspaceChanges({
           // Pinned to the run's configured provider, not the fallback route: the
           // review's model is validated against `req.providerId`'s model list.
@@ -2998,7 +3034,7 @@ export async function startRun(
           // Each reviewer, skeptic and the verifier gets its own record under the review.
           observeAgent: (meta, o) => {
             let handle: SubagentHandle | undefined
-            let ending: { status: SubagentStatus; budget: SubagentBudget } | undefined
+            let ending: { status: SubagentStatus; outcome: SubagentOutcome; budget: SubagentBudget } | undefined
             return {
               onStart: ({ system, tools: toolNames }) => {
                 handle = subagentRecorder.start(callId, {
@@ -3020,7 +3056,7 @@ export async function startRun(
                 handle?.end({
                   status: ending?.status ?? (abort.signal.aborted ? 'aborted' : 'error'),
                   report,
-                  ...(ending ? { budget: ending.budget } : {})
+                  ...(ending ? { outcome: ending.outcome, budget: ending.budget } : {})
                 })
             }
           },
@@ -3029,23 +3065,25 @@ export async function startRun(
             reviewOutput += u.outputTokens ?? 0
             reviewCacheRead += u.cacheReadTokens ?? 0
             reviewCacheWrite += u.cacheWriteTokens ?? 0
+            // Priced per request, like a subagent's turns (see runDispatch).
+            const turnCost = turnCostUsd(
+              reviewModel,
+              u.inputTokens ?? 0,
+              u.outputTokens ?? 0,
+              { readTokens: u.cacheReadTokens, writeTokens: u.cacheWriteTokens },
+              reviewCaps
+            )
+            reviewCost += turnCost
+            delegatedCostUsd += turnCost
           },
           signal: abort.signal
         }).finally(() => {
           if (reviewInput || reviewOutput) {
-            const cost = turnCostUsd(
-              reviewModel,
-              reviewInput,
-              reviewOutput,
-              { readTokens: reviewCacheRead, writeTokens: reviewCacheWrite },
-              reviewCaps
-            )
-            delegatedCostUsd += cost
             emit({
               type: 'usage',
               inputTokens: 0,
               outputTokens: reviewOutput,
-              cost,
+              cost: reviewCost,
               // Its own model: a review can run on a different (often cheaper) one,
               // and lumping it into the main model's total hides that entirely.
               model: reviewModel,

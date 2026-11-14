@@ -7,6 +7,7 @@ import {
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
   promises as fsp
 } from 'node:fs'
 
@@ -57,11 +58,40 @@ function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms)
 }
 
+/**
+ * Characters per write when a large string goes to disk. Writing a string in one call
+ * converts all of it to UTF-8 in a single native buffer. A conversation file of many
+ * megabytes, saved several times per model step and a little larger each time, made
+ * one such buffer per save; freed, they stay with the system allocator (on macOS as
+ * dirty, empty large regions), so the process's memory footprint climbed by tens of
+ * megabytes a turn while its live memory stayed flat. Bounded slices keep each buffer
+ * small and reused.
+ */
+const WRITE_CHUNK_CHARS = 256 * 1024
+
+/** Write `data` to `fd` as UTF-8 in bounded slices, never splitting a surrogate pair. */
+export function writeStringChunked(fd: number, data: string, chunkChars = WRITE_CHUNK_CHARS): void {
+  let start = 0
+  while (start < data.length) {
+    let end = Math.min(start + chunkChars, data.length)
+    // A slice must not end between the halves of a surrogate pair: each half alone
+    // would be written as U+FFFD.
+    if (end < data.length) {
+      const c = data.charCodeAt(end)
+      if (c >= 0xdc00 && c <= 0xdfff) end = end - 1 > start ? end - 1 : end + 1
+    }
+    const chunk = Buffer.from(data.slice(start, end), 'utf8')
+    let off = 0
+    while (off < chunk.length) off += writeSync(fd, chunk, off, chunk.length - off)
+    start = end
+  }
+}
+
 /** Write `data` to a new file at `tmp` and, when `durable`, flush it to stable storage. */
 function writeTempSync(tmp: string, data: string, mode: number | undefined, durable: boolean): void {
   const fd = openSync(tmp, 'w', mode ?? 0o666)
   try {
-    writeFileSync(fd, data, 'utf8')
+    writeStringChunked(fd, data)
     if (durable) fsyncSync(fd)
   } finally {
     closeSync(fd)

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agent'
 import { toOpenAIMessages, createOpenAIProvider, modelOptionFromListing } from './openai'
+import { EXTENDED_STREAM_IDLE_TIMEOUT_MS, requestedStreamIdleWindow } from './idle-fetch'
 
 // Mock the lazily-imported SDK so we can feed a synthetic chat-completions stream
 // and assert how the adapter turns it into provider events. `ctor` captures the
@@ -586,6 +587,34 @@ describe('openai adapter: reasoning_effort gating', () => {
   it('falls back to the id heuristic when capability is unknown', async () => {
     const body = await createBody({ reasoningEffort: 'high' })
     expect(body).not.toHaveProperty('reasoning_effort') // deepseek-r1 isn't matched by the regex
+  })
+
+  /** The idle window the request was sent under (see withStreamIdleWindow). */
+  async function sentWindow(req: Partial<ChatRequest>): Promise<number | undefined> {
+    let seen: number | undefined
+    h.create.mockImplementation(async () => {
+      seen = requestedStreamIdleWindow()
+      return streamOf([stopChunk()])
+    })
+    const provider = createOpenAIProvider('k', 'https://openrouter.ai/api/v1')
+    for await (const _e of provider.streamChat({
+      model: 'deepseek/deepseek-r1',
+      messages: [{ role: 'user', content: 'hi' }],
+      ...req
+    })) {
+      void _e
+    }
+    return seen
+  }
+
+  it('sends a reasoning request under the extended idle window', async () => {
+    expect(await sentWindow({ reasoningEffort: 'high', reasoningCapable: true })).toBe(EXTENDED_STREAM_IDLE_TIMEOUT_MS)
+  })
+
+  it('keeps the client default window when no reasoning is requested', async () => {
+    // Nothing requested: the fetch's own window applies.
+    expect(await sentWindow({ reasoningEffort: 'high', reasoningCapable: false })).toBe(0)
+    expect(await sentWindow({})).toBe(0)
   })
 })
 

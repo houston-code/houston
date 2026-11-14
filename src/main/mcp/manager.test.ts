@@ -476,6 +476,46 @@ describe('mcp manager: connecting several servers', () => {
   })
 })
 
+describe('mcp manager: paginated tool lists', () => {
+  it('offers the tools of every page and warns when a list was cut short', async () => {
+    const { log } = await import('../logger')
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {})
+    try {
+      _setMcpHttpClientFactory(
+        () =>
+          new McpHttpClient(async (_url, init) => {
+            if (init.method === 'GET') return new Response('', { status: 405 })
+            const req = JSON.parse(init.body as string) as { id?: number; method: string; params?: { cursor?: string } }
+            if (req.id === undefined) return new Response('', { status: 202 })
+            // Page 1 -> page 2 -> page 2 again: the repeated cursor ends the walk.
+            const result =
+              req.method === 'tools/list'
+                ? req.params?.cursor === undefined
+                  ? { tools: [{ name: 'first' }], nextCursor: 'p2' }
+                  : { tools: [{ name: 'second' }], nextCursor: 'p2' }
+                : {}
+            return new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }), {
+              status: 200,
+              headers: new Headers({ 'content-type': 'application/json' })
+            })
+          })
+      )
+      const defs = await getMcpToolDefs([
+        cfg({ id: 'paged', transport: 'http', command: '', url: 'https://x/mcp' })
+      ])
+      expect(defs.map((d) => d.schema.name).filter((n) => n.startsWith('mcp__paged__'))).toEqual([
+        mcpToolName('paged', 'first'),
+        mcpToolName('paged', 'second')
+      ])
+      expect(warn.mock.calls.map((c) => String(c[0]))).toContainEqual(
+        expect.stringMatching(/"paged" sent a tools list Houston did not read in full: .*repeated a page cursor/)
+      )
+    } finally {
+      warn.mockRestore()
+    }
+  })
+})
+
 describe('mcp manager: a server that keeps failing', () => {
   afterEach(() => vi.useRealTimers())
 

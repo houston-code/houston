@@ -48,6 +48,7 @@ import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
+import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
@@ -330,6 +331,8 @@ vi.mock('./verify-gate', async (importActual) => {
 const {
   startRun,
   cancelRun,
+  cancelAllRuns,
+  waitForRunsToEnd,
   resolveApproval,
   resolveQuestion,
   resolvePlan,
@@ -4160,6 +4163,42 @@ describe('ask_user', () => {
       | { output: string }
       | undefined
     expect(result?.output).toContain('stopped the agent')
+  })
+
+  it('cancelAllRuns stops every live run, and waitForRunsToEnd sees them unwind', async () => {
+    // A terminal client stopping on a signal: whatever is mid-turn is cancelled, and
+    // the exit waits (bounded) for each run to record its stop.
+    expect(cancelAllRuns()).toBe(0)
+    expect(await waitForRunsToEnd(0)).toBe(true)
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'q1', name: 'ask_user', arguments: { question: 'Wait?' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ]
+    ])
+    let asked!: () => void
+    const blocked = new Promise<void>((r) => (asked = r))
+    const events: AgentEvent[] = []
+    const run = startRun(
+      {
+        runId: 'run-cancel-all',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      (e) => {
+        events.push(e)
+        if (e.type === 'tool_question') asked()
+      }
+    )
+    await blocked
+    expect(await waitForRunsToEnd(20, 5)).toBe(false)
+    expect(cancelAllRuns()).toBe(1)
+    expect(await waitForRunsToEnd(5_000, 5)).toBe(true)
+    await run
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
   })
 
   it('fires plugin lifecycle hooks: onUserMessage, then onToolStart/onToolResult around a tool', async () => {
@@ -8648,6 +8687,74 @@ describe('subagent dispatch: progress, models, resume, nesting', () => {
     } finally {
       delete h.settings.subagentHistoryMb
     }
+  })
+
+  it("bills a dispatch's turns one by one into the run's usage, as the main loop prices its own", async () => {
+    // claude-haiku-5-5 bills a request past 100k input tokens at its long-context rate.
+    // Two 60k-token turns are each under it; priced as one 120k request, they wouldn't be.
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'scan', prompt: 'look' }),
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'list_dir', arguments: { path: '.' } } },
+          { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 60_000, outputTokens: 10 } }
+        ],
+        [
+          { type: 'text', text: 'sub report' },
+          { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 60_000, outputTokens: 10 } }
+        ],
+        finalText('done')
+      ],
+      []
+    )
+    const r = await run({ provider, model: 'claude-haiku-5-5' })
+    const perTurn = 2 * turnCostUsd('claude-haiku-5-5', 60_000, 10)
+    expect(perTurn).toBeLessThan(turnCostUsd('claude-haiku-5-5', 120_000, 20))
+    const sub = r.events.find((e) => e.type === 'usage' && e.inputTokens === 0 && e.outputTokens === 20)
+    expect(sub?.type === 'usage' && sub.cost).toBeCloseTo(perTurn, 10)
+    const saved = r.messages.find((m) => m.subagents)!.subagents![0]
+    expect(saved.usage?.costUsd).toBeCloseTo(perTurn, 10)
+    expect(saved.outcome).toBe('done')
+  })
+
+  it("wraps a dispatch up once the run's spend reaches the cost ceiling", async () => {
+    h.settings.costCeilingUsd = 0.01
+    try {
+      const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+      const provider = scriptedRecording(
+        [
+          dispatchCall({ description: 'scan', prompt: 'look' }),
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'list_dir', arguments: { path: '.' } } },
+            // About $0.10 at the long-context rate: past the ceiling on its own.
+            { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 200_000, outputTokens: 10 } }
+          ],
+          finalText('sub report'),
+          finalText('done')
+        ],
+        requests
+      )
+      await run({ provider, model: 'claude-haiku-5-5' })
+      const landed = (i: number): boolean =>
+        requests[i].messages.some((m) => m.role === 'user' && m.content.endsWith(SUBAGENT_COST_LANDING_NOTE))
+      expect(landed(1)).toBe(false)
+      expect(landed(2)).toBe(true)
+    } finally {
+      delete h.settings.costCeilingUsd
+    }
+  })
+
+  it('saves the outcome of a dispatch that came back empty', async () => {
+    const provider = scriptedRecording(
+      [dispatchCall({ description: 'scan', prompt: 'look' }), [{ type: 'done', stopReason: 'end_turn' }], finalText('done')],
+      []
+    )
+    const r = await run({ provider })
+    const end = r.events.find((e) => e.type === 'subagent_end')
+    expect(end?.type === 'subagent_end' && end.update).toMatchObject({ status: 'done', outcome: 'empty' })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'dispatch_agent')
+    expect(result?.type === 'tool_result' && result.output).toMatch(/^\[subagent returned no answer\]/)
+    expect(r.messages.find((m) => m.subagents)!.subagents![0].outcome).toBe('empty')
   })
 
   it('runs a dispatch on an explicit sibling model and validates unknown ids', async () => {

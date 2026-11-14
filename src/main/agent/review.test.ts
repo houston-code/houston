@@ -808,7 +808,7 @@ describe('runReview observeAgent', () => {
     const { fn, calls } = fakeAgent((o) => {
       o.onStart?.({ system: o.systemOverride ?? '', tools: ['read_file'] })
       o.onStep?.({ index: 0, turn: 1, kind: 'tool', summary: 'Read a.ts', ok: true })
-      o.onEnd?.({ status: 'done', budget: { used: 1, limit: 40, ceiling: 40 } })
+      o.onEnd?.({ status: 'done', outcome: 'done', budget: { used: 1, limit: 40, ceiling: 40 } })
       if (isSkeptic(o)) return 'CONFIRMED - real'
       if (isVerifier(o)) return 'No confirmed issues.'
       return dimensionOf(o) === 'SECURITY' ? '- [SEVERITY: high] a.ts:1 - hole\n  Why: bad' : 'No issues found.'

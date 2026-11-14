@@ -332,3 +332,62 @@ export function capMcpOutput(text: string, max = MAX_MCP_OUTPUT_CHARS): string {
   if (text.length <= max) return text
   return `${text.slice(0, max)}\n[truncated: the MCP server returned ${text.length} chars]`
 }
+
+/** The most pages one list walk (`tools/list` and the like) follows before it stops. */
+export const MAX_LIST_PAGES = 50
+
+/** The most entries one list walk keeps, across all its pages. */
+export const MAX_LIST_ITEMS = 5_000
+
+/** The longest `nextCursor` followed; a longer one ends the walk. */
+const MAX_CURSOR_CHARS = 4_096
+
+/** A paginated list result: the merged entries, and why the walk stopped early (if it did). */
+export interface ListedPages {
+  tools?: unknown[]
+  resources?: unknown[]
+  prompts?: unknown[]
+  /** Set when a cap or a bad cursor ended the walk before the server's last page. */
+  truncated?: string
+}
+
+/**
+ * Walk a paginated MCP list (`tools/list`, `resources/list`, `prompts/list`) by
+ * following `nextCursor` and merging every page's `key` array. Each page is a
+ * request of its own (with its own timeout), and an error on any page fails the
+ * walk, as an error on a single page always has. A server is external and may be
+ * hostile or buggy, so the walk is bounded: at most {@link MAX_LIST_PAGES} pages and
+ * {@link MAX_LIST_ITEMS} entries, a cursor that repeats or is not a short non-empty
+ * string ends it, and `truncated` says when that cut the list short. A first page
+ * without a `key` array yields an object without that key (callers that keep the old
+ * list on a malformed answer still can).
+ */
+export async function listAllPages(
+  fetchPage: (params: Record<string, unknown>) => Promise<unknown>,
+  key: 'tools' | 'resources' | 'prompts'
+): Promise<ListedPages> {
+  const items: unknown[] = []
+  const seen = new Set<string>()
+  let cursor: string | undefined
+  for (let page = 0; ; page++) {
+    const res = await fetchPage(cursor === undefined ? {} : { cursor })
+    const list = res && typeof res === 'object' ? (res as Record<string, unknown>)[key] : undefined
+    if (!Array.isArray(list)) return page === 0 ? {} : { [key]: items }
+    const room = MAX_LIST_ITEMS - items.length
+    items.push(...list.slice(0, room))
+    if (list.length > room) return { [key]: items, truncated: `the list was cut at ${MAX_LIST_ITEMS} entries` }
+    const next = (res as { nextCursor?: unknown }).nextCursor
+    if (next === undefined || next === null || next === '') return { [key]: items }
+    if (typeof next !== 'string' || next.length > MAX_CURSOR_CHARS) {
+      return { [key]: items, truncated: 'the server sent a malformed page cursor, so later pages were skipped' }
+    }
+    if (seen.has(next)) {
+      return { [key]: items, truncated: 'the server repeated a page cursor, so later pages were skipped' }
+    }
+    if (page + 1 >= MAX_LIST_PAGES) {
+      return { [key]: items, truncated: `only the first ${MAX_LIST_PAGES} pages were read` }
+    }
+    seen.add(next)
+    cursor = next
+  }
+}

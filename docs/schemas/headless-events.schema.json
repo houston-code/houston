@@ -245,7 +245,8 @@
             "error",
             "schema_invalid",
             "input_error",
-            "verify_failed"
+            "verify_failed",
+            "aborted"
           ]
         },
         "stopReason": {
