@@ -4963,6 +4963,23 @@ describe('skill', () => {
     expect(await getTool('skill')!.execute({ name: 'pdf' }, withSkill)).toBe('instructions for pdf')
   })
 
+  it('passes a bundled file through to useSkill', async () => {
+    const seen: Array<[string, string | undefined]> = []
+    const withSkill: ToolContext = {
+      ...ctx,
+      useSkill: async (name, file) => {
+        seen.push([name, file])
+        return 'file text'
+      }
+    }
+    expect(await getTool('skill')!.execute({ name: 'pdf', file: 'ref.md' }, withSkill)).toBe('file text')
+    await getTool('skill')!.execute({ name: 'pdf' }, withSkill)
+    expect(seen).toEqual([
+      ['pdf', 'ref.md'],
+      ['pdf', undefined]
+    ])
+  })
+
   it('errors when skills are unavailable in the context', async () => {
     await expect(run('skill', { name: 'pdf' })).rejects.toThrow('Skills are not available')
   })

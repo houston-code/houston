@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, sep } from 'node:path'
 import { isDisabledFlag, parseFrontmatter } from '@shared/frontmatter'
 import { HOUSTON_GUIDE } from './guide-content'
 import { RENDER_UI_SKILL } from './render-ui-skill'
+import { isSensitivePath } from './sensitive-paths'
 
 /**
  * Skills: reusable instruction bundles in `.houston/skills/<name>/SKILL.md`. Each
@@ -15,7 +16,8 @@ import { RENDER_UI_SKILL } from './render-ui-skill'
  * A skill can bundle more than its SKILL.md: any other files in the skill directory
  * (references, templates, scripts) are resources the instructions can lean on. Those
  * are discovered at load time and listed at the end of the `skill` tool's response so
- * the agent knows they exist and can `read_file`/run them — a second level of
+ * the agent knows they exist and can read them with `skill({ name, file })` (see
+ * readSkillFile) or run them — a second level of
  * progressive disclosure, the SKILL.md body itself staying the first.
  */
 
@@ -280,5 +282,105 @@ export async function resolveSkillInstructions(
   // List the bundled files after the instructions so the agent knows what it can
   // reach for (read or run), without paying to inline them up front.
   const list = skill.resources.map((r) => `- ${r}`).join('\n')
-  return `${body}\n\n---\nBundled files for this skill (read or run with the file tools as the instructions direct):\n${list}`
+  return (
+    `${body}\n\n---\nBundled files for this skill. Read one with skill({ name: "${skill.name}", file: "<path>" }), ` +
+    `passing the path as listed; run scripts as the instructions direct:\n${list}`
+  )
+}
+
+/** Largest bundled skill file the `skill` tool returns. */
+export const MAX_SKILL_FILE_BYTES = 256 * 1024
+
+/** Whether `p` resolves, through any symlinks, to `root` or a path inside it (both realpath'd). */
+function realpathInside(p: string, root: string): string | null {
+  try {
+    const realRoot = realpathSync(root)
+    const real = realpathSync(p)
+    const rel = relative(realRoot, real)
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel)) ? real : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * The skill-relative path a `file` argument names: a path as the skill's bundled-files
+ * list gives it (workspace-relative for a project skill, absolute for a user skill), or
+ * one relative to the skill's folder. Null for anything that climbs out of the folder,
+ * any other absolute path, or a NUL byte.
+ */
+function skillRelativeFile(skill: Skill, file: string): string | null {
+  if (!file || file.includes('\u0000')) return null
+  const norm = (p: string): string => p.replace(/\\/g, '/')
+  const dir = norm(skill.path).replace(/\/?SKILL\.md$/, '')
+  let rel = norm(file.trim())
+  if (rel === dir || rel.startsWith(`${dir}/`)) rel = rel.slice(dir.length + 1)
+  else if (isAbsolute(file) || /^[A-Za-z]:\//.test(rel) || rel.startsWith('/')) return null
+  rel = rel.replace(/^(\.\/)+/, '')
+  const parts = rel.split('/')
+  if (!rel || parts.some((s) => s === '..' || s === '')) return null
+  return parts.join('/')
+}
+
+/**
+ * Read one of a skill's bundled files, for `skill({ name, file })`. This is how the
+ * agent reaches the files of a user skill (`~/.houston/skills`), which sit outside the
+ * project and so outside what the file tools may read; it works the same for a project
+ * skill. Without widening those roots, the read is held to the skill's own folder:
+ *
+ * - the path must stay inside the folder (no `..`, no other absolute path), and its
+ *   realpath must too, so a symlink can't reach a file elsewhere. The folder itself
+ *   must still resolve inside its skills root;
+ * - only a regular file, at most {@link MAX_SKILL_FILE_BYTES}, read as text (a binary
+ *   file is described, not returned);
+ * - a file whose name marks it as a credential (see isSensitivePath) is refused, since
+ *   a direct read of one asks first and this path never asks;
+ * - read-only: nothing is written or run.
+ *
+ * Returns the file's text, or a note saying why it can't be shown.
+ */
+export async function readSkillFile(workspace: string, skill: Skill, file: string): Promise<string> {
+  if (skill.body !== undefined) return `Skill "${skill.name}" is built in and has no bundled files.`
+  const rel = skillRelativeFile(skill, file)
+  const listed = skill.resources?.length ? ` Its bundled files: ${skill.resources.join(', ')}.` : ''
+  if (rel === null) return `"${file}" is not a file inside skill "${skill.name}".${listed}`
+  if (isSensitivePath(rel)) {
+    return `"${file}" looks like a credentials file, so the skill tool does not return it.`
+  }
+  const root = skill.root ?? workspace
+  const skillDir = join(skill.root ? skill.path : join(workspace, skill.path), '..')
+  const realDir = realpathInside(skillDir, root)
+  if (!realDir) return `Skill "${skill.name}" has no readable folder.`
+  const real = realpathInside(join(skillDir, ...rel.split('/')), realDir)
+  if (!real) return `"${file}" is not a file inside skill "${skill.name}".${listed}`
+  let stat
+  try {
+    stat = await fs.stat(real)
+  } catch {
+    return `"${file}" could not be read.`
+  }
+  if (!stat.isFile()) return `"${file}" is not a file.${listed}`
+  if (stat.size > MAX_SKILL_FILE_BYTES) {
+    return `"${file}" is ${stat.size} bytes, over the ${MAX_SKILL_FILE_BYTES}-byte limit for skill files.`
+  }
+  const buf = await fs.readFile(real)
+  if (buf.subarray(0, 8192).includes(0)) return `"${file}" is a binary file (${buf.byteLength} bytes); it is not shown as text.`
+  const text = buf.toString('utf8')
+  return text.length ? text : `"${file}" is empty.`
+}
+
+/**
+ * Resolve `skill({ name, file })`: the bundled file's text (see {@link readSkillFile}),
+ * or the "unknown skill" note {@link resolveSkillInstructions} gives.
+ */
+export async function resolveSkillFile(
+  workspace: string,
+  skills: Skill[],
+  name: string,
+  file: string
+): Promise<string> {
+  const wanted = name.trim().toLowerCase()
+  const skill = skills.find((s) => s.name.toLowerCase() === wanted)
+  if (!skill) return resolveSkillInstructions(workspace, skills, name)
+  return readSkillFile(workspace, skill, file)
 }

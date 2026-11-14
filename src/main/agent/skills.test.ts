@@ -9,6 +9,9 @@ import {
   loadSkills,
   loadSkillBody,
   resolveSkillInstructions,
+  resolveSkillFile,
+  readSkillFile,
+  MAX_SKILL_FILE_BYTES,
   type Skill
 } from './skills'
 import { HOUSTON_GUIDE } from './guide-content'
@@ -188,6 +191,7 @@ describe('loadSkills — bundled resources', () => {
       const out = await resolveSkillInstructions(ws, skills, 'demo')
       expect(out).toContain('Do the thing.')
       expect(out).toContain('Bundled files for this skill')
+      expect(out).toContain('skill({ name: "demo", file: "<path>" })')
       expect(out).toContain('.houston/skills/demo/helper.py')
     })
   })
@@ -201,5 +205,134 @@ describe('loadSkills — bundled resources', () => {
       const out = await resolveSkillInstructions(ws, skills, 'plain')
       expect(out).toBe('Just instructions.')
     })
+  })
+})
+
+describe('skill({ name, file }): bundled files', () => {
+  /** A workspace and a separate home folder, both thrown away afterward. */
+  async function withHome(fn: (ws: string, home: string) => Promise<void>): Promise<void> {
+    const home = mkdtempSync(join(tmpdir(), 'houston-home-'))
+    try {
+      await withWorkspace((ws) => fn(ws, home))
+    } finally {
+      rmSync(home, { recursive: true, force: true })
+    }
+  }
+
+  it("reads a user skill's file by the absolute path it is listed under, though it is outside the project", async () => {
+    await withHome(async (ws, home) => {
+      const dir = join(home, '.houston/skills/deploy')
+      mkdirSync(join(dir, 'references'), { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('deploy', 'See references/steps.md.'))
+      writeFileSync(join(dir, 'references', 'steps.md'), 'Step 1: build.')
+      const skills = await loadSkills(ws, home)
+      const deploy = skills.find((s) => s.name === 'deploy')!
+      const listed = deploy.resources![0]
+      expect(listed).toBe(join(dir, 'references', 'steps.md'))
+      expect(await resolveSkillFile(ws, skills, 'deploy', listed)).toBe('Step 1: build.')
+      // Relative to the skill folder works too, with or without ./
+      expect(await resolveSkillFile(ws, skills, 'Deploy', 'references/steps.md')).toBe('Step 1: build.')
+      expect(await resolveSkillFile(ws, skills, 'deploy', './references/steps.md')).toBe('Step 1: build.')
+    })
+  })
+
+  it("reads a project skill's file by its workspace-relative listed path", async () => {
+    await withWorkspace(async (ws) => {
+      const dir = join(ws, '.houston/skills/demo')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('demo'))
+      writeFileSync(join(dir, 'helper.py'), 'print(1)\n')
+      const skills = await loadSkills(ws)
+      expect(await resolveSkillFile(ws, skills, 'demo', '.houston/skills/demo/helper.py')).toBe('print(1)\n')
+      expect(await resolveSkillFile(ws, skills, 'demo', 'helper.py')).toBe('print(1)\n')
+    })
+  })
+
+  it('refuses paths that leave the skill folder', async () => {
+    await withHome(async (ws, home) => {
+      const dir = join(home, '.houston/skills/deploy')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('deploy'))
+      writeFileSync(join(home, '.houston/skills/other.txt'), 'NEIGHBOUR')
+      writeFileSync(join(home, 'secret.txt'), 'TOPSECRET')
+      const skills = await loadSkills(ws, home)
+      for (const file of ['../other.txt', '../../secret.txt', join(home, 'secret.txt'), '/etc/hosts', 'a/../../x', 'x\u0000y']) {
+        const out = await resolveSkillFile(ws, skills, 'deploy', file)
+        expect(out).toMatch(/is not a file inside skill "deploy"/)
+        expect(out).not.toContain('TOPSECRET')
+        expect(out).not.toContain('NEIGHBOUR')
+      }
+    })
+  })
+
+  it('refuses a symlink inside the skill folder that points outside it', async () => {
+    await withHome(async (ws, home) => {
+      const dir = join(home, '.houston/skills/deploy')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('deploy'))
+      writeFileSync(join(home, 'secret.txt'), 'TOPSECRET')
+      symlinkSync(join(home, 'secret.txt'), join(dir, 'notes.md'))
+      const skills = await loadSkills(ws, home)
+      const out = await resolveSkillFile(ws, skills, 'deploy', 'notes.md')
+      expect(out).not.toContain('TOPSECRET')
+      expect(out).toMatch(/is not a file inside skill/)
+    })
+  })
+
+  it('follows a symlink that stays inside the skill folder', async () => {
+    await withWorkspace(async (ws) => {
+      const dir = join(ws, '.houston/skills/demo')
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('demo'))
+      writeFileSync(join(dir, 'real.md'), 'REAL')
+      symlinkSync(join(dir, 'real.md'), join(dir, 'alias.md'))
+      expect(await resolveSkillFile(ws, await loadSkills(ws), 'demo', 'alias.md')).toBe('REAL')
+    })
+  })
+
+  it('refuses credential-looking files, directories, binaries and oversized files', async () => {
+    await withWorkspace(async (ws) => {
+      const dir = join(ws, '.houston/skills/demo')
+      mkdirSync(join(dir, 'sub'), { recursive: true })
+      writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('demo'))
+      writeFileSync(join(dir, '.env'), 'API_KEY=sk-live-123')
+      writeFileSync(join(dir, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]))
+      writeFileSync(join(dir, 'big.txt'), 'x'.repeat(MAX_SKILL_FILE_BYTES + 1))
+      const skills = await loadSkills(ws)
+      const env = await resolveSkillFile(ws, skills, 'demo', '.env')
+      expect(env).toMatch(/looks like a credentials file/)
+      expect(env).not.toContain('sk-live')
+      expect(await resolveSkillFile(ws, skills, 'demo', 'sub')).toMatch(/is not a file/)
+      expect(await resolveSkillFile(ws, skills, 'demo', 'logo.png')).toMatch(/is a binary file \(8 bytes\)/)
+      expect(await resolveSkillFile(ws, skills, 'demo', 'big.txt')).toMatch(/over the 262144-byte limit/)
+      expect(await resolveSkillFile(ws, skills, 'demo', 'missing.md')).toMatch(/is not a file inside skill/)
+    })
+  })
+
+  it('refuses when the skill folder itself was swapped for a link out of its root', async () => {
+    const outside = mkdtempSync(join(tmpdir(), 'houston-outside-'))
+    try {
+      writeFileSync(join(outside, 'loot.md'), 'TOPSECRET')
+      await withWorkspace(async (ws) => {
+        const dir = join(ws, '.houston/skills/demo')
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'SKILL.md'), SKILL_MD('demo'))
+        const skills = await loadSkills(ws)
+        rmSync(dir, { recursive: true })
+        symlinkSync(outside, dir)
+        const out = await resolveSkillFile(ws, skills, 'demo', 'loot.md')
+        expect(out).not.toContain('TOPSECRET')
+      })
+    } finally {
+      rmSync(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('says a built-in skill has no files, and lists skills for an unknown name', async () => {
+    const skills = withBuiltinSkills([])
+    expect(await readSkillFile('/anywhere', skills.find((s) => s.name === 'houston-guide')!, 'x.md')).toMatch(
+      /built in and has no bundled files/
+    )
+    expect(await resolveSkillFile('/anywhere', skills, 'nope', 'x.md')).toMatch(/Unknown skill: "nope"/)
   })
 })

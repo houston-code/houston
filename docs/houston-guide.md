@@ -1908,8 +1908,12 @@ have it in every project; a project's skill wins if both use the same name.
 1. The agent sees only each skill's name and description up front, which is cheap.
 2. When a task matches, it loads the full body by calling the `skill` tool.
 3. Any other files in the skill's folder (a `references/` folder, a template, a helper
-   script) are listed at the end of the `skill` response. The agent reads or runs them
-   with the file tools when the instructions say to, and only when a task needs them.
+   script) are listed at the end of the `skill` response. The agent reads one through
+   the `skill` tool itself (its `file` argument), and runs scripts when the instructions
+   say to, only when a task needs them. That read works for skills in your home folder
+   too, though they sit outside the project. It is held to the skill's own folder: no
+   path or symlink out of it, text files up to 256 KB, and files that look like
+   credentials are refused.
 
 **Built-in skills:**
 

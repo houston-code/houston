@@ -372,6 +372,10 @@
         "name": {
           "type": "string",
           "description": "The exact name of the skill to load, as listed in your context."
+        },
+        "file": {
+          "type": "string",
+          "description": "Optional: a bundled file to read instead, as listed."
         }
       },
       "required": [
