@@ -320,6 +320,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   hooks: 'hooks',
   systemPromptExtra: 'system prompt addition',
   compactionThreshold: 'compaction threshold',
+  compactionThresholdPercent: 'compaction threshold (share of the window)',
   shellOutputMaxBytes: 'command output limit',
   maxIterations: 'steps per turn',
   autoExtendTurns: 'keep going while productive',

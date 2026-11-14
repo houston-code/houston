@@ -26,6 +26,7 @@ import type {
 import type { PlanReadiness } from '@shared/planReadiness'
 import type { ChatStatusMap, PendingPrompt } from '@shared/chatStatus'
 import type { Todo } from '@shared/todos'
+import { compactionLimitFrom } from '@shared/compactionThreshold'
 import type { TurnReceipt } from '@shared/evidence'
 import {
   systemNoteMessage,
@@ -3322,16 +3323,18 @@ export async function startRun(
     // below for the rest of the assembly). The threshold scales
     // to the model's context window (host-listed caps first, then the family
     // heuristic), capped under the model's long-context price tier when it has one;
-    // an explicit setting overrides it, and the fixed default covers models whose
-    // window is unknown. Stale tool results start going out as stubs at a lower,
-    // separate trigger (see resolveEvictionTrigger).
+    // the user's own trigger (a token count or a share of the window) can lower it
+    // but never raise it, and the fixed default covers models whose window is
+    // unknown. Stale tool results start going out as stubs at a lower, separate
+    // trigger (see resolveEvictionTrigger).
     const contextWindow = resolveContextWindow(req.model, selectedModelCaps)
+    const compactionLimit = compactionLimitFrom(settings)
     const threshold = resolveCompactionThreshold(
-      settings.compactionThreshold,
+      compactionLimit,
       contextWindow,
       longContextTierAbove(req.model, selectedModelCaps)
     )
-    const evictionTrigger = resolveEvictionTrigger(settings.compactionThreshold, threshold)
+    const evictionTrigger = resolveEvictionTrigger(compactionLimit, threshold, contextWindow)
     let cut = 0
     let summary = ''
     let summaryMsgs: ChatMessage[] = []

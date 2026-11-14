@@ -17,8 +17,8 @@ export const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'high'
  * Fallback context-compaction threshold in tokens, used only when the selected
  * model's context window is unknown (a custom/local model with no capability
  * metadata). When the window IS known, the threshold scales to it instead — see
- * `resolveCompactionThreshold` in main/agent/compaction.ts. An explicit
- * `compactionThreshold` setting overrides both.
+ * `resolveCompactionThreshold` in shared/compactionThreshold.ts. The user's
+ * `compactionThreshold` / `compactionThresholdPercent` settings can lower it.
  */
 export const DEFAULT_COMPACTION_THRESHOLD = 100_000
 
