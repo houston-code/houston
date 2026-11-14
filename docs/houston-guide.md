@@ -1195,7 +1195,16 @@ With verification on and the field left empty, Houston uses the command it would
 suggest, but only in Full auto, where shell commands already run without asking. It
 says which command it is using the first time it runs one in a turn. That command
 gets network access only if you allowed the agent's own shell commands to use the
-network. In the other modes an empty field still means nothing runs.
+network. It also runs only where shell commands are sandboxed: on a computer without
+the OS sandbox (Windows, or Linux without bubblewrap) Houston skips it and says so,
+unless you chose **Allow for run** on an unsandboxed command earlier in the run. In the
+other modes an empty field still means nothing runs.
+
+A command you set yourself runs the project's scripts, which the agent can edit, so it
+gets network exactly when the agent's own shell commands do. After any verification
+command, Houston checks the repository's git hooks and settings the same way it does
+after the agent's shell commands (see "Git hooks and settings"), and asks you to keep or undo
+anything that could run programs outside the sandbox (a run with nobody to ask undoes it).
 
 ### Watching a running turn
 
@@ -1634,7 +1643,8 @@ and settings such as `core.fsmonitor` or a filter driver. Your own terminal's gi
 shell prompt that runs `git status`) would run them outside the sandbox, and neither
 `git status` nor a diff shows them.
 
-So after each shell command Houston checks for those and nothing else:
+So after each shell command (and each verification command it runs when the agent
+stops) Houston checks for those and nothing else:
 
 - **Nothing to see for ordinary git.** Your name and email, remotes, and upstream
   branches never count, and a command that doesn't touch `.git` costs a few file checks.
