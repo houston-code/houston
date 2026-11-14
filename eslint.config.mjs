@@ -44,6 +44,16 @@ export default tseslint.config(
     }
   },
   {
+    // The npm package's launcher (packaging/npm/houston.cjs) is plain CommonJS that runs
+    // straight from the installed package, with only Node's own modules.
+    files: ['packaging/**/*.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { require: 'readonly', module: 'writable', process: 'readonly' }
+    },
+    rules: { '@typescript-eslint/no-require-imports': 'off' }
+  },
+  {
     files: ['src/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks },
     rules: {
