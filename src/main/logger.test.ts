@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -139,5 +139,40 @@ describe('buffered writes', () => {
     expect(readFileSync(first, 'utf8')).toContain('first profile')
     expect(readFileSync(first, 'utf8')).not.toContain('second profile')
     expect(contents()).toContain('second profile')
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('log file permissions', () => {
+  beforeEach(() => {
+    state.userData = mkdtempSync(join(tmpdir(), 'houston-logger-perm-'))
+  })
+  afterEach(() => {
+    flushLogSync()
+    rmSync(state.userData, { recursive: true, force: true })
+  })
+
+  const mode = (p: string): number => statSync(p).mode & 0o777
+
+  it('creates the log folder 0700 and the log 0600, so other local accounts cannot read it', () => {
+    log.info('first line')
+    flushLogSync()
+    expect(mode(join(state.userData, 'logs'))).toBe(0o700)
+    expect(mode(join(state.userData, 'logs', 'houston.log'))).toBe(0o600)
+  })
+
+  it('tightens a folder, log, and rotated log an earlier version left world-readable', () => {
+    const dir = join(state.userData, 'logs')
+    mkdirSync(dir)
+    chmodSync(dir, 0o755)
+    writeFileSync(join(dir, 'houston.log'), 'old\n')
+    chmodSync(join(dir, 'houston.log'), 0o644)
+    writeFileSync(join(dir, 'houston.log.1'), 'older\n')
+    chmodSync(join(dir, 'houston.log.1'), 0o644)
+    log.warn('next line')
+    flushLogSync()
+    expect(mode(dir)).toBe(0o700)
+    expect(mode(join(dir, 'houston.log'))).toBe(0o600)
+    expect(mode(join(dir, 'houston.log.1'))).toBe(0o600)
+    expect(readFileSync(join(dir, 'houston.log'), 'utf8')).toContain('next line')
   })
 })

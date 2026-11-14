@@ -6,6 +6,7 @@ import {
   dedupeExisting,
   linuxTmpDirs,
   probeBwrapUsable,
+  resolveBwrapPath,
   type BwrapArgsInput
 } from './linux'
 
@@ -179,7 +180,7 @@ describe('bwrapShell', () => {
 
 describe('probeBwrapUsable', () => {
   it('is true when the probe command exits cleanly', () => {
-    expect(probeBwrapUsable({ exec: () => {}, shell: '/bin/sh' })).toBe(true)
+    expect(probeBwrapUsable({ exec: () => {}, shell: '/bin/sh', bwrapPath: () => '/usr/bin/bwrap' })).toBe(true)
   })
 
   it('is false when bwrap is missing or unprivileged userns is blocked', () => {
@@ -188,7 +189,8 @@ describe('probeBwrapUsable', () => {
         exec: () => {
           throw new Error('bwrap: Creating new namespace failed: Operation not permitted')
         },
-        shell: '/bin/sh'
+        shell: '/bin/sh',
+        bwrapPath: () => '/usr/bin/bwrap'
       })
     ).toBe(false)
   })
@@ -199,10 +201,55 @@ describe('probeBwrapUsable', () => {
       exec: (_file, args) => {
         seen = args
       },
-      shell: '/bin/sh'
+      shell: '/bin/sh',
+      bwrapPath: () => '/usr/bin/bwrap'
     })
     expect(seen).toContain('--unshare-net')
     expect(seen).toContain('--unshare-pid')
+  })
+})
+
+describe('resolveBwrapPath', () => {
+  const at = (...present: string[]) => (p: string) => present.includes(p)
+
+  it('takes the first absolute PATH entry holding bwrap', () => {
+    expect(resolveBwrapPath('/opt/x/bin:/usr/local/bin:/usr/bin', at('/usr/local/bin/bwrap', '/usr/bin/bwrap'))).toBe(
+      '/usr/local/bin/bwrap'
+    )
+  })
+
+  it('skips relative and empty entries, so a workspace-planted bwrap is never chosen', () => {
+    // `.`, `bin`, and the empty entries (leading, doubled, trailing `:`) all mean a
+    // directory relative to the spawn cwd, which is the workspace.
+    const seen: string[] = []
+    const exists = (p: string): boolean => {
+      seen.push(p)
+      return true
+    }
+    expect(resolveBwrapPath(':.:bin:node_modules/.bin::/usr/bin:', exists)).toBe('/usr/bin/bwrap')
+    expect(seen).toEqual(['/usr/bin/bwrap'])
+  })
+
+  it('is undefined when only relative entries hold one, or none does', () => {
+    expect(resolveBwrapPath('.:bin', () => true)).toBeUndefined()
+    expect(resolveBwrapPath('/usr/bin:/bin', () => false)).toBeUndefined()
+    expect(resolveBwrapPath('', () => true)).toBeUndefined()
+  })
+})
+
+describe('probeBwrapUsable bwrap path', () => {
+  it('probes the resolved absolute path, never the bare name', () => {
+    let file = ''
+    probeBwrapUsable({ exec: (f) => void (file = f), shell: '/bin/sh', bwrapPath: () => '/usr/local/bin/bwrap' })
+    expect(file).toBe('/usr/local/bin/bwrap')
+  })
+
+  it('is false without running anything when no absolute PATH entry holds bwrap', () => {
+    let ran = false
+    expect(
+      probeBwrapUsable({ exec: () => void (ran = true), shell: '/bin/sh', bwrapPath: () => undefined })
+    ).toBe(false)
+    expect(ran).toBe(false)
   })
 })
 
@@ -214,7 +261,10 @@ describe('BubblewrapBackend', () => {
       allowNetwork: false,
       cwd: '/'
     })
-    expect(launch.file).toBe('bwrap')
+    // Always an absolute path (see resolveBwrapPath), never the bare name a spawn would
+    // look up on the child's PATH from the workspace.
+    expect(launch.file.startsWith('/')).toBe(true)
+    expect(launch.file.endsWith('/bwrap')).toBe(true)
     expect(launch.detached).toBe(true)
     expect(launch.windowsHide).toBe(false)
     expect(seqIndex(launch.args, ['--ro-bind', '/', '/'])).toBe(0)

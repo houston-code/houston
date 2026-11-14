@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { isAbsolute } from 'node:path'
 import { buildSeatbeltProfile, seatbeltNetworkMode, SeatbeltBackend } from './darwin'
 import { runWithBackend } from './shared'
 import type { SandboxRunOptions } from './contract'
@@ -65,6 +66,20 @@ describe('buildSeatbeltProfile', () => {
 })
 
 describe('SeatbeltBackend.buildLaunch', () => {
+  it('names the wrapper by absolute path in every network mode (never a PATH lookup)', () => {
+    // A bare name is resolved on the child's PATH with the workspace as cwd, so a
+    // relative PATH entry would run a planted `sandbox-exec` while reporting sandboxed.
+    for (const [allowNetwork, egressProxy] of [
+      [false, undefined],
+      [true, undefined],
+      [true, { tcpPort: 9137 }]
+    ] as const) {
+      const launch = SeatbeltBackend.buildLaunch({ command: 'true', roots: ['/work'], allowNetwork, egressProxy, cwd: '/work' })
+      expect(launch.file).toBe('/usr/bin/sandbox-exec')
+      expect(isAbsolute(launch.file)).toBe(true)
+    }
+  })
+
   it('wraps the command in sandbox-exec with the generated profile', () => {
     const launch = SeatbeltBackend.buildLaunch({
       command: 'echo hi',
@@ -72,7 +87,7 @@ describe('SeatbeltBackend.buildLaunch', () => {
       allowNetwork: false,
       cwd: '/work'
     })
-    expect(launch.file).toBe('sandbox-exec')
+    expect(launch.file).toBe('/usr/bin/sandbox-exec')
     expect(launch.args[0]).toBe('-p')
     expect(launch.args[1]).toContain('(deny default)')
     expect(launch.args.slice(2)).toEqual(['/bin/bash', '-c', 'echo hi'])
@@ -203,7 +218,7 @@ describe('runWithBackend(SeatbeltBackend) lifecycle', () => {
     const child = makeFakeChild()
     const spawn = fakeSpawn(child)
     run(baseOpts(), { spawn, signalTree: vi.fn(), drainMs: 50 })
-    expect(spawn.calls[0].cmd).toBe('sandbox-exec')
+    expect(spawn.calls[0].cmd).toBe('/usr/bin/sandbox-exec')
     expect(spawn.calls[0].options.detached).toBe(true)
     expect(spawn.calls[0].options.signal).toBeUndefined()
   })

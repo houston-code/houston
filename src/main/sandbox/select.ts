@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import type { SandboxBackend } from './contract'
-import { SeatbeltBackend } from './darwin'
+import { SANDBOX_EXEC_PATH, SeatbeltBackend } from './darwin'
 import { BubblewrapBackend, probeBwrapUsable } from './linux'
 import { UnsandboxedBackend } from './unsandboxed'
 import { WindowsBackend } from './windows'
@@ -25,7 +25,7 @@ export interface SelectDeps {
 export function sandboxAvailable(deps: SelectDeps = {}): boolean {
   const platform = deps.platform ?? process.platform
   const exists = deps.exists ?? existsSync
-  if (platform === 'darwin') return exists('/usr/bin/sandbox-exec')
+  if (platform === 'darwin') return exists(SANDBOX_EXEC_PATH)
   if (platform === 'linux') return (deps.bwrapUsable ?? probeBwrapUsable)()
   // win32 / anything else: no enforceable OS sandbox.
   return false

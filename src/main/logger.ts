@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, statSync, renameSync, existsSync, promises as fsp } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync, statSync, renameSync, existsSync, promises as fsp } from 'node:fs'
 import { join } from 'node:path'
 import { getUserDataDir } from './userData'
 
@@ -67,12 +67,38 @@ function stringifyError(e: unknown): string {
   return typeof e === 'string' ? e : JSON.stringify(e)
 }
 
+/**
+ * The log is private to the user: it records provider errors, file paths, and
+ * command lines that the redactor can't recognize as secret, and on a shared machine
+ * the default 0755 folder and 0644 file let every local account read it. New folders
+ * and files are created 0700 / 0600, and a folder or log an earlier version left
+ * readable is tightened once per process (mode bits only; no-op on Windows).
+ */
+const LOG_DIR_MODE = 0o700
+const LOG_FILE_MODE = 0o600
+
+/** Log paths already tightened in this process (see the modes above). */
+const secured = new Set<string>()
+
+function secureOnce(path: string, mode: number): void {
+  if (secured.has(path)) return
+  secured.add(path)
+  try {
+    chmodSync(path, mode)
+  } catch {
+    // Best effort: missing, or a filesystem without POSIX modes.
+  }
+}
+
 /** The log file (`<profile>/logs/houston.log`), creating its folder if needed. */
 export function logFilePath(): string {
   // Throws if the userData seam isn't wired yet; the caller's catch keeps that
   // silent, preserving the "logging never breaks the app" contract.
   const dir = join(getUserDataDir(), 'logs')
-  mkdirSync(dir, { recursive: true })
+  mkdirSync(dir, { recursive: true, mode: LOG_DIR_MODE })
+  // mkdir's mode is masked by the umask and ignored for a folder that already
+  // exists, so set it outright.
+  secureOnce(dir, LOG_DIR_MODE)
   return join(dir, 'houston.log')
 }
 
@@ -89,6 +115,15 @@ function rotateIfNeeded(path: string): void {
   } catch {
     // rotation is best-effort
   }
+}
+
+/**
+ * `mode` on the append applies only when it creates the file (a fresh or just-rotated
+ * log); an existing one, and the previous rotation, are tightened here.
+ */
+function secureLog(path: string): void {
+  secureOnce(path, LOG_FILE_MODE)
+  secureOnce(`${path}.1`, LOG_FILE_MODE)
 }
 
 /** Take the buffer, grouped by file in logged order. */
@@ -112,7 +147,8 @@ export function flushLogSync(): void {
   for (const [path, text] of takePending()) {
     try {
       rotateIfNeeded(path)
-      appendFileSync(path, text)
+      appendFileSync(path, text, { mode: LOG_FILE_MODE })
+      secureLog(path)
     } catch {
       // Never let logging break the app.
     }
@@ -131,7 +167,8 @@ function flushAsync(): void {
     for (const [path, text] of batch) {
       try {
         rotateIfNeeded(path)
-        await fsp.appendFile(path, text)
+        await fsp.appendFile(path, text, { mode: LOG_FILE_MODE })
+        secureLog(path)
       } catch {
         // Never let logging break the app.
       }
