@@ -5,7 +5,7 @@ import { fstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, wr
 import { isAbsolute, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { isatty } from 'node:tty'
-import { spawn, spawnSync } from 'node:child_process'
+import { spawnSync } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import type { McpServerConfig } from '@shared/types'
 import {
@@ -44,6 +44,7 @@ import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './
 import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
 import { findFiles } from './agent/mentions'
 import { loadSkills } from './agent/skills'
+import { runUserShell } from './userShell'
 import { loadAgents } from './agent/agents'
 import { loadSlashCommands } from './agent/commands'
 import { stopAndDeleteConversation } from './deleteChat'
@@ -494,43 +495,6 @@ export function wireTerminalSessionBackends(opts: {
         }
       })
   }
-}
-
-/**
- * Run a command in the user's own shell for the composer's `!` escape.
- *
- * Unsandboxed on purpose. The sandbox exists to confine the AGENT, which can be
- * steered by a prompt injection into running something the user never wanted. A
- * command the user typed at their own prompt is not that: it is exactly as
- * trusted as the shell they launched Houston from, and confining it would only
- * break the obvious cases (`!git push` with no network, `!npm i` unable to write
- * outside the workspace).
- *
- * `shell: true` is intended here — the string IS a shell command, typed by the
- * person the shell belongs to. Their $SHELL is used so aliases-free but familiar
- * syntax works; output is streamed so a build looks alive rather than hung.
- */
-function runUserShell(
-  workspace: string,
-  command: string,
-  onOutput: (chunk: string) => void
-): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, {
-      cwd: workspace,
-      shell: process.platform === 'win32' ? true : (process.env.SHELL ?? '/bin/sh'),
-      env: process.env,
-      stdio: ['ignore', 'pipe', 'pipe']
-    })
-    // Decode as streams, so a multibyte character split across two pipe chunks
-    // prints as itself rather than as two replacement characters.
-    child.stdout?.setEncoding('utf8')
-    child.stderr?.setEncoding('utf8')
-    child.stdout?.on('data', (d: string) => onOutput(d))
-    child.stderr?.on('data', (d: string) => onOutput(d))
-    child.on('error', reject)
-    child.on('close', (code) => resolve(code ?? 0))
-  })
 }
 
 /**

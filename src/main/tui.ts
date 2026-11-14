@@ -18,7 +18,9 @@ import {
   type ProviderConfig
 } from '@shared/types'
 import { loadProjectConfig } from './agent/projectConfig'
+import type { ShellCapture } from './userShell'
 import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
+import { describeContextConsent } from './agent/commandContext'
 import { HOOK_TIMEOUT_MAX_S, HOOK_TIMEOUT_MIN_S, HOOK_TIMEOUT_MS } from './agent/hooks'
 import { appendUserTurn } from './agent/userTurn'
 import {
@@ -3215,6 +3217,11 @@ export interface TuiDeps {
   capabilities?: () => Promise<CapabilitySnapshot>
   /** Load the workspace's custom `.houston/commands`, so `/<name>` runs one as a turn. */
   commands?: () => Promise<Command[]>
+  /**
+   * Run one of a command template's `` !`command` `` pieces. Absent: the user's own
+   * shell, bounded in time and output (tests inject a fake).
+   */
+  runContextShell?: (command: string) => Promise<ShellCapture>
   /** Compact the given conversation on demand (the `/compact` command). */
   compact?: (id: string, providerId: string, model: string, opts?: CompactOptions) => Promise<CompactResult>
   /** Persist a settings patch (for /hooks and /mcp editing). Absent ⇒ editing disabled. */
@@ -3515,7 +3522,9 @@ export function summarizeElevated(c: {
     c.allowRules.length ? `${c.allowRules.length} allow rule${c.allowRules.length === 1 ? '' : 's'}` : '',
     c.hooks.length ? `${c.hooks.length} hook${c.hooks.length === 1 ? '' : 's'}` : '',
     c.mcpServers.length ? `${c.mcpServers.length} MCP server${c.mcpServers.length === 1 ? '' : 's'}` : '',
-    commands ? `${commands} command${commands === 1 ? '' : 's'} that pre-approve${commands === 1 ? 's' : ''} tools` : '',
+    commands
+      ? `${commands} command${commands === 1 ? '' : 's'} that pre-approve${commands === 1 ? 's' : ''} tools or run${commands === 1 ? 's' : ''} shell commands`
+      : '',
     // Each plugin file by name: trusting the folder consents to running exactly these.
     plugins.length
       ? `${plugins.length} plugin${plugins.length === 1 ? '' : 's'} (${plugins.map((p) => p.name).join(', ')})`
@@ -3571,7 +3580,7 @@ export async function promptFolderTrust(cwd: string, deps: TuiDeps, paint: Paint
     `\n${paint(state === 'changed' ? 'This project’s trusted configuration changed.' : 'This project asks for extra permissions.', 'cyan')}\n` +
       `  It defines ${summarizeElevated(cfg.elevated)} (in ${elevatedSource(cfg.elevated)}).\n` +
       paint(
-        '  Hooks, MCP servers, and plugins run as you, and allow rules and pre-approving commands auto-approve matching actions.\n' +
+        '  Hooks, MCP servers, plugins, and command templates\' shell commands run as you, and allow rules and pre-approving commands auto-approve matching actions.\n' +
           '  Only trust folders whose authors you trust; until then Houston ignores them.\n' +
           (cfg.elevated.plugins.length
             ? '  Plugins also need the projectPlugins setting on; a plugin added or edited later asks again.\n'
@@ -5448,9 +5457,22 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         // The typed line is already on screen; one dim line says what it runs, and
         // the prompt itself stays out of the scrollback.
         if (result.command) {
+          const commandName = `/${result.command.cmd.name}`
           const prepared = await prepareCommandRun(result.command.cmd, result.command.args, text, {
             settings: deps.getSettings(),
-            trusted: await workspaceTrusted(opts.cwd, deps.getSettings().trustedFolders).catch(() => false)
+            trusted: await workspaceTrusted(opts.cwd, deps.getSettings().trustedFolders).catch(() => false),
+            workspace: opts.cwd,
+            // A template's shell commands (or a credential file it reads): shown
+            // exactly, and run only on a yes.
+            confirmContext: async (consent) => {
+              const { title, lines } = describeContextConsent(commandName, consent)
+              deps.io.out(
+                `${paint(stripControlChars(title), 'cyan')}\n${lines.map((l) => `  ${stripControlChars(l)}`).join('\n')}\n`
+              )
+              const ans = await deps.io.readLine('Allow? [y/N] ', { discardPending: true })
+              return /^(y|yes)$/i.test(ans?.trim() ?? '')
+            },
+            ...(deps.runContextShell ? { runShell: deps.runContextShell } : {})
           })
           if (prepared && !prepared.ok) {
             deps.io.out(paint(`· ${stripControlChars(prepared.error)}\n`, 'yellow'))

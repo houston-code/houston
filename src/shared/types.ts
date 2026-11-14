@@ -438,7 +438,7 @@ export type FolderTrustState = 'trusted' | 'untrusted' | 'undecided' | 'changed'
  */
 export interface FolderTrustStatus {
   state: FolderTrustState | 'none'
-  /** `commands`: the project's commands that pre-approve tools (absent when none). */
+  /** `commands`: the project's commands that pre-approve tools or run shell commands (absent when none). */
   counts?: { allowRules: number; hooks: number; mcpServers: number; commands?: number; plugins?: number }
   /**
    * The names of the project's plugin files (`.houston/plugins/*.js`) the decision

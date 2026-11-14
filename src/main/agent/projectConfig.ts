@@ -6,6 +6,7 @@ import { sanitizeServerId } from '@shared/mcp'
 import { parseTightenOnlyRules } from './permissions'
 import { loadProjectCommands } from './commands'
 import { readPluginFiles, type ProjectPluginFile } from './plugins'
+import { contextCommands } from '@shared/commandContext'
 
 /**
  * Per-project config from `.houston/settings.json` in the workspace.
@@ -51,8 +52,9 @@ export interface ProjectElevatedConfig {
   mcpServers: McpServerConfig[]
   /**
    * The project's `.houston/commands` that ask for more than a prompt: tools
-   * pre-approved for their turn (`allowed-tools`). Part of the fingerprint, so a
-   * pull that adds or widens one drops a trusted folder back to asking.
+   * pre-approved for their turn (`allowed-tools`), or shell commands their template
+   * runs (`` !`command` ``). Part of the fingerprint, so a pull that adds or widens
+   * one drops a trusted folder back to asking.
    */
   commands?: ProjectCommandGrant[]
   /**
@@ -63,10 +65,12 @@ export interface ProjectElevatedConfig {
   plugins: ProjectPluginFile[]
 }
 
-/** One project command's elevating frontmatter, as the trust fingerprint sees it. */
+/** One project command's elevating parts, as the trust fingerprint sees them. */
 export interface ProjectCommandGrant {
   name: string
-  allowedTools: string
+  allowedTools?: string
+  /** The shell commands its template runs, in order. */
+  shell?: string[]
 }
 
 /**
@@ -254,10 +258,17 @@ export async function projectCommandGrants(workspace: string): Promise<ProjectCo
   } catch {
     return []
   }
-  return commands
-    .filter((c) => c.allowedTools)
-    .map((c) => ({ name: c.name, allowedTools: c.allowedTools ?? '' }))
-    .sort((a, b) => a.name.localeCompare(b.name))
+  const grants: ProjectCommandGrant[] = []
+  for (const c of commands) {
+    const shell = c.template ? contextCommands(c.template) : []
+    if (!c.allowedTools && !shell.length) continue
+    grants.push({
+      name: c.name,
+      ...(c.allowedTools ? { allowedTools: c.allowedTools } : {}),
+      ...(shell.length ? { shell } : {})
+    })
+  }
+  return grants.sort((a, b) => a.name.localeCompare(b.name))
 }
 
 export interface ProjectConfig {

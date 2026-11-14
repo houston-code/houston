@@ -90,7 +90,9 @@ export function TrustFolderBanner({
     c.allowRules ? `${c.allowRules} allow rule${c.allowRules === 1 ? '' : 's'}` : '',
     c.hooks ? `${c.hooks} hook${c.hooks === 1 ? '' : 's'}` : '',
     c.mcpServers ? `${c.mcpServers} MCP server${c.mcpServers === 1 ? '' : 's'}` : '',
-    c.commands ? `${c.commands} command${c.commands === 1 ? '' : 's'} that pre-approve${c.commands === 1 ? 's' : ''} tools` : '',
+    c.commands
+      ? `${c.commands} command${c.commands === 1 ? '' : 's'} that pre-approve${c.commands === 1 ? 's' : ''} tools or run${c.commands === 1 ? 's' : ''} shell commands`
+      : '',
     // Name every plugin file: trusting the folder consents to running exactly these.
     c.plugins
       ? `${c.plugins} plugin${c.plugins === 1 ? '' : 's'}${status.plugins?.length ? ` (${status.plugins.join(', ')})` : ''}`
@@ -126,7 +128,7 @@ export function TrustFolderBanner({
           {status.state === 'changed'
             ? `The extra permissions in this project’s ${source} changed since you trusted it (now: ${summary}). They stay off until you trust it again.${pluginNote}`
             : c.commands || c.plugins
-              ? `It defines ${summary} (in ${source}). Hooks, MCP servers, and plugins run as you, and allow rules and pre-approving commands auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.${pluginNote}`
+              ? `It defines ${summary} (in ${source}). Hooks, MCP servers, plugins, and command templates’ shell commands run as you, and allow rules and pre-approving commands auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.${pluginNote}`
               : `Its .houston/settings.json defines ${summary}. Hooks and MCP servers run as you, and allow rules auto-approve matching actions, so only trust folders whose authors you trust. Until you decide, Houston ignores them.`}
         </p>
         <div className="git-init-banner__actions">

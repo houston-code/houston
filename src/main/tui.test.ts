@@ -2999,6 +2999,51 @@ describe('runTui', () => {
     expect(rec.runs[2].turnAllowRules).toBeUndefined()
   })
 
+  it("shows a project command's shell context and runs it only on a yes", async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const ran: string[] = []
+    d.runContextShell = async (c) => {
+      ran.push(c)
+      return { exitCode: 0, stdout: ' 3 files changed\n', stderr: '', timedOut: false, truncated: false }
+    }
+    d.commands = async () => [
+      { name: 'rev', description: 'Review', template: 'Review this: !`git diff --stat`', source: 'project' }
+    ]
+    // First time: declined (Enter is no). Second: yes.
+    const t = fakeIo(['/rev', '', '/rev', 'y', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('/rev wants to run this command in your shell to fill in its prompt:')
+    expect(t.text()).toContain('  $ git diff --stat')
+    expect(t.text()).toContain("· /rev wasn't sent: not run: you declined its context")
+    expect(ran).toEqual(['git diff --stat'])
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages[0]).toMatchObject({
+      content: 'Review this:  3 files changed',
+      invokedAs: { label: '/rev', typed: '/rev' }
+    })
+    expect(t.reads.filter((r) => r.prompt === 'Allow? [y/N] ').every((r) => r.discardPending)).toBe(true)
+  })
+
+  it('sends nothing when a context command fails, and runs a user command without asking', async () => {
+    const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    d.runContextShell = async (c) =>
+      c === 'make'
+        ? { exitCode: 2, stdout: '', stderr: 'no rule\n', timedOut: false, truncated: false }
+        : { exitCode: 0, stdout: 'ok', stderr: '', timedOut: false, truncated: false }
+    d.commands = async () => [
+      { name: 'build', description: 'Build', template: 'Result: !`make`', source: 'user' },
+      { name: 'mine', description: 'Mine', template: 'Here: !`pwd`', source: 'user' }
+    ]
+    const t = fakeIo(['/build', '/mine', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain("· /build wasn't sent: `make` exited 2: no rule")
+    expect(t.text()).not.toContain('Allow? [y/N]')
+    expect(rec.runs).toHaveLength(1)
+    expect(rec.runs[0].messages[0].content).toBe('Here: ok')
+  })
+
   it("dispatches a command with agent: to that subagent", async () => {
     const { d, rec } = deps([{ runId: 'x', type: 'done', stopReason: 'end_turn' }])
     d.commands = async () => [{ name: 'audit', description: 'Audit', template: 'Audit $ARGUMENTS', source: 'project', agent: 'auditor' }]
@@ -4576,7 +4621,7 @@ describe('summarizeElevated', () => {
 
   it('counts commands that pre-approve tools, and names where the config lives', () => {
     const onlyCommands = { allowRules: [], hooks: [], mcpServers: [], commands: [1] }
-    expect(summarizeElevated(onlyCommands)).toBe('1 command that pre-approves tools')
+    expect(summarizeElevated(onlyCommands)).toBe('1 command that pre-approves tools or runs shell commands')
     expect(elevatedSource(onlyCommands)).toBe('.houston/commands')
     expect(elevatedSource({ ...onlyCommands, hooks: [1] })).toBe('.houston/settings.json and .houston/commands')
     expect(elevatedSource({ allowRules: [1], hooks: [], mcpServers: [] })).toBe('.houston/settings.json')
@@ -4590,7 +4635,7 @@ describe('summarizeElevated', () => {
 
   it('lists commands and plugins together, with every place they live', () => {
     const both = { allowRules: [], hooks: [], mcpServers: [], commands: [1], plugins: [{ name: 'a.js' }] }
-    expect(summarizeElevated(both)).toBe('1 command that pre-approves tools, 1 plugin (a.js)')
+    expect(summarizeElevated(both)).toBe('1 command that pre-approves tools or runs shell commands, 1 plugin (a.js)')
     expect(elevatedSource(both)).toBe('.houston/commands and .houston/plugins')
     expect(elevatedSource({ ...both, commands: [] })).toBe('.houston/plugins')
     expect(elevatedSource({ ...both, allowRules: [1] })).toBe(

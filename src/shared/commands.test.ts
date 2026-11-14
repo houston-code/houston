@@ -339,6 +339,14 @@ describe('commandHasRunOptions', () => {
       expect(commandHasRunOptions({ ...base, ...extra })).toBe(true)
     }
   })
+
+  it("is true for a workspace or user command whose template pulls in context, never for a built-in's", () => {
+    const withShell: Command = { name: 'x', description: 'x', template: 'Diff: !`git diff`', source: 'project' }
+    expect(commandHasRunOptions(withShell)).toBe(true)
+    expect(commandHasRunOptions({ ...withShell, template: 'See @docs/a.md', source: 'user' })).toBe(true)
+    expect(commandHasRunOptions({ ...withShell, source: undefined })).toBe(false)
+    expect(commandHasRunOptions({ ...withShell, template: 'Ping @octocat' })).toBe(false)
+  })
 })
 
 describe('command names matching Object.prototype members', () => {

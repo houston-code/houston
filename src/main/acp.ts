@@ -36,6 +36,7 @@ import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
 import { agentTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
 import { builtinCommands, mergeCommands, parseSlashCommand, resolveCommand, type Command } from '@shared/commands'
 import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
+import type { ShellCapture } from './userShell'
 import { DEFAULT_REASONING_EFFORT } from '@shared/defaults'
 import { modelDisplayName } from '@shared/models'
 import { limitNoticeText, runEndNoticeText, runEndRecords } from '@shared/runEnd'
@@ -262,6 +263,8 @@ export interface AcpDeps {
   commands?: (cwd: string) => Promise<Command[]>
   /** The workspace's skills and agents, for `/skills` and `/agents`. */
   skills?: (cwd: string) => Promise<{ name: string; description: string }[]>
+  /** Run a command template's `` !`command` `` piece (tests inject it); the user's shell otherwise. */
+  runContextShell?: (command: string) => Promise<ShellCapture>
   agents?: (cwd: string) => Promise<{ name: string; description: string }[]>
   /** Summarize a stored chat's older turns now (`/compact [focus]`). */
   compact?: (conversationId: string, providerId: string, model: string, focus?: string) => Promise<AcpCompactResult>
@@ -1494,9 +1497,14 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
       default: {
         // A template command: first-party (`/review`, `/init`), the workspace's own, or
         // a skill's `/<skill-name>`, with whatever its frontmatter asks of this one turn.
+        // No confirmContext: an editor's prompt has no way to show the exact commands
+        // and ask, so a template's shell context runs only for the user's own command
+        // or a trusted folder, and a credential-file read is refused.
         const prepared = await prepareCommandRun(cmd, arg, line, {
           settings,
-          trusted: await workspaceTrusted(s.cwd, settings.trustedFolders).catch(() => false)
+          trusted: await workspaceTrusted(s.cwd, settings.trustedFolders).catch(() => false),
+          workspace: s.cwd,
+          ...(deps.runContextShell ? { runShell: deps.runContextShell } : {})
         })
         if (!prepared) return null
         if (!prepared.ok) return { kind: 'reply', text: prepared.error }

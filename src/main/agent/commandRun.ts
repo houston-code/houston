@@ -6,6 +6,8 @@ import { commandTurn, type InvokedTurn } from '@shared/promptInvocation'
 import { folderTrustState, type AppSettings, type PermissionRule } from '@shared/types'
 import { loadProjectConfig } from './projectConfig'
 import { parseToolList } from './toolScope'
+import { expandCommandContext, type ContextConsent } from './commandContext'
+import type { ShellCapture } from '../userShell'
 
 /**
  * Running a custom command whose frontmatter asks for more than a prompt.
@@ -23,6 +25,9 @@ import { parseToolList } from './toolScope'
  * (every tool call still goes through the rules and the approval policy), so they
  * apply, and each is named in a note rather than applied silently. A user-level
  * command (`~/.houston/commands`) is the user's own and is honored in full.
+ *
+ * A template's `@file` and `` !`command` `` context is filled in here too, before
+ * anything is sent (see commandContext.ts for its own trust rules).
  */
 
 /** A custom command turn, ready to send, plus how this one turn runs. */
@@ -44,6 +49,15 @@ export interface CommandRunContext {
   settings: AppSettings
   /** Whether the workspace's project config is trusted (see {@link workspaceTrusted}). */
   trusted: boolean
+  /** The workspace the command runs in, for its `@file` and shell context. */
+  workspace: string
+  /**
+   * Ask the user to allow a template's shell commands or credential-file reads.
+   * Absent where nobody can be asked (an editor over ACP): those are refused.
+   */
+  confirmContext?: (consent: ContextConsent) => Promise<boolean>
+  /** Run one shell command for the context (tests inject it). */
+  runShell?: (command: string) => Promise<ShellCapture>
 }
 
 /**
@@ -92,9 +106,24 @@ export async function prepareCommandRun(
   typed: string,
   ctx: CommandRunContext
 ): Promise<CommandRunResult | null> {
-  const turn = commandTurn(cmd, args, typed)
-  if (!turn) return null
+  if (cmd.template === undefined) return null
   const name = `/${cmd.name}`
+  // A first-party template (`/review`) is Houston's own text: only a workspace's or
+  // the user's command gets its context filled in.
+  let expanded: string | undefined
+  if (cmd.source) {
+    const filled = await expandCommandContext(cmd.template, args, {
+      workspace: ctx.workspace,
+      roots: [ctx.workspace, ...(ctx.settings.additionalRoots ?? [])],
+      preapproved: cmd.source === 'user' || ctx.trusted,
+      ...(ctx.confirmContext ? { confirm: ctx.confirmContext } : {}),
+      ...(ctx.runShell ? { runShell: ctx.runShell } : {})
+    })
+    if (!filled.ok) return { ok: false, error: `${name} wasn't sent: ${filled.error}` }
+    expanded = filled.text
+  }
+  const turn = commandTurn(cmd, args, typed, expanded)
+  if (!turn) return null
   const notes: string[] = []
   const run: PreparedCommandRun = { turn, notes }
 

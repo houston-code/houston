@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -46,8 +46,8 @@ describe('parseAllowedTools', () => {
 })
 
 describe('prepareCommandRun', () => {
-  const trusted = { settings: settings(), trusted: true }
-  const untrusted = { settings: settings(), trusted: false }
+  const trusted = { settings: settings(), trusted: true, workspace: tmpdir() }
+  const untrusted = { settings: settings(), trusted: false, workspace: tmpdir() }
 
   it('is null for a command with no template', async () => {
     expect(await prepareCommandRun({ name: 'new', description: 'x' }, '', '/new', trusted)).toBeNull()
@@ -116,6 +116,55 @@ describe('prepareCommandRun', () => {
     const r = await prepareCommandRun(cmd({ source: 'user', allowedTools: 'run_shell(npm' }), '', '/deploy', trusted)
     expect(r?.ok && r.run.turnAllowRules).toBeUndefined()
     expect(r?.ok && r.run.notes[0]).toContain('missing its closing parenthesis')
+  })
+})
+
+describe('prepareCommandRun, dynamic context', () => {
+  const ran = (out: string) => async () => ({ exitCode: 0, stdout: out, stderr: '', timedOut: false, truncated: false })
+
+  it("asks before an untrusted project command's shell context, then sends the filled prompt", async () => {
+    const confirmContext = vi.fn(async () => true)
+    const r = await prepareCommandRun(cmd({ template: 'Diff: !`git diff --stat` for $1' }), 'review', '/deploy review', {
+      settings: settings(),
+      trusted: false,
+      workspace: tmpdir(),
+      confirmContext,
+      runShell: ran(' 2 files changed\n')
+    })
+    expect(confirmContext).toHaveBeenCalledWith({ commands: ['git diff --stat'], sensitiveFiles: [] })
+    expect(r?.ok && r.run.turn.text).toBe('Diff:  2 files changed for review')
+    expect(r?.ok && r.run.turn.invokedAs.typed).toBe('/deploy review')
+  })
+
+  it("runs a trusted folder's or the user's own shell context without asking", async () => {
+    for (const over of [{ trusted: true }, { trusted: false, source: 'user' as const }]) {
+      const confirmContext = vi.fn(async () => true)
+      const r = await prepareCommandRun(cmd({ template: '!`pwd`', ...('source' in over ? { source: over.source } : {}) }), '', '/deploy', {
+        settings: settings(),
+        trusted: over.trusted,
+        workspace: tmpdir(),
+        confirmContext,
+        runShell: ran('/here')
+      })
+      expect(confirmContext).not.toHaveBeenCalled()
+      expect(r?.ok && r.run.turn.text).toBe('/here')
+    }
+  })
+
+  it('stops the send with the reason when the user declines, and leaves first-party templates alone', async () => {
+    const r = await prepareCommandRun(cmd({ template: '!`ls`' }), '', '/deploy', {
+      settings: settings(),
+      trusted: false,
+      workspace: tmpdir(),
+      confirmContext: async () => false
+    })
+    expect(r).toEqual({ ok: false, error: "/deploy wasn't sent: not run: you declined its context" })
+    const builtin = await prepareCommandRun({ name: 'review', description: 'r', template: 'Run !`ls` now' }, '', '/review', {
+      settings: settings(),
+      trusted: false,
+      workspace: tmpdir()
+    })
+    expect(builtin?.ok && builtin.run.turn.text).toBe('Run !`ls` now')
   })
 })
 
