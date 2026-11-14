@@ -5661,9 +5661,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       if (e.type === 'text') {
         retryStreak = 0 // the request got through
         // The reply is streaming: whatever the spinner said before (a tool that has
-        // finished, Thinking) is over. Same word the desktop app's status bar uses.
+        // finished, Thinking) is over. Same word the desktop app's status bar uses. A
+        // screen reader already hears the "houston:" speaker line instead.
         if (!saysResponding) {
-          deps.io.setSpinnerLabel?.('Responding')
+          if (!screenReader) deps.io.setSpinnerLabel?.('Responding')
           saysResponding = true
         }
         const s = md.push(e.delta)
