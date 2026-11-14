@@ -303,7 +303,14 @@ export default function App(): JSX.Element {
   // Tagged with its chat: the Composer remounts per chat and applies a prefill on
   // mount, so one meant for another chat must never reach it.
   const [composerPrefill, setComposerPrefill] = useState<
-    { text: string; images?: ImageAttachment[]; seq: number; conversationId: string | null } | undefined
+    | {
+        text: string
+        images?: ImageAttachment[]
+        seq: number
+        conversationId: string | null
+        kind?: 'edit' | 'suggestion'
+      }
+    | undefined
   >()
   const [canUndoRewind, setCanUndoRewind] = useState(false)
   // The full-size image viewer (a show_images gallery or a tool-card screenshot).
@@ -1971,13 +1978,16 @@ export default function App(): JSX.Element {
 
   // ---- Rewind ----
 
+  // `edit` sets the composer's draft aside until the edit ends; `suggestion` (a
+  // starter or example task) never replaces a draft the user has typed.
   const prefillComposer = useCallback(
-    (text: string, images?: ImageAttachment[]) => {
+    (text: string, images?: ImageAttachment[], kind?: 'edit' | 'suggestion') => {
       setComposerPrefill((prev) => ({
         text,
         ...(images?.length ? { images } : {}),
         seq: (prev?.seq ?? 0) + 1,
-        conversationId: currentId
+        conversationId: currentId,
+        ...(kind ? { kind } : {})
       }))
     },
     [currentId]
@@ -2036,7 +2046,7 @@ export default function App(): JSX.Element {
       setRewindConfirm(null)
       setRewindPickerOpen(false)
       setEditing({ target, mode: 'both' })
-      prefillComposer(target.text, target.images)
+      prefillComposer(target.text, target.images, 'edit')
     },
     [prefillComposer]
   )
@@ -3359,7 +3369,7 @@ export default function App(): JSX.Element {
                 }
                 folderSummary={workspace ? baseName(workspace) : undefined}
                 taskExample={firstTaskExample(workspaceKind)}
-                onUseExample={(task) => prefillComposer(task)}
+                onUseExample={(task) => prefillComposer(task, undefined, 'suggestion')}
                 onConnectModel={() => setConnectOpen(true)}
                 onChooseFolder={() => void onChangeWorkspace()}
                 recentFolders={recentFolders(settings.recentWorkspaces, workspace)}
@@ -3377,7 +3387,10 @@ export default function App(): JSX.Element {
                   />
                 )}
                 {canChat && currentId === null && (
-                  <StarterPrompts prompts={starterPrompts(workspaceKind)} onPick={(task) => prefillComposer(task)} />
+                  <StarterPrompts
+                    prompts={starterPrompts(workspaceKind)}
+                    onPick={(task) => prefillComposer(task, undefined, 'suggestion')}
+                  />
                 )}
                 {!workspace && <p className="welcome__hint">Choose a project folder to begin.</p>}
                 {currentId === null && (
