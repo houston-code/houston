@@ -106,6 +106,17 @@ export function Popover({
     })
   }, [anchorRef, align, gap, atX, atY])
 
+  // A left-pinned menu runs rightward from the trigger, so near the window's right
+  // edge it would be cut off: once it is laid out, slide it left by what it overhangs.
+  // Only ever moves it left, so it settles in one pass.
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || !style || typeof style.left !== 'number') return
+    const width = el.getBoundingClientRect().width
+    const left = Math.max(8, Math.min(style.left, window.innerWidth - width - 8))
+    if (left < style.left) setStyle({ ...style, left })
+  }, [style])
+
   // Track how many popovers are open, for the app-level shortcut guard.
   useEffect(() => {
     openPopoverCount += 1

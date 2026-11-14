@@ -2034,8 +2034,11 @@ body.is-resizing {
 /* ---- Queued-input bar (messages typed mid-run) ---- */
 .queue-bar {
   display: flex;
+  /* Narrow window: the label, the chips and the buttons wrap onto their own lines
+     rather than squash the chips or push Clear out of view. */
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 6px 10px;
   width: 100%;
   margin: 0 0 4px;
   padding: 6px var(--chat-gap);
@@ -2043,11 +2046,11 @@ body.is-resizing {
   color: var(--text-dim);
 }
 .queue-bar__label {
-  flex-shrink: 0;
+  min-width: 0;
 }
 .queue-bar__items {
   display: flex;
-  flex: 1;
+  flex: 1 1 180px;
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;

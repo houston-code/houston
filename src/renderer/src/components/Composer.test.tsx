@@ -152,6 +152,34 @@ describe('Composer', () => {
     expect(props.onSend).not.toHaveBeenCalled()
   })
 
+  it('takes an exactly typed name over a longer one that starts with it', () => {
+    const agents: Command = { name: 'agents', description: 'List the workspace agents' }
+    const agent: Command = { name: 'agent', description: 'Hand a task to an agent' }
+    const props = baseProps({ commands: [agents, agent] })
+    render(<Composer {...props} />)
+    // Tab completes the name typed, not /agents listed before it.
+    const input = type('/agent')
+    fireEvent.keyDown(input, { key: 'Tab' })
+    expect(input.value).toBe('/agent ')
+    // Enter on the exact name runs it.
+    fireEvent.keyDown(type('/agent'), { key: 'Enter' })
+    expect(props.onCommand).toHaveBeenCalledWith(agent, '')
+  })
+
+  it('runs a command on Enter when its alias is typed in full, instead of completing it', () => {
+    const changes: Command = { name: 'changes', description: 'What changed' }
+    const reasoning: Command = { name: 'reasoning', description: 'Thinking effort' }
+    const props = baseProps({ commands: [changes, reasoning] })
+    render(<Composer {...props} />)
+    const input = type('/diff')
+    expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument()
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onCommand).toHaveBeenCalledWith(changes, '')
+    fireEvent.keyDown(type('/think'), { key: 'Enter' })
+    expect(props.onCommand).toHaveBeenCalledWith(reasoning, '')
+    expect(input.value).toBe('')
+  })
+
   it('dismisses the command menu on an outside click', () => {
     render(<Composer {...baseProps()} />)
     type('/ne')
@@ -231,6 +259,26 @@ describe('Composer', () => {
     fireEvent.mouseDown(document.body)
     expect(input).not.toHaveAttribute('aria-controls')
     expect(input).not.toHaveAttribute('aria-activedescendant')
+  })
+
+  it('keeps the highlighted file in view as the arrows move through the @ list', async () => {
+    const files = Array.from({ length: 12 }, (_, i) => `src/file${i}.ts`)
+    stubApi({ listWorkspaceFiles: vi.fn().mockResolvedValue(files) })
+    const scrolled: string[] = []
+    const original = Element.prototype.scrollIntoView
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.textContent ?? '')
+    }
+    try {
+      render(<Composer {...baseProps({ workspace: '/proj' })} />)
+      const input = type('@src')
+      await screen.findByRole('listbox', { name: 'Files' })
+      fireEvent.keyDown(input, { key: 'ArrowUp' }) // wraps to the last file
+      expect(scrolled.at(-1)).toBe('src/file11.ts')
+    } finally {
+      Element.prototype.scrollIntoView = original
+      delete (window as unknown as { api?: ApiStub }).api
+    }
   })
 
   it('shows the disabled reason as the placeholder', () => {
@@ -455,6 +503,41 @@ describe('Composer prompt-history recall', () => {
     expect(input.value).toBe('')
   })
 
+  it('recalls a /command without opening the command menu, so Up keeps walking history', () => {
+    render(<Composer {...baseProps()} />)
+    sendPrompt('an older prompt')
+    sendPrompt('/plan ')
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(input.value).toBe('/plan')
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull()
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(input.value).toBe('an older prompt')
+  })
+
+  it('moves between the lines of a recalled multi-line prompt before switching entries', () => {
+    render(<Composer {...baseProps()} />)
+    sendPrompt('older')
+    sendPrompt('line one\nline two')
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(input.value).toBe('line one\nline two')
+    // On the last line, Up is the caret's (not prevented), and the entry stays.
+    input.setSelectionRange(input.value.length, input.value.length)
+    expect(fireEvent.keyDown(input, { key: 'ArrowUp' })).toBe(true)
+    expect(input.value).toBe('line one\nline two')
+    // On the first line, Up recalls the older entry.
+    input.setSelectionRange(2, 2)
+    fireEvent.keyDown(input, { key: 'ArrowUp' })
+    expect(input.value).toBe('older')
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    expect(input.value).toBe('line one\nline two')
+    // Down on the first line is the caret's too.
+    input.setSelectionRange(0, 0)
+    expect(fireEvent.keyDown(input, { key: 'ArrowDown' })).toBe(true)
+    expect(input.value).toBe('line one\nline two')
+  })
+
   it('does not recall when the field already has a draft (Up moves the caret instead)', () => {
     render(<Composer {...baseProps()} />)
     sendPrompt('history entry')
@@ -479,6 +562,15 @@ describe('Composer edit-last-message (Esc Esc)', () => {
     fireEvent.keyDown(input, { key: 'Escape' })
     fireEvent.keyDown(input, { key: 'Escape' })
     expect(input.value).toBe('the previous question')
+  })
+
+  it('recalls a /command without opening the command menu', () => {
+    render(<Composer {...baseProps({ lastUserMessage: '/plan' })} />)
+    const input = screen.getByRole('textbox') as HTMLTextAreaElement
+    fireEvent.keyDown(input, { key: 'Escape' })
+    fireEvent.keyDown(input, { key: 'Escape' })
+    expect(input.value).toBe('/plan')
+    expect(screen.queryByRole('listbox', { name: 'Commands' })).toBeNull()
   })
 
   it('does not recall on a single Esc', () => {
@@ -545,6 +637,66 @@ describe('Composer rewind (Esc Esc picker, edit and resend)', () => {
     expect(input.value).toBe('changed')
     rerender(<Composer {...baseProps({ prefill: { text: 'edit me', seq: 2 } })} />)
     expect(input.value).toBe('edit me')
+  })
+
+  it('sets the draft and its chips aside for an edit, and puts them back on Cancel edit', () => {
+    const props = baseProps({ conversationId: 'c1' })
+    const { rerender } = render(<Composer {...props} />)
+    const input = type('my unsent draft')
+    fireEvent.paste(input, { clipboardData: { files: [], getData: () => 'z'.repeat(5000) } })
+    expect(screen.getByText('Pasted text')).toBeInTheDocument()
+
+    const edit = { text: 'fix the bug', seq: 1, kind: 'edit' as const }
+    rerender(<Composer {...props} editing={{ label: 'fix the bug', mode: 'both' }} prefill={edit} />)
+    expect(input.value).toBe('fix the bug')
+    // The draft's chip isn't sent inside the edited message.
+    expect(screen.queryByText('Pasted text')).toBeNull()
+
+    // Cancel edit: App clears `editing`; the prefill it last sent stays as it was.
+    rerender(<Composer {...props} prefill={edit} />)
+    expect(input.value).toBe('my unsent draft')
+    expect(screen.getByText('Pasted text')).toBeInTheDocument()
+  })
+
+  it('keeps the saved draft the user\'s own while an edit is open', () => {
+    const props = baseProps({ conversationId: 'c1' })
+    const { rerender, unmount } = render(<Composer {...props} />)
+    type('my unsent draft')
+    rerender(
+      <Composer
+        {...props}
+        editing={{ label: 'fix the bug', mode: 'both' }}
+        prefill={{ text: 'fix the bug', seq: 1, kind: 'edit' }}
+      />
+    )
+    unmount() // a chat switch mid-edit
+    render(<Composer {...props} />)
+    expect((screen.getByRole('textbox') as HTMLTextAreaElement).value).toBe('my unsent draft')
+  })
+
+  it('puts the draft back once the edited message is sent, and sends the edit alone', () => {
+    const props = baseProps({ conversationId: 'c1' })
+    const { rerender } = render(<Composer {...props} />)
+    const input = type('my unsent draft')
+    fireEvent.paste(input, { clipboardData: { files: [], getData: () => 'z'.repeat(5000) } })
+    const edit = { text: 'fix the bug', seq: 1, kind: 'edit' as const }
+    rerender(<Composer {...props} editing={{ label: 'fix the bug', mode: 'both' }} prefill={edit} />)
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onSend).toHaveBeenCalledWith('fix the bug', undefined)
+    rerender(<Composer {...props} prefill={edit} />) // the edit is done
+    expect(input.value).toBe('my unsent draft')
+    expect(screen.getByText('Pasted text')).toBeInTheDocument()
+  })
+
+  it('never replaces a typed draft with a starter suggestion', () => {
+    const { rerender } = render(<Composer {...baseProps()} />)
+    const input = type('my own words')
+    rerender(<Composer {...baseProps({ prefill: { text: 'Explain this repo', seq: 1, kind: 'suggestion' } })} />)
+    expect(input.value).toBe('my own words')
+    expect(screen.getByText('Clear the message box first to use this suggestion.')).toBeInTheDocument()
+    fireEvent.change(input, { target: { value: '' } })
+    rerender(<Composer {...baseProps({ prefill: { text: 'Explain this repo', seq: 2, kind: 'suggestion' } })} />)
+    expect(input.value).toBe('Explain this repo')
   })
 
   it('puts an edited message\'s images back with its text (vision models only)', () => {
@@ -683,6 +835,17 @@ describe('Composer height', () => {
     fireEvent.change(input, { target: { value: 'hi' } })
     expect(input.style.height).toBe('24px')
   })
+
+  it('re-fits the empty field when a suggested next message arrives', () => {
+    const { rerender } = render(<Composer {...baseProps()} />)
+    const input = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement
+    Object.defineProperty(input, 'scrollHeight', {
+      configurable: true,
+      get: () => (input.value.includes('(Tab to use)') ? 72 : 24)
+    })
+    rerender(<Composer {...baseProps({ suggestion: 'now write the migration and its tests' })} />)
+    expect(input.style.height).toBe('72px')
+  })
 })
 
 describe('Composer + attachment menu', () => {
@@ -718,6 +881,18 @@ describe('Composer + attachment menu', () => {
     expect(screen.queryByRole('button', { name: 'Attach image' })).not.toBeInTheDocument()
     openMenu()
     expect(screen.queryByRole('menuitem', { name: /Upload images/ })).not.toBeInTheDocument()
+  })
+
+  it('says how many staged images it removed when the model can\'t see images', async () => {
+    const props = baseProps()
+    const { container, rerender } = render(<Composer {...props} />)
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+    const shot = (name: string) => new File(['x'], name, { type: 'image/png' })
+    fireEvent.change(fileInput, { target: { files: [shot('a.png'), shot('b.png')] } })
+    await waitFor(() => expect(screen.getAllByAltText('attachment')).toHaveLength(2))
+    rerender(<Composer {...props} vision={false} />)
+    expect(screen.queryByAltText('attachment')).toBeNull()
+    expect(screen.getByText("Removed 2 images: this model can't see images.")).toBeInTheDocument()
   })
 
   it('disables "Add current changes" without a workspace', () => {
@@ -975,6 +1150,50 @@ describe('Composer + attachment menu', () => {
       expect(props.onCommand).toHaveBeenCalledWith(expect.objectContaining({ name: 'plan' }), '')
     })
 
+    it('runs a ! line in the terminal instead of steering with it', () => {
+      const onShellEscape = vi.fn()
+      const props = baseProps({ running: true, onSteer: vi.fn(), onShellEscape })
+      render(<Composer {...props} />)
+      const input = type('!npm test')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(onShellEscape).toHaveBeenCalledWith('npm test')
+      expect(props.onSteer).not.toHaveBeenCalled()
+      expect(input.value).toBe('')
+    })
+
+    const attachImage = async (container: HTMLElement): Promise<void> => {
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement
+      fireEvent.change(fileInput, { target: { files: [new File(['x'], 'shot.png', { type: 'image/png' })] } })
+      await screen.findByAltText('attachment')
+    }
+
+    it('queues a message with images on Enter rather than steer only its words', async () => {
+      const props = baseProps({ running: true, onSteer: vi.fn() })
+      const { container } = render(<Composer {...props} />)
+      await attachImage(container)
+      const input = type('match this mockup')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(props.onSteer).not.toHaveBeenCalled()
+      expect(props.onSend).toHaveBeenCalledWith('match this mockup', [
+        expect.objectContaining({ mediaType: 'image/png' })
+      ])
+      expect(screen.getByText("Queued for after this run: a steer can't carry images.")).toBeInTheDocument()
+      expect(screen.queryByAltText('attachment')).toBeNull()
+    })
+
+    it('answers a question with the words and keeps the images for the next message', async () => {
+      const props = baseProps({ running: true, onSteer: vi.fn(), answering: true })
+      const { container } = render(<Composer {...props} />)
+      await attachImage(container)
+      fireEvent.keyDown(type('the blue one'), { key: 'Enter' })
+      expect(props.onSteer).toHaveBeenCalledWith('the blue one')
+      expect(props.onSend).not.toHaveBeenCalled()
+      expect(screen.getByAltText('attachment')).toBeInTheDocument()
+      expect(
+        screen.getByText('Answered with the text only. The image stays here for your next message.')
+      ).toBeInTheDocument()
+    })
+
     it('the Queue button queues while running', () => {
       const props = baseProps({ running: true, onSteer: vi.fn() })
       render(<Composer {...props} />)
@@ -1019,6 +1238,34 @@ describe('Composer + attachment menu', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Send as message' }))
       expect(props.onSend).toHaveBeenCalledWith('# this is actually a heading')
       expect(props.onSaveMemory).not.toHaveBeenCalled()
+    })
+
+    it('drops the prompt once the text changes, so a stale note is never saved', () => {
+      const props = baseProps({ onSaveMemory: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('# prefer YAML')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      expect(screen.getByRole('group', { name: 'Remember instruction' })).toBeInTheDocument()
+      fireEvent.change(input, { target: { value: '# prefer TOML' } })
+      expect(screen.queryByRole('group', { name: 'Remember instruction' })).toBeNull()
+      expect(props.onSaveMemory).not.toHaveBeenCalled()
+      expect(input.value).toBe('# prefer TOML')
+    })
+
+    it('puts the prompt away on Cancel or Escape, keeping the text', () => {
+      const props = baseProps({ onSaveMemory: vi.fn() })
+      render(<Composer {...props} />)
+      const input = type('# prefer YAML')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+      expect(screen.queryByRole('group', { name: 'Remember instruction' })).toBeNull()
+      expect(input.value).toBe('# prefer YAML')
+      fireEvent.keyDown(input, { key: 'Enter' })
+      const esc = fireEvent.keyDown(input, { key: 'Escape' })
+      expect(esc).toBe(false) // handled here, so the app doesn't also read it
+      expect(screen.queryByRole('group', { name: 'Remember instruction' })).toBeNull()
+      expect(props.onSaveMemory).not.toHaveBeenCalled()
+      expect(input.value).toBe('# prefer YAML')
     })
 
     it('does not intercept when there is no memory handler (# is just a message)', () => {
@@ -1119,6 +1366,43 @@ describe('Composer + attachment menu notices', () => {
       await screen.findByText('Attached 2 files; left out the contents of 1 binary file.')
     ).toBeInTheDocument()
   })
+
+  it('says how many files were left out once the message holds all it can', async () => {
+    const picked = (n: number, from = 0) =>
+      Array.from({ length: n }, (_, i) => ({ name: `f${from + i}.ts`, content: 'x', bytes: 1 }))
+    const pickAttachmentFiles = vi.fn().mockResolvedValueOnce(picked(10)).mockResolvedValueOnce(picked(4, 10))
+    stubApi({ pickAttachmentFiles })
+    render(<Composer {...baseProps()} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Attach files/ }))
+    await screen.findByText('f9.ts')
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Attach files/ }))
+    expect(
+      await screen.findByText('Left out 2 files: a message holds up to 12 attachments.')
+    ).toBeInTheDocument()
+    expect(screen.getByText('f11.ts')).toBeInTheDocument()
+    expect(screen.queryByText('f12.ts')).toBeNull()
+  })
+
+  it('counts only the files it attached in the binary-file note', async () => {
+    const text = Array.from({ length: 11 }, (_, i) => ({ name: `f${i}.ts`, content: 'x', bytes: 1 }))
+    stubApi({
+      pickAttachmentFiles: vi.fn().mockResolvedValue([
+        { name: 'logo.png', content: '', bytes: 10, binary: true },
+        ...text,
+        { name: 'icon.png', content: '', bytes: 10, binary: true }
+      ])
+    })
+    render(<Composer {...baseProps()} />)
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Attach files/ }))
+    expect(
+      await screen.findByText(
+        'Attached 12 files; left out the contents of 1 binary file. Left out 1 file: a message holds up to 12 attachments.'
+      )
+    ).toBeInTheDocument()
+  })
 })
 
 describe('Composer suggested next message', () => {
@@ -1187,6 +1471,30 @@ describe('Composer power features', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(props.onSend).toHaveBeenCalledWith(expect.stringContaining('File: a.ts'), undefined)
     expect(props.onSend).toHaveBeenCalledWith(expect.stringContaining('const x = 1'), undefined)
+  })
+
+  it('says a dropped folder can\'t be attached instead of adding a broken chip', async () => {
+    const { container } = render(<Composer {...baseProps()} />)
+    const folder = new File([''], 'proj')
+    const notes = new File(['# notes\n'], 'notes.md', { type: 'text/markdown' })
+    const entry = (isDirectory: boolean) => ({ kind: 'file', webkitGetAsEntry: () => ({ isDirectory }) })
+    fireEvent.drop(container.querySelector('.composer__card')!, {
+      dataTransfer: { files: [folder, notes], items: [entry(true), entry(false)] }
+    })
+    expect(
+      screen.getByText("A folder can't be attached. Drop it outside the message box to open it as the project.")
+    ).toBeInTheDocument()
+    expect(await screen.findByText('notes.md')).toBeInTheDocument()
+    expect(screen.queryByText('proj')).toBeNull()
+  })
+
+  it('says how many dropped files went past what one drop reads', async () => {
+    const { container } = render(<Composer {...baseProps()} />)
+    const files = Array.from({ length: 13 }, (_, i) => new File(['x'], `d${i}.ts`, { type: 'text/plain' }))
+    fireEvent.drop(container.querySelector('.composer__card')!, { dataTransfer: { files } })
+    expect(await screen.findByText('Left out 3 files: you can drop up to 10 at a time.')).toBeInTheDocument()
+    expect(screen.getByText('d9.ts')).toBeInTheDocument()
+    expect(screen.queryByText('d10.ts')).toBeNull()
   })
 
   it('searches sent messages with Ctrl+R and puts the pick in the box', () => {
