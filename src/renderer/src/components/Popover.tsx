@@ -151,6 +151,17 @@ export function Popover({
         onCloseRef.current()
         return
       }
+      // Tab leaves a menu the way it does a native one: the menu closes and focus goes
+      // back to its trigger, instead of the menu staying open while focus wanders off to
+      // the far end of the window. A popover holding a form keeps Tab for its fields.
+      if (e.key === 'Tab') {
+        const menu = ref.current
+        if (!menu || !menu.contains(document.activeElement)) return
+        if (menu.querySelector('input, textarea, select')) return
+        e.preventDefault()
+        onCloseRef.current()
+        return
+      }
       if (rovingRef.current && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
         const menu = ref.current
         if (!menu || !menu.contains(document.activeElement)) return
