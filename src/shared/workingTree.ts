@@ -120,12 +120,23 @@ function parseDiffGitPaths(raw: string): { oldPath: string; newPath: string } | 
   return null
 }
 
-type Pending = FileDiff & { _raw?: string }
+type Pending = FileDiff & { _raw?: string; _modeChanged?: boolean }
 
-/** Resolve a file's display path from its `diff --git` header when none was set. */
+/**
+ * Resolve a file's display path from its `diff --git` header when none was set, and
+ * say why a file with no hunks has nothing to show (it would otherwise expand to an
+ * empty box).
+ */
 function finalizeFile(f: Pending): FileDiff {
   const raw = f._raw
+  const modeChanged = f._modeChanged === true
   delete f._raw
+  delete f._modeChanged
+  if (!f.binary && !f.note && f.hunks.length === 0) {
+    if (f.status === 'renamed') f.note = 'Renamed, no content changes'
+    else if (modeChanged) f.note = 'Only the file mode changed'
+    else if (f.status === 'added' || f.status === 'deleted') f.note = 'Empty file'
+  }
   if (!f.path && raw) {
     const parsed = parseDiffGitPaths(raw)
     if (parsed) {
@@ -171,6 +182,8 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
 
     if (line.startsWith('new file mode')) {
       cur.status = 'added'
+    } else if (line.startsWith('old mode ') || line.startsWith('new mode ')) {
+      cur._modeChanged = true
     } else if (line.startsWith('deleted file mode')) {
       cur.status = 'deleted'
     } else if (line.startsWith('rename from ')) {

@@ -185,7 +185,7 @@ describe('FilesPanel', () => {
     await screen.findByText('src')
 
     fireEvent.change(screen.getByLabelText('Filter files'), { target: { value: 'widget' } })
-    expect(await screen.findByText('src/deep/widget.ts')).toBeInTheDocument()
+    expect((await screen.findAllByTitle('src/deep/widget.ts'))[0]).toBeInTheDocument()
     expect(api.listWorkspaceFiles).toHaveBeenCalledWith('/repo', 'widget')
     // The tree is replaced by results while a query is active.
     expect(screen.queryByText('src')).not.toBeInTheDocument()
