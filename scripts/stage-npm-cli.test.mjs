@@ -115,6 +115,9 @@ function userEnv(base, extra = {}) {
     ...extra
   }
   if (!('NODE_COMPILE_CACHE' in extra)) delete env.NODE_COMPILE_CACHE
+  // A coverage run sets this for the test process, and Node then refuses the cache in
+  // every child: the launcher would be right to do nothing, and these tests would fail.
+  if (!('NODE_DISABLE_COMPILE_CACHE' in extra)) delete env.NODE_DISABLE_COMPILE_CACHE
   return env
 }
 
