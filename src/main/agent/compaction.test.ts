@@ -623,6 +623,12 @@ describe('findCompactionCut', () => {
 })
 
 describe('buildSummaryMessages', () => {
+  it('marks the summary with the head taint it is given, and only then', () => {
+    expect(buildSummaryMessages('S', 'web_fetch')[0]).toMatchObject({ role: 'user', taintSource: 'web_fetch' })
+    expect(buildSummaryMessages('S', null)[0]).not.toHaveProperty('taintSource')
+    expect(buildSummaryMessages('S')[0]).not.toHaveProperty('taintSource')
+  })
+
   it('returns a user/assistant pair so role alternation stays valid', () => {
     const pair = buildSummaryMessages('did stuff')
     expect(pair).toHaveLength(2)

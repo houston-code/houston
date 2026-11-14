@@ -144,6 +144,27 @@ score as an attempt stay inline with a warning, because the agent needs their ex
 The scoring is a heuristic that can be worded around, so this is defense in depth behind
 the approval flow, not a guarantee that a model never acts on injected text.
 
+Once a conversation has taken in such text (or a subagent's or spawned session's
+report), the actions that would let an injected instruction outlive it **ask in every
+mode**, past allow rules and "Allow for run": saving or deleting a memory, and
+launching a session with `spawn_session` or `schedule_run`, whose first message the
+model writes and the new session would otherwise read as the user's. A session launched
+from such a conversation (a spawned one, each run of such a schedule, a proposal the
+user starts) carries that mark, so its own memory writes and launches ask too. A
+scheduled run never runs under a more autonomous mode than the user's current default,
+whatever mode the chat that created it was in.
+
+"Allow for run" is scoped so one approval doesn't widen into unrelated autonomy: it
+covers a tool kind for the chat, except that `schedule_run`, `spawn_session`, and
+`dispatch_writable_agent` each need their own grant, each MCP server is granted
+separately, and network egress is granted per destination. A writable subagent runs
+shell commands, so dispatching one asks wherever shell asks. A PreToolUse hook's
+`approve` stands in only for the ordinary prompt of the user's own mode or rules: it
+is ignored from a project's hooks, and it never skips a check that asks in every mode
+(a managed or project `ask` rule, a shell command that escapes the project or discards
+work, a credential read or write, a tainted memory write or launch, or unconfined shell
+before the user's per-run consent to it).
+
 Reports that demonstrate a way to **bypass** a control that is supposed to hold (for
 example, escaping the shell sandbox, writing outside the workspace without approval,
 reaching a private/metadata network address through a network tool, sending network

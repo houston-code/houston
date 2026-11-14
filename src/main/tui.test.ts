@@ -6848,6 +6848,26 @@ describe('waking at an idle composer', () => {
     expect(t.text()).toContain('background work finished')
   })
 
+  it("keeps a wake note's taint on the turn's message, so memory writes still ask", async () => {
+    const { d, rec } = deps(done)
+    const t = wakeIo()
+    d.io = t.io
+    d.persist = fakePersist().persist
+    let tryWake: ((id: string) => boolean) | null = null
+    d.wake = {
+      register: (fn) => {
+        tryWake = fn
+      },
+      take: () => ({ content: `${SYSTEM_NOTE_PREFIX} A session you started finished.`, taintSource: 'spawned session report' })
+    }
+    const done$ = runTui(opts, d)
+    await vi.waitFor(() => expect(t.isOpen()).toBe(true))
+    expect(tryWake!('conv-1')).toBe(true)
+    await done$
+    expect(rec.runs).toHaveLength(2)
+    expect(rec.runs[1].messages.at(-1)).toMatchObject({ role: 'user', taintSource: 'spawned session report' })
+  })
+
   it('leaves a typed draft alone: no wake, the news waits for the next turn', async () => {
     const { d, rec } = deps(done)
     const t = wakeIo({ draftTyped: true })

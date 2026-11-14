@@ -669,7 +669,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Scheduled runs: persist under userData, fire through the spawn backend just
   // wired above (a fired occurrence is an ordinary background session in the
   // sidebar). start() also catches up occurrences missed while the app was closed.
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
+  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask') })
   setSchedulerBackend(scheduler)
   // Its catch-up run needs the provider keys, so not before the credential store is ready.
   afterReady(() => scheduler.start())

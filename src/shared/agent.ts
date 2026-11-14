@@ -175,6 +175,16 @@ export interface ChatMessage {
    */
   at?: string
   /**
+   * Present on a message that carries text from outside the user with no tool call in
+   * this log to show it: an automated note quoting the reports of sessions this chat
+   * started, or the first message of a session that a chat which had read outside text
+   * spawned or scheduled (whose text the model wrote). Names where the text came from.
+   * Read by the memory taint rule (memoryTaintSource in src/main/agent/memoryTools.ts),
+   * so such a conversation's memory writes and session launches still ask. Never shown,
+   * and providers never see it.
+   */
+  taintSource?: string
+  /**
    * Present on assistant turns: the model that actually served the reply (after a
    * fallback hop, the backup). Display-only; providers never see it.
    */
@@ -248,6 +258,13 @@ export const SYSTEM_NOTE_PREFIX = 'Automated note from Houston (not from the use
 export function systemNoteMessage(text: string): ChatMessage {
   return { role: 'user', content: `${SYSTEM_NOTE_PREFIX} ${text}` }
 }
+
+/**
+ * The {@link ChatMessage.taintSource} on a note quoting the reports of sessions this
+ * chat started: a child may have read attacker-written text, and its summary carries
+ * it here with no tool call behind it.
+ */
+export const CHILD_REPORT_TAINT = 'spawned session report'
 
 export interface ToolSchema {
   name: string

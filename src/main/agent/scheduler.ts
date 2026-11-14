@@ -52,6 +52,13 @@ export interface ScheduledRunInput {
    * sessions use the default at the time they fire.
    */
   reasoningEffort?: ReasoningEffort
+  /**
+   * Set when the creating chat had taken in outside text (see memoryTaintSource): the
+   * stored prompt is model-written text from that chat. Each fired session's first
+   * message carries it (see SpawnSessionInput.taintSource), so its memory writes and
+   * launches still ask.
+   */
+  taintSource?: string
 }
 
 /** A stored schedule, as reported back to the model and shown in listings. */

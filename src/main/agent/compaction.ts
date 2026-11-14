@@ -568,10 +568,20 @@ function mergeUserMessages(a: ChatMessage, b: ChatMessage): ChatMessage {
  * The synthetic user/assistant pair that stands in for the compacted head. Using a
  * pair (not a lone message) keeps role alternation valid and the first sent message
  * a `user` message.
+ *
+ * `taintSource` is the compacted head's taint (memoryTaintSource of the messages the
+ * summary replaces). A rewrite that drops those messages from the log (`/compact`)
+ * would otherwise drop the tool calls that showed the chat read outside text, and a
+ * long tainted chat would stop asking before memory writes and session launches the
+ * moment it compacted. Kept on the summary message, which the taint rule reads.
  */
-export function buildSummaryMessages(summary: string): ChatMessage[] {
+export function buildSummaryMessages(summary: string, taintSource?: string | null): ChatMessage[] {
   return [
-    { role: 'user', content: `${COMPACTION_SUMMARY_PREFIX}\n\n${summary}` },
+    {
+      role: 'user',
+      content: `${COMPACTION_SUMMARY_PREFIX}\n\n${summary}`,
+      ...(taintSource ? { taintSource } : {})
+    },
     { role: 'assistant', content: COMPACTION_ACK }
   ]
 }

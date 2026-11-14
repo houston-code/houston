@@ -1786,7 +1786,11 @@ On any single tool call you can:
 - **deny**
 - **allow for the run:** auto-approve that kind of tool for the rest of the
   conversation (for a network call, just that one destination, which the prompt
-  names)
+  names). A few calls get a grant of their own, because each starts work that keeps
+  going without you: `schedule_run`, `spawn_session`, and `dispatch_writable_agent`
+  are each covered only by "Allow for run" on that same tool, never by one on a file
+  edit (or on each other). An MCP grant covers that one server's tools, not every
+  server's.
 - **always allow / always deny:** save a permission rule so the choice persists
 
 **Keys in the desktop app.** A waiting approval answers to `Y` (allow), `A` (allow for
@@ -2066,7 +2070,10 @@ project's agent wins if both use the same name.
 - **Read-only by default.** A subagent can't edit files or run commands.
 - **Writable** (`write: true`) subagents are dispatched with `dispatch_writable_agent`,
   which asks for approval because it grants write access. One approval covers the
-  whole delegated task's local actions, confined to the project.
+  whole delegated task's local actions, confined to the project. Since that includes
+  running shell commands, it asks wherever shell commands ask: in every mode except
+  full auto, auto-approve edits included. "Allow for run" on it, or an allow rule,
+  stops the asking.
 - **Its report comes with evidence.** A writable subagent works under the same rules
   as the main agent about tests: it never deletes, skips, or weakens one to pass, and
   never calls unchecked work tested. Its report reaches the main agent followed by
@@ -2246,6 +2253,13 @@ A subagent reports back into the current turn. `spawn_session` instead spins off
   ask for that. A repository with no commits yet has nothing to branch from, so the
   session shares the folder.
 - **Never more permissive.** It inherits the current approval policy.
+- **After outside text, it asks.** Once the chat has read anything from outside (see
+  "Untrusted content" under "Memory across sessions"), `spawn_session` and
+  `schedule_run` ask you first in every mode, past an allow rule and "Allow for run":
+  the agent writes the new session's first message, which that session reads as yours.
+  A session started from such a chat (including a proposal you start) is marked, so
+  its own memory saves ask too. A chat that spawned a session counts as having read
+  outside text once that session can report back.
 - **When it ends,** the chat that started it gets a short report (title, how it ended,
   the start of its answer) as a Houston note, and you see a notice in the transcript.
   The report says whether it finished, failed, was stopped, or hit a limit (the step
@@ -2338,9 +2352,12 @@ what branch each one is on. Pick a number to open one.
 Ask the agent for a recurring (or one-time) background run, such as "every morning
 at 9, run the tests and summarize failures", and it stores a schedule with
 `schedule_run`. At each occurrence, a fresh session starts with the stored prompt,
-under the approval policy of the chat that created it. A schedule made from a chat
-in one of Houston's worktrees runs in the main checkout instead, since that
-worktree goes away with its chat.
+under the approval policy of the chat that created it, capped at your default approval
+mode at the time it runs (Settings > Permissions > Approval mode). So a schedule made in
+a full-auto chat runs in auto-edit once your default is auto-edit, and lowering your
+default lowers every schedule's next run. A schedule made from a chat in one of
+Houston's worktrees runs in the main checkout instead, since that worktree goes away
+with its chat.
 
 ### Schedule formats
 
@@ -2369,7 +2386,8 @@ failed rather than left running. Each has:
 **New scheduled run** opens a form: the task each run starts with, an optional name, when
 it runs (checked as you type, showing the first run time), the folder, the model, and the
 approval mode (Plan mode by default). A run that needs your approval waits in its chat
-until you answer.
+until you answer. As with schedules the agent creates, a run never uses a looser mode
+than your default at the time it runs.
 
 The agent manages the same list:
 
@@ -2528,7 +2546,7 @@ For finer control, a hook prints a single JSON object on stdout:
 
 | Field | Effect |
 | --- | --- |
-| `decision` | `"block"` vetoes the action even on a zero exit; `"approve"` (PreToolUse only) skips the approval prompt. A block always wins over an approve. |
+| `decision` | `"block"` vetoes the action even on a zero exit; `"approve"` (PreToolUse only) skips the prompt your approval mode or one of your own `ask` rules would show (see below). A block always wins over an approve. |
 | `reason` | a human-readable explanation, fed back to the agent (and shown with a block) |
 | `additionalContext` | extra context added where the event fires: the tool result (PreToolUse), your message (UserPromptSubmit), the system prompt (SessionStart), or the material being summarized (PreCompact) |
 | `updatedInput` | (PreToolUse only) replacement arguments the tool runs with |
@@ -2540,6 +2558,15 @@ against your permission rules again, so the approval decision is made on what wi
 actually run: a rewrite that lands on a deny rule is refused outright, even if the
 hook also approved. A hook can tighten policy, but it can never loosen a managed or
 project deny.
+
+**What an approve can skip.** Only your own hooks (Settings) can approve; an `approve`
+from a project's `.houston/settings.json` hook is ignored, even in a trusted folder.
+And it skips only the ordinary prompt: the one your mode shows, or one from your own
+`ask` rule. The checks that ask in every mode still ask: a managed or project `ask`
+rule, a shell command that reaches outside the project or can throw away work, reading
+or changing a credential file, a memory save or session launch after the chat has read
+outside text, and, on a host without a sandbox, running shell unconfined before you
+have chosen "Allow for run" on such a prompt.
 
 ### How hooks run
 
@@ -3040,8 +3067,11 @@ or text copied from web pages or tool output.
   "ask every time" mode, and runs on its own in auto-edit and full auto. Plan mode
   refuses it.
 - **Untrusted content.** Once a conversation has read anything from outside (a web
-  page, a GitHub body, an MCP result, a subagent's report, or a shell command that
-  fetches, like `curl` or `git pull`), every memory save asks you first, in every mode.
+  page, a GitHub body, an MCP result, a subagent's report, a spawned session's report,
+  or a shell command that fetches, like `curl` or `git pull`), every memory save asks
+  you first, in every mode. So does a session that such a chat spawned or scheduled,
+  since its first message is text the agent wrote there. Compacting the chat
+  (`/compact` included) doesn't clear it.
   Neither an allow rule, "Allow for run", nor full auto skips it: a memory rides along
   in every later conversation, which is exactly where an injected instruction would
   try to persist.

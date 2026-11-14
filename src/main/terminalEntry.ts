@@ -421,7 +421,7 @@ export function wireTerminalSessionBackends(opts: {
     })
   })
 
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
+  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome, () => getSettings().approvalPolicy ?? 'ask') })
   setSchedulerBackend(scheduler)
   if (opts.startScheduler) scheduler.start()
 
@@ -737,7 +737,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
           setWakeHost({ enabled: () => getSettings().backgroundWake !== false, start: tryWake }),
         take: (id) => {
           clearChildReportFlag(id)
-          return wakeNote(takeBackgroundEvents(id), takeChildReports(id))?.content ?? null
+          const note = wakeNote(takeBackgroundEvents(id), takeChildReports(id))
+          return note ? { content: note.content, ...(note.taintSource ? { taintSource: note.taintSource } : {}) } : null
         }
       },
       checkUpdate: async () => {
