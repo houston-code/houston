@@ -631,14 +631,14 @@ export function Transcript({
   function handleScroll(): void {
     const el = containerRef.current
     if (!el) return
-    const movedDown = el.scrollTop > lastTopRef.current
+    const movedUp = el.scrollTop < lastTopRef.current
     lastTopRef.current = el.scrollTop
     if (isNearBottom(el)) pinnedRef.current = true
-    // A view that moved down while pinned was pushed by layout (rows above settling to
-    // their real height), not by the reader, who can't scroll down past the bottom:
-    // stay pinned and catch up. Only a move up, or a view left short of the bottom
-    // without moving, means the reader went somewhere else.
-    else if (!(pinnedRef.current && movedDown)) pinnedRef.current = false
+    // The reader can only leave the bottom by scrolling up. A view that moved down while
+    // pinned, or stayed put while the chat grew beneath it (a row laid out at its
+    // placeholder height settling to its real one a frame later), was moved by layout:
+    // stay pinned and catch up.
+    else if (movedUp || !pinnedRef.current) pinnedRef.current = false
     else followBottom()
     setShowJump(!pinnedRef.current)
     const divider = newRef.current
