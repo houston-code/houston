@@ -19,13 +19,13 @@ describe('McpAddPanels', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Review Git' }))
     const form = screen.getByRole('form', { name: 'Review Git' })
     expect((screen.getByLabelText('Arguments, one per line') as HTMLTextAreaElement).value).toBe(
-      'mcp-server-git\n--repository\n/w/app'
+      'mcp-server-git@2026.11.11\n--repository\n/w/app'
     )
     expect(document.activeElement).toBe(screen.getByLabelText('Id'))
     expect(onAdd).not.toHaveBeenCalled()
     fireEvent.submit(form)
     expect(onAdd).toHaveBeenCalledWith([
-      { id: 'git', transport: 'stdio', command: 'uvx', args: ['mcp-server-git', '--repository', '/w/app'], enabled: false }
+      { id: 'git', transport: 'stdio', command: 'uvx', args: ['mcp-server-git@2026.11.11', '--repository', '/w/app'], enabled: false }
     ])
     expect(screen.getByRole('status').textContent).toMatch(/switched off/)
   })

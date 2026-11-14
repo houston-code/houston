@@ -13,6 +13,20 @@ describe('MCP_CATALOG', () => {
     }
   })
 
+  it('pins every package it runs to an exact version', () => {
+    // npx -y / uvx run whatever the registry calls newest; a pin runs the reviewed
+    // release. An exact version only: no tag (`latest`), range, or wildcard.
+    const exact = /@\d+\.\d+\.\d+$/
+    for (const e of MCP_CATALOG) {
+      if (e.transport !== 'stdio') continue
+      const pkg = e.command === 'npx' ? e.args.find((a) => a !== '-y' && !a.startsWith('-')) : e.args[0]
+      expect(pkg, e.id).toBeDefined()
+      expect(pkg!, e.id).toMatch(exact)
+      // A scoped npm name keeps its leading `@`; the version is the part after the last one.
+      expect(pkg!.lastIndexOf('@'), e.id).toBeGreaterThan(0)
+    }
+  })
+
   it('pins nothing to a local path and holds no secret values', () => {
     for (const e of MCP_CATALOG) {
       for (const a of e.args) expect(a === PROJECT_PLACEHOLDER || !a.startsWith('/')).toBe(true)
@@ -30,14 +44,14 @@ describe('catalogServer', () => {
       id: 'filesystem',
       transport: 'stdio',
       command: 'npx',
-      args: ['-y', '@modelcontextprotocol/server-filesystem', '/w/my app'],
+      args: ['-y', '@modelcontextprotocol/server-filesystem@2.3.0', '/w/my app'],
       enabled: false
     })
   })
 
   it('leaves the placeholder with no project, which review then asks to replace', () => {
     const s = catalogServer(fs, null)
-    expect(s.args).toEqual(['-y', '@modelcontextprotocol/server-filesystem', '{project}'])
+    expect(s.args).toEqual(['-y', '@modelcontextprotocol/server-filesystem@2.3.0', '{project}'])
     expect(serverProblem(s, [])).toBe('Replace {project} with a folder path.')
     expect(serverProblem({ ...s, args: ['-y', ' '] }, [])).toBe('Fill in every argument, or remove the empty ones.')
   })

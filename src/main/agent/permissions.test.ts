@@ -51,6 +51,34 @@ describe('permissionSubject', () => {
     expect(permissionSubject('memory_delete', { scope: 'repo', id: 'm_1' })).toBe('repo')
   })
 
+  it("reads an MCP resource or prompt call as the server's namespace plus what it asks for", () => {
+    expect(permissionSubject('mcp_read_resource', { server: 'proj-db', uri: 'db://rows' })).toBe('mcp__proj-db__db://rows')
+    expect(permissionSubject('mcp_get_prompt', { server: 'proj-db', name: 'review', arguments: {} })).toBe(
+      'mcp__proj-db__review'
+    )
+    // Matched as written, not as a path: a `..` can't climb out of the server prefix,
+    // whatever the roots.
+    const deny: PermissionRule[] = [{ action: 'deny', tool: '*', match: 'mcp__proj-db__*' }]
+    for (const uri of ['db://rows', '../../../x', 'a/../../..', '/etc/passwd']) {
+      expect(matchRule(deny, 'mcp_read_resource', permissionSubject('mcp_read_resource', { server: 'proj-db', uri }), ['/w'])).toBe(
+        'deny'
+      )
+    }
+    expect(matchRule(deny, 'mcp_read_resource', permissionSubject('mcp_read_resource', { server: 'web', uri: 'x' }), ['/w'])).toBeNull()
+  })
+
+  it('saves an MCP resource "Always allow" for that server and uri, never tool-wide', () => {
+    expect(persistedRules('allow', 'mcp_read_resource', { server: 'proj-db', uri: 'db://rows' })).toEqual([
+      { action: 'allow', tool: 'mcp_read_resource', match: 'mcp__proj-db__db://rows', exact: true }
+    ])
+    // A malformed call (no server) saves a rule that matches no real call, not `*`.
+    const blank = persistedRules('allow', 'mcp_read_resource', { uri: 'db://rows' })
+    expect(blank.map((r) => r.match)).not.toContain('*')
+    expect(
+      matchRule(blank, 'mcp_read_resource', permissionSubject('mcp_read_resource', { server: 'proj-db', uri: 'db://rows' }))
+    ).toBeNull()
+  })
+
   it('lets a rule target one memory scope', () => {
     const rules: PermissionRule[] = [{ tool: 'memory_save', match: 'global', action: 'deny' }]
     expect(matchRule(rules, 'memory_save', permissionSubject('memory_save', { scope: 'global' }), ['/w'])).toBe('deny')

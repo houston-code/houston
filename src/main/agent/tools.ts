@@ -87,6 +87,7 @@ import { cwdFromRoot, runInSession, shellCwdLabel, shellCwdLine, type ShellSessi
 import {
   presentUntrusted,
   presentUntrustedInline,
+  stripBidiControls,
   untrustedPreamble,
   type UntrustedPart
 } from './untrusted'
@@ -2557,6 +2558,29 @@ export function sandboxedLoopbackHint(
   )
 }
 
+/** The longest page title {@link envelopeTitle} keeps. */
+const MAX_ENVELOPE_TITLE_CHARS = 120
+
+/**
+ * A page's `<title>`, made fit for the trusted first line of view_localhost's result,
+ * outside the fence. The page picks its title, and a dev server can serve one built
+ * from anything (stored user input, fetched data), of any length and with line breaks,
+ * so a title could otherwise write paragraphs into the slot the agent reads as
+ * Houston's framing. Control characters and line breaks become spaces, bidi controls
+ * and the invisible zero-width characters go, whitespace runs become one space, and
+ * it is cut to {@link MAX_ENVELOPE_TITLE_CHARS}. Unlike an HTTP reason phrase, a title
+ * is often not English, so non-ASCII text is kept (the joiners emoji need included).
+ */
+function envelopeTitle(title: string): string {
+  const clean = stripBidiControls(title)
+    .replace(/[\p{Cc}\u2028\u2029]/gu, ' ')
+    .replace(/[\u200B\u2060\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const chars = [...clean]
+  return chars.length > MAX_ENVELOPE_TITLE_CHARS ? `${chars.slice(0, MAX_ENVELOPE_TITLE_CHARS).join('')}…` : clean
+}
+
 const viewLocalhost: ToolDef = {
   kind: 'network',
   summarize: (a) => {
@@ -2674,7 +2698,8 @@ const viewLocalhost: ToolDef = {
     })
 
     const lines: string[] = []
-    lines.push(`Loaded ${cap.finalUrl}${cap.title ? `: "${cap.title}"` : ''} (${cap.width}×${cap.height})`)
+    const title = envelopeTitle(cap.title)
+    lines.push(`Loaded ${cap.finalUrl}${title ? `: "${title}"` : ''} (${cap.width}×${cap.height})`)
     const note = await ownerNote
     if (note) lines.push(note)
     if (cap.loadError) {
@@ -2687,7 +2712,9 @@ const viewLocalhost: ToolDef = {
     }
     if (cap.steps) {
       lines.push('Steps:')
-      for (const r of cap.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step}: ${r.error}`)
+      // A failed step's error is fenced below rather than written here: it can be the
+      // page's own words (an exception the page threw, text it rendered).
+      for (const r of cap.steps) lines.push(r.ok ? `  ✓ ${r.step}` : `  ✗ ${r.step} (its error is in "Step errors" below)`)
       const notRun = steps.length - cap.steps.length
       if (notRun > 0) lines.push(`  (${notRun} later step${notRun === 1 ? '' : 's'} not run)`)
       lines.push(`Now at ${cap.finalUrl}`)
@@ -2738,6 +2765,14 @@ const viewLocalhost: ToolDef = {
     // can carry text from anywhere (stored user input, fetched data, third-party
     // scripts), so both are fenced. Empty ones are reported in the trusted envelope.
     const parts: UntrustedPart[] = []
+    const failed = (cap.steps ?? []).filter((r) => !r.ok)
+    if (failed.length) {
+      parts.push({
+        label: 'Step errors:',
+        text: failed.map((r) => `${r.step}: ${r.error ?? 'failed'}`).join('\n'),
+        source: `${cap.finalUrl} (step errors)`
+      })
+    }
     if (cap.pageText) {
       parts.push({
         label: cap.pageTextTruncated
@@ -2763,14 +2798,13 @@ const viewLocalhost: ToolDef = {
       envelope: lines.join('\n'),
       parts,
       preamble: untrustedPreamble(
-        "the loaded page's visible text and console output",
+        "the loaded page's visible text, console output, and step errors",
         'A local dev server can serve text from anywhere (stored user input, fetched data, third-party scripts)'
       ),
       subject: 'page',
       toolNames: builtinToolNames(),
-      // The title and a failed step's error can carry the page's own words, and both
-      // render outside the fence.
-      alsoScore: [cap.title, ...(cap.steps ?? []).map((r) => r.error ?? '')].join('\n')
+      // The title carries the page's own words and renders outside the fence, clamped.
+      alsoScore: title
     })
   }
 }
