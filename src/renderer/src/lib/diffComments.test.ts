@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { anchorComments, clearAllDrafts, commentPlace, draftKey, getDrafts, newCommentId, setDrafts, shownLines, sortComments, type DraftComment } from './diffComments'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { anchorComments, clearAllDrafts, commentPlace, draftKey, forgetLoadedDrafts, getDrafts, MAX_SAVED_COMMENTS, newCommentId, setDrafts, shownLines, sortComments, type DraftComment } from './diffComments'
 
 const c = (path: string, line: number, side: 'old' | 'new' = 'new'): DraftComment => ({
   id: newCommentId(),
@@ -22,6 +22,49 @@ describe('diffComments', () => {
     setDrafts(a, [])
     expect(getDrafts(a)).toEqual([])
     expect(draftKey(null, null)).not.toBe(draftKey('', '/ws'))
+  })
+
+  it('keeps drafts through a reload, like the composer draft', () => {
+    const a = draftKey('c1', '/ws')
+    const saved = [c('x', 1), c('y', 2, 'old')]
+    setDrafts(a, saved)
+    forgetLoadedDrafts()
+    expect(getDrafts(a)).toEqual(saved)
+    setDrafts(a, [])
+    forgetLoadedDrafts()
+    expect(getDrafts(a)).toEqual([])
+  })
+
+  it('reads malformed or unavailable storage as no drafts, and drops bad entries', () => {
+    const a = draftKey('c1', '/ws')
+    localStorage.setItem(`houston.diffComments:${encodeURIComponent(a)}`, '{not json')
+    expect(getDrafts(a)).toEqual([])
+    const good = c('x', 1)
+    localStorage.setItem(
+      `houston.diffComments:${encodeURIComponent(a)}`,
+      JSON.stringify([good, { id: 1 }, { ...good, side: 'left' }, { ...good, line: 1.5 }])
+    )
+    expect(getDrafts(a)).toEqual([good])
+  })
+
+  it('saves at most MAX_SAVED_COMMENTS', () => {
+    const a = draftKey('c1', '/ws')
+    setDrafts(a, Array.from({ length: MAX_SAVED_COMMENTS + 3 }, (_, i) => c('x', i + 1)))
+    forgetLoadedDrafts()
+    expect(getDrafts(a)).toHaveLength(MAX_SAVED_COMMENTS)
+  })
+
+  it('keeps drafts in memory when storage refuses them', () => {
+    const a = draftKey('c1', '/ws')
+    const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError')
+    })
+    try {
+      setDrafts(a, [c('x', 1)])
+      expect(getDrafts(a)).toHaveLength(1)
+    } finally {
+      spy.mockRestore()
+    }
   })
 
   it('orders comments by file, line, and removed line first', () => {

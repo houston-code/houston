@@ -31,6 +31,31 @@ export function settingsPatch(base: AppSettings, next: AppSettings): Partial<App
   return any ? (patch as Partial<AppSettings>) : null
 }
 
+/**
+ * `target` with the derived flags (a provider's stored key, the search keys, an MCP
+ * server's OAuth sign-in) taken from `current`. Undo restores an older copy of the
+ * settings, but a key saved or removed since then lives in the OS secret store, which
+ * the undo doesn't touch, so the older copy's flags would misreport it.
+ */
+export function withDerivedFlags(target: AppSettings, current: AppSettings): AppSettings {
+  return {
+    ...target,
+    providers: target.providers.map((p) => {
+      const now = current.providers.find((x) => x.id === p.id)
+      return now ? { ...p, hasKey: now.hasKey } : p
+    }),
+    searchKeyStatus: current.searchKeyStatus,
+    ...(target.mcpServers
+      ? {
+          mcpServers: target.mcpServers.map((sv) => {
+            const now = current.mcpServers?.find((x) => x.id === sv.id)
+            return now ? { ...sv, hasOAuth: now.hasOAuth } : sv
+          })
+        }
+      : {})
+  }
+}
+
 /** An entry's identity for {@link mergeList}, ignoring the derived key flag. */
 function entryId(v: unknown): string {
   return JSON.stringify(v && typeof v === 'object' && !Array.isArray(v) ? { ...v, hasKey: undefined } : v)
@@ -91,10 +116,18 @@ export function useAutosave({
   /** Where the editable fields live; focus inside one of its text fields defers the save. */
   containerRef: RefObject<HTMLElement | null>
   onSaved: (fresh: AppSettings) => void
-  onError: (message: string) => void
+  /** Told about a failed save (the returned `error` holds it too, until a save lands). */
+  onError?: (message: string) => void
   delayMs?: number
-}): { status: SaveStatus; flush: () => Promise<void>; undo: (() => void) | null } {
+}): {
+  status: SaveStatus
+  /** Why the last save failed, until a later one succeeds. */
+  error: string | null
+  flush: () => Promise<void>
+  undo: (() => void) | null
+} {
   const [status, setStatus] = useState<SaveStatus>('idle')
+  const [error, setError] = useState<string | null>(null)
   // What is stored, as this panel last wrote or read it.
   const baseline = useRef(initial)
   const working = useRef(settings)
@@ -142,12 +175,15 @@ export function useAutosave({
         baseline.current = next
         setUndoTo(undoing.current ? null : replaced)
         undoing.current = false
+        setError(null)
         setStatus('saved')
         onSavedRef.current(fresh)
       } catch (e) {
         failed.current = JSON.stringify(patch)
+        const message = `Could not save settings: ${(e as Error).message}`
+        setError(message)
         setStatus('error')
-        onErrorRef.current(`Could not save settings: ${(e as Error).message}`)
+        onErrorRef.current?.(message)
       } finally {
         inFlight.current = null
         setTick((t) => t + 1)
@@ -182,8 +218,8 @@ export function useAutosave({
     ? (): void => {
         setUndoTo(null)
         undoing.current = true
-        setSettings(undoTo)
+        setSettings(withDerivedFlags(undoTo, working.current))
       }
     : null
-  return { status, flush, undo }
+  return { status, error, flush, undo }
 }

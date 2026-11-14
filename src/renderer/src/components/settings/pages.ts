@@ -121,7 +121,7 @@ export const PAGES: SettingsPage[] = [
       },
       {
         id: 'context-window',
-        keys: ['compactionThreshold', 'shellOutputMaxBytes'],
+        keys: ['compactionThreshold', 'compactionThresholdPercent', 'shellOutputMaxBytes'],
         Component: ContextWindowSection,
         keywords: ['compaction', 'compact', 'tokens', 'output limit', 'truncate', 'memory']
       },

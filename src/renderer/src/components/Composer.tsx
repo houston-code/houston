@@ -270,9 +270,11 @@ export function Composer({
   onCancelEdit?: () => void
   /**
    * Text (and images) to put in the composer: an edited message. A new `seq` puts
-   * it there again.
+   * it there again. `edit` holds the unsent draft aside until the edit ends (Cancel
+   * edit, or the edited message is sent) and then puts it back; `suggestion` (a
+   * starter or example task) never replaces a draft the user has typed.
    */
-  prefill?: { text: string; images?: ImageAttachment[]; seq: number }
+  prefill?: { text: string; images?: ImageAttachment[]; seq: number; kind?: 'edit' | 'suggestion' }
   /**
    * Esc Esc on an empty field opens the rewind picker. Absent: Esc Esc recalls the
    * last message into the field instead.
@@ -292,6 +294,16 @@ export function Composer({
   const [context, setContext] = useState<ContextAttachment[]>(() =>
     loadComposerContext(conversationId)
   )
+  // Read by the attach paths, which may add several chips before the next render.
+  const contextRef = useRef(context)
+  contextRef.current = context
+  // The draft an edit prefill set aside (text, chips, images), put back when the edit
+  // ends. While it is held, it is what gets saved as this chat's draft.
+  const [editStash, setEditStash] = useState<{
+    text: string
+    context: ContextAttachment[]
+    images: ImageAttachment[]
+  } | null>(null)
   const [mention, setMention] = useState<MentionToken | null>(null)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [mentionIndex, setMentionIndex] = useState(0)
@@ -343,23 +355,20 @@ export function Composer({
   // Timestamp of the last Escape, for detecting the Esc-Esc "edit last message" chord.
   const lastEscAt = useRef(0)
 
-  // If the user switches to a model that can't see images, drop any pending
-  // attachments so they aren't silently sent to a model that will ignore them.
-  useEffect(() => {
-    if (!vision) setImages((prev) => (prev.length ? [] : prev))
-  }, [vision])
-
   // Persist the unsent draft (per conversation) so it survives an app restart.
   // Debounced so a large pasted block isn't re-serialized to storage on every
   // later keystroke; the unmount effect below flushes the latest text so a fast
   // chat switch (within the debounce window) can't lose it. `conversationId` is
-  // fixed for the component's lifetime (App.tsx keys the Composer by it).
-  const draftRef = useRef({ conversationId, text, context })
-  draftRef.current = { conversationId, text, context }
+  // fixed for the component's lifetime (App.tsx keys the Composer by it). While an
+  // edit is open, the draft is the one it set aside, not the message being edited.
+  const draftText = editStash ? editStash.text : text
+  const draftContext = editStash ? editStash.context : context
+  const draftRef = useRef({ conversationId, text: draftText, context: draftContext })
+  draftRef.current = { conversationId, text: draftText, context: draftContext }
   useEffect(() => {
-    const t = setTimeout(() => saveComposerDraft(conversationId, text, context), DRAFT_SAVE_MS)
+    const t = setTimeout(() => saveComposerDraft(conversationId, draftText, draftContext), DRAFT_SAVE_MS)
     return () => clearTimeout(t)
-  }, [conversationId, text, context])
+  }, [conversationId, draftText, draftContext])
   useEffect(
     () => () => {
       const { conversationId: cid, text: txt, context: ctx } = draftRef.current
@@ -387,7 +396,7 @@ export function Composer({
     }
     el.style.height = `${Math.min(height, MAX_TEXTAREA_PX)}px`
   }, [])
-  useEffect(fitHeight, [text, disabled, disabledReason, running, answering, fitHeight])
+  useEffect(fitHeight, [text, disabled, disabledReason, running, answering, suggestion, fitHeight])
   useEffect(() => {
     const el = ref.current
     if (!el || typeof ResizeObserver === 'undefined') return
@@ -429,6 +438,18 @@ export function Composer({
     noticeTimer.current = setTimeout(() => setNotice(null), 3500)
   }
 
+  // If the user switches to a model that can't see images, drop any pending
+  // attachments so they aren't silently sent to a model that will ignore them, and
+  // say so rather than let them vanish.
+  useEffect(() => {
+    if (vision || images.length === 0) return
+    const n = images.length
+    setImages([])
+    flashNotice(`Removed ${n === 1 ? '1 image' : `${n} images`}: this model can't see images.`)
+    // flashNotice only sets state; the effect is about the model and the staged images.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vision, images.length])
+
   const addFiles = async (files: File[]): Promise<void> => {
     const read = await Promise.all(files.map(readImageFile))
     const valid = read.filter((x): x is ImageAttachment => x !== null)
@@ -446,8 +467,46 @@ export function Composer({
   const addImage = (img: ImageAttachment): void =>
     setImages((prev) => [...prev, img].slice(0, MAX_ATTACHMENTS))
 
-  const addContext = (att: ContextAttachment): void =>
-    setContext((prev) => [...prev, att].slice(0, MAX_CONTEXT_ATTACHMENTS))
+  // Add chips up to the cap and return how many fit; the caller says what was left out.
+  const addContextItems = (atts: ContextAttachment[]): number => {
+    const room = Math.max(0, MAX_CONTEXT_ATTACHMENTS - contextRef.current.length)
+    const kept = atts.slice(0, room)
+    if (kept.length > 0) {
+      contextRef.current = [...contextRef.current, ...kept]
+      setContext((prev) => [...prev, ...kept].slice(0, MAX_CONTEXT_ATTACHMENTS))
+    }
+    return kept.length
+  }
+
+  const addContext = (att: ContextAttachment): void => {
+    if (addContextItems([att]) === 0) {
+      flashNotice(`A message holds up to ${MAX_CONTEXT_ATTACHMENTS} attachments. Remove one to add another.`)
+    }
+  }
+
+  // Attach picked or dropped files as chips, then say what didn't make it: the
+  // contents of binary files, and files past the chip cap (or past what one drop reads,
+  // `overDropCap`).
+  const attachPickedFiles = (files: PickedFile[], overDropCap = 0): void => {
+    const added = addContextItems(files.map(fileToContext))
+    const overChipCap = files.length - added
+    const binary = files.slice(0, added).filter((f) => f.binary).length
+    const notes: string[] = []
+    if (binary) {
+      notes.push(
+        `Attached ${added} file${added === 1 ? '' : 's'}; left out the contents of ${binary} binary file${binary === 1 ? '' : 's'}.`
+      )
+    }
+    const leftOut = overChipCap + overDropCap
+    if (leftOut) {
+      const why =
+        overChipCap > 0
+          ? `a message holds up to ${MAX_CONTEXT_ATTACHMENTS} attachments`
+          : `you can drop up to ${MAX_ATTACHMENT_FILES} at a time`
+      notes.push(`Left out ${leftOut} file${leftOut === 1 ? '' : 's'}: ${why}.`)
+    }
+    if (notes.length) flashNotice(notes.join(' '))
+  }
 
   const removeContext = (id: string): void =>
     setContext((prev) => prev.filter((a) => a.id !== id))
@@ -548,17 +607,7 @@ export function Composer({
     closeAttach()
     const files = await window.api.pickAttachmentFiles()
     if (files.length === 0) return
-    let added = 0
-    for (const f of files) {
-      addContext(fileToContext(f))
-      added++
-    }
-    const binary = files.filter((f) => f.binary).length
-    if (binary) {
-      flashNotice(
-        `Attached ${added} file${added === 1 ? '' : 's'}; left out the contents of ${binary} binary file${binary === 1 ? '' : 's'}.`
-      )
-    }
+    attachPickedFiles(files)
   }
 
   const addFolder = async (): Promise<void> => {
@@ -663,8 +712,9 @@ export function Composer({
     if (files.length === 0) {
       // A very large paste (a log, a whole file) folds into a chip so the message box
       // stays usable; its text is sent as pasted, and Expand puts it back in the box.
+      // With every chip slot taken, it pastes into the box as usual instead.
       const pasted = e.clipboardData.getData('text/plain')
-      if (pasted && isLargePaste(pasted)) {
+      if (pasted && isLargePaste(pasted) && contextRef.current.length < MAX_CONTEXT_ATTACHMENTS) {
         e.preventDefault()
         addContext({
           id: crypto.randomUUID(),
@@ -686,17 +736,32 @@ export function Composer({
   }
 
   const onDrop = (e: DragEvent<HTMLDivElement>): void => {
-    const dropped = Array.from(e.dataTransfer.files)
-    if (dropped.length === 0) return
+    const all = Array.from(e.dataTransfer.files)
+    if (all.length === 0) return
     e.preventDefault()
+    // A folder arrives as a File too, but it has no contents to read; it can't be
+    // attached here (the window opens a folder dropped anywhere else as the project).
+    // The entries must be read now: the drop's data is gone once this handler returns.
+    const entries = Array.from(e.dataTransfer.items ?? []).filter((item) => item.kind === 'file')
+    const isFolder = all.map((_, i) => entries[i]?.webkitGetAsEntry?.()?.isDirectory === true)
+    const dropped = all.filter((_, i) => !isFolder[i])
+    const folders = isFolder.filter(Boolean).length
+    if (folders > 0) {
+      flashNotice(
+        folders === 1
+          ? "A folder can't be attached. Drop it outside the message box to open it as the project."
+          : "Folders can't be attached. Drop one outside the message box to open it as the project."
+      )
+    }
     const files = dropped.filter((f) => f.type.startsWith('image/'))
     // Other files attach the way "+ Attach files" does: text inlined (capped), a
     // binary file (a PDF, an archive) by name only.
-    const others = dropped.filter((f) => !f.type.startsWith('image/')).slice(0, MAX_ATTACHMENT_FILES)
+    const nonImages = dropped.filter((f) => !f.type.startsWith('image/'))
+    const others = nonImages.slice(0, MAX_ATTACHMENT_FILES)
     if (others.length) {
-      void Promise.all(others.map(readDroppedFile)).then((read) => {
-        for (const f of read) addContext(fileToContext(f))
-      })
+      void Promise.all(others.map(readDroppedFile)).then((read) =>
+        attachPickedFiles(read, nonImages.length - others.length)
+      )
     }
     if (files.length === 0) return
     if (!vision) {
@@ -753,6 +818,11 @@ export function Composer({
   }, [mention, workspace])
 
   const showMentionMenu = mention !== null && suggestions.length > 0
+  // Keep the highlighted file in view too (the list holds more than the menu shows).
+  useEffect(() => {
+    if (!showMentionMenu) return
+    document.getElementById(`${fileMenuId}-${mentionIndex}`)?.scrollIntoView?.({ block: 'nearest' })
+  }, [showMentionMenu, mentionIndex, fileMenuId])
 
   // Dismiss the slash-command / @-mention menu on a click outside the field and
   // the menu itself (e.g. into the transcript) — otherwise it floats there until
@@ -794,6 +864,19 @@ export function Composer({
   // twice still refills it.
   useEffect(() => {
     if (!prefill) return
+    if (prefill.kind === 'suggestion' && (text.trim() || context.length > 0)) {
+      // A starter or example task never replaces what the user has typed.
+      flashNotice('Clear the message box first to use this suggestion.')
+      ref.current?.focus()
+      return
+    }
+    if (prefill.kind === 'edit') {
+      // Set the draft aside (its chips too, so they aren't sent inside the edited
+      // message). A second edit while one is open keeps the first stash: the text in
+      // the box then is the earlier edit, not the user's draft.
+      setEditStash((prev) => prev ?? { text, context, images })
+      setContext([])
+    }
     setText(prefill.text)
     setImages(vision && prefill.images?.length ? prefill.images.slice(0, MAX_ATTACHMENTS) : [])
     setHistPos(null)
@@ -801,13 +884,31 @@ export function Composer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prefill?.seq])
 
+  // The edit ended (Cancel edit, or the edited message was sent): put back the draft
+  // it set aside.
+  const wasEditing = useRef(!!editing)
+  useEffect(() => {
+    const was = wasEditing.current
+    wasEditing.current = !!editing
+    if (!was || editing || !editStash) return
+    setEditStash(null)
+    setText(editStash.text)
+    setContext(editStash.context)
+    setImages(vision ? editStash.images : [])
+    setHistPos(null)
+    focusEnd(editStash.text.length)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, editStash])
+
   // Show the history entry at `pos`, or restore the pre-recall draft when `pos`
-  // reaches the end (the live-draft sentinel).
+  // reaches the end (the live-draft sentinel). A recalled `/command` doesn't open the
+  // command menu, which would take over Up/Down from the recall.
   const showHistory = (snapshot: string[], pos: number): void => {
     const atDraft = pos >= snapshot.length
     const value = atDraft ? histDraft.current : snapshot[pos]
     setText(value)
     setHistPos(atDraft ? null : pos)
+    setCmdDismissed(true)
     focusEnd(value.length)
   }
 
@@ -922,6 +1023,10 @@ export function Composer({
     resetMenus()
   }
 
+  // The "Remember …?" prompt is about the text as it was on Enter: once that changes,
+  // the prompt is stale (saving it would save the old note and wipe the new text).
+  useEffect(() => setMemoryDraft(null), [text])
+
   // Resolve a pending `#`-capture: write it at the chosen scope and clear the field.
   const remember = (scope: MemoryScope): void => {
     if (!memoryDraft || !onSaveMemory) return
@@ -942,21 +1047,38 @@ export function Composer({
   }
 
   // Steer the running turn with the composer text. A course correction is text only
-  // (steerRun carries no images), so staged images stay for the next full turn; the
-  // text is cleared. No-op without text.
+  // (steerRun carries no images), so a message with images queues whole instead, the
+  // way one of images alone does. No-op without text.
   const steer = (): void => {
     const trimmed = text.trim()
     if (!trimmed || disabled) return
-    // A command is run, and a `#` line is saved as a rule, not steered: as steering
-    // either would reach the model as plain text.
+    // A command is run, a `!` line runs in the terminal, and a `#` line is saved as a
+    // rule, not steered: as steering each would reach the model as plain text.
     const parsed = parseSlashCommand(trimmed)
     if (parsed && (resolveCommand(commands, parsed.name) || (!parsed.args && terminalOnlyNote(parsed.name)))) {
+      submit()
+      return
+    }
+    if (onShellEscape && parseShellEscape(trimmed)) {
       submit()
       return
     }
     if (onSaveMemory && parseMemoryCapture(trimmed)) {
       submit()
       return
+    }
+    if (images.length > 0) {
+      if (!answering) {
+        // Queued rather than steered, so the images go with the words.
+        submit()
+        flashNotice("Queued for after this run: a steer can't carry images.")
+        return
+      }
+      // An answer can't wait for the run to end (the run is waiting on it), so the
+      // words answer now and the images stay for the next message.
+      flashNotice(
+        `Answered with the text only. The image${images.length === 1 ? ' stays' : 's stay'} here for your next message.`
+      )
     }
     appendPromptHistory(trimmed)
     onSteer(buildMessageWithContext(trimmed, context))
@@ -992,9 +1114,9 @@ export function Composer({
       if ((e.key === 'Enter' || e.key === 'Tab') && !e.ctrlKey && !e.metaKey) {
         e.preventDefault()
         const chosen = cmdMatches[cmdIndex]
-        // Enter on an already fully-typed name runs the command (a second Enter
-        // shouldn't be needed); Tab, or Enter on a partial name, completes it.
-        if (e.key === 'Enter' && cmdPrefix === chosen.name) submit()
+        // Enter on an already fully-typed name (or alias, `/diff`) runs the command (a
+        // second Enter shouldn't be needed); Tab, or Enter on a partial name, completes it.
+        if (e.key === 'Enter' && cmdPrefix !== null && resolveCommand(commands, cmdPrefix) === chosen) submit()
         else chooseCommand(chosen)
         return
       }
@@ -1026,6 +1148,12 @@ export function Composer({
         return
       }
     }
+    // Esc puts away the "Remember …?" prompt, keeping the text in the box.
+    if (e.key === 'Escape' && memoryDraft && !showCmdMenu && !showMentionMenu) {
+      e.preventDefault()
+      setMemoryDraft(null)
+      return
+    }
     // Esc Esc on an empty field opens the rewind picker (pick an earlier message to
     // rewind to), or, where the app offers no rewind, recalls the last user message
     // for editing. Never while a turn runs: there Esc stops it. A single Esc still
@@ -1046,6 +1174,7 @@ export function Composer({
         e.preventDefault()
         setHistPos(null)
         setText(lastUserMessage)
+        setCmdDismissed(true)
         focusEnd(lastUserMessage.length)
       }
       return
@@ -1054,9 +1183,15 @@ export function Composer({
     // Prompt-history recall with Up/Down — only when no menu is open. Recall starts
     // from an empty field (so Up still moves the caret in a non-empty draft) and,
     // once started, Up/Down walk through history until Down returns to the draft.
+    // In a recalled multi-line prompt, Up moves between its lines until the caret is
+    // on the first line, and Down until it is on the last.
     if (!showCmdMenu && !showMentionMenu) {
+      const el = e.currentTarget
+      const onFirstLine = !el.value.slice(0, el.selectionStart ?? 0).includes('\n')
+      const onLastLine = !el.value.slice(el.selectionEnd ?? el.value.length).includes('\n')
       if (e.key === 'ArrowUp') {
         if (histPos !== null) {
+          if (!onFirstLine) return
           e.preventDefault()
           showHistory(histSnapshot.current, historyUp(histSnapshot.current.length, histPos))
           return
@@ -1071,7 +1206,7 @@ export function Composer({
             return
           }
         }
-      } else if (e.key === 'ArrowDown' && histPos !== null) {
+      } else if (e.key === 'ArrowDown' && histPos !== null && onLastLine) {
         e.preventDefault()
         showHistory(histSnapshot.current, historyDown(histSnapshot.current.length, histPos))
         return
@@ -1100,7 +1235,17 @@ export function Composer({
     <div className={`composer${attention ? ' composer--attention' : ''}`}>
       <div className="composer__card" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
         {memoryDraft && (
-          <div className="memory-bar" role="group" aria-label="Remember instruction">
+          <div
+            className="memory-bar"
+            role="group"
+            aria-label="Remember instruction"
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape') return
+              e.preventDefault()
+              setMemoryDraft(null)
+              ref.current?.focus()
+            }}
+          >
             <span className="memory-bar__label">
               Remember <span className="memory-bar__note">“{memoryDraft}”</span> as a standing
               instruction?
@@ -1114,6 +1259,16 @@ export function Composer({
               </button>
               <button className="btn btn--sm" onClick={sendMemoryAsMessage}>
                 Send as message
+              </button>
+              <button
+                className="btn btn--sm"
+                title="Keep the text in the box without saving it (Esc)"
+                onClick={() => {
+                  setMemoryDraft(null)
+                  ref.current?.focus()
+                }}
+              >
+                Cancel
               </button>
             </div>
           </div>

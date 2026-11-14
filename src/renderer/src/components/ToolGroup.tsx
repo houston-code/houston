@@ -56,6 +56,7 @@ const TOOL_ICON: Record<string, string> = {
   kill_shell: '›_',
   web_fetch: '@',
   view_localhost: '▣',
+  browser_session: '▣',
   show_images: '▦',
   render_mockup: '▦',
   web_search: '⌕',

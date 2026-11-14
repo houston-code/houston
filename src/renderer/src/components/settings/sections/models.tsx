@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { AppSettings, ModelOption, ProviderConfig } from '@shared/types'
 import { summarizeFetch, type FetchSummary } from '@shared/model-listing'
 import {
@@ -10,6 +10,14 @@ import {
 import { SEARCH_PROVIDERS, DEFAULT_SEARCH_PROVIDER_ID, getSearchProviderInfo } from '@shared/search'
 import { DEFAULT_SUBAGENT_HISTORY_MB } from '@shared/subagents'
 import {
+  COMPACTION_WINDOW_FRACTION,
+  DEFAULT_COMPACTION_PERCENT,
+  DEFAULT_COMPACTION_TOKENS,
+  compactionMode,
+  withCompactionMode,
+  type CompactionMode
+} from '@shared/compactionThreshold'
+import {
   catalogForPlatform,
   catalogEntryToProvider,
   customEndpointToProvider,
@@ -18,7 +26,8 @@ import {
   type CatalogEntry
 } from '@shared/provider-catalog'
 import { isMacPlatform } from '../../../lib/shortcuts'
-import { HeadersField, ModelsField, SettingsSection } from '../fields'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
+import { HeadersField, ModelsField, NumberField, SettingsSection } from '../fields'
 import { VerifySuggestion } from './verifySuggestion'
 import { SmallModelField } from './smallModelField'
 import type { SettingsCtx } from '../context'
@@ -207,7 +216,14 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           {p.kind !== 'vertex' && (
             <label className="field">
               <span>API key</span>
-              <div className="field__row">
+              {/* A form, so Enter in the box saves the key. */}
+              <form
+                className="field__row"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (keyInputs[p.id]?.trim()) void saveKey(p.id)
+                }}
+              >
                 <input
                   type="password"
                   placeholder={
@@ -223,14 +239,15 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   }
                 />
                 <button
+                  type="submit"
                   className="btn btn--sm"
-                  disabled={busy === p.id}
-                  onClick={() => saveKey(p.id)}
+                  disabled={busy === p.id || !keyInputs[p.id]?.trim()}
                 >
                   Save
                 </button>
                 {p.hasKey && (
                   <button
+                    type="button"
                     className="btn btn--sm btn--danger"
                     disabled={busy === p.id}
                     onClick={() => removeKey(p.id)}
@@ -238,7 +255,7 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                     Remove
                   </button>
                 )}
-              </div>
+              </form>
             </label>
           )}
 
@@ -286,6 +303,13 @@ export function AddProviderSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
   const [newLabel, setNewLabel] = useState('')
   const [newUrl, setNewUrl] = useState('')
+  // Escape in a half-filled custom endpoint clears it rather than closing Settings.
+  const endpointRef = useRef<HTMLDivElement>(null)
+  useEscapeWithin(endpointRef, () => {
+    if (!newLabel && !newUrl) return false
+    setNewLabel('')
+    setNewUrl('')
+  })
 
   // Known-host catalog for the "Add a provider" picker. Platform-filtered (e.g. the
   // Apple-Silicon oMLX preset is hidden off macOS); hosts already present are shown
@@ -365,7 +389,7 @@ export function AddProviderSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
         </select>
       </label>
 
-      <div className="add-endpoint">
+      <div className="add-endpoint" ref={endpointRef}>
         <input
           placeholder="Custom label (e.g. My vLLM)"
           value={newLabel}
@@ -406,6 +430,7 @@ export function SystemPromptSection({ ctx }: { ctx: SettingsCtx }): JSX.Element 
 
 export function ContextWindowSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const { settings, setSettings } = ctx
+  const mode = compactionMode(settings)
   return (
     <SettingsSection
       title="Context window"
@@ -413,52 +438,69 @@ export function ContextWindowSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
     >
       <label className="field">
         <span>
-          Compact the conversation when it grows past this many tokens. Leave empty
-          for automatic sizing from the selected model&apos;s context window; set 0 to
-          disable compaction.
+          Compact the conversation automatically when it grows past a limit. Automatic
+          sizes the limit from the selected model&apos;s context window. Your own limit,
+          a share of the window or a token count, can make compaction start sooner but
+          never later than {Math.round(COMPACTION_WINDOW_FRACTION * 100)}% of the window.
         </span>
-        <input
-          type="number"
-          min={0}
-          step={1000}
-          placeholder="Automatic"
-          value={settings.compactionThreshold ?? ''}
-          onChange={(e) => {
-            const raw = e.target.value
-            setSettings((s) => {
-              // Empty input = automatic: store no override at all rather than a number.
-              if (raw.trim() === '') {
-                const { compactionThreshold: _threshold, ...rest } = s
-                return rest
-              }
-              return {
-                ...s,
-                compactionThreshold: Math.max(0, Math.floor(Number(raw) || 0))
-              }
-            })
-          }}
-        />
+        <select
+          value={mode}
+          onChange={(e) => setSettings((s) => withCompactionMode(s, e.target.value as CompactionMode))}
+        >
+          <option value="auto">Automatic</option>
+          <option value="percent">Share of the context window</option>
+          <option value="tokens">Token count</option>
+          <option value="off">Off</option>
+        </select>
       </label>
+      {mode === 'percent' && (
+        <label className="field">
+          <span>Compact at this percentage of the context window (1 to 100).</span>
+          <input
+            type="number"
+            min={1}
+            max={100}
+            step={5}
+            value={settings.compactionThresholdPercent ?? DEFAULT_COMPACTION_PERCENT}
+            onChange={(e) => {
+              const n = Math.floor(Number(e.target.value))
+              setSettings((s) => ({
+                ...s,
+                compactionThresholdPercent: Math.min(100, Math.max(1, Number.isFinite(n) ? n : 1))
+              }))
+            }}
+          />
+        </label>
+      )}
+      {mode === 'tokens' && (
+        <label className="field">
+          <span>Compact when the conversation grows past this many tokens.</span>
+          <input
+            type="number"
+            min={1000}
+            step={1000}
+            value={settings.compactionThreshold ?? DEFAULT_COMPACTION_TOKENS}
+            onChange={(e) => {
+              const n = Math.floor(Number(e.target.value))
+              setSettings((s) => ({
+                ...s,
+                compactionThreshold: Math.max(1000, Number.isFinite(n) ? n : 1000)
+              }))
+            }}
+          />
+        </label>
+      )}
       <label className="field">
         <span>
           Truncate a single command&apos;s output to this many bytes, keeping both ends
           (~4 bytes ≈ 1 token). Stops one runaway command from flooding the context
           window.
         </span>
-        <input
-          type="number"
+        <NumberField
           min={1000}
           step={1000}
           value={settings.shellOutputMaxBytes ?? DEFAULT_SHELL_OUTPUT_MAX_BYTES}
-          onChange={(e) =>
-            setSettings((s) => ({
-              ...s,
-              shellOutputMaxBytes: Math.max(
-                1000,
-                Math.floor(Number(e.target.value) || 0)
-              )
-            }))
-          }
+          onChange={(n) => setSettings((s) => ({ ...s, shellOutputMaxBytes: n }))}
         />
       </label>
     </SettingsSection>
@@ -478,15 +520,14 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           reminded to finish or summarize, so it lands cleanly instead of being cut off
           mid-edit.
         </span>
-        <input
-          type="number"
+        <NumberField
           min={1}
           step={1}
           value={settings.maxIterations ?? DEFAULT_MAX_ITERATIONS}
-          onChange={(e) =>
+          onChange={(n) =>
             setSettings((s) => ({
               ...s,
-              maxIterations: Math.max(1, Math.floor(Number(e.target.value) || 0)),
+              maxIterations: n,
               // Pin the keep-going switch to what it showed, so setting a cap
               // never silently turns extension off (see autoExtendTurnsEnabled).
               autoExtendTurns: autoExtendTurnsEnabled(s)
@@ -511,17 +552,11 @@ export function LoopControlSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
       {autoExtendTurnsEnabled(settings) && (
         <label className="field">
           <span>Never run a single turn past this many steps, however productive.</span>
-          <input
-            type="number"
+          <NumberField
             min={1}
             step={10}
             value={settings.maxIterationsCeiling ?? DEFAULT_ITERATION_CEILING}
-            onChange={(e) =>
-              setSettings((s) => ({
-                ...s,
-                maxIterationsCeiling: Math.max(1, Math.floor(Number(e.target.value) || 0))
-              }))
-            }
+            onChange={(n) => setSettings((s) => ({ ...s, maxIterationsCeiling: n }))}
           />
         </label>
       )}
@@ -754,7 +789,13 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   <span className="provider__key-ok pill pill--ok">key set ✓</span>
                 )}
               </span>
-              <div className="field__row">
+              <form
+                className="field__row"
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  if (keyInputs[selected.keyId]?.trim()) void saveKey(selected.keyId)
+                }}
+              >
                 <input
                   type="password"
                   placeholder={keySet ? '•••••••• (stored)' : selected.keyPlaceholder}
@@ -764,14 +805,15 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   }
                 />
                 <button
+                  type="submit"
                   className="btn btn--sm"
-                  disabled={busy === selected.keyId}
-                  onClick={() => saveKey(selected.keyId)}
+                  disabled={busy === selected.keyId || !keyInputs[selected.keyId]?.trim()}
                 >
                   Save
                 </button>
                 {keySet && (
                   <button
+                    type="button"
                     className="btn btn--sm btn--danger"
                     disabled={busy === selected.keyId}
                     onClick={() => removeKey(selected.keyId)}
@@ -779,7 +821,7 @@ export function WebSearchSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                     Remove
                   </button>
                 )}
-              </div>
+              </form>
               <p className="set-section__desc">
                 Get a key at{' '}
                 <a href={selected.keyUrl} target="_blank" rel="noreferrer">
