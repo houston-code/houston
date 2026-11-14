@@ -425,6 +425,13 @@ extended thinking, and prompt caching.
 - **Foundry** is the exception: it does take an API key. The resource name is the
   `my-resource` part of `https://my-resource.services.ai.azure.com`.
 
+**Stuck sign-ins.** If Bedrock or Vertex can't get credentials within 30 seconds (an
+expired SSO session, a `credential_process` waiting for input, a metadata server
+lookup on a machine outside the cloud), the turn stops with an error that says which
+credential source didn't answer and what to run, such as `aws sso login` or
+`gcloud auth application-default login`. Houston doesn't retry it on its own, and
+Stop ends the wait at any time.
+
 **Model lists.** The picker shows each model under one name whichever host you use.
 None of the three publishes a model list, so Houston ships a curated one, and
 "Fetch" restores it rather than calling out to the network. If your account can use
@@ -458,7 +465,12 @@ retries the turn with a growing pause between attempts and tells you it's retryi
   printed), and headless mode never writes it to stdout.
 - **Stalled connections are cut.** A reply that stops arriving for two minutes (a
   network switch or a laptop waking from sleep can leave the connection open but
-  dead) is treated as dropped and retried on a fresh connection.
+  dead) is treated as dropped and retried on a fresh connection. A model served
+  from your own machine or private network (Ollama, LM Studio, and other local
+  servers) gets ten minutes, since loading a model or reading a long prompt can
+  take that long before the first word, and so does a Chat Completions request
+  that asks for reasoning, which streams nothing while the model thinks. A stall
+  that long is retried once, not waited out like an outage.
 - **Outages are waited out.** If the network goes away after the provider has
   already answered in this run, Houston keeps retrying for up to five minutes and
   picks up when the connection comes back. Before the provider has answered once,
@@ -1918,7 +1930,9 @@ each shell command a writable subagent runs would run unconfined, so each asks f
 own approval too.
 
 **Cost.** Tokens a subagent spends roll into the conversation's usage meter, priced
-at the model it actually ran on.
+at the model it actually ran on, one request at a time like the main agent's. They
+count toward the run's cost ceiling (`--max-cost`) as they're spent, so a subagent
+working when the run reaches it is told to wrap up too.
 
 ### Seeing what a subagent did
 
@@ -1928,7 +1942,11 @@ command's exit code, an edit's line counts) and shows its model, step count, tim
 and tokens. A nested agent gets its own indented block.
 
 **When it finishes,** the row collapses to a summary: model, steps, time, cost, and
-its id (like `ag1`). Expand it for three tabs:
+its id (like `ag1`). A check means it finished with a whole report. A warning (`!`)
+means its report is partial or missing: it stopped at its step limit or `max_turns`,
+stopped after repeating itself, was cut off at the model's output limit, or ended
+without writing a report. The main agent is told the same in the result it gets back.
+Expand it for three tabs:
 
 - **Report:** the agent's report, rendered.
 - **Steps:** each step expands to its result, or an edit's real diff.
@@ -1943,8 +1961,10 @@ Loop control sets how much a chat keeps (4 MB by default). Past that, the oldest
 subagents keep their task, steps, and report but drop step results and diffs.
 
 **In the terminal,** a line is printed per step under the dispatch (a review's
-reviewers only with `/verbose`), then the report. `--json` emits `subagent_start`,
-`subagent_step`, and `subagent_end`.
+reviewers only with `/verbose`), then an end line marked the same way (a check, or `!`
+for a partial or missing report), then the report. `--json` emits `subagent_start`,
+`subagent_step`, and `subagent_end` (whose `outcome` is `done`, `limit`, `empty`, or
+`error`).
 
 ### Step budget
 
@@ -2003,7 +2023,22 @@ from here.
 ## Background work wakes the chat
 
 The agent runs open-ended commands (dev servers, watchers, long builds) with
-`run_shell` and `background: true`. It doesn't have to keep checking on them:
+`run_shell` and `background: true`. Two limits keep these from piling up:
+
+- **No duplicates.** Starting a command that the chat already has running in the same
+  folder doesn't start a second copy: the agent is pointed at the running one, to read
+  its output or stop it and start again.
+- **At most 8 at once per chat.** A ninth is refused with the list of the ones still
+  running, so the agent stops one it no longer needs first.
+
+Something a regular (foreground) command leaves running on its own, such as
+`docker compose up -d`, `docker run -d`, `pm2 start`, a detached `tmux` or `screen`
+session, `brew services start`, `systemctl start`, or a process sent to the
+background with `&`, isn't one of Houston's background commands, so Stop and quitting
+Houston don't stop it. The agent is told so, along with the command that stops it
+(for example `docker compose down` or `pm2 delete`).
+
+The agent doesn't have to keep checking on its background commands:
 
 - **When a background command exits,** the agent is told, with its exit code and the
   last lines it printed.
@@ -2148,7 +2183,10 @@ All times are local.
 ### Managing schedules
 
 **Settings > Scheduled Runs** (desktop) lists every schedule with its recurrence, folder,
-model, approval mode, next run, and how the last run went. Each has:
+model, approval mode, next run, and how the last run went: still running, finished,
+failed (with the error), stopped at a limit, or stopped before it finished. A run that
+couldn't start says so, and one that was still going when Houston closed is shown as
+failed rather than left running. Each has:
 
 - **Pause** / **Resume**: a paused schedule is kept but never runs. Resuming picks up
   from now, so the runs it missed while paused don't all start at once.
@@ -2164,7 +2202,7 @@ until you answer.
 The agent manages the same list:
 
 - `list_scheduled_runs` shows what's configured, with next and last fire times (or
-  "paused").
+  "paused") and how the last run went.
 - `cancel_scheduled_run` removes one.
 - Creating or cancelling a schedule asks for approval.
 
@@ -2851,6 +2889,9 @@ window:
    of one long request
 
 - **Your current request is always kept word for word.**
+- **Key facts are kept beside the summary:** your original request, the task list, the
+  files in play, and, as they stood when it last compacted, the git branch, the
+  shell's folder, and the background shells still running.
 - **Sized to the model.** The threshold is set automatically from the selected model's
   context window: a large-window model compacts later, a small local model sooner.
 - **Built up, not redone.** The summary is saved with the conversation, so later turns

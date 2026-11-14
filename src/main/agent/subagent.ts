@@ -30,7 +30,9 @@ import {
   clipText,
   stepHint,
   SUBAGENT_CAPS,
+  outcomeForStatus,
   type SubagentBudget,
+  type SubagentOutcome,
   type SubagentStatus,
   type SubagentStep
 } from '@shared/subagents'
@@ -43,7 +45,15 @@ import {
   shouldExtend,
   shouldLand
 } from './budget'
-import { StallDetector, callSignature, resolveStallThresholds, type StallThresholds } from './stall'
+import {
+  StallDetector,
+  callSignature,
+  commandFailureOf,
+  failedCallKey,
+  resolveStallThresholds,
+  type CommandFailure,
+  type StallThresholds
+} from './stall'
 import {
   elideStaleToolArguments,
   estimateTokens,
@@ -360,7 +370,22 @@ export interface SubAgentOptions {
    * is reminded to wrap up near the end, and its last step can't run tools, so it
    * always ends on a report.
    */
-  budget?: { maxIterations?: number; autoExtend?: boolean; ceiling?: number; hardCap?: number }
+  budget?: {
+    maxIterations?: number
+    autoExtend?: boolean
+    ceiling?: number
+    hardCap?: number
+    /**
+     * The dispatching run's cost ceiling (USD; unset or 0: none). Once `spentUsd` reaches
+     * it the agent gets the wrap-up reminder, as the main loop does at its own ceiling.
+     */
+    costCeilingUsd?: number
+  }
+  /**
+   * What the dispatching run has spent so far in USD, this agent's own turns included,
+   * read before each step for the cost ceiling above. Absent: counted as 0.
+   */
+  spentUsd?: () => number
   /** Loop detection, as in the main loop. Unset: on with default thresholds; `false`: off. */
   stall?: false | Partial<StallThresholds>
   /**
@@ -377,14 +402,28 @@ export interface SubAgentOptions {
   onStep?: (step: SubagentStep) => void
   /** Called once, before the first step, with the system prompt and tools the agent runs with. */
   onStart?: (info: { system: string; tools: string[] }) => void
-  /** Called once, when the agent stops, with how it ended and the budget it used. */
-  onEnd?: (end: { status: SubagentStatus; budget: SubagentBudget }) => void
+  /**
+   * Called once, when the agent stops, with how it ended, whether its report is whole
+   * (`outcome`: cut short or empty is not), and the budget it used.
+   */
+  onEnd?: (end: { status: SubagentStatus; outcome: SubagentOutcome; budget: SubagentBudget }) => void
 }
 
 /** The note pushed before a subagent's last step: its tools won't run, so report now. */
 export const SUBAGENT_FINAL_STEP_NOTE =
   'This is your last step: tool calls made now will NOT run. Write your report now, in plain ' +
   'text: what you found or changed, the specifics the caller needs, and what you did not get to.'
+
+/** The one-time reminder when the dispatching run reaches its cost ceiling. */
+export const SUBAGENT_COST_LANDING_NOTE =
+  'This run has reached its cost limit. Wrap up: finish what you are doing and write your ' +
+  'report now. Do not start anything you cannot complete.'
+
+/** The note on a report the model's output limit cut off. */
+export const OUTPUT_LIMIT_NOTE = "[subagent report cut off at the model's output limit]"
+
+/** The result when the agent ended without any report text. */
+export const EMPTY_REPORT_NOTE = '[subagent returned no answer]'
 
 /** The one-time reminder as a subagent nears its step limit. */
 export function subagentLandingReminder(stepsLeft: number): string {
@@ -512,7 +551,8 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const hardCap = opts.budget?.hardCap
   const budget = resolveBudgetLimits({
     maxIterations: hardCap ?? opts.budget?.maxIterations,
-    landingMargin: 2
+    landingMargin: 2,
+    costCeilingUsd: opts.budget?.costCeilingUsd
   })
   const extension = resolveExtensionLimits(budget, {
     autoExtend: hardCap === undefined && opts.budget?.autoExtend !== false,
@@ -552,13 +592,13 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   }
 
   // Clean-completion exit: hand the transcript back (for resumability) and return.
-  const finish = (text: string, status: SubagentStatus = 'done'): string => {
+  const finish = (text: string, status: SubagentStatus = 'done', outcome?: SubagentOutcome): string => {
     opts.onTranscript?.(messages)
-    opts.onEnd?.({ status, budget: budgetUsed(turnsTaken) })
+    opts.onEnd?.({ status, outcome: outcome ?? outcomeForStatus(status)!, budget: budgetUsed(turnsTaken) })
     return text
   }
   const stop = (text: string, status: SubagentStatus): string => {
-    opts.onEnd?.({ status, budget: budgetUsed(turnsTaken) })
+    opts.onEnd?.({ status, outcome: outcomeForStatus(status)!, budget: budgetUsed(turnsTaken) })
     return text
   }
 
@@ -657,10 +697,17 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       budget.maxIterations = ext.maxIterations
       notice(iter, `Still making progress, so the step limit grew to ${ext.maxIterations} (at most ${extension.ceiling})`)
     }
-    const landing = shouldLand({ iteration: iter, costUsd: 0, alreadyLanded: landed }, budget)
+    const landing = shouldLand(
+      { iteration: iter, costUsd: opts.spentUsd?.() ?? 0, alreadyLanded: landed },
+      budget
+    )
     if (landing.land) {
       landed = true
-      messages.push(systemNoteMessage(subagentLandingReminder(landing.iterationsLeft)))
+      messages.push(
+        systemNoteMessage(
+          landing.trigger === 'cost' ? SUBAGENT_COST_LANDING_NOTE : subagentLandingReminder(landing.iterationsLeft)
+        )
+      )
     }
     // The last step can't run tools, so the agent spends it on its report.
     const finalStep = isFinalStep(iter, budget)
@@ -784,16 +831,19 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
           'step-limit'
         )
       }
-      const report = answer.trim() || '[subagent returned no answer]'
-      return finish(
-        outputLimited ? `${report}\n\n[subagent report cut off at the model's output limit]` : report
-      )
+      // A report the output limit cut off, or no report at all, is not a whole answer: say
+      // so to the dispatching agent, and mark the record so no client shows it as a success.
+      const report = answer.trim()
+      if (!report) return finish(EMPTY_REPORT_NOTE, 'done', 'empty')
+      return outputLimited ? finish(`${report}\n\n${OUTPUT_LIMIT_NOTE}`, 'done', 'limit') : finish(report)
     }
     // The continued text was an interim message ahead of these calls, not the report.
     carried = ''
     if (text.trim()) step({ turn: iter + 1, kind: 'text', summary: text.trim() })
 
+    // What the stall detector sees, keyed the way the main loop keys it (see stall.ts).
     const iterErrors: string[] = []
+    const iterFailures: CommandFailure[] = []
     for (const call of calls) {
       // Stop between calls too, not just between turns: after Stop the rest of the
       // batch must not run (a later write would still land) or ask anything (a new
@@ -957,7 +1007,11 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
       const clean = redact(output)
       messages.push({ role: 'tool', content: clean, toolCallId: call.id, toolName: call.name })
 
-      if (!ok) iterErrors.push(clean)
+      if (!ok) iterErrors.push(failedCallKey(call, clean))
+      // A command that ran and exited non-zero is a successful call, so it isn't an error
+      // above; rerun after small tweaks, failing the same way, it is still a loop.
+      const failure = ok ? commandFailureOf(call, clean) : null
+      if (failure) iterFailures.push({ ...failure, command: redact(failure.command) })
       if (ok && PROGRESS_TOOLS.has(call.name)) writeIterations.add(iter)
       if (ok && isDiscoveryTool(call.name, tool?.kind)) {
         const sig = callSignature(call)
@@ -992,7 +1046,7 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
 
     // Loop detection, as in the main loop: one corrective nudge, then stop.
     if (stall) {
-      const action = stall.observe({ calls, errors: iterErrors })
+      const action = stall.observe({ calls, errors: iterErrors, commandFailures: iterFailures })
       if (action.kind === 'nudge') {
         lastStallNudge = iter
         messages.push(systemNoteMessage(action.message))

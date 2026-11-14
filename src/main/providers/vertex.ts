@@ -1,9 +1,11 @@
+import type { Middleware } from '@anthropic-ai/sdk'
 import type { Provider } from '@shared/agent'
 import type { ModelOption } from '@shared/types'
 import { VERTEX_MODELS } from '@shared/provider-catalog'
 import { createMessagesProvider, type MessagesClient } from './anthropic'
 import { idleTimeoutFetch } from './idle-fetch'
 import { SDK_MAX_RETRIES } from '../agent/retry'
+import { GOOGLE_CREDENTIALS, boundCredentialLookup, findCredentialLookupError } from './cloud-credentials'
 
 /**
  * Claude on Google Vertex AI.
@@ -57,22 +59,42 @@ export function createVertexProvider(opts: VertexOptions = {}): Provider {
   // Lazy + memoized: google-auth-library is imported only once a turn actually runs.
   let clientPromise: Promise<MessagesClient> | undefined
   const getClient = (): Promise<MessagesClient> =>
-    (clientPromise ??= import('@anthropic-ai/vertex-sdk').then(
-      (m) =>
-        new m.AnthropicVertex({
-          fetch: idleTimeoutFetch(),
-          maxRetries: SDK_MAX_RETRIES,
-          ...NO_ENV_AUTH,
-          ...(opts.region ? { region: opts.region } : {}),
-          ...(opts.projectId ? { projectId: opts.projectId } : {}),
-          ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
-          ...(opts.headers && Object.keys(opts.headers).length
-            ? { defaultHeaders: opts.headers }
-            : {})
-        })
-    ))
+    (clientPromise ??= import('@anthropic-ai/vertex-sdk').then((m) => {
+      // The Google OAuth lookup runs before the SDK's request timer and ignores the
+      // abort signal, so bound it here (see cloud-credentials.ts).
+      class BoundedVertex extends m.AnthropicVertex {
+        protected override backendMiddleware(): ReadonlyArray<Middleware> {
+          return boundCredentialLookup(super.backendMiddleware(), GOOGLE_CREDENTIALS)
+        }
+      }
+      return new BoundedVertex({
+        fetch: idleTimeoutFetch(),
+        maxRetries: SDK_MAX_RETRIES,
+        ...NO_ENV_AUTH,
+        ...(opts.region ? { region: opts.region } : {}),
+        ...(opts.projectId ? { projectId: opts.projectId } : {}),
+        ...(opts.baseUrl ? { baseURL: opts.baseUrl } : {}),
+        ...(opts.headers && Object.keys(opts.headers).length
+          ? { defaultHeaders: opts.headers }
+          : {})
+      })
+    }))
 
-  return createMessagesProvider(getClient)
+  const inner = createMessagesProvider(getClient)
+  return {
+    async *streamChat(req) {
+      try {
+        yield* inner.streamChat(req)
+      } catch (err) {
+        // The SDK keeps the first google-auth client it asked for, stuck or not, so a
+        // lookup that never answered would fail every later turn the same way. Start
+        // the next one from a fresh client.
+        const lookup = findCredentialLookupError(err)
+        if (lookup) clientPromise = undefined
+        throw lookup ?? err
+      }
+    }
+  }
 }
 
 /**

@@ -2334,6 +2334,33 @@ describe('runTui', () => {
     expect(out).not.toContain('pass resume')
   })
 
+  it('ends a subagent cut off at the output limit on a warning, not a check', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'dispatch_agent', args: { description: 'Trace the flow', prompt: 'p' } },
+      { runId: 'x', type: 'subagent_start', parentCallId: 'c1', record: {
+        id: 'sa1',
+        kind: 'research',
+        label: 'Trace the flow',
+        model: 'claude-haiku-5-5',
+        modelSource: 'run',
+        prompt: 'p',
+        tools: ['read_file'],
+        status: 'running',
+        startedAt: 0,
+        steps: []
+      } },
+      { runId: 'x', type: 'subagent_end', parentCallId: 'c1', recordId: 'sa1', update: { status: 'done', outcome: 'limit', endedAt: 14_000 } },
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'dispatch_agent', ok: true, output: "Half\n\n[subagent report cut off at the model's output limit]" },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain("! Trace the flow: cut off at the model's output limit (0 steps, 14s)")
+    expect(out).not.toContain('✓ Trace the flow')
+  })
+
   it('strips control characters from a subagent report before printing it', () => {
     const line = renderToolResult('dispatch_agent', true, 'Found it\x1b]52;c;ZXZpbA==\x07\nsecond line', (t) => t)
     expect(line).toContain('Found it')

@@ -129,6 +129,11 @@ export interface SpawnSessionInput {
    * consent, so it is neither capped nor counted.
    */
   startedBy?: 'agent' | 'user'
+  /**
+   * Called once when the session's background run settles, however it ended (its
+   * outcome is then on the chat's log). Lets a scheduled run record how it went.
+   */
+  onRunEnd?: () => void
 }
 
 /** What the backend returns once the session exists and its background run has started. */

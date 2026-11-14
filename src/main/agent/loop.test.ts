@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import type {
   AgentEvent,
   AgentRunRequest,
+  BackgroundShellInfo,
   ChatMessage,
   ChatRequest,
   PlanDecision,
@@ -47,6 +48,7 @@ import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
+import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
@@ -165,6 +167,8 @@ const h = vi.hoisted(() => ({
   // The repository the `./github` partial mock reports the gh_* tools act on; null
   // (the default) is "unknown", as in a temp workspace with no remotes.
   ghRepo: null as string | null,
+  // What listShells reports to the loop; null (the default) is the real registry.
+  shells: null as BackgroundShellInfo[] | null,
   // Route getMcpToolDefs to the real MCP manager (with a fake server behind its client
   // factory) instead of handing back `mcpDefs`, for the tests that need a live connection.
   realMcp: false
@@ -242,6 +246,10 @@ vi.mock('./tools', async (importActual) => {
   }
 })
 vi.mock('./git', () => ({ gitContext: async () => h.gitContext }))
+vi.mock('./shells', async (importActual) => {
+  const actual = await importActual<typeof import('./shells')>()
+  return { ...actual, listShells: () => h.shells ?? actual.listShells() }
+})
 vi.mock('./github', async (importActual) => ({
   ...(await importActual<typeof import('./github')>()),
   ghRepoKey: async () => h.ghRepo
@@ -374,6 +382,7 @@ beforeEach(() => {
   h.sandboxed = null
   h.egressFails = false
   h.egressScope = null
+  h.shells = null
   h.ghRepo = null
   delete h.settings.webReads
   delete h.settings.sandboxEgress
@@ -3535,6 +3544,62 @@ describe('context management inside a long turn', () => {
     })
     expect(shape(second.sends[0]).slice(0, last.length)).toEqual(shape(last))
   })
+
+  it('pins the branch and running shells once evicted, frozen until the next advance', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: ws })
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/feature/pinned-state'], { cwd: ws })
+    h.secrets = ['sk-pinned-secret-value-123456']
+    const overhead = await fixedOverheadTokens()
+    h.probeTools = [bigReadFile(6_000)]
+    h.settings.compactionThreshold = overhead + 10_000
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const bg = (over: Partial<BackgroundShellInfo>): BackgroundShellInfo => ({
+      id: 'dev12345',
+      command: 'API_KEY=sk-pinned-secret-value-123456 npm run dev',
+      running: true,
+      exitCode: null,
+      startedAt: 2,
+      exitedAt: null,
+      conversationId: conv.id,
+      workspace: ws,
+      urls: ['http://localhost:5173'],
+      ...over
+    })
+    h.shells = [
+      bg({}),
+      bg({ id: 'otherchat', conversationId: 'someone-else' }),
+      bg({ id: 'finished', running: false, exitCode: 0, exitedAt: 3 })
+    ]
+
+    const first = longTurn(7)
+    const r1 = await run({ provider: first.provider, userText: REQUEST, policy: 'full-auto', conversationId: conv.id })
+    const last = first.sends.at(-1)!
+    const block = last[0].content
+    expect(block).toContain(PINNED_MEMORY_PREFIX)
+    expect(block).toContain('- Git branch: feature/pinned-state')
+    expect(block).toContain('dev12345: API_KEY=')
+    expect(block).toContain('(running, http://localhost:5173)')
+    expect(block).not.toContain('sk-pinned-secret-value-123456')
+    expect(block).not.toContain('otherchat')
+    expect(block).not.toContain('finished')
+    // At the project root the shell directory adds nothing.
+    expect(block).not.toContain('Shell directory')
+    expect(getConversation(conv.id)!.compaction!.workspaceState?.branch).toBe('feature/pinned-state')
+
+    // The live state moves on, but nothing advanced: the next turn re-sends the same
+    // block, so its window still extends the cached one.
+    h.shells = []
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/another'], { cwd: ws })
+    const second = longTurn(0)
+    await run({
+      provider: second.provider,
+      messages: [...r1.messages, { role: 'user', content: 'second task' }],
+      policy: 'full-auto',
+      conversationId: conv.id
+    })
+    expect(shape(second.sends[0]).slice(0, last.length)).toEqual(shape(last))
+  })
+
 
   it('treats a summary cut off at its output cap as a failed compaction', async () => {
     // A thinking model can spend the whole cap before it writes the summary's end; a
@@ -8584,6 +8649,74 @@ describe('subagent dispatch: progress, models, resume, nesting', () => {
     } finally {
       delete h.settings.subagentHistoryMb
     }
+  })
+
+  it("bills a dispatch's turns one by one into the run's usage, as the main loop prices its own", async () => {
+    // claude-haiku-5-5 bills a request past 100k input tokens at its long-context rate.
+    // Two 60k-token turns are each under it; priced as one 120k request, they wouldn't be.
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'scan', prompt: 'look' }),
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'list_dir', arguments: { path: '.' } } },
+          { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 60_000, outputTokens: 10 } }
+        ],
+        [
+          { type: 'text', text: 'sub report' },
+          { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 60_000, outputTokens: 10 } }
+        ],
+        finalText('done')
+      ],
+      []
+    )
+    const r = await run({ provider, model: 'claude-haiku-5-5' })
+    const perTurn = 2 * turnCostUsd('claude-haiku-5-5', 60_000, 10)
+    expect(perTurn).toBeLessThan(turnCostUsd('claude-haiku-5-5', 120_000, 20))
+    const sub = r.events.find((e) => e.type === 'usage' && e.inputTokens === 0 && e.outputTokens === 20)
+    expect(sub?.type === 'usage' && sub.cost).toBeCloseTo(perTurn, 10)
+    const saved = r.messages.find((m) => m.subagents)!.subagents![0]
+    expect(saved.usage?.costUsd).toBeCloseTo(perTurn, 10)
+    expect(saved.outcome).toBe('done')
+  })
+
+  it("wraps a dispatch up once the run's spend reaches the cost ceiling", async () => {
+    h.settings.costCeilingUsd = 0.01
+    try {
+      const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+      const provider = scriptedRecording(
+        [
+          dispatchCall({ description: 'scan', prompt: 'look' }),
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'list_dir', arguments: { path: '.' } } },
+            // About $0.10 at the long-context rate: past the ceiling on its own.
+            { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 200_000, outputTokens: 10 } }
+          ],
+          finalText('sub report'),
+          finalText('done')
+        ],
+        requests
+      )
+      await run({ provider, model: 'claude-haiku-5-5' })
+      const landed = (i: number): boolean =>
+        requests[i].messages.some((m) => m.role === 'user' && m.content.endsWith(SUBAGENT_COST_LANDING_NOTE))
+      expect(landed(1)).toBe(false)
+      expect(landed(2)).toBe(true)
+    } finally {
+      delete h.settings.costCeilingUsd
+    }
+  })
+
+  it('saves the outcome of a dispatch that came back empty', async () => {
+    const provider = scriptedRecording(
+      [dispatchCall({ description: 'scan', prompt: 'look' }), [{ type: 'done', stopReason: 'end_turn' }], finalText('done')],
+      []
+    )
+    const r = await run({ provider })
+    const end = r.events.find((e) => e.type === 'subagent_end')
+    expect(end?.type === 'subagent_end' && end.update).toMatchObject({ status: 'done', outcome: 'empty' })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'dispatch_agent')
+    expect(result?.type === 'tool_result' && result.output).toMatch(/^\[subagent returned no answer\]/)
+    expect(r.messages.find((m) => m.subagents)!.subagents![0].outcome).toBe('empty')
   })
 
   it('runs a dispatch on an explicit sibling model and validates unknown ids', async () => {

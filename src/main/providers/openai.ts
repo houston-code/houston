@@ -8,7 +8,13 @@ import { classifyLead, parseTextToolCalls } from './tool-call-fallback'
 import { ControlTagScrubber } from './control-tag-scrubber'
 import { releaseDateFrom } from './release-date'
 import { parseToolArguments } from './tool-args'
-import { idleTimeoutFetch, LIST_MODELS_TIMEOUT_MS } from './idle-fetch'
+import {
+  EXTENDED_STREAM_IDLE_TIMEOUT_MS,
+  idleTimeoutFetch,
+  LIST_MODELS_TIMEOUT_MS,
+  streamIdleTimeoutFor,
+  withStreamIdleWindow
+} from './idle-fetch'
 import { SDK_MAX_RETRIES } from '../agent/retry'
 
 type OpenAIMessage = OpenAI.Chat.Completions.ChatCompletionMessageParam
@@ -174,19 +180,24 @@ export function createChatCompletionsProvider(
       // cache when breakpoints are present; the caller gates this per route.
       if (req.explicitCacheControl) markOpenAICacheBreakpoints(messages)
 
-      const stream = await client.chat.completions.create(
-        {
-          model: req.model,
-          messages,
-          stream: true,
-          // Ask for a final usage-only chunk. Most OpenAI-compatible servers honour
-          // this; those that don't simply never send it, which we handle gracefully.
-          stream_options: { include_usage: true },
-          ...(req.maxTokens ? maxTokensField(req.model, req.maxTokens) : {}),
-          ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
-          ...(tools && tools.length ? { tools } : {})
-        },
-        { signal: req.signal }
+      // Chat Completions streams nothing while a model reasons, so a long think is
+      // silent on the wire: give a request that asked for reasoning the extended idle
+      // window rather than cutting it as a dead socket two minutes in.
+      const stream = await withStreamIdleWindow(reasoningEffort ? EXTENDED_STREAM_IDLE_TIMEOUT_MS : 0, () =>
+        client.chat.completions.create(
+          {
+            model: req.model,
+            messages,
+            stream: true,
+            // Ask for a final usage-only chunk. Most OpenAI-compatible servers honour
+            // this; those that don't simply never send it, which we handle gracefully.
+            stream_options: { include_usage: true },
+            ...(req.maxTokens ? maxTokensField(req.model, req.maxTokens) : {}),
+            ...(reasoningEffort ? { reasoning_effort: reasoningEffort } : {}),
+            ...(tools && tools.length ? { tools } : {})
+          },
+          { signal: req.signal }
+        )
       )
 
       // Accumulate streamed tool calls by their `index`. Some hosts send every call of a
@@ -349,7 +360,9 @@ export function createOpenAIProvider(
     (clientPromise ??= import('openai').then(
       (m) =>
         new m.default({
-          fetch: idleTimeoutFetch(),
+          // A model server on the user's own machine or network can go quiet for
+          // minutes while it loads weights or prefills a long prompt.
+          fetch: idleTimeoutFetch(streamIdleTimeoutFor(baseURL)),
           maxRetries: SDK_MAX_RETRIES,
           apiKey: apiKey || 'no-key',
           ...(baseURL ? { baseURL } : {}),
