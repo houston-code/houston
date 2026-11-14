@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DiffHunk, FileDiff, WorkingTreeChanges } from '@shared/workingTree'
 import {
   canRevertHunks,
@@ -478,7 +478,11 @@ export function DiffPanel({
   const [texts, setTexts] = useState<Record<string, string[] | null>>({})
   const [opened, setOpened] = useState<Record<string, { above: number; below: number }>>({})
   const filesRef = useRef(files)
-  useEffect(() => {
+  // A layout effect, not a passive one: it runs in the same commit that puts the new
+  // diff's buttons on screen. A passive effect can run after that commit, so a click
+  // that lands in between captured the previous list as `asked`, and the read it
+  // started was then dropped as stale: the lines never appeared and nothing said why.
+  useLayoutEffect(() => {
     filesRef.current = files
     setTexts({})
     setOpened({})
