@@ -3,7 +3,8 @@ import { readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync, s
 import { basename, join } from 'node:path'
 import { writeFileAtomicStampedSync } from './atomic-write'
 import { buildUsageReport, type UsageInput, type UsageReport } from '@shared/usageReport'
-import { externalizeMedia, hydrateMedia, pruneMedia } from './conversationMedia'
+import { externalizeMedia, hydrateMedia, pruneMedia, readMediaFile, viewMedia } from './conversationMedia'
+import { parseMediaUrl, type ImageAttachment } from '@shared/images'
 import {
   COMPACTION_SUMMARY_PREFIX,
   CONVERSATION_SCHEMA_VERSION,
@@ -357,6 +358,62 @@ export function getConversation(id: string): Conversation | null {
   // provider: it holds the messages the user rewound away, attachments and all.
   const { rewindBackup: _rewindBackup, ...rest } = conv
   return hydrateMedia(rest, mediaDir(conv.id))
+}
+
+/**
+ * {@link getConversation} for the app window: images come as URLs to their stored
+ * files and documents without their bytes (see viewMedia), so opening a chat full of
+ * screenshots does not copy every one into the window as base64.
+ */
+export function getConversationForView(id: string): Conversation | null {
+  const conv = read(id)
+  if (!conv) return null
+  const { rewindBackup: _rewindBackup, ...rest } = conv
+  return viewMedia(rest, mediaDir(conv.id), conv.id)
+}
+
+/** {@link viewMedia} for a conversation some other call already loaded (a fork, a compaction). */
+export function conversationForView<T>(value: T, conversationId: string): T {
+  return isConversationId(conversationId) ? viewMedia(value, mediaDir(conversationId), conversationId) : value
+}
+
+const IMAGE_TYPE_BY_EXT: Record<string, string> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp'
+}
+
+/**
+ * The stored image a {@link mediaUrl} names, as bytes, or null when the URL is not
+ * one, names no conversation, or the file is gone or not an image. The type comes
+ * from the stored file's name, never from the caller.
+ */
+export function readStoredImage(url: unknown): { mediaType: string; bytes: Buffer } | null {
+  const parsed = parseMediaUrl(url)
+  if (!parsed) return null
+  const mediaType = IMAGE_TYPE_BY_EXT[parsed.mediaRef.slice(parsed.mediaRef.lastIndexOf('.') + 1)]
+  if (!mediaType) return null
+  const bytes = readMediaFile(mediaDir(parsed.conversationId), parsed.mediaRef)
+  return bytes ? { mediaType, bytes } : null
+}
+
+/**
+ * Images the window sends back (a past message's images restored to the composer
+ * and sent again): any that name a stored file by URL get their bytes back, so the
+ * provider receives the image itself. Anything else passes through untouched for
+ * sanitizeAttachments to check; an unresolvable URL keeps its empty `data` and is
+ * dropped there.
+ */
+export function resolveStoredImages(value: unknown): unknown {
+  if (!Array.isArray(value)) return value
+  return value.map((v) => {
+    if (typeof v !== 'object' || v === null) return v
+    const { src, data } = v as Partial<ImageAttachment>
+    if (typeof src !== 'string' || (typeof data === 'string' && data.length > 0)) return v
+    const stored = readStoredImage(src)
+    return stored ? { mediaType: stored.mediaType, data: stored.bytes.toString('base64') } : v
+  })
 }
 
 /**

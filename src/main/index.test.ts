@@ -93,7 +93,8 @@ describe('main entry app identity', () => {
     expect(registerSchemesAsPrivileged).toHaveBeenCalledTimes(1)
     expect(registerSchemesAsPrivileged).toHaveBeenCalledWith([
       expect.objectContaining({ scheme: 'houston-mockup', privileges: expect.objectContaining({ standard: true, secure: true }) }),
-      expect.objectContaining({ scheme: 'houston-visual', privileges: expect.objectContaining({ standard: true, secure: true }) })
+      expect.objectContaining({ scheme: 'houston-visual', privileges: expect.objectContaining({ standard: true, secure: true }) }),
+      expect.objectContaining({ scheme: 'houston-media', privileges: expect.objectContaining({ standard: true, secure: true }) })
     ])
     expect(registerSchemesAsPrivileged.mock.invocationCallOrder[0]).toBeLessThan(
       whenReady.mock.invocationCallOrder[0]

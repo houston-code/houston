@@ -16,4 +16,9 @@ describe('cachedImageDataUrl', () => {
     // Asked again, the first attachment still gets its own.
     expect(cachedImageDataUrl(a)).toBe('data:image/png;base64,AAAA')
   })
+
+  it('uses a stored image\'s URL when the window was given one instead of bytes', () => {
+    const a: ImageAttachment = { mediaType: 'image/png', data: '', src: 'houston-media://x/y.png' }
+    expect(cachedImageDataUrl(a)).toBe('houston-media://x/y.png')
+  })
 })

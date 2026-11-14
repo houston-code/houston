@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { mediaDigest, rememberMediaDigest } from './mediaDigest'
+import { isSupportedImageType, mediaUrl } from '@shared/images'
 
 /**
  * Image and document bytes kept beside a conversation instead of inside its JSON.
@@ -114,15 +115,14 @@ export function externalizeMedia<T>(value: T, mediaDir: string): { value: T; ref
   return { value: visit(value) as T, refs }
 }
 
+const DROP = Symbol('drop')
+
 /**
- * Copy `value`, putting the base64 `data` back on every stored reference. A
- * reference whose file is missing or unreadable (or whose name isn't a well-formed
- * digest, so it can never point outside `mediaDir`) is dropped: removed from its
- * array, or left off its parent object. A conversation with a lost image still
- * loads, and never sends a provider an image block with no bytes in it.
+ * Copy `value`, replacing every stored reference with what `fn` returns for it
+ * (DROP removes it from its array, or leaves it off its parent object). Objects and
+ * arrays are copied only along paths that change.
  */
-export function hydrateMedia<T>(value: T, mediaDir: string): T {
-  const DROP = Symbol('drop')
+function mapStored<T>(value: T, fn: (v: Stored) => unknown): T {
   const visit = (v: unknown): unknown => {
     if (Array.isArray(v)) {
       let changed = false
@@ -135,20 +135,7 @@ export function hydrateMedia<T>(value: T, mediaDir: string): T {
       return changed ? out : v
     }
     if (!isObject(v)) return v
-    if (isStored(v)) {
-      if (!MEDIA_REF_RE.test(v.mediaRef)) return DROP
-      try {
-        const data = readFileSync(join(mediaDir, v.mediaRef)).toString('base64')
-        const { mediaRef: _ref, ...rest } = v
-        const hydrated = { ...rest, data }
-        // The file is named by the digest of these bytes, so later lookups (the next
-        // save, the model's image cache) reuse it instead of hashing the image again.
-        rememberMediaDigest(hydrated, v.mediaRef.slice(0, 64))
-        return hydrated
-      } catch {
-        return DROP
-      }
-    }
+    if (isStored(v)) return MEDIA_REF_RE.test(v.mediaRef) ? fn(v) : DROP
     let changed = false
     const out: Record<string, unknown> = {}
     for (const [k, item] of Object.entries(v)) {
@@ -160,6 +147,56 @@ export function hydrateMedia<T>(value: T, mediaDir: string): T {
   }
   const result = visit(value)
   return (result === DROP ? undefined : result) as T
+}
+
+/**
+ * Copy `value`, putting the base64 `data` back on every stored reference. A
+ * reference whose file is missing or unreadable (or whose name isn't a well-formed
+ * digest, so it can never point outside `mediaDir`) is dropped: removed from its
+ * array, or left off its parent object. A conversation with a lost image still
+ * loads, and never sends a provider an image block with no bytes in it.
+ */
+export function hydrateMedia<T>(value: T, mediaDir: string): T {
+  return mapStored(value, (v) => {
+    try {
+      const data = readFileSync(join(mediaDir, v.mediaRef)).toString('base64')
+      const { mediaRef: _ref, ...rest } = v
+      const hydrated = { ...rest, data }
+      // The file is named by the digest of these bytes, so later lookups (the next
+      // save, the model's image cache) reuse it instead of hashing the image again.
+      rememberMediaDigest(hydrated, v.mediaRef.slice(0, 64))
+      return hydrated
+    } catch {
+      return DROP
+    }
+  })
+}
+
+/**
+ * Copy `value` for the app window, which only shows attachments: an image becomes
+ * `{ mediaType, data: '', src }` with `src` the URL the window loads the stored file
+ * from (see mediaProtocol.ts), so a chat full of screenshots is not held in the
+ * window as base64. Anything else (a document) stays a bare reference, since the
+ * window never reads its bytes. A missing file is dropped, as in {@link hydrateMedia}.
+ * Never hand the result to a provider or back to the store.
+ */
+export function viewMedia<T>(value: T, mediaDir: string, conversationId: string): T {
+  return mapStored(value, (v) => {
+    if (!existsSync(join(mediaDir, v.mediaRef))) return DROP
+    if (!isSupportedImageType(v.mediaType)) return v
+    const { mediaRef: _ref, ...rest } = v
+    return { ...rest, data: '', src: mediaUrl(conversationId, v.mediaRef) }
+  })
+}
+
+/** The bytes of one stored file, or null when the name is not a digest or the file is gone. */
+export function readMediaFile(mediaDir: string, mediaRef: string): Buffer | null {
+  if (!MEDIA_REF_RE.test(mediaRef)) return null
+  try {
+    return readFileSync(join(mediaDir, mediaRef))
+  } catch {
+    return null
+  }
 }
 
 /** Delete files in `mediaDir` that no reference in `keep` points at; the folder too once empty. */

@@ -233,6 +233,22 @@ function defaultSelection(settings: AppSettings): SelectedModel | null {
   return null
 }
 
+
+/**
+ * A banner's "Not now" for one workspace. Built outside App on purpose: a callback
+ * created inside App's render shares that render's closure scope, so one kept for as
+ * long as the workspace stays the same (as these are) also kept everything that render
+ * held, such as the transcript of a chat the user had since left.
+ */
+function notNowFor(
+  workspace: string | null | undefined,
+  set: (update: (s: ReadonlySet<string>) => ReadonlySet<string>) => void
+): () => void {
+  return () => {
+    if (workspace) set((s) => new Set(s).add(workspace))
+  }
+}
+
 export default function App(): JSX.Element {
   // The saved settings. Their model, reasoning effort and approval policy are only the
   // defaults new chats start from: an open chat keeps its own (chatSettings), and
@@ -719,14 +735,10 @@ export default function App(): JSX.Element {
       ),
     [chat.items]
   )
-  const onGitInitNotNow = useCallback(() => {
-    if (workspace) setGitInitNotNow((s) => new Set(s).add(workspace))
-  }, [workspace])
+  const onGitInitNotNow = useMemo(() => notNowFor(workspace, setGitInitNotNow), [workspace])
   // Session-only "Not now" for the trusted-folders consent banner (per workspace).
   const [trustNotNow, setTrustNotNow] = useState<ReadonlySet<string>>(() => new Set())
-  const onTrustNotNow = useCallback(() => {
-    if (workspace) setTrustNotNow((s) => new Set(s).add(workspace))
-  }, [workspace])
+  const onTrustNotNow = useMemo(() => notNowFor(workspace, setTrustNotNow), [workspace])
   // Nudge the git-init banner to re-check repo state when the Changes panel closes —
   // the user may have initialized the repo from there, which no window-focus event
   // would signal.
