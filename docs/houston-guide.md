@@ -2131,7 +2131,10 @@ All times are local.
 ### Managing schedules
 
 **Settings > Scheduled Runs** (desktop) lists every schedule with its recurrence, folder,
-model, approval mode, next run, and how the last run went. Each has:
+model, approval mode, next run, and how the last run went: still running, finished,
+failed (with the error), stopped at a limit, or stopped before it finished. A run that
+couldn't start says so, and one that was still going when Houston closed is shown as
+failed rather than left running. Each has:
 
 - **Pause** / **Resume**: a paused schedule is kept but never runs. Resuming picks up
   from now, so the runs it missed while paused don't all start at once.
@@ -2147,7 +2150,7 @@ until you answer.
 The agent manages the same list:
 
 - `list_scheduled_runs` shows what's configured, with next and last fire times (or
-  "paused").
+  "paused") and how the last run went.
 - `cancel_scheduled_run` removes one.
 - Creating or cancelling a schedule asks for approval.
 

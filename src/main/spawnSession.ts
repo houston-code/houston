@@ -190,6 +190,19 @@ export function createSpawnBackend(deps: SpawnDeps): SpawnBackend {
           ...(input.reasoningEffort !== undefined ? { reasoningEffort: input.reasoningEffort } : {}),
           messages: seeded
         }, { countsTowardCap })
+        // Tell the caller when the run settles (a scheduled run records how it went).
+        const onRunEnd = input.onRunEnd
+        if (run && onRunEnd) {
+          void run
+            .catch(() => {})
+            .then(() => {
+              try {
+                onRunEnd()
+              } catch {
+                // Bookkeeping only: never surfaces into the run or the spawning turn.
+              }
+            })
+        }
         // When the child's run settles (success or failure), tell its parent. Never
         // throws into the spawning turn: the report is best-effort bookkeeping.
         if (run && parentId && deps.reportToParent) {

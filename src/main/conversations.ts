@@ -37,7 +37,7 @@ import { rewindableTurnIndices, turnText } from '@shared/rewind'
 import { repairDanglingToolResults } from './agent/repair'
 import { accumulateModelUsage } from '@shared/usage'
 import { invocationText } from '@shared/promptInvocation'
-import { runOutcome } from '@shared/runEnd'
+import { runOutcome, type RunOutcome } from '@shared/runEnd'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
 import type { StoredQueue } from '@shared/queue'
 import { clearConversationOverride } from './agent/overrides'
@@ -826,6 +826,15 @@ export function setProposalState(
   conv.proposals = { ...(conv.proposals ?? {}), [callId]: state }
   write(conv)
   return conv.proposals
+}
+
+/**
+ * How a conversation's latest run ended, from its persisted log (no attachment
+ * bytes loaded). Undefined when the chat no longer exists.
+ */
+export function conversationRunOutcome(id: string): RunOutcome | undefined {
+  const conv = read(id)
+  return conv ? runOutcome(conv.messages, conv.lastError) : undefined
 }
 
 /** Most finished-child reports kept pending on one parent; older ones drop first. */

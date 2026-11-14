@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, type ApprovalPolicy, type ProviderConfig } from '@shared/types'
-import type { SchedulePreview, ScheduleView } from '@shared/schedules'
+import {
+  scheduleLastRunFailed,
+  scheduleLastRunText,
+  type SchedulePreview,
+  type ScheduleView
+} from '@shared/schedules'
 import { SettingsSection } from '../fields'
 import type { SettingsCtx } from '../context'
 
@@ -14,6 +19,9 @@ export function formatRunTime(ms: number): string {
     minute: '2-digit'
   })
 }
+
+/** How often the list re-reads while a scheduled run is in flight. */
+export const RUNNING_POLL_MS = 5000
 
 /** The last path segment, for a compact folder label. */
 function folderName(path: string): string {
@@ -61,6 +69,7 @@ function ScheduleRow({
     }
   }
 
+  const lastRun = scheduleLastRunText(s)
   const next = s.paused ? 'Paused' : s.nextRunAt === null ? 'No more runs' : `Next run ${formatRunTime(s.nextRunAt)}`
   return (
     <li className={`sched-item${s.paused ? ' sched-item--paused' : ''}`}>
@@ -74,9 +83,9 @@ function ScheduleRow({
       </span>
       <span className="sched-item__prompt">{s.prompt}</span>
       {s.lastFiredAt !== undefined && (
-        <span className={`sched-item__last${s.lastResult === 'error' ? ' sched-item__last--err' : ''}`}>
+        <span className={`sched-item__last${scheduleLastRunFailed(s) ? ' sched-item__last--err' : ''}`}>
           Last run {formatRunTime(s.lastFiredAt)}
-          {s.lastResult === 'error' ? `: couldn't start (${s.lastError ?? 'unknown error'})` : ''}
+          {lastRun ? `: ${lastRun}` : ''}
         </span>
       )}
       {started && (
@@ -340,6 +349,13 @@ export function ScheduledRunsSection({ ctx }: { ctx: SettingsCtx }): JSX.Element
   useEffect(() => {
     void reload()
   }, [reload])
+  // While a run is in flight, check back so its outcome shows without reopening the page.
+  const anyRunning = list?.some((s) => s.lastResult === 'running') ?? false
+  useEffect(() => {
+    if (!anyRunning) return
+    const t = setInterval(() => void reload(), RUNNING_POLL_MS)
+    return () => clearInterval(t)
+  }, [anyRunning, reload])
 
   return (
     <SettingsSection

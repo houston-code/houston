@@ -7,11 +7,15 @@ import {
   describeSpec,
   type ScheduleSpec
 } from './agent/schedule-spec'
-import type {
-  SchedulerBackend,
-  ScheduledRunInfo,
-  ScheduledRunInput
+import {
+  MAX_SCHEDULE_ERROR_CHARS,
+  type SchedulerBackend,
+  type ScheduledFire,
+  type ScheduledRunInfo,
+  type ScheduledRunInput,
+  type ScheduledRunResult
 } from './agent/scheduler'
+import type { RunOutcome } from '@shared/runEnd'
 import { spawnSession, isSpawnBackendConfigured } from './agent/spawn'
 import { isApprovalPolicy } from '@shared/types'
 import { isReasoningEffort } from '@shared/agent'
@@ -46,8 +50,14 @@ import { log } from './logger'
  * listing/cancelling works everywhere while timers only run in long-lived hosts.
  */
 
-/** Persisted shape. Bump + migrate in load() when the schema changes. */
-const SCHEDULES_SCHEMA_VERSION = 1
+/**
+ * Persisted shape. Bump + migrate in load() when the schema changes.
+ *
+ * 2: `lastResult` is how the fired run ENDED (with `running` while it is in flight),
+ * not just whether its session started. A version 1 `ok` only meant "started", so
+ * migrating drops it rather than claim the run finished.
+ */
+const SCHEDULES_SCHEMA_VERSION = 2
 
 interface PersistedSchedules {
   schemaVersion: number
@@ -62,8 +72,13 @@ export function schedulesFilePath(): string {
 export interface SchedulerServiceDeps {
   /** Absolute path of the JSON store (schedulesFilePath() in production). */
   file: string
-  /** Start one occurrence's background session. Rejections mark the schedule's lastResult. */
-  fire: (schedule: ScheduledRunInfo) => Promise<void>
+  /**
+   * Start one occurrence's background session. Rejections mark the schedule's
+   * lastResult as an error; a returned {@link ScheduledFire} marks it running until
+   * its `ended` settles with how the run went. Resolving with nothing means the fire
+   * did all its work, and records it as finished.
+   */
+  fire: (schedule: ScheduledRunInfo) => Promise<ScheduledFire | void>
   /** Clock, injectable for tests. */
   now?: () => number
   warn?: (message: string) => void
@@ -117,6 +132,68 @@ const LOCK_RETRY_MS = 5
  * alone never breaks a lock whose pid was reused after its holder crashed.
  */
 export const LOCK_STALE_MS = 30 * 1000
+
+/** The message a run left running by a host that has since quit is settled with. */
+export const ORPHANED_RUN_MESSAGE = 'Houston closed before this run finished.'
+
+/** Whether a process with this pid exists (EPERM: it does, owned by someone else). */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
+/** A failure message as the store keeps it: one line, bounded. */
+function boundedError(message: string): string {
+  const flat = message.replace(/\s+/g, ' ').trim() || 'The run failed.'
+  return flat.length > MAX_SCHEDULE_ERROR_CHARS ? `${flat.slice(0, MAX_SCHEDULE_ERROR_CHARS - 1)}…` : flat
+}
+
+/** What a fire's outcome writes onto its schedule. */
+interface RunRecord {
+  lastResult: ScheduledRunResult
+  lastError?: string
+  lastLimit?: RunOutcome['limit']
+}
+
+function recordOf(o: RunOutcome): RunRecord {
+  switch (o.outcome) {
+    case 'done':
+      return { lastResult: 'ok' }
+    case 'error':
+      return { lastResult: 'error', lastError: boundedError(o.message ?? 'The run failed.') }
+    case 'limit':
+      return { lastResult: 'limit', lastLimit: o.limit ?? 'max-steps' }
+    case 'stopped':
+      return { lastResult: 'stopped' }
+  }
+}
+
+/** Write a run record onto a schedule, clearing what the previous run left. */
+function applyRecord(s: ScheduledRunInfo, r: RunRecord): void {
+  s.lastResult = r.lastResult
+  if (r.lastError === undefined) delete s.lastError
+  else s.lastError = r.lastError
+  if (r.lastLimit === undefined) delete s.lastLimit
+  else s.lastLimit = r.lastLimit
+  // The pid only matters while a run is in flight.
+  if (r.lastResult !== 'running') delete s.lastRunPid
+}
+
+/**
+ * Whether a schedule says its run is in flight in a process that no longer exists,
+ * so nothing will ever record how it ended. A run in this process is left alone:
+ * this process is alive, and records its own runs' ends.
+ */
+function isOrphanedRun(s: ScheduledRunInfo): boolean {
+  if (s.lastResult !== 'running') return false
+  if (typeof s.lastRunPid !== 'number' || !Number.isInteger(s.lastRunPid) || s.lastRunPid <= 0) return true
+  if (s.lastRunPid === process.pid) return false
+  return !pidAlive(s.lastRunPid)
+}
 
 /** Block this thread for `ms` (the lock is taken from synchronous code). */
 function sleepSync(ms: number): void {
@@ -230,10 +307,13 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
     }
     try {
       const parsed = JSON.parse(raw) as PersistedSchedules
-      if (typeof parsed.schemaVersion === 'number') {
-        storedVersion = Math.max(SCHEDULES_SCHEMA_VERSION, parsed.schemaVersion)
-      }
+      const version = typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 1
+      storedVersion = Math.max(SCHEDULES_SCHEMA_VERSION, version)
       if (!Array.isArray(parsed.schedules)) return []
+      if (version < 2) {
+        // v1 -> v2: a v1 'ok' meant the session started, not that the run finished.
+        for (const s of parsed.schedules) if (s && s.lastResult === 'ok') delete s.lastResult
+      }
       return parsed.schedules
     } catch {
       // A corrupt store must not take scheduling down (or be silently clobbered):
@@ -333,29 +413,83 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
       return claimed
     })
     for (const s of due) {
-      deps
-        .fire(s)
-        .then(
-          () => recordResult(s.id, { lastResult: 'ok' }),
-          (e: unknown) => {
-            const lastError = e instanceof Error ? e.message : String(e)
-            warn(`scheduled run "${s.name}" (${s.id}) failed to start: ${lastError}`)
-            recordResult(s.id, { lastResult: 'error', lastError })
-          }
-        )
+      deps.fire(s).then(
+        (started) => recordStarted(s.id, started),
+        (e: unknown) => {
+          const lastError = e instanceof Error ? e.message : String(e)
+          warn(`scheduled run "${s.name}" (${s.id}) failed to start: ${lastError}`)
+          recordStartFailed(s.id, lastError)
+        }
+      )
     }
     arm()
   }
 
-  /** Store how a fire went on the schedule as it is on disk now (it may be gone). */
-  function recordResult(id: string, result: { lastResult: 'ok' | 'error'; lastError?: string }): void {
+  /** Change a schedule as it is on disk now (it may be gone, or changed by another process). */
+  function update(id: string, fn: (s: ScheduledRunInfo) => boolean | void): void {
     locked(() => {
       reload()
       const s = schedules.find((x) => x.id === id)
-      if (!s) return
-      s.lastResult = result.lastResult
-      if (result.lastError === undefined) delete s.lastError
-      else s.lastError = result.lastError
+      if (!s || fn(s) === false) return
+      save()
+    })
+  }
+
+  /** A fire could not start its session. */
+  function recordStartFailed(id: string, message: string): void {
+    update(id, (s) => {
+      applyRecord(s, { lastResult: 'error', lastError: boundedError(message) })
+      delete s.lastRunConversationId
+    })
+  }
+
+  /**
+   * A fire started its session: mark it running, then record how it ends. A void
+   * fire did all its work already.
+   */
+  function recordStarted(id: string, handle: ScheduledFire | void): void {
+    if (!handle) {
+      update(id, (s) => {
+        applyRecord(s, { lastResult: 'ok' })
+        delete s.lastRunConversationId
+      })
+      return
+    }
+    const { conversationId } = handle
+    update(id, (s) => {
+      applyRecord(s, { lastResult: 'running' })
+      s.lastRunConversationId = conversationId
+      s.lastRunPid = process.pid
+    })
+    handle.ended.then(
+      (outcome) => recordEnded(id, conversationId, recordOf(outcome)),
+      (e: unknown) =>
+        recordEnded(id, conversationId, {
+          lastResult: 'error',
+          lastError: boundedError(e instanceof Error ? e.message : String(e))
+        })
+    )
+  }
+
+  /** The run a fire started ended. Ignored once a later fire of the schedule has started. */
+  function recordEnded(id: string, conversationId: string, r: RunRecord): void {
+    update(id, (s) => {
+      if (s.lastRunConversationId !== conversationId) return false
+      applyRecord(s, r)
+    })
+  }
+
+  /**
+   * Settle every run left 'running' by a process that has quit (the app was closed or
+   * crashed mid-run), so a schedule never shows a run in flight forever.
+   */
+  function settleOrphanedRuns(): void {
+    if (!schedules.some(isOrphanedRun)) return
+    locked(() => {
+      reload()
+      const orphans = schedules.filter(isOrphanedRun)
+      if (orphans.length === 0) return
+      for (const s of orphans) applyRecord(s, { lastResult: 'error', lastError: ORPHANED_RUN_MESSAGE })
       save()
     })
   }
@@ -384,6 +518,7 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
 
     list(): ScheduledRunInfo[] {
       reload()
+      settleOrphanedRuns()
       return schedules.map((s) => ({ ...s }))
     },
 
@@ -431,19 +566,23 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
         return { ...s }
       })
       if (!target) throw new Error('That scheduled run no longer exists.')
+      let fired: ScheduledFire | void
       try {
-        await deps.fire(target)
-        recordResult(id, { lastResult: 'ok' })
+        fired = await deps.fire(target)
       } catch (e) {
         const lastError = e instanceof Error ? e.message : String(e)
-        recordResult(id, { lastResult: 'error', lastError })
+        recordStartFailed(id, lastError)
         throw new Error(lastError, { cause: e })
       }
+      recordStarted(id, fired)
     },
 
     start(): void {
       if (started) return
       started = true
+      // A run this host's previous life left in flight will never report its end.
+      reload()
+      settleOrphanedRuns()
       // Catch-up pass: anything due while we were down fires once now (fireDue
       // also recomputes each schedule's next occurrence from the present).
       fireDue()
@@ -465,12 +604,18 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
  * live-session concurrency cap and show up as ordinary conversations. Kept here
  * (not inlined per host) so the desktop and terminal hosts can't drift.
  */
-export function fireViaSpawn(): (s: ScheduledRunInfo) => Promise<void> {
+export function fireViaSpawn(
+  /** How a chat's latest run ended, from its log; undefined when the chat is gone. */
+  outcomeOf: (conversationId: string) => RunOutcome | undefined
+): (s: ScheduledRunInfo) => Promise<ScheduledFire> {
   return async (s) => {
     if (!isSpawnBackendConfigured()) {
       throw new Error('no spawn backend wired — cannot start the scheduled session')
     }
-    await spawnSession({
+    let runEnded!: () => void
+    const settled = new Promise<void>((resolve) => (runEnded = resolve))
+    const result = await spawnSession({
+      onRunEnd: () => runEnded(),
       title: s.name,
       prompt: s.prompt,
       providerId: s.providerId,
@@ -481,5 +626,9 @@ export function fireViaSpawn(): (s: ScheduledRunInfo) => Promise<void> {
       ...(isReasoningEffort(s.reasoningEffort) ? { reasoningEffort: s.reasoningEffort } : {}),
       workspace: s.workspace
     })
+    const { conversationId } = result
+    // A chat deleted mid-run had its run killed with it.
+    const ended = settled.then((): RunOutcome => outcomeOf(conversationId) ?? { outcome: 'stopped' })
+    return { conversationId, ended }
   }
 }

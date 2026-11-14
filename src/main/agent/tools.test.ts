@@ -249,6 +249,50 @@ describe('propose_session', () => {
   })
 })
 
+describe('list_scheduled_runs', () => {
+  const base = {
+    name: 'n',
+    spec: 'every 30m',
+    prompt: 'p',
+    workspace: '/w',
+    providerId: 'anthropic',
+    model: 'm',
+    approvalPolicy: 'plan' as const,
+    nextRunAt: null,
+    createdAt: 0,
+    lastFiredAt: 1
+  }
+  it("says how each schedule's last run went, never calling an in-flight run a success", async () => {
+    const ctx: ToolContext = {
+      workspace: '/w',
+      allowNetwork: false,
+      scheduler: {
+        create: () => {
+          throw new Error('unused')
+        },
+        cancel: () => false,
+        list: () => [
+          { ...base, id: 'sch-run', lastResult: 'running', lastRunConversationId: 'c1' },
+          { ...base, id: 'sch-ok', lastResult: 'ok', lastRunConversationId: 'c2' },
+          { ...base, id: 'sch-err', lastResult: 'error', lastError: 'bad key', lastRunConversationId: 'c3' },
+          { ...base, id: 'sch-nostart', lastResult: 'error', lastError: 'Too many sessions' },
+          { ...base, id: 'sch-lim', lastResult: 'limit', lastLimit: 'stalled', lastRunConversationId: 'c4' },
+          { ...base, id: 'sch-stop', lastResult: 'stopped', lastRunConversationId: 'c5' }
+        ]
+      }
+    }
+    const out = await getTool('list_scheduled_runs')!.execute({}, ctx)
+    const line = (id: string): string => out.split('\n').find((l) => l.includes(id)) ?? ''
+    expect(line('sch-run')).toContain('(still running)')
+    expect(line('sch-ok')).toContain('(finished)')
+    expect(line('sch-err')).toContain('(failed (bad key))')
+    expect(line('sch-nostart')).toContain("(couldn't start (Too many sessions))")
+    expect(line('sch-lim')).toContain('stalled without making progress')
+    expect(line('sch-stop')).toContain('was stopped before it finished')
+    expect(out).not.toContain('—')
+  })
+})
+
 describe('spawn_session', () => {
   it('is a write tool (gated by approval, blocked in plan mode)', () => {
     const tool = getTool('spawn_session')!
