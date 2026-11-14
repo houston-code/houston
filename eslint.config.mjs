@@ -44,6 +44,16 @@ export default tseslint.config(
     }
   },
   {
+    // The npm package's launcher is shipped as written, run by bare Node with no build
+    // step, so it is plain CommonJS using only Node's own globals.
+    files: ['packaging/npm/*.cjs'],
+    languageOptions: {
+      sourceType: 'commonjs',
+      globals: { require: 'readonly', module: 'writable', process: 'readonly' }
+    },
+    rules: { '@typescript-eslint/no-require-imports': 'off' }
+  },
+  {
     files: ['src/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks },
     rules: {

@@ -292,7 +292,13 @@ function isDirectRun(): boolean {
   return typeof require !== 'undefined' && require.main === module
 }
 
-if (isDirectRun()) {
+/**
+ * Run this process as the CLI: fatal handlers, `main()`, then a drained exit. Runs on its
+ * own when the bundle is the entry script (the release download, Homebrew, AUR). The npm
+ * package's launcher (`packaging/npm/houston.cjs`) loads the bundle as a module, so that
+ * it can turn on Node's compile cache first, and then calls this.
+ */
+export function runAsEntry(): void {
   // Mirror the desktop headless path's fatal handling: log, one-line stderr, exit.
   process.on('uncaughtException', (err) => {
     logFatal('uncaughtException', err)
@@ -316,3 +322,5 @@ if (isDirectRun()) {
     exit(1)
   })
 }
+
+if (isDirectRun()) runAsEntry()

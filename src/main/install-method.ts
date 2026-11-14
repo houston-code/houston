@@ -7,7 +7,7 @@ import { DOWNLOAD_URL } from '@shared/update'
  *
  * Read from where the running script actually lives (symlinks resolved): every channel
  * puts the CLI somewhere recognizable. npm and bun link `houston` to the package's
- * houston-cli.cjs, the Homebrew formula and the AUR package run it from their own
+ * launcher (houston.cjs, next to houston-cli.cjs), the Homebrew formula and the AUR package run it from their own
  * directories through a wrapper, install.sh copies it to a file named `houston`, and a
  * source checkout builds it to out/cli/. Anything unrecognized falls back to the
  * download link, which is always correct, just less convenient.

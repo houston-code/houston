@@ -3,8 +3,9 @@
 // The repo-root package.json is the Electron app: it is `private`, pulls Electron and a
 // native module, and runs electron-rebuild on postinstall, so it can never be what
 // `npm i -g` installs. The CLI is one self-contained file (scripts/build-cli.mjs), so the
-// npm package is that file plus a generated manifest, the npm-page README, and the license
-// files. Nothing else ships: no dependencies, no install scripts.
+// npm package is that file plus a small launcher (packaging/npm/houston.cjs, which turns on
+// Node's compile cache and then runs the bundle), a generated manifest, the npm-page README,
+// and the license files. Nothing else ships: no dependencies, no install scripts.
 //
 //   node scripts/stage-npm-cli.mjs [--cli out/cli/houston-cli.cjs] [--out out/npm-cli] [--manifest package.json]
 //
@@ -25,6 +26,7 @@ import { isReleaseVersion } from './render-packaging.mjs'
 
 export const PACKAGE_NAME = '@houston-code/cli'
 const CLI_FILE = 'houston-cli.cjs'
+const LAUNCHER_FILE = 'houston.cjs'
 
 /** The published package.json, derived from the root manifest so version and links never drift. */
 export function npmManifest(rootPkg) {
@@ -41,12 +43,23 @@ export function npmManifest(rootPkg) {
     bugs: rootPkg.bugs,
     license: rootPkg.license,
     author: rootPkg.author,
-    bin: { houston: CLI_FILE },
-    files: [CLI_FILE, 'NOTICE'],
+    bin: { houston: LAUNCHER_FILE },
+    files: [LAUNCHER_FILE, CLI_FILE, 'NOTICE'],
     engines: { node: rootPkg.engines.node },
     // No `provenance: true` here: npm can only generate provenance in CI, so it would break
     // the one-time hand publish. The release workflow passes --provenance itself.
     publishConfig: { access: 'public' },
+  }
+}
+
+/**
+ * The launcher runs the bundle by calling its exported `runAsEntry`. A bundle built before
+ * that export existed (re-publishing an older release, say) would load and then do nothing,
+ * so refuse to stage it rather than publish a `houston` that silently exits.
+ */
+export function assertRunsFromLauncher(bundleText, label = 'the CLI bundle') {
+  if (!/\brunAsEntry\b/.test(bundleText)) {
+    throw new Error(`${label} exports no runAsEntry, which the npm launcher calls; build it from a newer commit`)
   }
 }
 
@@ -68,15 +81,18 @@ function main() {
   const cliPath = resolve(root, cli)
   const outDir = resolve(root, out)
   if (!existsSync(cliPath)) throw new Error(`${cliPath} not found: run \`npm run build:cli\` first`)
-  if (!readFileSync(cliPath, 'utf8').startsWith('#!/usr/bin/env node')) {
-    throw new Error(`${cliPath} has no node shebang; npm's bin shim needs one`)
+  const launcherPath = resolve(root, 'packaging/npm', LAUNCHER_FILE)
+  if (!readFileSync(launcherPath, 'utf8').startsWith('#!/usr/bin/env node')) {
+    throw new Error(`${launcherPath} has no node shebang; npm's bin shim needs one`)
   }
+  assertRunsFromLauncher(readFileSync(cliPath, 'utf8'), cliPath)
 
   const manifest = npmManifest(JSON.parse(readFileSync(resolve(root, manifestPath), 'utf8')))
   rmSync(outDir, { recursive: true, force: true })
   mkdirSync(outDir, { recursive: true })
   writeFileSync(join(outDir, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
   copyFileSync(cliPath, join(outDir, CLI_FILE))
+  copyFileSync(launcherPath, join(outDir, LAUNCHER_FILE))
   copyFileSync(resolve(root, 'packaging/npm/README.md'), join(outDir, 'README.md'))
   // npm always packs LICENSE and README; Apache-2.0 also needs NOTICE, listed in `files`.
   copyFileSync(resolve(root, 'LICENSE'), join(outDir, 'LICENSE'))

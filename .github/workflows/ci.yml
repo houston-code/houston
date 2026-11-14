@@ -142,6 +142,27 @@ jobs:
           echo "$out"
           [ "$code" -ne 0 ] || { echo "::error::CLI -p with no key unexpectedly exited 0"; exit 1; }
           echo "$out" | grep -q "No model configured" || { echo "::error::CLI -p did not surface the expected 'No model configured' error"; exit 1; }
+      - name: Smoke the npm package launcher
+        run: |
+          set -euo pipefail
+          # The npm package's `houston` is a launcher that turns on Node's compile cache
+          # and then calls the bundle's runAsEntry. Stage the real bundle the way the
+          # release does and run it through the launcher from a scratch dir, so a
+          # bundle that stops starting under it fails here, not after an npm publish.
+          iso="$(mktemp -d)"
+          node scripts/stage-npm-cli.mjs --out "$iso/pkg"
+          # A scratch HOME and XDG_CACHE_HOME keep the cache (~/Library/Caches on macOS,
+          # $XDG_CACHE_HOME on Linux) inside the scratch dir, where the last check looks.
+          export HOME="$iso/home" XDG_CACHE_HOME="$iso/cache"
+          ver="$(node -p "require('./package.json').version")"
+          got="$(cd "$iso" && node pkg/houston.cjs --version)"
+          echo "npm houston --version -> $got (expected $ver)"
+          [ "$got" = "$ver" ] || { echo "::error::npm launcher --version printed '$got', expected '$ver'"; exit 1; }
+          out="$(cd "$iso" && HOUSTON_DATA_DIR="$iso/profile" node pkg/houston.cjs -p ping --cwd "$iso" 2>&1)" && code=0 || code=$?
+          echo "$out"
+          [ "$code" -ne 0 ] || { echo "::error::npm launcher -p with no key unexpectedly exited 0"; exit 1; }
+          echo "$out" | grep -q "No model configured" || { echo "::error::npm launcher -p did not surface the expected 'No model configured' error"; exit 1; }
+          [ -n "$(find "$iso" -path '*/houston/compile-cache/*' -type f | head -1)" ] || { echo "::error::npm launcher wrote no compile cache"; exit 1; }
       - name: Smoke the CLI installer (bare `houston` on PATH)
         run: |
           set -euo pipefail
