@@ -14,8 +14,11 @@ import { runSandboxed, clampToolResult } from '../sandbox'
  * before the run is accepted as done.
  *
  * It is deliberately conservative:
- *  - OPT-IN only: does nothing unless the user enabled it AND configured a
- *    command. We never run a command the user didn't type.
+ *  - OPT-IN only: does nothing unless the user enabled it. With no command
+ *    configured, the loop may use the one the project's files suggest
+ *    (`inferVerifyCommand`, a fixed set like `npm test` or `cargo test`), but only
+ *    in Full auto, where shell commands already run without asking, with network
+ *    only on the agent's own shell-network grant, and it says so once per run.
  *  - Only fires when files were actually modified this run (no point verifying a
  *    read-only Q&A turn).
  *  - BOUNDED: at most `maxPasses` extra verification cycles, after which `done`
@@ -105,6 +108,11 @@ export function verifyFailureMessage(command: string, output: string): string {
     'Fix the problems above, then finish. If the failures are unrelated to your ' +
     'changes or you cannot fix them, say so and stop.'
   )
+}
+
+/** Said once per run, the first time the gate runs a command it inferred. */
+export function inferredVerifyNotice(command: string, source: string): string {
+  return `Verifying with \`${command}\` (from ${source}). Set a verification command in Settings to use a different one.`
 }
 
 /** Inputs needed to actually execute the verification command. */

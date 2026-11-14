@@ -245,7 +245,8 @@ Lines arrive in this order:
 In the result line:
 
 - `status` is `success`, `limit`, `stalled`, `approval_denied`, `error`,
-  `schema_invalid`, `input_error`, or `verify_failed`.
+  `schema_invalid`, `input_error`, `verify_failed`, or `aborted` (stopped by a
+  signal).
 - `finalText` is the agent's closing answer (the text after its last tool call).
 - `receipt` is Houston's record of what the run actually ran (see "What actually
   ran"), present when it ran checks or changed files.
@@ -264,7 +265,7 @@ repository.
 | 3 | the run hit a budget before finishing (its step cap or the model's output limit) |
 | 4 | the final answer still didn't match `--output-schema` after the corrective round |
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
-| 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `error`); a second signal exits at once |
+| 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `aborted`); a second signal exits at once |
 
 **Stopping Houston stops what the agent started.** When `-p`, `-i`, or `--acp` ends,
 normally or because the terminal closed or it was sent a signal, it stops the
@@ -425,6 +426,13 @@ extended thinking, and prompt caching.
 - **Foundry** is the exception: it does take an API key. The resource name is the
   `my-resource` part of `https://my-resource.services.ai.azure.com`.
 
+**Stuck sign-ins.** If Bedrock or Vertex can't get credentials within 30 seconds (an
+expired SSO session, a `credential_process` waiting for input, a metadata server
+lookup on a machine outside the cloud), the turn stops with an error that says which
+credential source didn't answer and what to run, such as `aws sso login` or
+`gcloud auth application-default login`. Houston doesn't retry it on its own, and
+Stop ends the wait at any time.
+
 **Model lists.** The picker shows each model under one name whichever host you use.
 None of the three publishes a model list, so Houston ships a curated one, and
 "Fetch" restores it rather than calling out to the network. If your account can use
@@ -458,7 +466,12 @@ retries the turn with a growing pause between attempts and tells you it's retryi
   printed), and headless mode never writes it to stdout.
 - **Stalled connections are cut.** A reply that stops arriving for two minutes (a
   network switch or a laptop waking from sleep can leave the connection open but
-  dead) is treated as dropped and retried on a fresh connection.
+  dead) is treated as dropped and retried on a fresh connection. A model served
+  from your own machine or private network (Ollama, LM Studio, and other local
+  servers) gets ten minutes, since loading a model or reading a long prompt can
+  take that long before the first word, and so does a Chat Completions request
+  that asks for reasoning, which streams nothing while the model thinks. A stall
+  that long is retried once, not waited out like an outage.
 - **Outages are waited out.** If the network goes away after the provider has
   already answered in this run, Houston keeps retrying for up to five minutes and
   picks up when the connection comes back. Before the provider has answered once,
@@ -470,6 +483,23 @@ retries the turn with a growing pause between attempts and tells you it's retryi
 - **Nothing half-runs.** Tool calls in a discarded reply never run.
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.
+
+### Behind a proxy
+
+On a network where traffic must go through an HTTP proxy, Houston sends its own API
+requests through it: model providers, MCP servers reached over HTTP or SSE (and their
+sign-in endpoints), and web search APIs. It uses the **Network proxy** setting
+(Settings → Providers & Models, or `proxyUrl` in `settings.json`) when set, and otherwise the
+`HTTPS_PROXY` and `HTTP_PROXY` environment variables (either case), in the desktop
+app and the terminal alike. `NO_PROXY` lists hosts that connect directly (`NO_PROXY=*`
+turns the proxy off), and `localhost`, `127.0.0.1` and `::1` always do, so a local
+model server keeps working. Only `http://` and `https://` proxy URLs are supported;
+credentials can ride in the URL (`http://user:pass@proxy:8080`).
+
+Two things never use it: `web_fetch`, which connects straight to an address it has
+checked so it can't be pointed at a private network, and shell commands, which the
+sandbox's own network proxy governs. Houston also trusts certificates in your
+operating system's store, so a proxy that re-signs TLS with a company root works too.
 
 ### When a turn fails
 
@@ -751,6 +781,12 @@ Houston** under the agent's last message. For example:
 `No tests ran · install failed (no network) · build failed · 14 files changed`
 
 Houston builds it from the commands it executed and the files its tools changed.
+In a git repository that includes files a shell command changed (a `sed -i`, `git
+apply`, a heredoc, a code generator): Houston compares `git status` and each listed
+file's size and modification time before and after a command that may write, so a
+read-only command like `ls` or `git log` costs nothing. Files git ignores aren't
+counted, and in a very large repository where that comparison is slow, Houston stops
+making it for the rest of the turn.
 **The agent can't write it**, so it's what to check the agent's own summary against:
 if the reply says the tests pass and the receipt says no tests ran, believe the
 receipt.
@@ -903,6 +939,13 @@ and page through a large file by them.
   lines so it can check them.
 - An edit whose snippet matches nothing points the agent at the closest part of the
   file instead of only failing.
+
+**Whole-file rewrites.** When the agent overwrites a file of 200 or more lines, the
+result tells it how many lines changed and how many were removed, and warns it when
+more than 30% of the file is gone. A rewrite that puts a placeholder such as
+`// ... existing code ...` or `# rest unchanged` where real code was is refused, since
+the code it stands for would be deleted; the agent writes the whole file or edits just
+the part it means to change.
 
 ## Code intelligence (language servers)
 
@@ -1107,13 +1150,20 @@ your own step count, it stays a hard stop until you turn the switch on.
 **Checking the work when it finishes.** Loop control also has an opt-in verification
 command that runs when the agent stops after changing files, with a failure sent back
 for a bounded fix-up. Changes made through shell commands count too (a `sed -i`, a
-heredoc, `git apply`, a code generator): in a git repository, Houston compares the
-working tree at the end of the turn with how it was when the turn started, so a
-read-only command like `ls` or `git log` doesn't trigger a check. Outside a git
-repository, only the agent's own file edits do. With a project open, Houston suggests one from the project's
+heredoc, `git apply`, a code generator): in a git repository, Houston notes the files
+each such command changed (see the receipt above) and also compares the working tree
+at the end of the turn with how it was when the turn started, so a read-only command
+like `ls` or `git log` doesn't trigger a check. Outside a git repository, only the
+agent's own file edits do. With a project open, Houston suggests one from the project's
 files under the field: the `typecheck` and `test` scripts in `package.json` (run with
 npm, pnpm, yarn, or bun by lockfile), `cargo test`, `go test ./...`, or `pytest`.
 **Use this command** fills the field; it doesn't turn verification on.
+
+With verification on and the field left empty, Houston uses the command it would
+suggest, but only in Full auto, where shell commands already run without asking. It
+says which command it is using the first time it runs one in a turn. That command
+gets network access only if you allowed the agent's own shell commands to use the
+network. In the other modes an empty field still means nothing runs.
 
 ### Watching a running turn
 
@@ -1901,7 +1951,9 @@ each shell command a writable subagent runs would run unconfined, so each asks f
 own approval too.
 
 **Cost.** Tokens a subagent spends roll into the conversation's usage meter, priced
-at the model it actually ran on.
+at the model it actually ran on, one request at a time like the main agent's. They
+count toward the run's cost ceiling (`--max-cost`) as they're spent, so a subagent
+working when the run reaches it is told to wrap up too.
 
 ### Seeing what a subagent did
 
@@ -1911,7 +1963,11 @@ command's exit code, an edit's line counts) and shows its model, step count, tim
 and tokens. A nested agent gets its own indented block.
 
 **When it finishes,** the row collapses to a summary: model, steps, time, cost, and
-its id (like `ag1`). Expand it for three tabs:
+its id (like `ag1`). A check means it finished with a whole report. A warning (`!`)
+means its report is partial or missing: it stopped at its step limit or `max_turns`,
+stopped after repeating itself, was cut off at the model's output limit, or ended
+without writing a report. The main agent is told the same in the result it gets back.
+Expand it for three tabs:
 
 - **Report:** the agent's report, rendered.
 - **Steps:** each step expands to its result, or an edit's real diff.
@@ -1926,8 +1982,10 @@ Loop control sets how much a chat keeps (4 MB by default). Past that, the oldest
 subagents keep their task, steps, and report but drop step results and diffs.
 
 **In the terminal,** a line is printed per step under the dispatch (a review's
-reviewers only with `/verbose`), then the report. `--json` emits `subagent_start`,
-`subagent_step`, and `subagent_end`.
+reviewers only with `/verbose`), then an end line marked the same way (a check, or `!`
+for a partial or missing report), then the report. `--json` emits `subagent_start`,
+`subagent_step`, and `subagent_end` (whose `outcome` is `done`, `limit`, `empty`, or
+`error`).
 
 ### Step budget
 
@@ -1986,7 +2044,22 @@ from here.
 ## Background work wakes the chat
 
 The agent runs open-ended commands (dev servers, watchers, long builds) with
-`run_shell` and `background: true`. It doesn't have to keep checking on them:
+`run_shell` and `background: true`. Two limits keep these from piling up:
+
+- **No duplicates.** Starting a command that the chat already has running in the same
+  folder doesn't start a second copy: the agent is pointed at the running one, to read
+  its output or stop it and start again.
+- **At most 8 at once per chat.** A ninth is refused with the list of the ones still
+  running, so the agent stops one it no longer needs first.
+
+Something a regular (foreground) command leaves running on its own, such as
+`docker compose up -d`, `docker run -d`, `pm2 start`, a detached `tmux` or `screen`
+session, `brew services start`, `systemctl start`, or a process sent to the
+background with `&`, isn't one of Houston's background commands, so Stop and quitting
+Houston don't stop it. The agent is told so, along with the command that stops it
+(for example `docker compose down` or `pm2 delete`).
+
+The agent doesn't have to keep checking on its background commands:
 
 - **When a background command exits,** the agent is told, with its exit code and the
   last lines it printed.
@@ -2131,7 +2204,10 @@ All times are local.
 ### Managing schedules
 
 **Settings > Scheduled Runs** (desktop) lists every schedule with its recurrence, folder,
-model, approval mode, next run, and how the last run went. Each has:
+model, approval mode, next run, and how the last run went: still running, finished,
+failed (with the error), stopped at a limit, or stopped before it finished. A run that
+couldn't start says so, and one that was still going when Houston closed is shown as
+failed rather than left running. Each has:
 
 - **Pause** / **Resume**: a paused schedule is kept but never runs. Resuming picks up
   from now, so the runs it missed while paused don't all start at once.
@@ -2147,7 +2223,7 @@ until you answer.
 The agent manages the same list:
 
 - `list_scheduled_runs` shows what's configured, with next and last fire times (or
-  "paused").
+  "paused") and how the last run went.
 - `cancel_scheduled_run` removes one.
 - Creating or cancelling a schedule asks for approval.
 
@@ -2383,6 +2459,10 @@ or **OAuth** for servers that need a sign-in:
 - The spawned process gets a base environment with credentials stripped, so a token
   the server needs must be listed explicitly.
 - Environment values are treated as secrets and stored encrypted, like header values.
+- Disconnecting a server, or quitting Houston, stops everything the server started,
+  not just its own process: a launcher such as `npx`, `uvx`, or `sh -c` doesn't leave
+  the real server running. A server that hasn't exited two seconds after being asked
+  to is force-stopped.
 - On Windows, a command such as `npx` that is installed as a `.cmd` script runs
   through `cmd.exe`. Its arguments can't contain `"`, `%`, `!`, or a line break there;
   a server whose arguments need one fails to start with an error saying so.
@@ -2834,6 +2914,9 @@ window:
    of one long request
 
 - **Your current request is always kept word for word.**
+- **Key facts are kept beside the summary:** your original request, each message you
+  sent after it (shortened if long), the task list, the files in play, and, as they stood when it last compacted, the git branch, the
+  shell's folder, and the background shells still running.
 - **Sized to the model.** The threshold is set automatically from the selected model's
   context window: a large-window model compacts later, a small local model sooner.
 - **Built up, not redone.** The summary is saved with the conversation, so later turns
@@ -2906,7 +2989,11 @@ be reverted with one click (and re-applied after a revert).
 - **Covers every file-editing tool,** including multi-file patches (adds, updates,
   deletes, and moves) and edits made by a writable subagent the turn dispatched.
 - **Survives restarts.** Checkpoints are kept on disk in your Houston profile, for the
-  most recent 200 turns.
+  most recent 200 turns, up to 512 MB in all; the oldest go first. Each chat's latest
+  turn is always kept.
+- **Large files are skipped.** A file over 5 MB isn't snapshotted, and neither is a
+  file that would take one turn's snapshots past about 32 MB of text, so reverting that turn
+  leaves those files as they are.
 - **Shell side effects aren't covered.** Revert only restores files the editing tools
   touched.
 
@@ -2920,6 +3007,11 @@ empty chat, a row under the message box names the keys it understands: `/` for
 commands, `@` for files, `#` to save a rule, ⇧Tab to switch the approval mode, ↑ for
 your last prompt, and ⌘K for everything else. The row goes away once the chat has
 messages. Keys you rebind in Settings > Keyboard show as you bound them.
+
+The sidebar's chat list and the Files tree are each one stop for Tab. Inside, ↑ and ↓
+move between rows, Home and End jump to the first and last, and Enter opens the row. In
+the Files tree, → opens a folder (and then steps into it) and ← closes it (or steps out
+to its parent).
 
 Hover any icon button to see what it does: the title-bar and sidebar buttons name their
 shortcut where they have one (for example New chat ⌘N and Settings ⌘,), and the

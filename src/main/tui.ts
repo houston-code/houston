@@ -367,6 +367,31 @@ export function renderToolStart(name: string, args: Record<string, unknown>, pai
   return `${paint('·', 'dim')} ${paint(verb, 'cyan')}${suffix}`
 }
 
+/**
+ * A short name for one tool call ("Read src/a.ts", "Run npm test"), put in front of its
+ * result and progress lines while other calls run alongside it. Parallel calls print
+ * all their start rows first, so without it every result would read as belonging to
+ * the last row above it.
+ */
+export function toolCallTag(name: string, args: Record<string, unknown> | undefined): string {
+  const { verb, target } = describeToolCall(name, args)
+  const hint = (target || (verb === name && args ? toolArgHint(args) : '')).replace(/\s+/g, ' ').trim()
+  return hint ? `${verb} ${truncate(hint, 40)}` : verb
+}
+
+/** Prefix the first line of a rendered result with its call's tag, after the indent. */
+export function tagResultLines(rendered: string, tag: string, paint: Painter): string {
+  if (!rendered) return rendered
+  const nl = rendered.indexOf('\n')
+  const first = nl === -1 ? rendered : rendered.slice(0, nl)
+  const rest = nl === -1 ? '' : rendered.slice(nl)
+  // The indent may sit inside the line's own colour codes; keep it in front either way.
+  // eslint-disable-next-line no-control-regex
+  const m = /^((?:\x1b\[[0-9;]*m)*)(\s*)/.exec(first)
+  const lead = m ? m[0].length : 0
+  return `${first.slice(0, lead)}${paint(`${tag}:`, 'dim')} ${first.slice(lead)}${rest}`
+}
+
 /** Best-effort one-liner describing a tool call's most salient argument. */
 export function toolArgHint(args: Record<string, unknown>): string {
   for (const key of ['path', 'file', 'file_path', 'command', 'cmd', 'query', 'url', 'pattern']) {
@@ -4554,6 +4579,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     const promptedWrites = new Set<string>()
     // todo_write calls whose list we already drew, so their summary line is dropped.
     const todoCalls = new Set<string>()
+    // Calls started and not yet finished, and those that ran alongside another one:
+    // their result and progress lines name the call, since they can't sit under it.
+    const liveCalls = new Map<string, string>()
+    const parallelCalls = new Set<string>()
+    const callTag = (callId: string): string | null => {
+      const name = liveCalls.get(callId)
+      return name && parallelCalls.has(callId) ? toolCallTag(name, toolArgs.get(callId)) : null
+    }
     // Review findings print once per status change (line mode can't update in place).
     const printFinding = createFindingPrinter()
     // A subagent's start, finished steps and end (reviewers' steps only under /verbose).
@@ -4642,6 +4675,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'tool_start': {
           deps.io.setSpinnerLabel?.(describeToolCall(e.name, e.args).verb)
           toolArgs.set(e.callId, e.args)
+          if (liveCalls.size > 0) {
+            for (const id of liveCalls.keys()) parallelCalls.add(id)
+            parallelCalls.add(e.callId)
+          }
+          liveCalls.set(e.callId, e.name)
           // A todo update IS its list; showing "· todo_write" and then a count of
           // what changed tells you nothing about the plan.
           const todos = e.name === 'todo_write' ? parseTodosSafe(e.args.todos) : []
@@ -4658,6 +4696,9 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           break
         }
         case 'tool_result': {
+          const tag = callTag(e.callId)
+          liveCalls.delete(e.callId)
+          parallelCalls.delete(e.callId)
           // The list was just drawn from the call's args; its result is only the
           // model-facing summary of what we already showed.
           if (todoCalls.delete(e.callId) && e.ok) {
@@ -4686,7 +4727,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
               break
             }
           }
-          const line = renderToolResult(e.name, e.ok, e.output, paint, { verbose, width: columns() })
+          const rendered = renderToolResult(e.name, e.ok, e.output, paint, { verbose, width: columns() })
+          const line = tag ? tagResultLines(rendered, tag, paint) : rendered
           if (line) deps.io.out(`${line}\n`)
           toolArgs.delete(e.callId)
           const preview = writePreviews.get(e.callId)
@@ -4700,9 +4742,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           promptedWrites.delete(e.callId)
           break
         }
-        case 'tool_progress':
-          if (e.message.trim()) deps.io.out(paint(`  … ${truncate(e.message.trim(), 80)}\n`, 'dim'))
+        case 'tool_progress': {
+          if (!e.message.trim()) break
+          const tag = callTag(e.callId)
+          deps.io.out(paint(`  … ${tag ? `${tag}: ` : ''}${truncate(e.message.trim(), 80)}\n`, 'dim'))
           break
+        }
         case 'subagent_start':
         case 'subagent_step':
         case 'subagent_end': {

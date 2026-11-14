@@ -644,6 +644,13 @@ export interface AppSettings {
    */
   webReads?: 'ask' | 'allow'
   /**
+   * Proxy for Houston's own API traffic (model providers, MCP http/sse servers, web
+   * search APIs), as an `http://` or `https://` URL. Unset: the `HTTPS_PROXY` /
+   * `HTTP_PROXY` environment variables apply. `NO_PROXY` is honoured either way, and
+   * loopback always goes direct. `web_fetch` and shell commands never use it.
+   */
+  proxyUrl?: string
+  /**
    * Per-provider "an API key is stored" flags, keyed by search-provider id. Derived
    * from the secrets store on every read, never persisted.
    */
@@ -726,7 +733,8 @@ export interface AppSettings {
    * End-of-run verification gate (opt-in). When the model stops naturally after
    * modifying files, run {@link verifyCommand} and, if it fails, feed the output
    * back for a bounded number of self-correction passes before accepting done.
-   * Off by default and inert unless a command is configured.
+   * Off by default. With no command configured, a Full auto run uses the one the
+   * project's files suggest (`inferVerifyCommand`); other modes run nothing.
    */
   verifyOnStop?: boolean
   /**

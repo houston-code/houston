@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { version as PKG_VERSION } from '../../../package.json'
 import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
-import { McpClient, type SpawnFn } from './client'
+import { McpClient, killLiveMcpGroups, type SpawnFn } from './client'
 import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
 
 interface ToolDecl {
@@ -29,6 +29,32 @@ function fakeServer(tools: ToolDecl[], callResult: (params: unknown) => unknown)
       if (msg.method === 'initialize') reply(msg.id, { protocolVersion: '2024-11-05', capabilities: {} })
       else if (msg.method === 'tools/list') reply(msg.id, { tools })
       else if (msg.method === 'tools/call') reply(msg.id, callResult(msg.params))
+      return true
+    }
+  })
+  const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+  return (() => child) as unknown as SpawnFn
+}
+
+/** A two-page answer to each `*\/list` method: `one` on the first page, `two` behind cursor `page-2`. */
+function pagedListResult(method: string, cursor: unknown): unknown {
+  const kind = method.split('/')[0]
+  if (!['tools', 'resources', 'prompts'].includes(kind) || !method.endsWith('/list')) return {}
+  const entry = (n: string): unknown => (kind === 'resources' ? { uri: `file:///${n}` } : { name: n })
+  return cursor === undefined ? { [kind]: [entry('one')], nextCursor: 'page-2' } : { [kind]: [entry('two')] }
+}
+
+/** A stdio server that answers every request with `answer(method, params)`. */
+function fakeListServer(answer: (method: string, params: unknown) => unknown): SpawnFn {
+  const stdout = new EventEmitter()
+  const stdin = Object.assign(new EventEmitter(), {
+    write(line: string): boolean {
+      const msg = JSON.parse(line.trim()) as { id?: number; method: string; params?: unknown }
+      if (msg.id === undefined) return true
+      const result = msg.method === 'initialize' ? { protocolVersion: '2024-11-05', capabilities: {} } : answer(msg.method, msg.params)
+      queueMicrotask(() =>
+        stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+      )
       return true
     }
   })
@@ -73,6 +99,52 @@ describe('McpClient (fake stdio server)', () => {
     )
     await client.connect({ command: 'fake' })
     expect(client.tools.map((t) => t.name)).toEqual(['echo'])
+    client.close()
+  })
+
+  it('follows nextCursor through every page of tools, resources and prompts', async () => {
+    const stdout = new EventEmitter()
+    const asked: Array<{ method: string; cursor?: unknown }> = []
+    const stdin = Object.assign(new EventEmitter(), {
+      write(line: string): boolean {
+        const msg = JSON.parse(line.trim()) as { id?: number; method: string; params?: { cursor?: unknown } }
+        if (msg.id === undefined) return true
+        if (msg.method.endsWith('/list')) asked.push({ method: msg.method, cursor: msg.params?.cursor })
+        const result =
+          msg.method === 'initialize'
+            ? { protocolVersion: '2025-06-18', capabilities: { resources: {}, prompts: {} } }
+            : pagedListResult(msg.method, msg.params?.cursor)
+        queueMicrotask(() =>
+          stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+        )
+        return true
+      }
+    })
+    const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    const client = new McpClient((() => child) as unknown as SpawnFn)
+    await client.connect({ command: 'fake' })
+    expect(client.tools.map((t) => t.name)).toEqual(['one', 'two'])
+    expect(client.resources.map((r) => r.uri)).toEqual(['file:///one', 'file:///two'])
+    expect(client.prompts.map((p) => p.name)).toEqual(['one', 'two'])
+    expect(client.listNotes).toEqual({})
+    expect(asked).toEqual([
+      { method: 'tools/list', cursor: undefined },
+      { method: 'tools/list', cursor: 'page-2' },
+      { method: 'resources/list', cursor: undefined },
+      { method: 'resources/list', cursor: 'page-2' },
+      { method: 'prompts/list', cursor: undefined },
+      { method: 'prompts/list', cursor: 'page-2' }
+    ])
+    client.close()
+  })
+
+  it('notes a tool list cut short by a repeated cursor', async () => {
+    const client = new McpClient(
+      fakeListServer((method) => (method === 'tools/list' ? { tools: [{ name: 'a' }], nextCursor: 'again' } : {}))
+    )
+    await client.connect({ command: 'fake' })
+    expect(client.tools.map((t) => t.name)).toEqual(['a', 'a'])
+    expect(client.listNotes.tools).toMatch(/repeated a page cursor/)
     client.close()
   })
 
@@ -544,6 +616,88 @@ describe('McpClient (real stdio process)', () => {
       })
     ).rejects.toThrow('MCP server process exited: Error: missing API_TOKEN')
     client.close()
+  }, 15_000)
+})
+
+describe.skipIf(process.platform === 'win32')('McpClient close (POSIX process group)', () => {
+  /**
+   * A server that starts a long-lived helper of its own (as `npx`/`uvx`/`sh -c`
+   * launchers do) and names the helper's pid as its one tool. `helperIgnoresTerm`
+   * makes both the helper and the server ignore SIGTERM, so only SIGKILL ends them.
+   */
+  const serverWithHelper = (helperIgnoresTerm: boolean): string => {
+    const trap = helperIgnoresTerm ? "process.on('SIGTERM', () => {});" : ''
+    return String.raw`
+      ${trap}
+      const { spawn } = require('node:child_process')
+      // The helper says when its SIGTERM handler is in place; the server only starts
+      // answering after that, so close() can't land before the handler does.
+      const helper = spawn(process.execPath, ['-e', ${JSON.stringify(`${trap} process.stdout.write('ready'); setInterval(() => {}, 1e6)`)}], { stdio: ['ignore', 'pipe', 'ignore'] })
+      let buf = ''
+      helper.stdout.once('data', () => process.stdin.on('data', (c) => {
+        buf += c
+        let nl
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const msg = JSON.parse(buf.slice(0, nl))
+          buf = buf.slice(nl + 1)
+          if (msg.id === undefined) continue
+          const result = msg.method === 'tools/list' ? { tools: [{ name: 'pid-' + helper.pid }] } : { capabilities: {} }
+          process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result }) + '\n')
+        }
+      }))
+    `
+  }
+
+  const alive = (pid: number): boolean => {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  async function goneWithin(pid: number, ms: number): Promise<boolean> {
+    const deadline = Date.now() + ms
+    while (Date.now() < deadline) {
+      if (!alive(pid)) return true
+      await new Promise((r) => setTimeout(r, 50))
+    }
+    return !alive(pid)
+  }
+
+  for (const ignoresTerm of [false, true]) {
+    it(`stops the server's own child processes on close${ignoresTerm ? ' (SIGKILL after the grace)' : ''}`, async () => {
+      const client = new McpClient()
+      let helperPid = 0
+      try {
+        await client.connect({ command: process.execPath, args: ['-e', serverWithHelper(ignoresTerm)] })
+        helperPid = Number(client.tools[0]?.name.replace('pid-', ''))
+        expect(helperPid).toBeGreaterThan(0)
+        expect(alive(helperPid)).toBe(true)
+        client.close()
+        expect(await goneWithin(helperPid, 6_000)).toBe(true)
+      } finally {
+        client.close()
+        if (helperPid && alive(helperPid)) process.kill(helperPid, 'SIGKILL')
+      }
+    }, 15_000)
+  }
+
+  it('kills servers still running when Houston exits, even ones never closed', async () => {
+    const client = new McpClient()
+    let helperPid = 0
+    try {
+      await client.connect({ command: process.execPath, args: ['-e', serverWithHelper(true)] })
+      helperPid = Number(client.tools[0]?.name.replace('pid-', ''))
+      expect(alive(helperPid)).toBe(true)
+      // What the process 'exit' hook runs: no grace, since nothing runs after it.
+      killLiveMcpGroups()
+      expect(await goneWithin(helperPid, 1_500)).toBe(true)
+    } finally {
+      client.close()
+      if (helperPid && alive(helperPid)) process.kill(helperPid, 'SIGKILL')
+    }
   }, 15_000)
 })
 

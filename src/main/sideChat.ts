@@ -13,7 +13,7 @@ import {
 } from '@shared/agent'
 import type { ModelCaps, PermissionRule } from '@shared/types'
 import { turnCostUsd } from '@shared/usage'
-import { runSubAgent, type SubAgentOptions } from './agent/subagent'
+import { EMPTY_REPORT_NOTE, runSubAgent, type SubAgentOptions } from './agent/subagent'
 import { createSecretRedactor } from './agent/redact'
 import { matchRule, permissionSubject } from './agent/permissions'
 import { isSensitiveRead } from './agent/sensitive-paths'
@@ -327,7 +327,7 @@ export function sideOutcome(report: string, aborted: boolean): { answer: string 
   if (aborted) return { error: 'Stopped before it answered.' }
   const err = /^\[subagent error: ([\s\S]*)\]$/.exec(report.trim())
   if (err) return { error: err[1] }
-  if (report.trim() === '[subagent returned no answer]') return { error: 'No answer came back. Try asking again.' }
+  if (report.trim() === EMPTY_REPORT_NOTE) return { error: 'No answer came back. Try asking again.' }
   return { answer: report }
 }
 

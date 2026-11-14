@@ -168,7 +168,7 @@ async function workTreeRoot(workspace: string): Promise<string | { unreadable: s
  * even when unborn (no commits yet) and fails only on a detached HEAD, where
  * `rev-parse --abbrev-ref` would say "HEAD".
  */
-async function currentBranch(root: string): Promise<string | null> {
+export async function currentBranch(root: string): Promise<string | null> {
   const head = await runGitCapture(['symbolic-ref', '--short', '-q', 'HEAD'], root)
   return head.ok ? head.stdout.trim() || null : null
 }

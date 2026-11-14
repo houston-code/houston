@@ -3,8 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatMessage, ChatRequest, Provider, ProviderStreamEvent } from '@shared/agent'
-import type { SubagentBudget, SubagentStatus, SubagentStep } from '@shared/subagents'
-import { runSubAgent, SUBAGENT_FINAL_STEP_NOTE } from './subagent'
+import type { SubagentBudget, SubagentOutcome, SubagentStatus, SubagentStep } from '@shared/subagents'
+import { runSubAgent, SUBAGENT_COST_LANDING_NOTE, SUBAGENT_FINAL_STEP_NOTE } from './subagent'
 import { clearCheckpoints } from './checkpoints'
 
 let ws: string
@@ -44,7 +44,7 @@ function looping(call: (n: number) => { name: string; arguments: Record<string, 
 
 function collect(): {
   steps: SubagentStep[]
-  end: { status: SubagentStatus; budget: SubagentBudget } | null
+  end: { status: SubagentStatus; outcome?: SubagentOutcome; budget: SubagentBudget } | null
   start: { system: string; tools: string[] } | null
 } {
   return { steps: [], end: null, start: null }
@@ -87,7 +87,7 @@ describe('subagent steps', () => {
     expect(finished.ok).toBe(true)
     expect(finished.hint).toMatch(/lines?$/)
     expect(finished.output).toContain('two')
-    expect(got.end).toEqual({ status: 'done', budget: { used: 2, limit: 40, ceiling: 200 } })
+    expect(got.end).toEqual({ status: 'done', outcome: 'done', budget: { used: 2, limit: 40, ceiling: 200 } })
   })
 
   it('marks a refused call as failed and redacts what it records', async () => {
@@ -218,7 +218,7 @@ describe('subagent step budget', () => {
       onTranscript: (m) => messages.push(m)
     })
     expect(seen.length).toBe(5)
-    expect(got.end).toEqual({ status: 'step-limit', budget: { used: 5, limit: 5, ceiling: 5 } })
+    expect(got.end).toEqual({ status: 'step-limit', outcome: 'limit', budget: { used: 5, limit: 5, ceiling: 5 } })
     expect(report).toContain('Partial findings so far.')
     // The dropped last-step call never ran and isn't left dangling in the transcript.
     const transcript = messages[0]
@@ -240,7 +240,7 @@ describe('subagent step budget', () => {
       onEnd: (e) => (got.end = e)
     })
     expect(seen.length).toBe(3)
-    expect(got.end).toEqual({ status: 'step-limit', budget: { used: 3, limit: 3, ceiling: 3, hardCap: 3 } })
+    expect(got.end).toEqual({ status: 'step-limit', outcome: 'limit', budget: { used: 3, limit: 3, ceiling: 3, hardCap: 3 } })
   })
 
   it('a last step with no text and only tool calls leaves no empty assistant turn', async () => {
@@ -269,6 +269,40 @@ describe('subagent loop detection', () => {
     })
     expect(got.end?.status).toBe('stalled')
     expect(got.steps.some((s) => s.kind === 'notice' && /Repeating itself/.test(s.summary))).toBe(true)
+    expect(report).toMatch(/kept repeating/)
+  })
+
+  it('stops an agent that reruns a command failing the same way between edits', async () => {
+    // Each round writes a different file, then reruns the same failing command: no call
+    // repeats and no call errors, so only the command-failure check can catch it.
+    const got = collect()
+    let n = 0
+    const provider: Provider = {
+      async *streamChat(): AsyncGenerator<ProviderStreamEvent> {
+        n++
+        yield { type: 'tool_call', call: { id: `w${n}`, name: 'write_file', arguments: { path: `f${n}.txt`, content: `try ${n}` } } }
+        yield {
+          type: 'tool_call',
+          call: { id: `s${n}`, name: 'run_shell', arguments: { command: 'node -e "console.log(\'boom\');process.exit(3)"' } }
+        }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const report = await runSubAgent({
+      ...base,
+      workspace: ws,
+      writable: true,
+      shellSandboxed: true,
+      budget: { maxIterations: 20, autoExtend: false },
+      provider,
+      onStep: (s) => got.steps.push(s),
+      onEnd: (e) => (got.end = e)
+    })
+    expect(got.end?.status).toBe('stalled')
+    expect(got.end?.outcome).toBe('limit')
+    expect(got.steps.some((s) => s.kind === 'notice' && /Repeating itself/.test(s.summary))).toBe(true)
+    // Three failing runs nudge it, three more stop it: well short of the 20-step budget.
+    expect(n).toBe(6)
     expect(report).toMatch(/kept repeating/)
   })
 
@@ -314,5 +348,98 @@ describe('subagent context', () => {
     expect(big.content).toMatch(/bytes elided/)
     const kept = transcripts[0].find((m) => m.role === 'tool' && m.toolCallId === 'b')!
     expect(kept.content.length).toBeGreaterThan(10_000)
+  })
+})
+
+describe('subagent outcome', () => {
+  const end = async (turns: ProviderStreamEvent[][], extra: Partial<Parameters<typeof runSubAgent>[0]> = {}) => {
+    const got = collect()
+    const report = await runSubAgent({ ...base, workspace: ws, provider: scripted(turns), onEnd: (e) => (got.end = e), ...extra })
+    return { report, end: got.end }
+  }
+
+  it('is done for a whole report', async () => {
+    const r = await end([[{ type: 'text', text: 'All found.' }, { type: 'done', stopReason: 'end_turn' }]])
+    expect(r.end).toMatchObject({ status: 'done', outcome: 'done' })
+    expect(r.report).toBe('All found.')
+  })
+
+  it('is empty, and says so to the caller, when the agent ends without any text', async () => {
+    const r = await end([[{ type: 'done', stopReason: 'end_turn' }]])
+    expect(r.end).toMatchObject({ status: 'done', outcome: 'empty' })
+    expect(r.report).toBe('[subagent returned no answer]')
+  })
+
+  it('is a limit, and says so to the caller, when the output limit cut the report off', async () => {
+    const cut: ProviderStreamEvent[] = [{ type: 'text', text: 'part ' }, { type: 'done', stopReason: 'max_tokens' }]
+    const r = await end([cut, cut, cut, cut])
+    expect(r.end).toMatchObject({ status: 'done', outcome: 'limit' })
+    expect(r.report).toMatch(/\[subagent report cut off at the model's output limit\]$/)
+  })
+
+  it('is a limit at a max_turns cap, with the step-limit note', async () => {
+    const r = await end(
+      [
+        [{ type: 'tool_call', call: { id: 'a', name: 'list_dir', arguments: { path: '.' } } }, { type: 'done', stopReason: 'tool_use' }],
+        [{ type: 'text', text: 'Partial.' }, { type: 'tool_call', call: { id: 'b', name: 'glob', arguments: { pattern: '*' } } }, { type: 'done', stopReason: 'tool_use' }]
+      ],
+      { budget: { hardCap: 2 } }
+    )
+    expect(r.end).toMatchObject({ status: 'step-limit', outcome: 'limit' })
+    expect(r.report).toMatch(/stopped at its step limit/)
+  })
+
+  it('is an error when the model fails', async () => {
+    const provider: Provider = {
+      // eslint-disable-next-line require-yield
+      async *streamChat(): AsyncGenerator<ProviderStreamEvent> {
+        throw Object.assign(new Error('bad request'), { status: 400 })
+      }
+    }
+    const got = collect()
+    await runSubAgent({ ...base, workspace: ws, provider, onEnd: (e) => (got.end = e) })
+    expect(got.end).toMatchObject({ status: 'error', outcome: 'error' })
+  })
+})
+
+describe('subagent cost ceiling', () => {
+  it("lands the agent once the run's spend reaches the ceiling", async () => {
+    const seen: ChatRequest[] = []
+    let spent = 0
+    await runSubAgent({
+      ...base,
+      workspace: ws,
+      budget: { costCeilingUsd: 1 },
+      spentUsd: () => spent,
+      provider: scripted(
+        [
+          [{ type: 'tool_call', call: { id: 'a', name: 'list_dir', arguments: { path: '.' } } }, { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'tool_call', call: { id: 'b', name: 'glob', arguments: { pattern: '*' } } }, { type: 'done', stopReason: 'tool_use' }],
+          [{ type: 'text', text: 'Report.' }, { type: 'done', stopReason: 'end_turn' }]
+        ],
+        seen
+      ),
+      onStep: () => {
+        // The first step's spend crosses the ceiling.
+        spent = 1.5
+      }
+    })
+    const notes = (req: ChatRequest): string[] =>
+      req.messages.filter((m) => m.role === 'user' && m.content.endsWith(SUBAGENT_COST_LANDING_NOTE)).map((m) => m.content)
+    expect(notes(seen[0])).toHaveLength(0)
+    expect(notes(seen[1])).toHaveLength(1)
+    // Once only.
+    expect(notes(seen[2])).toHaveLength(1)
+  })
+
+  it('never lands on cost without a ceiling', async () => {
+    const seen: ChatRequest[] = []
+    await runSubAgent({
+      ...base,
+      workspace: ws,
+      spentUsd: () => 100,
+      provider: scripted([[{ type: 'text', text: 'Report.' }, { type: 'done', stopReason: 'end_turn' }]], seen)
+    })
+    expect(seen[0].messages.some((m) => m.content.endsWith(SUBAGENT_COST_LANDING_NOTE))).toBe(false)
   })
 })

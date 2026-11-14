@@ -37,7 +37,7 @@ import { rewindableTurnIndices, turnText } from '@shared/rewind'
 import { repairDanglingToolResults } from './agent/repair'
 import { accumulateModelUsage } from '@shared/usage'
 import { invocationText } from '@shared/promptInvocation'
-import { runOutcome } from '@shared/runEnd'
+import { runOutcome, type RunOutcome } from '@shared/runEnd'
 import { buildScorecard, type Scorecard } from '@shared/scorecard'
 import type { StoredQueue } from '@shared/queue'
 import { clearConversationOverride } from './agent/overrides'
@@ -828,6 +828,15 @@ export function setProposalState(
   return conv.proposals
 }
 
+/**
+ * How a conversation's latest run ended, from its persisted log (no attachment
+ * bytes loaded). Undefined when the chat no longer exists.
+ */
+export function conversationRunOutcome(id: string): RunOutcome | undefined {
+  const conv = read(id)
+  return conv ? runOutcome(conv.messages, conv.lastError) : undefined
+}
+
 /** Most finished-child reports kept pending on one parent; older ones drop first. */
 export const MAX_PENDING_CHILD_REPORTS = 20
 /** Longest summary kept per report (the child's own chat holds the full answer). */
@@ -1042,7 +1051,8 @@ export function setCompaction(id: string, compaction: ConversationCompaction | n
       prev?.cut === compaction.cut &&
       prev.summary === compaction.summary &&
       prev.anchor === compaction.anchor &&
-      prev.evictBefore === compaction.evictBefore
+      prev.evictBefore === compaction.evictBefore &&
+      JSON.stringify(prev.workspaceState) === JSON.stringify(compaction.workspaceState)
     ) {
       return
     }

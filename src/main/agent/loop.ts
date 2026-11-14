@@ -20,7 +20,8 @@ import type {
   StopReason,
   ToolApprovalDecision,
   ToolCall,
-  ToolSchema
+  ToolSchema,
+  PinnedWorkspaceState
 } from '@shared/agent'
 import type { PlanReadiness } from '@shared/planReadiness'
 import type { ChatStatusMap, PendingPrompt } from '@shared/chatStatus'
@@ -115,7 +116,7 @@ import {
   writePaths,
   writeTouchesUnknownPaths
 } from './readCache'
-import { createShellSession } from './shell-session'
+import { createShellSession, shellCwdLabel } from './shell-session'
 import { getMcpToolDefs, releaseMcpRun } from '../mcp/manager'
 import {
   MCP_LAZY_THRESHOLD,
@@ -179,7 +180,7 @@ import {
 } from './checkpoints'
 import { EvidenceLedger, type EvidenceDraft } from './evidence'
 import { detectTestEdits, isTestRelevantPath, testEditsNote } from './testTampering'
-import { peekShell } from './shells'
+import { listShells, peekShell } from './shells'
 import {
   backgroundEventsNote,
   backgroundEventsNotice,
@@ -205,6 +206,7 @@ import {
   subagentHistoryBytes,
   type SubagentBudget,
   type SubagentModelSource,
+  type SubagentOutcome,
   type SubagentStatus
 } from '@shared/subagents'
 import {
@@ -237,6 +239,7 @@ import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skill
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
+import { inferVerifyCommand } from '../verifyInfer'
 import { formatPromptSnapshot, localDateStamp, resolvePromptSnapshot } from './promptSnapshot'
 import { memoryStore, type MemoryStore } from './memoryStore'
 import { buildMemoryIndex } from './memoryIndex'
@@ -275,7 +278,14 @@ import {
   setPromptSnapshot,
   takeChildReports
 } from '../conversations'
-import { buildPinnedMessages, latestTodos, lastUserTurnIndex, originalTaskIndex } from './workingMemory'
+import {
+  buildPinnedMessages,
+  latestTodos,
+  lastUserTurnIndex,
+  normalizeWorkspaceState,
+  originalTaskIndex,
+  pinnedShells
+} from './workingMemory'
 import { todoEvidenceGaps, todoGapNote } from './todoEvidence'
 import { findAcceptedPlan, planProgress, planStillOpen } from './planChecklist'
 import {
@@ -290,7 +300,8 @@ import {
   type CommandFailure
 } from './stall'
 import { RevertTracker } from './revertTracker'
-import { workingTreeFingerprint } from './workingTree'
+import { currentBranch, workingTreeFingerprint } from './workingTree'
+import { changedSince, shellMayEdit, snapshotWorkingTree, type TreeSnapshot } from './shellEdits'
 import {
   MAX_OUTPUT_CONTINUATIONS,
   continuationNote,
@@ -316,11 +327,14 @@ import {
   shouldVerify,
   runVerification,
   verifyFailureMessage,
+  inferredVerifyNotice,
   resolveVerifyMaxPasses
 } from './verify-gate'
 
 /** Max times a Stop hook may force another turn, so a blocking hook can't spin forever. */
 const MAX_STOP_CONTINUATIONS = 3
+/** A working-tree snapshot slower than this turns shell-edit snapshots off for the run. */
+const SHELL_SNAPSHOT_MAX_MS = 1_500
 /** Max transient-failure retries per model turn (so up to MAX_STREAM_RETRIES+1 attempts). */
 const MAX_STREAM_RETRIES = MAX_PROVIDER_RETRIES
 
@@ -773,6 +787,30 @@ export function cancelRun(runId: string): void {
   run.elicitations.clear()
   run.pendingElicitations.clear()
   run.abort.abort()
+}
+
+/**
+ * Cancel every live run in this process, foreground and background alike: a terminal
+ * client stopping on a signal, which would otherwise exit with runs mid-step and their
+ * stop never recorded. Returns how many runs were cancelled.
+ */
+export function cancelAllRuns(): number {
+  const ids = [...runs.keys()]
+  for (const id of ids) cancelRun(id)
+  return ids.length
+}
+
+/**
+ * Resolve once no run is live (each cancelled run has unwound and released its slot),
+ * or after `timeoutMs`, whichever is first. Resolves true when every run ended.
+ */
+export async function waitForRunsToEnd(timeoutMs: number, pollMs = 25): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (runs.size > 0) {
+    if (Date.now() >= deadline) return false
+    await new Promise((r) => setTimeout(r, pollMs))
+  }
+  return true
 }
 
 /**
@@ -2541,10 +2579,13 @@ export async function startRun(
       let subOutput = 0
       let subCacheRead = 0
       let subCacheWrite = 0
+      // Priced per turn, as the main loop prices its own: a request's size can pick its
+      // rate (a long-context tier), so pricing the summed tokens once would overbill.
+      let subCost = 0
       let storedId: string | undefined
       // This agent's record, started once runSubAgent has assembled its system prompt.
       let handle: SubagentHandle | undefined
-      let ending: { status: SubagentStatus; budget: SubagentBudget } | undefined
+      let ending: { status: SubagentStatus; outcome: SubagentOutcome; budget: SubagentBudget } | undefined
       const result = await runSubAgent({
         // Pinned to the run's configured provider, not the fallback route: a
         // dispatch's `model` override is validated against `req.providerId`'s
@@ -2612,7 +2653,9 @@ export async function startRun(
           maxIterations: settings.maxIterations,
           autoExtend: autoExtendTurnsEnabled(settings),
           ceiling: settings.maxIterationsCeiling,
-          ...(hardCap ? { hardCap } : {})
+          ...(hardCap ? { hardCap } : {}),
+          // The run's cost ceiling reaches the agent too (see spentUsd below).
+          costCeilingUsd: settings.costCeilingUsd
         },
         stall:
           settings.stallDetection === false
@@ -2679,11 +2722,24 @@ export async function startRun(
                 })
             }
           : {}),
+        // What the run has spent against that ceiling: the main turns, every subagent's
+        // turns as they bill (this one's included), and side requests.
+        spentUsd: () => cumulativeCostUsd + delegatedCostUsd,
         onUsage: (u) => {
           subInput += u.inputTokens ?? 0
           subOutput += u.outputTokens ?? 0
           subCacheRead += u.cacheReadTokens ?? 0
           subCacheWrite += u.cacheWriteTokens ?? 0
+          const turnCost = turnCostUsd(
+            model,
+            u.inputTokens ?? 0,
+            u.outputTokens ?? 0,
+            { readTokens: u.cacheReadTokens, writeTokens: u.cacheWriteTokens },
+            modelCaps
+          )
+          subCost += turnCost
+          // Counted as it bills, so the cost ceiling sees a long dispatch while it runs.
+          delegatedCostUsd += turnCost
           handle?.usage(u)
         }
       }).finally(() => {
@@ -2692,19 +2748,11 @@ export async function startRun(
         // inputTokens: 0 keeps the context-size meter on the main turn (this is
         // an ephemeral subagent context), while output + cost accumulate.
         if (subInput || subOutput) {
-          const cost = turnCostUsd(
-            model,
-            subInput,
-            subOutput,
-            { readTokens: subCacheRead, writeTokens: subCacheWrite },
-            modelCaps
-          )
-          delegatedCostUsd += cost
           emit({
             type: 'usage',
             inputTokens: 0,
             outputTokens: subOutput,
-            cost,
+            cost: subCost,
             // A subagent can run on its own (often cheaper) model; attribute it there.
             model,
             ...(subCacheRead ? { cacheReadTokens: subCacheRead } : {}),
@@ -2715,8 +2763,8 @@ export async function startRun(
 
       handle?.end({
         status: ending?.status ?? (abort.signal.aborted ? 'aborted' : 'error'),
+        ...(ending ? { outcome: ending.outcome, budget: ending.budget } : {}),
         report: result,
-        ...(ending ? { budget: ending.budget } : {}),
         ...(storedId ? { resumeId: storedId } : {})
       })
 
@@ -2964,6 +3012,7 @@ export async function startRun(
         let reviewOutput = 0
         let reviewCacheRead = 0
         let reviewCacheWrite = 0
+        let reviewCost = 0
         return reviewWorkspaceChanges({
           // Pinned to the run's configured provider, not the fallback route: the
           // review's model is validated against `req.providerId`'s model list.
@@ -2990,7 +3039,7 @@ export async function startRun(
           // Each reviewer, skeptic and the verifier gets its own record under the review.
           observeAgent: (meta, o) => {
             let handle: SubagentHandle | undefined
-            let ending: { status: SubagentStatus; budget: SubagentBudget } | undefined
+            let ending: { status: SubagentStatus; outcome: SubagentOutcome; budget: SubagentBudget } | undefined
             return {
               onStart: ({ system, tools: toolNames }) => {
                 handle = subagentRecorder.start(callId, {
@@ -3012,7 +3061,7 @@ export async function startRun(
                 handle?.end({
                   status: ending?.status ?? (abort.signal.aborted ? 'aborted' : 'error'),
                   report,
-                  ...(ending ? { budget: ending.budget } : {})
+                  ...(ending ? { outcome: ending.outcome, budget: ending.budget } : {})
                 })
             }
           },
@@ -3021,23 +3070,25 @@ export async function startRun(
             reviewOutput += u.outputTokens ?? 0
             reviewCacheRead += u.cacheReadTokens ?? 0
             reviewCacheWrite += u.cacheWriteTokens ?? 0
+            // Priced per request, like a subagent's turns (see runDispatch).
+            const turnCost = turnCostUsd(
+              reviewModel,
+              u.inputTokens ?? 0,
+              u.outputTokens ?? 0,
+              { readTokens: u.cacheReadTokens, writeTokens: u.cacheWriteTokens },
+              reviewCaps
+            )
+            reviewCost += turnCost
+            delegatedCostUsd += turnCost
           },
           signal: abort.signal
         }).finally(() => {
           if (reviewInput || reviewOutput) {
-            const cost = turnCostUsd(
-              reviewModel,
-              reviewInput,
-              reviewOutput,
-              { readTokens: reviewCacheRead, writeTokens: reviewCacheWrite },
-              reviewCaps
-            )
-            delegatedCostUsd += cost
             emit({
               type: 'usage',
               inputTokens: 0,
               outputTokens: reviewOutput,
-              cost,
+              cost: reviewCost,
               // Its own model: a review can run on a different (often cheaper) one,
               // and lumping it into the main model's total hides that entirely.
               model: reviewModel,
@@ -3172,6 +3223,10 @@ export async function startRun(
     // only under context pressure and never moved back, so between advances the
     // window stays append-only (see evictionBoundary and the pressure check below).
     let evictBefore = 0
+    // Workspace state for the pinned block (branch, shell directory, background
+    // shells), captured whenever `cut` or `evictBefore` advances and frozen with them,
+    // so the block stays byte-identical between advances (see workingMemory.ts).
+    let workspaceState: PinnedWorkspaceState | undefined
     let lastInputTokens = 0
     // The user turn this run is answering: the only turn compaction may cut inside
     // of, and the request it re-sends verbatim when it does. Frozen here, after the
@@ -3198,6 +3253,13 @@ export async function startRun(
             anchor = persisted.anchor
           }
           evictBefore = persisted.evictBefore ?? 0
+          // Reused as captured so the resumed window's pinned block matches the last
+          // one sent. The shell directory is the exception: every run's shell starts
+          // at the project root, so a directory from an earlier run would be wrong.
+          const restored = normalizeWorkspaceState(persisted.workspaceState)
+          workspaceState = restored?.shellCwd
+            ? normalizeWorkspaceState({ ...restored, shellCwd: undefined })
+            : restored
         }
       } catch {
         // Store unavailable (unwired host) — run with in-memory compaction only.
@@ -3213,7 +3275,8 @@ export async function startRun(
           cut,
           summary,
           ...(anchor !== undefined ? { anchor } : {}),
-          ...(evictBefore > 0 ? { evictBefore } : {})
+          ...(evictBefore > 0 ? { evictBefore } : {}),
+          ...(workspaceState ? { workspaceState } : {})
         })
       } catch {
         // Store unavailable — the run continues with in-memory state.
@@ -3260,6 +3323,8 @@ export async function startRun(
     // paths it touched (or everything, if those paths can't be determined); shell —
     // and anything else non-read that changes state — clears the cache wholesale.
     const invalidateForMutation = (name: string, kind: ToolKind, args: Record<string, unknown>): void => {
+      // Any mutation may have switched branches (a shell `git switch`, a write to .git).
+      branchStale = true
       if (kind === 'write') {
         const touched = writePaths(name, args, resolvePath, patchPaths)
         if (writeTouchesUnknownPaths(touched)) readCache.invalidateAll()
@@ -3337,15 +3402,40 @@ export async function startRun(
     // files (so we don't verify a read-only turn) and how many verification passes
     // have already run (bounded self-correction). A write-kind tool call arms it
     // directly. A run_shell edit (sed -i, a heredoc, git apply, a codegen script) arms
-    // it too: when the gate is configured, the working tree is fingerprinted at run
-    // start, and at a natural stop after a successful foreground shell command it is
-    // fingerprinted again; a difference means the shell changed files. Outside a git
-    // repo there is no fingerprint, so only write-kind calls arm it there.
+    // it too: in a git repo, a foreground command that may write is bracketed by
+    // working-tree snapshots and the paths it changed are recorded (see shellEdits.ts).
+    // As a backstop, when the gate is configured the tree is also fingerprinted at run
+    // start and again at a natural stop after a successful foreground shell command; a
+    // difference means the shell changed files. Outside a git repo only write-kind
+    // calls arm it.
     let filesModified = false
+    // The command the gate runs: the user's own, or, when the gate is on with none set,
+    // the one the project's files suggest (package.json scripts, Cargo, Go, pytest).
+    // An inferred command runs only in Full auto, where shell commands already run
+    // without asking, and gets network only where the agent's own shell commands
+    // would; it is announced once, the first time it runs.
+    const userVerifyCommand = (settings.verifyCommand ?? '').trim()
+    const inferredVerify =
+      settings.verifyOnStop === true && userVerifyCommand === '' ? inferVerifyCommand(workspace) : null
+    const verifyCommandFor = (): { command: string; inferred: boolean } | null => {
+      if (userVerifyCommand) return { command: userVerifyCommand, inferred: false }
+      if (inferredVerify && run.policy === 'full-auto') return { command: inferredVerify.command, inferred: true }
+      return null
+    }
+    let inferredVerifyAnnounced = false
     const verifyGateConfigured =
-      settings.verifyOnStop === true && (settings.verifyCommand ?? '').trim() !== ''
+      settings.verifyOnStop === true && (userVerifyCommand !== '' || inferredVerify !== null)
     const treeAtStart = verifyGateConfigured ? await workingTreeFingerprint(workspace) : null
     let shellMayHaveEdited = false
+    // Snapshots around shell commands (see shellEdits.ts) stop for the rest of the run
+    // once one is slow: a huge repository shouldn't add seconds to every command.
+    let shellSnapshotsOff = false
+    const timedSnapshot = async (): Promise<TreeSnapshot | null> => {
+      const started = Date.now()
+      const snap = await snapshotWorkingTree(workspace)
+      if (Date.now() - started > SHELL_SNAPSHOT_MAX_MS) shellSnapshotsOff = true
+      return snap
+    }
     let verifyPassesRun = 0
     // Whether the model has been told this turn that its edits loosened a test (once).
     let testEditsNoted = false
@@ -3361,6 +3451,37 @@ export async function startRun(
     const evictedLog = (): ChatMessage[] =>
       evictBefore > 0 ? evictStaleToolResults(messages, { keepFrom: evictBefore }) : messages
 
+    // The workspace's branch, read through the hardened git runner (no repo hooks or
+    // config-driven programs run) only when the pinned block is about to be rebuilt
+    // and something may have changed it since the last read.
+    let branchCache: string | null = null
+    let branchStale = true
+    const refreshBranch = async (): Promise<void> => {
+      if (!branchStale) return
+      branchStale = false
+      try {
+        branchCache = await currentBranch(workspace)
+      } catch {
+        branchCache = null
+      }
+    }
+    // Snapshot the live workspace state for the pinned block. Synchronous: the branch
+    // comes from the cache refreshBranch keeps. Redacted, since shell commands can
+    // carry inline secrets.
+    const captureWorkspaceState = (): PinnedWorkspaceState | undefined => {
+      const label = (dir: string): string | null => shellCwdLabel(workspace, dir)
+      const { shells, more } = pinnedShells(listShells(), conversationId, label)
+      const cwd = label(shellSession.cwd)
+      return normalizeWorkspaceState({
+        ...(branchCache ? { branch: redact(branchCache) } : {}),
+        ...(cwd ? { shellCwd: redact(cwd) } : {}),
+        ...(shells.length
+          ? { shells: shells.map((sh) => ({ ...sh, command: redact(sh.command), ...(sh.cwd ? { cwd: redact(sh.cwd) } : {}) })) }
+          : {}),
+        ...(more > 0 ? { moreShells: more } : {})
+      })
+    }
+
     // Advance the eviction watermark to the current staleness boundary (turn age or
     // iteration age, whichever reaches further), when that would stub something new.
     // The cheap step under context pressure: no model call, and nothing is lost that
@@ -3371,6 +3492,7 @@ export async function startRun(
       if (!hasEvictableToolResults(messages, Math.max(cut, evictBefore), boundary)) return false
       evictBefore = boundary
       lastInputTokens = 0
+      workspaceState = captureWorkspaceState()
       persistContextState()
       forgetUnseenFiles()
       return true
@@ -3383,6 +3505,7 @@ export async function startRun(
     // anchor re-sent between the summary and the tail.
     const compactTo = async (newCut: number): Promise<'ok' | 'aborted' | 'failed'> => {
       if (newCut <= cut) return 'failed'
+      await refreshBranch()
       // PreCompact: let a hook persist state or inject a note before older turns are
       // summarized away. Any injected context is folded into the material being
       // summarized so it carries into the summary. Best-effort and non-blocking —
@@ -3431,6 +3554,7 @@ export async function startRun(
         anchor = compactionAnchor(messages, newCut, turnStart)
         cut = newCut
         lastInputTokens = 0
+        workspaceState = captureWorkspaceState()
         // Persist so the next run resumes from this summary instead of paying a
         // fresh summarization of the same head.
         persistContextState()
@@ -3443,7 +3567,8 @@ export async function startRun(
       }
     }
 
-    // Pinned working memory (original task, todo list, files in play), derived from
+    // Pinned working memory (original task, the user's later messages, todo list,
+    // files in play, workspace state), derived from
     // everything compaction or eviction has touched: the head before the cut or the
     // eviction watermark, whichever reaches further. Both only advance at a
     // compaction or eviction, so the block is byte-identical in between. The task is
@@ -3452,7 +3577,11 @@ export async function startRun(
     const pinnedMessages = (): ChatMessage[] => {
       const task = originalTaskIndex(messages)
       return buildPinnedMessages(messages.slice(0, Math.max(cut, evictBefore)), {
-        omitTask: task >= cut || task === anchor
+        omitTask: task >= cut || task === anchor,
+        workspaceState,
+        // Only what the summary stands in for: from the anchor on, the request and its
+        // steers are re-sent verbatim, and everything after the cut is in the tail.
+        userMessagesBefore: anchor ?? cut
       })
     }
 
@@ -3690,6 +3819,7 @@ export async function startRun(
           // shares of it, so a large prompt can't leave them unreachable.
           const fixed = estimateTokens(system, []) + toolTokens
           const room = Math.max(0, threshold - fixed)
+          await refreshBranch()
           advanceEviction()
           if (windowSize() > fixed + room * EVICTION_TARGET_FRACTION) {
             const newCut = findCompactionCut(evictedLog(), cut, KEEP_RECENT_USER_TURNS, {
@@ -3841,6 +3971,7 @@ export async function startRun(
           // user's compaction threshold — an unsendable request must shrink
           // regardless.
           if (!emitted && isContextOverflowError(e)) {
+            await refreshBranch()
             if (advanceEviction()) {
               sendMessages = buildWindow()
               attempt = -1 // reset the transient-retry budget for the smaller request
@@ -4148,11 +4279,13 @@ export async function startRun(
           const treeNow = await workingTreeFingerprint(workspace)
           if (treeNow !== null && treeNow !== treeAtStart) filesModified = true
         }
+        const verify = verifyCommandFor()
         if (
           stopReason === 'end_turn' &&
+          verify !== null &&
           shouldVerify({
             enabled: settings.verifyOnStop === true,
-            command: settings.verifyCommand,
+            command: verify.command,
             filesModified,
             passesRun: verifyPassesRun,
             maxPasses: verifyMaxPasses,
@@ -4162,17 +4295,24 @@ export async function startRun(
           })
         ) {
           verifyPassesRun += 1
+          if (verify.inferred && !inferredVerifyAnnounced && inferredVerify) {
+            inferredVerifyAnnounced = true
+            emit({ type: 'notice', message: inferredVerifyNotice(verify.command, inferredVerify.source) })
+          }
           const result = await runVerification({
-            command: settings.verifyCommand!,
+            command: verify.command,
             workspace,
             roots,
-            // The verify command is USER-authored (a settings field the agent can't
-            // change), not agent-authored, so it isn't part of the shell-exfiltration
-            // vector the shell-network consent guards. Keep its prior network behavior
-            // (full-auto, or an explicit shell-network grant) so a verify command that
-            // hits the network isn't silently starved in full-auto.
+            // A user-set verify command is USER-authored (a settings field the agent
+            // can't change), not agent-authored, so it isn't part of the
+            // shell-exfiltration vector the shell-network consent guards. Keep its prior
+            // network behavior (full-auto, or an explicit shell-network grant) so a
+            // verify command that hits the network isn't silently starved in full-auto.
+            // An inferred one runs scripts the project (and so the agent) can edit, so
+            // it gets network only on the agent's own shell-network grant.
             allowNetwork:
-              (run.policy === 'full-auto' || run.shellNetworkGranted) && !egressUnavailable,
+              (verify.inferred ? run.shellNetworkGranted : run.policy === 'full-auto' || run.shellNetworkGranted) &&
+              !egressUnavailable,
             // The user-authored verify command still egresses through the same
             // per-domain allowlist — the policy is about destinations, not authorship.
             egressProxy,
@@ -4184,11 +4324,11 @@ export async function startRun(
             return
           }
           emit({ type: 'verification', passed: result.passed })
-          run.evidence.recordGate(redact(settings.verifyCommand!), result.passed)
+          run.evidence.recordGate(redact(verify.command), result.passed)
           if (!result.passed) {
             // Push the failure feedback as a system note so the model sees it next
             // turn and the transcript shows it as Houston's, not the user's; then loop.
-            messages.push(systemNoteMessage(verifyFailureMessage(settings.verifyCommand!, result.output)))
+            messages.push(systemNoteMessage(verifyFailureMessage(verify.command, result.output)))
             persist(messages)
             continue
           }
@@ -4917,6 +5057,19 @@ export async function startRun(
                           redact
                         )
                       : undefined
+                  // A foreground command that may write: snapshot the git working tree
+                  // around it, so the files it changed reach the ledger (see shellEdits.ts).
+                  // What it reports is held until then, so a check it ran sits after the
+                  // changes it made rather than before them.
+                  const treeBefore =
+                    call.name === 'run_shell' &&
+                    execArgs.background !== true &&
+                    !shellSnapshotsOff &&
+                    run.policy !== 'plan' &&
+                    shellMayEdit(typeof execArgs.command === 'string' ? execArgs.command : '')
+                      ? await timedSnapshot()
+                      : null
+                  const heldEvidence: EvidenceDraft[] = []
                   try {
                     output = await tool.execute(
                       execArgs,
@@ -4926,13 +5079,22 @@ export async function startRun(
                             ...(live ? { onShellOutput: live.push } : {}),
                             recordEvidence: (e) => {
                               if (e.kind === 'shell' && e.blocked === 'network') networkBlocked = true
-                              ctx.recordEvidence?.(e)
+                              if (treeBefore) heldEvidence.push(e)
+                              else ctx.recordEvidence?.(e)
                             }
                           }
                         : ctx
                     )
                   } finally {
                     live?.close()
+                    if (treeBefore) {
+                      const changed = await changedSince(treeBefore, workspace)
+                      if (changed.length) {
+                        run.evidence.recordFiles(workspace, changed)
+                        filesModified = true
+                      }
+                      for (const e of heldEvidence) ctx.recordEvidence?.(e)
+                    }
                   }
                 } catch (e) {
                   output = `Error: ${(e as Error).message}`

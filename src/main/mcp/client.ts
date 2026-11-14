@@ -5,6 +5,7 @@ import { MAX_MCP_MESSAGE_CHARS } from './sse-client'
 import { flattenMcpContent, flattenMcpPromptMessages, flattenMcpResourceContents } from '@shared/mcp'
 import { sanitizeChildEnv } from '../childEnv'
 import { planStdioLaunch, type StdioLaunchDeps } from './stdio-launch'
+import { signalProcessTree } from '../sandbox/shared'
 import {
   initializeParams,
   negotiatedProtocolVersion,
@@ -21,6 +22,8 @@ import {
   mcpCancelledError,
   parseIncoming,
   type ElicitationWireResult,
+  listAllPages,
+  type ListedPages,
   type McpListKind
 } from './protocol'
 
@@ -82,6 +85,8 @@ export interface McpConnection {
   readonly tools: McpToolInfo[]
   /** Why entries of the last `tools/list` were dropped (see {@link parseMcpToolList}). */
   readonly droppedTools?: readonly string[]
+  /** Lists the server sent more of than Houston reads, with why (see {@link listAllPages}). */
+  readonly listNotes?: Readonly<Partial<Record<McpListKind, string>>>
   /** Resources the server exposes; empty when the server doesn't support them. */
   readonly resources: McpResourceInfo[]
   /** Prompt templates the server exposes; empty when it doesn't support them. */
@@ -210,8 +215,94 @@ const MAX_EXIT_DETAIL_CHARS = 300
 export type SpawnFn = (
   command: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; cwd?: string; windowsVerbatimArguments?: boolean }
+  options: {
+    env?: NodeJS.ProcessEnv
+    cwd?: string
+    windowsVerbatimArguments?: boolean
+    detached?: boolean
+  }
 ) => ChildProcessWithoutNullStreams
+
+/** How long a closed stdio server's process group gets to exit on SIGTERM before SIGKILL. */
+export const MCP_KILL_GRACE_MS = 2_000
+
+/**
+ * Process groups of stdio servers this process spawned that may still have live
+ * members. On POSIX each server leads its own group (it is spawned detached, so a
+ * launcher like `npx`, `uvx` or `sh -c` and whatever it starts can be stopped
+ * together), which also means a terminal's Ctrl-C or Houston's own exit no longer
+ * reaches them. So when this process exits, every group still listed is SIGKILLed.
+ */
+const liveGroups = new Set<number>()
+let exitHookInstalled = false
+
+function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0)
+    return true
+  } catch {
+    // ESRCH: the group is empty. EPERM: not ours to signal. Nothing to stop either way.
+    return false
+  }
+}
+
+function killGroup(pgid: number): void {
+  try {
+    process.kill(-pgid, 'SIGKILL')
+  } catch {
+    // already gone
+  }
+}
+
+function trackGroup(pgid: number): void {
+  liveGroups.add(pgid)
+  if (exitHookInstalled) return
+  exitHookInstalled = true
+  // 'exit' handlers run synchronously, which process.kill is.
+  process.once('exit', killLiveMcpGroups)
+}
+
+/**
+ * SIGKILL every stdio server group still running (POSIX). Runs when this process
+ * exits, so a server that was never closed, or that ignored the SIGTERM a quit's
+ * disconnect sent it, doesn't outlive Houston in its own group.
+ */
+export function killLiveMcpGroups(): void {
+  for (const g of liveGroups) killGroup(g)
+  liveGroups.clear()
+}
+
+/**
+ * Stop a stdio server and everything it started. POSIX: SIGTERM its process group,
+ * then SIGKILL the group if anything in it is still running after the grace. Windows
+ * has no process groups here: the tree is killed by parent pid (`taskkill /T /F`),
+ * which is already forceful, so nothing is escalated.
+ */
+function stopServerTree(child: ChildProcessWithoutNullStreams, grouped: boolean): void {
+  const pid = child.pid
+  if (pid === undefined || !grouped) {
+    try {
+      child.kill()
+    } catch {
+      // already gone
+    }
+    return
+  }
+  if (process.platform === 'win32') {
+    signalProcessTree(child, 'SIGTERM')
+    return
+  }
+  if (!groupAlive(pid)) {
+    liveGroups.delete(pid)
+    return
+  }
+  signalProcessTree(child, 'SIGTERM')
+  const timer = setTimeout(() => {
+    if (liveGroups.has(pid) && groupAlive(pid)) killGroup(pid)
+    liveGroups.delete(pid)
+  }, MCP_KILL_GRACE_MS)
+  timer.unref?.()
+}
 
 export class McpClient {
   private child?: ChildProcessWithoutNullStreams
@@ -225,6 +316,10 @@ export class McpClient {
   private stderrTail = ''
   private readonly stderrDecoder = new StringDecoder('utf8')
   private closed = false
+  /** Whether the server is a real process whose tree close() should stop. */
+  private grouped = false
+  /** Set once close() has signalled the server, so a second close() is a no-op. */
+  private stopped = false
   /** Capabilities the server declared at initialize (gates list re-fetches). */
   private capable: Record<McpListKind, boolean> = { tools: true, resources: false, prompts: false }
   private readonly refresher = new ListRefresher({
@@ -234,6 +329,7 @@ export class McpClient {
   })
   tools: McpToolInfo[] = []
   droppedTools: string[] = []
+  listNotes: Partial<Record<McpListKind, string>> = {}
   resources: McpResourceInfo[] = []
   prompts: McpPromptInfo[] = []
 
@@ -272,12 +368,20 @@ export class McpClient {
       cwd: opts.cwd,
       ...this.launchDeps
     })
+    // POSIX: its own process group, so close() can stop what a launcher started too.
+    // Not on Windows, where detached would open a console window; the tree is killed
+    // by parent pid there instead.
+    const detached = process.platform !== 'win32'
     const child = this.spawnFn(launch.command, launch.args, {
       env,
       cwd: opts.cwd,
-      ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {})
+      ...(launch.windowsVerbatimArguments ? { windowsVerbatimArguments: true } : {}),
+      ...(detached ? { detached: true } : {})
     })
     this.child = child
+    // Only a real process (with a pid) is tracked; test fakes have none.
+    this.grouped = child.pid !== undefined
+    if (detached && child.pid !== undefined) trackGroup(child.pid)
     child.stdout.on('data', (c: Buffer) => this.onData(c))
     // Read stderr even though nothing needs it while the server runs: an unread pipe
     // fills (64 KB or so), and a server that logs to stderr, as the spec lets it, then
@@ -295,6 +399,8 @@ export class McpClient {
     let stderrEnded = false
     child.stderr?.once('end', () => (stderrEnded = true))
     child.on('exit', () => {
+      // A server that exited on its own and left nothing behind needs no stop at quit.
+      if (detached && child.pid !== undefined && !groupAlive(child.pid)) liveGroups.delete(child.pid)
       // Closed at once, so a new request fails fast; in-flight ones settle with the reason.
       this.closed = true
       const fail = (): void => this.failAll(`MCP server process exited${this.lastStderrLine()}`)
@@ -318,7 +424,7 @@ export class McpClient {
     if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
     this.notify('notifications/initialized', {})
 
-    const listed = (await this.request('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: unknown }
+    const listed = await this.fetchList('tools')
     this.setTools(listed)
 
     // Only ask for resources/prompts when the server declared the capability —
@@ -328,7 +434,7 @@ export class McpClient {
     if (this.capable.resources) {
       try {
         this.resources = parseMcpResourceList(
-          await this.request('resources/list', {}, INIT_TIMEOUT_MS)
+          await this.fetchList('resources')
         )
       } catch {
         this.resources = []
@@ -336,7 +442,7 @@ export class McpClient {
     }
     if (this.capable.prompts) {
       try {
-        this.prompts = parseMcpPromptList(await this.request('prompts/list', {}, INIT_TIMEOUT_MS))
+        this.prompts = parseMcpPromptList(await this.fetchList('prompts'))
       } catch {
         this.prompts = []
       }
@@ -367,6 +473,14 @@ export class McpClient {
     return flattenMcpPromptMessages(res) || '[no content]'
   }
 
+  /** Fetch a whole list, every page (see listAllPages), noting when it was cut short. */
+  private async fetchList(kind: McpListKind): Promise<ListedPages> {
+    const listed = await listAllPages((params) => this.request(`${kind}/list`, params, INIT_TIMEOUT_MS), kind)
+    if (listed.truncated) this.listNotes[kind] = listed.truncated
+    else delete this.listNotes[kind]
+    return listed
+  }
+
   /** Take a `tools/list` result, keeping only well-formed tools (see parseMcpToolList). */
   private setTools(listed: unknown): void {
     const dropped: string[] = []
@@ -377,7 +491,9 @@ export class McpClient {
   close(): void {
     this.closed = true
     this.failAll('MCP client closed')
-    this.child?.kill()
+    if (!this.child || this.stopped) return
+    this.stopped = true
+    stopServerTree(this.child, this.grouped)
   }
 
   // ---- transport internals ----
@@ -446,12 +562,12 @@ export class McpClient {
   /** Re-fetch one changed list in place (driven by the ListRefresher). */
   private async refreshList(kind: McpListKind): Promise<void> {
     if (kind === 'tools') {
-      const listed = (await this.request('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: unknown }
+      const listed = await this.fetchList('tools')
       if (Array.isArray(listed?.tools)) this.setTools(listed)
     } else if (kind === 'resources') {
-      this.resources = parseMcpResourceList(await this.request('resources/list', {}, INIT_TIMEOUT_MS))
+      this.resources = parseMcpResourceList(await this.fetchList('resources'))
     } else {
-      this.prompts = parseMcpPromptList(await this.request('prompts/list', {}, INIT_TIMEOUT_MS))
+      this.prompts = parseMcpPromptList(await this.fetchList('prompts'))
     }
   }
 

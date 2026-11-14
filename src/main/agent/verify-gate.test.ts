@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { SandboxRunResult } from '../sandbox'
 import {
   DEFAULT_VERIFY_MAX_PASSES,
+  inferredVerifyNotice,
   resolveVerifyMaxPasses,
   runVerification,
   shouldVerify,
@@ -128,5 +129,13 @@ describe('runVerification', () => {
     expect(r.passed).toBe(false)
     expect(r.aborted).toBe(false)
     expect(r.output).toMatch(/spawn ENOENT/)
+  })
+})
+
+describe('inferredVerifyNotice', () => {
+  it('names the command, where it came from, and how to change it', () => {
+    expect(inferredVerifyNotice('cargo test', 'Cargo.toml')).toBe(
+      'Verifying with `cargo test` (from Cargo.toml). Set a verification command in Settings to use a different one.'
+    )
   })
 })

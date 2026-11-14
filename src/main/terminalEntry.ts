@@ -21,7 +21,9 @@ import {
   resolveElicitation,
   cancelRun,
   setRunPolicy,
-  setRunEffort
+  setRunEffort,
+  cancelAllRuns,
+  waitForRunsToEnd
 } from './agent/loop'
 import { killAllShells } from './agent/shells'
 import { lspManager } from './agent/lsp/manager'
@@ -117,6 +119,7 @@ import {
   updateConversationMeta,
   listConversations,
   getConversation,
+  conversationRunOutcome,
   peekConversation,
   searchConversations,
   forkConversation,
@@ -165,6 +168,18 @@ export interface TerminalHost {
   flush?: () => Promise<unknown>
 }
 
+/** Longest an exit waits for cancelled runs to unwind (recording why they stopped). */
+export const RUN_STOP_GRACE_MS = 2_000
+
+/**
+ * Cancel whatever runs are still live (a signal arrived mid-turn, or background
+ * sessions were abandoned) and give them a moment to unwind, so each records that it
+ * was aborted instead of vanishing mid-step when the process exits.
+ */
+export async function stopLiveRuns(graceMs = RUN_STOP_GRACE_MS): Promise<void> {
+  if (cancelAllRuns() > 0) await waitForRunsToEnd(graceMs)
+}
+
 /**
  * Tear down what a terminal client started, once, on a normal exit or a signal
  * (SIGHUP when the terminal closes, SIGTERM from `kill`, `timeout`, or an editor
@@ -180,6 +195,7 @@ export function guardTerminalExit(
 ): SignalCleanup {
   return installSignalCleanup(
     async () => {
+      await stopLiveRuns()
       killAllShells()
       disconnectAllMcp()
       await lspManager.stopAll()
@@ -394,7 +410,7 @@ export function wireTerminalSessionBackends(opts: {
     })
   })
 
-  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn() })
+  const scheduler = createSchedulerService({ file: schedulesFilePath(), fire: fireViaSpawn(conversationRunOutcome) })
   setSchedulerBackend(scheduler)
   if (opts.startScheduler) scheduler.start()
 
@@ -625,8 +641,10 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   })
 
   // Ctrl-C is the TUI's own key (clear the composer, stop a turn), read from the
-  // raw terminal, so only a closed terminal or a kill ends it from outside.
-  const exitGuard = guardTerminalExit(['SIGHUP', 'SIGTERM'], host)
+  // raw terminal, which never turns it into a SIGINT. So a SIGINT, like a SIGHUP or
+  // SIGTERM, comes from outside (`kill -INT`, a supervisor): stop the runs, restore
+  // the terminal and exit rather than die with the terminal modes still on.
+  const exitGuard = guardTerminalExit(['SIGHUP', 'SIGTERM', 'SIGINT'], host)
   let code = 1
   try {
     code = await runTui(tui, {
@@ -981,6 +999,9 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
   } catch (e) {
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
   } finally {
+    // Interrupted: background sessions the run spawned are not waited for, so stop
+    // them here rather than let the exit cut them off mid-step.
+    if (interrupted) await stopLiveRuns()
     killAllShells()
     disconnectAllMcp()
     await lspManager.stopAll()
@@ -1087,6 +1108,7 @@ export async function runAcpEntry(host: TerminalHost = {}): Promise<number> {
     code = 1
   } finally {
     stopWatching()
+    if (signalled || outputClosed.signal.aborted) await stopLiveRuns()
     killAllShells()
     disconnectAllMcp()
     await lspManager.stopAll()

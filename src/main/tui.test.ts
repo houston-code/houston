@@ -23,6 +23,8 @@ import {
   makePainter,
   isThemeName,
   renderToolStart,
+  tagResultLines,
+  toolCallTag,
   renderPlan,
   toolArgHint,
   renderApprovalPrompt,
@@ -2294,6 +2296,45 @@ describe('runTui', () => {
     expect(out).toContain('✓ Correctness')
   })
 
+  it('names each parallel call on its result and progress lines, and a lone call on neither', async () => {
+    const { d } = deps([
+      // Two calls in flight at once: both start rows print before either result.
+      { runId: 'x', type: 'tool_start', callId: 'a', name: 'read_file', args: { path: 'src/a.ts' } },
+      { runId: 'x', type: 'tool_start', callId: 'b', name: 'read_file', args: { path: 'src/b.ts' } },
+      { runId: 'x', type: 'tool_progress', callId: 'a', message: 'still reading' },
+      { runId: 'x', type: 'tool_result', callId: 'b', name: 'read_file', ok: true, output: 'B1\nB2' },
+      // `a` finished after `b`'s result, so it is still named though it is alone now.
+      { runId: 'x', type: 'tool_result', callId: 'a', name: 'read_file', ok: false, output: 'no such file' },
+      // A call on its own prints under its own row, unnamed.
+      { runId: 'x', type: 'tool_start', callId: 'c', name: 'read_file', args: { path: 'src/c.ts' } },
+      { runId: 'x', type: 'tool_progress', callId: 'c', message: 'reading c' },
+      { runId: 'x', type: 'tool_result', callId: 'c', name: 'read_file', ok: false, output: 'gone too' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const lines = t.text().split('\n')
+    const find = (needle: string): string => lines.find((l) => l.includes(needle)) ?? ''
+    expect(find('still reading')).toContain('Read src/a.ts: still reading')
+    expect(find('Read failed')).toBeTruthy()
+    const failures = lines.filter((l) => l.includes('Read failed'))
+    expect(failures[0]).toContain('Read src/a.ts:')
+    expect(failures[1]).not.toContain('Read src/c.ts:')
+    expect(find('reading c')).not.toContain('Read src/c.ts:')
+  })
+
+  it('tags only the first line of a result, after its indent', () => {
+    const plain = (s: string): string => s
+    expect(tagResultLines('  ✓ done\n    body', 'Read a.ts', plain)).toBe('  Read a.ts: ✓ done\n    body')
+    expect(tagResultLines('', 'Read a.ts', plain)).toBe('')
+    expect(tagResultLines('\x1b[31m  ✗ Run failed\x1b[0m', 'Run npm test', plain)).toBe(
+      '\x1b[31m  Run npm test: ✗ Run failed\x1b[0m'
+    )
+    expect(toolCallTag('read_file', { path: 'src/a.ts' })).toBe('Read src/a.ts')
+    expect(toolCallTag('mystery_tool', { query: 'x  y' })).toBe('mystery_tool x y')
+  })
+
   it('renders a subagent’s steps and its report as markdown, without the resume note', async () => {
     const { d } = deps([
       { runId: 'x', type: 'tool_start', callId: 'c1', name: 'dispatch_agent', args: { description: 'Trace the flow', prompt: 'p' } },
@@ -2332,6 +2373,33 @@ describe('runTui', () => {
     expect(out).toContain('unsafe')
     expect(out).not.toContain('**unsafe**')
     expect(out).not.toContain('pass resume')
+  })
+
+  it('ends a subagent cut off at the output limit on a warning, not a check', async () => {
+    const { d } = deps([
+      { runId: 'x', type: 'tool_start', callId: 'c1', name: 'dispatch_agent', args: { description: 'Trace the flow', prompt: 'p' } },
+      { runId: 'x', type: 'subagent_start', parentCallId: 'c1', record: {
+        id: 'sa1',
+        kind: 'research',
+        label: 'Trace the flow',
+        model: 'claude-haiku-5-5',
+        modelSource: 'run',
+        prompt: 'p',
+        tools: ['read_file'],
+        status: 'running',
+        startedAt: 0,
+        steps: []
+      } },
+      { runId: 'x', type: 'subagent_end', parentCallId: 'c1', recordId: 'sa1', update: { status: 'done', outcome: 'limit', endedAt: 14_000 } },
+      { runId: 'x', type: 'tool_result', callId: 'c1', name: 'dispatch_agent', ok: true, output: "Half\n\n[subagent report cut off at the model's output limit]" },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    await runTui(opts, d)
+    const out = t.text()
+    expect(out).toContain("! Trace the flow: cut off at the model's output limit (0 steps, 14s)")
+    expect(out).not.toContain('✓ Trace the flow')
   })
 
   it('strips control characters from a subagent report before printing it', () => {

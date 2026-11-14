@@ -3,7 +3,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { LOCK_STALE_MS, POLL_MS, createSchedulerService, fireViaSpawn } from './schedulerService'
-import type { ScheduledRunInfo, ScheduledRunInput } from './agent/scheduler'
+import {
+  MAX_SCHEDULE_ERROR_CHARS,
+  type ScheduledFire,
+  type ScheduledRunInfo,
+  type ScheduledRunInput
+} from './agent/scheduler'
+import type { RunOutcome } from '@shared/runEnd'
 import { resetSpawnBackend, setSpawnBackend, type SpawnSessionInput } from './agent/spawn'
 
 let dir: string
@@ -33,7 +39,9 @@ const input = (over: Partial<ScheduledRunInput> = {}): ScheduledRunInput => ({
   ...over
 })
 
-function makeService(opts: { fire?: (s: ScheduledRunInfo) => Promise<void>; lockAttempts?: number } = {}) {
+function makeService(
+  opts: { fire?: (s: ScheduledRunInfo) => Promise<ScheduledFire | void>; lockAttempts?: number } = {}
+) {
   const fired: ScheduledRunInfo[] = []
   const service = createSchedulerService({
     file,
@@ -53,7 +61,7 @@ describe('createSchedulerService', () => {
     expect(info.nextRunAt).toBe(Date.now() + 30 * 60 * 1000)
     // Persisted (atomically) with a schema version, and reloadable by a fresh service.
     const onDisk = JSON.parse(readFileSync(file, 'utf8'))
-    expect(onDisk.schemaVersion).toBe(1)
+    expect(onDisk.schemaVersion).toBe(2)
     expect(onDisk.schedules).toHaveLength(1)
     const { service: reloaded } = makeService()
     expect(reloaded.list()).toHaveLength(1)
@@ -333,17 +341,17 @@ describe('fireViaSpawn', () => {
   })
 
   it("starts each occurrence on the schedule's stored effort and policy", async () => {
-    await fireViaSpawn()(stored({ reasoningEffort: 'low', approvalPolicy: 'auto-edit' }))
+    await fireViaSpawn(() => undefined)(stored({ reasoningEffort: 'low', approvalPolicy: 'auto-edit' }))
     expect(spawned[0]).toMatchObject({ reasoningEffort: 'low', approvalPolicy: 'auto-edit', model: 'claude-test' })
   })
 
   it('leaves the effort to the default for a schedule without one', async () => {
-    await fireViaSpawn()(stored())
+    await fireViaSpawn(() => undefined)(stored())
     expect(spawned[0]).not.toHaveProperty('reasoningEffort')
   })
 
   it('coerces a hand-edited unknown policy to plan and drops an unknown effort', async () => {
-    await fireViaSpawn()(stored({ approvalPolicy: 'yolo' as never, reasoningEffort: 'max' as never }))
+    await fireViaSpawn(() => undefined)(stored({ approvalPolicy: 'yolo' as never, reasoningEffort: 'max' as never }))
     expect(spawned[0].approvalPolicy).toBe('plan')
     expect(spawned[0]).not.toHaveProperty('reasoningEffort')
   })
@@ -403,6 +411,182 @@ describe('pause, resume and run now', () => {
     const [s] = service.list()
     expect(s).toMatchObject({ lastResult: 'error', lastError: 'Too many background sessions', paused: true })
     await expect(service.runNow('sch-nope')).rejects.toThrow('no longer exists')
+  })
+})
+
+describe('how a fired run ended', () => {
+  /** A fire whose run stays in flight until the test ends it with `finish`. */
+  function controlledFire() {
+    const runs: { conversationId: string; finish: (o: RunOutcome) => void }[] = []
+    let n = 0
+    const fire = async (): Promise<ScheduledFire> => {
+      const conversationId = `conv-${++n}`
+      let finish!: (o: RunOutcome) => void
+      const ended = new Promise<RunOutcome>((resolve) => (finish = resolve))
+      runs.push({ conversationId, finish })
+      return { conversationId, ended }
+    }
+    return { fire, runs }
+  }
+
+  it('shows a run still in flight as running, not ok, then ok once it finishes cleanly', async () => {
+    const { fire, runs } = controlledFire()
+    const { service } = makeService({ fire })
+    const info = service.create(input())
+    await service.runNow(info.id)
+    expect(service.list()[0]).toMatchObject({ lastResult: 'running', lastRunConversationId: 'conv-1' })
+    // Another process reading the store sees the same.
+    expect(makeService().service.list()[0].lastResult).toBe('running')
+    runs[0].finish({ outcome: 'done' })
+    await vi.advanceTimersByTimeAsync(0)
+    const [s] = service.list()
+    expect(s.lastResult).toBe('ok')
+    expect(s.lastError).toBeUndefined()
+  })
+
+  it('records a run that failed, hit a limit, or was stopped, with the failure message', async () => {
+    const { fire, runs } = controlledFire()
+    const { service } = makeService({ fire })
+    const info = service.create(input())
+
+    await service.runNow(info.id)
+    runs[0].finish({ outcome: 'error', message: 'The provider rejected the key.' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(service.list()[0]).toMatchObject({ lastResult: 'error', lastError: 'The provider rejected the key.' })
+
+    await service.runNow(info.id)
+    expect(service.list()[0].lastError).toBeUndefined() // a new run clears the old failure
+    runs[1].finish({ outcome: 'limit', limit: 'stalled' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(service.list()[0]).toMatchObject({ lastResult: 'limit', lastLimit: 'stalled' })
+
+    await service.runNow(info.id)
+    runs[2].finish({ outcome: 'stopped' })
+    await vi.advanceTimersByTimeAsync(0)
+    const [s] = service.list()
+    expect(s.lastResult).toBe('stopped')
+    expect(s.lastLimit).toBeUndefined()
+  })
+
+  it('records the outcome of a timer-fired run too', async () => {
+    const { fire, runs } = controlledFire()
+    const { service } = makeService({ fire })
+    service.create(input({ spec: 'every 30m' }))
+    service.start()
+    await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 5)
+    expect(service.list()[0].lastResult).toBe('running')
+    runs[0].finish({ outcome: 'limit', limit: 'max-steps' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(service.list()[0]).toMatchObject({ lastResult: 'limit', lastLimit: 'max-steps' })
+    service.stop()
+  })
+
+  it("doesn't let an earlier run's end overwrite a later run that is still going", async () => {
+    const { fire, runs } = controlledFire()
+    const { service } = makeService({ fire })
+    const info = service.create(input())
+    await service.runNow(info.id)
+    await service.runNow(info.id)
+    runs[0].finish({ outcome: 'error', message: 'old run failed' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(service.list()[0]).toMatchObject({ lastResult: 'running', lastRunConversationId: 'conv-2' })
+  })
+
+  it('caps a long failure message', async () => {
+    const { fire, runs } = controlledFire()
+    const { service } = makeService({ fire })
+    const info = service.create(input())
+    await service.runNow(info.id)
+    runs[0].finish({ outcome: 'error', message: 'x'.repeat(10_000) })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(service.list()[0].lastError!.length).toBeLessThanOrEqual(MAX_SCHEDULE_ERROR_CHARS)
+  })
+
+  /** A store left mid-run by the host with `pid`. */
+  function writeRunningStore(pid: number) {
+    const s: ScheduledRunInfo = {
+      ...input(),
+      id: 'sch-orphan',
+      nextRunAt: Date.now() + 60 * 60 * 1000,
+      createdAt: 0,
+      lastFiredAt: Date.now() - 1000,
+      lastResult: 'running',
+      lastRunConversationId: 'conv-x',
+      lastRunPid: pid
+    }
+    writeFileSync(file, JSON.stringify({ schemaVersion: 2, schedules: [s] }))
+  }
+  // Above every platform's pid range, so no process has it.
+  const DEAD_PID = 2_147_483_000
+
+  it("doesn't leave a run stuck running after the host that ran it quit", () => {
+    writeRunningStore(DEAD_PID)
+    const [s] = makeService().service.list()
+    expect(s.lastResult).toBe('error')
+    expect(s.lastError).toMatch(/Houston closed before this run finished/)
+    // Written back, so every reader agrees.
+    expect(JSON.parse(readFileSync(file, 'utf8')).schedules[0].lastResult).toBe('error')
+  })
+
+  it('settles an orphaned run at start(), before anything lists it', () => {
+    writeRunningStore(DEAD_PID)
+    const { service } = makeService()
+    service.start()
+    expect(JSON.parse(readFileSync(file, 'utf8')).schedules[0].lastResult).toBe('error')
+    service.stop()
+  })
+
+  it('leaves a run alone while the host running it is still alive', () => {
+    writeRunningStore(process.pid)
+    expect(makeService().service.list()[0].lastResult).toBe('running')
+  })
+
+  it("treats a version 1 store's ok as unknown: it only meant the run started", () => {
+    writeFileSync(
+      file,
+      JSON.stringify({
+        schemaVersion: 1,
+        schedules: [{ ...input(), id: 'sch-old', nextRunAt: null, createdAt: 0, lastFiredAt: 5, lastResult: 'ok' }]
+      })
+    )
+    const [s] = makeService().service.list()
+    expect(s.lastFiredAt).toBe(5)
+    expect(s.lastResult).toBeUndefined()
+  })
+})
+
+describe('fireViaSpawn run outcome', () => {
+  afterEach(() => resetSpawnBackend())
+
+  it('resolves the run outcome once the spawned session ends, read from its chat', async () => {
+    let end!: () => void
+    setSpawnBackend({
+      spawn: async (i) => {
+        end = () => i.onRunEnd?.()
+        return { conversationId: 'c-9', title: i.title ?? '', workspace: i.workspace }
+      }
+    })
+    const outcomes: Record<string, RunOutcome> = { 'c-9': { outcome: 'limit', limit: 'max-output' } }
+    const handle = await fireViaSpawn((id) => outcomes[id])({ ...input(), id: 'sch-1', nextRunAt: null, createdAt: 0 })
+    expect(handle.conversationId).toBe('c-9')
+    let settled: RunOutcome | undefined
+    void handle.ended!.then((o) => (settled = o))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toBeUndefined() // still in flight
+    end()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(settled).toEqual({ outcome: 'limit', limit: 'max-output' })
+  })
+
+  it('reports a run whose chat is gone as stopped', async () => {
+    setSpawnBackend({
+      spawn: async (i) => {
+        queueMicrotask(() => i.onRunEnd?.())
+        return { conversationId: 'c-gone', title: '', workspace: i.workspace }
+      }
+    })
+    const handle = await fireViaSpawn(() => undefined)({ ...input(), id: 'sch-1', nextRunAt: null, createdAt: 0 })
+    expect(await handle.ended).toEqual({ outcome: 'stopped' })
   })
 })
 

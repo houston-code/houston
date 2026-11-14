@@ -476,12 +476,20 @@ describe('SettingsModal', () => {
     it('finds a section by a synonym and lists it under its page, across pages', () => {
       installApi()
       renderModal()
-      type('proxy')
+      type('outbound')
       expect(visibleHeadings()).toEqual(['Sandbox egress'])
       expect(resultPages()).toEqual(['Permissions'])
       // The current page is replaced by the results: its sections are hidden.
       expect(screen.getByText('My Local').closest('[hidden]')).not.toBeNull()
       expect(screen.getByText('1 result')).toBeInTheDocument()
+    })
+
+    it('finds both the network proxy and the sandbox egress by "proxy"', () => {
+      installApi()
+      renderModal()
+      type('proxy')
+      expect(visibleHeadings()).toEqual(['Network proxy', 'Sandbox egress'])
+      expect(resultPages()).toEqual(['Providers & Models', 'Permissions'])
     })
 
     it('finds sections by their own text, needing every word', () => {
@@ -537,7 +545,7 @@ describe('SettingsModal', () => {
     it("jumps to a result's page from its heading, clearing the search", () => {
       installApi()
       renderModal()
-      type('proxy')
+      type('outbound')
       const heading = document.querySelector('.set-results__page:not([hidden]) .set-results__title') as HTMLElement
       fireEvent.click(within(heading).getByRole('button', { name: 'Permissions' }))
       expect(search().value).toBe('')

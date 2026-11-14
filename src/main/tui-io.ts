@@ -110,6 +110,11 @@ export interface TerminalIoDeps {
   history?: () => string[]
   /** Terminal width, for composer wrapping. Defaults to stdout.columns. */
   columns?: () => number
+  /**
+   * Subscribe to terminal resizes; returns the unsubscribe. Defaults to stdout's
+   * 'resize' event for the process's real terminal, and to none for an injected stream.
+   */
+  onResize?: (listener: () => void) => () => void
   /** Open the draft in $VISUAL/$EDITOR (Ctrl-X Ctrl-E); null when unavailable. */
   editText?: (initial: string) => Promise<string | null>
   /** Input stream. Defaults to process.stdin; a fake TTY in tests. */
@@ -169,6 +174,22 @@ export function marksByLine(lines: readonly string[], ranges: readonly KeywordRa
   return out
 }
 
+/**
+ * How many physical rows the cursor sits below the top of a drawn composer once the
+ * terminal is `columns` wide. The composer draws each row to fit the width it had;
+ * a narrower terminal rewraps every longer row onto several, so the logical row
+ * count the redraw climbs would leave the top of the old draw on screen.
+ */
+export function physicalCursorRow(
+  rows: readonly string[],
+  cursorRow: number,
+  cursorCol: number,
+  columns: number
+): number {
+  const cols = Math.max(1, columns)
+  return pickerPhysicalRows(rows.slice(0, cursorRow), cols) + Math.floor(cursorCol / cols)
+}
+
 export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // The input stream, injectable so the raw-mode readers (the composer, the
   // picker, readSecret) can be driven by a fake TTY in tests — they own raw mode
@@ -193,6 +214,16 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       history: deps.history ? [...deps.history()].reverse() : undefined
     }) as unknown as ReadlineLike)
   const rawWrite = deps.write ?? ((s: string) => void process.stdout.write(s))
+  // Resizes only matter on the process's real terminal: an injected (test) stream
+  // has no window, and a process-wide listener per instance would leak.
+  const onResize =
+    deps.onResize ??
+    (stdin === process.stdin && process.stdout.isTTY
+      ? (listener: () => void): (() => void) => {
+          process.stdout.on('resize', listener)
+          return () => void process.stdout.off('resize', listener)
+        }
+      : undefined)
   const drainInput = deps.drainInput ?? defaultDrain
   const paint = deps.paint ?? ((s: string) => s)
   const now = deps.now ?? Date.now
@@ -650,6 +681,10 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       let done = false
       let drawn = false
       let prevCursorRow = 0
+      // The last draw, for a resize to find its top again (see physicalCursorRow).
+      let prevRows: string[] = []
+      let prevCursorCol = 0
+      let stopResize: (() => void) | null = null
       // Reserve the last column: writing exactly `columns` cells makes some
       // terminals wrap and insert a phantom row, which would desync the redraw.
       const width = (): number =>
@@ -707,6 +742,20 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         rawWrite(s)
         drawn = true
         prevCursorRow = v.cursorRow
+        prevRows = v.rows
+        prevCursorCol = v.cursorCol
+      }
+      // The terminal changed width under the composer: it rewrapped the old draw, so
+      // climb its physical rows (not its logical ones), clear, and draw it again at
+      // the new width. Not while the region is off screen ($EDITOR) or the read is over.
+      const onTerminalResize = (): void => {
+        if (done || !drawn) return
+        const cols = deps.columns?.() ?? process.stdout.columns ?? 80
+        const up = physicalCursorRow(prevRows, prevCursorRow, prevCursorCol, cols)
+        rawWrite(`${up > 0 ? `\x1b[${up}A` : ''}\r\x1b[0J`)
+        drawn = false
+        prevCursorRow = 0
+        draw()
       }
       // A menu whose rows arrived late (an `@` file lookup): repaint, unless the read
       // is over or the region is not on screen (handed to $EDITOR).
@@ -714,6 +763,8 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (!done && drawn) draw()
       }
       const teardown = (): void => {
+        stopResize?.()
+        stopResize = null
         try {
           stdin.removeListener('data', onData)
           // Hand the cursor back: a block cursor left behind outlives Houston and
@@ -738,6 +789,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         // Shift-Enter for a new line, on terminals that can report it.
         rawWrite(ENABLE_MODIFIED_KEYS)
         stdin.on('data', onData)
+        stopResize = onResize?.(onTerminalResize) ?? null
       }
       const finish = (value: string | null, echo = false): void => {
         if (done) return

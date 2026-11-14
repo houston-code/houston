@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import type {
   AgentEvent,
   AgentRunRequest,
+  BackgroundShellInfo,
   ChatMessage,
   ChatRequest,
   PlanDecision,
@@ -47,6 +48,7 @@ import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
+import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
@@ -165,6 +167,8 @@ const h = vi.hoisted(() => ({
   // The repository the `./github` partial mock reports the gh_* tools act on; null
   // (the default) is "unknown", as in a temp workspace with no remotes.
   ghRepo: null as string | null,
+  // What listShells reports to the loop; null (the default) is the real registry.
+  shells: null as BackgroundShellInfo[] | null,
   // Route getMcpToolDefs to the real MCP manager (with a fake server behind its client
   // factory) instead of handing back `mcpDefs`, for the tests that need a live connection.
   realMcp: false
@@ -242,6 +246,10 @@ vi.mock('./tools', async (importActual) => {
   }
 })
 vi.mock('./git', () => ({ gitContext: async () => h.gitContext }))
+vi.mock('./shells', async (importActual) => {
+  const actual = await importActual<typeof import('./shells')>()
+  return { ...actual, listShells: () => h.shells ?? actual.listShells() }
+})
 vi.mock('./github', async (importActual) => ({
   ...(await importActual<typeof import('./github')>()),
   ghRepoKey: async () => h.ghRepo
@@ -323,6 +331,8 @@ vi.mock('./verify-gate', async (importActual) => {
 const {
   startRun,
   cancelRun,
+  cancelAllRuns,
+  waitForRunsToEnd,
   resolveApproval,
   resolveQuestion,
   resolvePlan,
@@ -374,6 +384,7 @@ beforeEach(() => {
   h.sandboxed = null
   h.egressFails = false
   h.egressScope = null
+  h.shells = null
   h.ghRepo = null
   delete h.settings.webReads
   delete h.settings.sandboxEgress
@@ -2971,6 +2982,27 @@ describe('compaction persistence across runs', () => {
     expect(history[stored.cut].role).toBe('user') // always lands on a turn boundary
   })
 
+  it("pins the user's own words from the summarized turns, and none from the kept tail", async () => {
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const history = historyOf(5) // user turns at 0,2,4,6,8; current question at 10
+    setMessages(conv.id, history)
+    setCompaction(conv.id, { cut: 6, summary: 'PRIOR SUMMARY' })
+    const sends: ChatMessage[][] = []
+    const provider: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    await run({ provider, messages: history, conversationId: conv.id })
+    const pinned = sends[0].find((m) => m.content.startsWith(PINNED_MEMORY_PREFIX))!
+    expect(pinned.content).toContain('Original task:\nquestion 0')
+    expect(pinned.content).toContain("The user's later messages, in order (clipped):\n- question 1\n- question 2")
+    // question 3 onward is still in the window verbatim.
+    expect(pinned.content).not.toContain('question 3')
+  })
+
   it('resumes from persisted state instead of re-summarizing the head again', async () => {
     const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
     const history = historyOf(5) // user turns at 0,2,4,6,8; current question at 10
@@ -3536,6 +3568,62 @@ describe('context management inside a long turn', () => {
     expect(shape(second.sends[0]).slice(0, last.length)).toEqual(shape(last))
   })
 
+  it('pins the branch and running shells once evicted, frozen until the next advance', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: ws })
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/feature/pinned-state'], { cwd: ws })
+    h.secrets = ['sk-pinned-secret-value-123456']
+    const overhead = await fixedOverheadTokens()
+    h.probeTools = [bigReadFile(6_000)]
+    h.settings.compactionThreshold = overhead + 10_000
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const bg = (over: Partial<BackgroundShellInfo>): BackgroundShellInfo => ({
+      id: 'dev12345',
+      command: 'API_KEY=sk-pinned-secret-value-123456 npm run dev',
+      running: true,
+      exitCode: null,
+      startedAt: 2,
+      exitedAt: null,
+      conversationId: conv.id,
+      workspace: ws,
+      urls: ['http://localhost:5173'],
+      ...over
+    })
+    h.shells = [
+      bg({}),
+      bg({ id: 'otherchat', conversationId: 'someone-else' }),
+      bg({ id: 'finished', running: false, exitCode: 0, exitedAt: 3 })
+    ]
+
+    const first = longTurn(7)
+    const r1 = await run({ provider: first.provider, userText: REQUEST, policy: 'full-auto', conversationId: conv.id })
+    const last = first.sends.at(-1)!
+    const block = last[0].content
+    expect(block).toContain(PINNED_MEMORY_PREFIX)
+    expect(block).toContain('- Git branch: feature/pinned-state')
+    expect(block).toContain('dev12345: API_KEY=')
+    expect(block).toContain('(running, http://localhost:5173)')
+    expect(block).not.toContain('sk-pinned-secret-value-123456')
+    expect(block).not.toContain('otherchat')
+    expect(block).not.toContain('finished')
+    // At the project root the shell directory adds nothing.
+    expect(block).not.toContain('Shell directory')
+    expect(getConversation(conv.id)!.compaction!.workspaceState?.branch).toBe('feature/pinned-state')
+
+    // The live state moves on, but nothing advanced: the next turn re-sends the same
+    // block, so its window still extends the cached one.
+    h.shells = []
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/another'], { cwd: ws })
+    const second = longTurn(0)
+    await run({
+      provider: second.provider,
+      messages: [...r1.messages, { role: 'user', content: 'second task' }],
+      policy: 'full-auto',
+      conversationId: conv.id
+    })
+    expect(shape(second.sends[0]).slice(0, last.length)).toEqual(shape(last))
+  })
+
+
   it('treats a summary cut off at its output cap as a failed compaction', async () => {
     // A thinking model can spend the whole cap before it writes the summary's end; a
     // truncated summary must never replace the head it was meant to carry.
@@ -4096,6 +4184,42 @@ describe('ask_user', () => {
       | { output: string }
       | undefined
     expect(result?.output).toContain('stopped the agent')
+  })
+
+  it('cancelAllRuns stops every live run, and waitForRunsToEnd sees them unwind', async () => {
+    // A terminal client stopping on a signal: whatever is mid-turn is cancelled, and
+    // the exit waits (bounded) for each run to record its stop.
+    expect(cancelAllRuns()).toBe(0)
+    expect(await waitForRunsToEnd(0)).toBe(true)
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'q1', name: 'ask_user', arguments: { question: 'Wait?' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ]
+    ])
+    let asked!: () => void
+    const blocked = new Promise<void>((r) => (asked = r))
+    const events: AgentEvent[] = []
+    const run = startRun(
+      {
+        runId: 'run-cancel-all',
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'go' }]
+      },
+      (e) => {
+        events.push(e)
+        if (e.type === 'tool_question') asked()
+      }
+    )
+    await blocked
+    expect(await waitForRunsToEnd(20, 5)).toBe(false)
+    expect(cancelAllRuns()).toBe(1)
+    expect(await waitForRunsToEnd(5_000, 5)).toBe(true)
+    await run
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
   })
 
   it('fires plugin lifecycle hooks: onUserMessage, then onToolStart/onToolResult around a tool', async () => {
@@ -7058,6 +7182,77 @@ describe('loop control — verification gate', () => {
     expect(types(r).at(-1)).toBe('done')
   })
 
+  describe('with no command set', () => {
+    const writePackage = (): void =>
+      writeFileSync(join(ws, 'package.json'), JSON.stringify({ scripts: { typecheck: 'tsc', test: 'vitest run' } }))
+
+    it('uses the command the project suggests in Full auto, and says so once', async () => {
+      writePackage()
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      const r = await withSettings({ verifyOnStop: true, verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto' })
+      )
+      expect(h.verifyRuns).toHaveLength(1)
+      expect(h.verifyRuns[0]).toMatchObject({ command: 'npm run typecheck && npm test', allowNetwork: false })
+      const notices = r.events.filter(
+        (e) => e.type === 'notice' && /Verifying with `npm run typecheck && npm test`/.test(e.message)
+      )
+      expect(notices).toHaveLength(1)
+      expect((notices[0] as { message: string }).message).toContain('package.json')
+    })
+
+    it('says so only once across several passes', async () => {
+      writePackage()
+      let stops = 0
+      const provider: Provider = {
+        async *streamChat() {
+          if (stops++ % 2 === 0) {
+            yield { type: 'tool_call', call: { id: `w${stops}`, name: 'write_file', arguments: { path: 'out.txt', content: `v${stops}` } } }
+            yield { type: 'done', stopReason: 'tool_use' }
+          } else {
+            yield { type: 'text', text: 'done' }
+            yield { type: 'done', stopReason: 'end_turn' }
+          }
+        }
+      }
+      h.verifyRunner = async () => ({ passed: false, output: 'still failing', aborted: false })
+      const r = await withSettings(
+        { verifyOnStop: true, verifyMaxPasses: 2, maxIterations: 40, stallDetection: false },
+        () => run({ provider, policy: 'full-auto' })
+      )
+      expect(h.verifyRuns).toHaveLength(2)
+      expect(r.events.filter((e) => e.type === 'notice' && /^Verifying with/.test(e.message))).toHaveLength(1)
+    })
+
+    it('runs nothing outside Full auto', async () => {
+      writePackage()
+      const r = await withSettings({ verifyOnStop: true, verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'auto-edit' })
+      )
+      expect(h.verifyRuns).toHaveLength(0)
+      expect(types(r)).not.toContain('verification')
+    })
+
+    it('runs nothing when the gate is off, or when the project suggests nothing', async () => {
+      writePackage()
+      await withSettings({ verifyOnStop: false }, () => run({ provider: writeThenStop(), policy: 'full-auto' }))
+      expect(h.verifyRuns).toHaveLength(0)
+      rmSync(join(ws, 'package.json'))
+      await withSettings({ verifyOnStop: true }, () => run({ provider: writeThenStop(), policy: 'full-auto' }))
+      expect(h.verifyRuns).toHaveLength(0)
+    })
+
+    it('keeps a command the user set over the inferred one, with no notice', async () => {
+      writePackage()
+      h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
+      const r = await withSettings({ verifyOnStop: true, verifyCommand: 'make check', verifyMaxPasses: 1 }, () =>
+        run({ provider: writeThenStop(), policy: 'full-auto' })
+      )
+      expect(h.verifyRuns[0]).toMatchObject({ command: 'make check' })
+      expect(r.events.some((e) => e.type === 'notice' && /^Verifying with/.test(e.message))).toBe(false)
+    })
+  })
+
   it('passes first time: emits a passed verification then done', async () => {
     h.verifyRunner = async () => ({ passed: true, output: '', aborted: false })
     const r = await withSettings(
@@ -7236,6 +7431,64 @@ describe('loop control — verification gate', () => {
       | undefined
     expect(shellResult?.ok).toBe(true)
     expect(h.verifyRuns).toHaveLength(0)
+  }, 20_000)
+
+  type ShellReceipt = {
+    filesChanged: string[]
+    checks: Array<{ kind: string; ok?: boolean; beforeLastWrite?: true }>
+  }
+  const receiptOf = (r: Awaited<ReturnType<typeof run>>): ShellReceipt | undefined =>
+    (r.events.find((e) => e.type === 'receipt') as { receipt: ShellReceipt } | undefined)?.receipt
+
+  it('files a shell command changed land on the receipt, without a verify command', async () => {
+    gitRepoWithTrackedFile()
+    const r = await shellOnlyRun("printf 'v2\\n' > tracked.txt && printf 'gen\\n' > generated.txt")
+    expect(receiptOf(r)?.filesChanged).toEqual(['generated.txt', 'tracked.txt'])
+  }, 20_000)
+
+  it('a read-only shell command adds no files to the receipt', async () => {
+    gitRepoWithTrackedFile()
+    writeFileSync(join(ws, 'tracked.txt'), 'dirty before the run\n')
+    const r = await shellOnlyRun('ls && cat tracked.txt && git status')
+    expect(receiptOf(r)?.filesChanged ?? []).toEqual([])
+  }, 20_000)
+
+  it('a shell edit after a passing test marks that pass as before the last change', async () => {
+    gitRepoWithTrackedFile()
+    writeFileSync(join(ws, 'test.mjs'), 'process.exit(0)\n')
+    const r = await run({
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow'),
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'node test.mjs' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          {
+            type: 'tool_call',
+            call: { id: 's2', name: 'run_shell', arguments: { command: "sed -i.bak 's/v1/v2/' tracked.txt" } }
+          },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ]
+    })
+    const receipt = receiptOf(r)
+    expect(readFileSync(join(ws, 'tracked.txt'), 'utf8')).toBe('v2\n')
+    expect(receipt?.filesChanged).toContain('tracked.txt')
+    expect(receipt?.checks).toEqual([expect.objectContaining({ kind: 'test', ok: true, beforeLastWrite: true })])
+  }, 20_000)
+
+  it('a test run after an edit in the same shell command still counts for the final code', async () => {
+    gitRepoWithTrackedFile()
+    writeFileSync(join(ws, 'test.mjs'), 'process.exit(0)\n')
+    const r = await shellOnlyRun("printf 'v2\\n' > tracked.txt && node test.mjs")
+    const receipt = receiptOf(r)
+    expect(receipt?.filesChanged).toContain('tracked.txt')
+    expect(receipt?.checks).toHaveLength(1)
+    expect(receipt?.checks[0]).toMatchObject({ kind: 'test', ok: true })
+    expect(receipt?.checks[0].beforeLastWrite).toBeUndefined()
   }, 20_000)
 })
 
@@ -8584,6 +8837,74 @@ describe('subagent dispatch: progress, models, resume, nesting', () => {
     } finally {
       delete h.settings.subagentHistoryMb
     }
+  })
+
+  it("bills a dispatch's turns one by one into the run's usage, as the main loop prices its own", async () => {
+    // claude-haiku-5-5 bills a request past 100k input tokens at its long-context rate.
+    // Two 60k-token turns are each under it; priced as one 120k request, they wouldn't be.
+    const provider = scriptedRecording(
+      [
+        dispatchCall({ description: 'scan', prompt: 'look' }),
+        [
+          { type: 'tool_call', call: { id: 's1', name: 'list_dir', arguments: { path: '.' } } },
+          { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 60_000, outputTokens: 10 } }
+        ],
+        [
+          { type: 'text', text: 'sub report' },
+          { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 60_000, outputTokens: 10 } }
+        ],
+        finalText('done')
+      ],
+      []
+    )
+    const r = await run({ provider, model: 'claude-haiku-5-5' })
+    const perTurn = 2 * turnCostUsd('claude-haiku-5-5', 60_000, 10)
+    expect(perTurn).toBeLessThan(turnCostUsd('claude-haiku-5-5', 120_000, 20))
+    const sub = r.events.find((e) => e.type === 'usage' && e.inputTokens === 0 && e.outputTokens === 20)
+    expect(sub?.type === 'usage' && sub.cost).toBeCloseTo(perTurn, 10)
+    const saved = r.messages.find((m) => m.subagents)!.subagents![0]
+    expect(saved.usage?.costUsd).toBeCloseTo(perTurn, 10)
+    expect(saved.outcome).toBe('done')
+  })
+
+  it("wraps a dispatch up once the run's spend reaches the cost ceiling", async () => {
+    h.settings.costCeilingUsd = 0.01
+    try {
+      const requests: Array<{ model: string; messages: ChatMessage[]; tools: string[] }> = []
+      const provider = scriptedRecording(
+        [
+          dispatchCall({ description: 'scan', prompt: 'look' }),
+          [
+            { type: 'tool_call', call: { id: 's1', name: 'list_dir', arguments: { path: '.' } } },
+            // About $0.10 at the long-context rate: past the ceiling on its own.
+            { type: 'done', stopReason: 'tool_use', usage: { inputTokens: 200_000, outputTokens: 10 } }
+          ],
+          finalText('sub report'),
+          finalText('done')
+        ],
+        requests
+      )
+      await run({ provider, model: 'claude-haiku-5-5' })
+      const landed = (i: number): boolean =>
+        requests[i].messages.some((m) => m.role === 'user' && m.content.endsWith(SUBAGENT_COST_LANDING_NOTE))
+      expect(landed(1)).toBe(false)
+      expect(landed(2)).toBe(true)
+    } finally {
+      delete h.settings.costCeilingUsd
+    }
+  })
+
+  it('saves the outcome of a dispatch that came back empty', async () => {
+    const provider = scriptedRecording(
+      [dispatchCall({ description: 'scan', prompt: 'look' }), [{ type: 'done', stopReason: 'end_turn' }], finalText('done')],
+      []
+    )
+    const r = await run({ provider })
+    const end = r.events.find((e) => e.type === 'subagent_end')
+    expect(end?.type === 'subagent_end' && end.update).toMatchObject({ status: 'done', outcome: 'empty' })
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'dispatch_agent')
+    expect(result?.type === 'tool_result' && result.output).toMatch(/^\[subagent returned no answer\]/)
+    expect(r.messages.find((m) => m.subagents)!.subagents![0].outcome).toBe('empty')
   })
 
   it('runs a dispatch on an explicit sibling model and validates unknown ids', async () => {

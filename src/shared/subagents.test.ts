@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   capSteps,
+  endedShort,
   formatDuration,
   limitSubagentHistory,
   modelSourceLabel,
   recordBytes,
   recordHeadline,
   recordDiffStat,
+  recordOutcome,
   recordToMarkdown,
   resumeNote,
   splitSubagentReport,
@@ -255,6 +257,51 @@ describe('summaries', () => {
     ])
     expect(rows.map((r) => r.id)).toEqual(['b', 'a'])
     expect(rows[0].label).toBe('ag2 · Trace the flow')
+  })
+})
+
+describe('outcomes', () => {
+  it('derives an outcome from the status when none was recorded', () => {
+    expect(recordOutcome({ status: 'running' })).toBeUndefined()
+    expect(recordOutcome({ status: 'done' })).toBe('done')
+    expect(recordOutcome({ status: 'step-limit' })).toBe('limit')
+    expect(recordOutcome({ status: 'stalled' })).toBe('limit')
+    expect(recordOutcome({ status: 'error' })).toBe('error')
+    expect(recordOutcome({ status: 'aborted' })).toBe('error')
+    expect(recordOutcome({ status: 'done', outcome: 'empty' })).toBe('empty')
+    // A running agent has no outcome yet, whatever a stale field says.
+    expect(recordOutcome({ status: 'running', outcome: 'done' })).toBeUndefined()
+  })
+
+  it('flags only an agent cut short or empty', () => {
+    expect(endedShort({ status: 'done' })).toBe(false)
+    expect(endedShort({ status: 'done', outcome: 'limit' })).toBe(true)
+    expect(endedShort({ status: 'done', outcome: 'empty' })).toBe(true)
+    expect(endedShort({ status: 'step-limit' })).toBe(true)
+    expect(endedShort({ status: 'error' })).toBe(false)
+  })
+
+  it('labels a report the output limit cut off, and one never written', () => {
+    expect(statusLabel(rec({ status: 'done', outcome: 'limit' }))).toBe("cut off at the model's output limit")
+    expect(statusLabel(rec({ status: 'done', outcome: 'empty' }))).toBe('finished without a report')
+    expect(statusLabel(rec({ status: 'done', outcome: 'done' }))).toBe('finished with a report')
+  })
+
+  it('ends a terminal line with a warning, not a check, for an agent cut short or empty', () => {
+    const t = new SubagentTermLines()
+    t.line({ type: 'subagent_start', parentCallId: 'c', record: rec() })
+    const end = (update: { status: SubagentRecord['status']; outcome?: SubagentRecord['outcome'] }): ReturnType<SubagentTermLines['line']> =>
+      t.line({ type: 'subagent_end', parentCallId: 'c', recordId: 'sa1', update: { ...update, endedAt: 0 } })
+    expect(end({ status: 'done', outcome: 'limit' })).toMatchObject({
+      tone: 'yellow',
+      text: expect.stringMatching(/^! Trace the flow: cut off at the model's output limit/)
+    })
+    expect(end({ status: 'done', outcome: 'empty' })).toMatchObject({
+      tone: 'yellow',
+      text: expect.stringMatching(/^! Trace the flow: finished without a report/)
+    })
+    expect(end({ status: 'step-limit', outcome: 'limit' })).toMatchObject({ tone: 'yellow', text: expect.stringMatching(/^! /) })
+    expect(end({ status: 'done', outcome: 'done' })).toMatchObject({ tone: 'dim', text: expect.stringMatching(/^✓ /) })
   })
 })
 

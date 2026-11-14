@@ -1,5 +1,6 @@
 import { causeFromMessage, type TurnErrorCause } from '@shared/turnError'
 import type { ThrottleInfo } from '@shared/rateLimit'
+import { STREAM_IDLE_TIMEOUT_MS, streamIdleWindowOf } from '../providers/idle-fetch'
 
 /**
  * Transient-failure handling for provider streaming. This is the only retry layer: the
@@ -39,6 +40,15 @@ export const MAX_PROVIDER_RETRIES = 6
  * (see {@link RetryBudget}), so a mistyped base URL still fails at the attempt count.
  */
 export const NETWORK_OUTAGE_BUDGET_MS = 5 * 60_000
+
+/**
+ * Retries for a stream that went quiet past an extended idle window (a reasoning request
+ * on Chat Completions, or a local model server; see `withStreamIdleWindow`). Silence that
+ * long is a host that stopped, not a network blip, and every retry re-sends and re-bills
+ * the whole request and waits out the window again, so one retry is all it gets rather
+ * than riding the outage budget or the attempt count.
+ */
+export const MAX_EXTENDED_IDLE_RETRIES = 1
 
 /**
  * Longest we'll honor a server's `Retry-After`. A provider shedding load can name a
@@ -307,6 +317,8 @@ export function isNetworkError(err: unknown): boolean {
  */
 export class RetryBudget {
   private outageSince: number | undefined
+  private extendedIdleStalls = 0
+  private lastWasExtendedIdle = false
 
   constructor(
     private readonly reachable: () => boolean,
@@ -316,6 +328,12 @@ export class RetryBudget {
   /** Whether retry number `retry` (1-based) may go ahead after `err`. */
   allows(err: unknown, retry: number): boolean {
     if (!isRetryableError(err)) return false
+    const idleWindow = streamIdleWindowOf(err)
+    this.lastWasExtendedIdle = idleWindow !== undefined && idleWindow > STREAM_IDLE_TIMEOUT_MS
+    if (this.lastWasExtendedIdle) {
+      this.outageSince = undefined
+      return ++this.extendedIdleStalls <= MAX_EXTENDED_IDLE_RETRIES
+    }
     const now = this.opts.now ?? Date.now
     if (this.reachable() && isNetworkError(err)) {
       this.outageSince ??= now()
@@ -330,6 +348,7 @@ export class RetryBudget {
    * where the budget is time rather than a count. Read after {@link allows}.
    */
   get reportedMax(): number | undefined {
+    if (this.lastWasExtendedIdle) return MAX_EXTENDED_IDLE_RETRIES
     return this.outageSince === undefined ? (this.opts.maxRetries ?? MAX_PROVIDER_RETRIES) : undefined
   }
 }

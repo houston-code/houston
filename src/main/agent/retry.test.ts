@@ -9,6 +9,7 @@ import {
   isQuotaExhaustedError,
   isRetryableError,
   isToolsUnsupportedError,
+  MAX_EXTENDED_IDLE_RETRIES,
   MAX_PROVIDER_RETRIES,
   NETWORK_OUTAGE_BUDGET_MS,
   ProviderError,
@@ -25,6 +26,7 @@ import {
   geminiApiError,
   geminiQuotaBody
 } from '../test/gemini-errors'
+import { EXTENDED_STREAM_IDLE_TIMEOUT_MS, STREAM_IDLE_TIMEOUT_MS, StreamIdleError } from '../providers/idle-fetch'
 
 /** A thrown SDK-shaped error: a status, and optionally the headers it came with. */
 function apiError(status: number, message = 'boom', headers?: Record<string, string>): Error {
@@ -436,6 +438,30 @@ describe('RetryBudget', () => {
     expect(b.allows(offline(), 6)).toBe(true)
     now += NETWORK_OUTAGE_BUDGET_MS - 1
     expect(b.allows(offline(), 7)).toBe(true)
+  })
+
+  it('gives a stall past an extended idle window one retry, not the outage budget', () => {
+    let now = 0
+    const b = new RetryBudget(() => true, { maxRetries: 6, now: () => now })
+    const longStall = (): Error => new Error('Connection error.', { cause: new StreamIdleError(EXTENDED_STREAM_IDLE_TIMEOUT_MS) })
+    expect(b.allows(longStall(), 1)).toBe(true)
+    expect(b.reportedMax).toBe(MAX_EXTENDED_IDLE_RETRIES)
+    now += 1_000
+    expect(b.allows(longStall(), 2)).toBe(false)
+    // Unreached providers are held to the same single retry, not the attempt count.
+    const cold = new RetryBudget(() => false, { maxRetries: 6 })
+    expect(cold.allows(longStall(), 1)).toBe(true)
+    expect(cold.allows(longStall(), 2)).toBe(false)
+  })
+
+  it('still rides out a default-window stall on the outage budget', () => {
+    let now = 0
+    const b = new RetryBudget(() => true, { maxRetries: 2, now: () => now })
+    for (let retry = 1; retry <= 5; retry++) {
+      expect(b.allows(new StreamIdleError(STREAM_IDLE_TIMEOUT_MS), retry)).toBe(true)
+      now += 10_000
+    }
+    expect(b.reportedMax).toBeUndefined()
   })
 
   it('never retries a permanent failure, reached or not', () => {

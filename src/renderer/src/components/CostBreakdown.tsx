@@ -56,7 +56,10 @@ export function CostBreakdown({
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      // Consumed here: the app's own Esc handler would otherwise also stop the run.
+      e.preventDefault()
+      setOpen(false)
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)

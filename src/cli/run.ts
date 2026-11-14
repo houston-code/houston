@@ -35,6 +35,7 @@ import {
 } from './credentials'
 import { runProvidersCommand, type ProvidersDeps } from './providers'
 import { trustSystemCertificates } from '../main/system-ca'
+import { configureOutboundProxy } from '../main/outbound-proxy'
 import { noteRuleUsed } from '../main/ruleUsage'
 
 export { log } from '../main/logger'
@@ -54,6 +55,8 @@ export function wireCliHost(): void {
   void startShellLedger(resolveUserDataDir())
   // Before any provider call: a TLS-inspecting network's root CA lives in the OS store.
   trustSystemCertificates()
+  // Provider, MCP and search traffic honours the proxy setting or HTTPS_PROXY.
+  configureOutboundProxy(() => getSettings().proxyUrl)
   configureHasKey((id) => cliHasKey(id))
   // A fresh install starts in full-auto only where the sandbox confines shell commands.
   configureFreshInstallApprovalPolicy(() => freshInstallApprovalPolicy(isSandboxed()))

@@ -1,15 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { COMPACTION_SUMMARY_PREFIX, type ChatMessage } from '@shared/agent'
+import { COMPACTION_SUMMARY_PREFIX, systemNoteMessage, type BackgroundShellInfo, type ChatMessage } from '@shared/agent'
 import {
+  MAX_PINNED_SHELLS,
   PINNED_MEMORY_PREFIX,
+  formatWorkspaceState,
+  normalizeWorkspaceState,
+  pinnedShells,
   buildPinnedMemory,
   buildPinnedMessages,
   filesInPlay,
   lastUserTurnIndex,
+  laterUserMessages,
   latestTodos,
   originalTask,
   originalTaskIndex
 } from './workingMemory'
+
+const INVOKED = { kind: 'command' as const, label: '/review' }
 
 function toolCall(name: string, args: Record<string, unknown>): ChatMessage {
   return { role: 'assistant', content: '', toolCalls: [{ id: `c-${name}`, name, arguments: args }] }
@@ -152,6 +159,161 @@ describe('buildPinnedMemory', () => {
     const block = buildPinnedMemory([{ role: 'user', content: huge }])
     expect(block.length).toBeLessThan(huge.length)
     expect(block).toContain('…')
+  })
+})
+
+describe("the user's later messages in the pinned block", () => {
+  const log: ChatMessage[] = [
+    { role: 'user', content: 'Build the importer' },
+    { role: 'assistant', content: 'on it' },
+    { role: 'user', content: 'use pnpm, not npm' },
+    systemNoteMessage('You seem to be repeating yourself.'),
+    { role: 'user', content: 'Review this', invokedAs: INVOKED },
+    { role: 'user', content: `${COMPACTION_SUMMARY_PREFIX}\n\nold summary` },
+    { role: 'user', content: 'also   keep\n\nthe CSV header' },
+    { role: 'assistant', content: 'ok' }
+  ]
+
+  it("lists every message the user wrote after the task, in order, and none of Houston's", () => {
+    expect(laterUserMessages(log)).toEqual(['use pnpm, not npm', 'also   keep\n\nthe CSV header'])
+    const block = buildPinnedMemory(log)
+    expect(block).toContain("The user's later messages, in order (clipped):\n- use pnpm, not npm\n- also keep the CSV header")
+    expect(block).not.toContain('repeating yourself')
+    expect(block).not.toContain('Review this')
+  })
+
+  it('stops at the given index, so messages still in the window are not repeated', () => {
+    expect(laterUserMessages(log, 4)).toEqual(['use pnpm, not npm'])
+    expect(buildPinnedMemory(log, { userMessagesBefore: 2 })).not.toContain('later messages')
+  })
+
+  it('clips each message and keeps the newest when there are too many', () => {
+    const many: ChatMessage[] = [{ role: 'user', content: 'task' }]
+    for (let i = 0; i < 40; i++) many.push({ role: 'user', content: `note ${i} ${'x'.repeat(600)}` })
+    const block = buildPinnedMemory(many)
+    expect(block).toContain('note 39 ')
+    expect(block).not.toContain('note 0 ')
+    expect(block).toMatch(/- \(\d+ earlier messages not shown\)/)
+    expect(block).not.toContain('x'.repeat(450))
+    expect(block.length).toBeLessThanOrEqual(9000)
+  })
+})
+
+describe('workspace state in the pinned block', () => {
+  const shell = (over: Partial<BackgroundShellInfo>): BackgroundShellInfo => ({
+    id: 'abc12345',
+    command: 'npm run dev',
+    running: true,
+    exitCode: null,
+    startedAt: 1,
+    exitedAt: null,
+    conversationId: 'c1',
+    workspace: '/ws',
+    ...over
+  })
+  const label = (dir: string): string | null => (dir === '/ws' ? null : dir.replace('/ws/', ''))
+
+  it('adds branch, shell directory, and running shells after the files', () => {
+    const msgs: ChatMessage[] = [{ role: 'user', content: 'Ship it' }, toolCall('read_file', { path: 'a.ts' })]
+    const block = buildPinnedMemory(msgs, {
+      workspaceState: {
+        branch: 'feature/login',
+        shellCwd: 'packages/api',
+        shells: [{ id: 'abc12345', command: 'npm run dev', status: 'running, http://localhost:5173' }]
+      }
+    })
+    expect(block.indexOf('Files in play')).toBeLessThan(block.indexOf('Workspace state'))
+    expect(block).toContain('- Git branch: feature/login')
+    expect(block).toContain('- Shell directory: packages/api')
+    expect(block).toContain('  - abc12345: npm run dev (running, http://localhost:5173)')
+  })
+
+  it('leaves the section out when there is no state, and each line out when absent', () => {
+    const msgs: ChatMessage[] = [{ role: 'user', content: 'Ship it' }]
+    expect(buildPinnedMemory(msgs)).not.toContain('Workspace state')
+    expect(buildPinnedMemory(msgs, { workspaceState: {} })).not.toContain('Workspace state')
+    expect(formatWorkspaceState(undefined)).toBe('')
+    expect(formatWorkspaceState({ shells: [] })).toBe('')
+    const onlyBranch = formatWorkspaceState({ branch: 'main' })
+    expect(onlyBranch).toContain('Git branch: main')
+    expect(onlyBranch).not.toContain('Shell directory')
+    expect(onlyBranch).not.toContain('Background shells')
+  })
+
+  it('pins the state on its own once the task is omitted', () => {
+    const msgs: ChatMessage[] = [{ role: 'user', content: 'Just chat' }]
+    const block = buildPinnedMemory(msgs, { omitTask: true, workspaceState: { branch: 'main' } })
+    expect(block.startsWith(PINNED_MEMORY_PREFIX)).toBe(true)
+    expect(block).toContain('Git branch: main')
+    expect(block).not.toContain('Just chat')
+  })
+
+  it('bounds every field and the shell list, and folds control characters', () => {
+    const many = Array.from({ length: MAX_PINNED_SHELLS + 4 }, (_, i) => ({
+      id: `s${i}`,
+      command: `run ${'y'.repeat(500)}`,
+      status: 'running'
+    }))
+    const state = normalizeWorkspaceState({
+      branch: 'b'.repeat(500),
+      shellCwd: `dir\n${'d'.repeat(500)}`,
+      shells: many
+    })!
+    expect(state.branch!.length).toBeLessThanOrEqual(121)
+    expect(state.shellCwd).not.toContain('\n')
+    expect(state.shellCwd!.length).toBeLessThanOrEqual(201)
+    expect(state.shells).toHaveLength(MAX_PINNED_SHELLS)
+    expect(state.shells!.every((s) => s.command.length <= 161)).toBe(true)
+    expect(state.moreShells).toBe(1)
+    const text = formatWorkspaceState({ ...state, moreShells: 4 })
+    expect(text).toContain('and 4 more')
+    // Heading, branch, directory, shells heading, the capped shells, the "more" line.
+    expect(text.split('\n').length).toBe(4 + MAX_PINNED_SHELLS + 1)
+    // The whole pinned block stays capped however large the inputs.
+    const block = buildPinnedMemory([{ role: 'user', content: 'x'.repeat(5000) }], { workspaceState: state })
+    expect(block.length).toBeLessThanOrEqual(6001)
+  })
+
+  it('drops malformed persisted state rather than trusting it', () => {
+    expect(normalizeWorkspaceState(null)).toBeUndefined()
+    expect(normalizeWorkspaceState('main')).toBeUndefined()
+    expect(normalizeWorkspaceState({ branch: 7, shells: 'x' })).toBeUndefined()
+    expect(
+      normalizeWorkspaceState({ shells: [{ id: 'a', command: 'ls' }, { id: 'b', command: 'dev', status: 'running' }, 5] })
+    ).toEqual({ shells: [{ id: 'b', command: 'dev', status: 'running' }] })
+    expect(normalizeWorkspaceState({ branch: 'main', moreShells: -3 })).toEqual({ branch: 'main' })
+  })
+
+  it("lists only this chat's live shells, newest first, with a short status", () => {
+    const { shells, more } = pinnedShells(
+      [
+        shell({ id: 'old', startedAt: 1 }),
+        shell({ id: 'new', startedAt: 5, urls: ['http://localhost:5173'] }),
+        shell({ id: 'other-chat', conversationId: 'c2' }),
+        shell({ id: 'done', running: false, exitCode: 0, exitedAt: 3 }),
+        shell({ id: 'orphan', running: false, exitCode: 0, exitedAt: 3, leftover: true, startedAt: 2 }),
+        shell({ id: 'sub', workspace: '/ws/packages/web', startedAt: 0 })
+      ],
+      'c1',
+      label
+    )
+    expect(more).toBe(0)
+    expect(shells).toEqual([
+      { id: 'new', command: 'npm run dev', status: 'running, http://localhost:5173' },
+      { id: 'orphan', command: 'npm run dev', status: 'exited, left a process running' },
+      { id: 'old', command: 'npm run dev', status: 'running' },
+      { id: 'sub', command: 'npm run dev', status: 'running', cwd: 'packages/web' }
+    ])
+    expect(formatWorkspaceState({ shells })).toContain('sub: npm run dev (running; started in packages/web)')
+  })
+
+  it('caps the shell list and counts the rest', () => {
+    const infos = Array.from({ length: MAX_PINNED_SHELLS + 3 }, (_, i) => shell({ id: `s${i}`, startedAt: i }))
+    const { shells, more } = pinnedShells(infos, 'c1', label)
+    expect(shells).toHaveLength(MAX_PINNED_SHELLS)
+    expect(shells[0].id).toBe(`s${MAX_PINNED_SHELLS + 2}`)
+    expect(more).toBe(3)
+    expect(pinnedShells(infos, undefined, label)).toEqual({ shells: [], more: 0 })
   })
 })
 

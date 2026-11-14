@@ -15,7 +15,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process'
 import {
   getTool,
   sandboxedLoopbackHint,
@@ -47,14 +47,19 @@ import {
   presentFetchedDocument,
   backgroundsItself,
   BACKGROUND_AMPERSAND_ERROR,
+  duplicateShellMessage,
   staleWriteRefusal,
+  rewriteStats,
+  isElisionPlaceholder,
+  elisionPlaceholders,
   type ToolContext
 } from './tools'
 import { FileReadTracker } from './readCache'
 import type { EvidenceDraft } from './evidence'
 import type { FetchedDocument } from './webfetch'
 import type { GhResult } from './github'
-import { readShellOutput, registerShell } from './shells'
+import { killShell, MAX_RUNNING_SHELLS_PER_CHAT, readShellOutput, registerShell } from './shells'
+import { detachedLaunches } from './detached'
 import { createShellSession } from './shell-session'
 import { GIT_GUARD_UNDO, GitGuard } from './gitGuard'
 import { backendSupportsSession } from '../sandbox'
@@ -246,6 +251,50 @@ describe('propose_session', () => {
 
   it('errors without a proposeSession handler in context', async () => {
     await expect(run('propose_session', { title: 't', prompt: 'p' })).rejects.toThrow(/not available/)
+  })
+})
+
+describe('list_scheduled_runs', () => {
+  const base = {
+    name: 'n',
+    spec: 'every 30m',
+    prompt: 'p',
+    workspace: '/w',
+    providerId: 'anthropic',
+    model: 'm',
+    approvalPolicy: 'plan' as const,
+    nextRunAt: null,
+    createdAt: 0,
+    lastFiredAt: 1
+  }
+  it("says how each schedule's last run went, never calling an in-flight run a success", async () => {
+    const ctx: ToolContext = {
+      workspace: '/w',
+      allowNetwork: false,
+      scheduler: {
+        create: () => {
+          throw new Error('unused')
+        },
+        cancel: () => false,
+        list: () => [
+          { ...base, id: 'sch-run', lastResult: 'running', lastRunConversationId: 'c1' },
+          { ...base, id: 'sch-ok', lastResult: 'ok', lastRunConversationId: 'c2' },
+          { ...base, id: 'sch-err', lastResult: 'error', lastError: 'bad key', lastRunConversationId: 'c3' },
+          { ...base, id: 'sch-nostart', lastResult: 'error', lastError: 'Too many sessions' },
+          { ...base, id: 'sch-lim', lastResult: 'limit', lastLimit: 'stalled', lastRunConversationId: 'c4' },
+          { ...base, id: 'sch-stop', lastResult: 'stopped', lastRunConversationId: 'c5' }
+        ]
+      }
+    }
+    const out = await getTool('list_scheduled_runs')!.execute({}, ctx)
+    const line = (id: string): string => out.split('\n').find((l) => l.includes(id)) ?? ''
+    expect(line('sch-run')).toContain('(still running)')
+    expect(line('sch-ok')).toContain('(finished)')
+    expect(line('sch-err')).toContain('(failed (bad key))')
+    expect(line('sch-nostart')).toContain("(couldn't start (Too many sessions))")
+    expect(line('sch-lim')).toContain('stalled without making progress')
+    expect(line('sch-stop')).toContain('was stopped before it finished')
+    expect(out).not.toContain('—')
   })
 })
 
@@ -612,6 +661,91 @@ describe('write/read/edit', () => {
     writeFileSync(join(workspace, 'small.ts'), numbered(30, 'old'))
     const small = await run('write_file', { path: 'small.ts', content: numbered(30, 'fresh') })
     expect(small).not.toContain('edit_file keeps the rest intact')
+  })
+
+  it('counts changed and removed lines when write_file overwrites a file of 200+ lines', async () => {
+    writeFileSync(join(workspace, 'big.ts'), numbered(250, 'old'))
+    // Keep 230 lines, rewrite 10, drop 10.
+    const next = numbered(230, 'old') + numbered(10, 'fresh')
+    const out = await run('write_file', { path: 'big.ts', content: next })
+    expect(out).toContain('Compared with the 250-line file it replaced (blank lines not counted): 10 lines changed, 10 lines removed.')
+    expect(out).not.toContain('Warning')
+    expect(out).not.toContain('edit_file')
+  })
+
+  it('warns when write_file removes more than 30% of a large file', async () => {
+    writeFileSync(join(workspace, 'big.ts'), numbered(300, 'old'))
+    // Keep the first 150 lines and nothing else: half the file is gone.
+    const out = await run('write_file', { path: 'big.ts', content: numbered(150, 'old') })
+    expect(fileText('big.ts')).toBe(numbered(150, 'old')) // written, never refused
+    expect(out).toContain('0 lines changed, 150 lines removed.')
+    expect(out).toContain('Warning: this write removed 50% of the file.')
+    // One pointer to edit_file, not two.
+    expect(out.match(/edit_file/g)).toHaveLength(1)
+  })
+
+  it('refuses a write_file that puts an elision placeholder where existing code was', async () => {
+    const original = numbered(40, 'old')
+    writeFileSync(join(workspace, 'mod.ts'), original)
+    const lazy = numbered(5, 'old') + '// ... existing code ...\nexport const added = 1\n'
+    await expect(run('write_file', { path: 'mod.ts', content: lazy })).rejects.toThrow(
+      /write_file refused: the new content puts a placeholder where existing code was \(line 6: "\/\/ \.\.\. existing code \.\.\."\)/
+    )
+    expect(fileText('mod.ts')).toBe(original) // untouched
+  })
+
+  it('allows placeholders the file already had, in new files, and when every line is kept', async () => {
+    const tpl = 'function f() {\n  // ... rest unchanged\n}\nconst a = 1\nconst b = 2\n'
+    writeFileSync(join(workspace, 'tpl.ts'), tpl)
+    await run('write_file', { path: 'tpl.ts', content: 'function f() {\n  // ... rest unchanged\n}\nconst a = 1\n' })
+    // A brand-new file has no code to stand in for.
+    await run('write_file', { path: 'fresh.ts', content: '// ... existing code ...\n' })
+    writeFileSync(join(workspace, 'keep.ts'), 'const a = 1\n')
+    await run('write_file', { path: 'keep.ts', content: 'const a = 1\n// rest of the file unchanged\n' })
+    expect(fileText('keep.ts')).toContain('rest of the file unchanged')
+  })
+})
+
+describe('write_file rewrite helpers', () => {
+  it('splits dropped lines into changed and removed', () => {
+    expect(rewriteStats('a\nb\nc\nd\n', 'a\nB\n')).toEqual({ total: 4, kept: 1, changed: 1, removed: 2 })
+    expect(rewriteStats('a\n\n\nb\n', 'a\nb\nc\n')).toEqual({ total: 2, kept: 2, changed: 0, removed: 0 })
+  })
+
+  it.each([
+    '// ... existing code ...',
+    '// ...existing code...',
+    '  /* ... rest of the file unchanged ... */',
+    '# ... rest unchanged',
+    '# rest of the code remains the same',
+    '// (rest of implementation unchanged)',
+    '<!-- ... existing content ... -->',
+    '{/* ... existing code ... */}',
+    '... rest of file unchanged ...',
+    '// … other methods …',
+    '-- remaining code omitted',
+    '// keep existing code here'
+  ])('flags %j as a placeholder', (line) => {
+    expect(isElisionPlaceholder(line)).toBe(true)
+  })
+
+  it.each([
+    '// existing code paths call this',
+    '// Existing implementation',
+    '# Handle the rest of the args',
+    '// keep existing behaviour for old clients',
+    'const rest = args.slice(1) // rest unchanged by design, see #12',
+    'existing code',
+    '...args',
+    ''
+  ])('does not flag %j', (line) => {
+    expect(isElisionPlaceholder(line)).toBe(false)
+  })
+
+  it('reports only placeholders new to the file, with their line numbers', () => {
+    const before = 'one\ntwo\n// ... rest unchanged\nthree\n'
+    const after = 'one\n// ... rest unchanged\n// ... existing code ...\n'
+    expect(elisionPlaceholders(before, after)).toEqual([{ line: 3, text: '// ... existing code ...' }])
   })
 })
 
@@ -2932,6 +3066,57 @@ describe('untrusted-content fencing beyond web_fetch', () => {
   })
 })
 
+describe('detachedLaunches', () => {
+  const whats = (command: string, backgrounded = false): string[] =>
+    detachedLaunches(command, backgrounded).map((d) => d.what)
+
+  it('names launchers whose flags say they detach, with how to stop them', () => {
+    expect(detachedLaunches('docker run -d --name api -p 8080:80 nginx', false)).toEqual([
+      { what: 'a detached container', stop: '`docker stop api` (`docker ps` lists them)' }
+    ])
+    expect(whats('docker run -itd redis')).toEqual(['a detached container'])
+    expect(whats('docker container run --detach redis')).toEqual(['a detached container'])
+    expect(detachedLaunches('cd infra && docker compose -f dev.yml up -d', false)[0].stop).toContain('`docker compose down`')
+    expect(whats('docker-compose up --detach db')).toEqual(['Compose services in the background'])
+    expect(detachedLaunches('npx pm2 start server.js --name web', false)[0].stop).toContain('`pm2 delete web`')
+    expect(detachedLaunches('tmux new -d -s dev "npm run dev"', false)[0].stop).toContain('`tmux kill-session -t dev`')
+    expect(detachedLaunches('screen -dmS worker ./run.sh', false)[0].stop).toContain('`screen -S worker -X quit`')
+    expect(detachedLaunches('brew services start postgresql@16', false)[0].stop).toContain('`brew services stop postgresql@16`')
+    expect(detachedLaunches('sudo systemctl start nginx', false)[0].stop).toContain('`systemctl stop nginx`')
+    expect(detachedLaunches('systemctl --user enable --now app.service', false)[0].stop).toContain('`systemctl --user stop app.service`')
+    expect(whats('setsid -f ./daemon')).toEqual(['a process in its own session (setsid)'])
+    expect(whats('nohup node server.js > log 2>&1 &', true)).toEqual(['a process sent to the background with `&`'])
+    expect(whats('./server & disown', true)).toEqual(['a disowned background process'])
+  })
+
+  it('stays quiet for commands that finish in the foreground', () => {
+    for (const command of [
+      'docker run --rm -it node:22 node --version',
+      'docker ps',
+      'docker compose up',
+      'docker compose down',
+      'docker compose logs -f',
+      'docker build -t app .',
+      'docker start -a builder',
+      'pm2 ls',
+      'pm2 start app.js --no-daemon',
+      'tmux ls',
+      'tmux new -s dev',
+      'screen -ls',
+      'brew services list',
+      'brew install redis',
+      'systemctl status nginx',
+      'systemctl enable nginx',
+      'nohup ./long-task.sh',
+      'echo docker run -d',
+      'grep -r "pm2 start" .',
+      'npm run dev 2>&1'
+    ]) {
+      expect(whats(command), command).toEqual([])
+    }
+  })
+})
+
 describe('backgroundsItself', () => {
   it('flags a lone & that backgrounds part of the command', () => {
     expect(backgroundsItself('npm run dev &')).toBe(true)
@@ -3272,6 +3457,67 @@ describe('run_shell evidence', () => {
 })
 
 describe('background shell tools', () => {
+  const closed = (c: ChildProcess): Promise<void> =>
+    new Promise<void>((resolve) => (c.exitCode !== null || c.signalCode ? resolve() : c.on('close', () => resolve())))
+  const idle = (): ChildProcess => spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'])
+
+  it('run_shell notes a foreground command that left a process running in the background', async () => {
+    const out = await run('run_shell', { command: 'true &' })
+    expect(out).toContain('[note: this command left something running outside Houston: a process sent to the background with `&`')
+    expect(out).toContain('will not stop it')
+    expect(await run('run_shell', { command: 'echo done' })).not.toContain('outside Houston')
+  })
+
+  it('points a repeated background start at the shell already running it', async () => {
+    ctx = { ...ctx, conversationId: 'conv-dup' }
+    const child = idle()
+    const other = idle()
+    const id = registerShell('npm run dev', child, 'conv-dup', workspace)
+    // The same command in another chat is not this chat's duplicate.
+    const otherId = registerShell('npm run dev', other, 'conv-dup-other', workspace)
+    try {
+      const out = await run('run_shell', { command: 'npm run dev', background: true })
+      expect(out).toBe(duplicateShellMessage(id))
+      expect(out).toContain(`read_shell_output({ shell_id: "${id}" })`)
+      expect(out).toContain(`kill_shell({ shell_id: "${id}" })`)
+    } finally {
+      killShell(id)
+      killShell(otherId)
+      await Promise.all([closed(child), closed(other)])
+    }
+  })
+
+  it('starts the same command again once the first one has exited', async () => {
+    ctx = { ...ctx, conversationId: 'conv-dup-exited' }
+    const child = spawn(process.execPath, ['-e', 'process.exit(0)'])
+    registerShell('echo hi', child, 'conv-dup-exited', workspace)
+    await closed(child)
+    const out = await run('run_shell', { command: 'echo hi', background: true })
+    const id = /Started background shell (\w+)/.exec(out)?.[1]
+    expect(id).toBeDefined()
+    await vi.waitFor(() => expect(readShellOutput(id!).running).toBe(false), { timeout: 10_000 })
+  })
+
+  it('refuses a background start past the per-chat cap, listing the running shells', async () => {
+    ctx = { ...ctx, conversationId: 'conv-cap' }
+    const children = Array.from({ length: MAX_RUNNING_SHELLS_PER_CHAT }, idle)
+    const ids = children.map((c, i) => registerShell(`node server-${i}.js`, c, 'conv-cap', workspace))
+    try {
+      const err = await run('run_shell', { command: 'node one-more.js', background: true }).catch((e: Error) => e.message)
+      expect(err).toContain(`already has ${MAX_RUNNING_SHELLS_PER_CHAT} background shells running`)
+      for (const [i, id] of ids.entries()) expect(err).toContain(`- ${id}: node server-${i}.js`)
+      // Another chat is not held to this one's count.
+      ctx = { ...ctx, conversationId: 'conv-cap-other' }
+      const out = await run('run_shell', { command: 'echo hi', background: true })
+      const started = /Started background shell (\w+)/.exec(out)?.[1]
+      expect(started).toBeDefined()
+      await vi.waitFor(() => expect(readShellOutput(started!).running).toBe(false), { timeout: 10_000 })
+    } finally {
+      for (const id of ids) killShell(id)
+      await Promise.all(children.map(closed))
+    }
+  })
+
   it('run_shell background returns a shell id message', async () => {
     const out = await run('run_shell', { command: 'echo hi', background: true })
     const id = /Started background shell (\w+)/.exec(out)?.[1]

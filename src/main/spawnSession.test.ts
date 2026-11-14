@@ -342,6 +342,20 @@ describe('createSpawnBackend: forked context and reporting back', () => {
     expect(reported).toEqual(['conv-1'])
   })
 
+  it("tells the caller once the run settles, failed or not, without a parent", async () => {
+    let finish!: (e?: Error) => void
+    const { deps } = fakeDeps({
+      startBackgroundRun: () => new Promise<void>((resolve, reject) => (finish = (e) => (e ? reject(e) : resolve())))
+    })
+    let ended = 0
+    await createSpawnBackend(deps).spawn({ ...baseInput, onRunEnd: () => void ended++ })
+    await new Promise((r) => setTimeout(r, 0))
+    expect(ended).toBe(0)
+    finish(new Error('boom'))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(ended).toBe(1)
+  })
+
   it('does not promise a report when there is no parent or no run promise', async () => {
     const reported: string[] = []
     const { deps } = fakeDeps({ reportToParent: (_p, c) => void reported.push(c) })

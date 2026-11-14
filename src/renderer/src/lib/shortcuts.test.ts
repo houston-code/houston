@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { afterEach, describe, it, expect } from 'vitest'
 import {
   matchShortcut,
   formatChord,
@@ -6,6 +6,8 @@ import {
   isEditableTarget,
   isCustomizable,
   terminalKeepsKey,
+  shiftTabCyclesMode,
+  escapeStopsRun,
   SHORTCUTS,
   type Keyish
 } from './shortcuts'
@@ -160,6 +162,45 @@ describe('isEditableTarget', () => {
     // contenteditable can't be asserted here — cover the non-editable cases.)
     expect(isEditableTarget(document.createElement('div'))).toBe(false)
     expect(isEditableTarget(null)).toBe(false)
+  })
+})
+
+describe('where Shift+Tab and Esc act on the chat', () => {
+  function build(html: string): HTMLElement {
+    const root = document.createElement('div')
+    root.innerHTML = html
+    document.body.appendChild(root)
+    return root
+  }
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('cycles the mode from the message box and from nothing in particular', () => {
+    const root = build('<textarea class="composer__input"></textarea><div class="transcript"><p>reply</p></div>')
+    expect(shiftTabCyclesMode(root.querySelector('.composer__input'))).toBe(true)
+    expect(shiftTabCyclesMode(root.querySelector('p'))).toBe(true)
+    expect(shiftTabCyclesMode(document.body)).toBe(true)
+  })
+
+  it('leaves Shift+Tab to move focus back from any other control', () => {
+    const root = build(
+      '<button id="b">Allow</button><input id="i"><div id="t" tabindex="0"></div>' +
+        '<aside class="preview-dock"><div id="d">diff</div></aside><aside class="side-chat"><textarea id="s"></textarea></aside>'
+    )
+    for (const id of ['b', 'i', 't', 'd', 's']) expect(shiftTabCyclesMode(root.querySelector(`#${id}`)), id).toBe(false)
+  })
+
+  it('stops the run only from the message box or a control in the chat', () => {
+    const root = build(
+      '<textarea class="composer__input"></textarea><button id="b">Allow</button><input id="search">' +
+        '<aside class="preview-dock"><input id="filter"><button id="revert">Revert</button></aside>' +
+        '<aside class="side-chat"><textarea id="ask"></textarea></aside><aside class="plan-panel"><button id="p">Approve</button></aside>'
+    )
+    expect(escapeStopsRun(root.querySelector('.composer__input'))).toBe(true)
+    expect(escapeStopsRun(root.querySelector('#b'))).toBe(true)
+    expect(escapeStopsRun(document.body)).toBe(true)
+    for (const id of ['search', 'filter', 'revert', 'ask', 'p']) expect(escapeStopsRun(root.querySelector(`#${id}`)), id).toBe(false)
   })
 })
 

@@ -1,3 +1,5 @@
+import { outboundFetch } from '../outbound-proxy'
+
 /**
  * Ollama native-API helpers. Houston talks to Ollama through its OpenAI-compatible
  * `/v1` endpoint for chat, but capability metadata only lives on the native API.
@@ -23,7 +25,7 @@ export async function ollamaSupportsTools(
   const root = baseUrl.replace(/\/v1\/?$/, '')
   let res: Response
   try {
-    res = await fetch(`${root}/api/show`, {
+    res = await outboundFetch(`${root}/api/show`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       // `model` is the current field; `name` is the legacy alias — send both so the

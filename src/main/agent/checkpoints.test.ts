@@ -8,7 +8,8 @@ import {
   existsSync,
   mkdirSync,
   statSync,
-  symlinkSync
+  symlinkSync,
+  utimesSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,6 +26,8 @@ import {
   writeTargets,
   conversationForLatestRun,
   _setCheckpointMemoryBudget,
+  _setCheckpointDiskBudget,
+  _setRunSnapshotBudget,
   revertRunsGuarded
 } from './checkpoints'
 import { setUserDataDir, resetUserDataDir } from '../userData'
@@ -759,5 +762,83 @@ describe('checkpoint memory budget', () => {
     const r = await revertRunsGuarded([{ runId: 'run-a', turn: 0, at: 0, files: true }])
     expect(r).toMatchObject({ restored: 1, conflicts: [] })
     expect(readFileSync(c, 'utf8')).toBe('c')
+  })
+})
+
+describe('checkpoint storage byte caps', () => {
+  let dataDir: string
+  const cpDir = (): string => join(dataDir, 'checkpoints')
+  const runFiles = (): string[] =>
+    readdirSync(cpDir()).filter((f) => f.endsWith('.json') && f !== 'index.json')
+  const diskBytes = (): number => runFiles().reduce((n, f) => n + statSync(join(cpDir(), f)).size, 0)
+
+  beforeEach(() => {
+    dataDir = mkdtempSync(join(tmpdir(), 'houston-cp-data-'))
+    setUserDataDir(dataDir)
+  })
+  afterEach(() => {
+    _setCheckpointDiskBudget(null)
+    _setRunSnapshotBudget(null)
+    rmSync(dataDir, { recursive: true, force: true })
+  })
+
+  let clock = 0
+  /**
+   * Record one run snapshotting a fresh 2 KB file, and wait for its file to land. Its
+   * mtime is then set a second after the previous run's, so oldest-first is exact
+   * (runs recorded in the same millisecond would otherwise tie).
+   */
+  async function bigRun(runId: string): Promise<void> {
+    writeFileSync(join(ws, `${runId}.txt`), runId.padEnd(2_000, 'x'))
+    await recordOriginal(runId, [ws], `${runId}.txt`)
+    await flushCheckpoints()
+    const t = new Date(1_700_000_000_000 + ++clock * 1_000)
+    utimesSync(join(cpDir(), `${runId}.json`), t, t)
+  }
+
+  it('prunes the oldest run files once their total size passes the disk budget', async () => {
+    _setCheckpointDiskBudget(5_000)
+    for (let i = 0; i < 6; i++) await bigRun(`run-${i}`)
+    const files = runFiles()
+    // Each run file is a little over 2 KB, so only the newest two fit.
+    expect(files.length).toBeLessThan(6)
+    expect(files).toContain('run-5.json')
+    expect(files).not.toContain('run-0.json')
+    expect(diskBytes()).toBeLessThanOrEqual(5_000)
+    // The newest run is kept and still reverts.
+    expect(await restoreCheckpoint('run-5')).toBe(1)
+  })
+
+  it("never prunes a conversation's current run to make room", async () => {
+    _setCheckpointDiskBudget(5_000)
+    // conv1's run starts first, so it is the oldest file, and is still the chat's latest run.
+    noteConversationRun('conv1', 'run-live')
+    await bigRun('run-live')
+    for (let i = 0; i < 4; i++) await bigRun(`run-${i}`)
+    expect(runFiles()).toContain('run-live.json')
+    expect(runFiles()).toContain('run-3.json')
+    expect(runFiles()).not.toContain('run-0.json')
+    // Evicted from memory or not, it still reverts from disk.
+    clearCheckpoints()
+    writeFileSync(join(ws, 'run-live.txt'), 'changed')
+    expect(await restoreCheckpoint('run-live')).toBe(1)
+    expect(readFileSync(join(ws, 'run-live.txt'), 'utf8')).toBe('run-live'.padEnd(2_000, 'x'))
+  })
+
+  it('leaves out a file that would take one run past its snapshot budget', async () => {
+    _setRunSnapshotBudget(150)
+    writeFileSync(join(ws, 'a.txt'), 'a'.repeat(100))
+    writeFileSync(join(ws, 'b.txt'), 'b'.repeat(100))
+    await recordOriginal('run-a', [ws], 'a.txt')
+    await recordOriginal('run-a', [ws], 'b.txt')
+    expect(checkpointFileCount('run-a')).toBe(1)
+
+    // The post-write content counts too: past the budget, redo skips the file.
+    writeFileSync(join(ws, 'a.txt'), 'A'.repeat(100))
+    await recordResult('run-a', [ws], 'a.txt')
+    expect(await restoreCheckpoint('run-a')).toBe(1)
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('a'.repeat(100))
+    expect(await reapplyCheckpoint('run-a')).toBe(0)
+    expect(readFileSync(join(ws, 'a.txt'), 'utf8')).toBe('a'.repeat(100))
   })
 })

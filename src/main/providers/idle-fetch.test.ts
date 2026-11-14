@@ -2,7 +2,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import type { Provider, ProviderStreamEvent } from '@shared/agent'
-import { idleTimeoutFetch, StreamIdleError, STREAM_IDLE_CODE } from './idle-fetch'
+import {
+  EXTENDED_STREAM_IDLE_TIMEOUT_MS,
+  idleTimeoutFetch,
+  isLocalModelHost,
+  requestedStreamIdleWindow,
+  STREAM_IDLE_TIMEOUT_MS,
+  streamIdleTimeoutFor,
+  streamIdleWindowOf,
+  StreamIdleError,
+  STREAM_IDLE_CODE,
+  withStreamIdleWindow
+} from './idle-fetch'
 import { createMessagesProvider } from './anthropic'
 import { createChatCompletionsProvider } from './openai'
 import { isRetryableError } from '../agent/retry'
@@ -104,6 +115,104 @@ describe('idleTimeoutFetch', () => {
     const res204 = new Response(null, { status: 204 })
     expect(await idleTimeoutFetch(50, async () => res204)('http://x')).toBe(res204)
   })
+  it('stretches the window for a request sent inside withStreamIdleWindow', async () => {
+    const m = manualFetch()
+    vi.useFakeTimers()
+    try {
+      const res = await withStreamIdleWindow(500, () => idleTimeoutFetch(50, m.fetch)('http://x'))
+      const text = readAll(res)
+      // Well past the fetch's own 50ms, inside the requested 500ms.
+      await vi.advanceTimersByTimeAsync(400)
+      m.push('late')
+      m.end()
+      expect(await text).toBe('late')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports the stretched window on the stall, and never shortens the fetch window', async () => {
+    const long = manualFetch()
+    const res = await withStreamIdleWindow(80, () => idleTimeoutFetch(20, long.fetch)('http://x'))
+    const err = await readAll(res).catch((e: unknown) => e)
+    expect((err as StreamIdleError).idleMs).toBe(80)
+
+    const short = manualFetch()
+    const res2 = await withStreamIdleWindow(5, () => idleTimeoutFetch(40, short.fetch)('http://x'))
+    const err2 = await readAll(res2).catch((e: unknown) => e)
+    expect((err2 as StreamIdleError).idleMs).toBe(40)
+  })
+
+  it('scopes the requested window to the call it wraps', async () => {
+    expect(requestedStreamIdleWindow()).toBeUndefined()
+    await withStreamIdleWindow(123, async () => {
+      await sleep(1)
+      expect(requestedStreamIdleWindow()).toBe(123)
+    })
+    expect(requestedStreamIdleWindow()).toBeUndefined()
+  })
+
+  it('keeps the longer window when calls nest', () => {
+    withStreamIdleWindow(300, () => {
+      withStreamIdleWindow(0, () => expect(requestedStreamIdleWindow()).toBe(300))
+      withStreamIdleWindow(900, () => expect(requestedStreamIdleWindow()).toBe(900))
+    })
+  })
+})
+
+describe('streamIdleWindowOf', () => {
+  it('reads the window off an idle stall, directly or wrapped by an SDK', () => {
+    expect(streamIdleWindowOf(new StreamIdleError(600_000))).toBe(600_000)
+    expect(streamIdleWindowOf(new Error('Connection error.', { cause: new StreamIdleError(7) }))).toBe(7)
+    // A bare code (no window recorded) reads as the default window.
+    expect(streamIdleWindowOf(Object.assign(new Error('x'), { code: STREAM_IDLE_CODE }))).toBe(STREAM_IDLE_TIMEOUT_MS)
+  })
+
+  it('is undefined for any other failure', () => {
+    expect(streamIdleWindowOf(new Error('Connection error.'))).toBeUndefined()
+    expect(streamIdleWindowOf(undefined)).toBeUndefined()
+    const cyclic: { cause?: unknown } = {}
+    cyclic.cause = cyclic
+    expect(streamIdleWindowOf(cyclic)).toBeUndefined()
+  })
+})
+
+describe('per-host idle window', () => {
+  it('treats the user’s own machine and private network as local', () => {
+    for (const url of [
+      'http://localhost:11434/v1',
+      'http://LOCALHOST:1234/v1',
+      'http://ollama.localhost/v1',
+      'http://127.0.0.1:8000/v1',
+      'http://127.1.2.3/v1',
+      'http://[::1]:8080/v1',
+      'http://0.0.0.0:8000/v1',
+      'http://10.0.0.5:11434/v1',
+      'http://192.168.1.20:1234/v1',
+      'http://172.16.0.1/v1',
+      'http://172.31.255.255/v1',
+      'http://gpu-box.local:8000/v1',
+      'http://[fd12:3456::1]/v1'
+    ]) {
+      expect(isLocalModelHost(url), url).toBe(true)
+      expect(streamIdleTimeoutFor(url), url).toBe(EXTENDED_STREAM_IDLE_TIMEOUT_MS)
+    }
+  })
+
+  it('keeps the default window for hosted endpoints and anything unparseable', () => {
+    for (const url of [
+      'https://openrouter.ai/api/v1',
+      'https://api.openai.com/v1',
+      'http://172.32.0.1/v1',
+      'http://11.0.0.1/v1',
+      'https://localhost.example.com/v1',
+      'not a url',
+      undefined
+    ]) {
+      expect(isLocalModelHost(url), String(url)).toBe(false)
+      expect(streamIdleTimeoutFor(url), String(url)).toBe(STREAM_IDLE_TIMEOUT_MS)
+    }
+  })
 })
 
 /**
@@ -169,6 +278,14 @@ describe('provider streams over a flaky connection', () => {
     expect(Date.now() - t0).toBeLessThan(5_000)
     expect(r.text).toBe('the')
     expect(isRetryableError(r.error)).toBe(true)
+  })
+
+  it.each(providers)('%s: a window requested around the call reaches the real SDK fetch', async (_name, api, make) => {
+    const s = await start(api, ['stall'])
+    const r = await withStreamIdleWindow(300, () => drive(make(s.url, 50)))
+    expect(r.text).toBe('the')
+    // The stall was timed on the requested window, not the client's own 50ms.
+    expect(streamIdleWindowOf(r.error)).toBe(300)
   })
 
   it('ends a stalled body on a request abort as an abort, not an idle timeout', async () => {

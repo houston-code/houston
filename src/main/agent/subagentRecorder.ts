@@ -2,11 +2,13 @@ import type { AgentEvent, TokenUsage } from '@shared/agent'
 import {
   capSteps,
   clipText,
+  outcomeForStatus,
   upsertStep,
   SUBAGENT_CAPS,
   type SubagentBudget,
   type SubagentKind,
   type SubagentModelSource,
+  type SubagentOutcome,
   type SubagentRecord,
   type SubagentStatus,
   type SubagentStep
@@ -33,7 +35,14 @@ export interface SubagentHandle {
   id: string
   step(step: SubagentStep): void
   usage(u: TokenUsage): void
-  end(e: { status: SubagentStatus; report?: string; budget?: SubagentBudget; resumeId?: string }): void
+  end(e: {
+    status: SubagentStatus
+    /** Defaults to what `status` implies (see outcomeForStatus). */
+    outcome?: SubagentOutcome
+    report?: string
+    budget?: SubagentBudget
+    resumeId?: string
+  }): void
 }
 
 type WithoutRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
@@ -58,7 +67,10 @@ export class SubagentRecorder {
   constructor(
     private readonly emit: EmitFn,
     private readonly redact: (text: string) => string,
-    /** Prices a round of usage on the agent's model (undefined when unknown). */
+    /**
+     * Prices one model turn's usage on the agent's model (undefined when unknown). Called
+     * per turn, as the main loop prices its own, since a request's size picks its rate.
+     */
     private readonly price: (model: string, u: { input: number; output: number; cacheRead: number; cacheWrite: number }) => number | undefined,
     private readonly now: () => number = Date.now
   ) {}
@@ -95,6 +107,8 @@ export class SubagentRecorder {
     }
 
     const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+    // Summed per turn; undefined until some turn had a known price.
+    let cost: number | undefined
     let ended = false
     return {
       id,
@@ -102,18 +116,29 @@ export class SubagentRecorder {
         if (!ended) this.step(parentCallId, record, step)
       },
       usage: (u) => {
-        usage.input += u.inputTokens ?? 0
-        usage.output += u.outputTokens ?? 0
-        usage.cacheRead += u.cacheReadTokens ?? 0
-        usage.cacheWrite += u.cacheWriteTokens ?? 0
+        const turn = {
+          input: u.inputTokens ?? 0,
+          output: u.outputTokens ?? 0,
+          cacheRead: u.cacheReadTokens ?? 0,
+          cacheWrite: u.cacheWriteTokens ?? 0
+        }
+        usage.input += turn.input
+        usage.output += turn.output
+        usage.cacheRead += turn.cacheRead
+        usage.cacheWrite += turn.cacheWrite
+        if (turn.input || turn.output) {
+          const c = this.price(record.model, turn)
+          if (c !== undefined) cost = (cost ?? 0) + c
+        }
       },
       end: (e) => {
         if (ended) return
         ended = true
-        const cost = usage.input || usage.output ? this.price(record.model, usage) : undefined
+        const outcome = e.outcome ?? outcomeForStatus(e.status)
         const update: SubagentRecord = {
           ...record,
           status: e.status,
+          ...(outcome ? { outcome } : {}),
           endedAt: this.now(),
           ...(usage.input || usage.output
             ? {
@@ -137,6 +162,7 @@ export class SubagentRecorder {
           recordId: id,
           update: {
             status: record.status,
+            ...(record.outcome ? { outcome: record.outcome } : {}),
             endedAt: record.endedAt!,
             ...(record.usage ? { usage: record.usage } : {}),
             ...(record.budget ? { budget: record.budget } : {}),

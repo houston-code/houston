@@ -8,7 +8,7 @@ import { parseSweepItemsSafe, type SweepItem, type SweepItemStatus } from '@shar
 import { diffLines, diffStat, type FileDiffPreview } from '@shared/diff'
 import { droppedSummary, findingTally, isDropped, sortFindings } from '@shared/reviewFindings'
 import { deniedPromptText, stoppedPromptText } from '@shared/promptOutcome'
-import { isSubagentTool } from '@shared/subagents'
+import { endedShort, isSubagentTool, statusLabel } from '@shared/subagents'
 import { formatElapsed } from '@shared/elapsed'
 import { useTick } from '../hooks/useTick'
 import type { ToolItem } from '../lib/items'
@@ -26,7 +26,7 @@ import {
   trackKeyActivity,
   type ApprovalVariant
 } from '../lib/approvalKeys'
-import { SubagentBody, SubagentChips, SubagentTranscript } from './SubagentPanel'
+import { rootRecord, SubagentBody, SubagentChips, SubagentTranscript } from './SubagentPanel'
 import { ImageGallery } from './ImageGallery'
 import {
   galleryViewerImages,
@@ -144,8 +144,17 @@ const GLYPH: Record<Exclude<ToolItem['status'], 'running'>, string> = {
   denied: '⊘'
 }
 
-function StatusGlyph({ status }: { status: ToolItem['status'] }): JSX.Element {
+function StatusGlyph({ status, short }: { status: ToolItem['status']; short?: string }): JSX.Element {
   if (status === 'running') return <span className="tool-row__spinner" aria-label="running" />
+  // A dispatch that came back cut short or empty: the call worked, but its report is not
+  // a whole answer, so it gets a warning instead of the check.
+  if (short && status === 'done') {
+    return (
+      <span className="tool-row__glyph tool-row__glyph--warn" title={short} aria-label={short}>
+        !
+      </span>
+    )
+  }
   return <span className={`tool-row__glyph tool-row__glyph--${status}`}>{GLYPH[status]}</span>
 }
 
@@ -373,6 +382,8 @@ const ToolRow = memo(function ToolRow({
   // its summary chips once it finishes.
   const isAgent = isSubagentTool(item.name)
   const records = item.records
+  const agentRoot = isAgent ? rootRecord(records) : undefined
+  const agentShort = agentRoot && endedShort(agentRoot) ? `Subagent ${statusLabel(agentRoot)}` : undefined
   // Open the diff/output by default while a change is awaiting approval, and a
   // subagent's steps while it runs.
   // The transcript's detail settings and its Expand/Collapse tools control decide
@@ -418,7 +429,7 @@ const ToolRow = memo(function ToolRow({
             }
           : {})}
       >
-        <StatusGlyph status={item.status} />
+        <StatusGlyph status={item.status} short={agentShort} />
         <span className="tool-row__icon">{iconFor(item)}</span>
         <span className="tool-row__verb">{verb}</span>
         {target &&

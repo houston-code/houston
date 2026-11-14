@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import type { ScheduleView } from '@shared/schedules'
 import type { SettingsCtx } from '../context'
-import { ScheduledRunsSection, usableModels } from './schedules'
+import { RUNNING_POLL_MS, ScheduledRunsSection, usableModels } from './schedules'
 
 afterEach(cleanup)
 
@@ -78,6 +78,41 @@ describe('ScheduledRunsSection', () => {
     expect(screen.getByText('Paused')).toBeTruthy()
     expect(screen.getByText(/couldn't start \(Too many sessions\)/)).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Resume Paused one' })).toBeTruthy()
+  })
+
+  it("shows how each last run went in plain words, and doesn't call a running one finished", async () => {
+    installApi([
+      sched({ id: 'a', name: 'A', lastFiredAt: 5, lastResult: 'running', lastRunConversationId: 'c1' }),
+      sched({ id: 'b', name: 'B', lastFiredAt: 5, lastResult: 'ok', lastRunConversationId: 'c2' }),
+      sched({ id: 'c', name: 'C', lastFiredAt: 5, lastResult: 'error', lastError: 'bad key', lastRunConversationId: 'c3' }),
+      sched({ id: 'd', name: 'D', lastFiredAt: 5, lastResult: 'limit', lastLimit: 'max-steps', lastRunConversationId: 'c4' }),
+      sched({ id: 'e', name: 'E', lastFiredAt: 5, lastResult: 'stopped', lastRunConversationId: 'c5' })
+    ])
+    render(<ScheduledRunsSection ctx={ctx()} />)
+    expect(await screen.findByText(/: still running$/)).toBeTruthy()
+    expect(screen.getByText(/: finished$/)).toBeTruthy()
+    const failed = screen.getByText(/: failed \(bad key\)$/)
+    expect(failed.className).toContain('sched-item__last--err')
+    expect(screen.getByText(/: stopped at the step limit$/).className).toContain('sched-item__last--err')
+    expect(screen.getByText(/: was stopped before it finished$/).className).toContain('sched-item__last--err')
+    expect(screen.getByText(/: still running$/).className).not.toContain('sched-item__last--err')
+    expect(document.body.textContent).not.toContain('—')
+  })
+
+  it('checks back while a run is in flight, so its outcome shows', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const api = installApi([sched({ lastFiredAt: 5, lastResult: 'running', lastRunConversationId: 'c1' })])
+      render(<ScheduledRunsSection ctx={ctx()} />)
+      await screen.findByText(/: still running$/)
+      api.listSchedules.mockImplementation(() =>
+        Promise.resolve([sched({ lastFiredAt: 5, lastResult: 'ok', lastRunConversationId: 'c1' })])
+      )
+      await vi.advanceTimersByTimeAsync(RUNNING_POLL_MS + 10)
+      expect(await screen.findByText(/: finished$/)).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('pauses, runs now and deletes after confirming', async () => {

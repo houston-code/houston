@@ -52,6 +52,41 @@ describe('SubagentRecorder', () => {
     expect(rec.take('call1')).toBeUndefined()
   })
 
+  it('prices each turn on its own, so one big turn is not billed at a summed rate', () => {
+    const events: RecorderEvent[] = []
+    // A tiered price: a request over 100 input tokens costs ten times as much per token.
+    const rec = new SubagentRecorder(
+      (e) => events.push(e),
+      (s) => s,
+      (_model, u) => (u.input > 100 ? u.input * 10 : u.input)
+    )
+    const h = rec.start('c', start)
+    h.usage({ inputTokens: 60, outputTokens: 0 })
+    h.usage({ inputTokens: 60, outputTokens: 0 })
+    h.end({ status: 'done' })
+    const end = events.at(-1) as Extract<Ev, { type: 'subagent_end' }>
+    expect(end.update.usage).toEqual({ input: 120, output: 0, costUsd: 120 })
+  })
+
+  it('leaves the cost off when no turn had a price', () => {
+    const events: RecorderEvent[] = []
+    const rec = new SubagentRecorder((e) => events.push(e), (s) => s, () => undefined)
+    const h = rec.start('c', start)
+    h.usage({ inputTokens: 10, outputTokens: 1 })
+    h.end({ status: 'done' })
+    const end = events.at(-1) as Extract<Ev, { type: 'subagent_end' }>
+    expect(end.update.usage).toEqual({ input: 10, output: 1 })
+  })
+
+  it('records the outcome it is given, or the one the status implies', () => {
+    const { rec, events } = setup()
+    rec.start('c', start).end({ status: 'done', outcome: 'empty', report: '[subagent returned no answer]' })
+    rec.start('c', start).end({ status: 'step-limit' })
+    const ends = events.filter((e): e is Extract<Ev, { type: 'subagent_end' }> => e.type === 'subagent_end')
+    expect(ends.map((e) => e.update.outcome)).toEqual(['empty', 'limit'])
+    expect(rec.take('c')!.map((r) => r.outcome)).toEqual(['empty', 'limit'])
+  })
+
   it('redacts the text of a write’s diff', () => {
     const { rec } = setup()
     const h = rec.start('c', start)

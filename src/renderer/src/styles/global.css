@@ -3685,6 +3685,11 @@ h6.md-h {
 .tool-row__glyph--denied {
   color: var(--danger);
 }
+/* A subagent that came back cut short or without a report. */
+.tool-row__glyph--warn {
+  color: var(--warn);
+  font-weight: 600;
+}
 /* Same amber as the sidebar's "needs input" dot, so the row's signal and the thing
    to answer read as one state. */
 .tool-row__glyph--awaiting-approval {
@@ -6123,6 +6128,10 @@ body.is-resizing .preview-dock__resizer::after {
 }
 .files-row__btn:hover {
   background: var(--bg-hover);
+}
+.files-row__btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 .files-row__btn--selected,
 .files-row__btn--selected:hover {
