@@ -758,6 +758,12 @@ Houston** under the agent's last message. For example:
 `No tests ran · install failed (no network) · build failed · 14 files changed`
 
 Houston builds it from the commands it executed and the files its tools changed.
+In a git repository that includes files a shell command changed (a `sed -i`, `git
+apply`, a heredoc, a code generator): Houston compares `git status` and each listed
+file's size and modification time before and after a command that may write, so a
+read-only command like `ls` or `git log` costs nothing. Files git ignores aren't
+counted, and in a very large repository where that comparison is slow, Houston stops
+making it for the rest of the turn.
 **The agent can't write it**, so it's what to check the agent's own summary against:
 if the reply says the tests pass and the receipt says no tests ran, believe the
 receipt.
@@ -1114,10 +1120,11 @@ your own step count, it stays a hard stop until you turn the switch on.
 **Checking the work when it finishes.** Loop control also has an opt-in verification
 command that runs when the agent stops after changing files, with a failure sent back
 for a bounded fix-up. Changes made through shell commands count too (a `sed -i`, a
-heredoc, `git apply`, a code generator): in a git repository, Houston compares the
-working tree at the end of the turn with how it was when the turn started, so a
-read-only command like `ls` or `git log` doesn't trigger a check. Outside a git
-repository, only the agent's own file edits do. With a project open, Houston suggests one from the project's
+heredoc, `git apply`, a code generator): in a git repository, Houston notes the files
+each such command changed (see the receipt above) and also compares the working tree
+at the end of the turn with how it was when the turn started, so a read-only command
+like `ls` or `git log` doesn't trigger a check. Outside a git repository, only the
+agent's own file edits do. With a project open, Houston suggests one from the project's
 files under the field: the `typecheck` and `test` scripts in `package.json` (run with
 npm, pnpm, yarn, or bun by lockfile), `cargo test`, `go test ./...`, or `pytest`.
 **Use this command** fills the field; it doesn't turn verification on.

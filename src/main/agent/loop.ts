@@ -300,6 +300,7 @@ import {
 } from './stall'
 import { RevertTracker } from './revertTracker'
 import { currentBranch, workingTreeFingerprint } from './workingTree'
+import { changedSince, shellMayEdit, snapshotWorkingTree, type TreeSnapshot } from './shellEdits'
 import {
   MAX_OUTPUT_CONTINUATIONS,
   continuationNote,
@@ -330,6 +331,8 @@ import {
 
 /** Max times a Stop hook may force another turn, so a blocking hook can't spin forever. */
 const MAX_STOP_CONTINUATIONS = 3
+/** A working-tree snapshot slower than this turns shell-edit snapshots off for the run. */
+const SHELL_SNAPSHOT_MAX_MS = 1_500
 /** Max transient-failure retries per model turn (so up to MAX_STREAM_RETRIES+1 attempts). */
 const MAX_STREAM_RETRIES = MAX_PROVIDER_RETRIES
 
@@ -3373,15 +3376,26 @@ export async function startRun(
     // files (so we don't verify a read-only turn) and how many verification passes
     // have already run (bounded self-correction). A write-kind tool call arms it
     // directly. A run_shell edit (sed -i, a heredoc, git apply, a codegen script) arms
-    // it too: when the gate is configured, the working tree is fingerprinted at run
-    // start, and at a natural stop after a successful foreground shell command it is
-    // fingerprinted again; a difference means the shell changed files. Outside a git
-    // repo there is no fingerprint, so only write-kind calls arm it there.
+    // it too: in a git repo, a foreground command that may write is bracketed by
+    // working-tree snapshots and the paths it changed are recorded (see shellEdits.ts).
+    // As a backstop, when the gate is configured the tree is also fingerprinted at run
+    // start and again at a natural stop after a successful foreground shell command; a
+    // difference means the shell changed files. Outside a git repo only write-kind
+    // calls arm it.
     let filesModified = false
     const verifyGateConfigured =
       settings.verifyOnStop === true && (settings.verifyCommand ?? '').trim() !== ''
     const treeAtStart = verifyGateConfigured ? await workingTreeFingerprint(workspace) : null
     let shellMayHaveEdited = false
+    // Snapshots around shell commands (see shellEdits.ts) stop for the rest of the run
+    // once one is slow: a huge repository shouldn't add seconds to every command.
+    let shellSnapshotsOff = false
+    const timedSnapshot = async (): Promise<TreeSnapshot | null> => {
+      const started = Date.now()
+      const snap = await snapshotWorkingTree(workspace)
+      if (Date.now() - started > SHELL_SNAPSHOT_MAX_MS) shellSnapshotsOff = true
+      return snap
+    }
     let verifyPassesRun = 0
     // Whether the model has been told this turn that its edits loosened a test (once).
     let testEditsNoted = false
@@ -4990,6 +5004,19 @@ export async function startRun(
                           redact
                         )
                       : undefined
+                  // A foreground command that may write: snapshot the git working tree
+                  // around it, so the files it changed reach the ledger (see shellEdits.ts).
+                  // What it reports is held until then, so a check it ran sits after the
+                  // changes it made rather than before them.
+                  const treeBefore =
+                    call.name === 'run_shell' &&
+                    execArgs.background !== true &&
+                    !shellSnapshotsOff &&
+                    run.policy !== 'plan' &&
+                    shellMayEdit(typeof execArgs.command === 'string' ? execArgs.command : '')
+                      ? await timedSnapshot()
+                      : null
+                  const heldEvidence: EvidenceDraft[] = []
                   try {
                     output = await tool.execute(
                       execArgs,
@@ -4999,13 +5026,22 @@ export async function startRun(
                             ...(live ? { onShellOutput: live.push } : {}),
                             recordEvidence: (e) => {
                               if (e.kind === 'shell' && e.blocked === 'network') networkBlocked = true
-                              ctx.recordEvidence?.(e)
+                              if (treeBefore) heldEvidence.push(e)
+                              else ctx.recordEvidence?.(e)
                             }
                           }
                         : ctx
                     )
                   } finally {
                     live?.close()
+                    if (treeBefore) {
+                      const changed = await changedSince(treeBefore, workspace)
+                      if (changed.length) {
+                        run.evidence.recordFiles(workspace, changed)
+                        filesModified = true
+                      }
+                      for (const e of heldEvidence) ctx.recordEvidence?.(e)
+                    }
                   }
                 } catch (e) {
                   output = `Error: ${(e as Error).message}`
