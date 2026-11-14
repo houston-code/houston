@@ -8168,6 +8168,10 @@ body:has(.coachmark) .get-started {
 .field__hint--warn {
   color: var(--warn);
 }
+/* A warning inside a labelled field keeps its colour over the label text's. */
+.field > .field__hint--warn {
+  color: var(--warn);
+}
 /* Optional-integrations status rows (Settings → Tools). */
 .integration__install {
   display: flex;

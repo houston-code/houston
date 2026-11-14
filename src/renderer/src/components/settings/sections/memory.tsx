@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
 import {
   MAX_MEMORY_BODY,
   MAX_MEMORY_DESCRIPTION,
@@ -66,12 +67,15 @@ export function MemorySettingsSection({ ctx }: { ctx: SettingsCtx }): JSX.Elemen
 
 type Draft = Pick<MemoryRecord, 'type' | 'name' | 'description' | 'body'>
 
+const draftOf = (m: MemoryRecord): Draft => ({ type: m.type, name: m.name, description: m.description, body: m.body })
+
 /** The saved memories: read, edit, pin, delete (with undo), and other repositories' folders. */
 export function MemoriesSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
   const workspace = ctx.workspace ?? ''
   const [overview, setOverview] = useState<MemoryOverview | null>(null)
   const [status, setStatus] = useState<{ text: string; error?: boolean } | null>(null)
-  const [editing, setEditing] = useState<{ memory: MemoryRecord; draft: Draft } | null>(null)
+  // `conflict`: the memory changed on disk while it was being edited.
+  const [editing, setEditing] = useState<{ memory: MemoryRecord; draft: Draft; conflict?: boolean } | null>(null)
   const [deleted, setDeleted] = useState<MemoryRecord | null>(null)
   const [confirmRepo, setConfirmRepo] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -115,7 +119,24 @@ export function MemoriesSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
       ...draft,
       expectedUpdated: memory.updated
     })
-    if (res?.ok) setEditing(null)
+    if (!res) return
+    if (res.ok) {
+      setEditing(null)
+      return
+    }
+    // Refused because the memory changed on disk since the editor opened (the agent
+    // saved it meanwhile): take the new version, so saving again replaces it with
+    // this draft rather than failing the same way forever.
+    const fresh = [...res.overview.repoMemories, ...res.overview.globalMemories].find(
+      (m) => m.scope === memory.scope && m.id === memory.id
+    )
+    if (fresh && fresh.updated !== memory.updated) {
+      setEditing({ memory: fresh, draft, conflict: true })
+      setStatus({
+        text: 'This memory changed while you were editing it. Save again to replace it with your edit, or use the saved version.',
+        error: true
+      })
+    }
   }
 
   const renderList = (memories: MemoryRecord[], empty: string): JSX.Element =>
@@ -128,9 +149,20 @@ export function MemoriesSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
             <li key={m.id} className="memory-item memory-item--editing">
               <MemoryEditor
                 draft={editing.draft}
-                onChange={(draft) => setEditing({ memory: m, draft })}
+                onChange={(draft) => setEditing({ ...editing, draft })}
                 onSave={() => void saveEdit()}
-                onCancel={() => setEditing(null)}
+                onCancel={() => {
+                  setEditing(null)
+                  if (editing.conflict) setStatus(null)
+                }}
+                onUseSaved={
+                  editing.conflict
+                    ? () => {
+                        setEditing({ memory: m, draft: draftOf(m) })
+                        setStatus(null)
+                      }
+                    : undefined
+                }
                 busy={busy}
               />
             </li>
@@ -147,7 +179,7 @@ export function MemoriesSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                   <button
                     className="btn btn--sm"
                     disabled={busy}
-                    onClick={() => setEditing({ memory: m, draft: { type: m.type, name: m.name, description: m.description, body: m.body } })}
+                    onClick={() => setEditing({ memory: m, draft: draftOf(m) })}
                     aria-label={`Edit memory ${m.name}`}
                   >
                     Edit
@@ -282,16 +314,23 @@ function MemoryEditor({
   onChange,
   onSave,
   onCancel,
+  onUseSaved,
   busy
 }: {
   draft: Draft
   onChange: (d: Draft) => void
   onSave: () => void
   onCancel: () => void
+  /** Offered after an edit conflict: drop the draft for the version now on disk. */
+  onUseSaved?: () => void
   busy: boolean
 }): JSX.Element {
+  // Escape cancels this edit rather than closing Settings.
+  const formRef = useRef<HTMLFormElement>(null)
+  useEscapeWithin(formRef, onCancel)
   return (
     <form
+      ref={formRef}
       className="memory-editor"
       onSubmit={(e) => {
         e.preventDefault()
@@ -341,6 +380,11 @@ function MemoryEditor({
         <button type="button" className="btn btn--sm" onClick={onCancel}>
           Cancel
         </button>
+        {onUseSaved && (
+          <button type="button" className="btn btn--sm" onClick={onUseSaved}>
+            Use the saved version
+          </button>
+        )}
       </div>
     </form>
   )

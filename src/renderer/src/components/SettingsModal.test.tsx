@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AppSettings, ProviderConfig } from '@shared/types'
 import { SettingsModal } from './SettingsModal'
@@ -453,6 +453,18 @@ describe('SettingsModal', () => {
     expect(screen.getByDisplayValue('git status')).toBeInTheDocument()
   })
 
+  it('clears the rule filter on add, so the new rule is not hidden by it', () => {
+    installApi()
+    renderModal({ permissionRules: [{ action: 'deny', tool: 'run_shell', match: 'rm *' }] })
+    fireEvent.click(screen.getByRole('button', { name: 'Permissions' }))
+    const filter = screen.getByPlaceholderText('Filter rules…')
+    fireEvent.change(filter, { target: { value: 'rm' } })
+    fireEvent.click(screen.getByRole('button', { name: '+ Add rule' }))
+    expect(filter).toHaveValue('')
+    expect(document.querySelectorAll('.rule')).toHaveLength(2)
+    expect(screen.getByRole('textbox', { name: 'Rule 2 pattern' })).toHaveValue('')
+  })
+
   describe('settings search', () => {
     const search = (): HTMLInputElement => screen.getByRole('searchbox', { name: 'Search settings' }) as HTMLInputElement
     const type = (q: string): void => {
@@ -759,6 +771,20 @@ describe('SettingsModal', () => {
       fireEvent.click(within(document.querySelector('.rules-text') as HTMLElement).getByRole('button', { name: 'Cancel' }))
       expect(document.querySelectorAll('.rule-row')).toHaveLength(2)
     })
+
+    it('cancels the text edit on Escape instead of closing Settings', () => {
+      installApi()
+      const { onClose } = renderModal({ permissionRules: rules })
+      open()
+      fireEvent.change(editor(), { target: { value: '[]' } })
+      fireEvent.keyDown(editor(), { key: 'Escape' })
+      expect(onClose).not.toHaveBeenCalled()
+      expect(screen.queryByRole('textbox', { name: 'Rules as JSON' })).toBeNull()
+      expect(document.querySelectorAll('.rule-row')).toHaveLength(2)
+      // With no editor open, Escape closes Settings as usual.
+      fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+      expect(onClose).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('rule order', () => {
@@ -933,6 +959,42 @@ describe('SettingsModal', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Save' })[0])
     expect(await screen.findByText('Could not save API key: disk full')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Restart Houston' })).not.toBeInTheDocument()
+  })
+
+  it('saves a typed API key on Enter, and offers Save only once something is typed', async () => {
+    const api = installApi()
+    renderModal()
+    const keyInput = screen.getByPlaceholderText('•••••••• (stored)')
+    const form = keyInput.closest('form') as HTMLFormElement
+    const save = within(form).getByRole('button', { name: 'Save' })
+    expect(save).toBeDisabled()
+    fireEvent.change(keyInput, { target: { value: 'sk-secret' } })
+    expect(save).toBeEnabled()
+    // Enter in the box submits its form.
+    fireEvent.submit(form)
+    await waitFor(() => expect(api.setKey).toHaveBeenCalledWith('anthropic', 'sk-secret'))
+    await waitFor(() => expect(keyInput).toHaveValue(''))
+  })
+
+  it('saves a typed but unsaved API key on the way out of Settings', async () => {
+    const api = installApi()
+    const { onClose } = renderModal()
+    fireEvent.change(screen.getByPlaceholderText('•••••••• (stored)'), { target: { value: 'sk-typed' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Back to app' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1))
+    expect(api.setKey).toHaveBeenCalledWith('anthropic', 'sk-typed')
+  })
+
+  it('stays open with the error when a typed key fails to save on the way out', async () => {
+    installApi({
+      setKey: vi.fn(() => Promise.reject(new Error('disk full'))),
+      getSecureStorageStatus: vi.fn(() => Promise.resolve({ available: true, platform: 'darwin' }))
+    })
+    const { onClose } = renderModal()
+    fireEvent.change(screen.getByPlaceholderText('•••••••• (stored)'), { target: { value: 'sk-typed' } })
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })
+    expect(await screen.findByText('Could not save API key: disk full')).toBeInTheDocument()
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   it('fetches models from the provider and writes them into the textarea', async () => {
@@ -1213,6 +1275,28 @@ describe('SettingsModal', () => {
       expect(screen.queryByRole('button', { name: 'Undo' })).toBeNull()
     })
 
+    it('keeps a key saved since the undone change marked as stored', async () => {
+      const keyless: ProviderConfig = { ...anthropic, hasKey: false }
+      const api = installApi({
+        setKey: vi.fn(() => Promise.resolve(makeSettings({ providers: [anthropic, customEndpoint] })))
+      })
+      renderModal({ providers: [keyless, customEndpoint], formatOnSave: false })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      fireEvent.click(screen.getByRole('checkbox', { name: /run the matching formatter/i }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(1))
+      // Then a key is saved: it lives in the OS secret store, which Undo doesn't touch.
+      fireEvent.click(screen.getByRole('button', { name: 'Providers & Models' }))
+      const keyInput = screen.getByPlaceholderText('Required')
+      fireEvent.change(keyInput, { target: { value: 'sk-new' } })
+      fireEvent.submit(keyInput.closest('form') as HTMLFormElement)
+      await waitFor(() => expect(document.querySelectorAll('.provider__key-ok')).toHaveLength(1))
+      fireEvent.click(screen.getByRole('button', { name: 'Undo' }))
+      await waitFor(() => expect(api.saveSettings).toHaveBeenCalledTimes(2))
+      expect((api.saveSettings.mock.calls[1][0] as AppSettings).formatOnSave).toBe(false)
+      expect(document.querySelectorAll('.provider__key-ok')).toHaveLength(1)
+      expect(screen.getByPlaceholderText('•••••••• (stored)')).toBeInTheDocument()
+    })
+
     it('saves what is pending when Settings closes, and closes without asking', async () => {
       const api = installApi()
       const { onClose, unmount } = renderModal({}, { initialTab: 'agent' })
@@ -1233,6 +1317,27 @@ describe('SettingsModal', () => {
       fireEvent.click(screen.getByRole('checkbox', { name: /run the matching formatter/i }))
       expect(await screen.findByRole('alert')).toHaveTextContent('Could not save settings: disk full')
       expect(screen.getByText('Not saved')).toBeInTheDocument()
+    })
+
+    it('retries a failed save, and clears its error once a save lands', async () => {
+      const saveSettings = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('disk full'))
+        .mockImplementation((s: AppSettings) => {
+          stored = s
+          return Promise.resolve(s)
+        })
+      installApi({ saveSettings })
+      renderModal({ formatOnSave: false })
+      fireEvent.click(screen.getByRole('button', { name: 'Tools' }))
+      fireEvent.click(screen.getByRole('checkbox', { name: /run the matching formatter/i }))
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not save settings: disk full')
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+      expect(await screen.findByText('Saved')).toBeInTheDocument()
+      expect(saveSettings).toHaveBeenCalledTimes(2)
+      expect((saveSettings.mock.calls[1][0] as AppSettings).formatOnSave).toBe(true)
+      expect(screen.queryByRole('alert')).toBeNull()
+      expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     })
   })
 
@@ -1318,6 +1423,38 @@ describe('SettingsModal', () => {
     expect(box).toBeChecked()
     fireEvent.change(screen.getByDisplayValue('40'), { target: { value: '60' } })
     expect(box).toBeChecked()
+  })
+
+  it('lets a number with a minimum be cleared and retyped, bringing it into range on blur', async () => {
+    const api = installApi()
+    renderModal({}, { initialTab: 'agent' })
+    const bytes = screen.getByLabelText(/Truncate a single command/) as HTMLInputElement
+    act(() => bytes.focus())
+    // Typed digit by digit over the old value: the first `1` is below the 1000 minimum,
+    // which used to snap it to 1000 (ending up as 100028000).
+    for (const v of ['1', '12', '128', '1280', '12800', '128000']) fireEvent.change(bytes, { target: { value: v } })
+    expect(bytes).toHaveValue(128000)
+    act(() => bytes.blur())
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).shellOutputMaxBytes).toBe(128000)
+
+    // Backspaced to empty and retyped, the step cap takes the new number.
+    const steps = screen.getByDisplayValue('40') as HTMLInputElement
+    act(() => steps.focus())
+    for (const v of ['4', '', '6', '60']) fireEvent.change(steps, { target: { value: v } })
+    expect(steps).toHaveValue(60)
+    act(() => steps.blur())
+    await waitFor(() => expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).maxIterations).toBe(60))
+
+    // Left below the minimum, it comes back into range; left empty, it keeps its value.
+    act(() => bytes.focus())
+    fireEvent.change(bytes, { target: { value: '5' } })
+    act(() => bytes.blur())
+    expect(bytes).toHaveValue(1000)
+    act(() => steps.focus())
+    fireEvent.change(steps, { target: { value: '' } })
+    act(() => steps.blur())
+    expect(steps).toHaveValue(60)
   })
 
   it('toggles a checkbox option (format on save) under the Tools tab', () => {
@@ -1454,6 +1591,107 @@ describe('SettingsModal', () => {
     expect(servers).toHaveLength(1)
     // The new server row defaults to a stdio command field.
     expect(within(servers[0] as HTMLElement).getByPlaceholderText('command (e.g. npx)')).toBeInTheDocument()
+  })
+
+  it("takes a stdio server's arguments one per line, so one can hold a space", async () => {
+    const api = installApi()
+    renderModal({ mcpServers: [{ id: 'fs', command: 'npx', args: ['-y'], enabled: true }] })
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
+    const args = screen.getByPlaceholderText(/args, one per line/) as HTMLTextAreaElement
+    expect(args).toHaveValue('-y')
+    act(() => args.focus())
+    // Typed as is (a trailing space or newline survives while typing).
+    const typed = '-y \n@modelcontextprotocol/server-filesystem\n/work/My Projects\n'
+    fireEvent.change(args, { target: { value: typed } })
+    expect(args).toHaveValue(typed)
+    act(() => args.blur())
+    expect(args).toHaveValue('-y\n@modelcontextprotocol/server-filesystem\n/work/My Projects')
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).mcpServers?.[0].args).toEqual([
+      '-y',
+      '@modelcontextprotocol/server-filesystem',
+      '/work/My Projects'
+    ])
+  })
+
+  it('tidies a new server id when the field is left, and flags an empty or taken one', () => {
+    installApi()
+    renderModal({ mcpServers: [{ id: 'github', command: 'npx', args: [], enabled: true }] })
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
+    fireEvent.click(screen.getByRole('button', { name: '+ Add MCP server' }))
+    const row = document.querySelectorAll('.mcp-server')[1] as HTMLElement
+    expect(within(row).getByText('Give it an id (letters, digits, - or _).')).toBeInTheDocument()
+    const id = within(row).getByPlaceholderText('id') as HTMLInputElement
+    act(() => id.focus())
+    // Tidying each keystroke used to drop the `-` (and spaces) as they were typed.
+    fireEvent.change(id, { target: { value: 'my-' } })
+    expect(id).toHaveValue('my-')
+    fireEvent.change(id, { target: { value: 'my server' } })
+    act(() => id.blur())
+    expect(id).toHaveValue('my-server')
+    expect(within(row).queryByText(/Give it an id/)).toBeNull()
+    act(() => id.focus())
+    fireEvent.change(id, { target: { value: 'github' } })
+    act(() => id.blur())
+    expect(within(row).getByText('There is already a server with the id github.')).toBeInTheDocument()
+  })
+
+  it("keeps a saved server's id fixed, since its secrets are stored under it", () => {
+    installApi()
+    renderModal({
+      mcpServers: [{ id: 'github', command: 'npx', args: [], env: { GITHUB_TOKEN: '••••••••' }, enabled: true }]
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
+    const id = screen.getByRole('textbox', { name: 'Server id github' })
+    expect(id).toHaveAttribute('readonly')
+    act(() => id.focus())
+    expect(screen.getByText('To rename a server, remove it and add it again.')).toBeInTheDocument()
+  })
+
+  it('reads env vars written NAME=value, and keeps a line it cannot read with a warning', async () => {
+    const api = installApi()
+    renderModal({ mcpServers: [{ id: 'db', command: 'npx', args: [], enabled: true }] })
+    fireEvent.click(screen.getByRole('button', { name: 'MCP Servers' }))
+    const env = screen.getByPlaceholderText(/env vars, one per line/) as HTMLTextAreaElement
+    act(() => env.focus())
+    fireEvent.change(env, { target: { value: 'DATABASE_URL=postgres://u:p@h/db\nghp_orphan' } })
+    act(() => env.blur())
+    expect(env).toHaveValue('DATABASE_URL=postgres://u:p@h/db\nghp_orphan')
+    expect(screen.getByRole('alert')).toHaveTextContent('One line was not saved: write each as NAME=value.')
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).mcpServers?.[0].env).toEqual({
+      DATABASE_URL: 'postgres://u:p@h/db'
+    })
+  })
+
+  it('clears the tool matcher when a hook moves to a turn-level event, so the hook runs', async () => {
+    const api = installApi()
+    renderModal({}, { initialTab: 'hooks' })
+    fireEvent.click(screen.getByRole('button', { name: '+ Add hook' }))
+    const row = document.querySelector('.rule') as HTMLElement
+    const event = row.querySelector('select') as HTMLSelectElement
+    expect(within(row).getByPlaceholderText('tool (or *)')).toHaveValue('edit_file')
+    fireEvent.change(event, { target: { value: 'Stop' } })
+    expect(within(row).queryByPlaceholderText('tool (or *)')).toBeNull()
+    await waitFor(() => expect(api.saveSettings).toHaveBeenCalled())
+    expect((api.saveSettings.mock.calls.at(-1)![0] as AppSettings).hooks).toEqual([
+      { event: 'Stop', matcher: '', command: '' }
+    ])
+    // Back on a tool event, it starts from the default tool again.
+    fireEvent.change(event, { target: { value: 'PreToolUse' } })
+    expect(within(row).getByPlaceholderText('tool (or *)')).toHaveValue('edit_file')
+    // Notification matches a wait type, not a tool: it starts on every wait.
+    fireEvent.change(event, { target: { value: 'Notification' } })
+    expect(within(row).getByPlaceholderText('wait type (or *)')).toHaveValue('')
+  })
+
+  it('flags a turn-level hook saved with a tool matcher, which never runs, and clears it', () => {
+    installApi()
+    renderModal({ hooks: [{ event: 'Stop', matcher: 'edit_file', command: 'make lint' }] }, { initialTab: 'hooks' })
+    expect(screen.getByText(/Never runs: a Stop hook has no tool to match/)).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Clear the tool' }))
+    expect(screen.queryByText(/Never runs/)).toBeNull()
+    expect(screen.queryByPlaceholderText('tool (or *)')).toBeNull()
   })
 
   it('signs a remote MCP server in via OAuth (saves first, then flips to Sign out)', async () => {

@@ -122,6 +122,60 @@ describe('MemoriesSection', () => {
     expect(screen.getByLabelText('Memory')).toBeInTheDocument()
   })
 
+  it('recovers from an edit conflict: saving again sends the new version, keeping the draft', async () => {
+    // The agent saved the memory while it was open in the editor.
+    const newer = memory({ updated: '2026-10-25T00:00:00.000Z', body: 'Saved by the agent.' })
+    const api = installApi((req) =>
+      req.op === 'update' && req.expectedUpdated !== newer.updated
+        ? { ok: false, error: 'Memory m_20261024_aaaaaa changed since it was read; reload it and retry.', overview: overview({ repoMemories: [newer] }) }
+        : { ok: true, overview: overview({ repoMemories: [req.op === 'update' ? newer : memory()] }) }
+    )
+    render(<MemoriesSection ctx={ctx()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit memory tests-need-rg' }))
+    fireEvent.change(screen.getByLabelText('Memory'), { target: { value: 'My edit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    expect(await screen.findByText(/changed while you were editing it/)).toBeInTheDocument()
+    expect(screen.queryByText(/reload it and retry/)).toBeNull()
+    expect(screen.getByLabelText('Memory')).toHaveValue('My edit')
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() =>
+      expect(api.memoryRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ op: 'update', body: 'My edit', expectedUpdated: '2026-10-25T00:00:00.000Z' })
+      )
+    )
+    await waitFor(() => expect(screen.queryByLabelText('Memory')).toBeNull())
+  })
+
+  it('offers the saved version after an edit conflict', async () => {
+    const newer = memory({ updated: '2026-10-25T00:00:00.000Z', body: 'Saved by the agent.' })
+    installApi((req) =>
+      req.op === 'update'
+        ? { ok: false, error: 'Memory changed since it was read; reload it and retry.', overview: overview({ repoMemories: [newer] }) }
+        : { ok: true, overview: overview() }
+    )
+    render(<MemoriesSection ctx={ctx()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit memory tests-need-rg' }))
+    fireEvent.change(screen.getByLabelText('Memory'), { target: { value: 'My edit' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Use the saved version' }))
+    expect(screen.getByLabelText('Memory')).toHaveValue('Saved by the agent.')
+    expect(screen.queryByText(/changed while you were editing it/)).toBeNull()
+  })
+
+  it('cancels an edit on Escape, without it reaching the dialog around it', async () => {
+    installApi(() => ({ ok: true, overview: overview() }))
+    const onDialogKey = vi.fn()
+    render(
+      <div role="dialog" onKeyDown={onDialogKey}>
+        <MemoriesSection ctx={ctx()} />
+      </div>
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Edit memory tests-need-rg' }))
+    fireEvent.keyDown(screen.getByLabelText('Memory'), { key: 'Escape' })
+    expect(screen.queryByLabelText('Memory')).toBeNull()
+    expect(onDialogKey).not.toHaveBeenCalled()
+  })
+
   it('pins and unpins', async () => {
     const api = installApi((req) => ({ ok: true, overview: overview({ repoMemories: [memory({ pinned: req.op === 'pin' && req.pinned })] }) }))
     render(<MemoriesSection ctx={ctx()} />)
