@@ -42,6 +42,7 @@ import {
   type AcpStoredSession,
   type ServeAcpOptions
 } from './acp'
+import { ACP_MAX_FRAME_BYTES } from './acpFrame'
 
 const settings = {
   providers: [{ id: 'anthropic', requiresKey: true, hasKey: true, models: [{ id: 'claude-sonnet-4-5' }] }],
@@ -109,6 +110,8 @@ class FakeLoop {
 interface Harness {
   loop: FakeLoop
   frames: any[]
+  /** Each written line's size in UTF-8 bytes, newline included. */
+  lineBytes: number[]
   stored: Map<string, AcpStoredSession>
   saved: Map<string, ChatMessage[]>
   /** Every store.setModel call, as [id, providerId, model]. */
@@ -146,6 +149,7 @@ function harness(opts: {
   const loop = new FakeLoop()
   const input = new PassThrough()
   const frames: any[] = []
+  const lineBytes: number[] = []
   const pending = new Map<number, (m: any) => void>()
   const stored = new Map((opts.stored ?? []).map((s) => [s.id, s]))
   const saved = new Map<string, ChatMessage[]>()
@@ -192,6 +196,7 @@ function harness(opts: {
     write: (line) => {
       if (opts.writeFails?.(line)) throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
       expect(line.endsWith('\n')).toBe(true)
+      lineBytes.push(Buffer.byteLength(line, 'utf8'))
       const m = JSON.parse(line)
       expect(m.jsonrpc).toBe('2.0')
       frames.push(m)
@@ -218,6 +223,7 @@ function harness(opts: {
   return {
     loop,
     frames,
+    lineBytes,
     served,
     stored,
     saved,
@@ -434,6 +440,45 @@ describe('ACP server: protocol flow', () => {
     expect(done[0].content[0]).toEqual({ type: 'diff', path: join(cwd, 'a.txt'), oldText: 'old\n', newText: 'new\n' })
     expect(JSON.stringify(done[1])).not.toContain('top secret')
     expect(done[1].content.map((c: any) => c.type)).toEqual(['content'])
+    await h.end()
+  })
+
+  it('keeps every frame under the line limit of a readline-based client: big diffs, images, raw input', async () => {
+    let cwd = ''
+    const big = Array.from({ length: 4000 }, (_, i) => `line ${i} ${'x'.repeat(30)}`)
+    const h = harness({
+      deps: { readFile: undefined },
+      run: async (req, send) => {
+        const r = req.runId
+        const content = big.join('\n')
+        send({ runId: r, type: 'tool_start', callId: 'w', name: 'write_file', args: { path: 'big.txt', content }, kind: 'write', preview: [{ path: 'big.txt', diff: [{ type: 'add' as const, text: 'CHANGED' }] }] })
+        writeFileSync(join(cwd, 'big.txt'), big.map((l, i) => (i === 2000 ? 'CHANGED' : l)).join('\n'))
+        send({ runId: r, type: 'tool_result', callId: 'w', name: 'write_file', ok: true, output: 'ok' })
+        send({ runId: r, type: 'tool_start', callId: 'img', name: 'read_file', args: { path: 'shot.png' }, kind: 'read' })
+        send({
+          runId: r,
+          type: 'tool_result',
+          callId: 'img',
+          name: 'read_file',
+          ok: true,
+          output: 'image',
+          images: [{ data: 'A'.repeat(200_000), mediaType: 'image/png' }]
+        } as AgentEvent)
+        send({ runId: r, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    cwd = h.cwd
+    writeFileSync(join(cwd, 'big.txt'), big.join('\n'))
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('go') })
+    expect(Math.max(...h.lineBytes)).toBeLessThanOrEqual(ACP_MAX_FRAME_BYTES)
+    const done = h.updates(sessionId).filter((u) => u.status === 'completed')
+    const diff = done[0].content.find((c: any) => c.type === 'diff')
+    // The changed line survives, with its context; the unchanged runs are folded.
+    expect(diff.oldText).toContain('line 2000 ')
+    expect(diff.newText).toContain('CHANGED')
+    expect(diff.newText).toMatch(/^⋯ 1997 unchanged lines\n/)
+    expect(JSON.stringify(done[1])).toContain('not shown: too large for one message')
     await h.end()
   })
 

@@ -33,6 +33,7 @@ import {
 import { throttleNotice } from '@shared/rateLimit'
 import type { FileDiffPreview } from '@shared/diff'
 import { sanitizeAttachments, type ImageAttachment } from '@shared/images'
+import { fitAcpFrame } from './acpFrame'
 import { agentTurn, invocationText, type InvokedTurn } from '@shared/promptInvocation'
 import { builtinCommands, mergeCommands, parseSlashCommand, resolveCommand, type Command } from '@shared/commands'
 import { prepareCommandRun, workspaceTrusted, type PreparedCommandRun } from './agent/commandRun'
@@ -1023,7 +1024,8 @@ export function createAcpServer(deps: AcpDeps): AcpServer {
   const frame = (m: JsonRpcMessage): void => {
     if (peerGone) return
     try {
-      deps.write(`${JSON.stringify({ jsonrpc: '2.0', ...m })}\n`)
+      // Sized to fit a line-based reader: an oversized tool-call payload is shrunk.
+      deps.write(`${fitAcpFrame({ jsonrpc: '2.0', ...m })}\n`)
     } catch (e) {
       // The client's end broke (EPIPE): a run left going would keep editing files
       // for a reader that is gone.
