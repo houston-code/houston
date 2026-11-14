@@ -640,6 +640,16 @@ describe('openai adapter: tool calls cut off at the output limit', () => {
     ])
   })
 
+  it('reports a content_filter finish and a refusal delta as a refusal', async () => {
+    const filtered = await run([{ choices: [{ delta: { content: '' } }] }, stopChunk('content_filter')])
+    expect(filtered.at(-1)).toMatchObject({ type: 'done', refusal: 'content_filter' })
+    const refused = await run([{ choices: [{ delta: { refusal: "I can't help with that." } }] }, stopChunk('stop')])
+    expect(refused).toContainEqual({ type: 'text', text: "I can't help with that." })
+    expect(refused.at(-1)).toMatchObject({ type: 'done', refusal: 'refusal' })
+    const plain = await run([{ choices: [{ delta: { content: 'hi' } }] }, stopChunk('stop')])
+    expect(plain.at(-1)).not.toHaveProperty('refusal')
+  })
+
   it('marks the last call even when its JSON happens to parse', async () => {
     const events = await run([callChunk(0, '{}', 'call_1', 'write_file'), stopChunk('length')])
     expect(events[0]).toEqual({

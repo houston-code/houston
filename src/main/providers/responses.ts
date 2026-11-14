@@ -15,6 +15,7 @@ import { openaiResponsesReasoning } from './reasoning'
 import { parseToolArguments } from './tool-args'
 import { idleTimeoutFetch, StreamClosedEarlyError } from './idle-fetch'
 import { responsesWebSearch, type ResponsesCreateClient } from './native-search'
+import { SDK_MAX_RETRIES } from '../agent/retry'
 
 /**
  * Adapter for OpenAI's **Responses API** (`client.responses.create`), the path
@@ -218,6 +219,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       (m) =>
         new m.default({
           fetch: idleTimeoutFetch(),
+          maxRetries: SDK_MAX_RETRIES,
           apiKey: apiKey || 'no-key',
           ...(baseURL ? { baseURL } : {})
         })
@@ -291,6 +293,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
       let stopReason: StopReason = 'end_turn'
       // Whether the stream reached `response.completed` or `response.incomplete`.
       let finished = false
+      let refusal: string | undefined
       const turnReasoning: ReasoningBlock[] = []
 
       for await (const event of stream) {
@@ -298,6 +301,11 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         switch (ev.type) {
           case 'response.output_text.delta':
             if (ev.delta) yield { type: 'text', text: ev.delta }
+            break
+          // A refusal arrives as its own content part; it is the model's answer, so show it.
+          case 'response.refusal.delta':
+            if (ev.delta) yield { type: 'text', text: ev.delta }
+            refusal = 'refusal'
             break
           case 'response.reasoning_summary_text.delta':
             if (ev.delta) yield { type: 'reasoning', text: ev.delta }
@@ -349,6 +357,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
             cacheReadTokens = u?.input_tokens_details?.cached_tokens
             cacheWriteTokens = u?.input_tokens_details?.cache_write_tokens
             if (ev.response?.incomplete_details?.reason === 'max_output_tokens') stopReason = 'max_tokens'
+            if (ev.response?.incomplete_details?.reason === 'content_filter') refusal = 'content_filter'
             break
           }
           case 'response.failed':
@@ -388,6 +397,7 @@ export function createResponsesProvider(apiKey: string | null, baseURL?: string)
         type: 'done',
         // A cut-off reply keeps `max_tokens` even when it carries calls, so the loop knows.
         stopReason: stopReason === 'max_tokens' ? stopReason : calls.length ? 'tool_use' : stopReason,
+        ...(refusal ? { refusal } : {}),
         usage: {
           inputTokens,
           outputTokens,

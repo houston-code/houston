@@ -735,6 +735,19 @@ describe('EvidenceLedger.passed and todo gaps', () => {
     expect(r).not.toHaveProperty('todoGaps')
   })
 
+  it('makes a receipt for test edits alone, capped and cleaned, and replaces them on each reading', () => {
+    const l = new EvidenceLedger()
+    l.setTestEdits(
+      Array.from({ length: 23 }, (_, i) => ({ path: `t${i}.test.ts\u001b`, kind: 'skip' as const, detail: `added\nit.skip(${i})` }))
+    )
+    const r = l.receipt()!
+    expect(r.testEdits).toHaveLength(20)
+    expect(r.testEditsOmitted).toBe(3)
+    expect(r.testEdits?.[0]).toEqual({ path: 't0.test.ts', kind: 'skip', detail: 'added it.skip(0)' })
+    l.setTestEdits([])
+    expect(l.receipt()).toBeNull()
+  })
+
   it('makes a receipt for todo gaps alone, capped and cleaned', () => {
     const l = new EvidenceLedger()
     expect(l.receipt(undefined, { todoGaps: [] })).toBeNull()

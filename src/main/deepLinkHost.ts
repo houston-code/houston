@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron'
+import { app, dialog, ipcMain, type WebContents } from 'electron'
 import { realpathSync, statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DEEP_LINK_SCHEME, deepLinkFromArgv } from '@shared/deepLink'
@@ -6,7 +6,8 @@ import { IPC } from '@shared/constants'
 import type { MenuCommand } from '@shared/types'
 import { createDeepLinkRouter, type DeepLinkRouter } from './deepLinks'
 import { appWindows } from './helperWindows'
-import { windowShowing } from './windows'
+// Links act on the window app-level actions land on: the focused one, else the last used.
+import { targetWindow, windowShowing } from './windows'
 import { getSettings, rememberWorkspace } from './store'
 import { conversationExists, listConversations } from './conversations'
 import { log } from './logger'
@@ -16,13 +17,6 @@ import { log } from './logger'
  * lock that forwards a second launch's link to the running app, macOS `open-url`,
  * and the renderer's "ready" signal. The policy lives in ./deepLinks.
  */
-
-/** The window links act on: the focused app window, else the first one. */
-function targetWindow(): BrowserWindow | undefined {
-  const focused = BrowserWindow.getFocusedWindow()
-  const windows = appWindows()
-  return focused && windows.includes(focused) ? focused : windows[0]
-}
 
 function send(channel: string, ...args: unknown[]): void {
   const win = targetWindow()
@@ -112,11 +106,22 @@ export function wireDeepLinks(opts: {
   // The renderer says when its listeners are attached; until then links are held.
   // A closed window holds them again until the next one is ready (macOS keeps the
   // app running with no window).
+  // A reload holds them too: the page that attached the listeners is going away, and
+  // the new one says ready again once its own are attached. Each renderer is watched
+  // once, however many times its page loads.
+  const watched = new WeakSet<WebContents>()
   ipcMain.on(IPC.deepLinkReady, (event) => {
-    if (!appWindows().some((w) => !w.isDestroyed() && w.webContents === event.sender)) return
-    event.sender.once('destroyed', () => {
-      if (appWindows().every((w) => w.isDestroyed() || w.webContents === event.sender)) router.markNotReady()
-    })
+    const sender = event.sender
+    if (!appWindows().some((w) => !w.isDestroyed() && w.webContents === sender)) return
+    if (!watched.has(sender)) {
+      watched.add(sender)
+      sender.once('destroyed', () => {
+        if (appWindows().every((w) => w.isDestroyed() || w.webContents === sender)) router.markNotReady()
+      })
+      sender.on('did-start-navigation', (details) => {
+        if (details.isMainFrame && !details.isSameDocument) router.markNotReady()
+      })
+    }
     void opts.started.then(() => router.markReady())
   })
 

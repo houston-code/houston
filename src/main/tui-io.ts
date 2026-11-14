@@ -1,4 +1,5 @@
 import { createInterface as nodeCreateInterface, emitKeypressEvents } from 'node:readline'
+import { StringDecoder } from 'node:string_decoder'
 import { spinnerFrame, type TuiIo, type Painter } from './tui'
 import { visibleWidth } from './tui-wrap'
 import { findUltrathink, ultrathinkHint, type KeywordRange, type UltrathinkEffect } from '@shared/ultrathink'
@@ -294,6 +295,11 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
   // the composer and the streaming watcher: it describes the byte stream, not
   // whichever reader currently owns it.
   let lastPasteAt = -Infinity
+  // One UTF-8 decoder for the byte stream, shared by the composer and the streaming
+  // watcher for the same reason: a multi-byte character can be split across two
+  // reads, and decoding each chunk on its own turns both halves into U+FFFD.
+  const utf8 = new StringDecoder('utf8')
+  const decodeChunk = (data: Buffer | string): string => (typeof data === 'string' ? data : utf8.write(data))
 
   let interruptHandler: (() => void) | null = null
   // Fired by Shift-Tab, at the composer or mid-run. The driver owns what the modes
@@ -328,7 +334,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    * the moment the turn ends.
    */
   const onWatchData = (data: Buffer | string): void => {
-    const chunk = typeof data === 'string' ? data : data.toString('utf8')
+    const chunk = decodeChunk(data)
     const r = decodeInput(chunk, watchDec)
     watchDec = r.state
     // A paste here is as untrusted as one in the composer: its tail must not be
@@ -475,6 +481,18 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       // Drop type-ahead before a security-sensitive prompt so a stray buffered
       // 'y' can't answer an approval the user never actually saw.
       if (opts?.discardPending) drainInput()
+      // readline only turns raw mode on in its constructor, and every raw reader
+      // (composer, picker, readSecret) turns it off on the way out. Without this the
+      // question runs in cooked mode: the tty echoes each key on top of readline's
+      // own echo, and Ctrl-C is a real SIGINT that kills the process instead of
+      // reaching readline's 'SIGINT' event (and so the interrupt handler).
+      if (stdin.isTTY && typeof stdin.setRawMode === 'function') {
+        try {
+          stdin.setRawMode(true)
+        } catch {
+          /* best-effort: a cooked read still works, just with the double echo */
+        }
+      }
       rl.resume()
       rl.question(prompt, { signal: ac.signal }, (answer) => {
         questionAbort = null
@@ -795,7 +813,7 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
       }
 
       function onData(data: Buffer | string): void {
-        const chunk = typeof data === 'string' ? data : data.toString('utf8')
+        const chunk = decodeChunk(data)
         const r = decodeInput(chunk, dec)
         dec = r.state
         // A paste body is attacker-controlled and can end paste mode early with its
@@ -1025,8 +1043,15 @@ function runPicker(
     let prevRows = 0
     let done = false
 
+    // readline keeps its own 'keypress' listener on stdin, and it runs whether or not
+    // the interface is paused: left attached, Up/Down also walk readline's history and
+    // repaint "> <old entry>" under the picker, Enter submits a junk line, and Ctrl-C
+    // reaches both handlers. Detach every other listener while the picker owns input
+    // (as readComposer and readSecret do) and restore them in finish.
+    const priorKeypress = stdin.listeners('keypress') as Array<(...args: unknown[]) => void>
     const draw = (first: boolean): void => {
-      if (!first && prevRows > 0) write(`\x1b[${prevRows}A\x1b[0J`) // up N physical rows, erase to end
+      // \r first: the up-move is counted from column 0 of the row under the picker.
+      if (!first && prevRows > 0) write(`\r\x1b[${prevRows}A\x1b[0J`) // up N physical rows, erase to end
       const lines = renderPicker(state, paint)
       // Count PHYSICAL rows, not logical lines: a rendered line wider than the terminal
       // wraps to several rows, so moving up by the logical count would under-count and
@@ -1039,6 +1064,7 @@ function runPicker(
       done = true
       try {
         stdin.removeListener('keypress', onKey)
+        for (const l of priorKeypress) if (!stdin.listeners('keypress').includes(l)) stdin.on('keypress', l)
         stdin.setRawMode(false)
         rl.resume() // hand input back to readline for the next read
         rl.pause()
@@ -1066,6 +1092,7 @@ function runPicker(
     try {
       rl.pause()
       emitKeypressEvents(stdin)
+      for (const l of priorKeypress) stdin.removeListener('keypress', l)
       stdin.setRawMode(true)
       stdin.resume()
       stdin.on('keypress', onKey)

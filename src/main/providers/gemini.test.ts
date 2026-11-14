@@ -389,6 +389,27 @@ describe('gemini stop reason', () => {
     )
   })
 
+  it('flags a SAFETY or RECITATION finish as a refusal, and a normal STOP not', async () => {
+    const doneFor = async (candidate: Record<string, unknown>): Promise<Record<string, unknown> | undefined> => {
+      h.stream.mockResolvedValue(
+        (async function* () {
+          yield { candidates: [candidate] }
+        })()
+      )
+      let done: Record<string, unknown> | undefined
+      for await (const ev of createGeminiProvider('k').streamChat({
+        model: 'gemini-2.5-flash',
+        messages: [{ role: 'user', content: 'hi' }]
+      } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+        if (ev.type === 'done') done = ev as unknown as Record<string, unknown>
+      }
+      return done
+    }
+    expect(await doneFor({ finishReason: 'SAFETY' })).toMatchObject({ refusal: 'SAFETY' })
+    expect(await doneFor({ finishReason: 'RECITATION' })).toMatchObject({ refusal: 'RECITATION' })
+    expect(await doneFor({ finishReason: 'STOP', content: { parts: [{ text: 'ok' }] } })).not.toHaveProperty('refusal')
+  })
+
   it('reports a normal STOP finish as end_turn', async () => {
     expect(await drainStopReason({ finishReason: 'STOP', content: { parts: [{ text: 'done' }] } })).toBe(
       'end_turn'

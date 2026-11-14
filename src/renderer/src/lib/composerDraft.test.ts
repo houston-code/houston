@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { loadComposerDraft, saveComposerDraft } from './composerDraft'
+import type { ContextAttachment } from '@shared/composerContext'
+import {
+  loadComposerContext,
+  loadComposerDraft,
+  MAX_SAVED_CONTEXT_CHARS,
+  saveComposerDraft
+} from './composerDraft'
 
 beforeEach(() => {
   localStorage.clear()
@@ -36,6 +42,39 @@ describe('composerDraft', () => {
     expect(loadComposerDraft('c1')).toBe('')
     expect(localStorage.getItem('houston.composerDraft:c1')).toBeNull()
     expect(loadComposerDraft('c2')).toBe('keep me')
+  })
+
+  it('round-trips context chips with the draft and clears them with it', () => {
+    const chip: ContextAttachment = {
+      id: 'a1',
+      kind: 'paste',
+      label: 'Pasted text',
+      detail: '60 lines',
+      text: 'big paste'
+    }
+    saveComposerDraft('c1', 'see this', [chip])
+    expect(loadComposerContext('c1')).toEqual([chip])
+    expect(loadComposerContext('c2')).toEqual([])
+    saveComposerDraft('c1', '', [])
+    expect(loadComposerContext('c1')).toEqual([])
+    expect(localStorage.getItem('houston.composerDraftContext:c1')).toBeNull()
+  })
+
+  it('inlines chip content into the saved text when the chips are over the cap', () => {
+    const big = 'y'.repeat(MAX_SAVED_CONTEXT_CHARS + 1)
+    saveComposerDraft('c1', 'see this', [{ id: 'a1', kind: 'file', label: 'f.txt', text: big }])
+    expect(loadComposerContext('c1')).toEqual([])
+    expect(loadComposerDraft('c1')).toBe(`see this\n\n${big}`)
+  })
+
+  it('ignores malformed saved chips', () => {
+    localStorage.setItem('houston.composerDraftContext:c1', '{not json')
+    expect(loadComposerContext('c1')).toEqual([])
+    localStorage.setItem(
+      'houston.composerDraftContext:c1',
+      JSON.stringify([{ id: 'a', kind: 'bogus', label: 'x', text: 'y' }, 5, null])
+    )
+    expect(loadComposerContext('c1')).toEqual([])
   })
 
   it('preserves whitespace-only drafts (still text the user typed)', () => {

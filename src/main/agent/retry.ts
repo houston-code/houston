@@ -2,13 +2,22 @@ import { causeFromMessage, type TurnErrorCause } from '@shared/turnError'
 import type { ThrottleInfo } from '@shared/rateLimit'
 
 /**
- * Transient-failure handling for provider streaming. The SDKs retry the *initial*
- * request a couple of times, but a connection that drops mid-stream, or a failure
- * after their retries are exhausted, otherwise kills the whole run. The loop retries
- * such failures with exponential backoff + jitter; one that arrives after part of the
- * turn has streamed discards that partial turn first (see `turn_discarded`), so the
- * redo can't duplicate output the user already saw.
+ * Transient-failure handling for provider streaming. This is the only retry layer: the
+ * SDK clients are built with {@link SDK_MAX_RETRIES} so a failure reaches it on the first
+ * request. The loop retries such failures with exponential backoff + jitter; one that
+ * arrives after part of the turn has streamed discards that partial turn first (see
+ * `turn_discarded`), so the redo can't duplicate output the user already saw.
  */
+
+/**
+ * `maxRetries` for every provider SDK client. Each SDK otherwise retries 408/409/429/5xx
+ * and connection errors twice on its own, out of sight: the user saw a silent spinner
+ * instead of a `retry` event, a 503 cost three requests per attempt here, an exhausted
+ * quota was only recognized after the SDK's retries, and the Anthropic SDK (which the
+ * Bedrock, Vertex and Foundry clients extend) slept out any `retry-after` uncapped, so a
+ * `retry-after: 3600` parked a turn for an hour past {@link RETRY_AFTER_CAP_MS}.
+ */
+export const SDK_MAX_RETRIES = 0
 
 /**
  * Max transient-failure retries for one provider call (so up to this + 1 attempts).
@@ -107,13 +116,102 @@ export function describeProviderError(err: unknown): string {
  * reports an exhausted balance as a 429 with code `insufficient_quota`, the same
  * status as a rate limit, but no amount of waiting fixes it: retrying only held the
  * error back for the whole backoff budget (about 40 seconds) before showing it.
+ *
+ * Gemini words every quota that way ("You exceeded your current quota"), its per-minute
+ * rate limits included, so its message alone can't decide. A Gemini quota is exhausted
+ * only when its `QuotaFailure` names a per-day (or longer) quota, or when it names no
+ * wait at all; a per-minute one with a `RetryInfo` delay is a rate limit, retried after
+ * that delay (see {@link retryAfterHintMs}).
  */
 export function isQuotaExhaustedError(err: unknown): boolean {
   const code = (err as { code?: unknown; error?: { code?: unknown } })?.code ??
     (err as { error?: { code?: unknown } })?.error?.code
   if (code === 'insufficient_quota') return true
   const msg = String((err as { message?: unknown })?.message ?? err)
-  return /insufficient_quota|exceeded your current quota/i.test(msg)
+  if (/insufficient_quota/i.test(msg)) return true
+  if (hasLongWindowQuotaFailure(err)) return true
+  if (!/exceeded your current quota/i.test(msg)) return false
+  return googleRetryDelayMs(err) === undefined
+}
+
+/** Longest error message parsed for the JSON body a Gemini error carries. */
+const ERROR_JSON_MAX = 64_000
+
+/**
+ * The `google.rpc` details of a Gemini error (`QuotaFailure`, `RetryInfo`, ...), or []
+ * when it has none. The Gemini SDK throws an `ApiError` whose message is the response
+ * body serialized as JSON, so the details are read back out of it; an error object that
+ * carries the body's `error` already parsed is read directly.
+ */
+function googleErrorDetails(err: unknown): Record<string, unknown>[] {
+  const detailsOf = (body: unknown): Record<string, unknown>[] | undefined => {
+    const first: unknown = Array.isArray(body) ? body[0] : body
+    const inner = (first as { error?: unknown } | null | undefined)?.error ?? first
+    const details = (inner as { details?: unknown } | null | undefined)?.details
+    if (!Array.isArray(details)) return undefined
+    return details.filter((d): d is Record<string, unknown> => !!d && typeof d === 'object')
+  }
+  const direct = detailsOf((err as { error?: unknown } | null | undefined)?.error)
+  if (direct) return direct
+  const msg = (err as { message?: unknown } | null | undefined)?.message
+  if (typeof msg !== 'string' || msg.length > ERROR_JSON_MAX) return []
+  const start = msg.search(/[[{]/)
+  if (start < 0) return []
+  try {
+    return detailsOf(JSON.parse(msg.slice(start))) ?? []
+  } catch {
+    return []
+  }
+}
+
+const detailType = (d: Record<string, unknown>): string => String(d['@type'] ?? '')
+
+/**
+ * A Google quota id that names a window of a day or longer
+ * (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`), as opposed to a per-minute one.
+ */
+const LONG_QUOTA_WINDOW = /per ?(day|week|month|year)|daily|weekly|monthly|yearly/i
+
+/** Whether a Gemini error's `QuotaFailure` names a quota that resets a day or more out. */
+function hasLongWindowQuotaFailure(err: unknown): boolean {
+  return googleErrorDetails(err).some((d) => {
+    if (!detailType(d).endsWith('google.rpc.QuotaFailure')) return false
+    const violations: unknown[] = Array.isArray(d.violations) ? d.violations : []
+    return violations.some((v) => {
+      const quotaId = (v as { quotaId?: unknown } | null)?.quotaId
+      return typeof quotaId === 'string' && LONG_QUOTA_WINDOW.test(quotaId)
+    })
+  })
+}
+
+/** A protobuf Duration as JSON (`"41s"`, `"0.5s"`) or as `{ seconds, nanos }`, in ms. */
+function durationMs(v: unknown): number | undefined {
+  if (typeof v === 'string') {
+    const m = /^\s*(\d+(?:\.\d+)?)s\s*$/.exec(v)
+    return m ? Number(m[1]) * 1000 : undefined
+  }
+  if (v && typeof v === 'object') {
+    const ms = Number((v as { seconds?: unknown }).seconds ?? 0) * 1000 +
+      Number((v as { nanos?: unknown }).nanos ?? 0) / 1e6
+    return Number.isFinite(ms) && ms >= 0 ? ms : undefined
+  }
+  return undefined
+}
+
+/**
+ * The wait a Gemini error names, in ms (uncapped): its `RetryInfo.retryDelay`, or the
+ * "Please retry in 41.18s." sentence its message ends with when the detail is missing.
+ */
+function googleRetryDelayMs(err: unknown): number | undefined {
+  for (const d of googleErrorDetails(err)) {
+    if (!detailType(d).endsWith('google.rpc.RetryInfo')) continue
+    const ms = durationMs(d.retryDelay)
+    if (ms !== undefined) return ms
+  }
+  const msg = String((err as { message?: unknown } | null | undefined)?.message ?? '')
+  const m = /please retry in (\d+(?:\.\d+)?) ?(ms|s)\b/i.exec(msg)
+  if (!m) return undefined
+  return m[2].toLowerCase() === 'ms' ? Number(m[1]) : Number(m[1]) * 1000
 }
 
 /**
@@ -276,6 +374,9 @@ export function isModelNotFoundError(err: unknown, model: string): boolean {
 export function classifyProviderFailure(err: unknown): TurnErrorCause | undefined {
   if (isQuotaExhaustedError(err)) return 'quota'
   const status = (err as { status?: unknown })?.status
+  // 402 Payment Required: the account can't pay for the request (OpenRouter's "requires
+  // more credits"). Never retried, since waiting adds no credit.
+  if (status === 402) return 'quota'
   if (status === 401 || status === 403) return 'auth'
   if (status === 429) return 'rate-limit'
   if (typeof status === 'number' && status >= 500) return 'provider-down'
@@ -360,8 +461,10 @@ function headerValue(headers: unknown, name: string): string | undefined {
  * names the window it wants you back in; guessing instead is how a rate-limit retry
  * lands too early and burns an attempt on a second 429.
  *
- * Handles both `Retry-After` forms (delta-seconds and HTTP-date), and the parsed value
- * an in-band {@link ProviderError} already carries. Clamped to {@link RETRY_AFTER_CAP_MS}.
+ * Handles the parsed value an in-band {@link ProviderError} already carries, the
+ * `retry-after-ms` header (OpenAI and Anthropic send it beside `Retry-After`), both
+ * `Retry-After` forms (delta-seconds and HTTP-date), and the delay a Gemini error names
+ * in its body (its SDK keeps no headers). Clamped to {@link RETRY_AFTER_CAP_MS}.
  */
 export function retryAfterHintMs(err: unknown, now: number = Date.now()): number | undefined {
   const e = err as { retryAfterMs?: unknown; headers?: unknown } | null | undefined
@@ -369,13 +472,20 @@ export function retryAfterHintMs(err: unknown, now: number = Date.now()): number
   if (typeof direct === 'number' && Number.isFinite(direct) && direct >= 0) {
     return Math.min(direct, RETRY_AFTER_CAP_MS)
   }
+  const rawMs = headerValue(e?.headers, 'retry-after-ms')?.trim()
+  if (rawMs) {
+    const ms = Number(rawMs)
+    if (Number.isFinite(ms)) return ms <= 0 ? 0 : Math.min(ms, RETRY_AFTER_CAP_MS)
+  }
   const raw = headerValue(e?.headers, 'retry-after')?.trim()
-  if (!raw) return undefined
-  const secs = Number(raw)
-  if (Number.isFinite(secs)) return secs <= 0 ? 0 : Math.min(secs * 1000, RETRY_AFTER_CAP_MS)
-  const at = Date.parse(raw)
-  if (Number.isNaN(at)) return undefined
-  return Math.min(Math.max(0, at - now), RETRY_AFTER_CAP_MS)
+  if (raw) {
+    const secs = Number(raw)
+    if (Number.isFinite(secs)) return secs <= 0 ? 0 : Math.min(secs * 1000, RETRY_AFTER_CAP_MS)
+    const at = Date.parse(raw)
+    if (!Number.isNaN(at)) return Math.min(Math.max(0, at - now), RETRY_AFTER_CAP_MS)
+  }
+  const google = googleRetryDelayMs(err)
+  return google === undefined ? undefined : Math.min(google, RETRY_AFTER_CAP_MS)
 }
 
 /**

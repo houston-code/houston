@@ -21,6 +21,15 @@
  */
 export const STREAM_IDLE_TIMEOUT_MS = 120_000
 
+/**
+ * Deadline for a model-listing request ("Fetch models", "Test key"): the response must
+ * start within it, and its body may not go quiet for longer. The SDKs' own default is ten
+ * minutes for the headers alone, and the Gemini SDK sets none at all, so on a network
+ * that drops packets the button just spun. A listing is one small JSON reply, so a host
+ * that hasn't answered in this long isn't going to.
+ */
+export const LIST_MODELS_TIMEOUT_MS = 15_000
+
 /** Error code {@link StreamIdleError} carries; the retry policy matches on it. */
 export const STREAM_IDLE_CODE = 'HOUSTON_STREAM_IDLE'
 

@@ -99,7 +99,7 @@ import {
   chatStatusSnapshot,
   onChatStatusChanged
 } from './agent/loop'
-import { killShell, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
+import { killShell, killShellsFor, listShells, listPreviewServers, onShellsChanged, shellTail } from './agent/shells'
 import { addToQueue, removeFromQueue, clearQueue, forgetQueue, listQueue, queuedSteerIds, retargetQueue } from './agent/queue'
 import { runAndDrain, drainQueue, type DrainIO } from './agent/drain'
 import { createDeltaCoalescer, flushAllDeltas, type DeltaCoalescer } from './deltaCoalescer'
@@ -138,7 +138,7 @@ import {
   targetWindow,
   windowShowing
 } from './windows'
-import { compactConversationNow } from './agent/compact'
+import { cancelCompaction, compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
 import { loadCommands } from './agent/commands'
@@ -876,6 +876,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
         currentBranch: null,
         unborn: false,
         branches: [],
+        defaultBranch: null,
         isLinkedWorktreeRoot: false,
         exists: false
       }
@@ -1251,10 +1252,19 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.conversationForkAt, (_event, id: string, point: unknown) =>
     typeof id === 'string' && isForkPoint(point) ? forkConversationAt(id, point) : null
   )
+  // /compact runs under an overall deadline and can be cancelled by chat id; retries
+  // of a failed summary request are pushed back so the UI can say it's retrying.
   handle(
     IPC.conversationCompact,
-    (_event, id: string, providerId: string, model: string) =>
-      compactConversationNow(id, providerId, model)
+    (event, id: string, providerId: string, model: string) =>
+      compactConversationNow(id, providerId, model, {
+        onRetry: (info) => {
+          if (!event.sender.isDestroyed()) event.sender.send(IPC.conversationCompactProgress, { id, ...info })
+        }
+      })
+  )
+  handle(IPC.conversationCompactCancel, (_event, id: unknown) =>
+    typeof id === 'string' ? cancelCompaction(id) : false
   )
   // Delete a conversation, confirming first via a native dialog so the choice is
   // unambiguous. A chat that owns a Houston-created worktree with work in it gets a
@@ -1314,6 +1324,12 @@ export function registerIpc(ready?: Promise<unknown>): void {
 
       const action = resolveDeleteAction(kind, response)
       if (!action.delete) return { deleted: false }
+      // Stop what the chat still has running before it goes: its live run (which would
+      // otherwise keep writing to a deleted chat) and its background shells (whose dev
+      // servers would keep their ports, inside a worktree about to be removed).
+      const liveRun = activeRunForConversation(id)
+      if (liveRun) cancelRun(liveRun)
+      killShellsFor(id)
       deleteConversation(id)
       // Drop the cached queue too: it went with the file, and must not linger in memory.
       forgetQueue(id)
@@ -2025,7 +2041,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Fire-and-forget focus signal so the ⌘W menu handler knows whether to close
   // the active terminal tab or the window.
   on(IPC.terminalFocusChanged, (_event, focused: boolean) => setTerminalFocused(focused))
-  on(IPC.menuState, (_event, state: MenuState) => setMenuState(state))
+  on(IPC.menuState, (event, state: MenuState) => setMenuState(state, event.sender))
 
   // ---- Live preview dock (started dev servers) ----
 

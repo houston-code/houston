@@ -24,7 +24,7 @@
  * refused.
  */
 
-import { WebContentsView, session, type BaseWindow, type Session } from 'electron'
+import { WebContentsView, session, type BaseWindow, type BrowserWindow, type Session } from 'electron'
 import { isLoopbackHost, validateLocalhostUrl } from './agent/loopback'
 import { hardenUntrustedSession } from './hardenedSession'
 import type { PreviewPaneBounds, PreviewPaneSpec } from '@shared/preview'
@@ -166,6 +166,20 @@ export function destroyPreviewPanesOf(host: BaseWindow): void {
   if (!panes) return
   for (const pane of panes.values()) destroyPane(host, pane)
   panesByHost.delete(host)
+}
+
+/**
+ * Tear a window's panes down whenever its page goes away without the window closing:
+ * a reload (View > Reload, force reload) or a renderer crash. The dock that asked for
+ * the panes is gone with the old page and its unmount cleanup never ran, so the native
+ * views would otherwise stay painted over the new page with nothing left to hide them.
+ * A reload is a cross-document navigation of the main frame; the first load happens
+ * before any pane exists, and an in-page navigation is not reported here.
+ */
+export function watchPreviewHost(host: BrowserWindow): void {
+  const release = (): void => destroyPreviewPanesOf(host)
+  host.webContents.on('did-navigate', release)
+  host.webContents.on('render-process-gone', release)
 }
 
 /** Tear down every pane in every window (app shutdown). */

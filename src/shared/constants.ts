@@ -197,6 +197,10 @@ export const IPC = {
   conversationForkAt: 'conversation:fork-at',
   conversationSetSettings: 'conversation:setSettings',
   conversationCompact: 'conversation:compact',
+  /** Cancel a chat's in-flight /compact. */
+  conversationCompactCancel: 'conversation:compact-cancel',
+  /** Main → renderer: a /compact is retrying a failed summary request. */
+  conversationCompactProgress: 'conversation:compact-progress',
   conversationDelete: 'conversation:delete',
   conversationExport: 'conversation:export',
   conversationExportHtml: 'conversation:exportHtml',

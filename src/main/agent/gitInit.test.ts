@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { initGitRepo } from './gitInit'
@@ -58,6 +58,31 @@ describe('initGitRepo', () => {
         encoding: 'utf8'
       })
       expect(others).toContain('app.ts')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it.runIf(hasGit)('refuses a worktree git cannot open instead of nesting a new repo in it', { timeout: 30_000 }, async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'houston-gitinit-')))
+    try {
+      const git = (...args: string[]): void => {
+        execFileSync('git', ['-C', dir, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], {
+          stdio: 'ignore'
+        })
+      }
+      git('init', '-q')
+      git('commit', '-q', '--allow-empty', '-m', 'init')
+      const wt = join(dir, 'wt')
+      git('worktree', 'add', '-q', wt)
+      rmSync(join(dir, '.git', 'worktrees', 'wt', 'commondir'))
+      const pointer = readFileSync(join(wt, '.git'), 'utf8')
+
+      const res = await initGitRepo(wt)
+      expect(res.ok).toBe(false)
+      expect(res.error).toMatch(/can't open/)
+      // The worktree's .git pointer file is untouched (no new repository in its place).
+      expect(readFileSync(join(wt, '.git'), 'utf8')).toBe(pointer)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

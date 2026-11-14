@@ -538,6 +538,13 @@ describe('anthropic tool calls cut off at the output limit', () => {
     expect(out.at(-1)).toMatchObject({ type: 'done', stopReason: 'max_tokens' })
   })
 
+  it('reports a refusal stop as a refusal, not a clean finish', async () => {
+    const out = await eventsFor([], 'refusal')
+    expect(out.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn', refusal: 'refusal' })
+    const plain = await eventsFor([], 'end_turn')
+    expect(plain.at(-1)).not.toHaveProperty('refusal')
+  })
+
   it('marks a call whose JSON was cut off as incomplete instead of running it with {}', async () => {
     const out = await eventsFor(
       [start(0, 'tu_1'), json(0, '{"path":"big.ts","content":"export const a'), stop(0)],

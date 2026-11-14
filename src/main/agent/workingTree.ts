@@ -11,6 +11,7 @@ import {
 } from '@shared/workingTree'
 import { classifyRemoteUrl, type RepoShipState } from '@shared/shipAction'
 import { runGitCapture, captureTry, uncommittedDiffBase } from './gitRead'
+import { findGitEntry, gitErrorLine } from './gitEntry'
 
 /** Cap how many untracked files we read so a junk-filled tree can't stall the UI. */
 const MAX_UNTRACKED_FILES = 200
@@ -62,8 +63,9 @@ function readUntracked(root: string, rel: string): FileDiff {
  * not just the current chat's edits.
  */
 export async function collectWorkingTreeChanges(workspace: string): Promise<WorkingTreeChanges> {
-  const root = await workTreeRoot(workspace)
-  if (!root) return NOT_A_REPO
+  const probe = await workTreeRoot(workspace)
+  if (typeof probe !== 'string') return probe ? { ...NOT_A_REPO, unreadable: probe.unreadable } : NOT_A_REPO
+  const root = probe
 
   const branch = await currentBranch(root)
 
@@ -96,8 +98,12 @@ export async function collectWorkingTreeChanges(workspace: string): Promise<Work
   }
 }
 
-/** The workspace's real path when it is inside a git work tree, else null. */
-async function workTreeRoot(workspace: string): Promise<string | null> {
+/**
+ * The workspace's real path when it is inside a git work tree. When git can't open
+ * it although a `.git` sits in it or a parent folder, git's reason; else null (a
+ * plain folder, or a path that is gone).
+ */
+async function workTreeRoot(workspace: string): Promise<string | { unreadable: string } | null> {
   if (!workspace) return null
   let root: string
   try {
@@ -106,7 +112,8 @@ async function workTreeRoot(workspace: string): Promise<string | null> {
     return null
   }
   const inside = await runGitCapture(['rev-parse', '--is-inside-work-tree'], root)
-  return inside.ok && inside.stdout.trim() === 'true' ? root : null
+  if (inside.ok) return inside.stdout.trim() === 'true' ? root : null
+  return findGitEntry(root) ? { unreadable: gitErrorLine(inside.stderr) } : null
 }
 
 /**
@@ -157,8 +164,12 @@ export function sumNumstat(out: string): { files: number; added: number; removed
  * exactly as the full path counts them, under the same file cap.
  */
 export async function collectWorkingTreeStats(workspace: string): Promise<WorkingTreeStats> {
-  const root = await workTreeRoot(workspace)
-  if (!root) return { isRepo: false, branch: null, fileCount: 0, added: 0, removed: 0 }
+  const probe = await workTreeRoot(workspace)
+  if (typeof probe !== 'string') {
+    const none: WorkingTreeStats = { isRepo: false, branch: null, fileCount: 0, added: 0, removed: 0 }
+    return probe ? { ...none, unreadable: probe.unreadable } : none
+  }
+  const root = probe
 
   const base = await uncommittedDiffBase(captureTry(root))
   const [branch, diff, untrackedPaths, ship] = await Promise.all([

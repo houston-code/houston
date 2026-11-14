@@ -272,6 +272,38 @@ describe('responses reasoning capture', () => {
   })
 })
 
+describe('responses refusals', () => {
+  beforeEach(() => h.create.mockReset())
+
+  async function eventsOf(events: unknown[]): Promise<ProviderStreamEvent[]> {
+    h.create.mockResolvedValue(streamOf(events))
+    const out: ProviderStreamEvent[] = []
+    for await (const ev of createResponsesProvider('k').streamChat({
+      model: 'gpt-5',
+      messages: [{ role: 'user', content: 'hi' }]
+    } as ChatRequest) as AsyncGenerator<ProviderStreamEvent>) {
+      out.push(ev)
+    }
+    return out
+  }
+
+  it('shows a refusal part as text and flags the turn', async () => {
+    const out = await eventsOf([
+      { type: 'response.refusal.delta', delta: "I can't help with that." },
+      { type: 'response.completed', response: {} }
+    ])
+    expect(out).toContainEqual({ type: 'text', text: "I can't help with that." })
+    expect(out.at(-1)).toMatchObject({ type: 'done', refusal: 'refusal' })
+  })
+
+  it('flags a reply the content filter cut short', async () => {
+    const out = await eventsOf([
+      { type: 'response.incomplete', response: { incomplete_details: { reason: 'content_filter' } } }
+    ])
+    expect(out.at(-1)).toMatchObject({ type: 'done', refusal: 'content_filter' })
+  })
+})
+
 describe('responses max_output_tokens', () => {
   beforeEach(() => h.create.mockReset())
 
@@ -396,9 +428,11 @@ describe('responses truncated replies', () => {
     } as ChatRequest)) {
       if (ev.type === 'done') done = ev
     }
+    // Not truncated (end_turn), but flagged: the filter, not the model, ended it.
     expect(done).toEqual({
       type: 'done',
       stopReason: 'end_turn',
+      refusal: 'content_filter',
       usage: { inputTokens: 50, outputTokens: 3 }
     })
   })
