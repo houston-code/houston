@@ -215,6 +215,12 @@ export type CommandClient = 'gui' | 'tui'
 export interface BuiltinCommand extends Command {
   /** Clients that expose this command. */
   clients: CommandClient[]
+  /**
+   * What the desktop menu says instead, where the app does the job differently from
+   * the terminal (it opens a Settings page rather than printing or taking
+   * subcommands). `args: null` shows no argument hint there.
+   */
+  gui?: { description?: string; args?: string | null }
 }
 
 /**
@@ -247,7 +253,12 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'full', group: 'Modes', description: 'Approval: full auto (sandboxed)', clients: ['gui', 'tui'] },
   { name: 'model', group: 'Modes', args: '[name]', description: 'List or switch the active model', clients: ['gui', 'tui'] },
   { name: 'login', group: 'Setup', description: 'Set or update an API key (also: /providers)', clients: ['gui', 'tui'] },
-  { name: 'settings', group: 'Setup', args: '[page]', description: 'Show a summary of your current settings', clients: ['gui', 'tui'] },
+  {
+    name: 'settings', group: 'Setup', args: '[page]',
+    description: 'Show a summary of your current settings',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Open Settings, or one page of it' }
+  },
   { name: 'undo', group: 'Review and undo', description: "Revert the files the last turn changed", clients: ['gui', 'tui'] },
   { name: 'redo', group: 'Review and undo', description: 'Put back what /undo reverted', clients: ['gui', 'tui'] },
   {
@@ -339,15 +350,31 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Hand a task to one of your .houston/agents (/agent <name> <task>)',
     clients: ['gui', 'tui']
   },
-  { name: 'mcp', group: 'Extend', description: 'List MCP servers (add, remove, login, logout)', clients: ['gui', 'tui'] },
+  {
+    name: 'mcp', group: 'Extend',
+    description: 'List MCP servers (add, remove, login, logout)',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Manage MCP servers in Settings' }
+  },
   {
     name: 'trust', group: 'Setup',
     description: "Show this folder's project-config trust (/trust forget re-decides)",
-    clients: ['gui', 'tui']
+    clients: ['gui', 'tui'],
+    gui: { description: "Review this folder's project-config trust in Settings" }
   },
   { name: 'hooks', group: 'Extend', description: 'List configured hooks', clients: ['gui', 'tui'] },
-  { name: 'memory', group: 'Extend', description: 'Review saved memories (show, edit, pin, forget, on, off)', clients: ['gui', 'tui'] },
-  { name: 'theme', group: 'Setup', args: '[name]', description: 'List or switch the color theme', clients: ['gui', 'tui'] },
+  {
+    name: 'memory', group: 'Extend',
+    description: 'Review saved memories (show, edit, pin, forget, on, off)',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Review saved memories in Settings' }
+  },
+  {
+    name: 'theme', group: 'Setup', args: '[name]',
+    description: 'List or switch the color theme',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Open Appearance settings', args: null }
+  },
   { name: 'image', group: 'Terminal', args: '[path]', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
   { name: 'cwd', group: 'Setup', description: 'Show the working directory', clients: ['gui', 'tui'] },
   { name: 'share', group: 'Chat', description: 'Copy an invite to Houston to share with a friend', clients: ['gui', 'tui'] },
@@ -372,19 +399,24 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'quit', group: 'Terminal', description: 'Leave', clients: ['tui'] }
 ]
 
-/** Strip the catalog-only `clients` tag, yielding a plain `Command`. */
-function toCommand(c: BuiltinCommand): Command {
-  const cmd: Command = { name: c.name, description: c.description }
+/**
+ * Strip the catalog-only tags, yielding a plain `Command`; for the desktop, with its
+ * own wording where the catalog gives one.
+ */
+function toCommand(c: BuiltinCommand, client?: CommandClient): Command {
+  const gui = client === 'gui' ? c.gui : undefined
+  const cmd: Command = { name: c.name, description: gui?.description ?? c.description }
   if (c.template !== undefined) cmd.template = c.template
   if (c.autoRun !== undefined) cmd.autoRun = c.autoRun
   if (c.group !== undefined) cmd.group = c.group
-  if (c.args !== undefined) cmd.args = c.args
+  const args = gui && gui.args !== undefined ? gui.args : c.args
+  if (args !== undefined && args !== null) cmd.args = args
   return cmd
 }
 
 /** The built-in commands a given client surfaces, as plain `Command`s. */
 export function builtinCommands(client: CommandClient): Command[] {
-  return BUILTIN_COMMAND_CATALOG.filter((c) => c.clients.includes(client)).map(toCommand)
+  return BUILTIN_COMMAND_CATALOG.filter((c) => c.clients.includes(client)).map((c) => toCommand(c, client))
 }
 
 /**
@@ -429,4 +461,4 @@ export function terminalOnlyNote(name: string): string | null {
  */
 export const BUILTIN_TEMPLATE_COMMANDS: Command[] = BUILTIN_COMMAND_CATALOG.filter(
   (c) => c.template !== undefined
-).map(toCommand)
+).map((c) => toCommand(c))
