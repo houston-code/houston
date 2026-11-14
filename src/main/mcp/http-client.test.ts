@@ -452,3 +452,107 @@ describe('McpHttpClient protocol-version negotiation', () => {
     expect(posts.map((p) => p.body.method)).toEqual(['initialize'])
   })
 })
+
+describe('McpHttpClient cancellation', () => {
+  /**
+   * A server that completes the handshake and then holds every tools/call POST open
+   * until the client aborts it, recording each JSON-RPC message posted.
+   */
+  function hangingFetch(posts: Array<Record<string, unknown>>, opts: { sse?: boolean } = {}): FetchFn {
+    return (_u, init) => {
+      if (init.method === 'GET') return Promise.resolve(new Response('', { status: 405 }))
+      const req = JSON.parse(init.body as string) as Record<string, unknown> & { id?: number; method?: string }
+      posts.push(req)
+      if (req.id === undefined) return Promise.resolve(new Response('', { status: 202 }))
+      if (req.method === 'tools/call') {
+        if (opts.sse) {
+          // The response stream opens, then never carries an answer.
+          const body = new ReadableStream<Uint8Array>({
+            start(controller) {
+              init.signal?.addEventListener('abort', () => controller.error(new Error('aborted')))
+            }
+          })
+          return Promise.resolve(
+            new Response(body, { status: 200, headers: new Headers({ 'content-type': 'text/event-stream' }) })
+          )
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () => reject(new Error('The operation was aborted.')))
+        })
+      }
+      const result = req.method === 'tools/list' ? { tools: [{ name: 'slow' }] } : {}
+      return Promise.resolve(
+        new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }), {
+          status: 200,
+          headers: new Headers({ 'content-type': 'application/json' })
+        })
+      )
+    }
+  }
+
+  async function settlesWithin<T>(p: Promise<T>, ms: number): Promise<{ settled: boolean; error?: unknown }> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<{ settled: boolean }>((resolve) => {
+      timer = setTimeout(() => resolve({ settled: false }), ms)
+    })
+    try {
+      return await Promise.race([
+        p.then(
+          () => ({ settled: true }),
+          (error: unknown) => ({ settled: true, error })
+        ),
+        late
+      ])
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  for (const sse of [false, true]) {
+    it(`settles a hung tools/call as soon as its signal aborts, and tells the server (${sse ? 'SSE' : 'JSON'} reply)`, async () => {
+      const posts: Array<Record<string, unknown>> = []
+      const client = new McpHttpClient(hangingFetch(posts, { sse }))
+      try {
+        await client.connect({ url: 'https://x/mcp' })
+        const stop = new AbortController()
+        const call = client.callTool('slow', {}, stop.signal)
+        await new Promise((r) => setTimeout(r, 5))
+        const sent = posts.find((p) => p.method === 'tools/call')
+        expect(sent).toBeDefined()
+
+        const t0 = Date.now()
+        stop.abort()
+        const outcome = await settlesWithin(call, 1_000)
+        expect(outcome.settled).toBe(true)
+        expect(Date.now() - t0).toBeLessThan(100)
+        expect(outcome.error).toBeInstanceOf(Error)
+        expect((outcome.error as Error).message).toMatch(/cancel/i)
+        await vi.waitFor(() =>
+          expect(posts.find((p) => p.method === 'notifications/cancelled')).toMatchObject({
+            jsonrpc: '2.0',
+            params: { requestId: sent!.id, reason: expect.any(String) }
+          })
+        )
+        expect(client.isClosed).toBe(false)
+      } finally {
+        client.close()
+      }
+    })
+  }
+
+  it('never posts a call whose signal has already aborted', async () => {
+    const posts: Array<Record<string, unknown>> = []
+    const client = new McpHttpClient(hangingFetch(posts))
+    try {
+      await client.connect({ url: 'https://x/mcp' })
+      const stop = new AbortController()
+      stop.abort()
+      const outcome = await settlesWithin(client.callTool('slow', {}, stop.signal), 1_000)
+      expect(outcome.settled).toBe(true)
+      expect(outcome.error).toBeInstanceOf(Error)
+      expect(posts.some((p) => p.method === 'tools/call')).toBe(false)
+    } finally {
+      client.close()
+    }
+  })
+})

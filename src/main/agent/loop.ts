@@ -1690,6 +1690,9 @@ export async function startRun(
     // A trusted folder's project MCP servers join the user's own under a `proj-`
     // id prefix (user servers win collisions); untrusted folders contribute none.
     // The headless --mcp-config servers join for this run only, never saved.
+    // Stop ends the wait for a slow server; a server that is down is named to the user
+    // (once per change per chat), shown below once the redactor exists.
+    const mcpNotices: string[] = []
     const mcpToolDefs = (
       await getMcpToolDefs(
         mergeRunMcpServers(
@@ -1698,9 +1701,14 @@ export async function startRun(
             : settings.mcpServers,
           req.extraMcpServers
         ),
-        runId
+        runId,
+        { signal: abort.signal, noticeKey: conversationId ?? runId, onNotice: (m) => mcpNotices.push(m) }
       )
     ).filter((d) => toolOffered(req.toolScope, d.schema.name))
+    if (abort.signal.aborted) {
+      emit({ type: 'done', stopReason: 'aborted' })
+      return
+    }
     // Lazy loading (lazy-mcp.ts): every schema rides along on every request, so the
     // deferred built-ins, and MCP tools once more than a threshold are connected, are
     // listed in the find_tools catalog instead and advertised only once loaded. At
@@ -1850,6 +1858,9 @@ export async function startRun(
     const emitHookNotice = (outcome: HookOutcome): void => {
       if (outcome.systemMessage) emit({ type: 'notice', message: redact(outcome.systemMessage) })
     }
+    // MCP servers that are down this turn (collected above). A server's error text can
+    // quote anything it printed, so it is redacted like any other text shown.
+    for (const message of mcpNotices) emit({ type: 'notice', message: redact(message) })
 
     // Scrub secrets out of the just-submitted user turn before anything downstream —
     // the model, plugins, hooks, and the persisted transcript — sees it, reusing the

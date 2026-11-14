@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { EventEmitter } from 'node:events'
+import { mcpToolName } from '@shared/mcp'
+import { McpClient } from '../mcp/client'
+import { _setMcpClientFactory, disconnectAllMcp } from '../mcp/manager'
 import { join } from 'node:path'
 import type {
   AgentEvent,
@@ -147,11 +151,18 @@ const h = vi.hoisted(() => ({
   egressScope: null as EgressRunScope | null,
   // The repository the `./github` partial mock reports the gh_* tools act on; null
   // (the default) is "unknown", as in a temp workspace with no remotes.
-  ghRepo: null as string | null
+  ghRepo: null as string | null,
+  // Route getMcpToolDefs to the real MCP manager (with a fake server behind its client
+  // factory) instead of handing back `mcpDefs`, for the tests that need a live connection.
+  realMcp: false
 }))
 
 vi.mock('../agentHost', () => ({
   getSettings: () => h.settings,
+  // Read by the real MCP manager (the realMcp tests); no stored headers or tokens.
+  getSecretHeaders: () => ({}),
+  getMcpOAuth: () => null,
+  setMcpOAuth: () => {},
   addPermissionRule: (rule: unknown) => {
     h.addedRules.push(rule)
   },
@@ -194,7 +205,17 @@ vi.mock('./retry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./retry')>()),
   retryDelayMs: () => 0
 }))
-vi.mock('../mcp/manager', () => ({ getMcpToolDefs: async () => h.mcpDefs, releaseMcpRun: () => {} }))
+vi.mock('../mcp/manager', async (importActual) => {
+  const actual = await importActual<typeof import('../mcp/manager')>()
+  return {
+    ...actual,
+    getMcpToolDefs: async (...args: Parameters<typeof actual.getMcpToolDefs>) =>
+      h.realMcp ? actual.getMcpToolDefs(...args) : h.mcpDefs,
+    releaseMcpRun: (owner: string) => {
+      if (h.realMcp) actual.releaseMcpRun(owner)
+    }
+  }
+})
 // Partial mock of the tool registry so a test can install a *counting* probe under a
 // real builtin name (e.g. `read_file`, which the read cache's allowlist accepts) and
 // have the loop's `getTool` resolve to the probe instead of the real filesystem tool.
@@ -10422,5 +10443,118 @@ describe('nativeWebSearchFor', () => {
     const r = await entry.nativeWebSearch!.search('q', 3)
     expect(r.hits[0].url).toBe('https://example.test')
     expect(webSearch).toHaveBeenCalledWith({ model: 'claude-x', query: 'q', maxResults: 3, signal })
+  })
+})
+
+describe('MCP servers in a run (real manager, fake server)', () => {
+  type Spawn = ConstructorParameters<typeof McpClient>[0]
+
+  /** A stdio server with one tool, `slow`, whose calls are never answered. */
+  function hangingServer(written: Array<Record<string, unknown>>): Spawn {
+    return (() => {
+      const stdout = new EventEmitter()
+      const stdin = Object.assign(new EventEmitter(), {
+        write(line: string): boolean {
+          const msg = JSON.parse(line.trim()) as Record<string, unknown> & { id?: number; method?: string }
+          written.push(msg)
+          if (msg.id === undefined || msg.method === 'tools/call') return true
+          const result = msg.method === 'tools/list' ? { tools: [{ name: 'slow' }] } : {}
+          queueMicrotask(() =>
+            stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+          )
+          return true
+        }
+      })
+      return Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    }) as unknown as Spawn
+  }
+
+  /** A stdio server whose process fails to start. */
+  function brokenServer(): Spawn {
+    return (() => {
+      const child = Object.assign(new EventEmitter(), {
+        stdout: new EventEmitter(),
+        stdin: Object.assign(new EventEmitter(), { write: () => true }),
+        stderr: new EventEmitter(),
+        kill: () => {}
+      })
+      queueMicrotask(() => child.emit('error', new Error('spawn nope ENOENT')))
+      return child
+    }) as unknown as Spawn
+  }
+
+  const server = { id: 'srv', name: 'srv', command: 'fake', args: [], enabled: true }
+
+  beforeEach(() => {
+    h.realMcp = true
+    h.settings.mcpServers = [server]
+  })
+  afterEach(() => {
+    disconnectAllMcp()
+    _setMcpClientFactory(null)
+    h.realMcp = false
+    h.settings.mcpServers = []
+  })
+
+  it('Stop during a hung MCP call ends the run promptly, and the server is told', async () => {
+    const written: Array<Record<string, unknown>> = []
+    _setMcpClientFactory(() => new McpClient(hangingServer(written)))
+    const name = mcpToolName('srv', 'slow')
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'm1', name, arguments: {} } },
+        { type: 'done', stopReason: 'tool_use' }
+      ]
+    ])
+    const runId = 'run-mcp-stop'
+    const events: AgentEvent[] = []
+    let stoppedAt = 0
+    const started = startRun(
+      {
+        runId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'call it' }]
+      },
+      (e) => {
+        events.push(e)
+        if (e.type === 'tool_approval') setTimeout(() => resolveApproval(runId, e.callId, 'allow'), 0)
+        if (e.type === 'tool_start' && e.name === name) {
+          setTimeout(() => {
+            stoppedAt = Date.now()
+            cancelRun(runId)
+          }, 20)
+        }
+      }
+    )
+    const ended = await Promise.race([
+      started.then(() => true),
+      new Promise<boolean>((r) => setTimeout(() => r(false), 2_000))
+    ])
+    expect(ended).toBe(true)
+    expect(Date.now() - stoppedAt).toBeLessThan(500)
+    expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
+    const call = written.find((m) => m.method === 'tools/call')
+    expect(call).toBeDefined()
+    expect(written.find((m) => m.method === 'notifications/cancelled')).toMatchObject({
+      params: { requestId: call!.id }
+    })
+  })
+
+  it('tells the user once per chat that a server is down', async () => {
+    _setMcpClientFactory(() => new McpClient(brokenServer()))
+    const turn = (): ProviderStreamEvent[][] => [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+    const notices = (r: RunResult): string[] => r.events.flatMap((e) => (e.type === 'notice' ? [e.message] : []))
+    const first = await run({ conversationId: 'conv-mcp-down', turns: turn() })
+    expect(notices(first)).toEqual([
+      `MCP server "srv" isn't available (failed to start: spawn nope ENOENT). Its tools are off for this turn.`
+    ])
+    expect(types(first).at(-1)).toBe('done')
+    const second = await run({ conversationId: 'conv-mcp-down', turns: turn() })
+    expect(notices(second)).toEqual([])
+    const elsewhere = await run({ conversationId: 'conv-mcp-other', turns: turn() })
+    expect(notices(elsewhere)).toHaveLength(1)
   })
 })

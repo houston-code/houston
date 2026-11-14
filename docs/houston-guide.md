@@ -2334,6 +2334,11 @@ Houston also:
   works; the names tell you what you just handed the agent.
 - `/mcp` in the terminal and the Settings panel show each server's live status:
   connected with a tool count, needs sign-in, or the connection error.
+- When a server is down at the start of a turn (it failed to start, timed out, or needs
+  sign-in), the chat shows a notice naming it, once per chat until its status changes.
+  The turn goes on without that server's tools.
+- Stop works during a slow MCP call: the call ends at once and the server is told the
+  request was cancelled.
 
 ### Server questions (elicitation)
 
