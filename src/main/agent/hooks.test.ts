@@ -637,3 +637,36 @@ describe('observational events (Notification, SessionEnd)', () => {
     expect([...BLOCKING_EVENT_TYPES].sort()).toEqual(['elicitation', 'plan_ready', 'tool_approval', 'tool_question'])
   })
 })
+
+describe('runHooks: the transcript a hook reads', () => {
+  it('brings the transcript file up to date before a matching hook runs, and only then', async () => {
+    const order: string[] = []
+    const session = {
+      id: 'c',
+      transcriptPath: '/data/conversations/c.json',
+      flushTranscript: () => order.push('flush')
+    }
+    const run = async (): Promise<SandboxRunResult> => {
+      order.push('hook')
+      return { stdout: '', stderr: '', exitCode: 0, timedOut: false, sandboxed: true }
+    }
+    await runHooks([{ event: 'PreToolUse', matcher: 'other', command: 'h' }], 'PreToolUse', { tool: 't', input: {}, session }, '/ws', sig, run)
+    expect(order).toEqual([])
+    await runHooks([{ event: 'PreToolUse', matcher: '*', command: 'h' }], 'PreToolUse', { tool: 't', input: {}, session }, '/ws', sig, run)
+    expect(order).toEqual(['flush', 'hook'])
+  })
+
+  it('still runs the hook when bringing the transcript up to date fails', async () => {
+    const seen: SandboxRunOptions[] = []
+    const session = {
+      id: 'c',
+      transcriptPath: '/data/conversations/c.json',
+      flushTranscript: () => {
+        throw new Error('disk full')
+      }
+    }
+    const r = await runHooks([{ event: 'Stop', matcher: '', command: 'h' }], 'Stop', { tool: 'Stop', input: {}, session }, '/ws', sig, runnerFrom({}, seen))
+    expect(seen).toHaveLength(1)
+    expect(r.blocked).toBe(false)
+  })
+})

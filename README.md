@@ -1389,7 +1389,8 @@ src/
 │   ├── oauth.ts       provider-account OAuth (stub; MCP-server OAuth is real
 │   │                  and lives in mcp/oauth.ts)
 │   ├── store.ts       settings persistence + migrations
-│   ├── conversations.ts  conversation persistence (one JSON per chat)
+│   ├── conversations.ts  conversation persistence (one JSON per chat, plus an
+│   │                  append-only log of recent saves, folded in as it grows)
 │   ├── tui.ts / headless.ts  the interactive terminal and one-shot clients
 │   └── ipc.ts         all IPC handlers
 ├── cli/           the standalone CLI entry (no Electron): env/file credentials,

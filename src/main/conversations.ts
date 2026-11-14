@@ -1,7 +1,21 @@
-import { randomUUID } from 'node:crypto'
-import { chmodSync, readFileSync, renameSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import {
+  chmodSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  renameSync,
+  rmSync,
+  statSync,
+  truncateSync,
+  writeFileSync
+} from 'node:fs'
 import { basename, join } from 'node:path'
-import { writeFileAtomicStampedSync } from './atomic-write'
+import { writeFileAtomicStampedSync, writeStringChunked } from './atomic-write'
 import { buildUsageReport, type UsageInput, type UsageReport } from '@shared/usageReport'
 import { externalizeMedia, hydrateMedia, pruneMedia, readMediaFile, viewMedia } from './conversationMedia'
 import { parseMediaUrl, type ImageAttachment } from '@shared/images'
@@ -187,13 +201,223 @@ function quarantine(path: string, reason: string): void {
   }
 }
 
-function read(id: string): Conversation | null {
+/*
+ * On-disk layout of one chat
+ * --------------------------
+ * `<id>.json` (the base) is a whole conversation, written by atomic rename. `<id>.jsonl`
+ * (the log), when present, holds the changes saved since the base was written, one JSON
+ * record per line, so a save costs what changed rather than the size of the chat:
+ *
+ *   {"houstonLog":1,"base":"<stamp>","hash":"<sha256>"}   header: the base it extends
+ *   {"n":12,"m":[...],"s":{...},"d":[...]}                 a save
+ *
+ * A save keeps the first `n` messages and appends `m` (both left out when the messages
+ * did not change), sets the top-level fields in `s` and deletes those named in `d`.
+ * Once the log outgrows the base (see {@link LOG_FOLD_MIN_BYTES}) the next save folds
+ * everything into a new base and removes the log. A process folds its open logs when
+ * it exits, and before a hook is handed the transcript path, so the base on its own is
+ * normally the whole chat, which is what an older Houston, a hook or any other reader
+ * of the JSON file sees.
+ *
+ * Crash safety: the base is only ever replaced whole. A log record is written with one
+ * append and ends in a newline that JSON never contains, so a crash can leave at most a
+ * torn last line. Readers apply complete lines only; the next save moves a torn or
+ * unreadable tail aside as `<id>.jsonl.corrupt-<time>` before appending. A log whose
+ * header names a different base (an older Houston rewrote the JSON, say) is not
+ * applied, and is moved aside as `<id>.jsonl.orphan-<time>` rather than deleted.
+ */
+
+function logPath(id: string): string {
+  // Not dir(): a log only ever sits beside its base, and the exit-time fold must not
+  // recreate a conversations folder that has since been removed.
+  return join(getUserDataDir(), 'conversations', `${id}.jsonl`)
+}
+
+/** A log is folded into the base once it would outgrow this or the base, whichever is larger. */
+export const LOG_FOLD_MIN_BYTES = 256 * 1024
+
+const LOG_FORMAT = 1
+
+interface LogHeader {
+  houstonLog: typeof LOG_FORMAT
+  /** The base's stamp when the log was started (inode, mtime, size). */
+  base: string
+  /** sha256 of the base's bytes: still matches when a copied profile changes the stamp. */
+  hash: string
+}
+
+interface LogRecord {
+  n?: number
+  m?: unknown[]
+  s?: Record<string, unknown>
+  d?: string[]
+}
+
+/**
+ * Fields a log record may never set or delete: the file's own identity, the log, and
+ * the names Object.assign would treat as the object's prototype rather than a field.
+ */
+const FIXED_FIELDS = new Set(['id', 'messages', '__proto__', 'constructor', 'prototype'])
+
+function sha256(data: string | Buffer): string {
+  return createHash('sha256').update(data).digest('hex')
+}
+
+/** What reading a chat's log found. */
+interface LogScan {
+  /** The log's stamp when it was read, or null when there is none. */
+  stamp: string | null
+  /** 'orphan': the log extends some other base, and nothing of it was applied. */
+  status: 'none' | 'ok' | 'orphan'
+  /** Bytes of the log that were applied (header included). */
+  goodEnd: number
+  /** Bytes read. */
+  size: number
+  /** Why reading stopped before `size`: an unfinished last line, or one that doesn't parse. */
+  bad?: 'torn' | 'corrupt'
+}
+
+/** A chat as stored: the base with its log applied, and what was found on the way. */
+interface Stored {
+  conv: Conversation
+  baseStamp: string
+  baseSize: number
+  /** sha256 of the base, when it was needed (a log to check, or a write to follow). */
+  baseHash: string | null
+  /** The base was written at an older schema version, and is rewritten whole on its next save. */
+  outdated: boolean
+  log: LogScan
+}
+
+/** A record's messages are messages, its fields are fields: checked before anything is applied. */
+function isLogRecord(raw: unknown, messageCount: number): raw is LogRecord {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return false
+  const r = raw as Record<string, unknown>
+  if (r.n !== undefined && !(Number.isInteger(r.n) && (r.n as number) >= 0 && (r.n as number) <= messageCount)) {
+    return false
+  }
+  if (r.m !== undefined) {
+    if (r.n === undefined || !Array.isArray(r.m)) return false
+    const shaped = r.m.every(
+      (m) =>
+        typeof m === 'object' &&
+        m !== null &&
+        typeof (m as Record<string, unknown>).role === 'string' &&
+        typeof (m as Record<string, unknown>).content === 'string'
+    )
+    if (!shaped) return false
+  }
+  if (r.s !== undefined) {
+    if (typeof r.s !== 'object' || r.s === null || Array.isArray(r.s)) return false
+    if (Object.keys(r.s).some((k) => FIXED_FIELDS.has(k))) return false
+  }
+  if (r.d !== undefined) {
+    if (!Array.isArray(r.d) || r.d.some((k) => typeof k !== 'string' || FIXED_FIELDS.has(k))) return false
+  }
+  return true
+}
+
+/** Apply one checked record, or leave `conv` as it was and return false when the result isn't a chat. */
+function applyRecord(conv: Conversation, rec: LogRecord): boolean {
+  const o = conv as unknown as Record<string, unknown>
+  const before: Record<string, unknown> = {}
+  const touched = [...Object.keys(rec.s ?? {}), ...(rec.d ?? [])]
+  for (const k of touched) before[k] = o[k]
+  if (rec.s) Object.assign(o, rec.s)
+  for (const k of rec.d ?? []) delete o[k]
+  if (!hasShellFields(o)) {
+    for (const k of touched) {
+      if (before[k] === undefined) delete o[k]
+      else o[k] = before[k]
+    }
+    return false
+  }
+  if (rec.n !== undefined) {
+    conv.messages.length = rec.n
+    for (const m of rec.m ?? []) conv.messages.push(m as ChatMessage)
+  }
+  return true
+}
+
+/**
+ * Apply `<id>.jsonl` to `conv` (the parsed base, edited in place). Null when the log is
+ * there but can't be read right now, so the caller skips the chat this time rather
+ * than show it without its latest messages.
+ */
+function applyLog(id: string, conv: Conversation, base: Buffer, baseStamp: string): (LogScan & { hash?: string }) | null {
+  const path = logPath(id)
+  const stamp = fileStamp(path)
+  if (stamp === null) return { stamp: null, status: 'none', goodEnd: 0, size: 0 }
+  let buf: Buffer
+  try {
+    buf = readFileSync(path)
+  } catch (e) {
+    log.warn(`[conversations] could not read ${path}: ${(e as Error)?.message ?? String(e)}`)
+    return null
+  }
+  const orphan: LogScan = { stamp, status: 'orphan', goodEnd: 0, size: buf.length }
+  const headerEnd = buf.indexOf(0x0a)
+  if (headerEnd < 0) return orphan
+  let header: Partial<LogHeader>
+  try {
+    header = JSON.parse(buf.toString('utf8', 0, headerEnd)) as Partial<LogHeader>
+  } catch {
+    return orphan
+  }
+  if (header?.houstonLog !== LOG_FORMAT || typeof header.base !== 'string' || typeof header.hash !== 'string') {
+    return orphan
+  }
+  if (header.base !== baseStamp && header.hash !== sha256(base)) return orphan
+  let start = headerEnd + 1
+  let bad: LogScan['bad']
+  while (start < buf.length) {
+    const end = buf.indexOf(0x0a, start)
+    if (end < 0) {
+      bad = 'torn'
+      break
+    }
+    let rec: unknown
+    try {
+      rec = JSON.parse(buf.toString('utf8', start, end))
+    } catch {
+      bad = 'corrupt'
+      break
+    }
+    if (!isLogRecord(rec, conv.messages.length) || !applyRecord(conv, rec)) {
+      bad = 'corrupt'
+      break
+    }
+    start = end + 1
+  }
+  return { stamp, status: 'ok', goodEnd: start, size: buf.length, hash: header.hash, ...(bad ? { bad } : {}) }
+}
+
+/** The top-level fields every reader relies on, with the types they rely on. */
+function hasShellFields(o: Record<string, unknown>): boolean {
+  return (
+    typeof o.id === 'string' &&
+    typeof o.title === 'string' &&
+    typeof o.workspace === 'string' &&
+    typeof o.providerId === 'string' &&
+    typeof o.model === 'string' &&
+    typeof o.createdAt === 'number' &&
+    typeof o.updatedAt === 'number'
+  )
+}
+
+/**
+ * Read a chat: its base, then its log. `hash` also hashes a base that has no log yet,
+ * for a caller about to start one.
+ */
+function readStored(id: string, { hash = false }: { hash?: boolean } = {}): Stored | null {
   if (!isConversationId(id)) return null
   const path = filePath(id)
-  if (!existsSync(path)) return null
-  let text: string
+  // Stamp first, read second: a base replaced in between is read again next time.
+  const baseStamp = fileStamp(path)
+  if (baseStamp === null) return null
+  let buf: Buffer
   try {
-    text = readFileSync(path, 'utf8')
+    buf = readFileSync(path)
   } catch (e) {
     // Can't read it right now (EACCES after a sudo run, Windows EBUSY/EPERM while
     // antivirus or another process holds it, EMFILE): the bytes may be fine, so skip
@@ -203,47 +427,128 @@ function read(id: string): Conversation | null {
   }
   let raw: unknown
   try {
-    raw = JSON.parse(text)
+    raw = JSON.parse(buf.toString('utf8'))
   } catch {
-    quarantine(path, 'invalid JSON')
+    quarantineChat(id, 'invalid JSON')
     return null
   }
   if (!isConversationShape(raw)) {
-    quarantine(path, 'not a conversation shape')
+    quarantineChat(id, 'not a conversation shape')
     return null
   }
-  return migrate(raw)
+  const outdated = !(typeof raw.schemaVersion === 'number' && raw.schemaVersion >= CONVERSATION_SCHEMA_VERSION)
+  const applied = applyLog(id, raw, buf, baseStamp)
+  if (!applied) return null
+  const baseHash = applied.status === 'ok' && applied.hash ? applied.hash : hash ? sha256(buf) : null
+  const { hash: _hash, ...scan } = applied
+  return { conv: migrate(raw), baseStamp, baseSize: buf.length, baseHash, outdated, log: scan }
+}
+
+function read(id: string): Conversation | null {
+  return readStored(id)?.conv ?? null
+}
+
+/** Quarantine an unreadable base, and its log with it: the log means nothing without it. */
+function quarantineChat(id: string, reason: string): void {
+  quarantine(filePath(id), reason)
+  if (existsSync(logPath(id))) quarantine(logPath(id), `its base had ${reason}`)
+}
+
+/** `<path>.<kind>-<time>`, never over an existing file. */
+function asideName(path: string, kind: string): string {
+  return `${path}.${kind}-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`
+}
+
+/**
+ * Before appending to a log, set aside what can't be appended to: the whole log when
+ * it extends another base, or the bytes after its last good record. Logged, and the
+ * bytes are kept beside the chat; returns the log's stamp and size afterwards.
+ */
+function tidyLog(id: string, scan: LogScan): { stamp: string | null; size: number } {
+  const path = logPath(id)
+  if (scan.status === 'none') return { stamp: null, size: 0 }
+  if (scan.status === 'orphan') {
+    const dest = asideName(path, 'orphan')
+    try {
+      renameSync(path, dest)
+      log.warn(`[conversations] ${path} extends another version of the chat; moved to ${dest}`)
+    } catch (e) {
+      log.error(`[conversations] could not move ${path} aside: ${(e as Error)?.message ?? String(e)}`)
+      rmSync(path, { force: true })
+    }
+    return { stamp: null, size: 0 }
+  }
+  if (!scan.bad) return { stamp: scan.stamp, size: scan.size }
+  const dest = asideName(path, 'corrupt')
+  try {
+    const fd = openSync(path, 'r')
+    let tail: Buffer
+    try {
+      tail = Buffer.alloc(scan.size - scan.goodEnd)
+      readSync(fd, tail, 0, tail.length, scan.goodEnd)
+    } finally {
+      closeSync(fd)
+    }
+    writeFileSync(dest, tail, { mode: 0o600, flag: 'wx' })
+    truncateSync(path, scan.goodEnd)
+    log.warn(
+      `[conversations] ${path} ended in ${scan.bad === 'torn' ? 'an unfinished' : 'an unreadable'} record; ` +
+        `moved its last ${tail.length} bytes to ${dest}`
+    )
+  } catch (e) {
+    log.error(`[conversations] could not set aside the end of ${path}: ${(e as Error)?.message ?? String(e)}`)
+    throw e
+  }
+  return { stamp: fileStamp(path), size: scan.goodEnd }
+}
+
+/**
+ * A chat's identity on disk: its base's stamp and its log's. Every writer, in this
+ * process or another, either replaces the base by rename (a new inode) or appends to
+ * the log (a new size), so a write anywhere changes it.
+ */
+function chatStamp(id: string): string | null {
+  const base = fileStamp(filePath(id))
+  return base === null ? null : `${base}|${fileStamp(logPath(id)) ?? ''}`
 }
 
 /** A conversation without its message log: everything a bookkeeping change touches. */
 type ConversationShell = Omit<Conversation, 'messages'>
 
 /**
- * What this process last wrote for a chat, kept so the next save does not have to read
- * the file back and parse it. Saving used to be read, parse, change one field,
- * serialise everything, write: several times per model step, on the main thread, each
- * pass linear in the size of the chat. With this:
+ * What this process last wrote for a chat, kept so a save writes only what changed and
+ * never reads the file back:
  *
- * - a bookkeeping change (usage totals, compaction state, the failed-turn marker)
- *   reuses the message log's JSON text as written last time, so the messages are
- *   neither parsed nor serialised again;
- * - replacing the message log needs only the rest of the conversation, so the file is
- *   not read at all.
+ * - `shell` is everything but the messages, as stored, to diff the next save against;
+ * - `msgs` are copies of the messages as they were handed in, sharing their strings, so
+ *   finding the first changed message compares structure and string identity rather
+ *   than serialising anything. After a read they are the messages as parsed
+ *   (`fromDisk`): the first save compares those by content, then keeps copies of the
+ *   caller's instead. Null for a file from an older schema, which is rewritten whole.
  *
- * An entry is used only while the file on disk is still the one this process wrote:
- * its stamp (inode, mtime, size) is taken from the temp file before the rename and
- * compared with a fresh stat before every use. Another process's write (the terminal
- * client, a headless run) replaces the file, the stamps differ, and the save falls
- * back to reading it, exactly as before. `shell` is this module's own copy, never
- * shared with a caller.
+ * An entry is used only while the files on disk are still the ones it describes: both
+ * stamps are compared with a fresh stat before every use. Another process's write (the
+ * terminal client, a headless run) changes one of them, and the save falls back to
+ * reading the chat, exactly as before.
  */
 interface WrittenChat {
-  stamp: string
+  baseStamp: string
+  baseHash: string
+  baseSize: number
+  logStamp: string | null
+  logSize: number
   shell: ConversationShell
-  messagesJson: string
+  /** Media the shell references (a side chat's images), to tell when one is dropped. */
+  shellRefs: string[]
+  msgs: { snaps: unknown[]; refs: string[][]; fromDisk?: boolean } | null
+  /**
+   * The base is from an older schema version (inline attachment bytes, say): the next
+   * save rewrites it whole in the current format instead of appending to it.
+   */
+  outdated: boolean
 }
 const written = new Map<string, WrittenChat>()
-/** Chats remembered at once. Each holds its message log as text, so keep it to the few in use. */
+/** Chats remembered at once. Each holds a copy of its message structure, so keep it to the few in use. */
 const MAX_WRITTEN_CHATS = 4
 
 function rememberWritten(id: string, entry: WrittenChat): void {
@@ -255,11 +560,11 @@ function rememberWritten(id: string, entry: WrittenChat): void {
   }
 }
 
-/** The remembered write for `id`, if the file on disk is still that write. */
+/** The remembered write for `id`, if the files on disk are still that write. */
 function stillWritten(id: string): WrittenChat | null {
   const entry = written.get(id)
   if (!entry) return null
-  if (fileStamp(filePath(id)) !== entry.stamp) {
+  if (fileStamp(filePath(id)) !== entry.baseStamp || fileStamp(logPath(id)) !== entry.logStamp) {
     written.delete(id)
     return null
   }
@@ -271,64 +576,317 @@ export function resetConversationWriteCache(): void {
   written.clear()
 }
 
+/**
+ * Read a chat to change it: as {@link readStored}, with its log made ready to append
+ * to and the result remembered as this process's write. Retried when the base is
+ * replaced mid-read, which would otherwise make a good log look like another base's.
+ */
+function loadForWrite(id: string): { entry: WrittenChat; conv: Conversation } | null {
+  for (let attempt = 0; ; attempt++) {
+    const stored = readStored(id, { hash: true })
+    if (!stored) return null
+    if (fileStamp(filePath(id)) !== stored.baseStamp && attempt < 2) continue
+    const tidied = tidyLog(id, stored.log)
+    const { messages, ...shell } = stored.conv
+    const media = mediaDir(id)
+    // The parsed messages are this function's own, never handed out, so they serve as
+    // the copies to compare against as they are. Their media references come from the
+    // same walk a save makes; an outdated file's inline bytes wait for its rewrite.
+    const known = stored.outdated ? null : externalizeMessages(messages, media)
+    const entry: WrittenChat = {
+      baseStamp: stored.baseStamp,
+      baseHash: stored.baseHash ?? '',
+      baseSize: stored.baseSize,
+      logStamp: tidied.stamp,
+      logSize: tidied.size,
+      shell: structuredClone(shell),
+      shellRefs: stored.outdated ? [] : [...externalizeMedia(shell, media).refs],
+      msgs: known ? { snaps: messages, refs: known.refs, fromDisk: true } : null,
+      outdated: stored.outdated
+    }
+    rememberWritten(id, entry)
+    return { entry, conv: stored.conv }
+  }
+}
+
+/** This process's write for `id`, or the chat read fresh to start one. */
+function openWritten(id: string): WrittenChat | null {
+  if (!isConversationId(id)) return null
+  return stillWritten(id) ?? loadForWrite(id)?.entry ?? null
+}
+
+/**
+ * A copy of `v` that shares its strings: what {@link sameValue} compares the next save
+ * against. Anything that isn't plain data is kept as its JSON form, so it never
+ * compares equal to the original and is always written again.
+ */
+function snapshot(v: unknown): unknown {
+  if (typeof v !== 'object' || v === null) return v
+  if (Array.isArray(v)) return v.map(snapshot)
+  const proto = Object.getPrototypeOf(v)
+  if (proto !== Object.prototype && proto !== null) {
+    const json = JSON.stringify(v)
+    return json === undefined ? undefined : JSON.parse(json)
+  }
+  const out: Record<string, unknown> = {}
+  for (const k of Object.keys(v)) out[k] = snapshot((v as Record<string, unknown>)[k])
+  return out
+}
+
+/**
+ * Whether `a` holds the same data as the snapshot `b`. Unchanged strings are the very
+ * strings the snapshot shares, so they compare by reference; a field replaced in place
+ * (`msg.content = ...`) is a new string and is caught. Errs towards "changed".
+ */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (!sameValue(a[i], b[i])) return false
+    return true
+  }
+  if (Array.isArray(b)) return false
+  const proto = Object.getPrototypeOf(a)
+  if (proto !== Object.prototype && proto !== null) return false
+  const ka = Object.keys(a)
+  if (ka.length !== Object.keys(b).length) return false
+  const ra = a as Record<string, unknown>
+  const rb = b as Record<string, unknown>
+  for (const k of ka) {
+    if (!Object.prototype.hasOwnProperty.call(rb, k) || !sameValue(ra[k], rb[k])) return false
+  }
+  return true
+}
+
 /** The file's text: the shell's fields, then the message log. */
 function serialize(shell: ConversationShell, messagesJson: string): string {
   // A shell always has fields (id, title, ...), so its JSON ends in a value then "}".
   return `${JSON.stringify(shell).slice(0, -1)},"messages":${messagesJson}}`
 }
 
-/** Put `shell` + `messagesJson` on disk and remember them as this process's write. */
-function commit(id: string, shell: ConversationShell, messagesJson: string): void {
+/** Messages as stored (attachments as media references), with what each references. */
+function externalizeMessages(messages: readonly unknown[], media: string): { values: unknown[]; refs: string[][] } {
+  const values: unknown[] = []
+  const refs: string[][] = []
+  for (const m of messages) {
+    const ext = externalizeMedia(m, media)
+    values.push(ext.value)
+    refs.push([...ext.refs])
+  }
+  return { values, refs }
+}
+
+function allRefs(shellRefs: Iterable<string>, msgRefs: string[][]): Set<string> {
+  const keep = new Set(shellRefs)
+  for (const r of msgRefs) for (const ref of r) keep.add(ref)
+  return keep
+}
+
+/** After any write: the list and search caches learn of it. */
+function afterWrite(id: string, entry: WrittenChat): void {
+  // Fresh metadata under the new stamp, built from what was just written, so listing
+  // does not parse the chat again. Never a stale entry: the stamp moved with the write.
+  const stamp = `${entry.baseStamp}|${entry.logStamp ?? ''}`
+  // A copy of the shell's top level is enough for dropUnknownChatSettings to edit; the
+  // meta is cloned so a caller can never reach the remembered shell's nested objects.
+  const meta = structuredClone(toMeta(dropUnknownChatSettings({ ...entry.shell, messages: [] })))
+  metaCache.set(id, { stamp, meta })
+  dropSearchEntry(id)
+}
+
+/**
+ * Write the whole chat as a new base and drop its log. `shell` and `messages` are as the
+ * caller holds them: attachment bytes go to the media folder first, so the JSON never
+ * names a file that isn't there yet, and files no longer referenced go after it lands.
+ */
+function fold(id: string, shellIn: ConversationShell, messages: readonly unknown[]): WrittenChat {
+  const media = mediaDir(id)
+  const shellExt = externalizeMedia(stampShell(shellIn), media)
+  const msgs = externalizeMessages(messages, media)
+  const text = serialize(shellExt.value, `[${msgs.values.map((m) => JSON.stringify(m)).join(',')}]`)
   // 0600 — owner read/write only. Transcripts can capture secrets echoed in tool
   // output (a curl with an auth header, an env dump), so keep them off world-read.
   // Compact, not indented: nobody reads these by hand, every reader parses either form,
   // and indentation more than doubled a chat full of nested subagent records.
-  // Not fsynced: a chat is saved several times per model step on the main thread, and
-  // an fsync each time (a few ms, more under disk contention) would stall it. A file a
-  // power loss truncates fails to parse and is quarantined with its bytes, not dropped.
-  const stamp = writeFileAtomicStampedSync(filePath(id), serialize(shell, messagesJson), 0o600, {
-    durable: false
-  })
-  rememberWritten(id, { stamp, shell: structuredClone(shell), messagesJson })
-  // This process's own write: drop the cached metadata now rather than lean on the
-  // file's stamp, which a filesystem with coarse timestamps could repeat.
-  metaCache.delete(id)
-  dropSearchEntry(id)
+  // Not fsynced: folds run on the main thread, and an fsync (a few ms, more under disk
+  // contention) would stall it. A file a power loss truncates fails to parse and is
+  // quarantined with its bytes, not dropped.
+  const baseStamp = writeFileAtomicStampedSync(filePath(id), text, 0o600, { durable: false })
+  // Everything the log held is in the new base. Removed after the rename, so a crash in
+  // between leaves a log that names the old base: set aside, never applied twice.
+  rmSync(logPath(id), { force: true })
+  const entry: WrittenChat = {
+    baseStamp,
+    baseHash: sha256(text),
+    baseSize: Number(baseStamp.slice(baseStamp.lastIndexOf(':') + 1)),
+    logStamp: null,
+    logSize: 0,
+    shell: structuredClone(shellExt.value),
+    shellRefs: [...shellExt.refs],
+    msgs: { snaps: messages.map(snapshot), refs: msgs.refs },
+    outdated: false
+  }
+  rememberWritten(id, entry)
+  afterWrite(id, entry)
+  pruneMedia(media, allRefs(shellExt.refs, msgs.refs))
+  return entry
 }
 
+/**
+ * Stamp the version on every write, whatever the call path, so a file read as legacy
+ * (v0) converges to the current version the first time it's touched (and a file stamped
+ * by a newer Houston keeps its higher version).
+ */
+function stampShell(shell: ConversationShell): ConversationShell {
+  return { ...shell, schemaVersion: stampedVersion(shell.schemaVersion) }
+}
+
+/**
+ * Save a chat this process holds (`entry`): `shellIn` is the whole conversation but its
+ * messages, and `messages` the whole log (null: unchanged). Appends one record holding
+ * the fields that changed and the messages from the first one that changed, or folds
+ * when the log has grown past the base or the messages were never handed in.
+ */
+function save(id: string, entry: WrittenChat, shellIn: ConversationShell, messages: readonly unknown[] | null): void {
+  if ((messages && !entry.msgs) || entry.outdated) {
+    const all = messages ?? readStored(id)?.conv.messages
+    if (all) {
+      fold(id, shellIn, all)
+      return
+    }
+  }
+  const media = mediaDir(id)
+  const shellExt = externalizeMedia(stampShell(shellIn), media)
+  const rec: LogRecord = {}
+  // The fields that changed.
+  const prev = entry.shell as unknown as Record<string, unknown>
+  const next = shellExt.value as unknown as Record<string, unknown>
+  const set: Record<string, unknown> = {}
+  for (const k of Object.keys(next)) {
+    if (next[k] === undefined) continue
+    if (!(k in prev) || !sameValue(next[k], prev[k])) set[k] = next[k]
+  }
+  const del = Object.keys(prev).filter((k) => prev[k] !== undefined && next[k] === undefined)
+  if (Object.keys(set).length) rec.s = set
+  if (del.length) rec.d = del
+  // The messages from the first that changed.
+  let keep = 0
+  let tail: { values: unknown[]; refs: string[][] } | null = null
+  if (messages && entry.msgs) {
+    const old = entry.msgs.snaps
+    const lim = Math.min(messages.length, old.length)
+    while (keep < lim && sameValue(messages[keep], old[keep])) keep++
+    if (keep < messages.length || keep < old.length) {
+      tail = externalizeMessages(messages.slice(keep), media)
+      rec.n = keep
+      rec.m = tail.values
+    }
+  }
+  if (rec.s === undefined && rec.d === undefined && rec.n === undefined) return
+
+  const header: LogHeader | null =
+    entry.logStamp === null ? { houstonLog: LOG_FORMAT, base: entry.baseStamp, hash: entry.baseHash } : null
+  const text = `${header ? `${JSON.stringify(header)}\n` : ''}${JSON.stringify(rec)}\n`
+  const bytes = Buffer.byteLength(text)
+  if (entry.logSize + bytes > Math.max(LOG_FOLD_MIN_BYTES, entry.baseSize)) {
+    const all = messages ?? entry.msgs?.snaps ?? readStored(id)?.conv.messages
+    if (all) {
+      fold(id, shellIn, all)
+      return
+    }
+  }
+  const path = logPath(id)
+  const fd = openSync(path, 'a', 0o600)
+  try {
+    writeStringChunked(fd, text)
+  } finally {
+    closeSync(fd)
+  }
+  entry.logStamp = fileStamp(path)
+  entry.logSize += bytes
+  entry.shell = structuredClone(shellExt.value)
+  const shellRefs = [...shellExt.refs]
+  let removed = entry.shellRefs.some((r) => !shellExt.refs.has(r))
+  entry.shellRefs = shellRefs
+  if (messages && entry.msgs) {
+    const old = entry.msgs
+    if (tail) removed = removed || keep < old.snaps.length
+    // Parsed messages compare by content; from here on, copies of the caller's, which
+    // share its strings, compare by reference.
+    const prefix = old.fromDisk ? messages.slice(0, keep).map(snapshot) : old.snaps.slice(0, keep)
+    entry.msgs = {
+      snaps: [...prefix, ...messages.slice(keep).map(snapshot)],
+      refs: tail ? [...old.refs.slice(0, keep), ...tail.refs] : old.refs
+    }
+  }
+  rememberWritten(id, entry)
+  afterWrite(id, entry)
+  // Only a change can drop a reference, and only with every message's refs known.
+  if (removed && entry.msgs) pruneMedia(media, allRefs(shellExt.refs, entry.msgs.refs))
+  ensureFoldOnExit()
+}
+
+let foldOnExitArmed = false
+
+/** Fold this process's open logs as it exits, so the JSON file alone is the whole chat. */
+function ensureFoldOnExit(): void {
+  if (foldOnExitArmed) return
+  foldOnExitArmed = true
+  process.on('exit', flushOpenConversations)
+}
+
+/**
+ * Fold every log this process has open (see {@link flushConversation}). For shutdown
+ * paths that may skip the process's exit event (Electron's will-quit and app.exit).
+ * Never throws: a log left behind is applied by the next read, so nothing is lost.
+ */
+export function flushOpenConversations(): void {
+  for (const id of [...written.keys()]) {
+    try {
+      flushConversation(id)
+    } catch {
+      // As above: the log stays and is read with the chat.
+    }
+  }
+}
+
+/**
+ * Fold a chat's log into its JSON file, so a reader that knows nothing of the log (a
+ * hook given the transcript path, an older Houston) sees the whole chat. A no-op when
+ * there is no log.
+ */
+export function flushConversation(id: string): void {
+  if (!isConversationId(id) || !existsSync(logPath(id))) return
+  const ours = stillWritten(id)
+  if (ours?.msgs) {
+    fold(id, ours.shell, ours.msgs.snaps)
+    return
+  }
+  const loaded = loadForWrite(id)
+  if (!loaded) return
+  const { messages, ...shell } = loaded.conv
+  fold(id, shell, messages)
+}
+
+/** Write a whole conversation: a save when this process holds the chat, a fold otherwise. */
 function write(conv: Conversation): void {
-  // Stamp on every write, whatever the call path, so a file read as legacy (v0)
-  // converges to the current version the first time it's touched (and a file stamped by
-  // a newer Houston keeps its higher version).
-  const stamped: Conversation = { ...conv, schemaVersion: stampedVersion(conv.schemaVersion) }
-  // Attachment bytes go to the media folder first, so the JSON never names a file
-  // that isn't there yet; files no longer referenced are dropped after it lands.
-  const media = mediaDir(conv.id)
-  const { value: toWrite, refs } = externalizeMedia(stamped, media)
-  const { messages, ...shell } = toWrite
-  commit(conv.id, shell, JSON.stringify(messages))
-  pruneMedia(media, refs)
+  const { messages, ...shell } = conv
+  const ours = stillWritten(conv.id)
+  if (ours) save(conv.id, ours, shell, messages)
+  else fold(conv.id, shell, messages)
 }
 
 /**
  * Open a chat for a change that does not touch its message log. `conv` is the caller's
- * to edit; `save` writes it. Uses the remembered write when the file is still ours (no
- * read, no parse, and the messages are not serialised again), and the file otherwise.
- * Only for fields that hold no attachments: `save` on the fast path does not
- * externalize or prune media, and has no need to, since the log is untouched.
+ * to edit; `save` writes the fields that changed. Uses the remembered write when the
+ * files are still ours (no read, no parse), and reads the chat otherwise.
  */
 function openForBookkeeping(id: string): { conv: ConversationShell; save: () => void } | null {
-  if (!isConversationId(id)) return null
-  const ours = stillWritten(id)
-  if (ours) {
-    const shell = structuredClone(ours.shell)
-    return {
-      conv: shell,
-      save: () => commit(id, { ...shell, schemaVersion: stampedVersion(shell.schemaVersion) }, ours.messagesJson)
-    }
-  }
-  const conv = read(id)
-  return conv ? { conv, save: () => write(conv) } : null
+  const entry = openWritten(id)
+  if (!entry) return null
+  const shell = structuredClone(entry.shell)
+  return { conv: shell, save: () => save(id, entry, shell, null) }
 }
 
 export function createConversation(input: {
@@ -568,9 +1126,9 @@ export function listConversations(): ConversationMeta[] {
   for (const f of files) {
     const id = f.replace(/\.json$/, '')
     if (!isConversationId(id)) continue
-    // Stamp first, read second: if the file is replaced in between, the entry holds
+    // Stamp first, read second: if the chat is written in between, the entry holds
     // newer metadata under an older stamp and is simply read again next time.
-    const stamp = fileStamp(filePath(id))
+    const stamp = chatStamp(id)
     if (stamp === null) continue
     seen.add(id)
     const cached = metaCache.get(id)
@@ -696,6 +1254,7 @@ export function deleteConversation(id: string): void {
   if (!isConversationId(id)) return
   const path = filePath(id)
   if (existsSync(path)) rmSync(path)
+  rmSync(logPath(id), { force: true })
   metaCache.delete(id)
   written.delete(id)
   dropSearchEntry(id)
@@ -902,11 +1461,12 @@ export function setProposalState(
   callId: string,
   state: ProposalState
 ): Record<string, ProposalState> {
-  const conv = read(id)
-  if (!conv) return {}
-  conv.proposals = { ...(conv.proposals ?? {}), [callId]: state }
-  write(conv)
-  return conv.proposals
+  const open = openForBookkeeping(id)
+  if (!open) return {}
+  const proposals = { ...(open.conv.proposals ?? {}), [callId]: state }
+  open.conv.proposals = proposals
+  open.save()
+  return proposals
 }
 
 /**
@@ -962,14 +1522,15 @@ export function childReportFrom(child: Conversation, now: number): ChildReport {
  * parent's next turn. A no-op when either chat is gone. Does not bump `updatedAt`.
  */
 export function reportChildToParent(parentId: string, childId: string): void {
-  const parent = read(parentId)
   const child = read(childId)
-  if (!parent || !child) return
+  const open = child ? openForBookkeeping(parentId) : null
+  if (!child || !open) return
+  const parent = open.conv
   const report = childReportFrom(child, Date.now())
   // One report per child: a later run of the same child replaces its earlier report.
   const rest = (parent.childReports ?? []).filter((r) => r.conversationId !== childId)
   parent.childReports = [...rest, report].slice(-MAX_PENDING_CHILD_REPORTS)
-  write(parent)
+  open.save()
 }
 
 /**
@@ -977,12 +1538,13 @@ export function reportChildToParent(parentId: string, childId: string): void {
  * side question isn't activity in the chat itself, so it mustn't reorder the sidebar.
  */
 export function saveSideChat(id: string, sideChat: StoredSideChat | null): void {
-  const conv = read(id)
-  if (!conv) return
+  const open = openForBookkeeping(id)
+  if (!open) return
+  const conv = open.conv
   if (sideChat) conv.sideChat = sideChat
   else if (conv.sideChat === undefined) return
   else delete conv.sideChat
-  write(conv)
+  open.save()
 }
 
 /**
@@ -990,9 +1552,11 @@ export function saveSideChat(id: string, sideChat: StoredSideChat | null): void 
  * Hydrates the queue alone: the message log's media stays on disk.
  */
 export function getQueuedInput(id: string): StoredQueue | null {
-  const conv = read(id)
-  if (!conv?.queuedInput) return null
-  return hydrateMedia(conv.queuedInput, mediaDir(id))
+  // The queue is part of the shell, so this process's own write answers without a read.
+  const ours = stillWritten(id)
+  const queued = ours ? ours.shell.queuedInput : read(id)?.queuedInput
+  if (!queued) return null
+  return hydrateMedia(structuredClone(queued), mediaDir(id))
 }
 
 /**
@@ -1001,21 +1565,22 @@ export function getQueuedInput(id: string): StoredQueue | null {
  * doesn't reorder the sidebar on its own.
  */
 export function setQueuedInput(id: string, queue: StoredQueue | null): void {
-  const conv = read(id)
-  if (!conv) return
+  const open = openForBookkeeping(id)
+  if (!open) return
+  const conv = open.conv
   if (queue && queue.items.length) conv.queuedInput = queue
   else if (conv.queuedInput === undefined) return
   else delete conv.queuedInput
-  write(conv)
+  open.save()
 }
 
 /** Take (and clear) a chat's pending finished-child reports. */
 export function takeChildReports(id: string): ChildReport[] {
-  const conv = read(id)
-  const reports = conv?.childReports ?? []
-  if (!conv || reports.length === 0) return []
-  delete conv.childReports
-  write(conv)
+  const open = openForBookkeeping(id)
+  const reports = open?.conv.childReports ?? []
+  if (!open || reports.length === 0) return []
+  delete open.conv.childReports
+  open.save()
   return reports
 }
 
@@ -1028,9 +1593,11 @@ export function takeChildReports(id: string): ChildReport[] {
 export function setGeneratedTitle(id: string, title: string): boolean {
   const conv = read(id)
   if (!conv || !needsGeneratedTitle(conv)) return false
-  conv.title = title
-  conv.titleGenerated = true
-  write(conv)
+  const open = openForBookkeeping(id)
+  if (!open) return false
+  open.conv.title = title
+  open.conv.titleGenerated = true
+  open.save()
   return true
 }
 
@@ -1178,12 +1745,11 @@ export function setAnnouncedPolicy(id: string, policy: ApprovalPolicy): void {
  */
 export function setMessages(id: string, messages: ChatMessage[], meta?: ConversationMetaPatch): void {
   // The new log replaces the old one outright, so only the rest of the conversation
-  // is needed: taken from this process's last write when the file is still that write,
-  // which skips reading and parsing a log that is about to be discarded.
-  const ours = isConversationId(id) ? stillWritten(id) : null
-  const conv: Conversation | null = ours ? { ...structuredClone(ours.shell), messages } : read(id)
-  if (!conv) return
-  conv.messages = messages
+  // is needed: taken from this process's last write when the files are still that
+  // write. The save then writes only the messages from the first one that changed.
+  const entry = openWritten(id)
+  if (!entry) return
+  const conv: Conversation = { ...structuredClone(entry.shell), messages }
   conv.updatedAt = Date.now()
   // The chat moved on from a rewind (a new message, a /compact): undoing it now would
   // throw away what came after, so the backup is dropped, and its attachments with it.
@@ -1199,7 +1765,8 @@ export function setMessages(id: string, messages: ChatMessage[], meta?: Conversa
     Object.assign(conv, meta)
     dropUnknownChatSettings(conv)
   }
-  write(conv)
+  const { messages: _messages, ...shell } = conv
+  save(id, entry, shell, messages)
 }
 
 /**
@@ -1217,8 +1784,9 @@ export function writeRewind(
     backup: RewindBackup | null
   }
 ): void {
-  const conv = read(id)
-  if (!conv) return
+  const entry = openWritten(id)
+  if (!entry) return
+  const conv: Conversation = { ...structuredClone(entry.shell), messages: next.messages }
   const backup = next.backup ? { ...next.backup } : null
   if (conv.forkedFrom) {
     if (backup && next.messages.length < conv.forkedFrom.historyLength) {
@@ -1238,7 +1806,8 @@ export function writeRewind(
   if (backup) conv.rewindBackup = backup
   else delete conv.rewindBackup
   conv.updatedAt = Date.now()
-  write(conv)
+  const { messages: _messages, ...shell } = conv
+  save(id, entry, shell, next.messages)
 }
 
 /** What {@link updateConversationMeta} can change: the chat's model, title and own settings. */
@@ -1246,12 +1815,13 @@ export type ConversationMetaPatch = Partial<Pick<ConversationMeta, 'providerId' 
   ConversationSettingsPatch
 
 export function updateConversationMeta(id: string, patch: ConversationMetaPatch): void {
-  const conv = read(id)
-  if (!conv) return
+  const open = openForBookkeeping(id)
+  if (!open) return
+  const conv = open.conv
   Object.assign(conv, patch)
-  dropUnknownChatSettings(conv)
+  dropUnknownChatSettings(conv as Conversation)
   conv.updatedAt = Date.now()
-  write(conv)
+  open.save()
 }
 
 /**
@@ -1263,10 +1833,11 @@ export function updateConversationMeta(id: string, patch: ConversationMetaPatch)
  * alone so changing a dropdown doesn't reorder the sidebar.
  */
 export function setConversationSettings(id: string, patch: ConversationSettingsPatch): ConversationMeta | null {
-  const conv = read(id)
-  if (!conv) return null
+  const open = openForBookkeeping(id)
+  if (!open) return null
+  const conv = open.conv
   const p: unknown = patch
-  if (typeof p !== 'object' || p === null) return toMeta(conv)
+  if (typeof p !== 'object' || p === null) return toMeta({ ...conv, messages: [] })
   const { providerId, model, reasoningEffort, approvalPolicy } = p as Record<string, unknown>
   // Provider and model move together: a model id only means something under its provider.
   if (typeof providerId === 'string' && providerId && typeof model === 'string' && model) {
@@ -1275,8 +1846,8 @@ export function setConversationSettings(id: string, patch: ConversationSettingsP
   }
   if (isReasoningEffort(reasoningEffort)) conv.reasoningEffort = reasoningEffort
   if (isApprovalPolicy(approvalPolicy)) conv.approvalPolicy = approvalPolicy
-  write(conv)
-  return toMeta(conv)
+  open.save()
+  return toMeta({ ...conv, messages: [] })
 }
 
 /**
@@ -1286,11 +1857,11 @@ export function setConversationSettings(id: string, patch: ConversationSettingsP
  * not bump `updatedAt`. Unknown ids are a no-op.
  */
 export function detachConversationWorktree(id: string, repoRoot: string): void {
-  const conv = read(id)
-  if (!conv?.worktree) return
-  conv.workspace = repoRoot
-  delete conv.worktree
-  write(conv)
+  const open = openForBookkeeping(id)
+  if (!open?.conv.worktree) return
+  open.conv.workspace = repoRoot
+  delete open.conv.worktree
+  open.save()
 }
 
 /**
@@ -1308,8 +1879,9 @@ export function organizeConversation(
     labels?: string[]
   }
 ): void {
-  const conv = read(id)
-  if (!conv) return
+  const open = openForBookkeeping(id)
+  if (!open) return
+  const conv = open.conv
   if (typeof patch.title === 'string' && patch.title.trim()) {
     conv.title = patch.title.trim()
     // A deliberate rename is sacred: never auto-title over it.
@@ -1339,7 +1911,7 @@ export function organizeConversation(
     if (labels.length > 0) conv.labels = labels
     else delete conv.labels
   }
-  write(conv)
+  open.save()
 }
 
 /**
@@ -1354,8 +1926,9 @@ export function reorderConversations(
   move?: { id: string; groupId: string | null }
 ): void {
   orderedIds.forEach((id, index) => {
-    const conv = read(id)
-    if (!conv) return
+    const open = openForBookkeeping(id)
+    if (!open) return
+    const conv = open.conv
     let changed = false
     if (conv.order !== index) {
       conv.order = index
@@ -1372,6 +1945,6 @@ export function reorderConversations(
         changed = true
       }
     }
-    if (changed) write(conv)
+    if (changed) open.save()
   })
 }

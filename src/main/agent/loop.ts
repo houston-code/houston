@@ -305,6 +305,7 @@ import {
 } from './compaction'
 import {
   conversationFilePath,
+  flushConversation,
   peekConversation,
   setAnnouncedPolicy,
   setCompaction,
@@ -1323,9 +1324,12 @@ export function withRunEndRecord(
  * The saved transcript file a hook is pointed at. Best effort: where the profile folder
  * isn't set up (or the conversation store isn't the real one), the hook just gets no path.
  */
-function transcriptPathOf(conversationId: string): { transcriptPath?: string } {
+function transcriptPathOf(conversationId: string): { transcriptPath?: string; flushTranscript?: () => void } {
   try {
-    return { transcriptPath: conversationFilePath(conversationId) }
+    return {
+      transcriptPath: conversationFilePath(conversationId),
+      flushTranscript: () => flushConversation(conversationId)
+    }
   } catch {
     return {}
   }

@@ -43,6 +43,7 @@ import { activeBackendId } from './sandbox'
 import { trustSystemCertificates } from './system-ca'
 import { configureOutboundProxy } from './outbound-proxy'
 import { flushRuleUsage } from './ruleUsage'
+import { flushOpenConversations } from './conversations'
 import { windowBackground } from './windowBackground'
 
 // Log uncaught failures instead of letting them vanish (or crash silently). We
@@ -400,6 +401,7 @@ if (!acp && !tui && !headless) app.on('before-quit', (e) => guardQuitWithLiveWor
  */
 async function flushBeforeExit(code: number): Promise<number> {
   flushRuleUsage()
+  flushOpenConversations()
   let exitCode = code
   try {
     await flushSecrets()
@@ -424,6 +426,8 @@ app.on('will-quit', (e) => {
     return
   }
   flushRuleUsage()
+  // Each open chat's JSON file becomes the whole chat again (see conversations.ts).
+  flushOpenConversations()
   destroyAllPreviewPanes()
   killAllShells()
   killAllTerminals()

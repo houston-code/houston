@@ -43,6 +43,7 @@ import {
   setConversationError,
   setConversationSettings,
   setMessages,
+  flushConversation,
   updateConversationMeta
 } from './conversations'
 import { setUserDataDir, resetUserDataDir } from './userData'
@@ -607,7 +608,12 @@ describe('per-chat settings (persisted)', () => {
     rmSync(dir, { recursive: true, force: true })
   })
 
-  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  // The chat's JSON file with any saved log folded in, so it is the whole chat: these
+  // tests read or rewrite it as another process would.
+  const file = (id: string): string => {
+    flushConversation(id)
+    return join(dir, 'conversations', `${id}.json`)
+  }
   const rewrite = (id: string, patch: Record<string, unknown>): void => {
     const raw = JSON.parse(readFileSync(file(id), 'utf8')) as Record<string, unknown>
     writeFileSync(file(id), JSON.stringify({ ...raw, ...patch }))
@@ -776,7 +782,12 @@ describe('listConversations metadata cache', () => {
     resetUserDataDir()
     rmSync(dir, { recursive: true, force: true })
   })
-  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  // The chat's JSON file with any saved log folded in, so it is the whole chat: these
+  // tests read or rewrite it as another process would.
+  const file = (id: string): string => {
+    flushConversation(id)
+    return join(dir, 'conversations', `${id}.json`)
+  }
   const titles = (): string[] => listConversations().map((c) => c.title)
 
   it('lists the same metadata as reading every chat, across every kind of change', () => {
@@ -885,7 +896,12 @@ describe('saving from the remembered write', () => {
     resetUserDataDir()
     rmSync(dir, { recursive: true, force: true })
   })
-  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  // The chat's JSON file with any saved log folded in, so it is the whole chat: these
+  // tests read or rewrite it as another process would.
+  const file = (id: string): string => {
+    flushConversation(id)
+    return join(dir, 'conversations', `${id}.json`)
+  }
   const onDisk = (id: string): Record<string, unknown> =>
     JSON.parse(readFileSync(file(id), 'utf8')) as Record<string, unknown>
 
@@ -1022,7 +1038,12 @@ describe('searchConversations cache', () => {
     resetUserDataDir()
     rmSync(dir, { recursive: true, force: true })
   })
-  const file = (id: string): string => join(dir, 'conversations', `${id}.json`)
+  // The chat's JSON file with any saved log folded in, so it is the whole chat: these
+  // tests read or rewrite it as another process would.
+  const file = (id: string): string => {
+    flushConversation(id)
+    return join(dir, 'conversations', `${id}.json`)
+  }
   const ids = (q: string): string[] => searchConversations(q).map((c) => c.id)
   /** The answer a search gave before the cache: read every chat and test it. */
   const reference = (q: string): string[] =>
