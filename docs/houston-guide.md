@@ -224,6 +224,8 @@ never from the chat. A chat you use in full auto can't loosen an unattended run.
 - **`--mcp-config <file>`** adds MCP servers for this run only: the `mcpServers`
   shape of `.houston/settings.json`, at most 10. Their tools are named
   `mcp__run-<id>__<tool>`.
+- **`--add-dir <dir>`** lets the run read and edit another folder too, as **Additional
+  folders** in Settings does, for this run only. Repeat it for more folders.
 - **`--input-format stream-json`** (with `--json`) reads one
   `{"type":"user","content":"..."}` line per turn from stdin. Each turn starts after
   the previous one finishes, until end of input.
@@ -641,7 +643,7 @@ safe subset in place. In the desktop app:
 **Desktop panels.** In the desktop app each command opens its own panel for the job:
 `/changes` the Changes panel, `/model` the model picker, `/btw` the side chat.
 
-**Terminal-only commands.** `/vim`, `/verbose`, `/output`, `/spawned`, `/proposals`,
+**Terminal-only commands.** `/add-dir`, `/vim`, `/verbose`, `/output`, `/spawned`, `/proposals`,
 `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
@@ -778,7 +780,12 @@ conversation, not a log. To see more:
   goes three results back. Nothing extra is stored for this: the whole output was
   always kept in the conversation.
 
-Very long output is capped, with a note saying how much was left out.
+Very long output is capped, with a note saying how much was left out. When a shell
+command's output is cut in the middle, Houston saves the whole output, with
+credentials masked, to a file in its data folder (`shell-output/`) and the result
+names the file and its line count, so the agent can read the part it needs instead of
+running the command again. Each run keeps at most 64 MB of these files, and they are
+deleted after a day.
 
 In the desktop app, a shell command shows its output in its row while it runs: the
 latest lines, scrolling to follow the newest unless you scroll up to read. It's a
@@ -1003,6 +1010,12 @@ turn.
 - the language server, or else a fast checker (`eslint`, `ruff`/`pyflakes`, `gofmt`)
   for other files
 - no check at all
+
+Checkers and formatters come from the project first: each folder's
+`node_modules/.bin`, then its `.venv` or `venv`, then the virtualenv you activated
+(`$VIRTUAL_ENV`), and only then your PATH, so the versions the project pins are the
+ones that run. The Python language server is pointed at the project's virtualenv
+interpreter too, so its imports resolve.
 
 ### Navigation tools
 
@@ -2611,7 +2624,9 @@ default.
 The structured file tools stay confined to the project on every platform.
 
 **Working across repos.** **Additional folders** (Settings) adds folders to the file
-tools' allowed roots and to the shell sandbox.
+tools' allowed roots and to the shell sandbox. In the terminal, `--add-dir <dir>`
+(repeatable, for both `houston` and `houston -p`) and `/add-dir <dir>` do the same
+for the current session only, without saving anything; `/add-dir` alone lists them.
 
 ### Network for shell commands
 

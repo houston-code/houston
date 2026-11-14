@@ -205,8 +205,41 @@ function nodeLocalBin(bin: string, roots: string[], opts: BinLookupOptions): str
   return null
 }
 
+/**
+ * The interpreter of the project's virtualenv: `.venv` or `venv` under a root, else the
+ * one the user activated (`$VIRTUAL_ENV`). Null when there is none. Pyright resolves
+ * imports against this interpreter's site-packages, so without it every third-party
+ * import in a venv project reads as unresolved.
+ */
+export function projectPython(roots: readonly string[], opts: BinLookupOptions = {}): string | null {
+  const exists = opts.exists ?? existsSync
+  const env = opts.env ?? process.env
+  const win = (opts.platform ?? process.platform) === 'win32'
+  const inVenv = (venv: string): string => (win ? join(venv, 'Scripts', 'python.exe') : join(venv, 'bin', 'python'))
+  const venvs = [...roots.flatMap((r) => [join(r, '.venv'), join(r, 'venv')]), ...(env.VIRTUAL_ENV ? [env.VIRTUAL_ENV] : [])]
+  for (const venv of venvs) {
+    const python = inVenv(venv)
+    if (exists(python)) return python
+  }
+  return null
+}
+
+/** The Python server's settings with the project's interpreter filled in, when it has one. */
+function withPythonEnv(spec: LspServerSpec, opts: ResolveOptions): LspServerSpec {
+  if (spec.id !== 'python' || spec.user) return spec
+  const pythonPath = projectPython(opts.roots ?? [], opts)
+  if (!pythonPath) return spec
+  const python = (spec.settings?.python ?? {}) as Record<string, unknown>
+  return { ...spec, settings: { ...spec.settings, python: { ...python, pythonPath } } }
+}
+
 /** Find the executable for `spec`: per candidate, the workspace's local bin, then PATH. */
 export function resolveServer(spec: LspServerSpec, opts: ResolveOptions = {}): ResolvedServer | null {
+  const found = resolveServerBinary(spec, opts)
+  return found ? { ...found, spec: withPythonEnv(spec, opts) } : null
+}
+
+function resolveServerBinary(spec: LspServerSpec, opts: ResolveOptions): ResolvedServer | null {
   for (const c of spec.candidates) {
     if (spec.user && isAbsolute(c.bin)) {
       const exists = opts.exists ?? existsSync

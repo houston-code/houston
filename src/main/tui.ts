@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { UnreadOutcome } from '@shared/chatStatus'
-import { realpathSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_LABEL,
@@ -166,6 +166,8 @@ export interface TuiOptions {
    * used only while no theme is saved: a `/theme` choice always wins.
    */
   detectedTheme?: ThemeName
+  /** `--add-dir`: extra directories (absolute) the session's runs may work in; `/add-dir` adds more. */
+  addDirs?: string[]
   /**
    * The first bad flag value (`--approval nonsense`). runTui reports it and exits
    * with a usage error before anything runs, rather than silently ignoring it.
@@ -198,6 +200,7 @@ export function parseTuiArgs(
   let continueSession = false
   let resumeId: string | undefined
   let usageError: string | undefined
+  const addDirs: string[] = []
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
@@ -233,6 +236,12 @@ export function parseTuiArgs(
       const { value, next } = flagValue(argv, i)
       resumeId = value
       i = next
+    } else if (name === '--add-dir') {
+      const { value, next } = flagValue(argv, i)
+      const added = resolveAddDir(value, defaultCwd)
+      if ('error' in added) usageError ??= `--add-dir: ${added.error}`
+      else if (!addDirs.includes(added.dir)) addDirs.push(added.dir)
+      i = next
     }
   }
 
@@ -245,8 +254,43 @@ export function parseTuiArgs(
     color: true,
     ...(continueSession ? { continueSession } : {}),
     ...(resumeId ? { resumeId } : {}),
+    ...(addDirs.length ? { addDirs } : {}),
     ...(usageError !== undefined ? { usageError } : {})
   }
+}
+
+/**
+ * Run `/add-dir`: add `path` to the session's directories (the next turn's runs may
+ * work there, as with Settings' additional directories, until the session ends), or
+ * list them when no path is given. Returns the line to print.
+ */
+export function applyAddDir(dirs: string[], path: string, base: string): string {
+  if (!path) {
+    return dirs.length
+      ? `· directories added this session: ${dirs.join(', ')}`
+      : '· no directories added this session; /add-dir <path> adds one'
+  }
+  const added = resolveAddDir(path, base)
+  if ('error' in added) return `· /add-dir ${added.error}`
+  if (dirs.includes(added.dir)) return `· ${added.dir} is already added`
+  dirs.push(added.dir)
+  return `· added ${added.dir} for this session: the agent can read and edit it from the next message`
+}
+
+/**
+ * A directory for `--add-dir` or `/add-dir`, resolved against `base` (where the
+ * command was typed, or the session's folder) and checked to exist.
+ */
+export function resolveAddDir(value: string | undefined, base: string): { dir: string } | { error: string } {
+  const v = value?.trim()
+  if (!v) return { error: 'needs the path of a directory, like ../shared' }
+  const dir = isAbsolute(v) ? v : resolvePath(base, v)
+  try {
+    if (statSync(dir).isDirectory()) return { dir }
+  } catch {
+    // reported below
+  }
+  return { error: `${JSON.stringify(v)} is not a directory` }
 }
 
 // --- Rendering ---------------------------------------------------------------
@@ -1504,6 +1548,8 @@ export type SlashResult =
   | { kind: 'reasoning'; effort?: ReasoningEffort; asDefault?: boolean }
   /** Turn vim keys in the composer on or off (/vim). */
   | { kind: 'vim'; on?: boolean }
+  /** `/add-dir <path>` adds a session directory; a bare `/add-dir` lists them. */
+  | { kind: 'add-dir'; path: string }
   /** Revert (or restore) the files the last turn changed (/undo, /redo). */
   | { kind: 'undo'; redo: boolean }
   /**
@@ -1627,6 +1673,8 @@ export function parseSlashCommand(
       if (isReasoningEffort(a)) return { kind: 'reasoning', effort: a, ...(asDefault ? { asDefault } : {}) }
       return { kind: 'reasoning' } // no/invalid arg → the driver reports the current one
     }
+    case 'add-dir':
+      return { kind: 'add-dir', path: arg.trim() }
     case 'vim': {
       const a = arg.trim().toLowerCase()
       if (a === 'on') return { kind: 'vim', on: true }
@@ -1804,6 +1852,7 @@ export const HELP_TEXT = [
   '  /doctor               check your setup (model, sandbox, tools, MCP)',
   '  /reasoning [effort]   show or set this chat\'s thinking (off | low | medium | high | xhigh; --default)',
   '  /vim [on|off]         vim keys in the composer (Esc for normal mode)',
+  '  /add-dir [path]       let the agent work in another folder this session (alone: list them)',
   '  /undo, /redo          revert (or restore) the files the last turn changed',
   '  /rewind [n] [mode]    rewind to an earlier message: conversation, code, or both (/rewind undo)',
   '  /changes              what is different in the working tree (also /diff)',
@@ -3160,6 +3209,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
 
   // Mutable session state. providerId/model may be null until a provider is set up:
   // an interactive session never ejects for a missing key (see below).
+  // Directories added for this session (`--add-dir`, `/add-dir`), sent with every run.
+  const sessionAddDirs: string[] = [...(opts.addDirs ?? [])]
   let providerId: string | null
   let model: string | null
   const resolved = resolveHeadlessModel(settings, opts)
@@ -3932,6 +3983,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         renderSettingsOverview(deps, paint)
         continue
       }
+      if (result.kind === 'add-dir') {
+        deps.io.out(paint(`${applyAddDir(sessionAddDirs, result.path, opts.cwd)}\n`, 'dim'))
+        continue
+      }
       if (result.kind === 'vim') {
         const on = result.on ?? deps.getSettings().tuiEditor !== 'vim'
         if (!deps.updateSettings) {
@@ -4580,6 +4635,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       messages,
       // show_images results print as clickable file links (see renderImageLinks).
       imageLinks: true,
+      ...(sessionAddDirs.length ? { addDirs: [...sessionAddDirs] } : {}),
       ...(wakeTurn ? { wake: true } : {})
     }
     // Serialize interactive prompts (approvals/questions) so two readLine calls

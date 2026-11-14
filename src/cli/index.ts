@@ -65,6 +65,8 @@ Usage:
 
 Options:
   -C, --cwd <dir>       project folder (default: the current directory)
+  --add-dir <dir>       another folder the agent may read and edit this session
+                        (repeatable; like Settings' additional directories, not saved)
   --provider <id>       provider id from your settings (default: your selection)
   --model <id>          model id (default: your selection)
   --approval <policy>   plan | ask | auto-edit | full-auto
@@ -154,7 +156,8 @@ const VALUE_FLAGS = new Set([
   '--append-system-prompt',
   '--output-schema',
   '--mcp-config',
-  '--input-format'
+  '--input-format',
+  '--add-dir'
 ])
 /** Flags that stand alone. */
 const SWITCH_FLAGS = new Set([

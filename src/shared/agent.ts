@@ -907,6 +907,13 @@ export interface AgentRunRequest {
    * the headless client sets it; the GUI's IPC builds its requests field by field.
    */
   allowShellNetwork?: boolean
+  /**
+   * Session-scoped extra directories (`--add-dir`, the TUI's `/add-dir`): allowed roots
+   * for this run exactly as Settings' additional directories are, merged with them and
+   * never saved. Only the terminal clients set it; the GUI's IPC builds its requests
+   * field by field.
+   */
+  addDirs?: string[]
   /** Per-run setting overrides (headless flags). Applied to this run only, never persisted. */
   overrides?: RunSettingsOverrides
   /**
