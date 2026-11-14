@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { minimatch } from 'minimatch'
 import type { Hook } from '@shared/types'
+import type { BlockingEvent } from '@shared/agent'
 import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../sandbox'
 
 /**
@@ -15,7 +16,8 @@ import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../
  * passed via HOUSTON_* environment variables (never interpolated into the command,
  * so there's no injection). A payload too large for an environment variable is
  * written to a private temp file instead, named by the matching `*_FILE` variable
- * (see {@link prepareHookEnv}).
+ * (see {@link prepareHookEnv}). The same context also arrives as one JSON object on
+ * the hook's stdin (see {@link hookStdinPayload}).
  *
  * Events:
  * - PreToolUse: before a tool runs. Can block the call, auto-approve it (skip the
@@ -30,6 +32,10 @@ import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../
  *   reason is fed back), e.g. "run the tests before you stop".
  * - PreCompact: before the conversation is compacted. Injected context is folded
  *   into the material being summarized so it survives compaction.
+ * - Notification: when the run stops to wait for the user (an approval, a question,
+ *   a plan to review, an MCP server's request). Observational. Matcher globs the
+ *   wait's type (`tool_approval`, `tool_question`, `plan_ready`, `elicitation`).
+ * - SessionEnd: once when a run ends, however it ended. Observational.
  *
  * Beyond the exit code, a hook may print a single JSON object on stdout to steer
  * the loop (see {@link HookDirective}). A non-JSON stdout is treated as plain
@@ -39,8 +45,17 @@ import { runSandboxed, type SandboxRunOptions, type SandboxRunResult } from '../
 
 export type HookEvent = Hook['event']
 
-/** Events tied to a specific tool call; their matcher globs the tool name. */
-const TOOL_EVENTS = new Set<HookEvent>(['PreToolUse', 'PostToolUse'])
+/**
+ * Events with a subject their matcher globs: the tool name for the tool events, the
+ * wait's type for Notification.
+ */
+const SUBJECT_EVENTS = new Set<HookEvent>(['PreToolUse', 'PostToolUse', 'Notification'])
+
+/**
+ * Events a hook only observes. Nothing it prints or returns is read back into the
+ * run: no block, no approval, no rewrite, no context.
+ */
+const OBSERVATIONAL_EVENTS = new Set<HookEvent>(['Notification', 'SessionEnd'])
 
 /** Events a hook can veto — a block stops the action (or, for Stop, forces another turn). */
 const BLOCKING_EVENTS = new Set<HookEvent>(['PreToolUse', 'UserPromptSubmit', 'Stop'])
@@ -52,6 +67,29 @@ const BLOCKING_EVENTS = new Set<HookEvent>(['PreToolUse', 'UserPromptSubmit', 'S
  */
 export const HOOK_TIMEOUT_MS = 60_000
 
+/** Bounds on a hook's own `timeout`, in seconds. */
+export const HOOK_TIMEOUT_MIN_S = 1
+export const HOOK_TIMEOUT_MAX_S = 600
+
+/**
+ * How long this hook may run: its own `timeout` (seconds, clamped to
+ * {@link HOOK_TIMEOUT_MIN_S}-{@link HOOK_TIMEOUT_MAX_S}), or {@link HOOK_TIMEOUT_MS}
+ * when it sets none or sets something that isn't a number.
+ */
+export function hookTimeoutMs(hook: Pick<Hook, 'timeout'>): number {
+  const t = hook.timeout
+  if (typeof t !== 'number' || !Number.isFinite(t)) return HOOK_TIMEOUT_MS
+  return Math.round(Math.min(HOOK_TIMEOUT_MAX_S, Math.max(HOOK_TIMEOUT_MIN_S, t)) * 1000)
+}
+
+/** The run a hook fires in, for its stdin payload. */
+export interface HookSession {
+  /** The conversation id (the run id for a run with no conversation). */
+  id: string
+  /** The conversation's saved transcript file, when it has one. */
+  transcriptPath?: string
+}
+
 export interface HookContext {
   /** The tool name for Pre/PostToolUse; the event name for lifecycle events. */
   tool: string
@@ -61,6 +99,15 @@ export interface HookContext {
   result?: string
   /** Present for UserPromptSubmit: the submitted prompt text. */
   prompt?: string
+  /** The run this fires in, passed on stdin as session_id and transcript_path. */
+  session?: HookSession
+  /**
+   * Notification: the wait's type, a one-line description of it, and the tool call
+   * it is about (an approval or a question names one).
+   */
+  notification?: { type: string; message: string; toolName?: string; toolInput?: Record<string, unknown> }
+  /** SessionEnd: how the run ended (`completed`, `aborted`, `error`, `limit`). */
+  reason?: string
 }
 
 /**
@@ -70,7 +117,7 @@ export interface HookContext {
  */
 export function matchingHooks(hooks: Hook[] | undefined, event: HookEvent, subject = ''): Hook[] {
   if (!hooks?.length) return []
-  const toolEvent = TOOL_EVENTS.has(event)
+  const toolEvent = SUBJECT_EVENTS.has(event)
   return hooks.filter((h) => {
     if (h.event !== event) return false
     const m = (h.matcher ?? '').trim()
@@ -150,6 +197,51 @@ export async function prepareHookEnv(event: HookEvent, ctx: HookContext): Promis
   return { env, cleanup }
 }
 
+/**
+ * The JSON object a hook reads on stdin: the same context as the HOUSTON_* variables,
+ * in one document, with the payloads inline whatever their size. Fields that don't
+ * apply to the event are left out. Exported for testing.
+ */
+export function hookStdinPayload(event: HookEvent, ctx: HookContext, workspace: string): string {
+  const n = ctx.notification
+  const tool =
+    event === 'PreToolUse' || event === 'PostToolUse'
+      ? { tool_name: ctx.tool, tool_input: ctx.input ?? {} }
+      : n?.toolName
+        ? { tool_name: n.toolName, tool_input: n.toolInput ?? {} }
+        : {}
+  return JSON.stringify({
+    hook_event_name: event,
+    ...(ctx.session ? { session_id: ctx.session.id } : {}),
+    ...(ctx.session?.transcriptPath ? { transcript_path: ctx.session.transcriptPath } : {}),
+    cwd: workspace,
+    ...tool,
+    ...(ctx.result !== undefined ? { tool_response: ctx.result } : {}),
+    ...(ctx.prompt !== undefined ? { prompt: ctx.prompt } : {}),
+    ...(n ? { notification_type: n.type, message: n.message } : {}),
+    ...(ctx.reason !== undefined ? { reason: ctx.reason } : {})
+  })
+}
+
+/** What a Notification hook is told about a wait: see {@link HookContext.notification}. */
+export function notificationFor(e: BlockingEvent): NonNullable<HookContext['notification']> {
+  switch (e.type) {
+    case 'tool_approval':
+      return {
+        type: e.type,
+        message: `Houston needs your approval: ${e.summary || e.name}`,
+        toolName: e.name,
+        toolInput: e.args ?? {}
+      }
+    case 'tool_question':
+      return { type: e.type, message: `Houston has a question: ${e.question}` }
+    case 'plan_ready':
+      return { type: e.type, message: 'Houston has a plan ready for your review' }
+    case 'elicitation':
+      return { type: e.type, message: `${e.serverId} is asking for input: ${e.message}` }
+  }
+}
+
 /** A structured directive a hook may print as a single JSON object on stdout. */
 interface HookDirective {
   /** `block` vetoes the action; `approve` (PreToolUse only) skips the approval prompt. */
@@ -219,6 +311,7 @@ export async function runHooks(
   if (matched.length === 0) return { blocked: false, approved: false, message: '' }
 
   const blocking = BLOCKING_EVENTS.has(event)
+  const observational = OBSERVATIONAL_EVENTS.has(event)
   const reasons: string[] = []
   const contexts: string[] = []
   const systemMsgs: string[] = []
@@ -242,8 +335,11 @@ export async function runHooks(
     return failure('Could not pass the hook its input', e)
   }
 
+  const stdin = hookStdinPayload(event, ctx, workspace)
+
   try {
     for (const hook of matched) {
+      const timeoutMs = hookTimeoutMs(hook)
       let res: SandboxRunResult
       try {
         res = await run({
@@ -253,7 +349,8 @@ export async function runHooks(
           allowNetwork: false,
           signal,
           env: prepared.env,
-          timeoutMs: HOOK_TIMEOUT_MS
+          stdin,
+          timeoutMs
         })
       } catch (e) {
         if (blocking) blocked = true
@@ -267,8 +364,14 @@ export async function runHooks(
       // closed, but says why instead of looking like a deliberate block; a Stop hook
       // that hung doesn't keep the turn going, since nothing asked it to.
       if (res.timedOut) {
-        reasons.push(`A ${event} hook timed out after ${Math.round(HOOK_TIMEOUT_MS / 1000)}s and was stopped.`)
+        reasons.push(`A ${event} hook timed out after ${Math.round(timeoutMs / 1000)}s and was stopped.`)
         if (blocking && event !== 'Stop') blocked = true
+        continue
+      }
+      // An observer's output steers nothing, so it isn't parsed as a directive.
+      if (observational) {
+        const out = [res.stdout?.trimEnd(), res.stderr?.trimEnd()].filter(Boolean).join('\n').trim()
+        if (out) reasons.push(out)
         continue
       }
       const directive = parseDirective(res.stdout)

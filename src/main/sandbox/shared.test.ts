@@ -552,6 +552,24 @@ describe('runWithBackend — honest sandboxed flag', () => {
     expect(spawn.calls[0].options.stdio).toEqual(['ignore', 'pipe', 'pipe'])
   })
 
+  it('writes given input to a stdin pipe and closes it, tolerating a command that never reads it', async () => {
+    const child = makeFakeChild()
+    const written: string[] = []
+    const stdin: any = new EventEmitter()
+    stdin.end = vi.fn((text: string) => {
+      written.push(text)
+      // The command exited without reading: the pipe errors under the write.
+      stdin.emit('error', Object.assign(new Error('write EPIPE'), { code: 'EPIPE' }))
+    })
+    child.stdin = stdin
+    const spawn = fakeSpawn(child)
+    const p = runWithBackend(fakeBackend(true), baseOpts({ stdin: '{"a":1}' }), { spawn, signalTree: vi.fn(), drainMs: 20 })
+    child.emit('close', 0)
+    expect((await p).exitCode).toBe(0)
+    expect(spawn.calls[0].options.stdio).toEqual(['pipe', 'pipe', 'pipe'])
+    expect(written).toEqual(['{"a":1}'])
+  })
+
   it('lets a watcher see output as it arrives, whole characters, without changing the result', async () => {
     const child = makeFakeChild()
     const seen: string[] = []

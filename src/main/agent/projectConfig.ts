@@ -71,13 +71,15 @@ export function parseProjectHooks(raw: unknown): Hook[] {
   for (const h of hooks) {
     if (out.length >= MAX_PROJECT_HOOKS) break
     if (typeof h !== 'object' || h === null) continue
-    const { event, matcher, command } = h as Record<string, unknown>
+    const { event, matcher, command, timeout } = h as Record<string, unknown>
     if (typeof event !== 'string' || !(HOOK_EVENTS as string[]).includes(event)) continue
     if (typeof command !== 'string' || !command.trim()) continue
     out.push({
       event: event as Hook['event'],
       matcher: typeof matcher === 'string' && matcher.trim() ? matcher.trim() : '*',
-      command: command.trim()
+      command: command.trim(),
+      // Kept only when it is a positive number; the runner clamps it (hookTimeoutMs).
+      ...(typeof timeout === 'number' && Number.isFinite(timeout) && timeout > 0 ? { timeout } : {})
     })
   }
   return out

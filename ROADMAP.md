@@ -191,11 +191,11 @@ dropped.
   subagents and the side chat. *Why deferred:* each needs a review surface for proposed
   memories, and the attended path had to prove what is worth keeping first.
 
-- **More lifecycle hook events.** Hooks fire at six points today (`PreToolUse`,
-  `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop`, `PreCompact`). Natural
-  additions include `SubagentStop` (when a dispatched subagent finishes), `PostCompact`
-  (after a compaction lands), and a `Notification` event (when a run is waiting on the
-  user). *Why deferred:* each needs its firing point and its blocking/context-injection
+- **More lifecycle hook events.** Hooks fire at eight points today (`PreToolUse`,
+  `PostToolUse`, `UserPromptSubmit`, `SessionStart`, `Stop`, `PreCompact`, and the
+  observe-only `Notification` and `SessionEnd`). Natural additions include `SubagentStop`
+  (when a dispatched subagent finishes) and `PostCompact` (after a compaction lands).
+  *Why deferred:* each needs its firing point and its blocking/context-injection
   semantics pinned down (a subagent has several exit paths and no hook wiring yet; a
   post-compaction hook has no obvious place to splice returned context back in), so they
   are better designed deliberately than bolted onto the highest-churn part of the loop.

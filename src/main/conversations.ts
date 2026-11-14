@@ -58,6 +58,11 @@ function filePath(id: string): string {
   return join(dir(), `${id}.json`)
 }
 
+/** Where a conversation's saved transcript lives (the file may not exist yet). */
+export function conversationFilePath(id: string): string {
+  return filePath(id)
+}
+
 /** Where a conversation's attachment bytes live (see conversationMedia.ts). */
 function mediaDir(id: string): string {
   return join(dir(), `${id}.media`)

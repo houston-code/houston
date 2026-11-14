@@ -35,6 +35,8 @@ import {
   MAX_PENDING_STEERS,
   isReasoningEffort,
   MAX_RUN_END_RECORDS,
+  BLOCKING_EVENT_TYPES,
+  type BlockingEvent,
   type RunEndRecord,
   type RunLimitReason
 } from '@shared/agent'
@@ -233,7 +235,7 @@ import {
   scheduleCreate,
   scheduleList
 } from './scheduler'
-import { matchingHooks, runHooks, type HookOutcome } from './hooks'
+import { matchingHooks, notificationFor, runHooks, type HookOutcome, type HookSession } from './hooks'
 import { loadAgents, type CustomAgent } from './agents'
 import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
 import { loadPluginsIfEnabled } from './plugins'
@@ -271,6 +273,7 @@ import {
   summaryMaxTokens
 } from './compaction'
 import {
+  conversationFilePath,
   peekConversation,
   setAnnouncedPolicy,
   setCompaction,
@@ -1258,6 +1261,18 @@ export function withRunEndRecord(
  * Run the agent loop, streaming events via `send`. Never throws — errors become events.
  * `onMessages` is called whenever the message log grows, so the caller can persist it.
  */
+/**
+ * The saved transcript file a hook is pointed at. Best effort: where the profile folder
+ * isn't set up (or the conversation store isn't the real one), the hook just gets no path.
+ */
+function transcriptPathOf(conversationId: string): { transcriptPath?: string } {
+  try {
+    return { transcriptPath: conversationFilePath(conversationId) }
+  } catch {
+    return {}
+  }
+}
+
 export async function startRun(
   req: AgentRunRequest,
   send: (e: AgentEvent) => void,
@@ -1373,6 +1388,10 @@ export async function startRun(
   let serving = { providerId: req.providerId, model: req.model }
   // The run's promptId, once its prompt is built: stamped on each reply and logged.
   let runPromptId: string | undefined
+  // Set once the run's hooks are known: runs Notification hooks for a wait (see emit),
+  // and SessionEnd hooks as the run finishes.
+  let notifyHooks: ((e: BlockingEvent) => void) | undefined
+  let endHooks: ((reason: string) => Promise<void>) | undefined
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void => {
     if ((e.type === 'done' || e.type === 'error') && beforeEnd) {
@@ -1406,6 +1425,11 @@ export async function startRun(
     }
     run.transcript.push(full)
     send(full)
+    // The run is about to wait for the user: tell any Notification hooks. They only
+    // observe, so they run alongside the wait instead of holding it up.
+    if (notifyHooks && (BLOCKING_EVENT_TYPES as readonly string[]).includes(full.type)) {
+      notifyHooks(full as BlockingEvent)
+    }
   }
 
   // Persist the message log AND reset the live-transcript buffer: everything up to
@@ -1615,6 +1639,35 @@ export async function startRun(
     const hooks = projectTrusted
       ? [...(settings.hooks ?? []), ...projectConfig.elevated.hooks]
       : (settings.hooks ?? [])
+    // Who the hooks fire for, passed on their stdin as session_id and transcript_path.
+    const hookSession: HookSession = conversationId
+      ? { id: conversationId, ...transcriptPathOf(conversationId) }
+      : { id: runId }
+    if (hooks.some((h) => h.event === 'Notification')) {
+      notifyHooks = (e) => {
+        const notification = notificationFor(e)
+        void runHooks(
+          hooks,
+          'Notification',
+          { tool: e.type, input: notification.toolInput ?? {}, notification, session: hookSession },
+          workspace,
+          abort.signal
+        ).catch((err) => log.warn(`run ${runId}: Notification hook failed: ${err instanceof Error ? err.message : String(err)}`))
+      }
+    }
+    if (hooks.some((h) => h.event === 'SessionEnd')) {
+      // Its own signal: a run the user stopped still ends, and its hook still runs
+      // (bounded by the hook's timeout).
+      endHooks = async (reason) => {
+        await runHooks(
+          hooks,
+          'SessionEnd',
+          { tool: 'SessionEnd', input: {}, reason, session: hookSession },
+          workspace,
+          new AbortController().signal
+        )
+      }
+    }
     // The system prompt is built once and can't change mid-run, so plan-mode
     // *guidance* is a snapshot of the starting policy. The runtime plan-mode
     // *block* below reads `run.policy`, so toggling plan on/off mid-run still
@@ -3513,7 +3566,7 @@ export async function startRun(
       const preCompact = await runHooks(
         hooks,
         'PreCompact',
-        { tool: 'PreCompact', input: {} },
+        { tool: 'PreCompact', input: {}, session: hookSession },
         workspace,
         abort.signal
       )
@@ -3629,7 +3682,7 @@ export async function startRun(
     const sessionStart = await runHooks(
       hooks,
       'SessionStart',
-      { tool: 'SessionStart', input: {} },
+      { tool: 'SessionStart', input: {}, session: hookSession },
       workspace,
       abort.signal
     )
@@ -3645,7 +3698,7 @@ export async function startRun(
     const promptSubmit = await runHooks(
       hooks,
       'UserPromptSubmit',
-      { tool: 'UserPromptSubmit', input: {}, prompt: promptText },
+      { tool: 'UserPromptSubmit', input: {}, prompt: promptText, session: hookSession },
       workspace,
       abort.signal
     )
@@ -4239,7 +4292,7 @@ export async function startRun(
           const stop = await runHooks(
             hooks,
             'Stop',
-            { tool: 'Stop', input: {} },
+            { tool: 'Stop', input: {}, session: hookSession },
             workspace,
             abort.signal
           )
@@ -4717,7 +4770,7 @@ export async function startRun(
           const ownPre = await runHooks(
             ownHooks,
             'PreToolUse',
-            { tool: modelCall.name, input: modelCall.arguments },
+            { tool: modelCall.name, input: modelCall.arguments, session: hookSession },
             workspace,
             abort.signal
           )
@@ -4775,7 +4828,7 @@ export async function startRun(
           const pre = await runHooks(
             hooks,
             'PreToolUse',
-            { tool: call.name, input: call.arguments },
+            { tool: call.name, input: call.arguments, session: hookSession },
             workspace,
             abort.signal
           )
@@ -5116,7 +5169,7 @@ export async function startRun(
               const post = await runHooks(
                 hooks,
                 'PostToolUse',
-                { tool: call.name, input: execArgs, result: output },
+                { tool: call.name, input: execArgs, result: output, session: hookSession },
                 workspace,
                 abort.signal
               )
@@ -5220,7 +5273,7 @@ export async function startRun(
           const ownPost = await runHooks(
             ownHooks,
             'PostToolUse',
-            { tool: modelCall.name, input: modelCall.arguments, result: output },
+            { tool: modelCall.name, input: modelCall.arguments, result: output, session: hookSession },
             workspace,
             abort.signal
           )
@@ -5319,6 +5372,16 @@ export async function startRun(
         runsByConversation.delete(conversationId)
         notifyActiveRunsChanged()
         noteRunEnded(conversationId, !ended ? 'natural' : ended.cls === 'aborted' ? 'aborted' : 'error')
+      }
+    }
+    // SessionEnd, once the run's slots are free: a slow hook never keeps the chat
+    // "running". Awaited, so a one-shot client doesn't exit before it finishes.
+    if (endHooks) {
+      const reason = ended ? (ended.cls === 'aborted' ? 'aborted' : 'error') : limited ? 'limit' : 'completed'
+      try {
+        await endHooks(reason)
+      } catch (err) {
+        log.warn(`run ${runId}: SessionEnd hook failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
   }

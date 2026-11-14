@@ -8095,6 +8095,11 @@ body:has(.coachmark) .get-started {
   min-width: 0;
   font-family: var(--mono);
 }
+.rule__timeout {
+  width: 64px;
+  flex-shrink: 0;
+  font-family: var(--mono);
+}
 .rule select:focus,
 .rule input:focus,
 .rule-add-other input:focus {
