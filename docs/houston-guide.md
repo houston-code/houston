@@ -2997,7 +2997,8 @@ or text copied from web pages or tool output.
   page, a GitHub body, an MCP result, a subagent's report, a spawned session's report,
   or a shell command that fetches, like `curl` or `git pull`), every memory save asks
   you first, in every mode. So does a session that such a chat spawned or scheduled,
-  since its first message is text the agent wrote there.
+  since its first message is text the agent wrote there. Compacting the chat
+  (`/compact` included) doesn't clear it.
   Neither an allow rule, "Allow for run", nor full auto skips it: a memory rides along
   in every later conversation, which is exactly where an injected instruction would
   try to persist.

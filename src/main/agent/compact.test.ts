@@ -61,6 +61,21 @@ describe('applyCompaction', () => {
     expect(out.slice(2)).toEqual(msgs.slice(2))
   })
 
+  it("carries the dropped head's taint onto the summary, and none from a clean head", () => {
+    const tainted: ChatMessage[] = [
+      { role: 'user', content: 'read it' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'f1', name: 'web_fetch', arguments: { url: 'https://e.com' } }] },
+      { role: 'tool', content: 'page', toolCallId: 'f1', toolName: 'web_fetch' },
+      ...msgs
+    ]
+    const out = applyCompaction(tainted, 3, 'S')
+    expect(out[0].taintSource).toBe('web_fetch')
+    // A second compaction over the first summary keeps the mark.
+    expect(applyCompaction(out, 2, 'S2')[0].taintSource).toBe('web_fetch')
+    // Taint in the kept tail stays where it is; a clean head adds none.
+    expect(applyCompaction(msgs, 2, 'S')[0]).not.toHaveProperty('taintSource')
+  })
+
   it('keeps everything when cut is 0 (just the summary pair prepended)', () => {
     const out = applyCompaction(msgs, 0, 'S')
     expect(out.slice(2)).toEqual(msgs)
@@ -120,6 +135,28 @@ describe('compactConversationNow', () => {
     // The rewrite invalidates any loop-persisted compaction state (its cut indexes
     // the old log), so the manual compact must clear it alongside the new log.
     expect(h.compactionSet).toEqual([null])
+  })
+
+  it('keeps a tainted head tainted after /compact rewrites the log', async () => {
+    const messages = bigConversation(3, 20_000)
+    messages.splice(1, 0, { role: 'assistant', content: '', toolCalls: [{ id: 'f1', name: 'web_fetch', arguments: { url: 'https://e.com' } }] }, {
+      role: 'tool',
+      content: 'page',
+      toolCallId: 'f1',
+      toolName: 'web_fetch'
+    })
+    h.conv = { id: 'c-taint', workspace: '/w', messages }
+    h.provider = {
+      async *streamChat() {
+        yield { type: 'text', text: 'SUMMARY' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const res = await compactConversationNow('c-taint', 'anthropic', 'claude-test')
+    expect(res.ok).toBe(true)
+    // The fetch was summarized away; its mark is on the summary instead.
+    expect(res.messages!.some((m) => m.toolCalls?.some((c) => c.name === 'web_fetch'))).toBe(false)
+    expect(res.messages![0].taintSource).toBe('web_fetch')
   })
 
   it('does nothing when the whole conversation already fits the kept-tail budget', async () => {

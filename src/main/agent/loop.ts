@@ -3437,7 +3437,9 @@ export async function startRun(
           cut = persisted.cut
           if (cut > 0) {
             summary = persisted.summary
-            summaryMsgs = buildSummaryMessages(summary)
+            // The log still holds the head (this loop never drops it), but the summary
+            // carries the head's taint too, as every summary does (see buildSummaryMessages).
+            summaryMsgs = buildSummaryMessages(summary, memoryTaintSource(messages.slice(0, cut), (n) => lookupTool(n)?.kind))
             anchor = persisted.anchor
           }
           evictBefore = persisted.evictBefore ?? 0
@@ -3758,7 +3760,7 @@ export async function startRun(
         // renderer shows) — not the absolute tail-start index.
         const compactedNow = newCut - cut
         summary = text
-        summaryMsgs = buildSummaryMessages(text)
+        summaryMsgs = buildSummaryMessages(text, memoryTaintSource(messages.slice(0, newCut), (n) => lookupTool(n)?.kind))
         anchor = compactionAnchor(messages, newCut, turnStart)
         cut = newCut
         lastInputTokens = 0

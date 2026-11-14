@@ -59,6 +59,7 @@ import { idleTimeoutFetch } from '../providers/idle-fetch'
 import { startFlakySseServer, type Hiccup } from '../test/flaky-sse-server'
 import { memoryStore } from './memoryStore'
 import { COMPACTION_SUMMARY_PREFIX } from './compaction'
+import { applyCompaction } from './compact'
 import {
   restoreCheckpoint,
   reapplyCheckpoint,
@@ -11851,6 +11852,19 @@ describe('approval grants and taint at the loop gate', () => {
     expect(spawned[1]).not.toHaveProperty('taintSource')
   })
 
+  it('a tainted chat compacted with /compact still asks before schedule_run in full auto', async () => {
+    const compacted = applyCompaction(fetched, 3, 'The user had a page read.')
+    expect(compacted.some((m) => m.toolCalls?.length)).toBe(false) // the fetch is gone
+    const r = await run({
+      policy: 'full-auto',
+      messages: compacted,
+      turns: [call('s1', 'schedule_run', { name: 'n', spec: 'every 5m', prompt: 'p' }), end],
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(approvalNames(r)).toEqual(['schedule_run'])
+    expect(created).toEqual([])
+  })
+
   describe('memory writes in a session that inherited taint', () => {
     let memRoot: string
     let before: string | undefined
@@ -11876,6 +11890,17 @@ describe('approval grants and taint at the loop gate', () => {
       const r = await run({
         policy: 'full-auto',
         messages: [{ role: 'user', content: 'Do the scheduled task', taintSource: 'web_fetch' }],
+        turns: [save, end],
+        onApproval: (_id, decide) => decide('deny')
+      })
+      expect(approvalNames(r)).toEqual(['memory_save'])
+      expect(saved()).toEqual([])
+    })
+
+    it('a tainted chat compacted with /compact still asks before memory_save in full auto', async () => {
+      const r = await run({
+        policy: 'full-auto',
+        messages: applyCompaction(fetched, 3, 'The user had a page read.'),
         turns: [save, end],
         onApproval: (_id, decide) => decide('deny')
       })
