@@ -1051,7 +1051,8 @@ export function setCompaction(id: string, compaction: ConversationCompaction | n
       prev?.cut === compaction.cut &&
       prev.summary === compaction.summary &&
       prev.anchor === compaction.anchor &&
-      prev.evictBefore === compaction.evictBefore
+      prev.evictBefore === compaction.evictBefore &&
+      JSON.stringify(prev.workspaceState) === JSON.stringify(compaction.workspaceState)
     ) {
       return
     }

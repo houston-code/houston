@@ -10,6 +10,7 @@ import { join } from 'node:path'
 import type {
   AgentEvent,
   AgentRunRequest,
+  BackgroundShellInfo,
   ChatMessage,
   ChatRequest,
   PlanDecision,
@@ -165,6 +166,8 @@ const h = vi.hoisted(() => ({
   // The repository the `./github` partial mock reports the gh_* tools act on; null
   // (the default) is "unknown", as in a temp workspace with no remotes.
   ghRepo: null as string | null,
+  // What listShells reports to the loop; null (the default) is the real registry.
+  shells: null as BackgroundShellInfo[] | null,
   // Route getMcpToolDefs to the real MCP manager (with a fake server behind its client
   // factory) instead of handing back `mcpDefs`, for the tests that need a live connection.
   realMcp: false
@@ -242,6 +245,10 @@ vi.mock('./tools', async (importActual) => {
   }
 })
 vi.mock('./git', () => ({ gitContext: async () => h.gitContext }))
+vi.mock('./shells', async (importActual) => {
+  const actual = await importActual<typeof import('./shells')>()
+  return { ...actual, listShells: () => h.shells ?? actual.listShells() }
+})
 vi.mock('./github', async (importActual) => ({
   ...(await importActual<typeof import('./github')>()),
   ghRepoKey: async () => h.ghRepo
@@ -374,6 +381,7 @@ beforeEach(() => {
   h.sandboxed = null
   h.egressFails = false
   h.egressScope = null
+  h.shells = null
   h.ghRepo = null
   delete h.settings.webReads
   delete h.settings.sandboxEgress
@@ -3535,6 +3543,62 @@ describe('context management inside a long turn', () => {
     })
     expect(shape(second.sends[0]).slice(0, last.length)).toEqual(shape(last))
   })
+
+  it('pins the branch and running shells once evicted, frozen until the next advance', async () => {
+    execFileSync('git', ['init', '-q'], { cwd: ws })
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/feature/pinned-state'], { cwd: ws })
+    h.secrets = ['sk-pinned-secret-value-123456']
+    const overhead = await fixedOverheadTokens()
+    h.probeTools = [bigReadFile(6_000)]
+    h.settings.compactionThreshold = overhead + 10_000
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-test' })
+    const bg = (over: Partial<BackgroundShellInfo>): BackgroundShellInfo => ({
+      id: 'dev12345',
+      command: 'API_KEY=sk-pinned-secret-value-123456 npm run dev',
+      running: true,
+      exitCode: null,
+      startedAt: 2,
+      exitedAt: null,
+      conversationId: conv.id,
+      workspace: ws,
+      urls: ['http://localhost:5173'],
+      ...over
+    })
+    h.shells = [
+      bg({}),
+      bg({ id: 'otherchat', conversationId: 'someone-else' }),
+      bg({ id: 'finished', running: false, exitCode: 0, exitedAt: 3 })
+    ]
+
+    const first = longTurn(7)
+    const r1 = await run({ provider: first.provider, userText: REQUEST, policy: 'full-auto', conversationId: conv.id })
+    const last = first.sends.at(-1)!
+    const block = last[0].content
+    expect(block).toContain(PINNED_MEMORY_PREFIX)
+    expect(block).toContain('- Git branch: feature/pinned-state')
+    expect(block).toContain('dev12345: API_KEY=')
+    expect(block).toContain('(running, http://localhost:5173)')
+    expect(block).not.toContain('sk-pinned-secret-value-123456')
+    expect(block).not.toContain('otherchat')
+    expect(block).not.toContain('finished')
+    // At the project root the shell directory adds nothing.
+    expect(block).not.toContain('Shell directory')
+    expect(getConversation(conv.id)!.compaction!.workspaceState?.branch).toBe('feature/pinned-state')
+
+    // The live state moves on, but nothing advanced: the next turn re-sends the same
+    // block, so its window still extends the cached one.
+    h.shells = []
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/another'], { cwd: ws })
+    const second = longTurn(0)
+    await run({
+      provider: second.provider,
+      messages: [...r1.messages, { role: 'user', content: 'second task' }],
+      policy: 'full-auto',
+      conversationId: conv.id
+    })
+    expect(shape(second.sends[0]).slice(0, last.length)).toEqual(shape(last))
+  })
+
 
   it('treats a summary cut off at its output cap as a failed compaction', async () => {
     // A thinking model can spend the whole cap before it writes the summary's end; a
