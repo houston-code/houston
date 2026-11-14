@@ -1224,7 +1224,11 @@ snapshots are cleared over time (the view says when). The view remembers the sco
 picked.
 
 - **Reading diffs.** Syntax colouring by file type, real line numbers, changed words
-  marked, and a **Side by side** toggle that puts the old lines beside the new.
+  marked, and a **Side by side** toggle that puts the old lines beside the new. A long
+  change shows its first 300 lines; **Show more** reveals the rest 300 at a time.
+  **Show more lines above** and **below** a change read the file as it is now and add
+  the unchanged lines around it, 20 at a time (not for a deleted file, or one that
+  changed since the view loaded: refresh first).
 - **Open** a file in its default app with the arrow button on its row.
 - **Revert** a whole file with the button on its row, or one change inside an edited
   file with **Revert** on that change. Each asks first. In **Working tree**, a file goes

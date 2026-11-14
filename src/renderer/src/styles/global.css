@@ -4615,6 +4615,35 @@ pre.diff {
 .diff__more {
   color: var(--text-dim);
   padding-top: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font);
+}
+.diff__more-btn,
+.changes-hunk__context {
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.diff__more-btn:hover,
+.changes-hunk__context:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+.diff__more-btn:focus-visible,
+.changes-hunk__context:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.changes-hunk__context {
+  display: block;
+  margin: 2px 14px;
 }
 
 /* ---- Titlebar "Changes" action ---- */

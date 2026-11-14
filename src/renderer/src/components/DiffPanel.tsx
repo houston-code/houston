@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { DiffHunk, FileDiff, WorkingTreeChanges } from '@shared/workingTree'
 import {
   canRevertHunks,
@@ -21,7 +21,8 @@ import {
   sortComments,
   type DraftComment
 } from '../lib/diffComments'
-import { DiffView, MAX_DIFF_LINES, lineKey, type DiffLayout, type DiffLineTarget } from './DiffView'
+import { CONTEXT_STEP, contextRoom, expandHunk, fileLines, hunkMatches } from '../lib/diffContext'
+import { DiffView, lineKey, type DiffLayout, type DiffLineTarget } from './DiffView'
 import { Icon } from './Icon'
 import { CommitForm } from './CommitForm'
 
@@ -182,6 +183,13 @@ interface CommentsApi {
   cancel: () => void
 }
 
+/** Revealing more unchanged lines around a file's hunks. */
+interface ContextApi {
+  /** Lines that could still be revealed above / below hunk `i` (null: not known until the file is read). */
+  room: (file: FileDiff, i: number) => { above: number; below: number | null }
+  expand: (file: FileDiff, i: number, dir: 'above' | 'below') => void
+}
+
 function FileSection({
   file,
   scope,
@@ -190,7 +198,9 @@ function FileSection({
   canRevert,
   onRevert,
   onOpen,
-  comments
+  comments,
+  hunks = file.hunks,
+  context
 }: {
   file: FileDiff
   scope: ChangesScope
@@ -202,6 +212,10 @@ function FileSection({
   onOpen?: (file: FileDiff) => void
   /** Line comments, when the view takes them. */
   comments?: CommentsApi
+  /** The hunks as shown, with any context revealed around them (default: the file's own). */
+  hunks?: DiffHunk[]
+  /** Reveals more unchanged lines around each hunk, when the file can be read. */
+  context?: ContextApi
 }): JSX.Element {
   const [open, setOpen] = useState(defaultOpen)
   // Which revert is waiting for confirmation: the whole file (-1) or a hunk index.
@@ -254,6 +268,25 @@ function FileSection({
         )
       }
     : undefined
+  // Lines with a comment (or an open editor) render even past a long hunk's cap.
+  const reveal = new Set(mine.map((c) => lineKey(c)))
+  const editingPlace = comments?.editing
+  if (editingPlace && editingPlace.startsWith(`${file.path}\u0000`)) reveal.add(editingPlace.slice(file.path.length + 1))
+  const contextButton = (i: number, dir: 'above' | 'below', room: number | null): JSX.Element | null => {
+    if (!context || room === 0) return null
+    const n = room === null ? CONTEXT_STEP : Math.min(CONTEXT_STEP, room)
+    const label = `Show ${n} more line${n === 1 ? '' : 's'} ${dir}`
+    return (
+      <button
+        type="button"
+        className="changes-hunk__context"
+        aria-label={`${label} change ${i + 1} in ${file.path}`}
+        onClick={() => context.expand(file, i, dir)}
+      >
+        {dir === 'above' ? '↑' : '↓'} {label}
+      </button>
+    )
+  }
   const onLineClick = comments
     ? (t: DiffLineTarget): void => {
         targets.current.set(lineKey(t), t)
@@ -327,10 +360,12 @@ function FileSection({
           {file.note ? (
             <p className="changes-file__note">{file.note}</p>
           ) : (
-            file.hunks.map((h: DiffHunk, i) => (
+            hunks.map((h: DiffHunk, i) => {
+              const room = context?.room(file, i)
+              return (
               <div key={i} className="changes-hunk">
                 <div className="changes-hunk__header">
-                  <span className="changes-hunk__range">{h.header}</span>
+                  <span className="changes-hunk__range">{file.hunks[i]?.header ?? h.header}</span>
                   {hunkReverts && (
                     <button
                       type="button"
@@ -344,6 +379,7 @@ function FileSection({
                   )}
                 </div>
                 {confirm === i && confirmBar(i)}
+                {room && contextButton(i, 'above', room.above)}
                 <DiffView
                   diff={h.lines}
                   path={file.path}
@@ -351,9 +387,12 @@ function FileSection({
                   layout={layout}
                   onLineClick={onLineClick}
                   renderBelow={renderBelow}
+                  reveal={reveal}
                 />
+                {room && contextButton(i, 'below', room.below)}
               </div>
-            ))
+              )
+            })
           )}
         </div>
       )}
@@ -433,9 +472,86 @@ export function DiffPanel({
     () => (data?.scope === scope ? (data.scope === 'tree' ? data.tree.files : data.chat.files) : []),
     [data, scope]
   )
+  // Unchanged lines revealed around hunks: each file's text as read from disk (null
+  // when it can't be read, or no longer matches its diff), and how far each hunk has
+  // been opened up. Both start over whenever a new diff loads.
+  const [texts, setTexts] = useState<Record<string, string[] | null>>({})
+  const [opened, setOpened] = useState<Record<string, { above: number; below: number }>>({})
+  const filesRef = useRef(files)
+  // A layout effect, not a passive one: it runs in the same commit that puts the new
+  // diff's buttons on screen. A passive effect can run after that commit, so a click
+  // that lands in between captured the previous list as `asked`, and the read it
+  // started was then dropped as stale: the lines never appeared and nothing said why.
+  useLayoutEffect(() => {
+    filesRef.current = files
+    setTexts({})
+    setOpened({})
+  }, [files])
+  const viewFiles = useMemo(
+    () =>
+      files.map((f) => {
+        const lines = texts[f.path]
+        if (!lines) return f
+        let changed = false
+        const hunks = f.hunks.map((h, i) => {
+          const o = opened[`${f.path}\u0000${i}`]
+          const x = o ? expandHunk(f.hunks, i, lines, o.above, o.below) : h
+          if (x && x !== h) changed = true
+          return x ?? h
+        })
+        return changed ? { ...f, hunks } : f
+      }),
+    [files, texts, opened]
+  )
+  const contextApi: ContextApi | undefined = workspace
+    ? {
+        room: (file, i) => {
+          if (file.status === 'deleted' || file.binary || texts[file.path] === null) return { above: 0, below: 0 }
+          const lines = texts[file.path]
+          const r = contextRoom(file.hunks, i, lines ? lines.length : null)
+          const o = opened[`${file.path}\u0000${i}`] ?? { above: 0, below: 0 }
+          return { above: Math.max(0, r.above - o.above), below: r.below === null ? null : Math.max(0, r.below - o.below) }
+        },
+        expand: (file, i, dir) => {
+          const key = `${file.path}\u0000${i}`
+          const grow = (lines: string[]): void => {
+            const r = contextRoom(file.hunks, i, lines.length)
+            setOpened((prev) => {
+              const o = prev[key] ?? { above: 0, below: 0 }
+              const next =
+                dir === 'above'
+                  ? { ...o, above: Math.min(r.above, o.above + CONTEXT_STEP) }
+                  : { ...o, below: Math.min(r.below ?? 0, o.below + CONTEXT_STEP) }
+              return { ...prev, [key]: next }
+            })
+          }
+          const have = texts[file.path]
+          if (have) return grow(have)
+          const asked = filesRef.current
+          void window.api
+            .readWorkspaceFile(workspace, file.path)
+            .then((p) => {
+              if (filesRef.current !== asked) return
+              const lines = p.kind === 'text' ? fileLines(p.text, p.truncated) : null
+              const ok = lines !== null && file.hunks.every((h) => hunkMatches(h, lines))
+              setTexts((prev) => ({ ...prev, [file.path]: ok ? lines : null }))
+              if (ok && lines) grow(lines)
+              else
+                setNotice(
+                  lines === null
+                    ? `Could not read ${file.path} to show more of it.`
+                    : `${file.path} changed since this view loaded. Refresh to show more of it.`
+                )
+            })
+            .catch(() => setTexts((prev) => ({ ...prev, [file.path]: null })))
+        }
+      }
+    : undefined
   // A comment shows under its line only while that line still holds the code it was
   // left on; after a refresh moves or changes the line, it is listed as outdated.
-  const lines = useMemo(() => shownLines(files, MAX_DIFF_LINES), [files])
+  // Every line of a hunk counts, including those past the render cap and revealed
+  // context: DiffView renders any line holding a comment.
+  const lines = useMemo(() => shownLines(viewFiles, Number.POSITIVE_INFINITY), [viewFiles])
   const { anchored, outdated } = anchorComments(comments, lines)
   const commentsApi: CommentsApi | undefined = onSendComments
     ? {
@@ -647,10 +763,12 @@ export function DiffPanel({
           <p className="changes-panel__empty">{data ? empty : 'Loading…'}</p>
         ) : (
           <>
-            {files.map((f) => (
+            {viewFiles.map((f, n) => (
               <FileSection
                 key={`${scope}:${f.status}:${f.path}`}
-                file={f}
+                file={files[n]}
+                hunks={f.hunks}
+                context={contextApi}
                 scope={scope}
                 defaultOpen={defaultOpen}
                 layout={layout}
