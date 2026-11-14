@@ -4953,6 +4953,69 @@ describe('dispatch_writable_agent', () => {
     expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('from subagent')
   })
 
+  it('follows the report with what the agent actually ran and changed', async () => {
+    h.sandboxed = false
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'fix', prompt: 'fix it' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'x' } } },
+          { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo checked' } } },
+          { type: 'tool_call', call: { id: 's2', name: 'run_shell', arguments: { command: 'exit 3' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        // The report claims more than the tools show.
+        [{ type: 'text', text: 'Fixed it; all tests pass.' }, { type: 'done', stopReason: 'end_turn' }],
+        [{ type: 'text', text: 'main done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'dispatch_writable_agent')
+    const content = typeof toolMsg?.content === 'string' ? toolMsg.content : ''
+    expect(content).toContain('Fixed it; all tests pass.')
+    expect(content).toContain('Commands run: `echo checked` exited 0; `exit 3` exited 3.')
+    expect(content).toContain('Files changed: out.txt.')
+    // The evidence follows the report, ahead of the resume note.
+    expect(content.indexOf('Commands run:')).toBeGreaterThan(content.indexOf('Fixed it'))
+  })
+
+  it('says so when a writable agent ran no commands', async () => {
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'x', prompt: 'do' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Done and tested.' }, { type: 'done', stopReason: 'end_turn' }],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto'
+    })
+    const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'dispatch_writable_agent')
+    const content = typeof toolMsg?.content === 'string' ? toolMsg.content : ''
+    expect(content).toContain('Commands run: none.\nFiles changed: none.')
+  })
+
+  it("leaves a research agent's report as it is", async () => {
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_agent', arguments: { description: 'x', prompt: 'look' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Found it.' }, { type: 'done', stopReason: 'end_turn' }],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto'
+    })
+    const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'dispatch_agent')
+    expect(typeof toolMsg?.content === 'string' && toolMsg.content).not.toContain('Commands run:')
+  })
+
   it('rejects an unknown named agent without running it', async () => {
     const r = await run({
       turns: [
