@@ -494,7 +494,10 @@ export function removeFolderTrust(
 /**
  * A fine-grained permission rule, consulted before the approval policy. Matches a
  * tool (by name, or `*` for any) and a glob over the call's subject (shell
- * command, path, URL, or query). First match wins.
+ * command, path, URL, or query). A matching deny always wins; otherwise the first
+ * matching allow or ask decides. A deny or ask naming one file-editing tool
+ * (`write_file`, `edit_file`, `multi_edit`, `apply_patch`, `notebook_edit`) applies to
+ * all of them.
  */
 export interface PermissionRule {
   action: 'allow' | 'deny' | 'ask'

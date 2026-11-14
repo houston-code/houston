@@ -1639,7 +1639,12 @@ The sandbox can read your whole filesystem, so a few controls hold even in full 
   fails for lack of network (the **shell-network consent**).
 - **Paths outside the project.** A shell command that names one, quoted or not, asks
   first. `/dev/null` and the temp directory the sandbox can already write to don't
-  count.
+  count. A change of directory whose target the command doesn't spell out (a bare
+  `cd`, `cd -`, `popd`, `cd "$DIR"`) asks too, as does a path climbing out through
+  `$PWD` or a glob (`$PWD/..`, `.[.]/x`), and so does every command while the shell's
+  working directory, which carries over between commands, is outside the project. An
+  `allow` rule skips this only when it names the outside path itself, or is exact for
+  the command.
 - **Reading a credential file** (a `.env`, a private key, `.aws/credentials`, and the
   like) asks, even though reads otherwise never do. "Allow for run" on that prompt
   stops it asking about credential reads for the rest of the conversation, and an
@@ -1709,12 +1714,13 @@ These ask in every mode, full auto included. The sandbox keeps commands inside t
 project, but the project is exactly what these destroy, and undo doesn't cover shell
 commands.
 
-- `git reset --hard`, a forced `git clean`, `git checkout -- .`, or `git restore` of
-  your changes
+- `git reset --hard`, a forced `git clean`, `git checkout -- .`, `git checkout HEAD
+  src` or `git checkout <file>`, or `git restore` of your changes
 - `rm -r` of anything but build output and dependencies (`node_modules`, `dist`,
   `build`, `target`, `__pycache__`, and the like are fine)
 - `find … -delete`
-- deleting a branch or a stash, rewriting history
+- deleting a branch or a stash (`git branch -D`, `git update-ref -d`), rewriting
+  history
 - a forced or deleting `git push`
 - wiping a database: `prisma migrate reset`, `rails db:drop` or `db:reset`,
   `manage.py flush`, `artisan migrate:fresh`, `dropdb`, and `DROP`, `TRUNCATE`, or an
@@ -1724,8 +1730,10 @@ commands.
   down infrastructure (`terraform destroy`, `kubectl delete namespace`)
 
 Quoting a word, splitting it across lines, or running it through `bash -c` doesn't
-hide one. "Allow for run" doesn't stop these asking; an `allow` permission rule for
-that exact command does (the "Always allow" choice on the prompt saves one).
+hide one. "Allow for run" doesn't stop these asking. An `allow` permission rule does
+only when it is exact for the command, or its pattern names the destructive part
+(`git push --force*`): a prefix like `git push` doesn't. The "Always allow" choice on
+the prompt saves an exact rule for that command.
 
 ### Which mode a new install starts in
 
@@ -1807,13 +1815,21 @@ matched on the tool plus a glob over its target. For example:
 - deny anything matching `*rm -rf*`
 - always ask before `write_file` under `src/secret/**`
 
-**Order matters.** Rules are checked before the mode, and the first match wins.
-Settings lists them numbered in the order they're checked; drag a rule or use its
-arrows to move it. **By tool** groups the list per tool instead.
+**A deny always wins.** Rules are checked before the mode. A matching `deny` refuses
+the call wherever it sits in the list, so a later "Always allow" never overrides a deny
+you wrote. Otherwise the first matching `allow` or `ask` decides, so their order
+matters. Settings lists rules numbered in the order they're checked; drag a rule or use
+its arrows to move it. **By tool** groups the list per tool instead.
 
-**Settings flags problems:** a rule that can never apply because an earlier one already
-matches everything it would (a `*` pattern for the same tool, or the same pattern), an
-empty pattern (it matches nothing), and an allow of `*`.
+**File edits share deny and ask rules.** A `deny` or `ask` on any of `write_file`,
+`edit_file`, `multi_edit`, `apply_patch`, or `notebook_edit` applies to all five, so a
+deny on `write_file` under `src/secret/**` also stops an `edit_file` or a patch there.
+An `allow` covers only the tool it names.
+
+**Settings flags problems:** a rule that can never apply because another one already
+matches everything it would (a `*` pattern for the same tool, or the same pattern) and
+wins (a deny anywhere, or an earlier allow or ask), an empty pattern (it matches
+nothing), and an allow of `*`.
 
 **History.** Each rule notes when it was added (and whether from an approval prompt or
 by hand) and when it last decided a call, which helps you prune rules you no longer
@@ -1837,7 +1853,10 @@ Matching normalizes the target first:
 - **File rules** are resolved and anchored to the workspace. `src/*` covers the same
   file written as an absolute path, and a climb like `src/../../etc/passwd` doesn't
   slip past it.
-- **URL rules** are case-insensitive on scheme and host.
+- **URL rules** read the server the way a fetch does: scheme and host are
+  case-insensitive, and a user name (`https://u@host/`), the default port
+  (`https://host:443/`), or a trailing dot on the host (`https://host./`) doesn't make
+  it a different site.
 - **Shell rules** see through quoting, backslash escapes, and bash's `$'...'` escapes,
   so `deny *rm -rf*` still fires on `"rm" -rf`, `r\m -rf`, or `$'\x72m' -rf`.
 - **Line continuations.** A line ending in a backslash continues onto the next, as in
@@ -1885,6 +1904,14 @@ and a folder doesn't cover the files inside it.
 
 - A shell command it can't shorten to a prefix is saved whole, and exact when it holds
   `*`, so approving `rm *` never allows `rm -rf ~`.
+- A command that asks in every mode (it names a path outside the project, or throws
+  away work) is saved whole and exact, so approving `git push --force origin x` allows
+  that one push. A prefix rule such as `git push` or `git diff` never covers those:
+  `git push --force` or `git diff --no-index /dev/null ~/.ssh/id_rsa` still asks.
+- A command that runs whatever follows it is saved whole and exact too: a shell
+  (`bash script.sh`), `eval`, `ssh`, `watch`, `docker run` or `exec`, and `kubectl
+  exec`, `run`, or `debug`. Approving `ssh myhost uptime` never allows
+  `ssh myhost 'anything'`.
 - A `cd` into the project needs no rule (an allowed `npm install` also covers
   `cd src && npm install`), so it's left out. Any other change of directory, such as
   `cd -`, `popd`, `cd $DIR`, or a `cd` out of the project, still asks, and is saved

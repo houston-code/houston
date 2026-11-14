@@ -95,7 +95,9 @@ side effects aren't checkpointed. So a shell command that can throw away work in
 project (`git reset --hard`, a forced `git clean`, `git checkout -- .`, `rm -r` of
 anything but build output and dependencies, `find … -delete`, deleting a branch or
 stash, a forced or deleting `git push`) **asks in every mode**, full auto and "Allow
-for run" included; only an explicit `allow` rule for the command skips it. So does a
+for run" included; only an explicit `allow` rule for the command skips it (one that
+is exact for the command, or whose pattern names the destructive part itself, never a
+prefix such as `git push` that merely matches it). So does a
 command that destroys data the project doesn't hold and a checkpoint can't restore: a
 database reset or drop (`prisma migrate reset`, `rails db:drop`, `manage.py flush`,
 `dropdb`, or `DROP`/`TRUNCATE` SQL handed to a database client), removing Docker
