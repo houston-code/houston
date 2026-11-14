@@ -555,6 +555,25 @@ describe('runSubAgent', () => {
       expect(sink.system).toContain('run shell commands')
     })
 
+    it('tells a writable subagent not to weaken tests or claim unverified work as tested', async () => {
+      const sink = { system: '', messages: [] as ChatMessage[][] }
+      const provider = recordingProvider(
+        [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]],
+        sink
+      )
+      await runSubAgent({
+        provider,
+        model: 'm',
+        workspace: ws,
+        prompt: 'x',
+        signal: new AbortController().signal,
+        writable: true,
+        shellSandboxed: true
+      })
+      expect(sink.system).toMatch(/never delete, skip, or weaken a test to make it pass/i)
+      expect(sink.system).toMatch(/never describe work you did not verify as tested/i)
+    })
+
     it('routes an unconfined run_shell through the gate and returns its output', async () => {
       const sink = { system: '', messages: [] as ChatMessage[][] }
       const provider = recordingProvider(

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type { Provider, ReviewFinding, ReviewSeverity, TokenUsage } from '@shared/agent'
 import { runSubAgent, type SubAgentOptions } from './subagent'
 import { gitDiff, isSafeGitRef, type GitExec, type WorkspaceDiff } from './git'
@@ -38,7 +39,7 @@ const MAX_VERIFIED_FINDINGS = 20
 
 const DIMENSION_FOCUS: Record<ReviewDimension, string> = {
   correctness:
-    'logic errors, off-by-one mistakes, inverted or wrong conditions, unhandled edge cases (null/undefined/empty/error paths), broken invariants, incorrect API or library usage, race conditions, resource leaks, and regressions in existing behavior',
+    'logic errors, off-by-one mistakes, inverted or wrong conditions, unhandled edge cases (null/undefined/empty/error paths), broken invariants, incorrect API or library usage, race conditions, resource leaks, regressions in existing behavior, and tests deleted, skipped, or loosened to make them pass',
   security:
     'injection (command, SQL, path traversal), SSRF and unsafe outbound requests, missing authentication/authorization checks, secret or credential leakage, unsafe deserialization, missing input validation at trust boundaries, unsafe file permissions, and the rest of the OWASP top 10',
   quality:
@@ -61,9 +62,35 @@ Report each finding as its own block:
 List the most severe findings first. If you find no real ${dimension} problems, reply with exactly: No issues found.`
 }
 
+/**
+ * What the reviewers know beyond the diff: decisions the author says the user settled,
+ * and the findings of this run's previous review round. Both are optional; each is
+ * size-bounded before it gets here.
+ */
+export interface ReviewBackground {
+  context?: string
+  previousFindings?: string
+}
+
+/** The background sections of a reviewer or verifier prompt, or '' when there are none. */
+function backgroundSections(bg: ReviewBackground | undefined, forVerifier = false): string {
+  const parts: string[] = []
+  if (bg?.context) {
+    parts.push(
+      `Decisions the user already settled, as stated by the author of the change. Treat these as intentional, not as ${forVerifier ? 'grounds to confirm a finding' : 'findings'}:\n\n${bg.context}`
+    )
+  }
+  if (bg?.previousFindings && !forVerifier) {
+    parts.push(
+      `Findings from the previous review rounds of this change. Confirmed ones were reported to the author and may already be fixed; rejected ones were checked and found not to be real problems. Do not raise any of them again unless the current code still has the problem (for a confirmed one) or you have new evidence that the rejection was wrong:\n\n${bg.previousFindings}`
+    )
+  }
+  return parts.length ? `\n\n${parts.join('\n\n')}` : ''
+}
+
 /** The user turn handed to a single-dimension reviewer. */
-export function reviewerPrompt(dimension: ReviewDimension, diff: string): string {
-  return `Review the following change for ${dimension} issues only. Read the real files for context before judging.
+export function reviewerPrompt(dimension: ReviewDimension, diff: string, bg?: ReviewBackground): string {
+  return `Review the following change for ${dimension} issues only. Read the real files for context before judging.${backgroundSections(bg)}
 
 ${diff}`
 }
@@ -83,10 +110,10 @@ End with a one-line tally: "Confirmed N of M candidate findings." If none surviv
 }
 
 /** The user turn handed to the verifier. */
-export function verifierPrompt(diff: string, candidates: string): string {
+export function verifierPrompt(diff: string, candidates: string, bg?: ReviewBackground): string {
   return `Change under review:
 
-${diff}
+${diff}${backgroundSections(bg, true)}
 
 Candidate findings to verify:
 
@@ -103,10 +130,10 @@ Reply with CONFIRMED or REJECTED as the very first word, then one sentence of ju
 }
 
 /** The user turn handed to a single-finding skeptic. */
-export function skepticPrompt(finding: string): string {
+export function skepticPrompt(finding: string, bg?: ReviewBackground): string {
   return `Candidate finding:
 
-${finding}
+${finding}${backgroundSections(bg, true)}
 
 Verify it against the actual code in the project, then answer CONFIRMED or REJECTED.`
 }
@@ -502,6 +529,13 @@ export interface RunReviewOptions {
   onFinding?: (finding: ReviewFinding) => void
   /** Called with each nested subagent turn's token usage, so the caller can meter review cost. */
   onUsage?: (usage: TokenUsage) => void
+  /** Settled decisions and the previous round's findings, handed to the reviewers. */
+  background?: ReviewBackground
+  /**
+   * Called once the review ends (however it ends) with the last state of every
+   * finding it raised, so the next round can be told what was already settled.
+   */
+  onSettled?: (findings: ReviewFinding[]) => void
   /** Opt the nested reviewer subagents into explicit prompt caching (see SubAgentOptions). */
   explicitCacheControl?: boolean
   /**
@@ -551,15 +585,31 @@ export interface ReviewAgentObserver {
  * agent. Never throws — reviewer failures surface as notes, not an aborted review.
  */
 export async function runReview(opts: RunReviewOptions): Promise<string> {
+  const latest = new Map<string, ReviewFinding>()
+  try {
+    return await reviewOnce(opts, latest)
+  } finally {
+    opts.onSettled?.([...latest.values()])
+  }
+}
+
+async function reviewOnce(opts: RunReviewOptions, latest: Map<string, ReviewFinding>): Promise<string> {
   const { provider, model, workspace, signal } = opts
   const baseRunAgent = opts.runAgent ?? runSubAgent
   const dimensions = opts.dimensions ?? REVIEW_DIMENSIONS
   const progress = opts.onProgress ?? ((): void => {})
   const sub = opts.onSubAgent ?? ((): void => {})
   const redact = opts.redact ?? ((t: string): string => t)
+  const bg: ReviewBackground | undefined = opts.background
+    ? {
+        ...(opts.background.context ? { context: redact(opts.background.context) } : {}),
+        ...(opts.background.previousFindings ? { previousFindings: redact(opts.background.previousFindings) } : {})
+      }
+    : undefined
   // Live finding rows, capped: updates to a row already shown always go through.
   const shown = new Set<string>()
   const finding = (f: ReviewFinding): void => {
+    if (latest.size < MAX_LIVE_FINDINGS || latest.has(f.id)) latest.set(f.id, f)
     if (!opts.onFinding) return
     if (!shown.has(f.id)) {
       if (shown.size >= MAX_LIVE_FINDINGS) return
@@ -638,7 +688,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
               model,
               workspace,
               signal,
-              prompt: reviewerPrompt(dimension, chunk),
+              prompt: reviewerPrompt(dimension, chunk, bg),
               systemOverride: reviewerSystem(dimension)
             },
             {
@@ -729,7 +779,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
                   model,
                   workspace,
                   signal,
-                  prompt: skepticPrompt(f.text),
+                  prompt: skepticPrompt(f.text, bg),
                   systemOverride: skepticSystem()
                 },
                 { role: 'skeptic', label: `Skeptic ${k + 1} of ${VOTES_PER_FINDING}: ${row.title}` }
@@ -798,7 +848,7 @@ export async function runReview(opts: RunReviewOptions): Promise<string> {
       model,
       workspace,
       signal,
-      prompt: verifierPrompt(diffContext, candidateText),
+      prompt: verifierPrompt(diffContext, candidateText, bg),
       systemOverride: verifierSystem()
     },
     { role: 'verifier', label: 'Verifier' }
@@ -852,6 +902,55 @@ export interface ReviewWorkspaceOptions {
   runAgent?: (opts: SubAgentOptions) => Promise<string>
   /** Record each nested agent's work (see RunReviewOptions.observeAgent). */
   observeAgent?: RunReviewOptions['observeAgent']
+  /** Decisions the user settled, as the calling agent states them (review_changes `context`). */
+  context?: string
+  /**
+   * This run's review history (see createReviewHistory). With it, repeat reviews are
+   * bounded and each round's reviewers are told what earlier rounds found.
+   */
+  history?: ReviewHistory
+}
+
+/** Review rounds allowed per run, however much the diff changes between them. */
+export const REVIEW_MAX_ROUNDS = 4
+/** After this many rounds, a diff that was already reviewed is not reviewed again. */
+const REVIEW_REPEAT_ROUNDS = 2
+/** Bounds on what is carried from one round to the next, and on the caller's context. */
+const MAX_PREVIOUS_FINDINGS = 30
+const MAX_PREVIOUS_FINDINGS_CHARS = 6000
+const MAX_CONTEXT_CHARS = 4000
+
+/** What one run's review_changes calls remember across rounds. */
+export interface ReviewHistory {
+  rounds: number
+  /** Hashes of the review inputs already reviewed. */
+  reviewed: Set<string>
+  /** The last state of each finding earlier rounds raised (bounded). */
+  previous: ReviewFinding[]
+}
+
+export function createReviewHistory(): ReviewHistory {
+  return { rounds: 0, reviewed: new Set(), previous: [] }
+}
+
+/**
+ * Earlier rounds' findings as a list for the next round's reviewers: what was
+ * confirmed, rejected, or left unverified. Merged and in-flight rows are left out.
+ * Size-bounded; '' when there is nothing to carry. Pure.
+ */
+export function formatPreviousFindings(findings: ReviewFinding[]): string {
+  const label: Partial<Record<ReviewFinding['status'], string>> = {
+    confirmed: 'confirmed',
+    rejected: 'rejected',
+    candidate: 'unverified'
+  }
+  const lines = findings.flatMap((f) => {
+    const status = label[f.status]
+    if (!status) return []
+    const where = f.location ? `${f.location} - ` : ''
+    return [`- [${status}] (${f.dimension}, ${f.severity}) ${where}${f.title}`]
+  })
+  return clip(lines.join('\n'), MAX_PREVIOUS_FINDINGS_CHARS)
 }
 
 /**
@@ -880,7 +979,34 @@ export async function reviewWorkspaceChanges(opts: ReviewWorkspaceOptions): Prom
     const scope = paths.length ? ` in ${paths.join(', ')}` : ''
     return `No uncommitted changes to review${scope}${against}.`
   }
+  const history = opts.history
+  const context = opts.context?.trim() ? clip(opts.context.trim(), MAX_CONTEXT_CHARS) : undefined
+  let previousFindings: string | undefined
+  if (history) {
+    if (history.rounds >= REVIEW_MAX_ROUNDS) {
+      return `Not reviewed: review_changes already ran ${REVIEW_MAX_ROUNDS} times in this run, the most it allows. Stop reviewing, verify the remaining changes directly (run the tests, recheck the changed lines), and finish.`
+    }
+    const hash = createHash('sha256').update(chunks.join('\0')).digest('hex')
+    if (history.rounds >= REVIEW_REPEAT_ROUNDS && history.reviewed.has(hash)) {
+      return `Not reviewed: these changes were already reviewed twice in this run and the diff has not changed since that review. Stop reviewing, fix any confirmed findings you have not addressed yet, verify those fixes directly, and finish.`
+    }
+    history.rounds++
+    history.reviewed.add(hash)
+    previousFindings = formatPreviousFindings(history.previous) || undefined
+  }
+  const background: ReviewBackground | undefined =
+    context || previousFindings
+      ? { ...(context ? { context } : {}), ...(previousFindings ? { previousFindings } : {}) }
+      : undefined
   return runReview({
+    ...(background ? { background } : {}),
+    ...(history
+      ? {
+          onSettled: (found: ReviewFinding[]) => {
+            history.previous = [...history.previous, ...found].slice(-MAX_PREVIOUS_FINDINGS)
+          }
+        }
+      : {}),
     provider: opts.provider,
     model: opts.model,
     workspace: opts.workspace,

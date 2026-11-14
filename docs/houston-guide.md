@@ -2128,7 +2128,12 @@ and quality.
 - **Click a finding** to see why it matters and the suggested fix.
 - **Options:** scope it to a `base` branch or specific `paths`; raise `effort` to
   `high` to verify each finding with several independent skeptics; pass `model` to run
-  the reviewers and verifiers on a cheaper sibling model.
+  the reviewers and verifiers on a cheaper sibling model; pass `context` to state
+  decisions you already settled, so the reviewers treat them as intentional.
+- **Repeat reviews.** A later review in the same run tells its reviewers what the
+  earlier ones confirmed or rejected, so they don't raise those again. After two
+  reviews, the same unchanged diff isn't reviewed a third time, and a run gets at most
+  four reviews.
 
 ### Showing images
 

@@ -3,16 +3,20 @@ import type { SubAgentOptions } from './subagent'
 import type { ReviewFinding } from '@shared/agent'
 import {
   chunkReviewInput,
+  createReviewHistory,
   describeFinding,
   formatReviewInput,
   locationKey,
   resolveVerified,
   isSafeReviewPath,
   parseFindings,
+  REVIEW_MAX_ROUNDS,
+  reviewerSystem,
   reviewWorkspaceChanges,
   runReview,
   splitDiffByFile,
   verifierSystem,
+  type ReviewHistory,
   type ReviewSubAgentEvent,
   type RunReviewOptions
 } from './review'
@@ -832,5 +836,104 @@ describe('runReview observeAgent', () => {
     expect(seen.every((s) => s.started && s.steps === 1 && s.report !== undefined)).toBe(true)
     // A review's agents keep the base budget rather than extending.
     expect(calls.every((c) => c.budget?.autoExtend === false)).toBe(true)
+  })
+})
+
+describe('review rounds per run', () => {
+  const repoExec =
+    (diff: () => string): GitExec =>
+    async (args) => {
+      if (args[0] === 'rev-parse') return 'true'
+      if (args[0] === 'diff') return diff()
+      return ''
+    }
+  const finding = '- [SEVERITY: high] a.ts:1 - null deref on empty input\n  Why: crashes\n  Suggested fix: guard it'
+  const reviewWith = (
+    history: ReviewHistory,
+    diff: () => string,
+    runAgent: (o: SubAgentOptions) => Promise<string>,
+    extra: { context?: string } = {}
+  ): Promise<string> =>
+    reviewWorkspaceChanges({
+      provider: base().provider,
+      model: 'm',
+      workspace: '/ws',
+      signal: new AbortController().signal,
+      gitExec: repoExec(diff),
+      runAgent,
+      history,
+      ...extra
+    })
+
+  it('a third call on an unchanged diff starts no agents and says to stop reviewing', async () => {
+    const history = createReviewHistory()
+    const { fn, calls } = fakeAgent(() => 'No issues found.')
+    const diff = (): string => '@@ a.ts @@\n+x'
+    await reviewWith(history, diff, fn)
+    await reviewWith(history, diff, fn)
+    const before = calls.length
+    expect(before).toBeGreaterThan(0)
+    const out = await reviewWith(history, diff, fn)
+    expect(calls.length).toBe(before)
+    expect(out).toMatch(/already reviewed twice/i)
+    expect(out).toMatch(/stop reviewing/i)
+  })
+
+  it('still reviews a changed diff after two rounds, up to the per-run cap', async () => {
+    const history = createReviewHistory()
+    const { fn, calls } = fakeAgent(() => 'No issues found.')
+    let n = 0
+    const diff = (): string => `@@ a.ts @@\n+x${n}`
+    for (let i = 0; i < REVIEW_MAX_ROUNDS; i++) {
+      n = i
+      const before = calls.length
+      await reviewWith(history, diff, fn)
+      expect(calls.length).toBeGreaterThan(before)
+    }
+    n = 99
+    const before = calls.length
+    const out = await reviewWith(history, diff, fn)
+    expect(calls.length).toBe(before)
+    expect(out).toContain(`${REVIEW_MAX_ROUNDS} times`)
+  })
+
+  it("hands the previous round's findings to the next round's reviewers", async () => {
+    const history = createReviewHistory()
+    let round = 0
+    const { fn, calls } = fakeAgent((o) => {
+      if (isVerifier(o)) return `${finding}\n\nConfirmed 1 of 1 candidate findings.`
+      if (round === 0 && dimensionOf(o) === 'CORRECTNESS') return finding
+      return 'No issues found.'
+    })
+    await reviewWith(history, () => '@@ a.ts @@\n+x', fn)
+    round = 1
+    const firstRoundCalls = calls.length
+    await reviewWith(history, () => '@@ a.ts @@\n+y', fn)
+    const reviewers = calls.slice(firstRoundCalls).filter((o) => dimensionOf(o))
+    expect(reviewers.length).toBeGreaterThan(0)
+    for (const r of reviewers) {
+      expect(r.prompt).toContain('previous review round')
+      expect(r.prompt).toContain('null deref on empty input')
+    }
+    // The first round's reviewers had nothing earlier to go on.
+    for (const r of calls.slice(0, firstRoundCalls).filter((o) => dimensionOf(o))) {
+      expect(r.prompt).not.toContain('previous review round')
+    }
+  })
+
+  it('passes the settled decisions in context to the reviewers', async () => {
+    const { fn, calls } = fakeAgent(() => 'No issues found.')
+    await reviewWith(createReviewHistory(), () => '@@ a.ts @@\n+x', fn, {
+      context: 'The user asked to keep the legacy flag on purpose.'
+    })
+    const reviewers = calls.filter((o) => dimensionOf(o))
+    expect(reviewers.length).toBeGreaterThan(0)
+    for (const r of reviewers) expect(r.prompt).toContain('keep the legacy flag on purpose')
+  })
+})
+
+describe('review dimensions', () => {
+  it('the correctness reviewer looks for tests weakened to make them pass', () => {
+    expect(reviewerSystem('correctness')).toMatch(/tests deleted, skipped, or loosened to make them pass/)
   })
 })
