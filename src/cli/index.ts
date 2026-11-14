@@ -81,22 +81,24 @@ Options:
                         --on-approval allow)
   --json                (-p) machine-readable: an init line, one JSON event per
                         line, then a {"type":"result",...} summary line
-  --effort <level>      (-p, --acp) reasoning effort for this run: off | low | medium | high | xhigh
+  --effort <level>      starting reasoning effort (also -p and --acp): off | low | medium | high | xhigh
+                        (interactive: change it later with /reasoning)
   --max-turns <n>       (-p, --acp) hard cap on model steps for each turn
   --max-cost <usd>      (-p) stop the run once its estimated cost reaches this (exit 3)
   --verify <command>    (-p) after the agent edits, run this check and send failures back
   --no-memory           (-p) run without the memories saved in earlier sessions
   --allowed-tools <list>
-                        (-p) only these tools: names, name*, or name(pattern),
+                        only these tools: names, name*, or name(pattern),
                         comma-separated, e.g. 'read_file,run_shell(git *)'
   --disallowed-tools <list>
-                        (-p) never these tools (wins over --allowed-tools)
+                        never these tools (wins over --allowed-tools)
   --append-system-prompt <text|@file>
-                        (-p) add instructions to the system prompt for this run
+                        add instructions to the system prompt for this session
   --output-schema <file|json>
                         (-p) the final answer must be JSON matching this schema
                         (--json puts it in the result line's structured_output)
-  --mcp-config <file>   (-p) extra MCP servers for this run only
+  --mcp-config <file>   extra MCP servers for this session only
+  -n, --name <title>    title the session's chat
   --input-format stream-json
                         (with --json) read one {"type":"user","content":"..."}
                         line per turn from stdin until end of input
@@ -168,6 +170,8 @@ const VALUE_FLAGS = new Set([
   '--output-schema',
   '--mcp-config',
   '--input-format',
+  '-n',
+  '--name',
   '--add-dir'
 ])
 /** Flags that stand alone. */

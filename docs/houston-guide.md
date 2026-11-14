@@ -171,6 +171,24 @@ the terminal. Only three kinds do anything:
 
 See "The terminal composer" for how to type, paste, and edit a message.
 
+#### Session flags (interactive and `-p`)
+
+These shape the whole session, interactive or one-shot, and never change your saved
+settings. A bad value, a file that can't be read, or a folder that isn't there exits
+with code 2 before anything runs.
+
+| Flag | Effect |
+| --- | --- |
+| `--effort <off\|low\|medium\|high\|xhigh>` | the chat's starting reasoning effort (interactive: `/reasoning` still changes it) |
+| `--allowed-tools <list>` / `--disallowed-tools <list>` | restrict the session's tools (see "Automation flags") |
+| `--append-system-prompt <text\|@file>` | adds instructions in their own marked section of the system prompt |
+| `--mcp-config <file>` | adds MCP servers for this session only |
+| `--add-dir <dir>` | another folder the agent may read and edit this session; repeat it for more, or add one later with `/add-dir` (see "Working across repos") |
+| `-n, --name <title>` | the chat's title, set at the start (a resumed chat is renamed); it is never replaced by a generated one |
+
+An interactive session prints which of these are in effect when it starts. The
+sessions the agent spawns in the background don't inherit them.
+
 ### Headless
 
 `houston -p "<prompt>"` runs one prompt, writes the result to stdout, and exits.
@@ -222,6 +240,8 @@ never from the chat. A chat you use in full auto can't loosen an unattended run.
 
 #### Automation flags
 
+These work in an interactive session too (see "Session flags").
+
 - **`--allowed-tools <list>` / `--disallowed-tools <list>`** restrict the run's
   tools. Each entry is a tool name (`read_file`), a name ending in `*`
   (`mcp__github__*`), or a name with a permission-rule pattern (`run_shell(git *)`).
@@ -237,8 +257,6 @@ never from the chat. A chat you use in full auto can't loosen an unattended run.
 - **`--mcp-config <file>`** adds MCP servers for this run only: the `mcpServers`
   shape of `.houston/settings.json`, at most 10. Their tools are named
   `mcp__run-<id>__<tool>`.
-- **`--add-dir <dir>`** lets the run read and edit another folder too, as **Additional
-  folders** in Settings does, for this run only. Repeat it for more folders.
 - **`--input-format stream-json`** (with `--json`) reads one
   `{"type":"user","content":"..."}` line per turn from stdin. Each turn starts after
   the previous one finishes, until end of input.

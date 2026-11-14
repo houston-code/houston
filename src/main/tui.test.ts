@@ -28,6 +28,8 @@ import {
   nextReasoningDisplay,
   renderThoughtSummary,
   parseTuiArgs,
+  sessionRunRequestFields,
+  sessionInputLines,
   makePainter,
   isThemeName,
   renderToolStart,
@@ -9105,5 +9107,161 @@ describe('/tasks', () => {
     d.io = t.io
     await runTui(opts, d)
     expect(t.text()).toContain('usage: /tasks, /tasks <n> to show one, /tasks kill <n> to stop one')
+  })
+})
+
+describe('session flags in the interactive session', () => {
+  const done: AgentEvent[] = [{ runId: 'x', type: 'done', stopReason: 'end_turn' }]
+
+  it('parses the session flags the one-shot run takes', () => {
+    const o = parseTuiArgs(
+      [
+        '-i',
+        '--effort', 'high',
+        '--allowed-tools', 'read_file,run_shell(git *)',
+        '--disallowed-tools=write_file',
+        '--append-system-prompt', '@rules.md',
+        '--mcp-config', 'servers.json',
+        '-n', '  fix   the login\u001b[31m  '
+      ],
+      '/proj'
+    )
+    expect(o).toMatchObject({
+      effort: 'high',
+      allowedTools: [
+        { tool: 'read_file', match: '*' },
+        { tool: 'run_shell', match: 'git *' }
+      ],
+      disallowedTools: [{ tool: 'write_file', match: '*' }],
+      appendSystemPrompt: ['@/proj/rules.md'],
+      mcpConfig: ['/proj/servers.json'],
+      title: 'fix the login[31m'
+    })
+    expect(o?.usageError).toBeUndefined()
+  })
+
+  it('reports a bad session flag value as a usage error', async () => {
+    expect(parseTuiArgs(['-i', '--effort', 'max'], '/d')?.usageError).toMatch(/--effort must be one of/)
+    expect(parseTuiArgs(['-i', '--name', '   '], '/d')?.usageError).toMatch(/--name needs a title/)
+    expect(parseTuiArgs(['-i', '-n', 'x'.repeat(201)], '/d')?.usageError).toMatch(/at most 200/)
+    expect(parseTuiArgs(['-i', '--add-dir', ''], '/d')?.usageError).toMatch(/--add-dir: needs the path of a directory/)
+    const { d, rec } = deps(done)
+    const t = fakeIo(['hi', null])
+    d.io = t.io
+    expect(await runTui({ ...opts, ...parseTuiArgs(['-i', '--effort', 'max'], '/proj')! }, d)).toBe(2)
+    expect(rec.runs).toHaveLength(0)
+  })
+
+  it('--effort is the chat starting effort, and /reasoning still changes it', async () => {
+    const { d, rec } = deps(done, { reasoningEffort: 'low' })
+    const t = fakeIo(['first', '/reasoning medium', 'second', null])
+    d.io = t.io
+    const { persist, store } = fakePersist()
+    d.persist = persist
+    await runTui({ ...opts, effort: 'xhigh' }, d)
+    expect(rec.runs.map((r) => r.reasoningEffort)).toEqual(['xhigh', 'medium'])
+    // The new chat records the flag's effort as its own.
+    expect([...store.values()][0].reasoningEffort).toBe('medium')
+  })
+
+  it('--effort wins over a resumed chat own effort', async () => {
+    const { d, rec } = deps(done)
+    const t = fakeIo(['go on', null])
+    d.io = t.io
+    const { persist } = fakePersist([
+      {
+        id: 'c1',
+        title: 'Old',
+        updatedAt: 1,
+        messages: [{ role: 'user', content: 'before' }],
+        providerId: 'anthropic',
+        model: 'claude',
+        reasoningEffort: 'low'
+      }
+    ])
+    d.persist = persist
+    await runTui({ ...opts, resumeId: 'c1', effort: 'high' }, d)
+    expect(rec.runs[0].reasoningEffort).toBe('high')
+  })
+
+  it('every turn carries the tool scope, system prompt text, MCP servers and extra directories', async () => {
+    const reqs: Array<Record<string, unknown>> = []
+    const { d } = deps(done)
+    const inner = d.startRun
+    d.startRun = async (req, send, onMessages) => {
+      reqs.push({ ...req })
+      await inner(req, send, onMessages)
+    }
+    const t = fakeIo(['one', '/clear', 'two', null])
+    d.io = t.io
+    const server: McpServerConfig = { id: 'docs', command: 'docs-mcp' } as McpServerConfig
+    await runTui(
+      {
+        ...opts,
+        allowedTools: [{ tool: 'read_file', match: '*' }],
+        addDirs: ['/elsewhere'],
+        sessionInputs: {
+          toolScope: { allowed: [{ tool: 'read_file', match: '*' }] },
+          appendSystemPrompt: 'Answer in French.',
+          mcpServers: [server]
+        }
+      },
+      d
+    )
+    expect(reqs).toHaveLength(2)
+    for (const req of reqs) {
+      expect(req).toMatchObject({
+        toolScope: { allowed: [{ tool: 'read_file', match: '*' }] },
+        appendSystemPrompt: 'Answer in French.',
+        extraMcpServers: [server],
+        addDirs: ['/elsewhere']
+      })
+    }
+    // Said once at startup.
+    expect(t.text()).toContain('tools scoped for this session (allowed: read_file)')
+    expect(t.text()).toContain('extra MCP servers for this session: docs')
+    expect(t.text()).toContain('extra directories for this session: /elsewhere')
+  })
+
+  it('a session without those flags sends none of them', async () => {
+    const reqs: Array<Record<string, unknown>> = []
+    const { d } = deps(done)
+    const inner = d.startRun
+    d.startRun = async (req, send, onMessages) => {
+      reqs.push({ ...req })
+      await inner(req, send, onMessages)
+    }
+    const t = fakeIo(['one', null])
+    d.io = t.io
+    await runTui(opts, d)
+    for (const k of ['toolScope', 'appendSystemPrompt', 'extraMcpServers', 'overrides']) {
+      expect(reqs[0]).not.toHaveProperty(k)
+    }
+    expect(sessionRunRequestFields(undefined)).toEqual({})
+    expect(sessionInputLines({})).toEqual([])
+  })
+
+  it('--name titles the first chat it creates, and only that one', async () => {
+    const { d } = deps(done)
+    const t = fakeIo(['one', '/clear', 'two', null])
+    d.io = t.io
+    const { persist } = fakePersist()
+    const renames: Array<[string, string]> = []
+    d.persist = { ...persist, rename: (id, title) => renames.push([id, title]) }
+    await runTui({ ...opts, title: 'Login bug' }, d)
+    expect(renames).toEqual([['conv-1', 'Login bug']])
+  })
+
+  it('--name renames a resumed chat', async () => {
+    const { d } = deps(done)
+    const t = fakeIo([null])
+    d.io = t.io
+    const { persist } = fakePersist([
+      { id: 'c1', title: 'Old', updatedAt: 1, messages: [{ role: 'user', content: 'x' }] }
+    ])
+    const renames: Array<[string, string]> = []
+    d.persist = { ...persist, rename: (id, title) => renames.push([id, title]) }
+    await runTui({ ...opts, continueSession: true, title: 'New name' }, d)
+    expect(renames).toEqual([['c1', 'New name']])
   })
 })

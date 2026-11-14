@@ -581,3 +581,57 @@ describe('the checked-in --json schema', () => {
     expect(validateJson(schema, { type: 'system', subtype: 'init', schemaVersion: 2 }).length).toBeGreaterThan(0)
   })
 })
+
+describe('session flags: --name and --add-dir', () => {
+  const parse = (...args: string[]) => parseHeadlessArgs(['houston', ...args], CWD)
+
+  it('parses --name/-n and never takes it or --add-dir as the -p prompt', () => {
+    const here = process.cwd()
+    expect(parse('-p', 'go', '-n', 'Nightly audit', '--add-dir', here)).toMatchObject({
+      prompt: 'go',
+      title: 'Nightly audit',
+      addDirs: [here]
+    })
+    expect(parseHeadlessArgs(['houston', '-p', '--name', 'x'], CWD, { stdinPiped: true })).toMatchObject({ promptFromStdin: true, title: 'x' })
+    expect(parse('-p', 'go', '--name', '')?.usageError).toMatch(/--name needs a title/)
+    expect(parse('-p', 'go', '--add-dir')?.usageError).toMatch(/--add-dir: needs the path of a directory/)
+  })
+
+  it('a missing --add-dir exits 2 before any run', async () => {
+    const missing = join(process.cwd(), 'definitely-not-here')
+    const parsed = parseHeadlessArgs(['houston', '-p', 'go', '--add-dir', missing], CWD)!
+    const { d, err, requests } = deps([answer('ok')])
+    expect(await runHeadless({ ...baseOpts, ...parsed }, d)).toBe(HEADLESS_EXIT.usage)
+    expect(requests).toHaveLength(0)
+    expect(err.join('')).toContain(`--add-dir: ${JSON.stringify(missing)} is not a directory`)
+  })
+
+  it('sends the directories as the run request\'s addDirs, leaving the overrides alone', async () => {
+    const { d, requests, err } = deps([answer('ok')])
+    await runHeadless({ ...baseOpts, json: false, addDirs: [process.cwd()], maxTurns: 3 }, d)
+    expect(requests[0].addDirs).toEqual([process.cwd()])
+    expect(requests[0].overrides).toEqual({ maxIterations: 3 })
+    expect(err.join('')).toContain('extra directories for this run')
+  })
+
+  it('titles a new or resumed session with --name', async () => {
+    const renames: Array<[string, string]> = []
+    const session = (prior: boolean): HeadlessDeps['session'] => ({
+      load: () => (prior ? { id: 'old', messages: [] } : null),
+      create: () => ({ id: 'new' }),
+      setMessages: () => {},
+      setSettings: () => {},
+      rename: (id, title) => renames.push([id, title])
+    })
+    await runHeadless({ ...baseOpts, title: 'Fresh' }, deps([answer('ok')], { session: session(false) }).d)
+    await runHeadless(
+      { ...baseOpts, title: 'Again', continueSession: true },
+      deps([answer('ok')], { session: session(true) }).d
+    )
+    await runHeadless(baseOpts, deps([answer('ok')], { session: session(false) }).d)
+    expect(renames).toEqual([
+      ['new', 'Fresh'],
+      ['old', 'Again']
+    ])
+  })
+})

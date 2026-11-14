@@ -41,6 +41,7 @@ import { createSpawnBackend } from './spawnSession'
 import { createSchedulerService, fireViaSpawn, schedulesFilePath, type SchedulerService } from './schedulerService'
 import { appSchedulerRunning, daemonPidPath, holdPidFile } from './scheduleDaemon'
 import { createWorktree, removeWorktree } from './agent/worktree'
+import { readFlagFile, resolveSessionInputs } from './sessionFlags'
 import { decideProposal, hostProposalDeps, proposalsIn, startProposal } from './proposals'
 import { askSideChat, cancelSideChat, clearSideChat, hostSideChatDeps } from './sideChat'
 import { findFiles } from './agent/mentions'
@@ -577,6 +578,17 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
   if (!process.stdin.isTTY) {
     process.stderr.write('Interactive mode (-i) needs a terminal. In a pipe, use `-p "<prompt>"`.\n')
     return 2
+  }
+  // The launch flags that name files, tools or folders are read and checked before
+  // the session starts, as a one-shot run does: a missing file is a usage error, not
+  // a session that quietly runs without it. A bad flag value is runTui's to report.
+  if (!tui.usageError) {
+    const inputs = await resolveSessionInputs(tui, { readFile: readFlagFile })
+    if ('error' in inputs) {
+      process.stderr.write(`${inputs.error}\n`)
+      return 2
+    }
+    tui.sessionInputs = inputs
   }
   // Colorize only when the environment says so (TTY, NO_COLOR, TERM, FORCE_COLOR).
   tui.color = resolveColor(process.env, Boolean(process.stdout.isTTY))
@@ -1146,7 +1158,9 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: Terminal
         setMessages,
         // Keep a resumed conversation's stored model and effort in step with what this
         // run actually used, so usage attribution and a GUI re-open don't diverge.
-        setSettings: (id, patch) => updateConversationMeta(id, patch)
+        setSettings: (id, patch) => updateConversationMeta(id, patch),
+        // --name: a chosen title, never replaced by a generated one.
+        rename: (id, title) => organizeConversation(id, { title })
       }
     })
     // Don't let the one-shot exit tear down sessions the run spawned; their
