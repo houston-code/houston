@@ -37,6 +37,7 @@ import {
   type ListedPages,
   type McpListKind
 } from './protocol'
+import { withTraceContext } from './trace'
 import { SseEventBuffer, type SseEvent } from './sse-client'
 
 /**
@@ -318,7 +319,7 @@ export class McpHttpClient implements McpConnection {
     // Stop the transfer once the request settles, whichever way: the response
     // arrived (no need to drain the rest), it timed out, was cancelled, or the client closed.
     void result.catch(() => {}).finally(() => controller.abort())
-    void this.performPost(id, method, { jsonrpc: '2.0', id, method, params: sent }, controller).catch(
+    void this.performPost(id, method, { jsonrpc: '2.0', id, method, params: withTraceContext(sent) }, controller).catch(
       (e) => this.pending.reject(id, e as Error)
     )
     return result
