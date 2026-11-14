@@ -535,6 +535,9 @@ Two things never use it: `web_fetch`, which connects straight to an address it h
 checked so it can't be pointed at a private network, and shell commands, which the
 sandbox's own network proxy governs. Houston also trusts certificates in your
 operating system's store, so a proxy that re-signs TLS with a company root works too.
+Install that root in the OS store: the installed desktop app, `Houston -i` and
+`Houston -p` included, ignores `NODE_EXTRA_CA_CERTS` and `NODE_OPTIONS` (the
+standalone CLI, which runs on your own Node, still reads them).
 
 ### When a turn fails
 
