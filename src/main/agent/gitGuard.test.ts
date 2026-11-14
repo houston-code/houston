@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { execFileSync } from 'node:child_process'
 import {
   chmodSync,
@@ -11,12 +11,14 @@ import {
   rmSync,
   statSync,
   symlinkSync,
+  utimesSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   answerKeeps,
+  defaultReadConfigEntries,
   describeChange,
   diffRepo,
   GIT_GUARD_KEEP,
@@ -113,6 +115,27 @@ describe('parseConfigList', () => {
       ['alias.x', '!a\nb'],
       ['core.flag', '']
     ])
+  })
+})
+
+describe('defaultReadConfigEntries', () => {
+  it('parses the bytes it is handed, not the file, and follows no include', async () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'houston-gitguard-')))
+    try {
+      const file = join(dir, 'config')
+      writeFileSync(file, '[user]\n\tname = on disk\n')
+      const included = join(dir, 'inc').replace(/\\/g, '/')
+      writeFileSync(included, '[core]\n\tfsmonitor = included\n')
+      const bytes = Buffer.from(`[core]\n\tpager = handed\n[include]\n\tpath = ${included}\n\tpath = inc\n`)
+      expect(await defaultReadConfigEntries(file, bytes)).toEqual([
+        ['core.pager', 'handed'],
+        ['include.path', included],
+        ['include.path', 'inc']
+      ])
+      expect(await defaultReadConfigEntries(file, Buffer.from('[core\n'))).toBeNull()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -472,6 +495,187 @@ describe('GitGuard on real repositories', () => {
     await guard.check()
     await guard.check()
     expect(readConfigEntries.mock.calls.length + listGitlinks.mock.calls.length).toBe(calls)
+  })
+
+  describe('config parses shared across runs', () => {
+    /** The real parser behind a spy, so a test sees which files reached git. */
+    const realParser = (): Mock<typeof defaultReadConfigEntries> => vi.fn(defaultReadConfigEntries)
+    const parsedFiles = (read: Mock<typeof defaultReadConfigEntries>, from = 0): string[] =>
+      read.mock.calls.slice(from).map(([file]) => file)
+    const wtGitDir = (name: string): string => join(ws, '.git', 'worktrees', name)
+
+    it('a later run spawns no git for config files it already parsed', async () => {
+      git(ws, 'config', 'extensions.worktreeConfig', 'true')
+      for (const name of ['a', 'b']) {
+        git(ws, 'worktree', 'add', '-q', join(tmp, name))
+        git(join(tmp, name), 'config', '--worktree', 'color.ui', 'auto')
+      }
+      const readConfigEntries = realParser()
+      await new GitGuard([join(tmp, 'a')], { readConfigEntries }).ensureBaseline()
+      expect(parsedFiles(readConfigEntries)).toContain(join(wtGitDir('b'), 'config.worktree'))
+      const cold = readConfigEntries.mock.calls.length
+      await new GitGuard([join(tmp, 'a')], { readConfigEntries }).ensureBaseline()
+      expect(readConfigEntries.mock.calls.length).toBe(cold)
+    })
+
+    it('with a warm cache, still catches each kind of planted change and undoes only those', async () => {
+      git(ws, 'config', 'extensions.worktreeConfig', 'true')
+      git(ws, 'worktree', 'add', '-q', join(tmp, 'wt'))
+      git(ws, 'worktree', 'add', '-q', join(tmp, 'sib'))
+      git(join(tmp, 'sib'), 'config', '--worktree', 'color.ui', 'auto')
+      const readConfigEntries = realParser()
+      await new GitGuard([join(tmp, 'wt')], { readConfigEntries }).ensureBaseline()
+      // The next run's guard starts from what the first one parsed.
+      const guard = new GitGuard([join(tmp, 'wt')], { readConfigEntries })
+      await guard.ensureBaseline()
+
+      git(ws, 'config', 'core.fsmonitor', 'sh -c evil')
+      git(ws, 'config', 'user.email', 'kept@x')
+      git(join(tmp, 'sib'), 'config', '--worktree', 'core.sshCommand', 'sh -c evil')
+      const hook = join(ws, '.git', 'hooks', 'post-checkout')
+      writeFileSync(hook, '#!/bin/sh\necho evil\n')
+      const sibCommondir = join(wtGitDir('sib'), 'commondir')
+      writeFileSync(sibCommondir, '../../../evil\n')
+
+      const { changes } = await guard.check()
+      expect(changes.map((c) => `${c.kind}:${c.file}`).sort()).toEqual(
+        [
+          `commondir:${sibCommondir}`,
+          `config:${join(ws, '.git', 'config')}`,
+          `config:${join(wtGitDir('sib'), 'config.worktree')}`,
+          `hook:${hook}`
+        ].sort()
+      )
+      expect(await guard.undo(changes)).toEqual([])
+      expect(() => git(ws, 'config', '--get', 'core.fsmonitor')).toThrow()
+      expect(() => git(join(tmp, 'sib'), 'config', '--worktree', '--get', 'core.sshCommand')).toThrow()
+      expect(existsSync(hook)).toBe(false)
+      expect(readFileSync(sibCommondir, 'utf8')).toBe('../..\n')
+      expect(git(ws, 'config', '--file', '.git/config', '--get', 'user.email').trim()).toBe('kept@x')
+      expect(git(join(tmp, 'sib'), 'config', '--worktree', '--get', 'color.ui').trim()).toBe('auto')
+      expect((await guard.check()).changes).toEqual([])
+    })
+
+    it('reparses a config rewritten with the same size and mtime but different bytes', async () => {
+      const file = join(ws, '.git', 'config.worktree')
+      const harmless = '[color]\n\tui = always\n'
+      const planted = '[core]\n\tpager = evil\n'
+      expect(Buffer.byteLength(planted)).toBe(Buffer.byteLength(harmless))
+      const when = new Date('2026-01-02T03:04:05Z')
+      writeFileSync(file, harmless)
+      utimesSync(file, when, when)
+      const readConfigEntries = realParser()
+      await new GitGuard([ws], { readConfigEntries }).ensureBaseline()
+      const guard = new GitGuard([ws], { readConfigEntries })
+      await guard.ensureBaseline()
+      const warm = readConfigEntries.mock.calls.length
+
+      const before = statSync(file)
+      writeFileSync(file, planted)
+      utimesSync(file, when, when)
+      const after = statSync(file)
+      expect([after.size, after.mtimeMs]).toEqual([before.size, before.mtimeMs])
+
+      const { changes } = await guard.check()
+      expect(parsedFiles(readConfigEntries, warm)).toEqual([file])
+      expect(changes).toMatchObject([{ kind: 'config', file, key: 'core.pager', before: [], after: ['evil'] }])
+      expect(await guard.undo(changes)).toEqual([])
+      expect(() => git(ws, 'config', '--file', '.git/config.worktree', '--get', 'core.pager')).toThrow()
+    })
+
+    it('between runs, picks up a worktree added since and drops one removed', async () => {
+      git(ws, 'config', 'extensions.worktreeConfig', 'true')
+      for (const name of ['a', 'gone']) {
+        git(ws, 'worktree', 'add', '-q', join(tmp, name))
+        git(join(tmp, name), 'config', '--worktree', 'color.ui', 'auto')
+      }
+      const readConfigEntries = realParser()
+      await new GitGuard([join(tmp, 'a')], { readConfigEntries }).ensureBaseline()
+
+      // Between the two runs: one worktree removed, another added.
+      git(ws, 'worktree', 'remove', '--force', join(tmp, 'gone'))
+      const added = join(tmp, 'added')
+      git(ws, 'worktree', 'add', '-q', added)
+      git(added, 'config', '--worktree', 'color.ui', 'auto')
+      const seen = readConfigEntries.mock.calls.length
+      const guard = new GitGuard([join(tmp, 'a')], { readConfigEntries })
+      await guard.ensureBaseline()
+      // Only the new worktree's file needed git; the rest came from the first run.
+      expect(parsedFiles(readConfigEntries, seen)).toEqual([join(wtGitDir('added'), 'config.worktree')])
+      const watched = [...(await guard.snapshot()).get(join(tmp, 'a'))!.configs.keys()]
+      expect(watched).toContain(join(wtGitDir('added'), 'config.worktree'))
+      expect(watched).not.toContain(join(wtGitDir('gone'), 'config.worktree'))
+
+      git(added, 'config', '--worktree', 'core.fsmonitor', 'sh -c evil')
+      const { changes } = await guard.check()
+      expect(changes).toMatchObject([
+        { kind: 'config', file: join(wtGitDir('added'), 'config.worktree'), key: 'core.fsmonitor' }
+      ])
+      expect(await guard.undo(changes)).toEqual([])
+      expect(() => git(added, 'config', '--worktree', '--get', 'core.fsmonitor')).toThrow()
+      expect(git(added, 'config', '--worktree', '--get', 'color.ui').trim()).toBe('auto')
+
+      // Removing a worktree mid-run runs nothing, so it is not reported either.
+      git(ws, 'worktree', 'remove', '--force', added)
+      expect((await guard.check()).changes).toEqual([])
+    })
+
+    it('tries a failed parse again instead of keeping the failure', async () => {
+      let fail = false
+      const readConfigEntries = vi.fn(async (file: string, bytes: Buffer) =>
+        fail ? null : await defaultReadConfigEntries(file, bytes)
+      )
+      const guard = new GitGuard([ws], { readConfigEntries })
+      await guard.ensureBaseline()
+      git(ws, 'config', 'core.fsmonitor', 'sh -c evil')
+      // The first look at the planted file fails (a timeout, say) and sees nothing.
+      fail = true
+      const missed = await guard.check()
+      expect(missed.changes).toEqual([])
+      guard.accept(missed.current)
+      fail = false
+      expect((await guard.check()).changes).toMatchObject([{ kind: 'config', key: 'core.fsmonitor' }])
+    })
+
+    it('parses cold files in parallel, never more than 8 at once', async () => {
+      // Real worktrees: bare entries would be pruned by git's background maintenance.
+      for (let i = 0; i < 12; i++) {
+        git(ws, 'worktree', 'add', '-q', '--detach', join(tmp, `w${i}`))
+        writeFileSync(join(wtGitDir(`w${i}`), 'config.worktree'), `[color]\n\tui = auto${i}\n`)
+      }
+      let inFlight = 0
+      let peak = 0
+      const readConfigEntries = vi.fn(async () => {
+        peak = Math.max(peak, ++inFlight)
+        await new Promise((r) => setTimeout(r, 10))
+        inFlight--
+        return [] as Array<[string, string]>
+      })
+      await new GitGuard([ws], { readConfigEntries }).ensureBaseline()
+      expect(readConfigEntries).toHaveBeenCalledTimes(13)
+      expect(peak).toBeGreaterThan(1)
+      expect(peak).toBeLessThanOrEqual(8)
+    })
+
+    it('lists a linked worktree root and its main checkout in a fixed order', async () => {
+      // Added out of name order: the snapshot lists them sorted.
+      for (const name of ['b', 'a']) git(ws, 'worktree', 'add', '-q', join(tmp, name))
+      const snap = await new GitGuard([join(tmp, 'b')]).snapshot()
+      expect([...snap.keys()]).toEqual([join(tmp, 'b'), ws])
+      const linked = snap.get(join(tmp, 'b'))!
+      const main = snap.get(ws)!
+      const per = (file: string, ...names: string[]): string[] => names.map((n) => join(wtGitDir(n), file))
+      expect([...linked.commondirs.keys()]).toEqual(per('commondir', 'b', 'a'))
+      expect([...main.commondirs.keys()]).toEqual([join(ws, '.git', 'commondir'), ...per('commondir', 'a', 'b')])
+      expect([...linked.configs.keys()]).toEqual([join(ws, '.git', 'config'), ...per('config.worktree', 'b', 'a')])
+      expect([...main.configs.keys()]).toEqual([
+        join(ws, '.git', 'config'),
+        join(ws, '.git', 'config.worktree'),
+        ...per('config.worktree', 'a', 'b')
+      ])
+      expect(main.configs.get(join(ws, '.git', 'config'))).toEqual(linked.configs.get(join(ws, '.git', 'config')))
+      expect([...main.commondirTargets!.values()]).toEqual([realpathSync(join(ws, '.git')), realpathSync(join(ws, '.git'))])
+    })
   })
 
   describe('reviewGitChanges', () => {

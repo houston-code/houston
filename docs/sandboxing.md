@@ -100,9 +100,10 @@ when a background shell's output is read or it is stopped), it compares again:
   answered) is still asked about everywhere it shows up.
 
 Cost: a snapshot of an unchanged repository is a handful of `stat`s and small reads.
-git runs only to parse a config file whose bytes changed (`git config --file`, outside
-any repository, which runs nothing) or to list submodule entries when the index changed
-(through the hardened runner).
+git runs only to parse config bytes Houston hasn't parsed since it started (`git config
+--file -` fed exactly the bytes Houston read, outside any repository, which runs nothing;
+a parse is reused only for a file with those same bytes, by SHA-256) or to list submodule
+entries when the index changed (through the hardened runner).
 
 Separately, the file tools treat `.git/hooks/…`, `.git/config`, `config.worktree`,
 `commondir`, and a `.git` pointer file as sensitive writes (`isGitExecPath` in
