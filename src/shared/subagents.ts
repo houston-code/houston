@@ -21,6 +21,15 @@ export type SubagentKind = 'research' | 'writable' | 'reviewer'
 
 export type SubagentStatus = 'running' | 'done' | 'error' | 'aborted' | 'step-limit' | 'stalled'
 
+/**
+ * Whether a finished agent's report can be taken as a whole answer. `done`: it finished
+ * with a report. `limit`: it was cut short (its step limit or `max_turns`, a loop it kept
+ * repeating, or the model's output limit), so the report is partial. `empty`: it ended
+ * without any report text. `error`: it failed or was stopped. The clients show a check
+ * only for `done`.
+ */
+export type SubagentOutcome = 'done' | 'limit' | 'empty' | 'error'
+
 /** Who picked the model the agent ran on. */
 export type SubagentModelSource = 'run' | 'argument' | 'agent-file'
 
@@ -100,6 +109,11 @@ export interface SubagentRecord {
   /** This record continues an earlier agent (a resume). */
   resumed?: boolean
   status: SubagentStatus
+  /**
+   * How its work came out, set when it ends. Records saved before this existed have none;
+   * read it through {@link recordOutcome}, which derives it from `status`.
+   */
+  outcome?: SubagentOutcome
   startedAt: number
   endedAt?: number
   budget?: SubagentBudget
@@ -234,12 +248,42 @@ export function modelSourceLabel(source: SubagentModelSource): string {
   return "the chat's model"
 }
 
+/** The outcome a status implies when nothing more specific was recorded. */
+export function outcomeForStatus(status: SubagentStatus): SubagentOutcome | undefined {
+  switch (status) {
+    case 'running':
+      return undefined
+    case 'done':
+      return 'done'
+    case 'step-limit':
+    case 'stalled':
+      return 'limit'
+    case 'error':
+    case 'aborted':
+      return 'error'
+  }
+}
+
+/** A record's outcome: the recorded one, else the one its status implies (undefined while running). */
+export function recordOutcome(r: Pick<SubagentRecord, 'status' | 'outcome'>): SubagentOutcome | undefined {
+  if (r.status === 'running') return undefined
+  return r.outcome ?? outcomeForStatus(r.status)
+}
+
+/** Whether an agent ended short of a whole answer (cut short or empty), which the clients flag. */
+export function endedShort(r: Pick<SubagentRecord, 'status' | 'outcome'>): boolean {
+  const o = recordOutcome(r)
+  return o === 'limit' || o === 'empty'
+}
+
 /** How the agent ended, in a few words. */
-export function statusLabel(r: SubagentRecord): string {
+export function statusLabel(r: Pick<SubagentRecord, 'status' | 'outcome' | 'budget'>): string {
   switch (r.status) {
     case 'running':
       return 'running'
     case 'done':
+      if (r.outcome === 'empty') return 'finished without a report'
+      if (r.outcome === 'limit') return "cut off at the model's output limit"
       return 'finished with a report'
     case 'error':
       return 'failed'
@@ -458,7 +502,7 @@ type TermEvent =
       type: 'subagent_end'
       parentCallId: string
       recordId: string
-      update: Pick<SubagentRecord, 'status' | 'endedAt'> & Partial<Pick<SubagentRecord, 'budget' | 'resumeId'>>
+      update: Pick<SubagentRecord, 'status' | 'endedAt'> & Partial<Pick<SubagentRecord, 'outcome' | 'budget' | 'resumeId'>>
     }
 
 /**
@@ -500,10 +544,12 @@ export class SubagentTermLines {
     if (quiet) return null
     const u = e.update
     const time = u.endedAt ? formatDuration(u.endedAt - agent.startedAt) : ''
-    const status = statusLabel({ status: u.status, budget: u.budget } as SubagentRecord)
+    const status = statusLabel(u)
     const facts = [`${agent.steps} step${agent.steps === 1 ? '' : 's'}`, time, u.resumeId ?? ''].filter(Boolean).join(', ')
-    const glyph = u.status === 'done' ? '✓' : u.status === 'running' ? '…' : u.status === 'step-limit' || u.status === 'stalled' ? '!' : '✗'
-    const tone = u.status === 'done' ? 'dim' : u.status === 'step-limit' || u.status === 'stalled' ? 'yellow' : 'red'
+    // A check only for a whole answer: an agent cut short or with nothing to say is a warning.
+    const outcome = recordOutcome(u)
+    const glyph = outcome === undefined ? '…' : outcome === 'done' ? '✓' : outcome === 'error' ? '✗' : '!'
+    const tone = outcome === 'done' || outcome === undefined ? 'dim' : outcome === 'error' ? 'red' : 'yellow'
     return { depth: agent.depth, text: terminalSafe(`${glyph} ${agent.label}: ${status} (${facts})`), tone }
   }
 }
