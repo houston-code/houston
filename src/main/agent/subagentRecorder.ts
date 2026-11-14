@@ -28,6 +28,8 @@ export interface SubagentStart {
   /** The parent's step that dispatched this agent (nested agents). */
   parentStep?: number
   resumed?: boolean
+  /** The background agent's id, when it was dispatched with `background: true`. */
+  backgroundId?: string
 }
 
 /** The handle the loop drives one agent's record through. */
@@ -90,6 +92,7 @@ export class SubagentRecorder {
       ...(s.systemPrompt ? { systemPrompt: clipText(this.redact(s.systemPrompt), SUBAGENT_CAPS.systemPrompt).text } : {}),
       tools: s.tools.slice(0, 64),
       ...(s.resumed ? { resumed: true } : {}),
+      ...(s.backgroundId ? { backgroundId: s.backgroundId } : {}),
       status: 'running',
       startedAt: this.now(),
       steps: []

@@ -714,8 +714,8 @@ safe subset in place. In the desktop app:
 
 **Terminal-only commands.** `/add-dir`, `/vim`, `/notify`, `/screen-reader`,
 `/reduce-motion`, `/verbose`, `/output`, `/copy`, `/thoughts`, `/transcript`, `/spawned`,
-`/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and `/exit`.
-Typed in the
+`/tasks`, `/proposals`, `/image`, `/rename`, `/export`, `/delete`, `/permissions`, and
+`/exit`. Typed in the
 desktop app, they tell you where the app does the same thing instead of being sent to
 the model.
 
@@ -2472,7 +2472,9 @@ working, instead of waiting for its report.
   finished record is saved with the chat.
 - **It never outlives the turn.** If the main agent finishes while one is still
   working, Houston waits for it (a notice says so) and hands over its report before
-  the turn ends. **Stop** stops it along with the turn.
+  the turn ends. **Stop** stops it along with the turn. In the terminal,
+  `/tasks kill <n>` stops just that agent: the main agent gets what it had, marked as
+  stopped by you.
 
 ### Running one yourself
 
@@ -2664,6 +2666,30 @@ what branch each one is on. Pick a number to open one.
   keeps going.
 - **Not the same as `/resume`,** which reopens any saved chat in this folder, whether
   or not this session started it.
+
+## Background tasks in the terminal (/tasks)
+
+`/tasks` (or `/bashes`) lists this chat's background work, numbered oldest first: the
+background commands the agent started (`run_shell` with `background: true`) and the
+subagents it dispatched, including background agents (`agent (background)`), which keep
+working while the turn goes on. Each row shows what it is (the command, or the agent's name and
+task), its state (running, exited with its code, killed, done, failed, stopped, or cut
+short), how long it has run, and, for a command, the last line it printed.
+
+- `/tasks <n>` shows one: a command's last 40 lines of output, or a subagent's task, its
+  recent steps, and its report once it ends. Reading never hides output from the agent.
+- `/tasks kill <n>` stops one. A command gets the same stop as the desktop's Stop
+  button: SIGTERM, then SIGKILL after a few seconds, and the agent hears of it with your
+  next message. A subagent ends at its next step and the turn goes on without it; the
+  agent is told you stopped it. Reviewers inside `/review` only stop with the turn.
+- On a terminal, a bare `/tasks` opens a picker: arrow keys to move, Enter to show the
+  task, `x` to stop it, Esc to close.
+- **It works while a turn runs.** Type `/tasks`, `/tasks <n>`, or `/tasks kill <n>` and
+  press Enter: it runs at once instead of waiting for the turn, prints the plain list
+  (no picker), and the turn keeps going.
+
+The desktop app shows background commands in the **Background tasks** list of the
+right-hand dock, and each subagent under the tool call that started it.
 
 ## Scheduled runs
 

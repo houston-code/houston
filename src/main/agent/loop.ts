@@ -220,8 +220,15 @@ import { afterWrite, captureBeforeWrite, type WriteSeamTarget } from './lsp/writ
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun, registerEgressRun } from './egress'
 import { formatFile } from './format'
-import { MAX_SUBAGENT_DEPTH, delegatedEvidenceSummary, runSubAgent, type DelegatedCommand } from './subagent'
+import {
+  MAX_SUBAGENT_DEPTH,
+  SUBAGENT_USER_STOPPED_NOTE,
+  delegatedEvidenceSummary,
+  runSubAgent,
+  type DelegatedCommand
+} from './subagent'
 import { SubagentRecorder, type SubagentHandle } from './subagentRecorder'
+import { USER_SUBAGENT_STOP, isUserSubagentStop, registerSubagentStop } from './subagentStops'
 import {
   limitSubagentHistory,
   resumeNote,
@@ -2717,8 +2724,13 @@ export async function startRun(
       depth: number
       /** For a nested agent: its parent's record, and the parent's step that dispatched it. */
       parent?: { recordId: string; step?: number }
-      /** The signal it runs under: the run's, or a background agent's (see BackgroundAgents). */
+      /**
+       * The signal it runs under: the run's, a background agent's (see BackgroundAgents),
+       * or for a nested agent its parent's, so stopping the parent stops it too.
+       */
       signal?: AbortSignal
+      /** Its id, when it was dispatched with `background: true` (see BackgroundAgents). */
+      backgroundId?: string
     }): Promise<string> => {
       const { callId, opts, writable, depth } = input
       const dispatchSignal = input.signal ?? abort.signal
@@ -2835,6 +2847,12 @@ export async function startRun(
       const changedFiles: string[] = []
       // The writable tier's own shell session (see below), which its gate reads the cwd of.
       const subShellSession = writable ? createShellSession(workspace) : undefined
+      // This agent's own stop, linked to the run's (or its parent agent's): the user can
+      // stop one agent from a task list without stopping the turn (see subagentStops).
+      // AbortSignal.any holds its sources weakly, so no listener piles up on the run's.
+      const ownStop = new AbortController()
+      const subSignal = AbortSignal.any([dispatchSignal, ownStop.signal])
+      let unregisterStop: (() => void) | undefined
       const result = await runSubAgent({
         // Pinned to the run's configured provider, not the fallback route: a
         // dispatch's `model` override is validated against `req.providerId`'s
@@ -2844,7 +2862,7 @@ export async function startRun(
         model,
         workspace,
         prompt: opts.prompt,
-        signal: dispatchSignal,
+        signal: subSignal,
         reachable: () => providerReached,
         systemOverride,
         tools: allowedTools,
@@ -2898,7 +2916,7 @@ export async function startRun(
           searchProvider: settings.searchProvider,
           ...nativeWebSearchFor(
             { provider: primaryRoute.provider, providerId: req.providerId, model },
-            dispatchSignal,
+            subSignal,
             (u, m, fee) => recordSideRequestUsage(u, m, undefined, fee)
           ),
           collectSecrets: () => knownSecrets
@@ -2936,8 +2954,10 @@ export async function startRun(
             systemPrompt: system,
             tools: toolNames,
             ...(input.parent ? { parentId: input.parent.recordId, parentStep: input.parent.step } : {}),
-            ...(resumed ? { resumed: true } : {})
+            ...(resumed ? { resumed: true } : {}),
+            ...(input.backgroundId ? { backgroundId: input.backgroundId } : {})
           })
+          unregisterStop = registerSubagentStop(runId, handle.id, () => ownStop.abort(USER_SUBAGENT_STOP))
         },
         onStep: (step) => handle?.step(step),
         onEnd: (end) => {
@@ -2981,8 +3001,8 @@ export async function startRun(
                   opts: { prompt: nestedPrompt, agent: nestedAgent, model: nestedModel, description: nestedDescription },
                   writable: false,
                   depth: depth + 1,
-                  ...(handle ? { parent: { recordId: handle.id, step: stepIndex } } : {}),
-                  signal: dispatchSignal
+                  signal: subSignal,
+                  ...(handle ? { parent: { recordId: handle.id, step: stepIndex } } : {})
                 })
             }
           : {}),
@@ -3008,6 +3028,7 @@ export async function startRun(
           handle?.usage(u)
         }
       }).finally(() => {
+        unregisterStop?.()
         // A subagent bills against its own (possibly cheaper) model; total its
         // tokens and fold them into the conversation's usage when it ends.
         // inputTokens: 0 keeps the context-size meter on the main turn (this is
@@ -3027,8 +3048,14 @@ export async function startRun(
         }
       })
 
+      // Stopped on its own (the user stopped this agent, or its parent agent, from a task
+      // list) while the turn goes on: say so, so the model doesn't read the cut-short
+      // report as the agent's answer or dispatch the same task straight back. Told apart
+      // from Stop and a run's end (which also stops background agents) by the reason the
+      // linked signal carries down from the stopped agent.
+      const stoppedAlone = subSignal.aborted && isUserSubagentStop(subSignal.reason)
       handle?.end({
-        status: ending?.status ?? (dispatchSignal.aborted ? 'aborted' : 'error'),
+        status: ending?.status ?? (subSignal.aborted ? 'aborted' : 'error'),
         ...(ending ? { outcome: ending.outcome, budget: ending.budget } : {}),
         report: result,
         ...(storedId ? { resumeId: storedId } : {})
@@ -3037,8 +3064,11 @@ export async function startRun(
       // A writable agent's report is its own account; follow it with what its tools
       // actually ran and changed, so a claim like "tests pass" can be checked against
       // the commands behind it. An aborted dispatch reports nothing further.
+      const reported = stoppedAlone ? `${result}\n\n${SUBAGENT_USER_STOPPED_NOTE}` : result
       const evidenced =
-        writable && !dispatchSignal.aborted ? `${result}\n\n${delegatedEvidenceSummary(ranCommands, changedFiles)}` : result
+        writable && !subSignal.aborted
+          ? `${reported}\n\n${delegatedEvidenceSummary(ranCommands, changedFiles)}`
+          : reported
 
       // Tell the model how to follow up. Only when a transcript was stored — an
       // aborted run, or one that failed before its first step, isn't resumable, and
@@ -3062,7 +3092,8 @@ export async function startRun(
       const label = opts.description?.trim() || (writable ? 'Writable subagent' : 'Research subagent')
       const started = backgroundAgents.start(
         { callId, label, writable },
-        (signal) => runDispatch({ callId, opts: { ...opts, background: false }, writable, depth: 1, signal }),
+        (signal, id) =>
+          runDispatch({ callId, opts: { ...opts, background: false }, writable, depth: 1, signal, backgroundId: id }),
         () => attachBackgroundRecords(callId)
       )
       return 'refused' in started ? started.refused : backgroundStartedText(started)

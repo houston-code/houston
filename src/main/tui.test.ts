@@ -9,6 +9,7 @@ import { catalogForPlatform } from '@shared/provider-catalog'
 import type {
   AgentEvent,
   AgentRunRequest,
+  BackgroundShellInfo,
   ChatMessage,
   ConversationSettingsPatch,
   ElicitationResult,
@@ -8603,5 +8604,334 @@ describe('composer keys handled by the driver', () => {
     await runTui(opts, d)
     expect(steers).toEqual(['use YAML'])
     expect(t.text()).toContain('removed 1 invisible character')
+  })
+})
+
+// /tasks (alias /bashes): the chat's background shells and subagents, read or stopped
+// from the terminal, also while a turn runs.
+describe('/tasks', () => {
+  const NOW_T = 5_000_000
+  const shellInfo = (over: Partial<BackgroundShellInfo> = {}): BackgroundShellInfo => ({
+    id: 'sh1',
+    command: 'npm run dev',
+    running: true,
+    exitCode: null,
+    startedAt: NOW_T - 60_000,
+    exitedAt: null,
+    workspace: '/proj',
+    ...over
+  })
+  const agentRecord = {
+    id: 'sa1',
+    kind: 'research' as const,
+    label: 'scan the repo',
+    model: 'claude-test',
+    modelSource: 'run' as const,
+    prompt: 'Where is the config loaded?',
+    tools: ['read_file'],
+    status: 'running' as const,
+    startedAt: NOW_T - 30_000,
+    steps: []
+  }
+  const agentEvents = (ended: boolean): AgentEvent[] => [
+    { runId: 'x', type: 'subagent_start', parentCallId: 'call1', record: agentRecord },
+    {
+      runId: 'x',
+      type: 'subagent_step',
+      parentCallId: 'call1',
+      recordId: 'sa1',
+      step: { index: 0, turn: 1, kind: 'tool', tool: 'read_file', summary: 'read config.ts', ok: true }
+    },
+    ...(ended
+      ? [
+          {
+            runId: 'x',
+            type: 'subagent_end',
+            parentCallId: 'call1',
+            recordId: 'sa1',
+            update: { status: 'done', outcome: 'done', endedAt: NOW_T - 10_000, report: 'It is in config.ts.' }
+          } as AgentEvent
+        ]
+      : [])
+  ]
+  function fakeTasks(shells: BackgroundShellInfo[]) {
+    const kills: string[] = []
+    const tails: Array<[string, number]> = []
+    const stops: Array<[string, string]> = []
+    const tasks: NonNullable<TuiDeps['backgroundTasks']> = {
+      shells: () => shells,
+      shellTail: (id, n) => {
+        tails.push([id, n])
+        return n === 1 ? ['ready on http://localhost:5173'] : ['line one', 'ready on http://localhost:5173']
+      },
+      killShell: (id) => {
+        kills.push(id)
+        return 'killed'
+      },
+      stopSubagent: (runId, recordId) => {
+        stops.push([runId, recordId])
+        return true
+      }
+    }
+    return { tasks, kills, tails, stops }
+  }
+
+  it('parses the forms and the alias', () => {
+    const s = settings()
+    expect(parseSlashCommand('/tasks', s)).toEqual({ kind: 'tasks', op: { op: 'list' } })
+    expect(parseSlashCommand('/bashes', s)).toEqual({ kind: 'tasks', op: { op: 'list' } })
+    expect(parseSlashCommand('/tasks 2', s)).toEqual({ kind: 'tasks', op: { op: 'show', index: 2 } })
+    expect(parseSlashCommand('/tasks kill 2', s)).toEqual({ kind: 'tasks', op: { op: 'kill', index: 2 } })
+    expect(parseSlashCommand('/tasks nope', s)).toEqual({ kind: 'tasks', op: { op: 'usage' } })
+    expect(HELP_TEXT).toContain('/tasks [n|kill n]')
+  })
+
+  it('says so when the chat has no background work', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/tasks', null])
+    d.io = t.io
+    d.backgroundTasks = fakeTasks([]).tasks
+    await runTui(opts, d)
+    expect(t.text()).toContain('No background tasks in this chat yet')
+  })
+
+  it("lists this chat's shells and the subagents its turns dispatched, numbered oldest first", async () => {
+    const { d, rec } = deps([...agentEvents(true), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', '/tasks', null])
+    d.io = t.io
+    d.now = () => NOW_T
+    const f = fakeTasks([
+      shellInfo(),
+      // Another chat's dev server is not this session's.
+      shellInfo({ id: 'other', command: 'cargo watch', conversationId: 'someone-else' })
+    ])
+    d.backgroundTasks = f.tasks
+    await runTui(opts, d)
+    const out = t.text()
+    expect(rec.runs).toHaveLength(1)
+    expect(out).toContain('Background tasks (1 running):')
+    expect(out).toMatch(/1\. shell\s+npm run dev\s+running\s+1m 0s/)
+    expect(out).toContain('ready on http://localhost:5173')
+    expect(out).toMatch(/2\. agent\s+scan the repo\s+done\s+20s/)
+    expect(out).not.toContain('cargo watch')
+  })
+
+  it("shows a shell's recent output and a subagent's steps and report", async () => {
+    const { d } = deps([...agentEvents(true), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', '/tasks 1', '/tasks 2', '/tasks 9', null])
+    d.io = t.io
+    d.now = () => NOW_T
+    const f = fakeTasks([shellInfo()])
+    d.backgroundTasks = f.tasks
+    await runTui(opts, d)
+    const out = t.text()
+    expect(f.tails).toContainEqual(['sh1', 40])
+    expect(out).toContain('$ npm run dev')
+    expect(out).toContain('line one')
+    expect(out).toContain('/tasks kill 1 stops it')
+    expect(out).toContain('task: Where is the config loaded?')
+    expect(out).toContain('read config.ts')
+    expect(out).toContain('It is in config.ts.')
+    expect(out).toContain('no task 9')
+  })
+
+  it('stops a running shell through the registry, and leaves a finished one alone', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/tasks kill 1', '/tasks kill 2', null])
+    d.io = t.io
+    const f = fakeTasks([
+      shellInfo(),
+      shellInfo({ id: 'sh2', command: 'npm test', running: false, exitCode: 0, startedAt: NOW_T, exitedAt: NOW_T })
+    ])
+    d.backgroundTasks = f.tasks
+    await runTui(opts, d)
+    expect(f.kills).toEqual(['sh1'])
+    expect(t.text()).toContain('stopping task 1')
+    expect(t.text()).toContain('task 2 already finished')
+  })
+
+  it('stops a leftover server of a shell that already exited', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/tasks kill 1', null])
+    d.io = t.io
+    const f = fakeTasks([shellInfo({ running: false, exitCode: 0, exitedAt: NOW_T, leftover: true })])
+    d.backgroundTasks = f.tasks
+    await runTui(opts, d)
+    expect(f.kills).toEqual(['sh1'])
+  })
+
+  // The point of /tasks is the turn that is running: typed mid-run, it runs now
+  // instead of queueing until the turn ends, and it never steers the model.
+  it('runs mid-turn without queueing or steering, and stops a running subagent of that turn', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    d.now = () => NOW_T
+    const f = fakeTasks([shellInfo()])
+    d.backgroundTasks = f.tasks
+    const steered: string[] = []
+    d.steerRun = (_r, text) => {
+      steered.push(text)
+      return true
+    }
+    let selects = 0
+    t.io.select = async () => {
+      selects++
+      return { kind: 'cancel' }
+    }
+    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    let liveRun = ''
+    let midOut = ''
+    d.startRun = async (req, send) => {
+      liveRun = req.runId
+      for (const e of agentEvents(false)) send({ ...e, runId: req.runId } as AgentEvent)
+      expect(hold.steer?.('/tasks')).toBe(true)
+      expect(hold.steer?.('/tasks 2')).toBe(true)
+      expect(hold.steer?.('/tasks kill 2')).toBe(true)
+      await new Promise((r) => setTimeout(r, 0))
+      midOut = t.text()
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    expect(steered).toEqual([])
+    // Printed while the turn was still running, as a plain list: no picker mid-run.
+    expect(midOut).toContain('Background tasks (2 running):')
+    expect(midOut).toMatch(/2\. agent\s+scan the repo\s+running/)
+    expect(midOut).toContain('read config.ts')
+    expect(midOut).toContain('stopping task 2')
+    expect(selects).toBe(0)
+    expect(f.stops).toEqual([[liveRun, 'sa1']])
+  })
+
+  // A background agent (dispatch with background: true) keeps working after its dispatch
+  // call returned and the model wrote its answer, while the turn waits for its report.
+  it('lists a background agent still working after its dispatch returned, shows it, and stops it', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['go', '/tasks', null])
+    d.io = t.io
+    d.now = () => NOW_T
+    const f = fakeTasks([])
+    d.backgroundTasks = f.tasks
+    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    let liveRun = ''
+    let midOut = ''
+    d.startRun = async (req, send) => {
+      liveRun = req.runId
+      const r = req.runId
+      send({ runId: r, type: 'tool_start', callId: 'call1', name: 'dispatch_agent', args: { description: 'scan the repo', background: true } })
+      send({ runId: r, type: 'subagent_start', parentCallId: 'call1', record: { ...agentRecord, backgroundId: 'bg1' } })
+      send({ runId: r, type: 'tool_result', callId: 'call1', name: 'dispatch_agent', output: 'Started background agent bg1 ("scan the repo").', ok: true })
+      send({ runId: r, type: 'text', delta: 'It is working on it.' })
+      send({ runId: r, type: 'notice', message: 'Waiting for 1 background agent to finish' })
+      expect(hold.steer?.('/tasks')).toBe(true)
+      expect(hold.steer?.('/tasks 1')).toBe(true)
+      expect(hold.steer?.('/tasks kill 1')).toBe(true)
+      await new Promise((res) => setTimeout(res, 0))
+      midOut = t.text()
+      send({
+        runId: r,
+        type: 'subagent_end',
+        parentCallId: 'call1',
+        recordId: 'sa1',
+        update: { status: 'aborted', endedAt: NOW_T - 5_000, report: 'Got as far as config.ts.' }
+      })
+      send({ runId: r, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    expect(midOut).toContain('Background tasks (1 running):')
+    expect(midOut).toMatch(/1\. agent \(background\)\s+scan the repo\s+running\s+30s/)
+    expect(midOut).toContain('background agent bg1: the turn goes on while it works')
+    expect(midOut).toContain('stopping task 1')
+    expect(f.stops).toEqual([[liveRun, 'sa1']])
+    // After the turn, the list keeps it, finished as stopped.
+    const after = t.text().slice(midOut.length)
+    expect(after).toMatch(/1\. agent \(background\)\s+scan the repo\s+stopped\s+25s/)
+  })
+
+  it("says a subagent that can't be stopped on its own needs Esc", async () => {
+    const { d } = deps([])
+    const t = fakeIo(['go', null])
+    d.io = t.io
+    const f = fakeTasks([])
+    f.tasks.stopSubagent = () => false
+    d.backgroundTasks = f.tasks
+    const hold: { steer: ((text: string) => boolean) | null } = { steer: null }
+    t.io.onSteer = (h) => {
+      hold.steer = h
+    }
+    d.startRun = async (req, send) => {
+      for (const e of agentEvents(false)) send({ ...e, runId: req.runId } as AgentEvent)
+      hold.steer?.('/tasks kill 1')
+      await new Promise((r) => setTimeout(r, 0))
+      send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+    }
+    await runTui(opts, d)
+    expect(t.text()).toContain("task 1 can't be stopped on its own; Esc stops the whole turn")
+  })
+
+  it('opens a picker at the composer: Enter shows the task, x stops it', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/tasks', '/tasks', '/tasks', null])
+    d.io = t.io
+    const f = fakeTasks([shellInfo()])
+    d.backgroundTasks = f.tasks
+    const specs: PickerSpec[] = []
+    const answers: PickerOutcome[] = [
+      { kind: 'commit', value: '0' },
+      { kind: 'action', id: 'kill', value: '0' },
+      { kind: 'cancel' }
+    ]
+    t.io.select = async (spec) => {
+      specs.push(spec)
+      return answers.shift()!
+    }
+    await runTui(opts, d)
+    expect(specs).toHaveLength(3)
+    expect(specs[0].actions?.map((a) => a.keys)).toEqual([['x']])
+    expect(specs[0].options[0].label).toContain('npm run dev')
+    expect(t.text()).toContain('$ npm run dev')
+    expect(f.kills).toEqual(['sh1'])
+  })
+
+  it('falls back to the numbered list when the picker is unavailable', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/bashes', null])
+    d.io = t.io
+    d.backgroundTasks = fakeTasks([shellInfo()]).tasks
+    t.io.select = async () => ({ kind: 'type' })
+    await runTui(opts, d)
+    expect(t.text()).toMatch(/1\. shell\s+npm run dev/)
+  })
+
+  it('lists subagents only when the host has no shell registry', async () => {
+    const { d } = deps([...agentEvents(true), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', '/tasks', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('background shells are unavailable here; listing subagents only')
+    expect(t.text()).toMatch(/1\. agent\s+scan the repo/)
+  })
+
+  it("forgets the old chat's subagents on /clear", async () => {
+    const { d } = deps([...agentEvents(true), { runId: 'x', type: 'done', stopReason: 'end_turn' }])
+    const t = fakeIo(['go', '/clear', '/tasks', null])
+    d.io = t.io
+    d.backgroundTasks = fakeTasks([]).tasks
+    await runTui(opts, d)
+    expect(t.text()).toContain('No background tasks in this chat yet')
+  })
+
+  it('prints the usage for an unknown form', async () => {
+    const { d } = deps([])
+    const t = fakeIo(['/tasks kill', null])
+    d.io = t.io
+    await runTui(opts, d)
+    expect(t.text()).toContain('usage: /tasks, /tasks <n> to show one, /tasks kill <n> to stop one')
   })
 })

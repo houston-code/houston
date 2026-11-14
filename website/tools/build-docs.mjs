@@ -378,6 +378,7 @@ export const GROUPS = [
       "spawn-separate-sessions",
       "proposed-sessions",
       "watching-work-you-sent-off",
+      "background-tasks-in-the-terminal",
       "scheduled-runs",
     ],
   },

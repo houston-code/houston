@@ -9,7 +9,9 @@ import { systemNoteMessage, type ChatMessage } from '@shared/agent'
  * signal follows the run's), the run's end stops any still going ({@link stop}), and a
  * turn that would end with one still working waits for it first, so its work is never
  * dropped unreported. It shares the run's budget and cost ceiling because it is an
- * ordinary dispatch (runDispatch) started without awaiting it.
+ * ordinary dispatch (runDispatch) started without awaiting it. For the same reason one
+ * agent is stopped on its own the way any dispatch is (see subagentStops): its report
+ * then ends with the user-stopped note and is delivered as usual.
  */
 
 /** Most background agents one run may have working at once. */
@@ -54,13 +56,13 @@ export class BackgroundAgents {
   }
 
   /**
-   * Start one. `run` is the dispatch itself; whatever it resolves (or throws) becomes
-   * the report. `onSettled` runs once it is done, before listeners are told. Returns the
+   * Start one. `run` is the dispatch itself, given the signal to run under and the new
+   * agent's id; whatever it resolves (or throws) becomes the report. `onSettled` runs once it is done, before listeners are told. Returns the
    * new agent, or a refusal to hand back as the tool result.
    */
   start(
     input: { callId: string; label: string; writable: boolean },
-    run: (signal: AbortSignal) => Promise<string>,
+    run: (signal: AbortSignal, id: string) => Promise<string>,
     onSettled?: (agent: BackgroundAgent) => void
   ): BackgroundAgent | { refused: string } {
     if (this.controller.signal.aborted) return { refused: 'The turn is ending, so no background agent can start now.' }
@@ -82,7 +84,7 @@ export class BackgroundAgents {
       }
     }
     const p = Promise.resolve()
-      .then(() => run(this.controller.signal))
+      .then(() => run(this.controller.signal, agent.id))
       .then(
         (result) => settle(result),
         (e: unknown) => settle(`[background agent failed: ${e instanceof Error ? e.message : String(e)}]`)

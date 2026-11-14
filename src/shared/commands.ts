@@ -152,6 +152,7 @@ export const COMMAND_ALIASES: Readonly<Record<string, string>> = {
   aside: 'btw',
   think: 'reasoning',
   proposed: 'proposals',
+  bashes: 'tasks',
   paste: 'image',
   q: 'quit'
 }
@@ -383,6 +384,11 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     clients: ['tui']
   },
   {
+    name: 'tasks', group: 'Terminal', args: '[n | kill n]',
+    description: 'List the background shells and subagents of this chat, show one, or stop one',
+    clients: ['tui']
+  },
+  {
     name: 'proposals', group: 'Terminal',
     description: 'List the sessions the agent proposed, and start, ask here, or dismiss one',
     clients: ['tui']
@@ -511,6 +517,7 @@ const DESKTOP_EQUIVALENT: Readonly<Record<string, string>> = {
   transcript: 'in the app, the chat itself is the full transcript: open a tool row or the reasoning to see it in full',
   copy: 'in the app, use the copy button on a reply or code block',
   spawned: 'in the app, sessions the agent started are listed under this chat in the sidebar',
+  tasks: 'in the app, background commands are in the Background tasks list in the right-hand dock, and subagents show under the tool call that started them',
   proposals: 'in the app, proposed sessions appear as cards in the chat, with Start and Dismiss',
   image: 'in the app, attach an image with the + button, or paste or drop it into the message box',
   rename: "in the app, rename a chat from its More actions menu in the sidebar",

@@ -26,7 +26,8 @@ import {
   cancelAllRuns,
   waitForRunsToEnd
 } from './agent/loop'
-import { killAllShells } from './agent/shells'
+import { killAllShells, killShell, listShells, shellTail } from './agent/shells'
+import { stopSubagent } from './agent/subagentStops'
 import { lspManager } from './agent/lsp/manager'
 import { flushRuleUsage } from './ruleUsage'
 import { installSignalCleanup, type CleanupSignal, type SignalCleanup, type SignalProcess } from './signalCleanup'
@@ -795,6 +796,13 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
       saveMemory: (scope, text) => saveMemory(tui.cwd, scope, text),
       memoryStore: () => memoryStore({ workspace: tui.cwd }),
       backgroundSessions: () => sessions.backgroundSessions(),
+      backgroundTasks: {
+        shells: () => listShells(),
+        shellTail: (id, maxLines) => shellTail(id, maxLines),
+        // `user`: the agent hears of it with the next message rather than being woken.
+        killShell: (id) => killShell(id, { by: 'user' }),
+        stopSubagent: (runId, recordId) => stopSubagent(runId, recordId)
+      },
       proposals: {
         list: (conversationId) => {
           const conv = getConversation(conversationId)

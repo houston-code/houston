@@ -56,12 +56,14 @@ import type { McpServerStatus } from './mcp/manager'
 import type {
   AgentEvent,
   AgentRunRequest,
+  BackgroundShellInfo,
   ChatMessage,
   ElicitationResult,
   PlanAcceptMode,
   PlanDecision,
   PlanPayload,
   QuestionOption,
+  KillShellOutcome,
   ReasoningEffort,
   ToolApprovalDecision
 } from '@shared/agent'
@@ -118,6 +120,23 @@ import type { PickerAction, PickerOption, PickerSpec, PickerOutcome } from './tu
 import { codeBlockLabel, copyableReplies, describeCopied, extractCodeBlocks, nthLatestReply } from './tui-copy'
 import { renderUsageReport } from './tui-usage'
 import type { UsageReport } from '@shared/usageReport'
+import {
+  chatSubagents,
+  parseTasksArgs,
+  renderShellDetail,
+  renderSubagentDetail,
+  renderTaskList,
+  shellInChat,
+  shellKillPhrase,
+  SubagentTracker,
+  taskPickerSpec,
+  taskRows,
+  taskRunning,
+  TASK_TAIL_LINES,
+  TASKS_USAGE,
+  type TaskRow,
+  type TasksOp
+} from './tui-tasks'
 import {
   signalFor,
   idleTitle,
@@ -1742,6 +1761,8 @@ export type SlashResult =
   | { kind: 'usage' }
   /** List (and open) the background sessions the agent spawned (/spawned). */
   | { kind: 'spawned' }
+  /** This chat's background shells and subagents: list, show one, or stop one (/tasks). */
+  | { kind: 'tasks'; op: TasksOp }
   /** List or act on the sessions the agent proposed (/proposals [start|here|dismiss n]). */
   | { kind: 'proposals'; op: 'list' | 'start' | 'here' | 'dismiss'; index?: number }
   /** Ask a quick side question about this chat without adding it to the chat (/btw). */
@@ -1808,6 +1829,9 @@ export function parseSlashCommand(
       return { kind: 'resume', query: arg }
     case 'spawned':
       return { kind: 'spawned' }
+    case 'tasks':
+    case 'bashes':
+      return { kind: 'tasks', op: parseTasksArgs(arg) }
     case 'proposals':
     case 'proposed': {
       const [op, n] = arg.trim().split(/\s+/)
@@ -2029,6 +2053,7 @@ export const HELP_TEXT = [
   '  /init                 write or improve AGENTS.md, the instructions file for this project',
   '  /resume [query]       pick a saved session to reopen (also /sessions): type to filter, 1-9 open a row, ctrl-r rename, ctrl-d or x delete, ctrl-a this folder or all folders',
   '  /spawned              list the background sessions the agent started; open one',
+  '  /tasks [n|kill n]     background shells and subagents of this chat: list, show n, or stop n (works mid-turn)',
   '  /proposals [op n]     sessions the agent proposed: start n, here n, or dismiss n',
   '  /btw <question>       ask a quick side question; the answer stays out of this chat',
   '  /btw clear            start this chat\'s side chat over',
@@ -2116,6 +2141,7 @@ export const STARTUP_TIPS = [
   'Ctrl-_ undoes your last edit in the prompt; Ctrl-^ redoes it',
   'Esc Esc on an empty prompt rewinds to an earlier message',
   'type while the agent works and press Enter to steer it',
+  '/tasks lists background shells and subagents, even while a turn runs',
   'Shift-Enter or Ctrl-J starts a new line',
   '/resume filters saved chats as you type; Ctrl-A shows every folder',
   'Ctrl-O opens the whole session full screen, with reasoning and full tool output',
@@ -3308,6 +3334,21 @@ export interface TuiDeps {
    */
   backgroundSessions?: () => BackgroundSession[]
   /**
+   * The background shell registry (`run_shell` background mode) and the subagent stop
+   * handles, for `/tasks`. Absent ⇒ /tasks lists the subagents it saw and says shells
+   * are unavailable here.
+   */
+  backgroundTasks?: {
+    /** Every background shell this process started (the driver keeps this chat's). */
+    shells: () => BackgroundShellInfo[]
+    /** A shell's last lines, secrets masked; moves no read cursor. Undefined when unknown. */
+    shellTail: (id: string, maxLines: number) => string[] | undefined
+    /** Stop a shell the way the desktop's Stop does: SIGTERM, then SIGKILL after a grace. */
+    killShell: (id: string) => KillShellOutcome
+    /** Stop one running subagent of a run; false when it can't be (finished, or a reviewer). */
+    stopSubagent: (runId: string, recordId: string) => boolean
+  }
+  /**
    * The chat's `propose_session` cards and what to do with them (`/proposals`).
    * Absent ⇒ the command says proposals are unavailable here.
    */
@@ -3981,6 +4022,85 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     wakeRequested = true
     return true
   })
+  // The subagents this session's runs dispatched, for /tasks (shells come from the
+  // registry each time; agents only exist as the events that described them).
+  const subagentTracker = new SubagentTracker()
+  // /tasks: this chat's background shells and subagents, numbered oldest first.
+  const currentTasks = (): TaskRow[] => {
+    const shells = deps.backgroundTasks
+      ? deps.backgroundTasks
+          .shells()
+          .filter((sh) => shellInChat(sh, conversationId, opts.cwd))
+          .map((sh) => ({ ...sh, lastLine: deps.backgroundTasks?.shellTail(sh.id, 1)?.[0] }))
+      : []
+    const agents = chatSubagents(messages, subagentTracker.forChat(conversationId), conversationId)
+    return taskRows(shells, agents)
+  }
+  const showTask = (rows: TaskRow[], n: number): void => {
+    const r = rows[n - 1]
+    if (!r) {
+      deps.io.out(paint(`· no task ${n}; /tasks lists them\n`, 'dim'))
+      return
+    }
+    const text =
+      r.kind === 'shell'
+        ? renderShellDetail(r, n, deps.backgroundTasks?.shellTail(r.shell.id, TASK_TAIL_LINES), nowFn(), paint)
+        : renderSubagentDetail(r, n, nowFn(), paint, columns())
+    deps.io.out(`${text}\n`)
+  }
+  const killTask = (rows: TaskRow[], n: number): void => {
+    const r = rows[n - 1]
+    if (!r) {
+      deps.io.out(paint(`· no task ${n}; /tasks lists them\n`, 'dim'))
+      return
+    }
+    if (!taskRunning(r)) {
+      deps.io.out(paint(`· task ${n} already finished; nothing to stop\n`, 'dim'))
+      return
+    }
+    if (r.kind === 'shell') {
+      if (!deps.backgroundTasks) {
+        deps.io.out(paint('· stopping background shells is unavailable here\n', 'dim'))
+        return
+      }
+      const outcome = deps.backgroundTasks.killShell(r.shell.id)
+      deps.io.out(paint(`${shellKillPhrase(n, outcome)}\n`, outcome === 'not-found' ? 'yellow' : 'dim'))
+      return
+    }
+    const a = r.agent
+    const stopped = a.runId ? (deps.backgroundTasks?.stopSubagent(a.runId, a.recordId) ?? false) : false
+    deps.io.out(
+      stopped
+        ? paint(`· stopping task ${n}: the subagent ends at its next step and the turn goes on without it\n`, 'dim')
+        : paint(`· task ${n} can't be stopped on its own; Esc stops the whole turn\n`, 'yellow')
+    )
+  }
+  /**
+   * Run /tasks. Mid-run (typed while a turn streams) it only prints, with no prompt or
+   * picker: the run owns the screen and the input, and an approval may need them.
+   */
+  const runTasks = async (op: TasksOp, midRun: boolean): Promise<void> => {
+    // Mid-run the cursor sits on the spinner row: start below it, as steering does.
+    if (midRun) deps.io.out('\n')
+    if (op.op === 'usage') {
+      deps.io.out(paint(`${TASKS_USAGE}\n`, 'dim'))
+      return
+    }
+    const rows = currentTasks()
+    if (op.op === 'show') return showTask(rows, op.index)
+    if (op.op === 'kill') return killTask(rows, op.index)
+    if (!deps.backgroundTasks) {
+      deps.io.out(paint('· background shells are unavailable here; listing subagents only\n', 'dim'))
+    }
+    if (midRun || !rows.length || !deps.io.select) {
+      deps.io.out(`${renderTaskList(rows, nowFn(), paint, columns())}\n`)
+      return
+    }
+    const r = await deps.io.select(taskPickerSpec(rows, nowFn(), columns()))
+    if (r.kind === 'commit') showTask(rows, Number(r.value) + 1)
+    else if (r.kind === 'action' && r.id === 'kill' && r.value !== null) killTask(rows, Number(r.value) + 1)
+    else if (r.kind === 'type') deps.io.out(`${renderTaskList(rows, nowFn(), paint, columns())}\n`)
+  }
   // A line typed mid-run goes to the turn that is running, so "no, not that" lands
   // while it can still change the outcome. With no live run there is nothing to
   // steer, and the io layer queues it as a follow-up instead. A slash command is
@@ -3990,6 +4110,12 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   deps.io.onSteer?.((typed) => {
     if (!activeRunId) return false
     const slash = parseSlashCommand(typed.trim(), deps.getSettings(), templateCommands)
+    // /tasks only reads the task lists or stops one task, so it runs now rather than
+    // waiting for the turn: that is when you want to see what the turn started.
+    if (slash.kind === 'tasks') {
+      runTasks(slash.op, true).catch(() => {})
+      return true
+    }
     if (slash.kind !== 'not-a-command' && slash.kind !== 'unknown') return false
     // The same invisible-character strip as a message sent from the composer.
     const cleaned = stripInvisible(typed)
@@ -4587,6 +4713,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       let result = parseSlashCommand(text, deps.getSettings(), templateCommands)
       if (result.kind === 'exit') break
       if (result.kind === 'clear') {
+        subagentTracker.forget(conversationId)
         messages = []
         conversationId = null // next turn starts (and persists) a fresh conversation
         persistedSettings = null // stored meta belongs to the old conversation
@@ -4890,6 +5017,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             'dim'
           )
         )
+        continue
+      }
+      if (result.kind === 'tasks') {
+        await runTasks(result.op, false)
         continue
       }
       if (result.kind === 'spawned') {
@@ -5799,6 +5930,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         case 'subagent_start':
         case 'subagent_step':
         case 'subagent_end': {
+          subagentTracker.apply(e, conversationId)
           const line = subagentLines.line(e)
           if (line) {
             const text = `  ${'  '.repeat(line.depth)}${truncate(line.text, Math.max(40, columns() - 6))}\n`

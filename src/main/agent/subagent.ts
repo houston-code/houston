@@ -434,6 +434,12 @@ export const OUTPUT_LIMIT_NOTE = "[subagent report cut off at the model's output
 
 /** The result when the agent ended without any report text. */
 export const EMPTY_REPORT_NOTE = '[subagent returned no answer]'
+/**
+ * Follows the report of an agent the user stopped on its own while the turn went on, so
+ * the model reads what came back as cut short and doesn't dispatch the same task again.
+ */
+export const SUBAGENT_USER_STOPPED_NOTE =
+  '[the user stopped this subagent before it finished; what is above is all it had. Do not dispatch the same task again unless they ask]'
 
 /** A command a writable subagent ran, as its tool results recorded it. */
 export interface DelegatedCommand {

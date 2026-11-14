@@ -395,3 +395,49 @@ describe('numbered picker (screen-reader mode)', () => {
     expect(parseNumberedPick(multi, '3, 1 3')).toEqual({ kind: 'commit', value: 'allow, session' })
   })
 })
+
+// /tasks: Enter views the highlighted task and `x` stops it, so `x` is an action
+// without a filter, and nothing falls back to a typed answer.
+describe('action keys without a filter', () => {
+  const tasks: PickerSpec = {
+    title: 'Background tasks:',
+    enterLabel: 'view',
+    actions: [{ id: 'kill', keys: ['x'], label: 'kill' }],
+    options: [
+      { label: '1. shell  npm run dev', value: '0' },
+      { label: '2. agent  scan', value: '1' }
+    ]
+  }
+
+  it('maps keys through the rich mapping, and leaves plain pickers as before', () => {
+    expect(pickerKeyFor(tasks, { sequence: 'x', name: 'x' })).toEqual({ type: 'text', ch: 'x' })
+    expect(pickerKeyFor(tasks, { name: 'c', sequence: '\x03', ctrl: true })).toEqual({ type: 'cancel' })
+    // Without actions, `x` is still a request to type.
+    expect(pickerKeyFor(spec, { sequence: 'x', name: 'x' })).toEqual({ type: 'char' })
+  })
+
+  it('ends with the action and the highlighted option', () => {
+    const moved = reducePicker(initialPickerState(tasks), { type: 'down' }).state
+    expect(reducePicker(moved, { type: 'text', ch: 'x' }).outcome).toEqual({ kind: 'action', id: 'kill', value: '1' })
+    expect(reducePicker(moved, { type: 'enter' }).outcome).toEqual({ kind: 'commit', value: '1' })
+  })
+
+  it('ignores other printable keys', () => {
+    const s = initialPickerState(tasks)
+    const step = reducePicker(s, { type: 'text', ch: 'q' })
+    expect(step.outcome).toBeUndefined()
+    expect(step.state.query).toBeUndefined()
+  })
+
+  it('names the labelled keys in the footer instead of offering a typed answer', () => {
+    const lines = renderPicker(initialPickerState(tasks), makePainter(false))
+    expect(lines[lines.length - 1]).toBe('↑/↓ move · enter view · x kill · esc cancel')
+  })
+
+  it('does nothing on an empty list', () => {
+    const empty = initialPickerState({ ...tasks, options: [] })
+    const step = reducePicker(empty, { type: 'text', ch: 'x' })
+    expect(step.outcome).toBeUndefined()
+    expect(step.state.notice).toBe('nothing selected')
+  })
+})
