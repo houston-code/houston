@@ -4,6 +4,7 @@ import { sanitizeServerId } from '@shared/mcp'
 import { MCP_CATALOG, addPastedServers, catalogServer, freeServerId, serverProblem, type McpCatalogEntry } from '@shared/mcpCatalog'
 import { parseMcpServersJson } from '@shared/mcpJson'
 import { HeadersField } from '../fields'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
 
 /** Review a catalog entry before adding it: every field editable, nothing saved until Add. */
 function ReviewForm({
@@ -28,15 +29,25 @@ function ReviewForm({
   const [switchOn, setSwitchOn] = useState(false)
   const [tried, setTried] = useState(false)
   const firstRef = useRef<HTMLInputElement>(null)
+  // Escape cancels the review rather than closing Settings.
+  const formRef = useRef<HTMLFormElement>(null)
+  useEscapeWithin(formRef, onCancel)
   useEffect(() => firstRef.current?.focus(), [])
 
   const remote = server.transport === 'http' || server.transport === 'sse'
-  const candidate: McpServerConfig = { ...server, args: remote ? [] : argsText.split('\n').map((a) => a.trim()).filter(Boolean) }
+  // The id is tidied when its field loses focus (tidying every keystroke would eat the
+  // `-` of `my-server`); Add reads the tidied form either way.
+  const candidate: McpServerConfig = {
+    ...server,
+    id: sanitizeServerId(server.id),
+    args: remote ? [] : argsText.split('\n').map((a) => a.trim()).filter(Boolean)
+  }
   const problem = serverProblem(candidate, taken)
   const patch = (p: Partial<McpServerConfig>): void => setServer((s) => ({ ...s, ...p }))
 
   return (
     <form
+      ref={formRef}
       className="mcp-review"
       aria-label={`Review ${entry.name}`}
       onSubmit={(e) => {
@@ -52,7 +63,12 @@ function ReviewForm({
       {entry.needs && <p className="field__hint">Needs {entry.needs} installed.</p>}
       <label className="mcp-review__field">
         <span>Id</span>
-        <input ref={firstRef} value={server.id} onChange={(e) => patch({ id: sanitizeServerId(e.target.value) })} />
+        <input
+          ref={firstRef}
+          value={server.id}
+          onChange={(e) => patch({ id: e.target.value })}
+          onBlur={() => patch({ id: sanitizeServerId(server.id) })}
+        />
       </label>
       {remote ? (
         <>
@@ -274,6 +290,12 @@ export function McpAddPanels({
   onAdd: (added: McpServerConfig[]) => void
 }): JSX.Element {
   const [open, setOpen] = useState<'catalog' | 'paste' | null>(null)
+  // Escape closes an open panel (and any pasted text in it) before it closes Settings.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEscapeWithin(rootRef, () => {
+    if (open === null) return false
+    setOpen(null)
+  })
   const [message, setMessage] = useState<string | null>(null)
   const add = (added: McpServerConfig[], msg: string): void => {
     onAdd(added)
@@ -285,7 +307,7 @@ export function McpAddPanels({
     setOpen((o) => (o === which ? null : which))
   }
   return (
-    <div className="mcp-add">
+    <div className="mcp-add" ref={rootRef}>
       <div className="mcp-review__actions">
         <button type="button" className="btn btn--sm" aria-expanded={open === 'catalog'} onClick={() => toggle('catalog')}>
           Add from catalog
