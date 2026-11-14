@@ -1,6 +1,7 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
+import { load } from 'js-yaml'
 import { describe, expect, it } from 'vitest'
 
 /**
@@ -180,9 +181,69 @@ describe("release-prepare runs publish's checks first", () => {
   })
 
   it("collects the notes' PRs from history and keeps an existing section in place", () => {
-    const notes = step('Generate release notes')
-    expect(notes).toContain('node scripts/release-source.mjs prs')
-    expect(notes).toContain('node scripts/changelog-upsert.mjs "$VERSION" .release-section.md CHANGELOG.md')
-    expect(notes).not.toContain('--search "merged:>')
+    const collect = step("Collect the release's PRs")
+    expect(collect).toContain('node scripts/release-source.mjs prs')
+    expect(collect).not.toContain('--search "merged:>')
+    expect(step('Generate release notes')).toContain(
+      'node scripts/changelog-upsert.mjs "$VERSION" .release-section.md CHANGELOG.md'
+    )
+  })
+})
+
+interface WorkflowStep {
+  name?: string
+  run?: string
+  env?: Record<string, string>
+}
+
+/** Every step of every job in every workflow file, with the file it came from. */
+function allSteps(): Array<{ file: string; step: WorkflowStep }> {
+  const dir = resolve(repoRoot, '.github/workflows')
+  return readdirSync(dir)
+    .filter((f) => /\.ya?ml$/.test(f))
+    .flatMap((file) => {
+      const doc = load(readFileSync(resolve(dir, file), 'utf8')) as { jobs?: Record<string, { steps?: WorkflowStep[] }> }
+      return Object.values(doc.jobs ?? {}).flatMap((j) => (j.steps ?? []).map((s) => ({ file, step: s })))
+    })
+}
+
+describe('release notes generator token scope', () => {
+  // The AI generator loads @anthropic-ai/sdk and its dependency tree. A GitHub token in its
+  // environment (GITHUB_TOKEN here has contents: write) would be readable by any of that
+  // code, so the `gh` calls that need the token run in their own step, before it.
+  const generators = allSteps().filter(({ step: s }) => s.run?.includes('ai-release-notes.mjs'))
+
+  it('runs the AI generator somewhere (so the checks below are not vacuous)', () => {
+    expect(generators.map(({ file, step: s }) => `${file}: ${s.name}`)).toEqual([
+      'release-prepare.yml: Generate release notes'
+    ])
+  })
+
+  it('gives every step that runs the AI generator no GitHub token', () => {
+    for (const { file, step: s } of generators) {
+      const where = `${file}: ${s.name}`
+      const env = s.env ?? {}
+      for (const name of ['GH_TOKEN', 'GITHUB_TOKEN', 'PUSH_TOKEN']) expect(env, where).not.toHaveProperty(name)
+      for (const value of Object.values(env)) {
+        expect(value, where).not.toMatch(/secrets\.(GITHUB_TOKEN|RELEASE_PR_TOKEN)|github\.token/)
+      }
+      expect(s.run, where).not.toMatch(/\bgh /)
+    }
+  })
+
+  it('hands the generator only the model key', () => {
+    const [notes] = generators
+    expect(Object.keys(notes.step.env ?? {})).toEqual(['ANTHROPIC_API_KEY'])
+  })
+
+  it('reads the PRs with the token in an earlier step that runs no third-party code', () => {
+    const prepare = job('prepare')
+    expect(prepare.indexOf("- name: Collect the release's PRs")).toBeLessThan(
+      prepare.indexOf('- name: Generate release notes')
+    )
+    const collect = step("Collect the release's PRs")
+    expect(collect).toContain('GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}')
+    expect(collect).toContain('gh pr view')
+    expect(collect).not.toMatch(/ai-release-notes|gen-release-notes|ANTHROPIC_API_KEY|npm /)
   })
 })

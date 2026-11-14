@@ -7,7 +7,7 @@
 
 # Privacy
 
-**Last updated: October 23, 2026**
+**Last updated: November 14, 2026**
 
 Houston is a locally installed coding agent. You bring your own model and
 credentials, so almost every privacy question comes down to one thing: which
@@ -42,6 +42,12 @@ directory and sends none of it anywhere:
   or from plain-text credential files in Houston's application-data directory, which
   it writes readable only by your user account.
 - **Window and interface state**: window size, panel layout, and the like.
+- **Crash dumps**: if the desktop app crashes, it saves a crash dump (a snapshot of
+  the crashed process, which can include part of what was in memory) in a
+  `Crashpad` folder in Houston's application-data directory. Crash dumps are never
+  uploaded.
+  Report an Issue lists the file names of recent dumps so you can decide whether to
+  attach one yourself.
 - **Memories**: facts the agent saves between conversations (your preferences and
   corrections, and things about a project the code doesn't show), one file each in
   `~/.houston/memory` in your home folder, readable only by your user account. You

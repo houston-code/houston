@@ -65,6 +65,40 @@ describe('customizeOverview', () => {
     const o = await customizeOverview(deps({ workspace: null }))
     expect(o.items.map((i) => i.id)).toEqual(['agent:user:a'])
   })
+
+  it('lists .agents/skills too, with format details, problems, and which one wins a clash', async () => {
+    put(ws, '.houston/skills/deploy/SKILL.md', '---\nname: deploy\ndescription: Ship it\n---\nSteps')
+    put(ws, '.agents/skills/deploy/SKILL.md', '---\nname: deploy\ndescription: Other\n---\nSteps')
+    put(
+      ws,
+      '.agents/skills/pdf/SKILL.md',
+      '---\nname: pdf\ndescription: PDFs\nlicense: MIT\nallowed-tools: Read Grep\npaths: "*.pdf"\n---\nSteps'
+    )
+    put(ws, '.agents/skills/Bad/SKILL.md', '---\nname: Bad\n---\nSteps')
+    put(home, '.agents/skills/pdf/SKILL.md', '---\nname: pdf\ndescription: Mine\n---\nSteps')
+    const o = await customizeOverview(deps())
+    const byId = Object.fromEntries(o.items.map((i) => [i.id, i]))
+    expect(byId['skill:project:deploy'].shadowed).toBeUndefined()
+    expect(byId['skill-agents:project:deploy']).toMatchObject({ source: 'agents', shadowed: true, file: '.agents/skills/deploy/SKILL.md' })
+    expect(byId['skill-agents:project:pdf']).toMatchObject({
+      kind: 'skill',
+      details: ['Tools: Read Grep', 'Paths: *.pdf', 'License: MIT']
+    })
+    expect(byId['skill-agents:project:pdf'].problems).toBeUndefined()
+    expect(byId['skill-agents:project:Bad'].problems?.length).toBe(2)
+    expect(byId['skill-agents:user:pdf']).toMatchObject({ shadowed: true, file: '~/.agents/skills/pdf/SKILL.md' })
+  })
+
+  it('switches off, opens and trashes an .agents skill by its id', async () => {
+    const file = put(ws, '.agents/skills/pdf/SKILL.md', '---\nname: pdf\ndescription: PDFs\n---\nSteps')
+    expect(await setItemEnabled('skill-agents:project:pdf', false, deps())).toEqual({ ok: true })
+    expect(readFileSync(file, 'utf8')).toContain('disabled: true')
+    expect((await loadSkills(ws, home)).map((s) => s.name)).toEqual([])
+    expect(await openItem('skill-agents:project:pdf', deps())).toEqual({ ok: true })
+    expect(open).toHaveBeenCalledWith(file)
+    expect(await deleteItem('skill-agents:project:pdf', deps())).toEqual({ ok: true })
+    expect(existsSync(dirname(file))).toBe(false)
+  })
 })
 
 describe('withDisabledFlag', () => {

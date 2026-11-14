@@ -23,8 +23,10 @@ jobs:
   respond:
     # A cheap first filter, so unrelated comments don't start a runner. The action applies
     # the real checks (mention outside code and quotes, write access) itself.
+    # `@houston implement` is left to houston-implement.yml; drop that line without it.
     if: >-
       contains(github.event.comment.body || github.event.issue.body, '@houston')
+      && !contains(github.event.comment.body, '@houston implement')
       && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
         github.event.comment.author_association || github.event.issue.author_association)
     runs-on: ubuntu-24.04

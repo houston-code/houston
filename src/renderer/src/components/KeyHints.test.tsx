@@ -8,6 +8,7 @@ describe('keyHintList', () => {
       { keys: '/', does: 'commands' },
       { keys: '@', does: 'files' },
       { keys: '#', does: 'save a rule' },
+      { keys: '!', does: 'run in terminal' },
       { keys: '⇧Tab', does: 'switch mode' },
       { keys: '↑', does: 'last prompt' },
       { keys: '⌘K', does: 'everything else' }
@@ -17,7 +18,7 @@ describe('keyHintList', () => {
   it('leaves out a shortcut the user unbound', () => {
     const does = keyHintList({ palette: '⌘K' }).map((h) => h.does)
     expect(does).not.toContain('switch mode')
-    expect(keyHintList({}).map((h) => h.does)).toEqual(['commands', 'files', 'save a rule', 'last prompt'])
+    expect(keyHintList({}).map((h) => h.does)).toEqual(['commands', 'files', 'save a rule', 'run in terminal', 'last prompt'])
   })
 })
 
@@ -27,6 +28,6 @@ describe('KeyHints', () => {
     const row = screen.getByLabelText('Keyboard hints')
     expect(row).toHaveTextContent('/ commands')
     expect(row).toHaveTextContent('Ctrl+K everything else')
-    expect(row.querySelectorAll('kbd')).toHaveLength(5)
+    expect(row.querySelectorAll('kbd')).toHaveLength(6)
   })
 })

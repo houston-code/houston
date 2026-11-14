@@ -13,10 +13,50 @@ import {
   parseExportArgs,
   renderPermissionRules,
   renderRecap,
+  sessionPreviewLines,
   writeExportFile
 } from './tui-sessions'
 
 const paint = makePainter(false)
+
+describe('sessionPreviewLines', () => {
+  const entry = { title: 'Auth \x1b[2Jrefactor', updatedAt: 0 }
+  const base = { width: 40, paint, when: '2h ago' }
+
+  it('shows the title, when, count, first prompt and the start of the last reply', () => {
+    const msgs: ChatMessage[] = [
+      { role: 'user', content: 'one\ntwo\nthree\nfour' },
+      { role: 'assistant', content: 'first reply' },
+      { role: 'user', content: 'later question' },
+      { role: 'assistant', content: `last reply ${'x'.repeat(80)}` }
+    ]
+    const lines = sessionPreviewLines(entry, msgs, { ...base, folder: '~/app' })
+    expect(lines.slice(1)).toEqual([
+      '  Auth [2Jrefactor',
+      '  updated 2h ago · 4 messages · ~/app',
+      '  you ›',
+      '    one',
+      '    two',
+      '    three …',
+      '  houston ›',
+      `    last reply ${'x'.repeat(23)}…`
+    ])
+    for (const l of lines) expect([...l].length).toBeLessThan(40)
+  })
+
+  it('skips system notes for the first prompt, and handles empty and unreadable chats', () => {
+    expect(sessionPreviewLines(entry, [], base).at(-1)).toBe('  (no messages yet)')
+    expect(sessionPreviewLines(entry, null, base).at(-1)).toBe("  couldn't read this chat")
+    const compacted: ChatMessage[] = [
+      { role: 'user', content: `${COMPACTION_SUMMARY_PREFIX} summary` },
+      { role: 'user', content: 'real ask' }
+    ]
+    const lines = sessionPreviewLines(entry, compacted, { ...base, lines: 2 })
+    expect(lines).toContain('    real ask')
+    expect(lines.join('\n')).not.toContain('summary')
+    expect(lines).toContain('  updated 2h ago · 2 messages')
+  })
+})
 
 const chat: ChatMessage[] = [
   { role: 'user', content: 'what does greet do?' },

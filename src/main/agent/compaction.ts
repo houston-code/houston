@@ -6,11 +6,20 @@ import {
   type ToolSchema
 } from '@shared/agent'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
-import { DEFAULT_COMPACTION_THRESHOLD } from '@shared/defaults'
+import {
+  COMPACTION_WINDOW_FRACTION,
+  hasUserCompactionLimit,
+  type CompactionLimit
+} from '@shared/compactionThreshold'
 import { APPROVAL_DENIED } from '@shared/promptOutcome'
 
 // Re-exported from shared so existing main-process imports/tests keep their path.
 export { COMPACTION_SUMMARY_PREFIX }
+export {
+  COMPACTION_WINDOW_FRACTION,
+  PRICE_TIER_HEADROOM_FRACTION,
+  resolveCompactionThreshold
+} from '@shared/compactionThreshold'
 
 /**
  * Context compaction. Long sessions otherwise grow the message log without bound
@@ -38,55 +47,6 @@ export const KEEP_RECENT_USER_TURNS = 3
 export const COMPACTION_TAIL_FRACTION = 0.5
 
 /**
- * Fraction of the model's context window at which proactive compaction kicks in.
- * The remaining fifth is headroom for the next turn's growth (tool results, the
- * model's output, attachments) and for the slack in the ~4-chars-per-token
- * estimate, so a turn that lands right at the threshold still fits comfortably.
- */
-export const COMPACTION_WINDOW_FRACTION = 0.8
-
-/**
- * Share of a model's long-context price tier kept free below its boundary. Past the
- * boundary every token of a request bills at the higher rate (see `turnCostUsd`), so
- * compaction aims under it with room for the next turn's growth and the slack in the
- * ~4-chars-per-token estimate.
- */
-export const PRICE_TIER_HEADROOM_FRACTION = 0.1
-
-/**
- * The effective compaction threshold in tokens. An explicit setting always wins
- * (0 disables compaction, matching the documented semantics); otherwise the
- * threshold scales to the selected model's context window — a fixed count is
- * mis-sized in both directions for a bring-your-own-model product (far too eager
- * on a 1M-token model, far too late on a 16k local one). When the window is
- * unknown (a custom/local model with no capability metadata) fall back to the
- * fixed default.
- *
- * `priceTierAbove` is the prompt size past which the model bills at its long-context
- * rate (`ModelPricing.longContext.above`), when it has one. The automatic threshold
- * then stays under that boundary less {@link PRICE_TIER_HEADROOM_FRACTION}: a window
- * left to grow to 80% of a 1M window would bill most of a long session at several
- * times the base rate.
- */
-export function resolveCompactionThreshold(
-  explicit: number | undefined,
-  contextWindow: number | null,
-  priceTierAbove?: number | null
-): number {
-  if (typeof explicit === 'number' && Number.isFinite(explicit)) {
-    return explicit > 0 ? Math.floor(explicit) : 0
-  }
-  const byWindow =
-    typeof contextWindow === 'number' && contextWindow > 0
-      ? Math.floor(contextWindow * COMPACTION_WINDOW_FRACTION)
-      : DEFAULT_COMPACTION_THRESHOLD
-  if (typeof priceTierAbove === 'number' && Number.isFinite(priceTierAbove) && priceTierAbove > 0) {
-    return Math.min(byWindow, Math.floor(priceTierAbove * (1 - PRICE_TIER_HEADROOM_FRACTION)))
-  }
-  return byWindow
-}
-
-/**
  * Window size at which stale tool results start going out as stubs, ahead of the
  * compaction threshold. On a large window the threshold sits hundreds of thousands
  * of tokens up, and every request below it re-sends every old file read and build
@@ -107,12 +67,16 @@ export const EARLY_EVICTION_MIN_GAIN_FRACTION = 0.1
  * The window size at which the loop advances its eviction watermark without
  * summarizing: {@link EARLY_EVICTION_TOKENS} when that is below the automatic
  * threshold, else the threshold itself (eviction then runs only alongside
- * compaction, as it always has). An explicit threshold governs both, and 0 turns
- * both off.
+ * compaction, as it always has). The user's own trigger (a token count, or a share
+ * of a known window) governs both, and 0 turns both off.
  */
-export function resolveEvictionTrigger(explicit: number | undefined, threshold: number): number {
+export function resolveEvictionTrigger(
+  limit: number | CompactionLimit | undefined,
+  threshold: number,
+  contextWindow: number | null = null
+): number {
   if (threshold <= 0) return 0
-  if (typeof explicit === 'number' && Number.isFinite(explicit)) return threshold
+  if (hasUserCompactionLimit(limit, contextWindow)) return threshold
   return Math.min(threshold, EARLY_EVICTION_TOKENS)
 }
 

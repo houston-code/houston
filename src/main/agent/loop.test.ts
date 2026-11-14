@@ -51,6 +51,7 @@ import { MAX_PROVIDER_RETRIES } from './retry'
 import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
+import { resetOllamaContextCache } from '../providers/ollama'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
@@ -67,6 +68,7 @@ import {
 } from './checkpoints'
 import { toAnthropicMessages } from '../providers/anthropic'
 import { resetUserDataDir, setUserDataDir } from '../userData'
+import { flushLogSync } from '../logger'
 import {
   createConversation,
   getConversation,
@@ -247,7 +249,11 @@ vi.mock('./tools', async (importActual) => {
     getTool: (name: string): unknown => h.probeTools.find((t) => t.schema.name === name) ?? actual.getTool(name)
   }
 })
-vi.mock('./git', () => ({ gitContext: async () => h.gitContext }))
+// The rest of ./git stays real: the spawn worktree default reads the repository through it.
+vi.mock('./git', async (importActual) => ({
+  ...(await importActual<typeof import('./git')>()),
+  gitContext: async () => h.gitContext
+}))
 vi.mock('./shells', async (importActual) => {
   const actual = await importActual<typeof import('./shells')>()
   return { ...actual, listShells: () => h.shells ?? actual.listShells() }
@@ -366,6 +372,17 @@ function scripted(turns: ProviderStreamEvent[][]): Provider {
       for (const ev of turn) yield ev
     }
   }
+}
+
+/** Make `dir` a git repository with one commit on `main`. */
+function gitRepoWithCommit(dir: string): void {
+  const git = (...args: string[]): void => {
+    execFileSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd: dir })
+  }
+  git('init', '-q', '-b', 'main')
+  writeFileSync(join(dir, 'README.md'), 'hi\n')
+  git('add', '.')
+  git('commit', '-q', '-m', 'init')
 }
 
 let ws: string
@@ -9345,6 +9362,36 @@ describe('scheduled runs (loop wiring)', () => {
     expect(result?.type === 'tool_result' && result.output).toContain('sch-test')
   })
 
+  it("targets the main checkout, not the creating chat's disposable Houston worktree", async () => {
+    gitRepoWithCommit(ws)
+    const root = ws
+    const wt = join(root, '.houston', 'worktrees', 'chat-1')
+    execFileSync('git', ['worktree', 'add', '-q', '-b', 'chat-1', wt], { cwd: root })
+    const created: ScheduledRunInput[] = []
+    setSchedulerBackend(fakeBackend(created))
+    const turns = (): ProviderStreamEvent[][] => [
+      [
+        {
+          type: 'tool_call',
+          call: { id: 'c1', name: 'schedule_run', arguments: { name: 'n', spec: 'daily at 09:00', prompt: 'p' } }
+        },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', stopReason: 'end_turn' }]
+    ]
+    try {
+      ws = wt
+      await run({ policy: 'full-auto', turns: turns() })
+    } finally {
+      ws = root
+    }
+    // From the main checkout itself, it stays put.
+    await run({ policy: 'full-auto', turns: turns() })
+    expect(created).toHaveLength(2)
+    expect(realpathSync(created[0].workspace)).toBe(realpathSync(root))
+    expect(realpathSync(created[1].workspace)).toBe(realpathSync(root))
+  }, 30_000)
+
   it("stores the creating chat's own reasoning effort on the schedule, and none without one", async () => {
     const created: ScheduledRunInput[] = []
     setSchedulerBackend(fakeBackend(created))
@@ -9920,6 +9967,66 @@ describe('session proposals, forked spawns, and finished-child reports', () => {
     })
     const out = r.messages.find((m) => m.role === 'tool' && m.toolCallId === 's1')?.content
     expect(out).toContain('(id child)')
+  })
+
+  // These set up real git repositories, which is slow on a loaded machine.
+  describe('worktree default', { timeout: 30_000 }, () => {
+    const spawnTurns = (args: Record<string, unknown>): ProviderStreamEvent[][] => [
+      [
+        { type: 'tool_call', call: { id: 's1', name: 'spawn_session', arguments: args } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'done', stopReason: 'end_turn' }]
+    ]
+
+    it('gives a session its own worktree in a git repository, branched from this checkout', async () => {
+      gitRepoWithCommit(ws)
+      execFileSync('git', ['checkout', '-q', '-b', 'feature/x'], { cwd: ws })
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'write the docs', title: 'Docs pass' }) })
+      expect(spawned).toHaveLength(1)
+      expect(spawned[0].worktree?.branch).toMatch(/^houston\/docs-pass-[0-9a-f]{6}$/)
+      expect(spawned[0].worktree?.base).toBe('feature/x')
+      expect(realpathSync(spawned[0].workspace)).toBe(realpathSync(ws))
+    })
+
+    it('names the branch from the prompt when there is no title', async () => {
+      gitRepoWithCommit(ws)
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'Fix flaky test\nmore detail' }) })
+      expect(spawned[0].worktree?.branch).toMatch(/^houston\/fix-flaky-test-[0-9a-f]{6}$/)
+    })
+
+    it('keeps an explicit worktree as given', async () => {
+      gitRepoWithCommit(ws)
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'p', worktree: { branch: 'mine', base: 'main' } }) })
+      expect(spawned[0].worktree).toEqual({ branch: 'mine', base: 'main' })
+    })
+
+    it('runs in this checkout with same_checkout: true', async () => {
+      gitRepoWithCommit(ws)
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'p', same_checkout: true }) })
+      expect(spawned).toHaveLength(1)
+      expect(spawned[0]).not.toHaveProperty('worktree')
+    })
+
+    it('refuses same_checkout together with a worktree', async () => {
+      gitRepoWithCommit(ws)
+      const r = await run({
+        policy: 'full-auto',
+        turns: spawnTurns({ prompt: 'p', same_checkout: true, worktree: { branch: 'b' } })
+      })
+      expect(spawned).toEqual([])
+      const result = r.events.find((e) => e.type === 'tool_result' && e.callId === 's1')
+      expect(result?.type === 'tool_result' && result.output).toMatch(/either worktree or same_checkout/)
+    })
+
+    it('makes no worktree outside a git repository, or in one with no commits yet', async () => {
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'p' }) })
+      execFileSync('git', ['init', '-q'], { cwd: ws })
+      await run({ policy: 'full-auto', turns: spawnTurns({ prompt: 'p' }) })
+      expect(spawned).toHaveLength(2)
+      expect(spawned[0]).not.toHaveProperty('worktree')
+      expect(spawned[1]).not.toHaveProperty('worktree')
+    })
   })
 
   it("starts a spawned session on this chat's model, effort and current policy", async () => {
@@ -10809,6 +10916,8 @@ describe('a run that ends without a reply', () => {
   })
 
   const logLines = (): string[] => {
+    // The logger buffers lines; put them on disk before reading.
+    flushLogSync()
     const path = join(userData, 'logs', 'houston.log')
     return existsSync(path) ? readFileSync(path, 'utf8').split('\n').filter(Boolean) : []
   }
@@ -10860,6 +10969,22 @@ describe('a run that ends without a reply', () => {
     // No blank assistant message is saved, and the turn reads as unanswered.
     expect(r.messages).toHaveLength(1)
     expect(r.messages[0].runEnds?.[0]).toMatchObject({ reason: 'error' })
+  })
+
+  it('logs a provider retry, with any secret in the error scrubbed', async () => {
+    h.secrets = ['sk-live-retry-secret-value']
+    const r = await run({
+      turns: [
+        [{ type: 'error', message: 'Overloaded for key sk-live-retry-secret-value', status: 529 }],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto'
+    })
+    expect(r.events.some((e) => e.type === 'retry')).toBe(true)
+    const line = logLines().find((l) => l.includes('provider retry 1'))
+    expect(line).toContain('[INFO]')
+    expect(line).toContain('Overloaded')
+    expect(logLines().join('\n')).not.toContain('sk-live-retry-secret-value')
   })
 
   it('keeps the text of a reply a filter cut short, with a notice', async () => {
@@ -11832,4 +11957,46 @@ describe('background subagents', () => {
     expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('from bg')
     expect(r.messages.some((m) => m.role === 'user' && m.content.includes('Background agent bg1 ("Write") has finished'))).toBe(true)
   }, 30_000)
+})
+
+describe('Ollama context check', () => {
+  const ollama = { id: 'ollama', kind: 'openai-compatible', label: 'Ollama', baseUrl: 'http://localhost:11434/v1', models: [] }
+  /** An Ollama that runs every model with `ctx` tokens of context. */
+  const serve = (ctx: number): ReturnType<typeof vi.fn> => {
+    const f = vi.fn(async (url: string) =>
+      url.endsWith('/api/ps')
+        ? new Response(JSON.stringify({ models: [{ name: 'qwen3:8b', context_length: ctx }] }))
+        : new Response(JSON.stringify({ parameters: '' }))
+    )
+    vi.stubGlobal('fetch', f)
+    return f
+  }
+  const reply = (): ProviderStreamEvent[][] => [[{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]]
+  const contextNotices = (r: RunResult): string[] =>
+    r.events.flatMap((e) => (e.type === 'notice' && /OLLAMA_CONTEXT_LENGTH/.test(e.message) ? [e.message] : []))
+
+  afterEach(() => {
+    delete h.extraConfigs.anthropic
+    vi.unstubAllGlobals()
+    resetOllamaContextCache()
+  })
+
+  it('warns, naming the fix, when the prompt is bigger than the context Ollama runs the model with', async () => {
+    h.extraConfigs.anthropic = ollama
+    serve(2048)
+    const r = await run({ turns: reply(), model: 'qwen3:8b' })
+    expect(contextNotices(r)).toHaveLength(1)
+    expect(contextNotices(r)[0]).toMatch(/2,048-token context/)
+  })
+
+  it('says nothing when the prompt fits, or on a provider that is not Ollama', async () => {
+    h.extraConfigs.anthropic = ollama
+    serve(262_144)
+    expect(contextNotices(await run({ turns: reply(), model: 'qwen3:8b' }))).toEqual([])
+    delete h.extraConfigs.anthropic
+    resetOllamaContextCache()
+    const f = serve(2048)
+    expect(contextNotices(await run({ turns: reply(), model: 'qwen3:8b' }))).toEqual([])
+    expect(f).not.toHaveBeenCalled()
+  })
 })

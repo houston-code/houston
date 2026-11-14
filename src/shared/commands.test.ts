@@ -102,6 +102,20 @@ describe('matchCommands ranking', () => {
     expect(names('think')[0]).toBe('reasoning')
   })
 
+  it('puts the command named exactly first, ahead of longer names that start with it', () => {
+    expect(names('agent').slice(0, 2)).toEqual(['agent', 'agents'])
+    expect(names('agents')[0]).toBe('agents')
+    expect(names('AGENT')[0]).toBe('agent')
+  })
+
+  it('puts an exact name ahead of a command that has it as an alias', () => {
+    const custom: Command = { name: 'diff', description: 'A workspace diff command', template: 'Diff' }
+    const both = mergeCommands(builtinCommands('gui'), [custom])
+    // resolveCommand reads `/diff` as the custom command too, so Enter runs the one shown first.
+    expect(matchCommands(both, 'diff')[0]).toBe(custom)
+    expect(resolveCommand(both, 'diff')).toBe(custom)
+  })
+
   it('finds a command by a word in its description', () => {
     expect(names('sandbox')).toContain('doctor')
     expect(names('invite')).toEqual(['share'])
@@ -142,6 +156,23 @@ describe('command groups', () => {
     expect(byName.agent.args).toBe('<name> <task>')
     expect(byName.model.args).toBe('[name]')
     expect(byName.undo.args).toBeUndefined()
+  })
+
+  it('describes what the desktop does where it differs from the terminal', () => {
+    const gui = Object.fromEntries(builtinCommands('gui').map((c) => [c.name, c]))
+    const tui = Object.fromEntries(builtinCommands('tui').map((c) => [c.name, c]))
+    expect(gui.settings.description).toBe('Open Settings, or one page of it')
+    expect(gui.settings.args).toBe('[page]')
+    expect(gui.theme.description).toBe('Open Appearance settings')
+    expect(gui.theme.args).toBeUndefined()
+    for (const name of ['memory', 'trust', 'mcp']) {
+      expect(gui[name].description, name).toContain('Settings')
+      expect(gui[name].description, name).not.toMatch(/forget|\(add|\(show/)
+    }
+    // The terminal keeps its own wording.
+    expect(tui.settings.description).toBe('Show a summary of your current settings')
+    expect(tui.theme.args).toBe('[name]')
+    expect(tui.memory.description).toContain('show, edit, pin')
   })
 })
 

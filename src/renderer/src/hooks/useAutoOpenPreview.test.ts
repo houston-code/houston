@@ -56,6 +56,18 @@ describe('useAutoOpenPreview', () => {
     expect(open).not.toHaveBeenCalled()
   })
 
+  it('leaves a side panel that is already open on its own tab', () => {
+    const open = vi.fn()
+    const { rerender } = renderHook(({ list, dock }) => useAutoOpenPreview(list, 'c1', true, open, dock), {
+      initialProps: { list: [] as PreviewServer[], dock: true }
+    })
+    rerender({ list: [server('a')], dock: true })
+    expect(open).not.toHaveBeenCalled()
+    // That server was this chat's one auto-open: closing the panel doesn't bring it back.
+    rerender({ list: [server('a')], dock: false })
+    expect(open).not.toHaveBeenCalled()
+  })
+
   it('waits for the first list from main before deciding what was already running', () => {
     const open = vi.fn()
     const { rerender } = renderHook(({ list }) => useAutoOpenPreview(list, 'c1', true, open), {

@@ -144,10 +144,17 @@ export function freeServerId(id: string, taken: readonly string[]): string {
   for (let n = 2; ; n++) if (!taken.includes(`${base}-${n}`)) return `${base}-${n}`
 }
 
+/** Why a server id can't be used (empty, or another server's), or null when it can. */
+export function serverIdProblem(id: string, taken: readonly string[]): string | null {
+  if (!id) return 'Give it an id (letters, digits, - or _).'
+  if (taken.includes(id)) return `There is already a server with the id ${id}.`
+  return null
+}
+
 /** Why a reviewed server can't be added yet, or null when it can. */
 export function serverProblem(server: McpServerConfig, taken: readonly string[]): string | null {
-  if (!server.id) return 'Give it an id (letters, digits, - or _).'
-  if (taken.includes(server.id)) return `There is already a server with the id ${server.id}.`
+  const idProblem = serverIdProblem(server.id, taken)
+  if (idProblem) return idProblem
   const remote = server.transport === 'http' || server.transport === 'sse'
   if (remote) {
     if (!/^https?:\/\/\S+$/i.test(server.url ?? '')) return 'Enter the server’s http:// or https:// URL.'

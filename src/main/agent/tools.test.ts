@@ -96,6 +96,7 @@ describe('tool registry', () => {
       'apply_patch',
       'ask_user',
       'ast_grep',
+      'browser_session',
       'cancel_scheduled_run',
       'dispatch_agent',
       'dispatch_writable_agent',
@@ -1782,6 +1783,29 @@ describe('read_file images and PDFs', () => {
     expect(out).toContain('[pdf: doc.pdf')
     expect(docs).toHaveLength(1)
     expect(docs[0].mediaType).toBe('application/pdf')
+  })
+
+  it('says a PDF could not be viewed when the model or provider takes no documents', async () => {
+    writeFileSync(join(workspace, 'doc.pdf'), Buffer.from('%PDF-1.4 minimal'))
+    const docs: unknown[] = []
+    const out = await getTool('read_file')!.execute(
+      { path: 'doc.pdf' },
+      { ...ctx, attachDocument: (d) => docs.push(d), modelSees: { images: true, documents: false } }
+    )
+    expect(docs).toHaveLength(0)
+    expect(out).toMatch(/^\[pdf: doc\.pdf .*could not be viewed.*pdftotext/)
+    expect(out).not.toContain('attached below')
+  })
+
+  it('does not attach an image the model cannot view', async () => {
+    writeFileSync(join(workspace, 'logo.png'), PNG)
+    const images: unknown[] = []
+    const out = await getTool('read_file')!.execute(
+      { path: 'logo.png' },
+      { ...ctx, attachImage: (img) => images.push(img), modelSees: { images: false, documents: true } }
+    )
+    expect(images).toHaveLength(0)
+    expect(out).toMatch(/^\[image: logo\.png .*the current model cannot view images/)
   })
 
   it('notes that an image cannot be shown when attachment is unavailable', async () => {

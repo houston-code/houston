@@ -30,7 +30,7 @@ export { isLoopbackHost, isBlockedSubresourceHost, validateLocalhostUrl }
 /** Offscreen viewport for the capture (a typical laptop content width). */
 export const VIEWPORT = { width: 1280, height: 800 }
 /** How long to wait for the page to finish loading before screenshotting anyway. */
-const LOAD_TIMEOUT_MS = 30_000
+export const LOAD_TIMEOUT_MS = 30_000
 /**
  * Longest one step may run. A step bounds its own waits (a click waits up to 15s for
  * the navigation it started, a `wait_for` up to 10s), so only a page whose main
@@ -267,14 +267,14 @@ function throwIfAborted(signal?: AbortSignal): void {
  * page-level step failure, this ends the capture: the caller's `finally` closes the
  * session, and destroying the window is what ends the call still pending inside it.
  */
-class CaptureInterrupted extends Error {}
+export class CaptureInterrupted extends Error {}
 
 /**
  * Race one call into the page against a timer and the run's abort signal. A page
  * whose main thread blocks never answers `executeJavaScript`, so without this a
  * capture would hang past Stop and leak its offscreen window.
  */
-function withPageDeadline<T>(
+export function withPageDeadline<T>(
   work: Promise<T>,
   timeoutMs: number,
   what: string,
@@ -543,22 +543,41 @@ async function captureVariants(
   }
 }
 
+/**
+ * The attribute a browser_session snapshot marks each element it lists with, so a
+ * later step can name the element by its ref (`e12`) instead of a selector.
+ */
+export const REF_ATTRIBUTE = 'data-houston-ref'
+/** A snapshot ref as the model passes it. */
+export const REF_PATTERN = /^e[1-9]\d{0,5}$/
+
+/** The CSS selector that finds the element a snapshot gave `ref`. */
+export function refSelector(ref: string): string {
+  return `[${REF_ATTRIBUTE}="${ref}"]`
+}
+
+/** A step's selector as shown: a snapshot ref reads as `ref e12`, anything else quoted. */
+function selectorLabel(selector: string): string {
+  const m = /^\[data-houston-ref="(e\d+)"\]$/.exec(selector)
+  return m ? `ref ${m[1]}` : JSON.stringify(selector)
+}
+
 /** A step as shown to the user and the model. Never includes a filled value. */
 export function describeStep(step: CaptureStep): string {
   switch (step.action) {
     case 'fill':
-      return `fill ${JSON.stringify(step.selector)}`
+      return `fill ${selectorLabel(step.selector)}`
     case 'click':
-      return `click ${JSON.stringify(step.selector)}`
+      return `click ${selectorLabel(step.selector)}`
     case 'dblclick':
-      return `double-click ${JSON.stringify(step.selector)}`
+      return `double-click ${selectorLabel(step.selector)}`
     case 'press':
-      return step.selector ? `press ${step.key} on ${JSON.stringify(step.selector)}` : `press ${step.key}`
+      return step.selector ? `press ${step.key} on ${selectorLabel(step.selector)}` : `press ${step.key}`
     case 'wait_for':
-      return `wait for ${JSON.stringify(step.selector)}`
+      return `wait for ${selectorLabel(step.selector)}`
     case 'expect_text': {
       const what = `${step.absent ? 'expect no text' : 'expect text'} ${JSON.stringify(step.text)}`
-      return step.selector ? `${what} in ${JSON.stringify(step.selector)}` : what
+      return step.selector ? `${what} in ${selectorLabel(step.selector)}` : what
     }
     case 'wait':
       return `wait ${step.ms}ms`

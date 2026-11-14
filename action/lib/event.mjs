@@ -6,7 +6,10 @@
 // written by whoever opened the issue, commented, or pushed. Nothing here interpolates it
 // into a shell or a URL; it flows only into the prompt file and the reply.
 
-export const MODES = /** @type {const} */ (['respond', 'review', 'fix-ci'])
+export const MODES = /** @type {const} */ (['respond', 'review', 'fix-ci', 'implement', 'task'])
+
+/** The modes that edit the checkout and end in a new branch and a pull request. */
+export const WRITE_MODES = new Set(['fix-ci', 'implement'])
 
 /**
  * `author_association` values that can belong to someone with write access. It is a hint
@@ -29,6 +32,10 @@ export function defaultMode(eventName) {
       return 'review'
     case 'workflow_run':
       return 'fix-ci'
+    // Plan-only by default. A workflow opts in to edits with `mode: implement`.
+    case 'schedule':
+    case 'workflow_dispatch':
+      return 'task'
     default:
       return null
   }
@@ -71,6 +78,22 @@ export function hasMention(body, trigger) {
   // Not part of a longer handle (`@houston-bot`), an email (`ci@houston`), or a path.
   const re = new RegExp(`(^|[^A-Za-z0-9_@./-])@${handle}(?![A-Za-z0-9_-])`, 'i')
   return re.test(proseOnly(body))
+}
+
+/**
+ * True when `body` mentions `trigger` followed by the `command` word, like
+ * `@houston implement`, in its prose (outside code, quotes, and HTML comments).
+ */
+export function hasCommand(body, trigger, command) {
+  if (typeof body !== 'string' || !isValidTrigger(trigger) || !/^[a-z]+$/.test(command)) return false
+  const re = new RegExp(`(^|[^A-Za-z0-9_@./-])@${trigger.slice(1)}[ \\t]+${command}(?![A-Za-z0-9_-])`, 'i')
+  return re.test(proseOnly(body))
+}
+
+/** A label name the workflow can set: printable, at most GitHub's 50 characters. */
+export function isValidLabel(label) {
+  // eslint-disable-next-line no-control-regex -- refusing control characters is the point
+  return typeof label === 'string' && label.trim() === label && /^[^\x00-\x1f\x7f]{1,50}$/.test(label)
 }
 
 /**
@@ -176,6 +199,55 @@ export function fixCiContext(eventName, event, { repository, branchPrefix }) {
   }
 }
 
+/**
+ * What an implement run builds, or `{ skip }`. It starts from an issue (a write-access
+ * collaborator's `@houston implement` comment, or the configured label being added) or
+ * from a scheduled or manual run whose workflow opted in. It never starts from a pull
+ * request: the result always goes to a new branch, never onto an existing one.
+ */
+export function implementContext(eventName, event, { trigger, repository, label, refName, refType }) {
+  const defaultBranch = typeof event.repository?.default_branch === 'string' ? event.repository.default_branch : null
+  if (eventName === 'issues') {
+    if (event.action !== 'labeled') return { skip: `issues ${event.action}: only adding the ${label} label starts an implement run` }
+    if (event.label?.name !== label) return { skip: `the ${event.label?.name ?? 'added'} label is not ${label}` }
+    const issue = event.issue
+    if (!issue || !Number.isSafeInteger(issue.number)) return { skip: 'the event carries no issue' }
+    if (issue.pull_request) return { skip: 'implement works from issues, never from a pull request' }
+    if (issue.state === 'closed') return { skip: `issue #${issue.number} is closed` }
+    const login = event.sender?.login
+    if (typeof login !== 'string' || !login) return { skip: 'the label event has no sender' }
+    if (event.sender?.type === 'Bot' || login.endsWith('[bot]')) return { skip: `@${login} is a bot` }
+    if (!defaultBranch) return { skip: 'the event names no default branch' }
+    return { repository, mode: 'implement', source: 'label', number: issue.number, author: login, request: null, base: defaultBranch, defaultBranch }
+  }
+  if (eventName === 'issue_comment') {
+    if (event.action !== 'created') return { skip: `issue_comment ${event.action}: only new comments start a run` }
+    if (event.issue?.pull_request) {
+      return { skip: 'implement works from issues; Houston never pushes to a pull request branch' }
+    }
+    const ctx = commentRequest({ repository }, event.comment, { number: event.issue?.number, isPullRequest: false, trigger })
+    if ('skip' in ctx) return ctx
+    if (!hasCommand(event.comment.body, trigger, 'implement')) return { skip: `no ${trigger} implement command` }
+    if (!defaultBranch) return { skip: 'the event names no default branch' }
+    return { ...ctx, mode: 'implement', source: 'comment', base: defaultBranch, defaultBranch }
+  }
+  if (eventName === 'schedule' || eventName === 'workflow_dispatch') {
+    if (refType !== 'branch' || typeof refName !== 'string' || !refName) {
+      return { skip: `${eventName} runs implement only on a branch (got ${refType || 'no'} ref)` }
+    }
+    return { repository, mode: 'implement', source: eventName, number: null, author: null, request: null, base: refName, defaultBranch: defaultBranch ?? refName }
+  }
+  return { skip: `implement mode does not handle ${eventName} events` }
+}
+
+/** A scheduled or manual plan-only run, or `{ skip }`. The task is the workflow's `prompt`. */
+export function taskContext(eventName, event, { repository }) {
+  if (eventName !== 'schedule' && eventName !== 'workflow_dispatch') {
+    return { skip: `task mode runs on schedule and workflow_dispatch events, not ${eventName}` }
+  }
+  return { repository, mode: 'task', source: eventName }
+}
+
 /** Route to the mode's context builder. Refused events throw: they are a workflow bug. */
 export function buildContext(mode, eventName, event, opts) {
   if (REFUSED_EVENTS.has(eventName)) {
@@ -187,6 +259,8 @@ export function buildContext(mode, eventName, event, opts) {
   if (mode === 'respond') return respondContext(eventName, event, opts)
   if (mode === 'review') return reviewContext(eventName, event, opts)
   if (mode === 'fix-ci') return fixCiContext(eventName, event, opts)
+  if (mode === 'implement') return implementContext(eventName, event, opts)
+  if (mode === 'task') return taskContext(eventName, event, opts)
   throw new Error(`Unknown mode ${JSON.stringify(mode)}: use one of ${MODES.join(', ')}`)
 }
 

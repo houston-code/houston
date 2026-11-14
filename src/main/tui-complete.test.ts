@@ -36,6 +36,14 @@ describe('completeInput', () => {
     expect(sub).toBe('/c')
   })
 
+  it('never completes an exact name into a longer one (/agent stays /agent)', () => {
+    // Tab inserts the candidates' common prefix: with /agent among them, that is
+    // /agent itself, so Tab can't turn it into /agents; Enter then runs /agent.
+    const [hits] = completeInput('/agent', [])
+    expect(hits).toEqual(expect.arrayContaining(['/agent ', '/agents ']))
+    expect(hits.every((h) => h.startsWith('/agent'))).toBe(true)
+  })
+
   it('completes @-file mentions from the provided files', () => {
     const [hits, sub] = completeInput('edit @sr', ['src/a.ts', 'src/b.ts'])
     expect(hits).toEqual(['@src/a.ts ', '@src/b.ts '])

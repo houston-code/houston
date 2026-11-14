@@ -10,7 +10,9 @@ export const ROOT = join(__dirname, '..')
 const CLOSE_TIMEOUT_MS = 15_000
 
 /** Where a packaged app from `npm run dist*` lives in `release/`, per platform. */
-interface PackagedApp {
+export interface PackagedApp {
+  /** What a copy of the app copies: the .app bundle on macOS, else the unpacked dir. */
+  bundle: string
   /** The app's own executable. */
   executable: string
   /** Its resources dir: the asar, Resources/bin, and the license files. */
@@ -29,19 +31,41 @@ export function findPackagedApp(): PackagedApp | null {
   const candidates: PackagedApp[] = []
   if (process.platform === 'darwin') {
     for (const dir of ['mac-arm64', 'mac', 'mac-universal']) {
-      const contents = join(release, dir, 'Houston.app', 'Contents')
-      candidates.push({ executable: join(contents, 'MacOS', 'Houston'), resources: join(contents, 'Resources'), dir })
+      const bundle = join(release, dir, 'Houston.app')
+      const contents = join(bundle, 'Contents')
+      candidates.push({
+        bundle,
+        executable: join(contents, 'MacOS', 'Houston'),
+        resources: join(contents, 'Resources'),
+        dir
+      })
     }
   } else if (process.platform === 'win32') {
     const base = join(release, 'win-unpacked')
-    candidates.push({ executable: join(base, 'Houston.exe'), resources: join(base, 'resources'), dir: 'win-unpacked' })
+    candidates.push({
+      bundle: base,
+      executable: join(base, 'Houston.exe'),
+      resources: join(base, 'resources'),
+      dir: 'win-unpacked'
+    })
   } else {
     // electron-builder names the Linux executable after package.json `name`.
     const base = join(release, 'linux-unpacked')
-    candidates.push({ executable: join(base, 'houston'), resources: join(base, 'resources'), dir: 'linux-unpacked' })
+    candidates.push({
+      bundle: base,
+      executable: join(base, 'houston'),
+      resources: join(base, 'resources'),
+      dir: 'linux-unpacked'
+    })
   }
   return candidates.find((c) => existsSync(c.executable)) ?? null
 }
+
+/**
+ * Set by e2e/global-setup.ts to the executable of an inspectable copy of the packaged app,
+ * when the packaged app's fuses refuse the Node inspector Playwright drives it through.
+ */
+export const LAUNCH_EXECUTABLE_ENV = 'HOUSTON_E2E_LAUNCH_EXECUTABLE'
 
 export interface LaunchTarget {
   executablePath: string
@@ -61,7 +85,15 @@ export interface LaunchTarget {
 export function resolveLaunch(): LaunchTarget {
   const packaged = findPackagedApp()
   if (packaged) {
-    return { executablePath: packaged.executable, args: [], mode: `packaged (${packaged.dir})`, packaged: true }
+    // The copy differs from the artifact only in the inspector fuse (and, on macOS, an
+    // ad-hoc signature); see inspectableCopy in fuses.ts.
+    const copy = process.env[LAUNCH_EXECUTABLE_ENV]
+    return {
+      executablePath: copy ?? packaged.executable,
+      args: [],
+      mode: copy ? `packaged (${packaged.dir}, inspectable copy)` : `packaged (${packaged.dir})`,
+      packaged: true
+    }
   }
   if (process.env.CI) {
     throw new Error('No packaged app in release/ for this platform. Did `npm run dist*` run before the e2e suite?')
@@ -110,6 +142,7 @@ export async function launchApp(opts: LaunchOptions = {}): Promise<LaunchedApp> 
   const userDataDir = opts.userDataDir ?? mkdtempSync(join(tmpdir(), 'houston-e2e-'))
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v
+  delete env[LAUNCH_EXECUTABLE_ENV]
   Object.assign(env, { HOUSTON_DISABLE_UPDATER: '1' }, opts.env)
   let app: ElectronApplication
   try {
