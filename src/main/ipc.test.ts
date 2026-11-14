@@ -114,7 +114,8 @@ vi.mock('./agent/compact', () => ({
 // Don't touch the real filesystem for the `#`-capture handler.
 vi.mock('./memory', () => ({ saveMemory: h.saveMemory }))
 
-import { MAX_QUESTION_ANSWER_LEN, registerIpc, resolveDeleteAction } from './ipc'
+import { MAX_QUESTION_ANSWER_LEN, noteRetryThrottle, registerIpc, resolveDeleteAction } from './ipc'
+import { _resetRateLimits } from './rateLimitStore'
 // The real checkpoints module (not mocked): the gating tests drive actual snapshots.
 import {
   recordOriginal,
@@ -1312,3 +1313,33 @@ describe('environment key offers', () => {
     expect(connect.some((o) => o.providerId === 'anthropic')).toBe(true)
   })
 })
+
+describe('rate-limit state', () => {
+  registerIpc()
+  afterEach(() => _resetRateLimits())
+
+  it('files what a throttled retry reported under the chat’s provider, and serves it', () => {
+    const conv = createConversation({ workspace: '/repo', providerId: 'anthropic', model: 'm' })
+    noteRetryThrottle(conv.id, {
+      runId: 'r',
+      type: 'retry',
+      attempt: 1,
+      max: 6,
+      message: 'rate limited',
+      throttle: { waitMs: 1000, retryAfterMs: 30_000, remainingRequests: 0 }
+    })
+    // A plain connection retry and other events carry no quota.
+    noteRetryThrottle(conv.id, { runId: 'r', type: 'retry', attempt: 2, message: 'reset' })
+    noteRetryThrottle('no-such-chat', {
+      runId: 'r',
+      type: 'retry',
+      attempt: 1,
+      message: 'x',
+      throttle: { waitMs: 1, remainingRequests: 7 }
+    })
+    const list = h.handlers.get(IPC.rateLimitList)!({ sender: {} }) as Array<Record<string, unknown>>
+    expect(list).toEqual([expect.objectContaining({ providerId: 'anthropic', remainingRequests: 0, source: 'retry' })])
+    expect(typeof list[0].resetAt).toBe('number')
+  })
+})
+

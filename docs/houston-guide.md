@@ -489,7 +489,11 @@ retries the turn with a growing pause between attempts and tells you it's retryi
 - **Rate limits are named.** When the provider throttles a request (HTTP 429),
   the notice says so, how long Houston waits before trying again (the provider's
   `Retry-After` when it sends one), and how many requests or tokens its headers say
-  are left in the current window. An exhausted quota is not retried.
+  are left in the current window. An exhausted quota is not retried. In the desktop
+  app, what the selected provider last reported (requests and tokens left, and when it
+  said it would take requests again) stays in the status bar, and the Usage view lists
+  it for every provider, until the app quits. Nothing shows before a provider has
+  rate limited a request.
 - **Nothing half-runs.** Tool calls in a discarded reply never run.
 - **Real errors stop.** A failure that isn't transient (a bad key, a malformed
   request) ends the turn instead.

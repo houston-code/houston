@@ -212,6 +212,10 @@ export const IPC = {
   conversationScorecard: 'conversation:scorecard',
   /** Spend and tokens per day and per project over every saved chat (local only). */
   conversationUsageReport: 'conversation:usageReport',
+  /** The last rate-limit state each provider reported (remaining quota, reset time). */
+  rateLimitList: 'rateLimit:list',
+  /** Main → renderer: a provider reported a new rate-limit state. */
+  rateLimitChanged: 'rateLimit:changed',
   /** Main → renderer: a chat got a model-generated title (live sidebar/header update). */
   conversationTitleChanged: 'conversation:titleChanged',
   conversationSuggestion: 'conversation:suggestion',
