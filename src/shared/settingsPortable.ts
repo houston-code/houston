@@ -56,6 +56,7 @@ export const PREFERENCE_DEFAULTS = {
   previewAutoOpen: true,
   toolOutputExpanded: false,
   showReasoning: false,
+  announceReplies: false,
   memoryEnabled: true,
   keybindings: {},
   sandboxEgress: undefined
@@ -159,6 +160,7 @@ const CHECKS: Record<Exclude<PreferenceKey, 'permissionRules' | 'hooks'>, (v: un
   previewAutoOpen: (v) => typeof v === 'boolean',
   toolOutputExpanded: (v) => typeof v === 'boolean',
   showReasoning: (v) => typeof v === 'boolean',
+  announceReplies: (v) => typeof v === 'boolean',
   memoryEnabled: (v) => typeof v === 'boolean',
   keybindings: (v) => isObject(v) && Object.values(v).every((b) => b === null || typeof b === 'string'),
   sandboxEgress: (v) =>

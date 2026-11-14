@@ -118,6 +118,18 @@ export function AppearanceSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           folding it away once the reply starts. Off by default.
         </span>
       </label>
+      <label className="field field--checkbox">
+        <input
+          type="checkbox"
+          checked={settings.announceReplies ?? false}
+          onChange={(e) => setSettings((s) => ({ ...s, announceReplies: e.target.checked }))}
+        />
+        <span>
+          Read replies to screen readers. When a reply finishes, a screen reader reads its text,
+          and names a tool that failed, instead of only saying the response is ready. Off by
+          default.
+        </span>
+      </label>
     </SettingsSection>
   )
 }
@@ -338,6 +350,7 @@ const PREFERENCE_LABEL: Record<PreferenceKey, string> = {
   previewAutoOpen: 'open Preview for dev servers',
   toolOutputExpanded: 'tool output expanded',
   showReasoning: 'always show reasoning',
+  announceReplies: 'read replies to screen readers',
   memoryEnabled: 'memory',
   keybindings: 'keyboard shortcuts',
   sandboxEgress: 'sandbox egress'

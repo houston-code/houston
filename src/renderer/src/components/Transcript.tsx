@@ -28,6 +28,7 @@ import { countsAsReply } from '@shared/chatStatus'
 import { copyText } from '../lib/clipboard'
 import { isNearBottom } from '../lib/scroll'
 import { scrollBehavior } from '../lib/motion'
+import { liveAnnouncement, messageHeading } from '../lib/transcriptA11y'
 import { useTransientFlag } from '../hooks/useTransientFlag'
 import { useStableCallback } from '../hooks/useStableCallback'
 import { ToolGroup } from './ToolGroup'
@@ -186,7 +187,8 @@ function InvokedBubble({
 }): JSX.Element {
   const mono = invokedAs.kind === 'command'
   return (
-    <div className="msg msg--user msg--invoked" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+    <article className="msg msg--user msg--invoked" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      <h3 style={SR_ONLY}>{messageHeading('user', at)}</h3>
       {menu.menu}
       <CopyButton text={text} className="msg__copy--user" />
       {actions}
@@ -204,7 +206,7 @@ function InvokedBubble({
         </details>
       </div>
       <MessageMeta at={at} align="user" />
-    </div>
+    </article>
   )
 }
 
@@ -264,13 +266,13 @@ const UserBubble = memo(function UserBubble({
   if (isSummary) {
     const body = text.slice(COMPACTION_SUMMARY_PREFIX.length).trimStart()
     return (
-      <div className="msg msg--summary" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      <article className="msg msg--summary" ref={menu.ref} onContextMenu={menu.onContextMenu}>
         {menu.menu}
-        <div className="msg__summary-label">🗜 Summary of earlier conversation</div>
+        <div className="msg__summary-label" role="heading" aria-level={3}>🗜 Summary of earlier conversation</div>
         <div className="msg__body">
           <Markdown text={body} />
         </div>
-      </div>
+      </article>
     )
   }
   if (invokedAs && !images?.length)
@@ -278,7 +280,8 @@ const UserBubble = memo(function UserBubble({
   return (
     // A message steered into a running turn reads like any other: where it lands in
     // the transcript already shows it arrived mid-run.
-    <div className="msg msg--user" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+    <article className="msg msg--user" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      <h3 style={SR_ONLY}>{messageHeading('user', at)}</h3>
       {menu.menu}
       {text.trim() !== '' && <CopyButton text={text} className="msg__copy--user" />}
       {actions}
@@ -293,7 +296,7 @@ const UserBubble = memo(function UserBubble({
         {text}
       </div>
       <MessageMeta at={at} align="user" />
-    </div>
+    </article>
   )
 }, sameUserBubble)
 
@@ -432,7 +435,8 @@ const AssistantMessage = memo(function AssistantMessage({
     ...(!streaming && onRetry ? [{ label: 'Retry', onSelect: onRetry }] : [])
   ])
   return (
-    <div className="msg msg--assistant" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+    <article className="msg msg--assistant" ref={menu.ref} onContextMenu={menu.onContextMenu}>
+      <h3 style={SR_ONLY}>{messageHeading('assistant', at)}</h3>
       {menu.menu}
       {reasoning && (
         <details className="reasoning" open={showReasoning || (streaming && !text)}>
@@ -478,7 +482,7 @@ const AssistantMessage = memo(function AssistantMessage({
           <Icon name="refresh" />
         </button>
       )}
-    </div>
+    </article>
   )
 })
 
@@ -546,7 +550,8 @@ export function Transcript({
   onRetryLast,
   newFromId,
   toolsExpanded = false,
-  showReasoning = false
+  showReasoning = false,
+  announceReplies = false
 }: {
   items: DisplayItem[]
   onApprove: (callId: string, decision: ToolApprovalDecision) => void
@@ -587,6 +592,11 @@ export function Transcript({
   toolsExpanded?: boolean
   /** Reasoning stays open under each reply (the "Always show reasoning" setting). */
   showReasoning?: boolean
+  /**
+   * Screen readers hear each finished reply's text, and the name of a tool that
+   * failed, instead of only "Response ready" (the "Read replies aloud" setting).
+   */
+  announceReplies?: boolean
 }): JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null)
   // Whether the view is currently stuck to the bottom. Starts pinned so the
@@ -793,17 +803,8 @@ export function Transcript({
 
   // A coarse, polite status for screen readers — the streaming transcript is
   // otherwise silent to assistive tech. Announces on change only (not on mount).
-  const liveStatus = useMemo(() => {
-    const last = nodes[nodes.length - 1]
-    if (!last) return ''
-    if (last.kind === 'toolgroup' && last.items.some((i) => i.status === 'awaiting-approval'))
-      return 'The agent is waiting for your approval.'
-    if (last.kind === 'question') return 'The agent is asking a question.'
-    if (last.kind === 'elicitation' && !last.item.outcome)
-      return 'An MCP server is requesting input.'
-    if (last.kind === 'assistant') return last.item.streaming ? 'The agent is responding…' : 'Response ready.'
-    return ''
-  }, [nodes])
+  // With announceReplies on, it reads a finished reply's text and a failed tool's name.
+  const liveStatus = useMemo(() => liveAnnouncement(nodes[nodes.length - 1], announceReplies), [nodes, announceReplies])
 
   const renderNode = (node: RenderNode): ReactNode => {
     switch (node.kind) {
@@ -923,10 +924,16 @@ export function Transcript({
       <div aria-live="polite" aria-atomic="true" style={SR_ONLY}>
         {liveStatus}
       </div>
+      {/* The conversation as a log for assistive tech. Its own announcing is off: the
+          polite region above speaks for it, once per change rather than per streamed
+          token. */}
       <div
         className="transcript"
         ref={containerRef}
         onScroll={handleScroll}
+        role="log"
+        aria-label="Conversation"
+        aria-live="off"
         onClickCapture={(e) => noteDisclosure(e.target)}
         onKeyDownCapture={(e) => {
           if (e.key === 'Enter' || e.key === ' ') noteDisclosure(e.target)
