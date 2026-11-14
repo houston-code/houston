@@ -238,7 +238,7 @@ import {
 } from './scheduler'
 import { matchingHooks, notificationFor, runHooks, type HookOutcome, type HookSession } from './hooks'
 import { loadAgents, type CustomAgent } from './agents'
-import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
+import { loadSkills, resolveSkillFile, resolveSkillInstructions, withBuiltinSkills } from './skills'
 import { loadPluginsIfEnabled } from './plugins'
 import { buildCapabilities } from './capabilities'
 import { gitContext } from './git'
@@ -3220,7 +3220,8 @@ export async function startRun(
         : {}),
       // Back the `skill` tool: resolve a skill name to its full instructions (or a
       // note listing what's available) from the skills loaded for this run.
-      useSkill: (name) => resolveSkillInstructions(workspace, skills, name),
+      useSkill: (name, file) =>
+        file ? resolveSkillFile(workspace, skills, name, file) : resolveSkillInstructions(workspace, skills, name),
       // Back `spawn_session` when a backend is wired (desktop only). Fills in the
       // run-scoped fields the tool doesn't take: provider/model, the workspace, and
       // `run.policy` (read live) so the spawned session inherits the parent's CURRENT
