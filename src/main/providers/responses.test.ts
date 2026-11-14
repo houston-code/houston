@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { ChatMessage, ChatRequest, ProviderStreamEvent } from '@shared/agent'
 import {
   createResponsesProvider,
+  documentFileName,
   isSummaryUnsupportedError,
   responsesErrorStatus,
   toResponsesInput,
@@ -82,6 +83,34 @@ describe('toResponsesInput', () => {
         content: [{ type: 'input_image', image_url: 'data:image/png;base64,SHOT', detail: 'auto' }]
       }
     ])
+  })
+
+  it('sends a PDF a tool attached as an input_file after the tool result, named by its base name', () => {
+    const msgs: ChatMessage[] = [
+      {
+        role: 'tool',
+        content: '[pdf: docs/spec.pdf (1 KB): attached below for viewing]',
+        toolCallId: 'call_1',
+        toolName: 'read_file',
+        images: [{ mediaType: 'image/png', data: 'IMG' }],
+        documents: [{ mediaType: 'application/pdf', data: 'PDFDATA', name: 'docs/spec.pdf' }]
+      }
+    ]
+    expect(toResponsesInput(msgs)).toEqual([
+      { type: 'function_call_output', call_id: 'call_1', output: '[pdf: docs/spec.pdf (1 KB): attached below for viewing]' },
+      {
+        role: 'user',
+        content: [
+          { type: 'input_image', image_url: 'data:image/png;base64,IMG', detail: 'auto' },
+          { type: 'input_file', filename: 'spec.pdf', file_data: 'data:application/pdf;base64,PDFDATA' }
+        ]
+      }
+    ])
+  })
+
+  it('names an unnamed document', () => {
+    expect(documentFileName(undefined, 0)).toBe('document-1.pdf')
+    expect(documentFileName('a\\b\\c.pdf', 2)).toBe('c.pdf')
   })
 
   it('emits an empty input_text for a contentless user turn (never empty content)', () => {

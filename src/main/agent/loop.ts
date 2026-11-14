@@ -58,7 +58,7 @@ import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaul
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
 import { hostPlatform, installHost } from './installHost'
 import { longContextTierAbove, resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
-import { providerSendsXhigh } from '@shared/model-facts'
+import { providerAcceptsPdf, providerSendsXhigh } from '@shared/model-facts'
 import {
   addPermissionRule,
   noteRuleUsed,
@@ -362,6 +362,8 @@ interface Route extends SelectedModel {
   reasoningCapable: boolean | undefined
   /** The provider passes `xhigh` to this model instead of clamping it to `high`. */
   sendsXhigh: boolean
+  /** What read_file may attach for this model (see ToolContext.modelSees). */
+  sees: { images: boolean; documents: boolean }
   explicitCacheControl: boolean
 }
 
@@ -1536,6 +1538,10 @@ export async function startRun(
         caps,
         reasoningCapable: caps?.reasoning,
         sendsXhigh: providerSendsXhigh(cfg.kind, model, Boolean(cfg.baseUrl)),
+        sees: {
+          images: resolveCapabilities(model, caps).vision,
+          documents: providerAcceptsPdf(cfg.kind, model, Boolean(cfg.baseUrl))
+        },
         // Opt explicit-caching routes (Claude/Qwen/Gemini via an aggregator host)
         // into prompt caching on the iterative loops. One-shot calls (title,
         // compaction) stay opted out: a cache write is a surcharge that only pays
@@ -2978,6 +2984,8 @@ export async function startRun(
     ): ToolContext => ({
       workspace,
       roots,
+      // The route at call time: a fallback hop can land on a model that sees less.
+      modelSees: route.sees,
       lsp: lspManager,
       allowNetwork: shellNetworkOn(),
       egressProxy,
@@ -3202,7 +3210,7 @@ export async function startRun(
       attachImage,
       // The route's model, read live: a fallback hop can land on one without vision.
       // Unknown models count as not seeing images, as the composer's attach button does.
-      modelSeesImages: () => resolveCapabilities(route.model, route.caps).vision,
+      modelSeesImages: () => route.sees.images,
       attachDocument,
       // Undefined on the CLI (no backend wired) so the view_localhost guard reads
       // cleanly; the tool is already filtered out of the schema set above.
