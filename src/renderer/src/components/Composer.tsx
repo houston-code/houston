@@ -29,6 +29,7 @@ import { HistorySearch } from './HistorySearch'
 import {
   expandTemplate,
   commandGroup,
+  commandHasRunOptions,
   matchCommands,
   parseSlashCommand,
 
@@ -198,6 +199,7 @@ export function Composer({
   onSend,
   onShellEscape,
   onInvoke,
+  onRunCommand,
   onSteer,
   answering = false,
   onSaveMemory,
@@ -255,6 +257,12 @@ export function Composer({
    * so the transcript shows the command the user ran, not the prompt it expands to.
    */
   onInvoke: (turn: InvokedTurn) => void
+  /**
+   * Run a custom command whose frontmatter changes how its turn runs (model, effort,
+   * agent, allowed-tools): the main process prepares it from the file on disk. Without
+   * it, such a command fills the message box like any other.
+   */
+  onRunCommand?: (cmd: Command, args: string, typed: string) => void
   /**
    * Steer the running turn with the composer text, injected before the agent's next
    * step (distinct from onSend, which queues for after the run).
@@ -984,6 +992,21 @@ export function Composer({
         return
       }
       if (cmd) {
+        if (cmd.template && onRunCommand && commandHasRunOptions(cmd)) {
+          // Its own model, effort, agent or tools for this turn: those don't survive
+          // being merged into a queued follow-up, so it waits for the turn to end.
+          if (running) {
+            flashNotice(`/${cmd.name} can't run while the agent is working. Send it once this turn ends.`)
+            setCmdDismissed(true)
+            return
+          }
+          appendPromptHistory(trimmed)
+          onRunCommand(cmd, parsed.args, trimmed)
+          setText('')
+          setImages([])
+          resetMenus()
+          return
+        }
         if (cmd.template) {
           const turn = cmd.autoRun ? commandTurn(cmd, parsed.args, trimmed) : null
           if (turn) {

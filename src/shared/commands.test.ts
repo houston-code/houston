@@ -15,6 +15,7 @@ import {
   COMMAND_ALIASES,
   COMMAND_GROUPS,
   CUSTOM_COMMAND_GROUP,
+  commandHasRunOptions,
   type Command
 } from './commands'
 import { APPROVAL_POLICIES, APPROVAL_POLICY_LABEL, parseApprovalPolicy } from './types'
@@ -327,5 +328,15 @@ describe('/init', () => {
     expect(init.template).toMatch(/Only write what you verified/)
     expect(init.template).toMatch(/improve it in place/)
     expect(init.template).not.toContain('\u2014')
+  })
+})
+
+describe('commandHasRunOptions', () => {
+  it('is true only when the frontmatter changes how the turn runs', () => {
+    const base: Command = { name: 'x', description: 'x', template: 'T', args: '<a>' }
+    expect(commandHasRunOptions(base)).toBe(false)
+    for (const extra of [{ model: 'm' }, { effort: 'low' as const }, { agent: 'a' }, { allowedTools: 'glob' }]) {
+      expect(commandHasRunOptions({ ...base, ...extra })).toBe(true)
+    }
   })
 })

@@ -25,6 +25,7 @@ import type { RecordShellResult } from '@shared/shellEscape'
 import type { EditorStatus, OpenResult } from '@shared/editors'
 import type { FileEntry, FilePreview } from '@shared/files'
 import type { Command } from '@shared/commands'
+import type { CommandPrepareResult } from '@shared/promptInvocation'
 import type { WorkingTreeChanges, WorkingTreeStats } from '@shared/workingTree'
 import type { BranchSync, GitActionResult, PrLookup } from '@shared/gitActions'
 import type { ChangeRevertRequest, ChangeRevertResult, ChatChanges } from '@shared/changes'
@@ -175,6 +176,9 @@ const api = {
   registerHtmlVisual: (html: string): Promise<string | null> => ipcRenderer.invoke(IPC.visualRegisterHtml, html),
   listCommands: (workspace: string): Promise<Command[]> =>
     ipcRenderer.invoke(IPC.commandsList, workspace),
+  /** Prepare a custom command whose frontmatter changes how its turn runs (model, effort, agent, allowed-tools). */
+  prepareCommand: (workspace: string, name: string, args: string, typed: string): Promise<CommandPrepareResult> =>
+    ipcRenderer.invoke(IPC.commandPrepare, workspace, name, args, typed),
   /** The project's and the user's skills (.houston/skills, ~/.houston/skills), name + description, for /skills. */
   listSkills: (workspace: string): Promise<Array<{ name: string; description: string }>> =>
     ipcRenderer.invoke(IPC.skillsList, workspace),

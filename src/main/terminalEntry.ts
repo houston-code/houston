@@ -610,7 +610,8 @@ export async function runTuiEntry(tui: TuiOptions, host: TerminalHost = {}): Pro
     .then((custom) => {
       menuCommands = mergeCommands(COMMANDS, custom).map((c) => ({
         name: c.name,
-        description: c.description
+        description: c.description,
+        ...(c.args ? { args: c.args } : {})
       }))
     })
     .catch(() => {

@@ -1682,10 +1682,14 @@ export async function startRun(
     // a user-tier one — only the latter can be skipped by a hook's `approve`.
     const guardrailRules = [...managedPolicy.permissionRules, ...projectConfig.permissionRules]
     const guardrailRuleCount = guardrailRules.length
+    // A custom command's `allowed-tools` for this run come last of all: they fill
+    // only what no saved rule decides, and only with `allow`.
+    const turnAllowRules = (req.turnAllowRules ?? []).filter((r) => r.action === 'allow')
     const permissionRules = [
       ...guardrailRules,
       ...(settings.permissionRules ?? []),
-      ...(projectTrusted ? projectConfig.elevated.allowRules : [])
+      ...(projectTrusted ? projectConfig.elevated.allowRules : []),
+      ...turnAllowRules
     ]
     // Hooks likewise: a trusted folder's project hooks run after the user's own.
     const hooks = projectTrusted
@@ -2438,7 +2442,7 @@ export async function startRun(
     // Settings. Bookkeeping only: it runs after the gate has its answer, never changes
     // it, and skips calls a guardrail tier decided. The user's rules sit between the
     // guardrails and a trusted project's allow rules (see the tier order above).
-    const projectAllowCount = projectTrusted ? projectConfig.elevated.allowRules.length : 0
+    const projectAllowCount = (projectTrusted ? projectConfig.elevated.allowRules.length : 0) + turnAllowRules.length
     const noteUserRuleUse = (name: string, subject: string, action: PermissionRule['action']): void => {
       queueMicrotask(() => {
         try {

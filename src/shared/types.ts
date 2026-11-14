@@ -437,7 +437,8 @@ export type FolderTrustState = 'trusted' | 'untrusted' | 'undecided' | 'changed'
  */
 export interface FolderTrustStatus {
   state: FolderTrustState | 'none'
-  counts?: { allowRules: number; hooks: number; mcpServers: number }
+  /** `commands`: the project's commands that pre-approve tools (absent when none). */
+  counts?: { allowRules: number; hooks: number; mcpServers: number; commands?: number }
 }
 
 /**

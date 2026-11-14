@@ -155,8 +155,12 @@ import {
 import { cancelCompaction, compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
-import { loadSlashCommands } from './agent/commands'
+import { loadCommands, loadSlashCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
+import { prepareCommandRun, workspaceTrusted } from './agent/commandRun'
+import { putCommandGrant, takeCommandGrant } from './commandGrants'
+import { resolveCommand } from '@shared/commands'
+import type { CommandPrepareResult } from '@shared/promptInvocation'
 import { loadAgents } from './agent/agents'
 import { registerCustomizeIpc } from './customizeIpc'
 import {
@@ -1022,7 +1026,8 @@ export function registerIpc(ready?: Promise<unknown>): void {
       counts: {
         allowRules: cfg.elevated.allowRules.length,
         hooks: cfg.elevated.hooks.length,
-        mcpServers: cfg.elevated.mcpServers.length
+        mcpServers: cfg.elevated.mcpServers.length,
+        ...(cfg.elevated.commands?.length ? { commands: cfg.elevated.commands.length } : {})
       }
     }
   })
@@ -1045,6 +1050,46 @@ export function registerIpc(ready?: Promise<unknown>): void {
       return []
     }
   })
+
+  // A custom command whose frontmatter changes how its turn runs: prepared here, from
+  // the file on disk and this folder's trust, never from what the renderer says.
+  // The per-turn options stay in main under a one-time token (see commandGrants.ts).
+  handle(
+    IPC.commandPrepare,
+    async (_event, workspace: string, name: string, args: string, typed: string): Promise<CommandPrepareResult> => {
+      if (typeof workspace !== 'string' || !workspace || typeof name !== 'string') {
+        return { ok: false, error: 'No folder is open.' }
+      }
+      let root: string
+      try {
+        root = realpathSync(workspace)
+      } catch {
+        return { ok: false, error: "This chat's folder no longer exists." }
+      }
+      const cmd = resolveCommand(await loadCommands(root).catch(() => []), name)
+      if (!cmd) return { ok: false, error: `No command /${name} in this folder any more.` }
+      const settings = getSettings()
+      const prepared = await prepareCommandRun(
+        cmd,
+        typeof args === 'string' ? args : '',
+        typeof typed === 'string' ? typed : `/${name}`,
+        { settings, trusted: await workspaceTrusted(root, settings.trustedFolders).catch(() => false) }
+      )
+      if (!prepared) return { ok: false, error: `/${cmd.name} is not a prompt command.` }
+      if (!prepared.ok) return prepared
+      const { turn, model, effort, turnAllowRules, notes } = prepared.run
+      const grant =
+        model || effort || turnAllowRules?.length
+          ? putCommandGrant({
+              workspace: root,
+              ...(model ? { model } : {}),
+              ...(effort ? { effort } : {}),
+              ...(turnAllowRules?.length ? { turnAllowRules } : {})
+            })
+          : undefined
+      return { ok: true, turn: { ...turn, ...(grant ? { grant } : {}) }, notes }
+    }
+  )
 
   // Read-only listing of the workspace's skills / custom agents for /skills and
   // /agents. Project to {name, description} only — the agent's full systemPrompt
@@ -1585,6 +1630,17 @@ export function registerIpc(ready?: Promise<unknown>): void {
     // Refusing that send used to drop the message (the bubble was never saved), so
     // queue it instead, and tell the renderer which run it's waiting on.
     const liveRunId = activeRunForConversation(conv.id)
+    if (liveRunId && req.commandGrant) {
+      // A command's per-turn options can't ride a queued follow-up (queued messages
+      // merge into one turn), and dropping them quietly would run it differently.
+      takeCommandGrant(req.commandGrant, '')
+      emitEvent(event.sender, conv.id, {
+        runId: req.runId,
+        type: 'error',
+        message: 'That command runs once the current turn ends. Send it again then.'
+      })
+      return
+    }
     if (liveRunId) {
       const items = addToQueue({
         conversationId: conv.id,
@@ -1641,16 +1697,30 @@ export function registerIpc(ready?: Promise<unknown>): void {
       log.warn(`could not record the recent model: ${(e as Error).message}`)
     }
 
+    // A custom command's per-turn model, effort and pre-approved tools, from main's
+    // own record (the chat keeps the settings recorded above).
+    let grant: ReturnType<typeof takeCommandGrant> = null
+    if (req.commandGrant) {
+      let root = conv.workspace
+      try {
+        root = realpathSync(conv.workspace)
+      } catch {
+        // A folder that's gone matches no grant.
+      }
+      grant = takeCommandGrant(req.commandGrant, root)
+    }
+
     void runAndDrain(
       makeIo(event.sender),
       conv.id,
       {
         runId: req.runId,
         workspace: conv.workspace,
-        providerId: req.providerId,
-        model: req.model,
+        providerId: grant?.model?.providerId ?? req.providerId,
+        model: grant?.model?.model ?? req.model,
         approvalPolicy,
-        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(grant?.effort ? { reasoningEffort: grant.effort } : reasoningEffort ? { reasoningEffort } : {}),
+        ...(grant?.turnAllowRules?.length ? { turnAllowRules: grant.turnAllowRules } : {}),
         messages
       },
       // Record the starting window so only it can approve/answer/cancel this run.

@@ -510,6 +510,42 @@ describe('Composer slash-command templates', () => {
     expect(props.onInvoke).not.toHaveBeenCalled() // a custom prompt stays the user's to edit
     expect(input.value).toBe('Write a spec for the login flow.') // previewed for editing
   })
+
+  it('hands a command with run options to main instead of filling the field', () => {
+    const quick: Command = { name: 'quick', description: 'Quick', template: 'Look at $ARGUMENTS', effort: 'low' }
+    const onRunCommand = vi.fn()
+    const props = baseProps({ commands: [quick], onRunCommand })
+    render(<Composer {...props} />)
+    const input = type('/quick the logs')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onRunCommand).toHaveBeenCalledWith(quick, 'the logs', '/quick the logs')
+    expect(props.onInvoke).not.toHaveBeenCalled()
+    expect(input.value).toBe('')
+  })
+
+  it('holds a command with run options while a turn is running, keeping the text', () => {
+    const quick: Command = { name: 'quick', description: 'Quick', template: 'Look', allowedTools: 'glob' }
+    const onRunCommand = vi.fn()
+    const props = baseProps({ commands: [quick], onRunCommand, running: true })
+    render(<Composer {...props} />)
+    const input = type('/quick now')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onRunCommand).not.toHaveBeenCalled()
+    expect(props.onSteer).not.toHaveBeenCalled()
+    expect(input.value).toBe('/quick now')
+    expect(screen.getByText(/can't run while the agent is working/)).toBeInTheDocument()
+  })
+
+  it('runs a skill through onCommand, and shows its hint in the menu', () => {
+    const pdf: Command = { name: 'pdf', description: 'Work with PDFs', args: '[task]', skill: true }
+    const props = baseProps({ commands: [...COMMANDS, pdf] })
+    render(<Composer {...props} />)
+    type('/pd')
+    expect(screen.getByText('[task]')).toBeInTheDocument()
+    const input = type('/pdf merge them')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(props.onCommand).toHaveBeenCalledWith(pdf, 'merge them')
+  })
 })
 
 describe('Composer prompt-history recall', () => {

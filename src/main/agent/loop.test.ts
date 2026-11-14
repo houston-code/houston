@@ -448,6 +448,7 @@ async function run(
     /** Answer prompts synchronously inside `send`, as the headless CLI does. */
     syncReplies?: boolean
     liveShellOutput?: boolean
+    turnAllowRules?: AgentRunRequest['turnAllowRules']
   }
 ): Promise<RunResult> {
   h.provider = opts.provider ?? scripted(opts.turns ?? [])
@@ -485,7 +486,8 @@ async function run(
       ...(opts.unattended !== undefined ? { unattended: opts.unattended } : {}),
       ...(opts.overrides ? { overrides: opts.overrides } : {}),
       ...(opts.allowShellNetwork ? { allowShellNetwork: true } : {}),
-      ...(opts.liveShellOutput ? { liveShellOutput: true } : {})
+      ...(opts.liveShellOutput ? { liveShellOutput: true } : {}),
+      ...(opts.turnAllowRules ? { turnAllowRules: opts.turnAllowRules } : {})
     },
     send,
     (m) => {
@@ -2168,6 +2170,54 @@ describe('startRun', () => {
     } finally {
       h.settings.permissionRules = []
     }
+  })
+
+  it("runs a command's allowed-tools unprompted for that run, below every saved rule", async () => {
+    // The user denies one file outright; the command pre-approves every write.
+    h.settings.permissionRules = [{ action: 'deny', tool: 'write_file', match: 'secret.txt' }]
+    try {
+      const r = await run({
+        policy: 'ask',
+        turnAllowRules: [
+          { action: 'allow', tool: 'write_file', match: '*' },
+          // Only allow rules ride along; anything else is dropped.
+          { action: 'deny', tool: 'read_file', match: '*' }
+        ],
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'notes.txt', content: 'x' } } },
+            { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'secret.txt', content: 'x' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      expect(r.events.filter((e) => e.type === 'tool_approval')).toHaveLength(0)
+      const results = r.events.filter((e) => e.type === 'tool_result') as Array<{ callId: string; ok: boolean }>
+      expect(results.find((e) => e.callId === 'w1')?.ok).toBe(true)
+      // The user's own deny still wins over the command's allow.
+      expect(results.find((e) => e.callId === 'w2')?.ok).toBe(false)
+      // Not one of the user's rules: nothing is noted as used for it.
+      await Promise.resolve()
+      expect(h.usedRules.some((u) => (u as { match?: string }).match === '*')).toBe(false)
+    } finally {
+      h.settings.permissionRules = []
+    }
+  })
+
+  it('asks again on the next run: a command allow lasts one run only', async () => {
+    const r = await run({
+      policy: 'ask',
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'notes.txt', content: 'x' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      onApproval: (_id, decide) => decide('deny')
+    })
+    expect(r.events.filter((e) => e.type === 'tool_approval')).toHaveLength(1)
   })
 
   it("notes which of the user's rules decided a call, and none for a guardrail's", async () => {
