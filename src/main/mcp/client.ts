@@ -21,6 +21,8 @@ import {
   mcpCancelledError,
   parseIncoming,
   type ElicitationWireResult,
+  listAllPages,
+  type ListedPages,
   type McpListKind
 } from './protocol'
 
@@ -82,6 +84,8 @@ export interface McpConnection {
   readonly tools: McpToolInfo[]
   /** Why entries of the last `tools/list` were dropped (see {@link parseMcpToolList}). */
   readonly droppedTools?: readonly string[]
+  /** Lists the server sent more of than Houston reads, with why (see {@link listAllPages}). */
+  readonly listNotes?: Readonly<Partial<Record<McpListKind, string>>>
   /** Resources the server exposes; empty when the server doesn't support them. */
   readonly resources: McpResourceInfo[]
   /** Prompt templates the server exposes; empty when it doesn't support them. */
@@ -234,6 +238,7 @@ export class McpClient {
   })
   tools: McpToolInfo[] = []
   droppedTools: string[] = []
+  listNotes: Partial<Record<McpListKind, string>> = {}
   resources: McpResourceInfo[] = []
   prompts: McpPromptInfo[] = []
 
@@ -318,7 +323,7 @@ export class McpClient {
     if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
     this.notify('notifications/initialized', {})
 
-    const listed = (await this.request('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: unknown }
+    const listed = await this.fetchList('tools')
     this.setTools(listed)
 
     // Only ask for resources/prompts when the server declared the capability —
@@ -328,7 +333,7 @@ export class McpClient {
     if (this.capable.resources) {
       try {
         this.resources = parseMcpResourceList(
-          await this.request('resources/list', {}, INIT_TIMEOUT_MS)
+          await this.fetchList('resources')
         )
       } catch {
         this.resources = []
@@ -336,7 +341,7 @@ export class McpClient {
     }
     if (this.capable.prompts) {
       try {
-        this.prompts = parseMcpPromptList(await this.request('prompts/list', {}, INIT_TIMEOUT_MS))
+        this.prompts = parseMcpPromptList(await this.fetchList('prompts'))
       } catch {
         this.prompts = []
       }
@@ -365,6 +370,14 @@ export class McpClient {
   async getPrompt(name: string, args: Record<string, string>, signal?: AbortSignal): Promise<string> {
     const res = await this.request('prompts/get', { name, arguments: args ?? {} }, CALL_TIMEOUT_MS, { signal })
     return flattenMcpPromptMessages(res) || '[no content]'
+  }
+
+  /** Fetch a whole list, every page (see listAllPages), noting when it was cut short. */
+  private async fetchList(kind: McpListKind): Promise<ListedPages> {
+    const listed = await listAllPages((params) => this.request(`${kind}/list`, params, INIT_TIMEOUT_MS), kind)
+    if (listed.truncated) this.listNotes[kind] = listed.truncated
+    else delete this.listNotes[kind]
+    return listed
   }
 
   /** Take a `tools/list` result, keeping only well-formed tools (see parseMcpToolList). */
@@ -446,12 +459,12 @@ export class McpClient {
   /** Re-fetch one changed list in place (driven by the ListRefresher). */
   private async refreshList(kind: McpListKind): Promise<void> {
     if (kind === 'tools') {
-      const listed = (await this.request('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: unknown }
+      const listed = await this.fetchList('tools')
       if (Array.isArray(listed?.tools)) this.setTools(listed)
     } else if (kind === 'resources') {
-      this.resources = parseMcpResourceList(await this.request('resources/list', {}, INIT_TIMEOUT_MS))
+      this.resources = parseMcpResourceList(await this.fetchList('resources'))
     } else {
-      this.prompts = parseMcpPromptList(await this.request('prompts/list', {}, INIT_TIMEOUT_MS))
+      this.prompts = parseMcpPromptList(await this.fetchList('prompts'))
     }
   }
 

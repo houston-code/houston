@@ -36,6 +36,32 @@ function fakeServer(tools: ToolDecl[], callResult: (params: unknown) => unknown)
   return (() => child) as unknown as SpawnFn
 }
 
+/** A two-page answer to each `*\/list` method: `one` on the first page, `two` behind cursor `page-2`. */
+function pagedListResult(method: string, cursor: unknown): unknown {
+  const kind = method.split('/')[0]
+  if (!['tools', 'resources', 'prompts'].includes(kind) || !method.endsWith('/list')) return {}
+  const entry = (n: string): unknown => (kind === 'resources' ? { uri: `file:///${n}` } : { name: n })
+  return cursor === undefined ? { [kind]: [entry('one')], nextCursor: 'page-2' } : { [kind]: [entry('two')] }
+}
+
+/** A stdio server that answers every request with `answer(method, params)`. */
+function fakeListServer(answer: (method: string, params: unknown) => unknown): SpawnFn {
+  const stdout = new EventEmitter()
+  const stdin = Object.assign(new EventEmitter(), {
+    write(line: string): boolean {
+      const msg = JSON.parse(line.trim()) as { id?: number; method: string; params?: unknown }
+      if (msg.id === undefined) return true
+      const result = msg.method === 'initialize' ? { protocolVersion: '2024-11-05', capabilities: {} } : answer(msg.method, msg.params)
+      queueMicrotask(() =>
+        stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+      )
+      return true
+    }
+  })
+  const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+  return (() => child) as unknown as SpawnFn
+}
+
 describe('McpClient (fake stdio server)', () => {
   it('launches a Windows .cmd shim (npx) through cmd.exe with its arguments intact', async () => {
     const inner = fakeServer([{ name: 'echo' }], () => ({}))
@@ -73,6 +99,52 @@ describe('McpClient (fake stdio server)', () => {
     )
     await client.connect({ command: 'fake' })
     expect(client.tools.map((t) => t.name)).toEqual(['echo'])
+    client.close()
+  })
+
+  it('follows nextCursor through every page of tools, resources and prompts', async () => {
+    const stdout = new EventEmitter()
+    const asked: Array<{ method: string; cursor?: unknown }> = []
+    const stdin = Object.assign(new EventEmitter(), {
+      write(line: string): boolean {
+        const msg = JSON.parse(line.trim()) as { id?: number; method: string; params?: { cursor?: unknown } }
+        if (msg.id === undefined) return true
+        if (msg.method.endsWith('/list')) asked.push({ method: msg.method, cursor: msg.params?.cursor })
+        const result =
+          msg.method === 'initialize'
+            ? { protocolVersion: '2025-06-18', capabilities: { resources: {}, prompts: {} } }
+            : pagedListResult(msg.method, msg.params?.cursor)
+        queueMicrotask(() =>
+          stdout.emit('data', Buffer.from(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result })}\n`))
+        )
+        return true
+      }
+    })
+    const child = Object.assign(new EventEmitter(), { stdout, stdin, stderr: new EventEmitter(), kill: () => {} })
+    const client = new McpClient((() => child) as unknown as SpawnFn)
+    await client.connect({ command: 'fake' })
+    expect(client.tools.map((t) => t.name)).toEqual(['one', 'two'])
+    expect(client.resources.map((r) => r.uri)).toEqual(['file:///one', 'file:///two'])
+    expect(client.prompts.map((p) => p.name)).toEqual(['one', 'two'])
+    expect(client.listNotes).toEqual({})
+    expect(asked).toEqual([
+      { method: 'tools/list', cursor: undefined },
+      { method: 'tools/list', cursor: 'page-2' },
+      { method: 'resources/list', cursor: undefined },
+      { method: 'resources/list', cursor: 'page-2' },
+      { method: 'prompts/list', cursor: undefined },
+      { method: 'prompts/list', cursor: 'page-2' }
+    ])
+    client.close()
+  })
+
+  it('notes a tool list cut short by a repeated cursor', async () => {
+    const client = new McpClient(
+      fakeListServer((method) => (method === 'tools/list' ? { tools: [{ name: 'a' }], nextCursor: 'again' } : {}))
+    )
+    await client.connect({ command: 'fake' })
+    expect(client.tools.map((t) => t.name)).toEqual(['a', 'a'])
+    expect(client.listNotes.tools).toMatch(/repeated a page cursor/)
     client.close()
   })
 
