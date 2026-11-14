@@ -107,9 +107,21 @@ let diskBudgetBytes = MAX_DISK_CHECKPOINT_BYTES
 export const MAX_RUN_SNAPSHOT_CHARS = 32_000_000
 let runBudgetChars = MAX_RUN_SNAPSHOT_CHARS
 
+/**
+ * Bytes of run files as of the last full size scan (null: never scanned in this
+ * process), and an upper bound on what was written since. While the count is under
+ * its cap and the two together are under the budget, a prune needs no per-file stat:
+ * statting every file on every new run made a busy history slow to record.
+ */
+let diskBytesAtScan: number | null = null
+/** The checkpoints directory that scan was of (the user-data dir can be switched). */
+let scannedDir: string | null = null
+let bytesWrittenSinceScan = 0
+
 /** For tests: a smaller disk budget (null restores the default). */
 export function _setCheckpointDiskBudget(bytes: number | null): void {
   diskBudgetBytes = bytes ?? MAX_DISK_CHECKPOINT_BYTES
+  diskBytesAtScan = null
 }
 
 /** For tests: a smaller per-run snapshot budget (null restores the default). */
@@ -550,7 +562,11 @@ async function writeRunFile(runId: string): Promise<void> {
       ...(s.reverted ? { reverted: true } : {})
     }))
   }
-  await writeJsonAtomic(join(dir, `${runId}.json`), data)
+  const json = JSON.stringify(data)
+  await writeFileAtomic(join(dir, `${runId}.json`), json, 0o600)
+  // Over-counts a rewrite of the same run (its old size is still in the total), which
+  // only makes the next byte scan come sooner.
+  bytesWrittenSinceScan += Buffer.byteLength(json)
 }
 
 /** Queue a write of this run's checkpoint file; resolves once it (or a newer one) lands. */
@@ -659,6 +675,14 @@ function schedulePrune(): Promise<void> {
       return
     }
     const runFiles = entries.filter((f) => f.endsWith('.json') && f !== 'index.json')
+    if (
+      runFiles.length <= MAX_DISK_CHECKPOINTS &&
+      diskBytesAtScan !== null &&
+      scannedDir === dir &&
+      diskBytesAtScan + bytesWrittenSinceScan <= diskBudgetBytes
+    ) {
+      return
+    }
     const stats: { f: string; mtime: number; size: number }[] = []
     for (const f of runFiles) {
       try {
@@ -670,6 +694,9 @@ function schedulePrune(): Promise<void> {
     }
     let count = stats.length
     let bytes = stats.reduce((n, s) => n + s.size, 0)
+    bytesWrittenSinceScan = 0
+    diskBytesAtScan = bytes
+    scannedDir = dir
     if (count <= MAX_DISK_CHECKPOINTS && bytes <= diskBudgetBytes) return
     stats.sort((a, b) => a.mtime - b.mtime)
     const keep = protectedRuns()
@@ -680,6 +707,7 @@ function schedulePrune(): Promise<void> {
       count--
       bytes -= s.size
     }
+    diskBytesAtScan = bytes
   })
 }
 
