@@ -13,6 +13,20 @@ usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"sys
 system prompt vs claude-sonnet-5 baseline:
 (baseline)
 
+## anthropic / claude-haiku-5-5
+host caps: {"reasoning":true}
+reasoning: effort=medium capable=true summary=- verbosity=-
+explicitCacheControl: false
+tools: 20
+usage event: usage {"cost":0.00015,"inputTokens":1000,"model":"claude-haiku-5-5","outputTokens":100}
+system prompt vs claude-sonnet-5 baseline:
++ 
++ # Notes for this model
++ - Send each tool argument as the plain JSON type its schema names. Never put XML or other markup tags inside an argument value.
++ - When a command or edit fails twice the same way, stop repeating it: read the full error and the file involved, then change the approach.
++ - Claim only what a check you ran showed. One passing fix does not show the whole task works, so say what you verified and what you did not.
++ - In your final message, describe what changed and where. Don't paste the contents of files you wrote.
+
 ## openai / gpt-5.2
 host caps: -
 reasoning: effort=medium capable=- summary=- verbosity=-
@@ -21,7 +35,10 @@ tools: 20
 usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4995},"cost":0.00315,"inputTokens":1000,"model":"gpt-5.2","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
 + 
-+ apply_patch is available for multi-file edits: prefer it when a single change spans several files. When the user asks for a change, carry it through to a verified result in this turn rather than stopping to propose a plan or ask whether to continue.
++ # Notes for this model
++ - apply_patch is available for multi-file edits: prefer it when a single change spans several files. Don't send a patch that changes nothing: if a file already reads the way you want, leave it and move on.
++ - When the user asks for a change, carry it through to a verified result in this turn rather than stopping to propose a plan or ask whether to continue.
++ - When the user asks only for a proposal, a plan, or an explanation, read what the answer needs and then give it. A long run of reads that ends without the answer has not done what was asked.
 
 ## ollama / llama3.3
 host caps: -
@@ -31,4 +48,7 @@ tools: 20
 usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4995},"cost":0,"inputTokens":1000,"model":"llama3.3","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
 + 
-+ You are running on a local model: prefer concise, deliberate tool use, one focused call at a time over many speculative ones.
++ # Notes for this model
++ - You are running on a local model: prefer concise, deliberate tool use, one focused call at a time over many speculative ones.
++ - Make every tool call through the tool-calling interface. Never write a tool call out as text in your reply: text is shown to the user and runs nothing.
++ - State only what you read in the project or in a tool result. If you haven't read it, say you don't know rather than filling the gap.

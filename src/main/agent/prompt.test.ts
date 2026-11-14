@@ -349,10 +349,16 @@ describe('buildSystemPrompt', () => {
 
   describe('per-model addendum', () => {
     const base = buildSystemPrompt('/tmp/x')
-    const OPENAI_ADDENDUM =
-      'apply_patch is available for multi-file edits: prefer it when a single change spans several files. When the user asks for a change, carry it through to a verified result in this turn rather than stopping to propose a plan or ask whether to continue.'
-    const GEMINI_ADDENDUM =
-      'After every tool result, either make the next tool call or reply to the user. Never end a reply with no text and no tool call.'
+    const HEADING = '# Notes for this model'
+    const OPENAI_ADDENDUM = [
+      HEADING,
+      "- apply_patch is available for multi-file edits: prefer it when a single change spans several files. Don't send a patch that changes nothing: if a file already reads the way you want, leave it and move on.",
+      '- When the user asks for a change, carry it through to a verified result in this turn rather than stopping to propose a plan or ask whether to continue.',
+      '- When the user asks only for a proposal, a plan, or an explanation, read what the answer needs and then give it. A long run of reads that ends without the answer has not done what was asked.'
+    ].join('\n')
+    const GEMINI_ADDENDUM = `${HEADING}\n- After every tool result, either make the next tool call or reply to the user. Never end a reply with no text and no tool call.`
+    const at = (providerId: string, model: string, offered?: string[]): string =>
+      buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, providerId, model, offered)
 
     it('appends the apply_patch line for the OpenAI provider', () => {
       const p = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'openai', 'gpt-4o')
@@ -375,9 +381,60 @@ describe('buildSystemPrompt', () => {
       }
     })
 
-    it('adds no addendum for the Anthropic family', () => {
-      const anthropic = buildSystemPrompt('/tmp/x', undefined, undefined, undefined, undefined, undefined, 'anthropic', 'claude-opus-4-8')
-      expect(anthropic).toBe(base)
+    it('adds no notes for the larger Claude models', () => {
+      for (const model of ['claude-opus-4-8', 'claude-sonnet-5', 'claude-fable-5-2']) {
+        expect(at('anthropic', model), model).toBe(base)
+      }
+    })
+
+    it('adds the small-tier notes for Haiku on any provider', () => {
+      for (const [id, model] of [
+        ['anthropic', 'claude-haiku-5-5'],
+        ['bedrock', 'us.anthropic.claude-haiku-4-5-20251001-v1:0'],
+        ['openrouter', 'anthropic/claude-haiku-5.5']
+      ]) {
+        const p = at(id, model)
+        const notes = p.slice(base.length)
+        expect(p.startsWith(`${base}\n\n${HEADING}\n`), `${id}/${model}`).toBe(true)
+        expect(notes.split('\n').filter((l) => l.startsWith('- '))).toHaveLength(4)
+        expect(notes).toContain('Never put XML or other markup tags inside an argument value')
+        expect(notes).toContain('fails twice the same way')
+        expect(notes).toContain('Claim only what a check you ran showed')
+        expect(notes).toContain("Don't paste the contents of files you wrote")
+      }
+    })
+
+    it('tells a local model to call tools through the interface and not to fill gaps', () => {
+      const notes = at('ollama', 'llama3').slice(base.length)
+      expect(notes).toContain('Never write a tool call out as text in your reply')
+      expect(notes).toContain("say you don't know rather than filling the gap")
+      // A local runtime serving a model with another family's name gets the local notes only.
+      expect(at('ollama', 'gpt-oss').slice(base.length)).toBe(notes)
+      expect(at('lmstudio', 'claude-haiku-like').slice(base.length)).toBe(notes)
+    })
+
+    it('gives every family one notes section of bullets, with no tool names beyond apply_patch', () => {
+      const names = toolNames().filter((n) => n !== 'apply_patch')
+      for (const [id, model] of [
+        ['openai', 'gpt-5.5'],
+        ['gemini', 'gemini-2.5-pro'],
+        ['ollama', 'llama3'],
+        ['anthropic', 'claude-haiku-5-5']
+      ]) {
+        const notes = at(id, model).slice(base.length)
+        const lines = notes.trim().split('\n')
+        expect(lines[0], id).toBe(HEADING)
+        expect(lines.slice(1).every((l) => l.startsWith('- ')), id).toBe(true)
+        for (const name of names) expect(notes, `${id}: ${name}`).not.toMatch(new RegExp(`\\b${name}\\b`))
+      }
+    })
+
+    it('drops only the apply_patch note when the run does not offer apply_patch', () => {
+      const offered = toolNames().filter((n) => n !== 'apply_patch')
+      const p = at('openai', 'gpt-5.5', offered)
+      expect(p).not.toContain('apply_patch')
+      expect(p).toContain(`${HEADING}\n- When the user asks for a change, carry it through`)
+      expect(p).toContain('A long run of reads that ends without the answer')
     })
 
     it('appends the no-empty-reply line for Gemini models on any provider', () => {
