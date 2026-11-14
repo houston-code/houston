@@ -171,9 +171,19 @@ function read(id: string): Conversation | null {
   if (!isConversationId(id)) return null
   const path = filePath(id)
   if (!existsSync(path)) return null
+  let text: string
+  try {
+    text = readFileSync(path, 'utf8')
+  } catch (e) {
+    // Can't read it right now (EACCES after a sudo run, Windows EBUSY/EPERM while
+    // antivirus or another process holds it, EMFILE): the bytes may be fine, so skip
+    // the chat this time rather than quarantining it for good.
+    console.error(`[conversations] could not read ${path}:`, (e as Error)?.message ?? e)
+    return null
+  }
   let raw: unknown
   try {
-    raw = JSON.parse(readFileSync(path, 'utf8'))
+    raw = JSON.parse(text)
   } catch {
     quarantine(path, 'invalid JSON')
     return null
@@ -253,7 +263,12 @@ function commit(id: string, shell: ConversationShell, messagesJson: string): voi
   // output (a curl with an auth header, an env dump), so keep them off world-read.
   // Compact, not indented: nobody reads these by hand, every reader parses either form,
   // and indentation more than doubled a chat full of nested subagent records.
-  const stamp = writeFileAtomicStampedSync(filePath(id), serialize(shell, messagesJson), 0o600)
+  // Not fsynced: a chat is saved several times per model step on the main thread, and
+  // an fsync each time (a few ms, more under disk contention) would stall it. A file a
+  // power loss truncates fails to parse and is quarantined with its bytes, not dropped.
+  const stamp = writeFileAtomicStampedSync(filePath(id), serialize(shell, messagesJson), 0o600, {
+    durable: false
+  })
   rememberWritten(id, { stamp, shell: structuredClone(shell), messagesJson })
   // This process's own write: drop the cached metadata now rather than lean on the
   // file's stamp, which a filesystem with coarse timestamps could repeat.

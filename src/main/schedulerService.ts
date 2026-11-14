@@ -319,7 +319,10 @@ export function createSchedulerService(deps: SchedulerServiceDeps): SchedulerSer
         // Advance BEFORE firing so a fire that throws synchronously can't wedge the
         // schedule into refiring the same occurrence forever.
         s.lastFiredAt = at
-        s.nextRunAt = spec ? nextOccurrence(spec, new Date(at)) : null
+        // A 'once' is spent after this fire. Re-deriving it would re-read its local-time
+        // spec in the current zone, which after a time-zone change can name a later
+        // instant and fire it a second time.
+        s.nextRunAt = spec && spec.kind !== 'once' ? nextOccurrence(spec, new Date(at)) : null
         claimed.push({ ...s })
       }
       if (claimed.length > 0) {

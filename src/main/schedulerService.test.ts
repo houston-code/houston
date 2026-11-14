@@ -117,6 +117,29 @@ describe('createSchedulerService', () => {
     expect(service.list()).toHaveLength(0)
   })
 
+  it('fires a one-shot once even when the time zone changes before it fires', async () => {
+    const zone = process.env.TZ
+    try {
+      process.env.TZ = 'America/New_York'
+      vi.setSystemTime(new Date(2026, 6, 15, 12, 0, 0))
+      const { service, fired } = makeService()
+      service.create(input({ spec: 'once at 2026-07-15 12:30' }))
+      // The user flies west: the stored local time "12:30" now names a later instant.
+      process.env.TZ = 'America/Los_Angeles'
+      service.start()
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000 + 5)
+      expect(fired).toHaveLength(1)
+      // Before: re-deriving the spec in the new zone re-armed it for 12:30 Pacific.
+      expect(service.list()).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(4 * 60 * 60 * 1000)
+      expect(fired).toHaveLength(1)
+      service.stop()
+    } finally {
+      if (zone === undefined) delete process.env.TZ
+      else process.env.TZ = zone
+    }
+  })
+
   it('keeps a higher schema version a newer Houston stamped on the store', () => {
     writeFileSync(file, JSON.stringify({ schemaVersion: 7, schedules: [] }))
     const { service } = makeService()
