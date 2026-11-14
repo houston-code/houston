@@ -425,6 +425,13 @@ extended thinking, and prompt caching.
 - **Foundry** is the exception: it does take an API key. The resource name is the
   `my-resource` part of `https://my-resource.services.ai.azure.com`.
 
+**Stuck sign-ins.** If Bedrock or Vertex can't get credentials within 30 seconds (an
+expired SSO session, a `credential_process` waiting for input, a metadata server
+lookup on a machine outside the cloud), the turn stops with an error that says which
+credential source didn't answer and what to run, such as `aws sso login` or
+`gcloud auth application-default login`. Houston doesn't retry it on its own, and
+Stop ends the wait at any time.
+
 **Model lists.** The picker shows each model under one name whichever host you use.
 None of the three publishes a model list, so Houston ships a curated one, and
 "Fetch" restores it rather than calling out to the network. If your account can use
