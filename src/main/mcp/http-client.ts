@@ -4,6 +4,7 @@ import {
   mcpCapable,
   parseMcpPromptList,
   parseMcpResourceList,
+  parseMcpToolList,
   type McpConnection,
   type McpPromptInfo,
   type McpResourceInfo,
@@ -130,6 +131,7 @@ export class McpHttpClient implements McpConnection {
   private protocolVersion?: McpProtocolVersion
   private onElicit?: (params: unknown) => Promise<ElicitationWireResult>
   tools: McpToolInfo[] = []
+  droppedTools: string[] = []
   resources: McpResourceInfo[] = []
   prompts: McpPromptInfo[] = []
 
@@ -158,8 +160,8 @@ export class McpHttpClient implements McpConnection {
     // an elicitation answer: its requests fall through to the -32601 decline.
     if (!supportsElicitation(this.protocolVersion)) this.onElicit = undefined
     await this.notify('notifications/initialized', {})
-    const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: McpToolInfo[] }
-    this.tools = Array.isArray(listed?.tools) ? listed.tools : []
+    const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: unknown }
+    this.setTools(listed)
 
     // Only ask for resources/prompts when the server declared the capability.
     this.capable.resources = mcpCapable(init, 'resources')
@@ -203,6 +205,13 @@ export class McpHttpClient implements McpConnection {
     }
     const text = flattenMcpContent(res?.content)
     return res?.isError ? `${text}\n[the MCP tool reported an error]`.trim() : text || '[no output]'
+  }
+
+  /** Take a `tools/list` result, keeping only well-formed tools (see parseMcpToolList). */
+  private setTools(listed: unknown): void {
+    const dropped: string[] = []
+    this.tools = parseMcpToolList(listed, dropped)
+    this.droppedTools = dropped
   }
 
   close(): void {
@@ -275,10 +284,17 @@ export class McpHttpClient implements McpConnection {
     if (sid) this.sessionId = sid
     if (res.status === 401) {
       await res.text().catch(() => '')
-      throw new McpUnauthorizedError(
+      const err = new McpUnauthorizedError(
         `MCP ${method} failed: HTTP 401 (the server rejected the credentials or requires OAuth sign-in)`,
         res.headers.get('www-authenticate')
       )
+      // Credentials that stopped working (a revoked or silently expired token) won't
+      // start working on this connection: mark it dead, like an expired session, so
+      // the manager reconnects (refreshing the OAuth token) instead of reusing it.
+      this.closed = true
+      this.pending.reject(id, err)
+      this.pending.failAll(err.message)
+      return
     }
     if (res.status === 404 && this.sessionId) {
       // The server expired our session (spec: 404 on a stale Mcp-Session-Id). A
@@ -465,8 +481,8 @@ export class McpHttpClient implements McpConnection {
   /** Re-fetch one changed list in place (driven by the ListRefresher). */
   private async refreshList(kind: McpListKind): Promise<void> {
     if (kind === 'tools') {
-      const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: McpToolInfo[] }
-      this.tools = Array.isArray(listed?.tools) ? listed.tools : this.tools
+      const listed = (await this.rpc('tools/list', {}, INIT_TIMEOUT_MS)) as { tools?: unknown }
+      if (Array.isArray(listed?.tools)) this.setTools(listed)
     } else if (kind === 'resources') {
       this.resources = parseMcpResourceList(await this.rpc('resources/list', {}, INIT_TIMEOUT_MS))
     } else {

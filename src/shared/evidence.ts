@@ -120,6 +120,29 @@ export interface DelegatedCommand {
   by: string
 }
 
+/** What a turn's file edits did to a test, as far as Houston could tell from the files. */
+export type TestEditKind =
+  /** A test file with assertions was deleted, and they didn't reappear in another test file. */
+  | 'deleted'
+  /** A skip marker was added (`.skip(`, `xit(`, `@pytest.mark.skip`, `t.Skip(`, `#[ignore]`). */
+  | 'skip'
+  /** A focus marker was added (`.only(`, `fit(`), so the rest of the suite stops running. */
+  | 'focus'
+  /** A test file has fewer assertions than it started with. */
+  | 'asserts'
+  /** A package.json test script now passes whatever happens (`|| true`, `--passWithNoTests`). */
+  | 'script'
+  /** A test runner's config changed which tests run (include/exclude, testMatch, addopts). */
+  | 'config'
+
+/** One test edit the turn made (see TurnReceipt.testEdits). */
+export interface TestEdit {
+  path: string
+  kind: TestEditKind
+  /** What changed, in a few words: "added it.skip('rejects bad input'", "3 assertions, down from 5". */
+  detail: string
+}
+
 /** What Houston recorded about a turn. Saved on the turn's last assistant message. */
 export interface TurnReceipt {
   v: 1
@@ -153,6 +176,15 @@ export interface TurnReceipt {
    * before a later file change, so it may not cover the final code. At most 10.
    */
   todoStale?: string[]
+  /**
+   * Edits the turn's file tools made that loosen a test: a deleted test file, an added
+   * skip or focus marker, dropped assertions, a test script or runner config that lets
+   * more through. Read from the files as they stood before and after the turn; capped at
+   * {@link RECEIPT_MAX_TEST_EDITS}.
+   */
+  testEdits?: TestEdit[]
+  /** Test edits dropped by the cap. */
+  testEditsOmitted?: number
   /** Progress against the plan the user accepted, while it is still being carried out. */
   plan?: PlanProgress
 }
@@ -190,6 +222,7 @@ export const RECEIPT_MAX_CHECKS = 24
 export const RECEIPT_MAX_FILES = 200
 export const RECEIPT_MAX_DELEGATED = 12
 export const RECEIPT_LABEL_MAX = 160
+export const RECEIPT_MAX_TEST_EDITS = 20
 
 const KIND_LABEL: Record<CheckKind, string> = {
   test: 'tests',
@@ -348,6 +381,8 @@ export function receiptSummary(r: TurnReceipt): string {
     parts.push(`${r.filesChangedCount} file${r.filesChangedCount === 1 ? '' : 's'} changed`)
   }
   if (r.plan) parts.push(planPhrase(r.plan))
+  const testEdits = (r.testEdits?.length ?? 0) + (r.testEditsOmitted ?? 0)
+  if (testEdits) parts.push(`${testEdits} test edit${testEdits === 1 ? '' : 's'} to review`)
   const gaps = r.todoGaps?.length ?? 0
   if (gaps) parts.push(`${gaps} todo${gaps === 1 ? '' : 's'} marked done with nothing recorded`)
   const stale = r.todoStale?.length ?? 0
@@ -380,6 +415,20 @@ const PLAN_CHECK_TEXT: Record<PlanCheckStatus['status'], string> = {
   skipped: 'skipped, as you asked'
 }
 
+const TEST_EDIT_TEXT: Record<TestEditKind, string> = {
+  deleted: 'test deleted',
+  skip: 'test skipped',
+  focus: 'test focused',
+  asserts: 'assertions removed',
+  script: 'test script loosened',
+  config: 'test config changed'
+}
+
+/** A test edit in one line: "test skipped: src/a.test.ts (added it.skip('x')". */
+export function testEditText(t: TestEdit): string {
+  return `${TEST_EDIT_TEXT[t.kind]}: ${t.path} (${t.detail})`
+}
+
 /** A plan check's status in words. */
 export function planCheckText(c: PlanCheckStatus): string {
   return PLAN_CHECK_TEXT[c.status]
@@ -388,13 +437,15 @@ export function planCheckText(c: PlanCheckStatus): string {
 /**
  * Whether the receipt needs a second look, which every client shows the same way: a
  * check failed, a test command ran fewer tests or skipped more than an earlier run of
- * it, or a todo claims a check that nothing (or only a run before the last change) backs.
+ * it, an edit loosened a test, or a todo claims a check that nothing (or only a run
+ * before the last change) backs.
  */
 export function receiptHasFailure(r: TurnReceipt): boolean {
   return (
     r.checks.some((c) => c.ok === false || c.shrunk !== undefined || c.skippedRose !== undefined) ||
     (r.todoGaps?.length ?? 0) > 0 ||
-    (r.todoStale?.length ?? 0) > 0
+    (r.todoStale?.length ?? 0) > 0 ||
+    (r.testEdits?.length ?? 0) > 0
   )
 }
 
@@ -422,6 +473,10 @@ export function formatReceiptLines(r: TurnReceipt): string[] {
   }
   const byFiles = Object.entries(r.filesBy ?? {})
   for (const [file, by] of byFiles) lines.push(`  changed ${file} (by ${by})`)
+  for (const t of r.testEdits ?? []) lines.push(`  ! ${testEditText(t)}`)
+  if (r.testEditsOmitted) {
+    lines.push(`  plus ${r.testEditsOmitted} more test edit${r.testEditsOmitted === 1 ? '' : 's'}`)
+  }
   for (const g of r.todoGaps ?? []) lines.push(`  ! marked done with nothing recorded: ${g}`)
   for (const g of r.todoStale ?? []) lines.push(`  ! marked done, checked only before the last change: ${g}`)
   if (r.plan && !r.plan.complete) {

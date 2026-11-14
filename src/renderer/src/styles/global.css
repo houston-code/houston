@@ -5404,6 +5404,10 @@ body.is-resizing .preview-dock__resizer::after {
   color: var(--danger);
   font-size: 12px;
 }
+.changes-panel__git-error {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 /* ---- Commit form in the Changes view ---- */
 .commit-form {
   display: flex;

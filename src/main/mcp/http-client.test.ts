@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { version as PKG_VERSION } from '../../../package.json'
 import { McpHttpClient, extractSseData, pickJsonRpc, type FetchFn } from './http-client'
 import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
+import { McpUnauthorizedError } from './client'
 
 describe('extractSseData', () => {
   it('pulls data payloads out of an SSE body', () => {
@@ -341,6 +342,27 @@ describe('McpHttpClient', () => {
       new Response('', { status: 401, headers: new Headers({ 'www-authenticate': 'Bearer realm="mcp"' }) })
     const client = new McpHttpClient(fetch)
     await expect(client.connect({ url: 'https://x/mcp' })).rejects.toThrow(/401/)
+  })
+
+  it('marks itself closed when a call gets a 401 after connecting (token revoked mid-session)', async () => {
+    let revoked = false
+    const fetch: FetchFn = async (_u, init) => {
+      if (init.method === 'GET') return new Response('', { status: 405 })
+      if (revoked) return new Response('', { status: 401, headers: new Headers({ 'www-authenticate': 'Bearer' }) })
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.id === undefined) return new Response('', { status: 202 })
+      const result = req.method === 'tools/list' ? { tools: [{ name: 'echo' }] } : {}
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }), {
+        status: 200,
+        headers: new Headers({ 'content-type': 'application/json' })
+      })
+    }
+    const client = new McpHttpClient(fetch)
+    await client.connect({ url: 'https://x/mcp' })
+    expect(client.isClosed).toBe(false)
+    revoked = true
+    await expect(client.callTool('echo', {})).rejects.toBeInstanceOf(McpUnauthorizedError)
+    expect(client.isClosed).toBe(true)
   })
 })
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve as resolvePath } from 'node:path'
 import type { AppSettings, ApprovalPolicy } from '@shared/types'
 import type {
   AgentEvent,
@@ -15,6 +15,8 @@ import { loadProjectConfig } from './agent/projectConfig'
 import {
   HEADLESS_EXIT,
   HEADLESS_SCHEMA_VERSION,
+  HEADLESS_SIGNAL_EXIT,
+  type HeadlessSignal,
   headlessExitCode,
   headlessOverrides,
   parseHeadlessArgs,
@@ -62,12 +64,40 @@ describe('parseHeadlessArgs', () => {
     expect(parseHeadlessArgs(['-p', 'x', '--resume=conv-9'], '/d')?.resumeId).toBe('conv-9')
   })
 
-  it('honors --full-auto and a valid --approval, ignoring an invalid one', () => {
+  it('honors --full-auto and a valid --approval, rejecting an invalid one as a usage error', () => {
     expect(parseHeadlessArgs(['-p', 'x', '--full-auto'], '/d')?.approvalPolicy).toBe('full-auto')
     expect(parseHeadlessArgs(['-p', 'x', '--approval', 'auto-edit'], '/d')?.approvalPolicy).toBe(
       'auto-edit'
     )
-    expect(parseHeadlessArgs(['-p', 'x', '--approval', 'bogus'], '/d')?.approvalPolicy).toBe('plan')
+    expect(parseHeadlessArgs(['-p', 'x', '--approval', 'auto-edit'], '/d')).not.toHaveProperty('usageError')
+    const bogus = parseHeadlessArgs(['-p', 'x', '--approval', 'bogus'], '/d')!
+    expect(bogus.approvalPolicy).toBe('plan')
+    expect(bogus.usageError).toBe('--approval must be one of plan, ask, auto-edit, full-auto (got "bogus")')
+    // A near miss doesn't silently run read-only and exit 0.
+    expect(parseHeadlessArgs(['-p', 'x', '--approval=fullauto'], '/d')?.usageError).toMatch(/^--approval must be/)
+    expect(parseHeadlessArgs(['-p', 'x', '--approval'], '/d')?.usageError).toContain('(got nothing)')
+  })
+
+  it('exits with a usage error before any run on a bad --approval', async () => {
+    let started = false
+    const { d, err } = deps([], {
+      startRun: async () => {
+        started = true
+      }
+    })
+    const code = await runHeadless(parseHeadlessArgs(['-p', 'x', '--approval', 'fullauto'], '/d')!, d)
+    expect(code).toBe(HEADLESS_EXIT.usage)
+    expect(started).toBe(false)
+    expect(err.join('')).toContain('--approval must be one of')
+  })
+
+  it('resolves a relative --cwd / -C against the starting folder', () => {
+    const base = resolvePath('/base')
+    expect(parseHeadlessArgs(['-p', 'x', '-C', 'sub'], base)?.cwd).toBe(resolvePath(base, 'sub'))
+    expect(parseHeadlessArgs(['-p', 'x', '--cwd=../up'], base)?.cwd).toBe(resolvePath(base, '../up'))
+    expect(parseHeadlessArgs(['-p', 'x', '--cwd', '.'], base)?.cwd).toBe(base)
+    // An absolute folder is kept as given.
+    expect(parseHeadlessArgs(['-p', 'x', '-C', '/proj'], base)?.cwd).toBe('/proj')
   })
 
   it('ignores unknown tokens like the binary/app path', () => {
@@ -1762,5 +1792,143 @@ describe('a turn the loop discarded and redid', () => {
     expect(lines[5]).toMatchObject({ textChars: 23, reasoningChars: 0, attempt: 1 })
     // The closing answer holds the redo once: the dropped round's text is taken back.
     expect(lines.at(-1)).toMatchObject({ status: 'success', finalText: 'So: The answer is 42.' })
+  })
+})
+
+describe('runHeadless termination signals', () => {
+  /** A startRun blocked until cancelRun aborts it, which then ends on done: aborted. */
+  function blockedRun() {
+    let raise: ((signal: HeadlessSignal) => void) | undefined
+    let unsubscribed = false
+    const cancelled: string[] = []
+    let started!: () => void
+    const running = new Promise<void>((r) => (started = r))
+    let release!: () => void
+    const extra: Partial<HeadlessDeps> = {
+      startRun: async (req, send, onMessages) => {
+        send({ runId: req.runId, type: 'text', delta: 'partial ' })
+        started()
+        await new Promise<void>((r) => (release = r))
+        onMessages?.([...req.messages, { role: 'assistant', content: 'partial ' }])
+        send({ runId: req.runId, type: 'done', stopReason: 'aborted' })
+      },
+      cancelRun: (runId) => {
+        cancelled.push(runId)
+        release()
+      },
+      onSignal: (handler) => {
+        raise = handler
+        return () => {
+          unsubscribed = true
+        }
+      }
+    }
+    return {
+      extra,
+      cancelled,
+      running,
+      raise: (s: HeadlessSignal) => raise!(s),
+      unsubscribed: () => unsubscribed
+    }
+  }
+
+  it('cancels the live run, writes an error result line, and exits 128+signal', async () => {
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+      const b = blockedRun()
+      const { d, out, err } = deps([], b.extra)
+      const done = runHeadless({ ...baseOpts, json: true }, d)
+      await b.running
+      b.raise(signal)
+      // A repeat is the host's cue to force the exit; the run is cancelled once.
+      b.raise(signal)
+      const code = await done
+      expect(code, signal).toBe(HEADLESS_SIGNAL_EXIT[signal])
+      expect(b.cancelled).toEqual(['run-1'])
+      expect(resultLine(out)).toMatchObject({
+        status: 'error',
+        stopReason: 'aborted',
+        error: `interrupted by ${signal}`
+      })
+      expect(err.join('')).toContain(`interrupted (${signal})`)
+      expect(b.unsubscribed()).toBe(true)
+    }
+    expect(HEADLESS_SIGNAL_EXIT).toEqual({ SIGINT: 130, SIGTERM: 143, SIGHUP: 129 })
+  })
+
+  it('persists the interrupted turn', async () => {
+    const b = blockedRun()
+    const saved: ChatMessage[][] = []
+    const { d } = deps([], {
+      ...b.extra,
+      session: {
+        load: () => null,
+        create: () => ({ id: 'conv-1' }),
+        setMessages: (_id, m) => saved.push(m),
+        setSettings: () => {}
+      }
+    })
+    const done = runHeadless(baseOpts, d)
+    await b.running
+    b.raise('SIGINT')
+    expect(await done).toBe(130)
+    expect(saved.at(-1)?.at(-1)).toMatchObject({ role: 'assistant', content: 'partial ' })
+  })
+
+  it('takes no further stream-json turns once interrupted', async () => {
+    const b = blockedRun()
+    let runs = 0
+    const startRun = b.extra.startRun!
+    const { d, out } = deps([], {
+      ...b.extra,
+      startRun: async (req, send, onMessages) => {
+        runs++
+        await startRun(req, send, onMessages)
+      },
+      readStdinLines: async function* () {
+        yield JSON.stringify({ type: 'user', content: 'one' })
+        yield JSON.stringify({ type: 'user', content: 'two' })
+      }
+    })
+    const done = runHeadless({ ...baseOpts, prompt: '', json: true, inputFormat: 'stream-json' }, d)
+    await b.running
+    b.raise('SIGTERM')
+    expect(await done).toBe(143)
+    expect(runs).toBe(1)
+    expect(resultLine(out)).toMatchObject({ status: 'error', error: 'interrupted by SIGTERM' })
+  })
+
+  it('stops waiting for the next stream-json turn on a signal between turns', async () => {
+    let raise!: (s: HeadlessSignal) => void
+    let waiting!: () => void
+    const idle = new Promise<void>((r) => (waiting = r))
+    const { d, out } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {
+      onSignal: (h) => {
+        raise = h
+        return () => {}
+      },
+      readStdinLines: async function* () {
+        yield JSON.stringify({ type: 'user', content: 'one' })
+        waiting()
+        // The driver never sends another line nor closes stdin.
+        await new Promise(() => {})
+      }
+    })
+    const done = runHeadless({ ...baseOpts, prompt: '', json: true, inputFormat: 'stream-json' }, d)
+    await idle
+    raise('SIGINT')
+    expect(await done).toBe(130)
+    // The finished turn's result line stands; no run was live to cancel.
+    expect(resultLine(out)).toMatchObject({ status: 'success' })
+  })
+
+  it('leaves the exit code alone and unsubscribes when no signal arrives', async () => {
+    let unsubscribed = false
+    const { d } = deps([{ runId: 'run-1', type: 'done', stopReason: 'end_turn' }], {
+      onSignal: () => () => {
+        unsubscribed = true
+      }
+    })
+    expect(await runHeadless(baseOpts, d)).toBe(0)
+    expect(unsubscribed).toBe(true)
   })
 })

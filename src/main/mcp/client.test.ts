@@ -37,6 +37,36 @@ function fakeServer(tools: ToolDecl[], callResult: (params: unknown) => unknown)
 }
 
 describe('McpClient (fake stdio server)', () => {
+  it('launches a Windows .cmd shim (npx) through cmd.exe with its arguments intact', async () => {
+    const inner = fakeServer([{ name: 'echo' }], () => ({}))
+    const spawned: Array<{ command: string; args: string[]; verbatim?: boolean; cwd?: string }> = []
+    const spawnFn: SpawnFn = (command, args, options) => {
+      spawned.push({ command, args, verbatim: options.windowsVerbatimArguments, cwd: options.cwd })
+      return inner(command, args, options)
+    }
+    const client = new McpClient(spawnFn, {
+      platform: 'win32',
+      exists: (p) => p === 'C:\\nodejs\\npx.cmd',
+      comspec: 'C:\\Windows\\system32\\cmd.exe'
+    })
+    await client.connect({
+      command: 'npx',
+      args: ['-y', 'some-server', 'C:\\data dir'],
+      env: { PATH: 'C:\\nodejs', PATHEXT: '.EXE;.CMD' },
+      cwd: 'C:\\work'
+    })
+    expect(spawned).toEqual([
+      {
+        command: 'C:\\Windows\\system32\\cmd.exe',
+        args: ['/d', '/v:off', '/s', '/c', '""C:\\nodejs\\npx.cmd" "-y" "some-server" "C:\\data dir""'],
+        verbatim: true,
+        cwd: 'C:\\work'
+      }
+    ])
+    expect(client.tools.map((t) => t.name)).toEqual(['echo'])
+    client.close()
+  })
+
   it('initializes and lists tools', async () => {
     const client = new McpClient(
       fakeServer([{ name: 'echo', description: 'Echoes input' }], () => ({}))

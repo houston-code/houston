@@ -10,6 +10,7 @@ import {
   type SseEvent
 } from './sse-client'
 import { LATEST_PROTOCOL_VERSION, McpUnsupportedProtocolError } from './version'
+import { McpUnauthorizedError } from './client'
 
 describe('parseSseEvents', () => {
   it('splits events on a blank line and reads event/data', () => {
@@ -287,6 +288,32 @@ describe('McpSseClient', () => {
     const fetch: FetchFn = async () => new Response('', { status: 401 })
     const client = new McpSseClient(connect, fetch)
     await expect(client.connect({ url: 'https://x/sse' })).rejects.toThrow(/401/)
+  })
+
+  it('marks itself closed when a call POST gets a 401 after connecting', async () => {
+    let emit: ((e: SseEvent) => void) | null = null
+    const connect: SseConnectFn = (_url, _headers, handlers) => {
+      emit = handlers.onEvent
+      queueMicrotask(() => emit?.({ event: 'endpoint', data: '/messages' }))
+      return { close: () => {} }
+    }
+    let revoked = false
+    const fetch: FetchFn = async (_url, init) => {
+      if (revoked) return new Response('', { status: 401 })
+      const req = JSON.parse(init.body as string) as { id?: number; method: string }
+      if (req.id !== undefined) {
+        const result = req.method === 'tools/list' ? { tools: [{ name: 'echo' }] } : {}
+        queueMicrotask(() => emit?.({ event: 'message', data: JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) }))
+      }
+      return new Response('', { status: 202 })
+    }
+    const client = new McpSseClient(connect, fetch)
+    await client.connect({ url: 'https://x/sse' })
+    expect(client.isClosed).toBe(false)
+    revoked = true
+    await expect(client.callTool('echo', {})).rejects.toBeInstanceOf(McpUnauthorizedError)
+    expect(client.isClosed).toBe(true)
+    client.close()
   })
 })
 

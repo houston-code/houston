@@ -91,6 +91,13 @@ when a background shell's output is read or it is stopped), it compares again:
   mode, or no file at all) and leaves unrelated changes from the same command alone;
   Keep makes the new state the baseline and the result names the commands to remove it
   by hand. With nobody to ask (headless) it undoes.
+- Each run compares against its own baseline, so a change made while one chat's
+  command ran also appears in every other chat working in the same repository, on that
+  chat's next command. Once the user keeps a change in one chat, the others skip that
+  exact change (same file, same key or contents) instead of asking again, where Undo
+  would remove what was just kept. A different value in the same place is asked about
+  again, and a change no chat has resolved yet (a run stopped before its question was
+  answered) is still asked about everywhere it shows up.
 
 Cost: a snapshot of an unchanged repository is a handful of `stat`s and small reads.
 git runs only to parse a config file whose bytes changed (`git config --file`, outside

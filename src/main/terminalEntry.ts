@@ -87,7 +87,13 @@ import { currentInstallMethod, upgradeHint } from './install-method'
 /** The interactive update check runs alongside the session, so it can wait longer than -p's. */
 const INTERACTIVE_UPDATE_TIMEOUT_MS = 10_000
 import { readClipboardImage, noClipboardHint } from './clipboard-image'
-import { runHeadless, type HeadlessOptions } from './headless'
+import {
+  HEADLESS_SIGNAL_EXIT,
+  HEADLESS_SIGNALS,
+  runHeadless,
+  type HeadlessOptions,
+  type HeadlessSignal
+} from './headless'
 import { serveAcp } from './acp'
 import { createTerminalIo, resolveColor } from './tui-io'
 import {
@@ -676,7 +682,7 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
       // Custom slash commands from the workspace's .houston/commands (for /<name>).
       commands: () => loadCommands(tui.cwd),
       // On-demand context compaction for the /compact command.
-      compact: (id, providerId, model) => compactConversationNow(id, providerId, model),
+      compact: (id, providerId, model, opts) => compactConversationNow(id, providerId, model, opts),
       // Settings editing for /hooks and /mcp (writes the shared settings.json, 0600).
       updateSettings: (patch) => {
         updateSettings(patch)
@@ -772,6 +778,35 @@ export async function runTuiEntry(tui: TuiOptions, host: { version?: string } = 
   return code
 }
 
+/**
+ * Hand the first SIGINT / SIGTERM / SIGHUP to `onFirst` so the client can stop its
+ * runs cleanly (Node's default would kill the process and skip every cleanup, while
+ * the agent's commands, each in its own process group, kept running). A second
+ * signal stops the commands and exits at once. Returns the unsubscribe.
+ */
+export function watchTerminationSignals(
+  onFirst: (signal: HeadlessSignal) => void,
+  proc: Pick<NodeJS.Process, 'on' | 'off' | 'exit'> = process
+): () => void {
+  let seen = false
+  const handlers = HEADLESS_SIGNALS.map((signal) => {
+    const handler = (): void => {
+      if (seen) {
+        killAllShells()
+        proc.exit(HEADLESS_SIGNAL_EXIT[signal])
+        return
+      }
+      seen = true
+      onFirst(signal)
+    }
+    proc.on(signal, handler)
+    return [signal, handler] as const
+  })
+  return () => {
+    for (const [signal, handler] of handlers) proc.off(signal, handler)
+  }
+}
+
 /** Run the one-shot headless client to completion. Returns the exit code. */
 export async function runHeadlessEntry(headless: HeadlessOptions, opts: { version?: string } = {}): Promise<number> {
   // spawn_session works headless too: children run concurrently in this process
@@ -799,6 +834,7 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
       })
   }
   let code = 1
+  let interrupted = false
   try {
     code = await runHeadless(headless, {
       getSettings,
@@ -807,6 +843,12 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
       resolveQuestion,
       resolvePlan,
       resolveElicitation,
+      cancelRun,
+      onSignal: (handler) =>
+        watchTerminationSignals((signal) => {
+          interrupted = true
+          handler(signal)
+        }),
       out: (s) => process.stdout.write(s),
       err: (s) => process.stderr.write(s),
       readStdin: readAllStdin,
@@ -842,8 +884,9 @@ export async function runHeadlessEntry(headless: HeadlessOptions, opts: { versio
       }
     })
     // Don't let the one-shot exit tear down sessions the run spawned; their
-    // conversations persist, so a later --resume can pick each one up.
-    const outstanding = sessions.pendingBackgroundSessions()
+    // conversations persist, so a later --resume can pick each one up. An
+    // interrupted run doesn't wait on them: the signal asked Houston to stop.
+    const outstanding = interrupted ? 0 : sessions.pendingBackgroundSessions()
     if (outstanding > 0) {
       process.stderr.write(
         `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`
@@ -887,58 +930,72 @@ export function reserveStdoutForProtocol(): (frame: string) => void {
  */
 export async function runAcpEntry(host: { version?: string } = {}): Promise<number> {
   const writeFrame = reserveStdoutForProtocol()
-  // The editor went away mid-write: there is no one left to serve.
-  process.stdout.on('error', () => process.stdin.destroy())
+  // The editor went away mid-write: there is no one left to serve, so live prompts
+  // are cancelled rather than left editing files for a reader that is gone.
+  const outputClosed = new AbortController()
+  process.stdout.on('error', () => outputClosed.abort())
+  // Ctrl-C, a kill, or a closed terminal: cancel every live prompt and stop serving.
+  const shutdown = new AbortController()
+  let signalled: HeadlessSignal | undefined
+  const stopWatching = watchTerminationSignals((signal) => {
+    signalled = signal
+    shutdown.abort()
+  })
   const sessions = wireTerminalSessionBackends({
     notify: (m) => process.stderr.write(`· ${m}\n`),
     startScheduler: false
   })
   let code = 0
   try {
-    await serveAcp(process.stdin, {
-      getSettings,
-      startRun,
-      resolveApproval,
-      resolveQuestion,
-      resolvePlan,
-      resolveElicitation,
-      cancelRun,
-      setRunPolicy,
-      write: writeFrame,
-      log: (m) => {
-        log.info(m)
-        process.stderr.write(`${m}\n`)
-      },
-      version: host.version ?? 'dev',
-      store: {
-        create: ({ workspace, providerId, model }) => createConversation({ workspace, providerId, model }),
-        get: (id) => {
-          const conv = getConversation(id)
-          return conv
-            ? {
-                id: conv.id,
-                workspace: conv.workspace,
-                messages: conv.messages,
-                title: conv.title,
-                updatedAt: conv.updatedAt,
-                providerId: conv.providerId,
-                model: conv.model,
-                ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {})
-              }
-            : null
+    await serveAcp(
+      process.stdin,
+      {
+        getSettings,
+        startRun,
+        resolveApproval,
+        resolveQuestion,
+        resolvePlan,
+        resolveElicitation,
+        cancelRun,
+        setRunPolicy,
+        write: writeFrame,
+        log: (m) => {
+          log.info(m)
+          process.stderr.write(`${m}\n`)
         },
-        list: () =>
-          listConversations().map((c) => ({
-            id: c.id,
-            workspace: c.workspace,
-            title: c.title,
-            updatedAt: c.updatedAt
-          })),
-        setMessages,
-        setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model })
-      }
-    })
-    const outstanding = sessions.pendingBackgroundSessions()
+        version: host.version ?? 'dev',
+        store: {
+          create: ({ workspace, providerId, model }) => createConversation({ workspace, providerId, model }),
+          get: (id) => {
+            const conv = getConversation(id)
+            return conv
+              ? {
+                  id: conv.id,
+                  workspace: conv.workspace,
+                  messages: conv.messages,
+                  title: conv.title,
+                  updatedAt: conv.updatedAt,
+                  providerId: conv.providerId,
+                  model: conv.model,
+                  ...(conv.reasoningEffort ? { reasoningEffort: conv.reasoningEffort } : {})
+                }
+              : null
+          },
+          list: () =>
+            listConversations().map((c) => ({
+              id: c.id,
+              workspace: c.workspace,
+              title: c.title,
+              updatedAt: c.updatedAt
+            })),
+          setMessages,
+          setModel: (id, providerId, model) => updateConversationMeta(id, { providerId, model })
+        }
+      },
+      { shutdown: shutdown.signal, outputClosed: outputClosed.signal }
+    )
+    // Stopped by a signal or a broken pipe: nothing is left to wait for them.
+    const outstanding = signalled || outputClosed.signal.aborted ? 0 : sessions.pendingBackgroundSessions()
     if (outstanding > 0) {
       process.stderr.write(
         `· waiting for ${outstanding} background session${outstanding === 1 ? '' : 's'} to finish…\n`
@@ -949,8 +1006,9 @@ export async function runAcpEntry(host: { version?: string } = {}): Promise<numb
     process.stderr.write(`Fatal: ${(e as Error).message}\n`)
     code = 1
   } finally {
+    stopWatching()
     killAllShells()
     disconnectAllMcp()
   }
-  return code
+  return signalled ? HEADLESS_SIGNAL_EXIT[signalled] : code
 }

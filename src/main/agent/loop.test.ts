@@ -43,6 +43,7 @@ import {
 import { checkEgressHost, type EgressRunScope } from './egress'
 import { INTERRUPTED_TOOL_RESULT, missingToolResults } from './repair'
 import { PINNED_MEMORY_PREFIX } from './workingMemory'
+import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import Anthropic from '@anthropic-ai/sdk'
@@ -126,6 +127,10 @@ const h = vi.hoisted(() => ({
   // A plugin event whose emit throws, standing in for an error nothing in the loop
   // handles. Null (the default) never throws.
   pluginThrowOn: null as string | null,
+  // A plugin event on which the host reports a listener failure through the warn
+  // callback the loop passed in (twice, to exercise the once-per-error dedupe).
+  pluginWarnOn: null as string | null,
+  pluginWarn: null as ((msg: string) => void) | null,
   // Known secret values the tool-result redactor should strip; set per test.
   secrets: [] as string[],
   // Models the mock provider config lists, for dispatch/review model-override tests.
@@ -266,13 +271,23 @@ vi.mock('./plugins', () => {
     emit: async (event: string, payload: unknown) => {
       h.pluginEvents.push({ event, payload })
       if (h.pluginThrowOn === event) throw new Error(`unhandled failure in ${event}`)
+      if (h.pluginWarnOn === event) {
+        h.pluginWarn?.(`[plugin:spin.js] ${event} failed: timed out after 1000ms`)
+        h.pluginWarn?.(`[plugin:spin.js] ${event} failed: timed out after 1000ms`)
+      }
     }
   }
   const emptyHost = { has: () => false, size: 0, emit: async () => {} }
   return {
     loadPlugins: async () => recordingHost,
-    loadPluginsIfEnabled: async (_ws: string, enabled: boolean | undefined) =>
-      enabled === true ? recordingHost : emptyHost
+    loadPluginsIfEnabled: async (
+      _ws: string,
+      enabled: boolean | undefined,
+      warn?: (msg: string) => void
+    ) => {
+      h.pluginWarn = warn ?? null
+      return enabled === true ? recordingHost : emptyHost
+    }
   }
 })
 
@@ -334,6 +349,8 @@ beforeEach(() => {
   ws = mkdtempSync(join(tmpdir(), 'houston-loop-'))
   h.pluginEvents = []
   h.pluginThrowOn = null
+  h.pluginWarnOn = null
+  h.pluginWarn = null
   h.addedRules = []
   h.usedRules = []
   h.unavailableCalls = []
@@ -2338,6 +2355,75 @@ describe('startRun', () => {
     expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('alpha\n')
   })
 
+  it('lets a re-read after compaction count again, so the edit that follows goes through', async () => {
+    // The read and its re-read happen in the same run, so the re-read used to be served
+    // from the run's read cache without re-recording the file: once compaction had
+    // folded the first read away, every edit was refused as unread, the agent re-read,
+    // and the loop went round until the stall detector stopped it.
+    writeFileSync(join(ws, 'notes.txt'), 'alpha\n')
+    const history: ChatMessage[] = []
+    for (let t = 0; t < 4; t++) {
+      history.push({ role: 'user', content: `old question ${t}` })
+      history.push({ role: 'assistant', content: `old answer ${t}` })
+    }
+    history.push({ role: 'user', content: 'edit notes.txt' })
+    const read = (id: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'read_file', arguments: { path: 'notes.txt' } }
+    })
+    const edit = (id: string): ProviderStreamEvent => ({
+      type: 'tool_call',
+      call: { id, name: 'edit_file', arguments: { path: 'notes.txt', old_string: 'alpha', new_string: 'beta' } }
+    })
+    // Read first, then other work; then every send overflows until the head holding the read has been
+    // summarized; then edit (refused), re-read, and edit again.
+    let compacted = false
+    const after: ProviderStreamEvent[] = [edit('e1'), read('r2'), edit('e2')]
+    let sentRead = false
+    const padding = [0, 1, 2, 3, 4, 5]
+    for (const n of padding) writeFileSync(join(ws, `pad${n}.txt`), `pad ${n}\n`)
+    const provider: Provider = {
+      async *streamChat(req) {
+        if (req.maxTokens != null) {
+          compacted = true
+          yield { type: 'text', text: 'SUMMARY' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        if (!sentRead) {
+          sentRead = true
+          yield read('r1')
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        // Later work in the same turn, so the summarized head can reach past the read.
+        const pad = padding.shift()
+        if (pad !== undefined) {
+          yield { type: 'tool_call', call: { id: `p${pad}`, name: 'read_file', arguments: { path: `pad${pad}.txt` } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        if (!compacted) {
+          yield { type: 'error', message: 'prompt is too long: 212129 tokens > 200000 maximum' }
+          return
+        }
+        const step = after.shift()
+        if (step) {
+          yield step
+          yield { type: 'done', stopReason: 'tool_use' }
+          return
+        }
+        yield { type: 'text', text: 'done' }
+        yield { type: 'done', stopReason: 'end_turn' }
+      }
+    }
+    const r = await run({ conversationId: 'conv-reread-after-compaction', policy: 'full-auto', provider, messages: history })
+    expect(types(r)).toContain('compaction')
+    expect(r.messages.find((m) => m.toolCallId === 'e1')!.content).toMatch(/^Error: You have not read notes\.txt yet/)
+    expect(r.messages.find((m) => m.toolCallId === 'e2')!.content).toBe('Edited notes.txt (1 replacement).')
+    expect(readFileSync(join(ws, 'notes.txt'), 'utf8')).toBe('beta\n')
+  })
+
   it('a user\'s mid-run "Always allow" cannot shadow a managed `ask` (stays gated)', async () => {
     // The user picks "Always allow" on the first write. Because the persisted allow is
     // spliced BELOW the managed guardrail, first-match-wins keeps hitting the admin
@@ -3072,6 +3158,47 @@ describe('prompt-cache-aware window assembly', () => {
     expect(shape(sends[n]).slice(0, prev.length)).toEqual(prev)
   })
 
+  it.each([
+    ['asks a model that calls tools in silence for a status update', false, true],
+    ['leaves a model that narrates its tool calls alone', true, false]
+  ])('%s', async (_name, narrate, expectCheckIn) => {
+    // A different listing every turn, so no stall check trips: only the silence counts.
+    const sends: ChatMessage[][] = []
+    let turn = 0
+    const provider: Provider = {
+      async *streamChat(req) {
+        sends.push(req.messages)
+        turn++
+        if (turn > SILENT_ITERATION_LIMIT + 2) {
+          yield { type: 'text', text: 'done' }
+          yield { type: 'done', stopReason: 'end_turn' }
+          return
+        }
+        if (narrate) yield { type: 'text', text: `checking pattern ${turn}` }
+        yield { type: 'tool_call', call: { id: `g${turn}`, name: 'list_dir', arguments: { path: `missing-${turn}` } } }
+        yield { type: 'done', stopReason: 'tool_use' }
+      }
+    }
+    const extra = { stallDetection: true, maxIterations: 60 }
+    const saved = { ...h.settings }
+    Object.assign(h.settings, extra)
+    try {
+      await run({ provider, messages: [{ role: 'user', content: 'look around' }], policy: 'full-auto' })
+    } finally {
+      for (const k of Object.keys(extra)) delete h.settings[k]
+      Object.assign(h.settings, saved)
+    }
+    const n = sends.findIndex((w) => w.some((m) => m.content.includes(SILENT_CHECK_IN)))
+    if (expectCheckIn) {
+      // Sent once the limit's worth of silent turns ran, and the run carried on to its answer.
+      expect(n).toBe(SILENT_ITERATION_LIMIT)
+      expect(sends).toHaveLength(SILENT_ITERATION_LIMIT + 3)
+    } else {
+      expect(n).toBe(-1)
+    }
+    // Two dozen full iterations: slower than one test's default allowance under a loaded suite.
+  }, 30_000)
+
   it('pins nothing on the very first turn (nothing has been compacted away yet)', async () => {
     const sends: ChatMessage[][] = []
     const provider: Provider = {
@@ -3522,6 +3649,65 @@ describe('one run per conversation', () => {
     expect(events.at(-1)).toMatchObject({ type: 'done' })
   })
 
+  it('frees the conversation slot even when every save fails', async () => {
+    // A save that throws (a full disk, a permissions error) used to escape startRun's
+    // finally before the run's slot was freed: startRun rejected, and the chat stayed
+    // "already running" behind a dead run until a restart.
+    const conversationId = 'conv-save-fails'
+    writeFileSync(join(ws, 'a.txt'), 'A')
+    writeFileSync(join(ws, 'b.txt'), 'B')
+    h.provider = scripted([
+      [
+        { type: 'tool_call', call: { id: 'r1', name: 'read_file', arguments: { path: 'a.txt' } } },
+        { type: 'tool_call', call: { id: 'r2', name: 'read_file', arguments: { path: 'b.txt' } } },
+        { type: 'done', stopReason: 'tool_use' }
+      ],
+      [{ type: 'text', text: 'read both' }, { type: 'done', stopReason: 'end_turn' }]
+    ])
+    let saves = 0
+    const failingSave = (): void => {
+      saves++
+      throw new Error('ENOSPC: no space left on device')
+    }
+    await expect(
+      startRun(
+        {
+          runId: 'run-save-fails-1',
+          conversationId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'ask',
+          messages: [{ role: 'user', content: 'read them' }]
+        },
+        () => {},
+        failingSave
+      )
+    ).resolves.toBeUndefined()
+    expect(saves).toBeGreaterThan(0)
+    expect(activeRunForConversation(conversationId)).toBeNull()
+
+    // The next run on the chat is accepted, not refused as already running.
+    h.provider = scripted([[{ type: 'text', text: 'again' }, { type: 'done', stopReason: 'end_turn' }]])
+    const events: AgentEvent[] = []
+    await startRun(
+      {
+        runId: 'run-save-fails-2',
+        conversationId,
+        workspace: ws,
+        providerId: 'anthropic',
+        model: 'claude-test',
+        approvalPolicy: 'ask',
+        messages: [{ role: 'user', content: 'again' }]
+      },
+      (e) => events.push(e),
+      failingSave
+    )
+    expect(events.some((e) => e.type === 'error')).toBe(false)
+    expect(events.at(-1)).toMatchObject({ type: 'done' })
+    expect(activeRunForConversation(conversationId)).toBeNull()
+  })
+
   it('counts live runs across conversations and clears them as they finish', async () => {
     // Two conversations, each gated open, so we can watch the live count rise and
     // fall as runs start and complete. This count is what the quit guard reads.
@@ -3925,6 +4111,35 @@ describe('ask_user', () => {
     expect(start?.payload).toMatchObject({ tool: 'read_file', input: { path: 'note.txt' } })
     const toolResult = h.pluginEvents.find((e) => e.event === 'onToolResult')
     expect(toolResult?.payload).toMatchObject({ tool: 'read_file', ok: true })
+  })
+
+  it('surfaces a plugin failure as one run notice instead of writing to stderr', async () => {
+    writeFileSync(join(ws, 'note.txt'), 'hi')
+    h.pluginWarnOn = 'onToolStart'
+    const stderr = vi.spyOn(process.stderr, 'write')
+    const consoleWarn = vi.spyOn(console, 'warn')
+    try {
+      const r = await run({
+        policy: 'full-auto',
+        userText: 'read the note',
+        turns: [
+          [
+            { type: 'tool_call', call: { id: 'c1', name: 'read_file', arguments: { path: 'note.txt' } } },
+            { type: 'done', stopReason: 'tool_use' }
+          ],
+          [{ type: 'text', text: 'done' }, { type: 'done', stopReason: 'end_turn' }]
+        ]
+      })
+      const notices = r.events.filter(
+        (e) => e.type === 'notice' && (e as { message: string }).message.includes('spin.js')
+      )
+      expect(notices).toHaveLength(1)
+      expect(consoleWarn).not.toHaveBeenCalled()
+      expect(stderr.mock.calls.some((c) => String(c[0]).includes('spin.js'))).toBe(false)
+    } finally {
+      stderr.mockRestore()
+      consoleWarn.mockRestore()
+    }
   })
 
   it('does not run workspace plugins when projectPlugins is off (default)', async () => {
@@ -4803,6 +5018,50 @@ describe('writable subagent unconfined-shell gate', () => {
       | undefined
     expect(result?.ok).toBe(false)
     expect(result?.output).toContain('interrupted')
+  })
+
+  it("stops a subagent's batch on Stop: the next call neither asks nor runs", async () => {
+    // The first write's card is resolved by Stop; the subagent used to move on to the
+    // next call in its batch, raising a card nothing answered (so the run never ended).
+    h.settings.permissionRules = [{ action: 'ask', tool: 'write_file', match: '*' }]
+    try {
+      h.provider = scripted([
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'two writes', prompt: 'write both' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'one.txt', content: '1' } } },
+          { type: 'tool_call', call: { id: 'w2', name: 'write_file', arguments: { path: 'two.txt', content: '2' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'sub done' }, { type: 'done', stopReason: 'end_turn' }],
+        [{ type: 'text', text: 'main done' }, { type: 'done', stopReason: 'end_turn' }]
+      ])
+      const runId = 'run-stop-subagent-batch'
+      const events: AgentEvent[] = []
+      let cancelled = false
+      await startRun(
+        { runId, workspace: ws, providerId: 'anthropic', model: 'claude-test', approvalPolicy: 'full-auto', messages: [{ role: 'user', content: 'go' }] },
+        (e) => {
+          events.push(e)
+          if (e.type !== 'tool_approval') return
+          if (!cancelled) {
+            cancelled = true
+            setTimeout(() => cancelRun(runId), 0)
+          } else {
+            // A regression: answer it so the assertions below fail instead of hanging.
+            setTimeout(() => resolveApproval(runId, e.callId, 'allow'), 0)
+          }
+        }
+      )
+      expect(events.filter((e) => e.type === 'tool_approval')).toHaveLength(1)
+      expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
+      expect(existsSync(join(ws, 'one.txt'))).toBe(false)
+      expect(existsSync(join(ws, 'two.txt'))).toBe(false)
+    } finally {
+      h.settings.permissionRules = []
+    }
   })
 
   it("'always' grants the unconfined-shell consent, so the next command skips the prompt", async () => {
@@ -7402,6 +7661,70 @@ describe('egress hardening', () => {
       expect(shellSawNetwork).toBe(false)
     })
 
+    it('asks nothing when the run is stopped during a command that then fails for lack of network', async () => {
+      // Stop mid-command: the command reports the network failure as it unwinds, after
+      // cancelRun already cleared every prompt. A network card raised then would wait
+      // for an answer nobody gives, and the run would never end.
+      const runId = 'run-stop-net-shell'
+      h.probeTools = [
+        {
+          kind: 'shell',
+          summarize: () => 'npm install',
+          schema: {
+            name: 'needs_net_shell',
+            description: 'probe shell stopped mid-command',
+            parameters: { type: 'object', properties: {}, additionalProperties: false }
+          },
+          execute: async (_a, ctx) => {
+            await new Promise<void>((resolve) => {
+              if (ctx.signal?.aborted) resolve()
+              else ctx.signal?.addEventListener('abort', () => resolve(), { once: true })
+            })
+            ctx.recordEvidence?.({
+              kind: 'shell',
+              command: 'npm install',
+              background: false,
+              exitCode: 1,
+              timedOut: false,
+              output: 'npm error code ENOTFOUND',
+              blocked: 'network'
+            })
+            return `npm error code ENOTFOUND\n[exit code: 1]\n${NETWORK_BLOCKED_HINT}`
+          }
+        }
+      ]
+      h.provider = scripted([
+        [needsNetCall('n1'), { type: 'done', stopReason: 'tool_use' }],
+        [{ type: 'done', stopReason: 'end_turn' }]
+      ])
+      const events: AgentEvent[] = []
+      let cancelledAt = -1
+      await startRun(
+        {
+          runId,
+          workspace: ws,
+          providerId: 'anthropic',
+          model: 'claude-test',
+          approvalPolicy: 'full-auto',
+          messages: [{ role: 'user', content: 'install' }]
+        },
+        (e) => {
+          events.push(e)
+          if (e.type === 'tool_start' && e.callId === 'n1') {
+            setTimeout(() => {
+              cancelledAt = events.length
+              cancelRun(runId)
+            }, 0)
+          }
+          // Answer any card so a regression fails the assertions below instead of hanging.
+          if (e.type === 'tool_approval') setTimeout(() => resolveApproval(runId, e.callId, 'allow'), 0)
+        }
+      )
+      expect(cancelledAt).toBeGreaterThan(0)
+      expect(events.slice(cancelledAt).filter((e) => e.type === 'tool_approval')).toEqual([])
+      expect(events.at(-1)).toMatchObject({ type: 'done', stopReason: 'aborted' })
+    })
+
     it('asks after a command fails for lack of network; allowing turns network on and tells the agent to retry', async () => {
       h.probeTools = [probeNeedsNetShell()]
       const r = await run({
@@ -9489,6 +9812,66 @@ describe('turn receipt', () => {
     expect(receipt?.checks[0]).toMatchObject({ kind: 'test', ok: true, beforeLastWrite: true })
   })
 
+  const SUITE = "it('adds', () => {\n  expect(add(1, 2)).toBe(3)\n})\nit('rejects strings', () => {\n  expect(() => add('1', 2)).toThrow()\n})\n"
+  const notes = (r: { messages: ChatMessage[] }): string[] =>
+    r.messages.filter((m) => m.role === 'user' && m.content.startsWith(SYSTEM_NOTE_PREFIX)).map((m) => m.content)
+
+  it('asks once about a test the turn skipped, and lists it on the receipt', async () => {
+    writeFileSync(join(ws, 'add.test.ts'), SUITE)
+    const skipped = SUITE.replace("it('rejects strings'", "it.skip('rejects strings'")
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        call('r1', 'read_file', { path: 'add.test.ts' }),
+        call('w1', 'write_file', { path: 'add.test.ts', content: skipped }),
+        say('Fixed: all tests pass.'),
+        call('w2', 'write_file', { path: 'add.test.ts', content: skipped.replace('toBe(3)', 'toEqual(3)') }),
+        say('I skipped the string test because the user asked to drop string support.')
+      ]
+    })
+    const asked = notes(r).filter((n) => n.includes('changed tests in ways that can make a failing suite pass'))
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toContain("- add.test.ts: added it.skip('rejects strings', () => {")
+    expect(r.messages.at(-1)?.content).toContain('user asked to drop string support')
+    expect(r.messages.at(-1)?.receipt?.testEdits).toEqual([
+      { path: 'add.test.ts', kind: 'skip', detail: "added it.skip('rejects strings', () => {" }
+    ])
+    expect(types(r).slice(-2)).toEqual(['receipt', 'done'])
+  })
+
+  it('drops a test edit from the receipt once the turn puts the test back', async () => {
+    writeFileSync(join(ws, 'add.test.ts'), SUITE)
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        call('r1', 'read_file', { path: 'add.test.ts' }),
+        call('w1', 'write_file', { path: 'add.test.ts', content: SUITE.replace("it('adds'", "it.only('adds'") }),
+        say('Done.'),
+        call('w2', 'write_file', { path: 'add.test.ts', content: SUITE }),
+        say('Restored the test.')
+      ]
+    })
+    expect(notes(r).filter((n) => n.includes('changed tests'))).toHaveLength(1)
+    expect(r.messages.at(-1)?.receipt).not.toHaveProperty('testEdits')
+  })
+
+  it('says nothing about a turn that only adds tests', async () => {
+    writeFileSync(join(ws, 'add.test.ts'), SUITE)
+    const more = `${SUITE}it('adds zero', () => {\n  expect(add(0, 0)).toBe(0)\n})\n`
+    const r = await run({
+      policy: 'full-auto',
+      turns: [
+        call('r1', 'read_file', { path: 'add.test.ts' }),
+        call('w1', 'write_file', { path: 'add.test.ts', content: more }),
+        call('w2', 'write_file', { path: 'sub.test.ts', content: "it.skip('subtracts', () => {})\n" }),
+        say('Added tests.')
+      ]
+    })
+    expect(notes(r).filter((n) => n.includes('changed tests'))).toEqual([])
+    expect(r.messages.at(-1)?.receipt?.filesChanged).toEqual(['add.test.ts', 'sub.test.ts'])
+    expect(r.messages.at(-1)?.receipt).not.toHaveProperty('testEdits')
+  })
+
   it("carries an accepted plan's progress across turns until it is complete", async () => {
     h.sandboxed = true
     h.probeTools = [shellProbe({ pytest: { exitCode: 0, output: '2 passed in 0.1s' } })]
@@ -9877,6 +10260,30 @@ describe('a run that ends without a reply', () => {
     expect(last.unanswered?.[0].message).toContain('bad request')
     expect(last.unanswered?.[0].message).not.toContain('sk-live-runend-secret-value')
     expect(Number.isNaN(Date.parse(last.unanswered?.[0].at ?? ''))).toBe(false)
+  })
+
+  it('fails a turn the provider refused before any text, instead of a blank success', async () => {
+    const r = await run({
+      conversationId: 'conv-runend-refused',
+      userText: prompt,
+      turns: [[{ type: 'done', stopReason: 'end_turn', refusal: 'refusal' }]]
+    })
+    const err = r.events.at(-1) as { type: string; message?: string }
+    expect(err.type).toBe('error')
+    expect(err.message).toMatch(/declined to answer/)
+    expect(runEndLines().some((l) => l.includes('class=refused'))).toBe(true)
+    // No blank assistant message is saved, and the turn reads as unanswered.
+    expect(r.messages).toHaveLength(1)
+    expect(r.messages[0].unanswered?.[0]).toMatchObject({ reason: 'error' })
+  })
+
+  it('keeps the text of a reply a filter cut short, with a notice', async () => {
+    const r = await run({
+      turns: [[{ type: 'text', text: 'Here is part' }, { type: 'done', stopReason: 'end_turn', refusal: 'content_filter' }]]
+    })
+    expect(r.events.some((e) => e.type === 'notice' && /may be incomplete/.test((e as { message: string }).message))).toBe(true)
+    expect(r.events.at(-1)?.type).toBe('done')
+    expect(r.messages.at(-1)).toMatchObject({ role: 'assistant', content: 'Here is part' })
   })
 
   it('logs and records a model that cannot call tools', async () => {

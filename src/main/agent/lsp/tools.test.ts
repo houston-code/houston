@@ -77,6 +77,17 @@ describe('navigation tools against a fake server', () => {
     expect(names(true)).toEqual(expect.arrayContaining([...LSP_TOOL_NAMES]))
   })
 
+  it('stops waiting on a server that is still starting when the run is stopped', async () => {
+    await manager.stopAll()
+    manager = makeManager({ FAKE_LSP_INIT_DELAY_MS: '5000' })
+    const abort = new AbortController()
+    const started = Date.now()
+    const call = tool('lsp_hover').execute({ path: 'a.fk', line: 1, symbol: 'greet' }, { ...ctx(), signal: abort.signal })
+    setTimeout(() => abort.abort(), 50)
+    await expect(call).rejects.toThrow(/Stopped/)
+    expect(Date.now() - started).toBeLessThan(1000)
+  })
+
   it('lsp_definition answers with path:line:col and the line', async () => {
     await open('a.fk') // the fake server only knows open files
     const out = await tool('lsp_definition').execute({ path: 'b.fk', line: 2, symbol: 'greet' }, ctx())

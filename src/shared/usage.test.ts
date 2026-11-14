@@ -487,6 +487,18 @@ describe('resolveCapabilities', () => {
       reasoning: true
     })
   })
+
+  it('treats an absent model id as an unknown model instead of throwing', () => {
+    // A selection with no model yet (persisted/IPC data the types do not guarantee)
+    // once reached the heuristic and crashed the renderer with a .toLowerCase() on
+    // undefined. An absent id now degrades to the conservative all-false default.
+    const missing = undefined as unknown as string
+    expect(() => resolveCapabilities(missing)).not.toThrow()
+    expect(resolveCapabilities(missing)).toEqual({ vision: false, reasoning: false })
+    expect(modelCapabilities(missing)).toEqual({ vision: false, reasoning: false })
+    expect(resolvePricing(missing)).toBeNull()
+    expect(resolveContextWindow(missing)).toBeNull()
+  })
 })
 
 describe('scheduled price changes', () => {

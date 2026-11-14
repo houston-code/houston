@@ -8,6 +8,8 @@ import {
   failedCallKey,
   resolveStallThresholds,
   DEFAULT_STALL_THRESHOLDS,
+  SILENT_CHECK_IN,
+  SILENT_ITERATION_LIMIT,
   type StallThresholds
 } from './stall'
 
@@ -293,5 +295,68 @@ describe('StallDetector: windowed loops', () => {
     const seq = [a, b, a, b, a, b, a, b, a, b].map((c) => d.observe({ calls: [c], errors: [], reads: [c] }).kind)
     expect(seq).toContain('nudge')
     expect(seq.at(-1)).toBe('stop')
+  })
+})
+
+describe('StallDetector silent-run check-in', () => {
+  // Each iteration a different read, so none of the stall checks can trip.
+  const quiet = (i: number, over: { spoke?: boolean; wrote?: boolean } = { spoke: false }) => ({
+    calls: [call('run_shell', { command: `git log -${i}` })],
+    errors: [],
+    changed: true,
+    ...over
+  })
+
+  it('asks for a status update after a long run of silent tool calls, and only then', () => {
+    const d = new StallDetector()
+    for (let i = 1; i < SILENT_ITERATION_LIMIT; i++) expect(d.observe(quiet(i))).toEqual({ kind: 'ok' })
+    expect(d.observe(quiet(SILENT_ITERATION_LIMIT))).toEqual({ kind: 'nudge', message: SILENT_CHECK_IN, checkIn: true })
+    // The count starts over after the check-in.
+    expect(d.observe(quiet(SILENT_ITERATION_LIMIT + 1))).toEqual({ kind: 'ok' })
+  })
+
+  it('never stops the run, however long the silence lasts', () => {
+    const d = new StallDetector()
+    const kinds = new Set<string>()
+    for (let i = 1; i <= SILENT_ITERATION_LIMIT * 3; i++) kinds.add(d.observe(quiet(i)).kind)
+    expect(kinds).toEqual(new Set(['ok', 'nudge']))
+  })
+
+  it('starts the count over when the model says something, writes a file, or ends with text', () => {
+    for (const reset of [{ spoke: true }, { spoke: false, wrote: true }]) {
+      const d = new StallDetector()
+      for (let i = 1; i < SILENT_ITERATION_LIMIT; i++) d.observe(quiet(i))
+      expect(d.observe(quiet(100, reset))).toEqual({ kind: 'ok' })
+      for (let i = 1; i < SILENT_ITERATION_LIMIT; i++) expect(d.observe(quiet(200 + i)).kind).toBe('ok')
+    }
+    const d = new StallDetector()
+    for (let i = 1; i < SILENT_ITERATION_LIMIT; i++) d.observe(quiet(i))
+    expect(d.observe({ calls: [], errors: [], spoke: true })).toEqual({ kind: 'ok' })
+    expect(d.observe(quiet(500)).kind).toBe('ok')
+  })
+
+  it('is off for a caller that does not report speech (a subagent)', () => {
+    const d = new StallDetector()
+    for (let i = 1; i <= SILENT_ITERATION_LIMIT * 2; i++) {
+      expect(d.observe({ calls: [call('run_shell', { command: `ls ${i}` })], errors: [] })).toEqual({ kind: 'ok' })
+    }
+  })
+
+  it('lets a real stall win, and a check-in does not count toward stopping', () => {
+    const d = new StallDetector()
+    for (let i = 1; i < SILENT_ITERATION_LIMIT; i++) d.observe(quiet(i))
+    // The same failing call three times in a row: a stall, reported as one (not a check-in).
+    const same = { calls: [call('read_file', { path: 'gone.ts' })], errors: ['Error: ENOENT gone.ts'], spoke: false }
+    d.observe(same)
+    d.observe(same)
+    const first = d.observe(same)
+    expect(first.kind).toBe('nudge')
+    expect(first.kind === 'nudge' && first.checkIn).toBeUndefined()
+    // A later check-in doesn't escalate; only the stall persisting does.
+    const d2 = new StallDetector()
+    for (let i = 1; i <= SILENT_ITERATION_LIMIT; i++) d2.observe(quiet(i))
+    d2.observe(same)
+    d2.observe(same)
+    expect(d2.observe(same).kind).toBe('nudge')
   })
 })
