@@ -89,7 +89,8 @@ export function useBackgroundTasks(
           title: t.title,
           subtitle: '',
           status: t.exitCode ? 'error' : 'done',
-          finishedAt: t.exitedAt
+          finishedAt: t.exitedAt,
+          ...(t.exitCode !== undefined ? { exitCode: t.exitCode } : {})
         })
       }
     }
@@ -121,7 +122,8 @@ export function useBackgroundTasks(
           finishedAt: s.exitedAt ?? undefined
         })
       } else if (!(s.exitedAt !== null && s.exitedAt <= clearedBefore)) {
-        // exitCode 0 is a clean finish; nonzero or null (killed) is a failure.
+        // exitCode 0 is a clean finish; nonzero is a failure, and null means it was
+        // killed (the row tells a stop apart from a failure by that null).
         finished.push({
           ...base,
           status: s.exitCode === 0 ? 'done' : 'error',

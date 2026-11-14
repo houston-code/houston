@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_HINT,
@@ -24,6 +24,7 @@ import { branchNameError, canCreateWorktree } from '../lib/worktree'
 import { baseName } from '../lib/paths'
 import { ModelPicker } from './ModelPicker'
 import { CostBreakdown } from './CostBreakdown'
+import { compactionLimitFrom, compactionThresholdNote } from '@shared/compactionThreshold'
 import { ChoiceMenu, type Choice } from './ChoiceMenu'
 import { Popover } from './Popover'
 import { recentFolders } from '../lib/recentFolders'
@@ -137,6 +138,7 @@ export function ControlBar({
   const canWorktree = showWorktreeEditor && canCreateWorktree(repoInfo)
   const worktreeOn = canWorktree && worktreeMode
   const branchError = worktreeOn ? branchNameError(branchName, repoInfo.branches) : null
+  const branchErrorId = useId()
 
   // Always label the folder control with the repo (main worktree) name, never the
   // per-chat worktree directory — so it reads "myrepo", not "houston/feat-x".
@@ -256,6 +258,7 @@ export function ControlBar({
                     title={branchError ?? 'New branch / worktree name'}
                     aria-label="New branch name"
                     aria-invalid={branchError !== null}
+                    aria-describedby={branchError ? branchErrorId : undefined}
                     onChange={(e) => onChangeBranchName(e.target.value)}
                   />
                 )}
@@ -336,6 +339,13 @@ export function ControlBar({
         </button>
       )}
 
+      {branchError && (
+        // The composer is off until the name is valid; say why where it can be read.
+        <p id={branchErrorId} className="control-bar__note control-bar__note--error" role="status">
+          New worktree: {branchError}
+        </p>
+      )}
+
       {worktreeOn && settings.newChatWorktree === undefined && (
         <p className="control-bar__note" role="note">
           This chat will work on its own branch in a separate folder, so your checkout stays as
@@ -349,6 +359,7 @@ export function ControlBar({
           usage={usage}
           contextWindow={ctxWindow}
           priceTierAbove={priceTier}
+          compactionNote={compactionThresholdNote(compactionLimitFrom(settings), ctxWindow, priceTier)}
           meterPct={pct}
           meterClass={meterClass}
           agents={subagentSpend}

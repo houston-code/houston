@@ -118,9 +118,15 @@ describe('resolveCompactionThreshold', () => {
     expect(resolveCompactionThreshold(undefined, 0)).toBe(DEFAULT_COMPACTION_THRESHOLD)
   })
 
-  it('lets an explicit setting override the window-relative sizing', () => {
+  it('lets an explicit setting lower the window-relative sizing', () => {
     expect(resolveCompactionThreshold(50_000, 1_000_000)).toBe(50_000)
     expect(resolveCompactionThreshold(50_000, null)).toBe(50_000)
+  })
+
+  it('never lets an explicit setting raise the threshold past the window margin', () => {
+    expect(resolveCompactionThreshold(900_000, 1_000_000)).toBe(
+      Math.floor(1_000_000 * COMPACTION_WINDOW_FRACTION)
+    )
   })
 
   it('keeps 0 meaning "compaction disabled", window or not', () => {
@@ -161,8 +167,10 @@ describe('resolveCompactionThreshold with a long-context price tier', () => {
     expect(resolveCompactionThreshold(undefined, 1_000_000, Number.NaN)).toBe(800_000)
   })
 
-  it('never overrides an explicit setting, including 0 (disabled)', () => {
-    expect(resolveCompactionThreshold(500_000, 1_000_000, 100_000)).toBe(500_000)
+  it('treats an explicit setting as one more minimum, and 0 still disables', () => {
+    expect(resolveCompactionThreshold(500_000, 1_000_000, 100_000)).toBe(90_000)
+    expect(resolveCompactionThreshold(50_000, 1_000_000, 100_000)).toBe(50_000)
+    expect(resolveCompactionThreshold(500_000, null, 100_000)).toBe(90_000)
     expect(resolveCompactionThreshold(0, 1_000_000, 100_000)).toBe(0)
   })
 
@@ -187,6 +195,12 @@ describe('resolveEvictionTrigger', () => {
     expect(resolveEvictionTrigger(700_000, 700_000)).toBe(700_000)
     expect(resolveEvictionTrigger(0, 0)).toBe(0)
     expect(resolveEvictionTrigger(undefined, 0)).toBe(0)
+  })
+
+  it('follows a share of the window when the window is known, and ignores it otherwise', () => {
+    expect(resolveEvictionTrigger({ percent: 60 }, 600_000, 1_000_000)).toBe(600_000)
+    expect(resolveEvictionTrigger({ percent: 60 }, 800_000, null)).toBe(EARLY_EVICTION_TOKENS)
+    expect(resolveEvictionTrigger({}, 800_000, 1_000_000)).toBe(EARLY_EVICTION_TOKENS)
   })
 })
 

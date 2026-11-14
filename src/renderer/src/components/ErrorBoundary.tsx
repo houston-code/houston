@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { reportRendererError } from '../lib/rendererErrors'
 
 interface Props {
   children: ReactNode
@@ -19,8 +20,10 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
-    // Surfaced in DevTools; the main-process logger captures uncaught errors too.
+    // A caught render error is not an uncaught one, so neither the window's error
+    // listener nor main's own handlers see it: forward it to the main log here.
     console.error('Renderer error boundary caught:', error, info.componentStack)
+    reportRendererError('boundary', error, info.componentStack)
   }
 
   render(): ReactNode {
@@ -28,6 +31,8 @@ export class ErrorBoundary extends Component<Props, State> {
     if (!error) return this.props.children
     return (
       <div className="crash" role="alert">
+        {/* The window has no title bar of its own (hiddenInset): keep a strip to move it by. */}
+        <div className="window-drag" aria-hidden="true" />
         <h1 className="crash__title">Something went wrong</h1>
         <p className="crash__msg">{error.message || 'The interface hit an unexpected error.'}</p>
         <div className="crash__actions">

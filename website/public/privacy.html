@@ -63,7 +63,7 @@
     <div class="wrap">
       <a class="back" href="/">&larr; Back to home</a>
       <h1>Privacy</h1>
-      <p class="doc-meta"><strong>Last updated: October 23, 2026</strong></p>
+      <p class="doc-meta"><strong>Last updated: November 14, 2026</strong></p>
       <p>Houston is a locally installed coding agent. You bring your own model and credentials, so almost every privacy question comes down to one thing: which providers you choose to connect. This document explains what Houston stores, what it sends, and where.</p>
       <h2>The short version</h2>
       <ul>
@@ -78,6 +78,7 @@
 <li><strong>Settings</strong>: preferences, configured providers and endpoints, model selections, permission rules, and similar configuration.</li>
 <li><strong>API keys and credentials</strong>: the desktop app stores them in your operating system's secure credential storage (for example, the OS keychain), so they are encrypted at rest rather than kept in plain configuration files. The standalone terminal CLI can't reach that storage, so it reads keys from environment variables or from plain-text credential files in Houston's application-data directory, which it writes readable only by your user account.</li>
 <li><strong>Window and interface state</strong>: window size, panel layout, and the like.</li>
+<li><strong>Crash dumps</strong>: if the desktop app crashes, it saves a crash dump (a snapshot of the crashed process, which can include part of what was in memory) in a <code>Crashpad</code> folder in Houston's application-data directory. Crash dumps are never uploaded. Report an Issue lists the file names of recent dumps so you can decide whether to attach one yourself.</li>
 <li><strong>Memories</strong>: facts the agent saves between conversations (your preferences and corrections, and things about a project the code doesn't show), one file each in <code>~/.houston/memory</code> in your home folder, readable only by your user account. You can review, edit, or delete them in Settings &gt; Memory or with <code>/memory</code>, or turn memory off. Like the rest of a conversation's context, the list of memories and any memory the agent reads are part of what goes to your model provider.</li>
 </ul>
       <p>You can delete any of it by removing the conversation or setting in the app, or by deleting Houston's application-data directory.</p>

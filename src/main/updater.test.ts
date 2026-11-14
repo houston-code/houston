@@ -378,6 +378,19 @@ describe('auto-install (signed macOS)', () => {
     expect(h.downloadUpdateCalls).toBe(0)
   })
 
+  it('records updater events in the app log, not only the console', async () => {
+    h.checkResult = { isUpdateAvailable: true, updateInfo: { version: '0.3.0' } }
+    const { checkForUpdates } = await load()
+    const { log } = await import('./logger')
+    const info = vi.spyOn(log, 'info').mockImplementation(() => {})
+    const error = vi.spyOn(log, 'error').mockImplementation(() => {})
+    await checkForUpdates()
+    fire('update-downloaded', { version: '0.3.0' })
+    fireNative('error', SIGNATURE_MISMATCH)
+    expect(info.mock.calls.map((c) => c[0])).toContain('[updater] downloaded 0.3.0 (waiting for the signature check)')
+    expect(error.mock.calls.some((c) => String(c[0]).startsWith('[updater] macOS refused to install 0.3.0'))).toBe(true)
+  })
+
   it('broadcasts rounded download progress', async () => {
     const { checkForUpdates } = await load()
     await checkForUpdates() // configures the updater + attaches the event listeners

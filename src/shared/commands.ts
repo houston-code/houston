@@ -19,6 +19,8 @@ export interface Command {
   group?: CommandGroup
   /** What may follow the name, shown dimmed beside it (for example `[name]`). */
   args?: string
+  /** `/<skill-name>`: runs a skill (listed under its own heading). */
+  skill?: boolean
 }
 
 /** Menu headings, in the order the menu shows them. Custom commands come last. */
@@ -26,6 +28,8 @@ export const COMMAND_GROUPS = ['Chat', 'Modes', 'Review and undo', 'Extend', 'Se
 export type CommandGroup = (typeof COMMAND_GROUPS)[number]
 /** Heading for a workspace's own commands (`.houston/commands`). */
 export const CUSTOM_COMMAND_GROUP = 'Custom'
+/** Heading for the skills, each runnable as `/<skill-name>`. */
+export const SKILL_COMMAND_GROUP = 'Skills'
 
 /** Parse a leading slash command from composer text: "/name the rest" → {name, args}. */
 export function parseSlashCommand(text: string): { name: string; args: string } | null {
@@ -58,12 +62,12 @@ export function expandTemplate(template: string, args: string): string {
 
 /** The heading a command is listed under. */
 export function commandGroup(cmd: Command): string {
-  return cmd.group ?? CUSTOM_COMMAND_GROUP
+  return cmd.group ?? (cmd.skill ? SKILL_COMMAND_GROUP : CUSTOM_COMMAND_GROUP)
 }
 
 /** The commands ordered by menu heading (stable within one), for an unfiltered menu. */
 export function groupCommands(commands: Command[]): Command[] {
-  const order: string[] = [...COMMAND_GROUPS, CUSTOM_COMMAND_GROUP]
+  const order: string[] = [...COMMAND_GROUPS, CUSTOM_COMMAND_GROUP, SKILL_COMMAND_GROUP]
   return commands
     .map((c, i) => ({ c, i, g: order.indexOf(commandGroup(c)) }))
     .sort((a, b) => a.g - b.g || a.i - b.i)
@@ -79,22 +83,26 @@ function isSubsequence(needle: string, hay: string): boolean {
 
 /**
  * How well a command answers what was typed after the slash; lower is better, null
- * is no match. A name that starts with it comes first, then an alias that does,
- * then a name containing it, then a word of the description starting with it (so
- * `/perm` finds `/approval`), then the letters appearing in order in the name.
+ * is no match. The command the text names exactly comes first (its name, then an
+ * alias, as {@link resolveCommand} reads it), so `/agent` is never taken for
+ * `/agents`. Then a name that starts with it, then an alias that does, then a name
+ * containing it, then a word of the description starting with it (so `/perm` finds
+ * `/approval`), then the letters appearing in order in the name.
  */
 function commandRank(cmd: Command, q: string): number | null {
   const name = cmd.name.toLowerCase()
-  if (name.startsWith(q)) return 0
+  if (name === q) return 0
+  if (COMMAND_ALIASES[q] === cmd.name) return 1
+  if (name.startsWith(q)) return 2
   for (const [alias, target] of Object.entries(COMMAND_ALIASES)) {
-    if (target === cmd.name && alias.startsWith(q)) return 1
+    if (target === cmd.name && alias.startsWith(q)) return 3
   }
-  if (name.includes(q)) return 2
+  if (name.includes(q)) return 4
   if (q.length >= 3) {
     const words = cmd.description.toLowerCase().split(/[^a-z0-9]+/)
-    if (words.some((w) => w.startsWith(q))) return 3
+    if (words.some((w) => w.startsWith(q))) return 5
   }
-  if (q.length >= 2 && isSubsequence(q, name)) return 4
+  if (q.length >= 2 && isSubsequence(q, name)) return 6
   return null
 }
 
@@ -211,6 +219,12 @@ export type CommandClient = 'gui' | 'tui'
 export interface BuiltinCommand extends Command {
   /** Clients that expose this command. */
   clients: CommandClient[]
+  /**
+   * What the desktop menu says instead, where the app does the job differently from
+   * the terminal (it opens a Settings page rather than printing or taking
+   * subcommands). `args: null` shows no argument hint there.
+   */
+  gui?: { description?: string; args?: string | null }
 }
 
 /**
@@ -243,7 +257,12 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'full', group: 'Modes', description: 'Approval: full auto (sandboxed)', clients: ['gui', 'tui'] },
   { name: 'model', group: 'Modes', args: '[name]', description: 'List or switch the active model', clients: ['gui', 'tui'] },
   { name: 'login', group: 'Setup', description: 'Set or update an API key (also: /providers)', clients: ['gui', 'tui'] },
-  { name: 'settings', group: 'Setup', args: '[page]', description: 'Show a summary of your current settings', clients: ['gui', 'tui'] },
+  {
+    name: 'settings', group: 'Setup', args: '[page]',
+    description: 'Show a summary of your current settings',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Open Settings, or one page of it' }
+  },
   { name: 'undo', group: 'Review and undo', description: "Revert the files the last turn changed", clients: ['gui', 'tui'] },
   { name: 'redo', group: 'Review and undo', description: 'Put back what /undo reverted', clients: ['gui', 'tui'] },
   {
@@ -322,7 +341,7 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   },
   {
     name: 'skills', group: 'Extend',
-    description: 'List the workspace skills (.houston/skills)',
+    description: 'List the skills (.houston/skills and .agents/skills); run one with /<name>',
     clients: ['gui', 'tui']
   },
   {
@@ -335,15 +354,31 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
     description: 'Hand a task to one of your .houston/agents (/agent <name> <task>)',
     clients: ['gui', 'tui']
   },
-  { name: 'mcp', group: 'Extend', description: 'List MCP servers (add, remove, login, logout, registry search)', clients: ['gui', 'tui'] },
+  {
+    name: 'mcp', group: 'Extend',
+    description: 'List MCP servers (add, remove, login, logout, registry search)',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Manage MCP servers in Settings' }
+  },
   {
     name: 'trust', group: 'Setup',
     description: "Show this folder's project-config trust (/trust forget re-decides)",
-    clients: ['gui', 'tui']
+    clients: ['gui', 'tui'],
+    gui: { description: "Review this folder's project-config trust in Settings" }
   },
   { name: 'hooks', group: 'Extend', description: 'List configured hooks', clients: ['gui', 'tui'] },
-  { name: 'memory', group: 'Extend', description: 'Review saved memories (show, edit, pin, forget, on, off)', clients: ['gui', 'tui'] },
-  { name: 'theme', group: 'Setup', args: '[name]', description: 'List or switch the color theme', clients: ['gui', 'tui'] },
+  {
+    name: 'memory', group: 'Extend',
+    description: 'Review saved memories (show, edit, pin, forget, on, off)',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Review saved memories in Settings' }
+  },
+  {
+    name: 'theme', group: 'Setup', args: '[name]',
+    description: 'List or switch the color theme',
+    clients: ['gui', 'tui'],
+    gui: { description: 'Open Appearance settings', args: null }
+  },
   { name: 'image', group: 'Terminal', args: '[path]', description: 'Attach an image: from your clipboard, or /image <path>', clients: ['tui'] },
   { name: 'cwd', group: 'Setup', description: 'Show the working directory', clients: ['gui', 'tui'] },
   { name: 'share', group: 'Chat', description: 'Copy an invite to Houston to share with a friend', clients: ['gui', 'tui'] },
@@ -368,19 +403,24 @@ export const BUILTIN_COMMAND_CATALOG: BuiltinCommand[] = [
   { name: 'quit', group: 'Terminal', description: 'Leave', clients: ['tui'] }
 ]
 
-/** Strip the catalog-only `clients` tag, yielding a plain `Command`. */
-function toCommand(c: BuiltinCommand): Command {
-  const cmd: Command = { name: c.name, description: c.description }
+/**
+ * Strip the catalog-only tags, yielding a plain `Command`; for the desktop, with its
+ * own wording where the catalog gives one.
+ */
+function toCommand(c: BuiltinCommand, client?: CommandClient): Command {
+  const gui = client === 'gui' ? c.gui : undefined
+  const cmd: Command = { name: c.name, description: gui?.description ?? c.description }
   if (c.template !== undefined) cmd.template = c.template
   if (c.autoRun !== undefined) cmd.autoRun = c.autoRun
   if (c.group !== undefined) cmd.group = c.group
-  if (c.args !== undefined) cmd.args = c.args
+  const args = gui && gui.args !== undefined ? gui.args : c.args
+  if (args !== undefined && args !== null) cmd.args = args
   return cmd
 }
 
 /** The built-in commands a given client surfaces, as plain `Command`s. */
 export function builtinCommands(client: CommandClient): Command[] {
-  return BUILTIN_COMMAND_CATALOG.filter((c) => c.clients.includes(client)).map(toCommand)
+  return BUILTIN_COMMAND_CATALOG.filter((c) => c.clients.includes(client)).map((c) => toCommand(c, client))
 }
 
 /**
@@ -425,4 +465,4 @@ export function terminalOnlyNote(name: string): string | null {
  */
 export const BUILTIN_TEMPLATE_COMMANDS: Command[] = BUILTIN_COMMAND_CATALOG.filter(
   (c) => c.template !== undefined
-).map(toCommand)
+).map((c) => toCommand(c))

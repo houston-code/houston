@@ -149,7 +149,18 @@ export function normalizeMcpInputSchema(schema: Record<string, unknown> | undefi
       note: `its input schema was too large to send (${size} characters), so any arguments are accepted`
     }
   }
-  const out: Record<string, unknown> = { ...schema }
+  const lowered = lowerJsonSchema(schema)
+  if (!lowered.schema) {
+    return { parameters: open, note: 'its input schema was too complex to send, so any arguments are accepted' }
+  }
+  const loweredSize = JSON.stringify(lowered.schema).length
+  if (loweredSize > MAX_SCHEMA_CHARS) {
+    return {
+      parameters: open,
+      note: `its input schema was too large to send once its references were resolved (${loweredSize} characters), so any arguments are accepted`
+    }
+  }
+  const out: Record<string, unknown> = { ...lowered.schema }
   const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
   const properties: Record<string, unknown> = isObj(out.properties) ? { ...out.properties } : {}
   const required = new Set(Array.isArray(out.required) ? out.required.filter((r) => typeof r === 'string') : [])
@@ -169,5 +180,121 @@ export function normalizeMcpInputSchema(schema: Record<string, unknown> | undefi
   out.properties = properties
   if (required.size) out.required = [...required]
   else delete out.required
-  return { parameters: out }
+  return lowered.note ? { parameters: out, note: lowered.note } : { parameters: out }
+}
+
+/** Keywords dropped from a tool schema: identifiers, annotations, and conditionals no provider takes. */
+const DROPPED_KEYWORDS = new Set([
+  '$schema',
+  '$id',
+  '$anchor',
+  '$dynamicRef',
+  '$dynamicAnchor',
+  '$vocabulary',
+  '$comment',
+  'if',
+  'then',
+  'else',
+  'dependentSchemas',
+  'dependentRequired',
+  'unevaluatedProperties',
+  'unevaluatedItems',
+  'contentSchema'
+])
+
+/** Keywords whose value is one subschema. */
+const SCHEMA_KEYWORDS = new Set(['items', 'additionalProperties', 'not', 'contains', 'propertyNames', 'additionalItems'])
+/** Keywords whose value is a list of subschemas. */
+const SCHEMA_LIST_KEYWORDS = new Set(['anyOf', 'oneOf', 'allOf'])
+/** Keywords whose value maps names to subschemas. */
+const SCHEMA_MAP_KEYWORDS = new Set(['properties', 'patternProperties'])
+
+/** Most schema nodes lowered before a schema counts as too complex. */
+const MAX_SCHEMA_NODES = 5_000
+/** Deepest nesting followed, references included. */
+const MAX_SCHEMA_DEPTH = 32
+
+/**
+ * Lower a JSON Schema 2020-12 tool schema (MCP's default dialect) to the subset every
+ * provider accepts, so one tool's schema can't fail the whole request:
+ *
+ * - local `$ref`s into `$defs` (or `definitions`) are inlined and the definitions
+ *   dropped; a cyclic, missing, root (`#`) or remote reference becomes an open
+ *   schema. Remote references are never fetched.
+ * - `const` becomes a one-value `enum`;
+ * - `prefixItems` (tuples) becomes `items` that accept any of the listed item schemas;
+ * - identifiers, annotations and conditionals (`$schema`, `$id`, `$anchor`,
+ *   `$dynamicRef`, `if`/`then`/`else`, `dependentSchemas`, `unevaluated*`, ...) are dropped.
+ *
+ * Bounded in depth and node count; a schema past either is null (the caller then
+ * accepts any arguments). `note` says when part of the schema was lost.
+ */
+export function lowerJsonSchema(schema: Record<string, unknown>): { schema: Record<string, unknown> | null; note?: string } {
+  const defs: Record<string, unknown> = {}
+  for (const key of ['definitions', '$defs'] as const) {
+    const d = schema[key]
+    if (d && typeof d === 'object' && !Array.isArray(d)) Object.assign(defs, d)
+  }
+  let nodes = 0
+  let lost = false
+  let tooBig = false
+  const lower = (node: unknown, depth: number, refs: readonly string[]): unknown => {
+    if (tooBig) return {}
+    if (Array.isArray(node)) return node.map((n) => lower(n, depth + 1, refs))
+    if (!node || typeof node !== 'object') return node
+    if (++nodes > MAX_SCHEMA_NODES || depth > MAX_SCHEMA_DEPTH) {
+      tooBig = true
+      return {}
+    }
+    const obj = node as Record<string, unknown>
+    let base: Record<string, unknown> = {}
+    if (typeof obj.$ref === 'string') {
+      const m = /^#\/(?:\$defs|definitions)\/(.+)$/.exec(obj.$ref)
+      const name = m ? decodeURIComponent(m[1]).replace(/~1/g, '/').replace(/~0/g, '~') : undefined
+      if (name !== undefined && name in defs && !refs.includes(name)) {
+        const target = lower(defs[name], depth + 1, [...refs, name])
+        if (target && typeof target === 'object' && !Array.isArray(target)) base = target as Record<string, unknown>
+      } else {
+        lost = true
+      }
+    }
+    const out: Record<string, unknown> = { ...base }
+    for (const [key, value] of Object.entries(obj)) {
+      if (key === '$ref' || key === '$defs' || key === 'definitions' || DROPPED_KEYWORDS.has(key)) {
+        if (key === 'if' || key === 'then' || key === 'else' || key === 'dependentSchemas' || key === '$dynamicRef') lost = true
+        continue
+      }
+      if (key === 'const') {
+        if (!('enum' in obj)) out.enum = [value]
+        continue
+      }
+      if (key === 'prefixItems') continue // folded into items below
+      if (SCHEMA_KEYWORDS.has(key)) {
+        // A boolean `items: false` closes a tuple; providers take only schemas.
+        if (typeof value === 'boolean') {
+          if (key !== 'items') out[key] = value
+          continue
+        }
+        out[key] = lower(value, depth + 1, refs)
+      } else if (SCHEMA_LIST_KEYWORDS.has(key) && Array.isArray(value)) {
+        out[key] = value.map((v) => lower(v, depth + 1, refs))
+      } else if (SCHEMA_MAP_KEYWORDS.has(key) && value && typeof value === 'object' && !Array.isArray(value)) {
+        out[key] = Object.fromEntries(Object.entries(value).map(([k, v]) => [k, lower(v, depth + 1, refs)]))
+      } else {
+        out[key] = value
+      }
+    }
+    if (Array.isArray(obj.prefixItems) && obj.prefixItems.length) {
+      const tuple = obj.prefixItems.map((v) => lower(v, depth + 1, refs))
+      const rest = out.items && typeof out.items === 'object' ? [out.items] : []
+      const options = [...tuple, ...rest]
+      out.items = options.length === 1 ? options[0] : { anyOf: options }
+    }
+    return out
+  }
+  const lowered = lower(schema, 0, []) as Record<string, unknown>
+  if (tooBig) return { schema: null }
+  return lost
+    ? { schema: lowered, note: 'parts of its input schema could not be resolved, so those parts accept any value' }
+    : { schema: lowered }
 }

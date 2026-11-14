@@ -90,6 +90,9 @@ export function networkDestination(
     return ghOwnGrant(toolName, args) ? `${repo}:${toolName}` : `${repo}:write`
   }
   if (toolName === 'web_search') return 'web_search'
+  // Without the session's page in hand (the loop passes it; see browserSessionDestination),
+  // only an open's own URL is known.
+  if (toolName === 'browser_session') return browserSessionDestination(args, null)
   const url = typeof args.url === 'string' ? args.url : ''
   if (url) {
     try {
@@ -107,6 +110,26 @@ export function networkDestination(
     }
   }
   return toolName
+}
+
+/**
+ * The destination a `browser_session` call is gated under, keyed exactly like
+ * view_localhost so one grant covers both: `open` loads its URL's host (`<host>`),
+ * `act` clicks and types on the page the session is on (`<host> (interactive)`), and
+ * the other actions read that page (`<host>`). `sessionUrl` is the URL the session's
+ * page is on now, which a page can change by navigating itself (only to loopback).
+ * With no page open, and so nothing to reach, the key is the tool name.
+ */
+export function browserSessionDestination(args: Record<string, unknown>, sessionUrl: string | null): string {
+  const raw = args.action === 'open' ? (typeof args.url === 'string' ? args.url : '') : (sessionUrl ?? '')
+  let host = ''
+  try {
+    host = raw ? new URL(raw).hostname.toLowerCase() : ''
+  } catch {
+    // Malformed: the open itself reports the parse error.
+  }
+  if (!host) return 'browser_session'
+  return args.action === 'act' ? `${host} (interactive)` : host
 }
 
 /** Whether a `view_localhost` call clicks or types (it passes `steps`). */

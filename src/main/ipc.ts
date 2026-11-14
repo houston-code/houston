@@ -137,6 +137,7 @@ import {
 } from './agent/checkpoints'
 import { createTerminal, writeTerminal, resizeTerminal, killTerminal, killTerminalsOf } from './terminal'
 import { log } from './logger'
+import { createRendererErrorLogger } from './crashRecovery'
 import { dismissEnvKeyOffers, dismissedEnvKeyOffers, envKeyOffers, envKeyValue } from './envKeys'
 import { setMenuState, setTerminalFocused } from './menu'
 import { syncPreviewPanes, reloadPreviewPane, assertLoopbackUrl } from './preview'
@@ -153,7 +154,7 @@ import {
 import { cancelCompaction, compactConversationNow } from './agent/compact'
 import { findFiles } from './agent/mentions'
 import { listDirectory, readWorkspaceFile } from './agent/fileTree'
-import { loadCommands } from './agent/commands'
+import { loadSlashCommands } from './agent/commands'
 import { loadSkills } from './agent/skills'
 import { loadAgents } from './agent/agents'
 import { registerCustomizeIpc } from './customizeIpc'
@@ -222,6 +223,7 @@ import { registerScheduleIpc } from './scheduleIpc'
 import { parseMermaidRequest, registerHtmlVisual, renderMermaid, wireHtmlVisualProtocol } from './visualRender'
 import { wireMediaProtocol } from './mediaProtocol'
 import { searchMcpRegistry } from './mcpRegistry'
+import { noteThrottle, onRateLimitChange, rateLimitSnapshot } from './rateLimitStore'
 
 /** A preferences export is a few KB; anything past this is not one. */
 const MAX_SETTINGS_FILE_BYTES = 2_000_000
@@ -347,8 +349,18 @@ function runOutputTargets(sender: WebContents): WebContents[] {
   return out
 }
 
+/**
+ * Keep what a throttled retry said about the provider's quota, filed under the chat's
+ * provider, so it outlives the retry notice (see rateLimitStore.ts).
+ */
+export function noteRetryThrottle(conversationId: string, e: AgentEvent): void {
+  if (e.type !== 'retry' || !e.throttle) return
+  noteThrottle(peekConversation(conversationId)?.providerId, e.throttle)
+}
+
 /** Stream one agent event to the renderers, persisting usage totals along the way. */
 function emitEvent(sender: WebContents, conversationId: string, e: AgentEvent): void {
+  noteRetryThrottle(conversationId, e)
   const ev = applyRunningUsage(conversationId, e)
   for (const wc of runOutputTargets(sender)) wc.send(IPC.agentEvent, ev)
   maybeNotify(sender, conversationId, ev)
@@ -472,6 +484,7 @@ function makeBroadcastIo(): DrainIO {
     imageGallery: true,
     liveShellOutput: true,
     emit: coalescedEmit((conversationId, e) => {
+      noteRetryThrottle(conversationId, e)
       const ev = applyRunningUsage(conversationId, e)
       toEach((wc) => wc.send(IPC.agentEvent, ev))
       const notifyVia = (windowShowing(conversationId) ?? targetWindow())?.webContents
@@ -679,6 +692,10 @@ export function registerIpc(ready?: Promise<unknown>): void {
   // Opening rebuilds the text in main rather than taking it from the renderer, so the
   // URL can only ever carry what issueReportBody allows.
   handle(IPC.logsReveal, () => revealLogs())
+  // Not held for startup: logging needs no credential, and an error during startup is
+  // exactly the one worth keeping.
+  const logRendererError = createRendererErrorLogger()
+  ipcMain.on(IPC.rendererError, (event, raw: unknown) => logRendererError(event.sender.id, raw))
   handle(IPC.issueReportPreview, (): string => issueReportText())
   handle(IPC.issueReportOpen, (): boolean => openIssueReport())
   // The composer's sandbox badge: a cheap read, unlike the full doctor probe.
@@ -1014,7 +1031,7 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.commandsList, async (_event, workspace: string) => {
     if (!workspace) return []
     try {
-      return await loadCommands(realpathSync(workspace))
+      return await loadSlashCommands(realpathSync(workspace))
     } catch {
       return []
     }
@@ -1240,6 +1257,14 @@ export function registerIpc(ready?: Promise<unknown>): void {
   handle(IPC.conversationScorecard, () => computeScorecard())
   // Local-only spend and tokens per day and per project, for the usage view.
   handle(IPC.conversationUsageReport, () => computeUsageReport())
+  // The last rate-limit state per provider, read once by each window and then followed
+  // through the broadcast (every window's status bar shows it).
+  handle(IPC.rateLimitList, () => rateLimitSnapshot())
+  onRateLimitChange((states) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.webContents.isDestroyed()) win.webContents.send(IPC.rateLimitChanged, states)
+    }
+  })
   handle(
     IPC.conversationCreate,
     async (

@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import type { LspServerConfig, ModelOption } from '@shared/types'
-import { parseHeaderLines } from '@shared/mcp'
+import { parseKeyValueLines } from '@shared/mcp'
 import type { FetchSummary } from '@shared/model-listing'
 import { useRepeatsPageTitle, useSectionMeta } from './SectionFrame'
 
@@ -110,53 +110,137 @@ export function ModelsField({
   )
 }
 
-function headersToText(headers: Record<string, string> | undefined): string {
+function headersToText(headers: Record<string, string> | undefined, env = false): string {
   return Object.entries(headers ?? {})
-    .map(([k, v]) => `${k}: ${v}`)
+    .map(([k, v]) => (env ? `${k}=${v}` : `${k}: ${v}`))
     .join('\n')
 }
 
 /**
- * "One `Key: Value` per line" header editor. Like ModelsField, it holds raw text
- * in local state while focused and only parses on blur. Parsing every keystroke
- * would drop a line the instant you typed its key (before the colon) and strip
- * trailing newlines — making it impossible to start a new header line.
+ * "One `Key: Value` per line" header editor, or with `env`, one `NAME=value`
+ * environment variable per line (the `NAME: value` form is read too). Like
+ * ModelsField, it holds raw text in local state while focused and only parses on
+ * blur. Parsing every keystroke would drop a line the instant you typed its key
+ * (before the separator) and strip trailing newlines, making it impossible to start
+ * a new line. A line it can't read stays in the box with a warning rather than
+ * vanishing, so a pasted value is never silently lost.
  */
 export function HeadersField({
   headers,
   onChange,
+  env = false,
   className,
   rows = 2,
   placeholder
 }: {
   headers: Record<string, string> | undefined
   onChange: (headers: Record<string, string>) => void
+  /** Environment variables rather than HTTP headers. */
+  env?: boolean
   className?: string
   rows?: number
   placeholder?: string
 }): JSX.Element {
-  const [text, setText] = useState(() => headersToText(headers))
-  // Re-sync when the value changes from outside, but never while focused.
+  const [text, setText] = useState(() => headersToText(headers, env))
+  const [unread, setUnread] = useState(0)
+  const warningId = useId()
+  // Re-sync when the value changes from outside, but never while focused, and not
+  // for the value this field just committed (which would drop the unread lines).
   const focused = useRef(false)
+  const committed = useRef(JSON.stringify(headers ?? {}))
   useEffect(() => {
-    if (!focused.current) setText(headersToText(headers))
-  }, [headers])
+    const incoming = JSON.stringify(headers ?? {})
+    if (focused.current || incoming === committed.current) return
+    committed.current = incoming
+    setText(headersToText(headers, env))
+    setUnread(0)
+  }, [headers, env])
 
   return (
-    <textarea
-      className={className}
-      rows={rows}
-      placeholder={placeholder}
+    <>
+      <textarea
+        className={className}
+        rows={rows}
+        placeholder={placeholder}
+        value={text}
+        aria-invalid={unread > 0 || undefined}
+        aria-describedby={unread > 0 ? warningId : undefined}
+        onFocus={() => {
+          focused.current = true
+        }}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          focused.current = false
+          const { values, invalid } = parseKeyValueLines(text, { env })
+          committed.current = JSON.stringify(values)
+          onChange(values)
+          setText([headersToText(values, env), ...invalid].filter(Boolean).join('\n'))
+          setUnread(invalid.length)
+        }}
+      />
+      {unread > 0 && (
+        <span id={warningId} className="field__hint field__hint--warn" role="alert">
+          {unread === 1 ? 'One line was' : `${unread} lines were`} not saved: write each as{' '}
+          {env ? <code>NAME=value</code> : <code>Name: value</code>}.
+        </span>
+      )}
+    </>
+  )
+}
+
+/**
+ * A whole-number input with a minimum (and optional maximum). The text is held
+ * locally, so clearing the box or typing a number digit by digit works: a value in
+ * range is kept as it is typed, and leaving the field brings anything else back
+ * into range (an empty box keeps the last value). Clamping on every keystroke would
+ * turn the first `1` of `128000` into the minimum.
+ */
+export function NumberField({
+  value,
+  min,
+  max,
+  step,
+  onChange
+}: {
+  value: number
+  min: number
+  max?: number
+  step?: number
+  onChange: (value: number) => void
+}): JSX.Element {
+  const [text, setText] = useState(() => String(value))
+  const focused = useRef(false)
+  useEffect(() => {
+    if (!focused.current) setText(String(value))
+  }, [value])
+  const read = (raw: string): number | null => {
+    if (raw.trim() === '') return null
+    const n = Math.floor(Number(raw))
+    return Number.isFinite(n) ? n : null
+  }
+  const inRange = (n: number): boolean => n >= min && (max === undefined || n <= max)
+
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      step={step}
       value={text}
       onFocus={() => {
         focused.current = true
       }}
-      onChange={(e) => setText(e.target.value)}
+      onChange={(e) => {
+        setText(e.target.value)
+        const n = read(e.target.value)
+        if (n !== null && inRange(n) && n !== value) onChange(n)
+      }}
       onBlur={() => {
         focused.current = false
-        const parsed = parseHeaderLines(text)
-        onChange(parsed)
-        setText(headersToText(parsed))
+        const n = read(text)
+        const next = n === null ? value : Math.min(max ?? Infinity, Math.max(min, n))
+        if (next !== value) onChange(next)
+        setText(String(next))
       }}
     />
   )

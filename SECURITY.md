@@ -59,6 +59,18 @@ encrypted-at-rest key storage) is described in the
 [docs/sandboxing.md](docs/sandboxing.md). Reports that account for that model are
 especially helpful.
 
+The packaged app is hardened against being started as something else by another
+program running as the same user. Its Electron fuses ignore the Node debugger flags
+(`--inspect`, `--inspect-brk`, and `SIGUSR1`) and `NODE_OPTIONS` on every platform,
+load the app only from `app.asar` with its integrity checked (macOS and Windows), and
+ignore `ELECTRON_RUN_AS_NODE` on macOS and Windows. Linux keeps `ELECTRON_RUN_AS_NODE`
+because the shell sandbox's network forwarder runs under it; Linux keyrings don't tie a
+secret to the program that stored it, so there it isn't what guards the keys. The macOS
+build is signed without the entitlement that would honor `DYLD_INSERT_LIBRARIES`. A way
+to run your own code inside a released Houston binary, or to read its stored keys under
+its identity, is in scope. The unpackaged development build (`npm run dev`) has none of
+these protections.
+
 The following are **expected behavior**, not vulnerabilities, because they follow
 directly from the tool's purpose and are gated by explicit user consent:
 

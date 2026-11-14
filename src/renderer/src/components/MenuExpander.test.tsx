@@ -53,6 +53,27 @@ describe('MenuExpander', () => {
     expect(flyout.style.position).toBe('fixed')
   })
 
+  it('shifts the card up to fit when its row sits near the bottom of the window', () => {
+    const rect = (left: number, top: number, width: number, height: number): DOMRect =>
+      ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top }) as DOMRect
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement
+    ) {
+      if (this.classList.contains('menu--flyout')) return rect(0, 0, 200, 300)
+      if (this.classList.contains('menu__item')) return rect(110, window.innerHeight - 60, 180, 28)
+      return rect(100, window.innerHeight - 200, 200, 190) // the menu holding the row
+    })
+    try {
+      const { trigger } = setup()
+      fireEvent.click(trigger)
+      const flyout = card()?.closest('.menu--flyout') as HTMLElement
+      expect(flyout.style.top).toBe(`${window.innerHeight - 300 - 8}px`)
+      expect(flyout.style.maxHeight).toBe(`${window.innerHeight - 16}px`)
+    } finally {
+      spy.mockRestore()
+    }
+  })
+
   it('opens immediately on click, without the delay', () => {
     const { trigger } = setup()
     fireEvent.click(trigger)

@@ -336,6 +336,18 @@ describe('ControlBar', () => {
     expect(screen.getByLabelText('New branch name')).toHaveAttribute('aria-invalid', 'true')
   })
 
+  it('says what is wrong with the branch name in words, tied to the field', () => {
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} branchName="main" />)
+    const note = screen.getByText('New worktree: Branch “main” already exists.')
+    expect(screen.getByLabelText('New branch name')).toHaveAttribute('aria-describedby', note.id)
+  })
+
+  it('shows no branch note for a valid name', () => {
+    render(<ControlBar {...baseProps()} newChat={true} repoInfo={repo} branchName="feature/x" />)
+    expect(screen.queryByText(/^New worktree:/)).toBeNull()
+    expect(screen.getByLabelText('New branch name')).not.toHaveAttribute('aria-describedby')
+  })
+
   it('shows a read-only branch badge for an existing worktree chat', () => {
     render(
       <ControlBar

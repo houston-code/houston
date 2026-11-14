@@ -3,6 +3,7 @@ import type { McpServerConfig } from '@shared/types'
 import { sanitizeServerId } from '@shared/mcp'
 import { applyDraftInputs, draftInputKey, freeServerId, serverProblem, type McpDraft, type McpDraftInput } from '@shared/mcpCatalog'
 import { HeadersField } from '../fields'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
 
 /** One field per variable or header a registry entry asks for. */
 function InputField({
@@ -59,11 +60,16 @@ export function ReviewForm({
   const [switchOn, setSwitchOn] = useState(false)
   const [tried, setTried] = useState(false)
   const firstRef = useRef<HTMLInputElement>(null)
+  // Escape cancels the review rather than closing Settings.
+  const formRef = useRef<HTMLFormElement>(null)
+  useEscapeWithin(formRef, onCancel)
   useEffect(() => firstRef.current?.focus(), [])
 
   const remote = server.transport === 'http' || server.transport === 'sse'
   const candidate: McpServerConfig = applyDraftInputs(
-    { ...server, args: remote ? [] : argsText.split('\n').map((a) => a.trim()).filter(Boolean) },
+    // The id is tidied when its field loses focus (tidying every keystroke would eat the
+    // `-` of `my-server`); Add reads the tidied form either way.
+    { ...server, id: sanitizeServerId(server.id), args: remote ? [] : argsText.split('\n').map((a) => a.trim()).filter(Boolean) },
     inputs,
     values
   )
@@ -72,6 +78,7 @@ export function ReviewForm({
 
   return (
     <form
+      ref={formRef}
       className="mcp-review"
       aria-label={`Review ${draft.name}`}
       onSubmit={(e) => {
@@ -87,7 +94,12 @@ export function ReviewForm({
       {draft.needs && <p className="field__hint">Needs {draft.needs} installed.</p>}
       <label className="mcp-review__field">
         <span>Id</span>
-        <input ref={firstRef} value={server.id} onChange={(e) => patch({ id: sanitizeServerId(e.target.value) })} />
+        <input
+          ref={firstRef}
+          value={server.id}
+          onChange={(e) => patch({ id: e.target.value })}
+          onBlur={() => patch({ id: sanitizeServerId(server.id) })}
+        />
       </label>
       {remote ? (
         <>

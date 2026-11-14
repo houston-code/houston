@@ -56,6 +56,7 @@ import type {
 import type { QueueAddRequest, QueuedInputMeta, SteerOutcome } from '@shared/queue'
 import type { Scorecard } from '@shared/scorecard'
 import type { UsageReport } from '@shared/usageReport'
+import type { RateLimitState } from '@shared/rateLimitState'
 import type { RewindMode, RewindPreviewResult, RewindResult, UndoRewindResult } from '@shared/rewind'
 import type { ShareResult, ShareTarget } from '@shared/share'
 import type { ChatStatusMap } from '@shared/chatStatus'
@@ -85,6 +86,16 @@ const api = {
     ipcRenderer.invoke(IPC.doctorFacts, workspace),
   /** Show the log file in the OS file manager (Help → Open Logs). */
   revealLogs: (): Promise<void> => ipcRenderer.invoke(IPC.logsReveal),
+  /**
+   * Record a renderer error in the main-process log (fire and forget). Main checks and
+   * caps every field and rate-limits per window.
+   */
+  reportRendererError: (err: {
+    kind: 'error' | 'unhandledrejection' | 'boundary'
+    message: string
+    stack?: string
+    componentStack?: string
+  }): void => ipcRenderer.send(IPC.rendererError, err),
   /** The text Report an Issue fills in, to show before opening it. */
   getIssueReport: (): Promise<string> => ipcRenderer.invoke(IPC.issueReportPreview),
   /** Open a new GitHub issue with that text filled in. */
@@ -320,6 +331,14 @@ const api = {
   getScorecard: (): Promise<Scorecard> => ipcRenderer.invoke(IPC.conversationScorecard),
   /** Spend and tokens per day and per project over every saved chat (local only). */
   getUsageReport: (): Promise<UsageReport> => ipcRenderer.invoke(IPC.conversationUsageReport),
+  /** The last rate-limit state each provider reported, for the status bar and Usage view. */
+  getRateLimits: (): Promise<RateLimitState[]> => ipcRenderer.invoke(IPC.rateLimitList),
+  /** Subscribe to rate-limit changes. Returns an unsubscribe fn. */
+  onRateLimitsChanged: (cb: (states: RateLimitState[]) => void): (() => void) => {
+    const listener = (_event: IpcRendererEvent, states: RateLimitState[]): void => cb(states)
+    ipcRenderer.on(IPC.rateLimitChanged, listener)
+    return () => ipcRenderer.removeListener(IPC.rateLimitChanged, listener)
+  },
   createConversation: (input: {
     workspace: string
     providerId: string

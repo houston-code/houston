@@ -8,6 +8,7 @@ import {
 } from '@shared/schedules'
 import { SettingsSection } from '../fields'
 import type { SettingsCtx } from '../context'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
 
 /** "Tue, Nov 17, 9:30 AM" in the user's locale. */
 export function formatRunTime(ms: number): string {
@@ -184,6 +185,9 @@ function CreateForm({
   const [busy, setBusy] = useState(false)
   const firstRef = useRef<HTMLTextAreaElement>(null)
   useEffect(() => firstRef.current?.focus(), [])
+  // Escape cancels the new run rather than closing Settings.
+  const formRef = useRef<HTMLFormElement>(null)
+  useEscapeWithin(formRef, onCancel)
 
   // What the typed schedule means, checked by main's parser as it is typed.
   useEffect(() => {
@@ -231,6 +235,7 @@ function CreateForm({
 
   return (
     <form
+      ref={formRef}
       className="sched-form"
       aria-label="New scheduled run"
       onSubmit={(e) => {

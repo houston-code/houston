@@ -1,7 +1,8 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { McpServerConfig } from '@shared/types'
 import { MCP_CATALOG, addPastedServers, catalogDraft } from '@shared/mcpCatalog'
 import { parseMcpServersJson } from '@shared/mcpJson'
+import { useEscapeWithin } from '../../../lib/useFocusTrap'
 import type { RegistrySearchResult } from '@shared/mcpRegistry'
 import { ReviewForm, addedMessage } from './mcpReview'
 import { RegistryPanel } from './mcpRegistry'
@@ -173,6 +174,12 @@ export function McpAddPanels({
   searchRegistry?: (query: string, cursor?: string) => Promise<RegistrySearchResult>
 }): JSX.Element {
   const [open, setOpen] = useState<AddPanel | null>(null)
+  // Escape closes an open panel (and any pasted text in it) before it closes Settings.
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEscapeWithin(rootRef, () => {
+    if (open === null) return false
+    setOpen(null)
+  })
   const [message, setMessage] = useState<string | null>(null)
   const add = (added: McpServerConfig[], msg: string): void => {
     onAdd(added)
@@ -184,7 +191,7 @@ export function McpAddPanels({
     setOpen((o) => (o === which ? null : which))
   }
   return (
-    <div className="mcp-add">
+    <div className="mcp-add" ref={rootRef}>
       <div className="mcp-review__actions">
         <button type="button" className="btn btn--sm" aria-expanded={open === 'catalog'} onClick={() => toggle('catalog')}>
           Recommended
