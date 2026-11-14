@@ -292,7 +292,13 @@ function isDirectRun(): boolean {
   return typeof require !== 'undefined' && require.main === module
 }
 
-if (isDirectRun()) {
+/**
+ * Start the CLI as a program: install the fatal handlers, run the invocation in
+ * `process.argv`, flush, and exit. The bundle calls this itself when run directly; the
+ * npm package's launcher (packaging/npm/houston.cjs) requires the bundle and calls it
+ * once Node's compile cache is on.
+ */
+export function startCli(): void {
   // Mirror the desktop headless path's fatal handling: log, one-line stderr, exit.
   process.on('uncaughtException', (err) => {
     logFatal('uncaughtException', err)
@@ -316,3 +322,5 @@ if (isDirectRun()) {
     exit(1)
   })
 }
+
+if (isDirectRun()) startCli()
