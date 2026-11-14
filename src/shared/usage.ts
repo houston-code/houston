@@ -147,6 +147,15 @@ export function resolvePricing(model: string, caps?: ModelCaps, at: Date = new D
 }
 
 /**
+ * The prompt size, in tokens, past which `model` bills at its long-context rate, or
+ * null when it has no such tier (or a host lists its own flat price). Compaction
+ * keeps the window under it, and `/context` shows when a request crossed it.
+ */
+export function longContextTierAbove(model: string, caps?: ModelCaps, at: Date = new Date()): number | null {
+  return resolvePricing(model, caps, at)?.longContext?.above ?? null
+}
+
+/**
  * Fallback prompt-cache price multipliers, relative to a model's base input rate:
  * a cached prefix that is *read* bills at 10% of the input price, and *writing* a
  * (5-minute) cache entry bills at 125%. These are Anthropic's published

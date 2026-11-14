@@ -5,10 +5,12 @@ import { peekConversation } from '../conversations'
 import { providerStreamError, withProviderRetry } from './retry'
 import { titleRequestOptions, type TitleRequestOptions } from './title'
 import { redactSecrets } from './redact'
+import { smallModelFor, withSmallModel } from '@shared/smallModel'
 
 /**
  * Suggested next prompt. When a turn ends, and only when the user has turned it on
- * (it costs a model call), the conversation's own model is asked, the way a chat title
+ * (it costs a model call), the provider's small model is asked (falling back to the
+ * conversation's own), the way a chat title
  * is (no tools, a tiny token cap, no history beyond the last exchange), for one short
  * message the user is likely to send next. The desktop app shows it as ghost text in
  * the empty message box; Tab accepts it. Best-effort throughout: any failure just
@@ -125,9 +127,19 @@ export async function maybeSuggestNext(opts: {
   const abort = new AbortController()
   const timer = setTimeout(() => abort.abort(), SUGGEST_TIMEOUT_MS)
   try {
-    const caps = providerConfig.models.find((m) => m.id === opts.model)?.caps
-    const request = titleRequestOptions(providerConfig.kind, opts.model, caps)
-    const text = await generateSuggestion(provider, opts.model, conv.messages, abort.signal, request)
+    const cfg = providerConfig
+    const text = await withSmallModel(
+      smallModelFor(cfg, opts.model),
+      opts.model,
+      (model) => {
+        const caps = cfg.models.find((m) => m.id === model)?.caps
+        const request = titleRequestOptions(cfg.kind, model, caps)
+        return generateSuggestion(provider, model, conv!.messages, abort.signal, request)
+      },
+      abort.signal,
+      // "Nothing to suggest" is an answer, not a failure: only an error tries again.
+      { retryEmpty: false }
+    )
     if (text) opts.onSuggestion(text)
   } catch {
     // no suggestion

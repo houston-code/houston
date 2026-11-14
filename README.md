@@ -408,10 +408,12 @@ Open source under the [Apache License 2.0](LICENSE).
   rewrite it with a JSON reply), and a *PostToolUse* hook's output is fed back to the
   agent, e.g. auto-format after every edit, or run tests after a write.
   *UserPromptSubmit*, *SessionStart*, *Stop* (keep the agent going until a check
-  passes), and *PreCompact* hooks cover the rest of the turn; see the
-  [guide](docs/houston-guide.md#hooks). Hooks run sandboxed to the project; the call's context
-  is in `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT` (or, for an input over 16 KB,
-  a temp file named by `$HOUSTON_TOOL_INPUT_FILE`).
+  passes), and *PreCompact* hooks cover the rest of the turn, and observe-only
+  *Notification* (the agent is waiting for you) and *SessionEnd* hooks let you react to
+  them; see the [guide](docs/houston-guide.md#hooks). Hooks run sandboxed to the project
+  with 60 seconds each unless a hook sets its own `timeout`. The call's context is in
+  `$HOUSTON_TOOL_NAME` / `$HOUSTON_TOOL_INPUT` (or, for an input over 16 KB, a temp file
+  named by `$HOUSTON_TOOL_INPUT_FILE`), and as one JSON object on stdin.
 - **Plugins.** Drop a JS file in `.houston/plugins/` to register *observational*
   lifecycle hooks, `houston.on('onToolStart' | 'onToolResult' | 'onUserMessage',
   fn)`, for logging, metrics, or notifications. Plugins are executable code, so they
@@ -1205,7 +1207,13 @@ What maps to what:
 - **Sessions** are ordinary Houston conversations in the editor's folder: the editor
   can list and reopen them, and they also appear in the desktop app and in
   `houston -i --resume <id>`.
-- **Modes** are the approval policies: Plan, Ask, Auto-edit, and Full auto.
+- **Modes** are the approval policies: Plan, Ask, Auto-edit, and Full auto. The
+  mode you pick is saved on the chat and restored when it is reopened.
+- **Config options**: the model and the reasoning effort, saved on the chat.
+- **Slash commands**: `/review`, `/init`, `/compact`, `/agent`, the mode commands,
+  `/model`, `/reasoning`, `/skills`, `/agents`, `/help`, and the workspace's own
+  `.houston/commands`.
+- **Session info**: the chat's title, once it has one.
 - **Approvals** use the editor's permission prompt (Allow, Always allow, Deny, Always
   deny). "Always allow" saves a permission rule, exactly as in the app. A plan from
   Plan mode is accepted or sent back the same way.

@@ -35,6 +35,8 @@ import {
   MAX_PENDING_STEERS,
   isReasoningEffort,
   MAX_RUN_END_RECORDS,
+  BLOCKING_EVENT_TYPES,
+  type BlockingEvent,
   type RunEndRecord,
   type RunLimitReason
 } from '@shared/agent'
@@ -55,7 +57,7 @@ import type { ImageAttachment } from '@shared/images'
 import { autoExtendTurnsEnabled, resolveShellOutputBudget } from '@shared/defaults'
 import { installSuggestion, missingRuntime, shellExitCode } from '@shared/runtimes'
 import { hostPlatform, installHost } from './installHost'
-import { resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
+import { longContextTierAbove, resolveCapabilities, resolveContextWindow, turnCostUsd } from '@shared/usage'
 import { providerSendsXhigh } from '@shared/model-facts'
 import {
   addPermissionRule,
@@ -69,6 +71,7 @@ import {
 import { createSecretRedactor } from './redact'
 import { log } from '../logger'
 import { runQuarantineExtraction } from './untrusted'
+import { smallModelFor, withSmallModel } from '@shared/smallModel'
 import { createProvider } from '../providers'
 import { needsExplicitCacheControl } from '../providers/caching'
 import { buildSystemPrompt, promptId } from './prompt'
@@ -198,7 +201,7 @@ import { afterWrite, captureBeforeWrite, type WriteSeamTarget } from './lsp/writ
 import { activeBackendId, isSandboxed, type EgressProxyEndpoints } from '../sandbox'
 import { egressEndpointsForRun, registerEgressRun } from './egress'
 import { formatFile } from './format'
-import { MAX_SUBAGENT_DEPTH, runSubAgent } from './subagent'
+import { MAX_SUBAGENT_DEPTH, delegatedEvidenceSummary, runSubAgent, type DelegatedCommand } from './subagent'
 import { SubagentRecorder, type SubagentHandle } from './subagentRecorder'
 import {
   limitSubagentHistory,
@@ -233,7 +236,7 @@ import {
   scheduleCreate,
   scheduleList
 } from './scheduler'
-import { matchingHooks, runHooks, type HookOutcome } from './hooks'
+import { matchingHooks, notificationFor, runHooks, type HookOutcome, type HookSession } from './hooks'
 import { loadAgents, type CustomAgent } from './agents'
 import { loadSkills, resolveSkillInstructions, withBuiltinSkills } from './skills'
 import { loadPluginsIfEnabled } from './plugins'
@@ -249,6 +252,7 @@ import { GitGuard } from './gitGuard'
 import { ghRepoKey, githubContext, resolveGh, runGh } from './github'
 import {
   COMPACTION_TAIL_FRACTION,
+  EARLY_EVICTION_MIN_GAIN_FRACTION,
   EVICTION_TARGET_FRACTION,
   KEEP_RECENT_USER_TURNS,
   SUMMARY_TRUNCATED_MESSAGE,
@@ -260,6 +264,7 @@ import {
   estimateTokens,
   estimateToolTokens,
   evictStaleToolResults,
+  evictableTokens,
   evictionBoundary,
   findCompactionCut,
   findForcedCompactionCut,
@@ -267,10 +272,13 @@ import {
   isContextOverflowError,
   isValidCompactionState,
   resolveCompactionThreshold,
+  resolveEvictionTrigger,
   summarizationSystemPrompt,
+  summaryFits,
   summaryMaxTokens
 } from './compaction'
 import {
+  conversationFilePath,
   peekConversation,
   setAnnouncedPolicy,
   setCompaction,
@@ -406,7 +414,8 @@ async function summarize(
   maxTokens: number,
   signal: AbortSignal,
   onRetry?: (attempt: number, err: unknown, max: number | undefined) => void,
-  reachable?: () => boolean
+  reachable?: () => boolean,
+  onUsage?: (usage: TokenUsage) => void
 ): Promise<string> {
   return withProviderRetry(
     async () => {
@@ -420,7 +429,11 @@ async function summarize(
         signal
       })) {
         if (ev.type === 'text') text += ev.text
-        else if (ev.type === 'done') truncated = ev.stopReason === 'max_tokens'
+        else if (ev.type === 'done') {
+          truncated = ev.stopReason === 'max_tokens'
+          // Billed whether or not the summary is kept, so counted either way.
+          if (ev.usage) onUsage?.(ev.usage)
+        }
         else if (ev.type === 'error') throw providerStreamError(ev)
       }
       if (truncated) throw new Error(SUMMARY_TRUNCATED_MESSAGE)
@@ -1258,6 +1271,18 @@ export function withRunEndRecord(
  * Run the agent loop, streaming events via `send`. Never throws — errors become events.
  * `onMessages` is called whenever the message log grows, so the caller can persist it.
  */
+/**
+ * The saved transcript file a hook is pointed at. Best effort: where the profile folder
+ * isn't set up (or the conversation store isn't the real one), the hook just gets no path.
+ */
+function transcriptPathOf(conversationId: string): { transcriptPath?: string } {
+  try {
+    return { transcriptPath: conversationFilePath(conversationId) }
+  } catch {
+    return {}
+  }
+}
+
 export async function startRun(
   req: AgentRunRequest,
   send: (e: AgentEvent) => void,
@@ -1373,6 +1398,10 @@ export async function startRun(
   let serving = { providerId: req.providerId, model: req.model }
   // The run's promptId, once its prompt is built: stamped on each reply and logged.
   let runPromptId: string | undefined
+  // Set once the run's hooks are known: runs Notification hooks for a wait (see emit),
+  // and SessionEnd hooks as the run finishes.
+  let notifyHooks: ((e: BlockingEvent) => void) | undefined
+  let endHooks: ((reason: string) => Promise<void>) | undefined
   type DistributiveOmitRunId<T> = T extends unknown ? Omit<T, 'runId'> : never
   const emit = (e: DistributiveOmitRunId<AgentEvent>): void => {
     if ((e.type === 'done' || e.type === 'error') && beforeEnd) {
@@ -1406,6 +1435,11 @@ export async function startRun(
     }
     run.transcript.push(full)
     send(full)
+    // The run is about to wait for the user: tell any Notification hooks. They only
+    // observe, so they run alongside the wait instead of holding it up.
+    if (notifyHooks && (BLOCKING_EVENT_TYPES as readonly string[]).includes(full.type)) {
+      notifyHooks(full as BlockingEvent)
+    }
   }
 
   // Persist the message log AND reset the live-transcript buffer: everything up to
@@ -1615,6 +1649,35 @@ export async function startRun(
     const hooks = projectTrusted
       ? [...(settings.hooks ?? []), ...projectConfig.elevated.hooks]
       : (settings.hooks ?? [])
+    // Who the hooks fire for, passed on their stdin as session_id and transcript_path.
+    const hookSession: HookSession = conversationId
+      ? { id: conversationId, ...transcriptPathOf(conversationId) }
+      : { id: runId }
+    if (hooks.some((h) => h.event === 'Notification')) {
+      notifyHooks = (e) => {
+        const notification = notificationFor(e)
+        void runHooks(
+          hooks,
+          'Notification',
+          { tool: e.type, input: notification.toolInput ?? {}, notification, session: hookSession },
+          workspace,
+          abort.signal
+        ).catch((err) => log.warn(`run ${runId}: Notification hook failed: ${err instanceof Error ? err.message : String(err)}`))
+      }
+    }
+    if (hooks.some((h) => h.event === 'SessionEnd')) {
+      // Its own signal: a run the user stopped still ends, and its hook still runs
+      // (bounded by the hook's timeout).
+      endHooks = async (reason) => {
+        await runHooks(
+          hooks,
+          'SessionEnd',
+          { tool: 'SessionEnd', input: {}, reason, session: hookSession },
+          workspace,
+          new AbortController().signal
+        )
+      }
+    }
     // The system prompt is built once and can't change mid-run, so plan-mode
     // *guidance* is a snapshot of the starting policy. The runtime plan-mode
     // *block* below reads `run.policy`, so toggling plan on/off mid-run still
@@ -1985,6 +2048,14 @@ export async function startRun(
         ...(u.cacheWriteTokens ? { cacheWriteTokens: u.cacheWriteTokens } : {})
       })
     }
+
+    // The model side requests (compaction summaries, the isolated reader) try first:
+    // the provider's small model, only while the run is on its primary provider (a
+    // fallback hop moves to another host, whose small model the user never set up).
+    const sideSmallModel = (): string | null =>
+      route.providerId === req.providerId ? smallModelFor(providerConfig, route.model) : null
+    const sideModelCaps = (model: string): ModelCaps | undefined =>
+      model === route.model ? route.caps : getProvider(route.providerId)?.models.find((m) => m.id === model)?.caps
 
     // Surface a hook's `systemMessage` directive as a user-facing transcript notice.
     // Emit-only by design: it never lands in `messages`, so the model never sees it
@@ -2586,6 +2657,9 @@ export async function startRun(
       // This agent's record, started once runSubAgent has assembled its system prompt.
       let handle: SubagentHandle | undefined
       let ending: { status: SubagentStatus; outcome: SubagentOutcome; budget: SubagentBudget } | undefined
+      // What a writable agent's tools ran and changed, for the evidence note on its result.
+      const ranCommands: DelegatedCommand[] = []
+      const changedFiles: string[] = []
       const result = await runSubAgent({
         // Pinned to the run's configured provider, not the fallback route: a
         // dispatch's `model` override is validated against `req.providerId`'s
@@ -2620,8 +2694,21 @@ export async function startRun(
               gateUnconfinedShell,
               // Delegated commands and edits belong on this turn's receipt, credited
               // to the agent that ran them.
-              recordEvidence: (e: EvidenceDraft) => recordEvidence(e, credit),
-              recordFiles: (paths: string[]) => run.evidence.recordFiles(workspace, paths, credit)
+              recordEvidence: (e: EvidenceDraft) => {
+                recordEvidence(e, credit)
+                if (e.kind === 'shell') {
+                  ranCommands.push({
+                    command: redact(e.command),
+                    exitCode: e.exitCode,
+                    timedOut: e.timedOut,
+                    background: e.background
+                  })
+                }
+              },
+              recordFiles: (paths: string[]) => {
+                run.evidence.recordFiles(workspace, paths, credit)
+                changedFiles.push(...paths.map((p) => redact(p)))
+              }
             }
           : {}),
         // Permission rules + the sensitive-read prompt on every local call, either tier.
@@ -2768,14 +2855,20 @@ export async function startRun(
         ...(storedId ? { resumeId: storedId } : {})
       })
 
+      // A writable agent's report is its own account; follow it with what its tools
+      // actually ran and changed, so a claim like "tests pass" can be checked against
+      // the commands behind it. An aborted dispatch reports nothing further.
+      const evidenced =
+        writable && !abort.signal.aborted ? `${result}\n\n${delegatedEvidenceSummary(ranCommands, changedFiles)}` : result
+
       // Tell the model how to follow up. Only when a transcript was stored — an
       // aborted run, or one that failed before its first step, isn't resumable, and
       // nested dispatches never are.
       if (storedId) {
         const tool = writable ? 'dispatch_writable_agent' : 'dispatch_agent'
-        return `${result}\n\n${resumeNote(storedId, tool)}`
+        return `${evidenced}\n\n${resumeNote(storedId, tool)}`
       }
-      return result
+      return evidenced
     }
 
     // Full auto runs shell commands offline until the user allows network for the chat.
@@ -2912,17 +3005,25 @@ export async function startRun(
       // history — so the page has nothing to act through and nothing to override.
       // Follows the fallback route (provider and model move together here, like the
       // summarizer): extracting through a model we've just seen fail would be futile.
+      // On the primary route the provider's small model reads it, with the run's own
+      // model as the fallback when that fails; the isolation is the same either way.
       quarantineExtract: ({ content, source, query }) =>
-        runQuarantineExtraction({
-          provider: route.provider,
-          model: route.model,
-          content,
-          source,
-          query,
-          signal: abort.signal,
-          // The reader runs a request on the run's model; count it in the run's cost.
-          onUsage: (u) => recordSideRequestUsage(u, route.model, route.caps)
-        }),
+        withSmallModel(
+          sideSmallModel(),
+          route.model,
+          (model) =>
+            runQuarantineExtraction({
+              provider: route.provider,
+              model,
+              content,
+              source,
+              query,
+              signal: abort.signal,
+              // The reader runs a side request; count it in the run's cost, on its model.
+              onUsage: (u) => recordSideRequestUsage(u, model, sideModelCaps(model))
+            }),
+          abort.signal
+        ),
       askUser: (q) => askRunUser(callId, q),
       // Route an MCP server's mid-call elicitation to this run's user and block
       // until they answer. Keyed by a fresh elicitId (one call can elicit
@@ -3209,10 +3310,17 @@ export async function startRun(
     // messages before `cut`) followed by `messages.slice(cut)` (see buildWindow
     // below for the rest of the assembly). The threshold scales
     // to the model's context window (host-listed caps first, then the family
-    // heuristic); an explicit setting overrides it, and the fixed default covers
-    // models whose window is unknown.
+    // heuristic), capped under the model's long-context price tier when it has one;
+    // an explicit setting overrides it, and the fixed default covers models whose
+    // window is unknown. Stale tool results start going out as stubs at a lower,
+    // separate trigger (see resolveEvictionTrigger).
     const contextWindow = resolveContextWindow(req.model, selectedModelCaps)
-    const threshold = resolveCompactionThreshold(settings.compactionThreshold, contextWindow)
+    const threshold = resolveCompactionThreshold(
+      settings.compactionThreshold,
+      contextWindow,
+      longContextTierAbove(req.model, selectedModelCaps)
+    )
+    const evictionTrigger = resolveEvictionTrigger(settings.compactionThreshold, threshold)
     let cut = 0
     let summary = ''
     let summaryMsgs: ChatMessage[] = []
@@ -3486,10 +3594,13 @@ export async function startRun(
     // iteration age, whichever reaches further), when that would stub something new.
     // The cheap step under context pressure: no model call, and nothing is lost that
     // recall_history or a re-run can't bring back. Returns whether the window changed.
-    const advanceEviction = (): boolean => {
+    // `minGain` (estimated tokens) refuses an advance that would free less than that.
+    const advanceEviction = (minGain = 0): boolean => {
       const boundary = evictionBoundary(messages)
       if (boundary <= evictBefore) return false
-      if (!hasEvictableToolResults(messages, Math.max(cut, evictBefore), boundary)) return false
+      const from = Math.max(cut, evictBefore)
+      if (!hasEvictableToolResults(messages, from, boundary)) return false
+      if (minGain > 0 && evictableTokens(messages, from, boundary) < minGain) return false
       evictBefore = boundary
       lastInputTokens = 0
       workspaceState = captureWorkspaceState()
@@ -3513,7 +3624,7 @@ export async function startRun(
       const preCompact = await runHooks(
         hooks,
         'PreCompact',
-        { tool: 'PreCompact', input: {} },
+        { tool: 'PreCompact', input: {}, session: hookSession },
         workspace,
         abort.signal
       )
@@ -3526,25 +3637,37 @@ export async function startRun(
         // Follows the fallback route: provider and model move together here, so
         // summarizing through a model we've just seen fail would be pointless. The
         // prior summary goes in with the request it was anchored to, if any: together
-        // they are what stands in for messages[0..cut) today.
-        const text = await summarize(
-          route.provider,
-          route.model,
-          buildSummaryRequestMessages([...summaryMsgs, ...anchorMsgs()], material),
-          summaryMaxTokens(resolveContextWindow(route.model, route.caps)),
-          abort.signal,
-          // Report a retry in here the same way the turn loop does. Compaction can be
-          // forced mid-turn, so without this a summary riding out a blip is just a run
-          // sitting silent for the length of the backoff.
-          (attempt, err, max) =>
-            emit({
-              type: 'retry',
-              attempt,
-              ...(max !== undefined ? { max } : {}),
-              message: redact(describeProviderError(err))
-            }),
-          () => providerReached
-        )
+        // they are what stands in for messages[0..cut) today. On the primary route the
+        // provider's small model writes it when the request fits its window, and the
+        // run's own model takes over if that fails.
+        const request = buildSummaryRequestMessages([...summaryMsgs, ...anchorMsgs()], material)
+        const summarizeOn = (model: string): Promise<string> => {
+          const caps = sideModelCaps(model)
+          return summarize(
+            route.provider,
+            model,
+            request,
+            summaryMaxTokens(resolveContextWindow(model, caps)),
+            abort.signal,
+            // Report a retry in here the same way the turn loop does. Compaction can be
+            // forced mid-turn, so without this a summary riding out a blip is just a run
+            // sitting silent for the length of the backoff.
+            (attempt, err, max) =>
+              emit({
+                type: 'retry',
+                attempt,
+                ...(max !== undefined ? { max } : {}),
+                message: redact(describeProviderError(err))
+              }),
+            () => providerReached,
+            (u) => recordSideRequestUsage(u, model, caps)
+          )
+        }
+        const small = sideSmallModel()
+        const smallFits =
+          small !== null &&
+          summaryFits(estimateTokens(summarizationSystemPrompt, request), resolveContextWindow(small, sideModelCaps(small)))
+        const text = await withSmallModel(smallFits ? small : null, route.model, summarizeOn, abort.signal)
         if (!text) return 'failed'
         // Messages folded into the summary *this round* (a count, which is what the
         // renderer shows) — not the absolute tail-start index.
@@ -3629,7 +3752,7 @@ export async function startRun(
     const sessionStart = await runHooks(
       hooks,
       'SessionStart',
-      { tool: 'SessionStart', input: {} },
+      { tool: 'SessionStart', input: {}, session: hookSession },
       workspace,
       abort.signal
     )
@@ -3645,7 +3768,7 @@ export async function startRun(
     const promptSubmit = await runHooks(
       hooks,
       'UserPromptSubmit',
-      { tool: 'UserPromptSubmit', input: {}, prompt: promptText },
+      { tool: 'UserPromptSubmit', input: {}, prompt: promptText, session: hookSession },
       workspace,
       abort.signal
     )
@@ -3807,13 +3930,19 @@ export async function startRun(
       // stubbing stale tool results (cheap, no model call), then, unless that alone
       // bought real headroom, by summarizing, which can now cut inside this turn.
       // Both rewrite the window and both are sticky, so neither runs below the
-      // threshold: under it the window stays append-only and the provider cache keeps
-      // the whole conversation. The visible transcript (persisted `messages`) is
-      // untouched — only the window sent to the provider shrinks.
+      // eviction trigger: under it the window stays append-only and the provider cache
+      // keeps the whole conversation. Between the trigger and the threshold only the
+      // cheap step runs, and only when it frees a real share of the trigger, so it
+      // never re-misses the cache every iteration for a sliver of room. The visible
+      // transcript (persisted `messages`) is untouched — only the window sent to the
+      // provider shrinks.
       if (threshold > 0) {
         const windowSize = (): number =>
           Math.max(estimateTokens(system, buildWindow()) + toolTokens, lastInputTokens)
-        if (windowSize() > threshold) {
+        const size = windowSize()
+        if (size <= threshold && size > evictionTrigger) {
+          advanceEviction(Math.floor(evictionTrigger * EARLY_EVICTION_MIN_GAIN_FRACTION))
+        } else if (size > threshold) {
           // What the threshold leaves the messages once the system prompt and tool
           // schemas (resent with every request) are paid for. Both targets below are
           // shares of it, so a large prompt can't leave them unreachable.
@@ -4239,7 +4368,7 @@ export async function startRun(
           const stop = await runHooks(
             hooks,
             'Stop',
-            { tool: 'Stop', input: {} },
+            { tool: 'Stop', input: {}, session: hookSession },
             workspace,
             abort.signal
           )
@@ -4717,7 +4846,7 @@ export async function startRun(
           const ownPre = await runHooks(
             ownHooks,
             'PreToolUse',
-            { tool: modelCall.name, input: modelCall.arguments },
+            { tool: modelCall.name, input: modelCall.arguments, session: hookSession },
             workspace,
             abort.signal
           )
@@ -4775,7 +4904,7 @@ export async function startRun(
           const pre = await runHooks(
             hooks,
             'PreToolUse',
-            { tool: call.name, input: call.arguments },
+            { tool: call.name, input: call.arguments, session: hookSession },
             workspace,
             abort.signal
           )
@@ -5116,7 +5245,7 @@ export async function startRun(
               const post = await runHooks(
                 hooks,
                 'PostToolUse',
-                { tool: call.name, input: execArgs, result: output },
+                { tool: call.name, input: execArgs, result: output, session: hookSession },
                 workspace,
                 abort.signal
               )
@@ -5220,7 +5349,7 @@ export async function startRun(
           const ownPost = await runHooks(
             ownHooks,
             'PostToolUse',
-            { tool: modelCall.name, input: modelCall.arguments, result: output },
+            { tool: modelCall.name, input: modelCall.arguments, result: output, session: hookSession },
             workspace,
             abort.signal
           )
@@ -5319,6 +5448,16 @@ export async function startRun(
         runsByConversation.delete(conversationId)
         notifyActiveRunsChanged()
         noteRunEnded(conversationId, !ended ? 'natural' : ended.cls === 'aborted' ? 'aborted' : 'error')
+      }
+    }
+    // SessionEnd, once the run's slots are free: a slow hook never keeps the chat
+    // "running". Awaited, so a one-shot client doesn't exit before it finishes.
+    if (endHooks) {
+      const reason = ended ? (ended.cls === 'aborted' ? 'aborted' : 'error') : limited ? 'limit' : 'completed'
+      try {
+        await endHooks(reason)
+      } catch (err) {
+        log.warn(`run ${runId}: SessionEnd hook failed: ${err instanceof Error ? err.message : String(err)}`)
       }
     }
   }

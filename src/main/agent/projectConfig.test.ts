@@ -102,6 +102,22 @@ describe('parseProjectHooks', () => {
     ])
     expect(parseProjectHooks({})).toEqual([])
   })
+
+  it('reads Notification and SessionEnd hooks, and a positive timeout', () => {
+    expect(
+      parseProjectHooks({
+        hooks: [
+          { event: 'Notification', matcher: 'tool_approval', command: 'notify', timeout: 5 },
+          { event: 'SessionEnd', command: 'bye', timeout: -1 },
+          { event: 'SessionEnd', command: 'bye2', timeout: '30' }
+        ]
+      })
+    ).toEqual([
+      { event: 'Notification', matcher: 'tool_approval', command: 'notify', timeout: 5 },
+      { event: 'SessionEnd', matcher: '*', command: 'bye' },
+      { event: 'SessionEnd', matcher: '*', command: 'bye2' }
+    ])
+  })
 })
 
 describe('parseProjectMcpServers', () => {

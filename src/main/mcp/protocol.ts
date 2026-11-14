@@ -74,6 +74,12 @@ const LIST_CHANGED: Record<string, McpListKind> = {
   'notifications/prompts/list_changed': 'prompts'
 }
 
+/** Whether an `elicitation/create` asks for a form: `mode` absent (before 2025-11-25) or `"form"`. */
+function isFormElicitation(params: unknown): boolean {
+  const mode = params && typeof params === 'object' ? (params as { mode?: unknown }).mode : undefined
+  return mode === undefined || mode === 'form'
+}
+
 /**
  * Handle a server-initiated message (request or notification). Responses are the
  * caller's business (they resolve its pending table); everything else lands here.
@@ -83,6 +89,16 @@ export function handleServerMessage(msg: JsonRpcIncoming, hooks: ServerMessageHo
   if (kind === 'request') {
     if (msg.method === 'ping') {
       hooks.send({ jsonrpc: '2.0', id: msg.id, result: {} })
+    } else if (msg.method === 'elicitation/create' && hooks.onElicit && !isFormElicitation(msg.params)) {
+      // 2025-11-25 added URL mode (send the user to a web page). Houston declares only
+      // form mode (an empty `elicitation` capability means form), so a server must not
+      // ask for it; one that does is refused rather than shown as an empty form the user
+      // could "accept".
+      hooks.send({
+        jsonrpc: '2.0',
+        id: msg.id,
+        error: { code: -32602, message: 'This client supports only form elicitation' }
+      })
     } else if (msg.method === 'elicitation/create' && hooks.onElicit) {
       // The user decides at their own pace; the responder always resolves (a
       // failure maps to 'cancel'), so the server always gets its reply.

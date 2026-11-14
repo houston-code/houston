@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { AppSettings, ApprovalPolicy } from '@shared/types'
 import { limitNoticeText } from '@shared/runEnd'
+import { REVIEW_TEMPLATE } from '@shared/commands'
 import {
   BLOCKING_EVENT_TYPES,
   type AgentEvent,
@@ -13,6 +14,7 @@ import {
   type BlockingEvent,
   type BlockingEventType,
   type ChatMessage,
+  type ConversationSettingsPatch,
   type ElicitationResult,
   type PlanDecision,
   type ToolApprovalDecision
@@ -20,8 +22,11 @@ import {
 import {
   ACP_DECLINED_ANSWER,
   ACP_ERROR,
+  ACP_COMMAND_NAMES,
   ACP_RESIDENT_SESSIONS,
   ACP_NO_QUESTION_ANSWER,
+  acpAvailableCommands,
+  acpCommands,
   acpMcpServersToConfigs,
   acpToolKind,
   elicitationSchema,
@@ -104,6 +109,8 @@ interface Harness {
   saved: Map<string, ChatMessage[]>
   /** Every store.setModel call, as [id, providerId, model]. */
   modelWrites: Array<[string, string, string]>
+  /** Every store.setSettings call, as [id, patch]. */
+  settingsWrites: Array<[string, ConversationSettingsPatch]>
   /** Send a request and await its response frame. */
   call: (method: string, params?: unknown) => Promise<any>
   notify: (method: string, params?: unknown) => void
@@ -137,6 +144,7 @@ function harness(opts: {
   const stored = new Map((opts.stored ?? []).map((s) => [s.id, s]))
   const saved = new Map<string, ChatMessage[]>()
   const modelWrites: Array<[string, string, string]> = []
+  const settingsWrites: Array<[string, ConversationSettingsPatch]> = []
   let ids = 0
   let convIds = 0
   const cwd = mkdtempSync(join(tmpdir(), 'houston-acp-'))
@@ -166,7 +174,9 @@ function harness(opts: {
       get: (id) => stored.get(id) ?? null,
       list: () => [...stored.values()],
       setMessages: (id, m) => void saved.set(id, m),
-      setModel: (id, providerId, model) => void modelWrites.push([id, providerId, model])
+      setModel: (id, providerId, model) => void modelWrites.push([id, providerId, model]),
+      setSettings: (id, patch) => void settingsWrites.push([id, patch]),
+      title: (id) => stored.get(id)?.title
     },
     write: (line) => {
       if (opts.writeFails?.(line)) throw Object.assign(new Error('write EPIPE'), { code: 'EPIPE' })
@@ -201,6 +211,7 @@ function harness(opts: {
     stored,
     saved,
     modelWrites,
+    settingsWrites,
     cwd,
     call: (method, params) => {
       const id = ++ids
@@ -335,7 +346,11 @@ describe('ACP server: protocol flow', () => {
     expect(perm.params.options.map((o: any) => o.kind)).toEqual(['allow_once', 'allow_always', 'reject_once', 'reject_always'])
     expect(h.loop.approvals).toEqual([['run-1', 'c1', 'rule-allow']])
 
-    const ups = h.updates(sessionId)
+    // The session's command list is announced on its own schedule, apart from the turn.
+    await vi.waitFor(() =>
+      expect(h.updates(sessionId).some((u) => u.sessionUpdate === 'available_commands_update')).toBe(true)
+    )
+    const ups = h.updates(sessionId).filter((u) => u.sessionUpdate !== 'available_commands_update')
     const kinds = ups.map((u) => u.sessionUpdate)
     expect(kinds).toEqual([
       'agent_thought_chunk',
@@ -360,7 +375,8 @@ describe('ACP server: protocol flow', () => {
     const before = h.updates(sessionId).length
     const loaded = await h.call('session/load', { sessionId, cwd: h.cwd, mcpServers: [] })
     expect(loaded.result.modes.currentModeId).toBe('ask')
-    expect(h.updates(sessionId).slice(before)).toEqual([
+    const replayed = h.updates(sessionId).slice(before).filter((u) => u.sessionUpdate !== 'available_commands_update')
+    expect(replayed).toEqual([
       { sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'fix a.txt' } },
       { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Editing done' } }
     ])
@@ -692,6 +708,254 @@ describe('ACP server: protocol flow', () => {
     expect(res.result.sessions.map((s: any) => s.sessionId)).toEqual(['new', 'old'])
     expect(res.result.sessions[0]).toEqual({ sessionId: 'new', cwd: '/w', title: 'New', updatedAt: new Date(2).toISOString() })
     await h.end()
+  })
+})
+
+describe('ACP server: slash commands, config options and session info', () => {
+  const done: RunBody = async (req, send) => send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+  const multi = {
+    ...settings,
+    providers: [
+      {
+        id: 'anthropic',
+        kind: 'anthropic',
+        label: 'Anthropic',
+        requiresKey: true,
+        hasKey: true,
+        models: [{ id: 'claude-sonnet-4-5' }, { id: 'claude-opus-4-1' }]
+      },
+      // Not set up: no key, so nothing of it is offered.
+      { id: 'openai', kind: 'openai', requiresKey: true, hasKey: false, models: [{ id: 'gpt-5' }] }
+    ]
+  } as unknown as AppSettings
+  const commandsOf = async (h: Harness, sessionId: string): Promise<any[]> => {
+    await vi.waitFor(() =>
+      expect(h.updates(sessionId).some((u) => u.sessionUpdate === 'available_commands_update')).toBe(true)
+    )
+    return h.updates(sessionId).find((u) => u.sessionUpdate === 'available_commands_update').availableCommands
+  }
+  const replies = (h: Harness, sessionId: string): string[] =>
+    h.updates(sessionId).filter((u) => u.sessionUpdate === 'agent_message_chunk').map((u) => u.content.text)
+
+  it('announces the editor-friendly built-ins plus the workspace commands after session/new', async () => {
+    const h = harness({
+      run: done,
+      deps: { commands: async () => [{ name: 'deploy', description: 'Ship it', template: 'Deploy $ARGUMENTS' }] }
+    })
+    const sessionId = await ready(h)
+    const names = (await commandsOf(h, sessionId)).map((c) => c.name)
+    expect(names).toEqual(expect.arrayContaining(['review', 'init', 'compact', 'model', 'reasoning', 'plan', 'full', 'agent', 'deploy']))
+    // Terminal-only commands, and ones an editor does itself, are not offered.
+    for (const n of ['vim', 'theme', 'resume', 'exit', 'new']) expect(names).not.toContain(n)
+    const model = (await commandsOf(h, sessionId)).find((c) => c.name === 'model')
+    expect(model).toEqual({ name: 'model', description: expect.any(String), input: { hint: '[name]' } })
+    await h.end()
+  })
+
+  it('runs /review and a workspace command as invoked turns, labelled with what was typed', async () => {
+    const h = harness({
+      run: done,
+      deps: { commands: async () => [{ name: 'deploy', description: 'Ship it', template: 'Deploy $ARGUMENTS now' }] }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('/review') })
+    expect(h.loop.requests[0].messages.at(-1)).toEqual({
+      role: 'user',
+      content: REVIEW_TEMPLATE,
+      invokedAs: expect.objectContaining({ kind: 'command', label: '/review', typed: '/review' })
+    })
+    await h.call('session/prompt', { sessionId, prompt: text('/deploy staging') })
+    expect(h.loop.requests[1].messages.at(-1)).toEqual(
+      expect.objectContaining({ content: 'Deploy staging now', invokedAs: expect.objectContaining({ label: '/deploy', typed: '/deploy staging' }) })
+    )
+    await h.call('session/prompt', { sessionId, prompt: text('/agent reviewer check the parser') })
+    expect(h.loop.requests[2].messages.at(-1)).toEqual(
+      expect.objectContaining({ invokedAs: expect.objectContaining({ label: '/agent reviewer', detail: 'check the parser' }) })
+    )
+    // A path is not a command, and an unknown name is the user's own words.
+    await h.call('session/prompt', { sessionId, prompt: text('/tmp/out.log is empty, why?') })
+    await h.call('session/prompt', { sessionId, prompt: text('/nosuchcommand please') })
+    expect(h.loop.requests[3].messages.at(-1)).toEqual({ role: 'user', content: '/tmp/out.log is empty, why?' })
+    expect(h.loop.requests[4].messages.at(-1)).toEqual({ role: 'user', content: '/nosuchcommand please' })
+    await h.end()
+  })
+
+  it('switches the approval mode from a command without running the model, and saves it on the chat', async () => {
+    const h = harness({ run: done })
+    const sessionId = await ready(h)
+    expect((await h.call('session/prompt', { sessionId, prompt: text('/full') })).result).toEqual({ stopReason: 'end_turn' })
+    expect(h.loop.requests).toHaveLength(0)
+    expect(h.updates(sessionId)).toEqual(
+      expect.arrayContaining([{ sessionUpdate: 'current_mode_update', currentModeId: 'full-auto' }])
+    )
+    expect(replies(h, sessionId).at(-1)).toMatch(/Full auto/)
+    await h.call('session/prompt', { sessionId, prompt: text('/approval plan') })
+    await h.call('session/prompt', { sessionId, prompt: text('/approval yolo') })
+    expect(replies(h, sessionId).at(-1)).toMatch(/Unknown approval mode: yolo/)
+    await h.call('session/prompt', { sessionId, prompt: text('look') })
+    expect(h.loop.requests[0].approvalPolicy).toBe('plan')
+    expect(h.settingsWrites).toEqual([
+      [sessionId, { approvalPolicy: 'full-auto' }],
+      [sessionId, { approvalPolicy: 'plan' }]
+    ])
+    await h.end()
+  })
+
+  it('offers the model and reasoning effort as config options, and sets and saves them', async () => {
+    const h = harness({ run: done, deps: { getSettings: () => multi } })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const created = (await h.call('session/new', { cwd: h.cwd, mcpServers: [] })).result
+    const sessionId = created.sessionId
+    const [model, effort] = created.configOptions
+    expect(model).toEqual(
+      expect.objectContaining({ id: 'model', category: 'model', type: 'select', currentValue: 'anthropic/claude-sonnet-4-5' })
+    )
+    expect(model.options.map((o: any) => o.value)).toEqual(['anthropic/claude-sonnet-4-5', 'anthropic/claude-opus-4-1'])
+    expect(effort).toEqual(expect.objectContaining({ id: 'reasoning_effort', category: 'thought_level', currentValue: 'high' }))
+    expect(effort.options.map((o: any) => o.value)).toEqual(['off', 'low', 'medium', 'high', 'xhigh'])
+
+    const set = await h.call('session/set_config_option', { sessionId, configId: 'model', value: 'anthropic/claude-opus-4-1' })
+    expect(set.result.configOptions[0].currentValue).toBe('anthropic/claude-opus-4-1')
+    const low = await h.call('session/set_config_option', { sessionId, configId: 'reasoning_effort', value: 'low' })
+    expect(low.result.configOptions[1].currentValue).toBe('low')
+    await h.call('session/prompt', { sessionId, prompt: text('go') })
+    expect(h.loop.requests[0]).toEqual(
+      expect.objectContaining({ providerId: 'anthropic', model: 'claude-opus-4-1', reasoningEffort: 'low' })
+    )
+    expect(h.settingsWrites).toEqual([
+      [sessionId, { providerId: 'anthropic', model: 'claude-opus-4-1' }],
+      [sessionId, { reasoningEffort: 'low' }]
+    ])
+    // A model that is not set up, an unknown effort or option: refused, nothing changes.
+    for (const [configId, value] of [
+      ['model', 'openai/gpt-5'],
+      ['reasoning_effort', 'max'],
+      ['temperature', '1']
+    ]) {
+      const bad = await h.call('session/set_config_option', { sessionId, configId, value })
+      expect(bad.error.code, configId).toBe(ACP_ERROR.invalidParams)
+    }
+    expect(h.settingsWrites).toHaveLength(2)
+    await h.end()
+  })
+
+  it('sends config_option_update when /model or /reasoning changes the session', async () => {
+    const h = harness({ run: done, deps: { getSettings: () => multi } })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('/model claude-opus-4-1') })
+    await h.call('session/prompt', { sessionId, prompt: text('/reasoning medium') })
+    const configs = h.updates(sessionId).filter((u) => u.sessionUpdate === 'config_option_update')
+    expect(configs.map((u) => u.configOptions.map((o: any) => o.currentValue))).toEqual([
+      ['anthropic/claude-opus-4-1', 'high'],
+      ['anthropic/claude-opus-4-1', 'medium']
+    ])
+    await h.call('session/prompt', { sessionId, prompt: text('/model gpt-5') })
+    expect(replies(h, sessionId).at(-1)).toMatch(/No model named gpt-5/)
+    await h.call('session/prompt', { sessionId, prompt: text('/model') })
+    expect(replies(h, sessionId).at(-1)).toMatch(/- anthropic\/claude-opus-4-1[^\n]*, current/)
+    expect(h.loop.requests).toHaveLength(0)
+    await h.end()
+  })
+
+  it("restores the chat's approval mode on load, only when one was chosen, and its title", async () => {
+    const h = harness({
+      run: done,
+      stored: [
+        { id: 'chose', workspace: '/x', messages: [], approvalPolicy: 'auto-edit', title: 'Fix the parser', updatedAt: 1 },
+        { id: 'never', workspace: '/x', messages: [] }
+      ]
+    })
+    await h.call('initialize', { protocolVersion: 1, clientCapabilities: {} })
+    const chose = await h.call('session/load', { sessionId: 'chose', cwd: h.cwd, mcpServers: [] })
+    expect(chose.result.modes.currentModeId).toBe('auto-edit')
+    expect(h.updates('chose')).toEqual(
+      expect.arrayContaining([
+        { sessionUpdate: 'session_info_update', title: 'Fix the parser', updatedAt: new Date(1).toISOString() }
+      ])
+    )
+    const never = await h.call('session/load', { sessionId: 'never', cwd: h.cwd, mcpServers: [] })
+    expect(never.result.modes.currentModeId).toBe('ask')
+    expect(h.updates('never').some((u) => u.sessionUpdate === 'session_info_update')).toBe(false)
+    await h.call('session/prompt', { sessionId: 'chose', prompt: text('go') })
+    expect(h.loop.requests[0].approvalPolicy).toBe('auto-edit')
+    // Loading saves nothing: only what the user sets is written.
+    expect(h.settingsWrites).toEqual([])
+    await h.call('session/set_mode', { sessionId: 'never', modeId: 'plan' })
+    expect(h.settingsWrites).toEqual([['never', { approvalPolicy: 'plan' }]])
+    await h.end()
+  })
+
+  it('tells the editor when a turn gives the chat a title', async () => {
+    const h: Harness = harness({
+      run: async (req, send) => {
+        h.stored.get(req.conversationId!)!.title = 'Rename the flag'
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('rename --foo') })
+    await h.call('session/prompt', { sessionId, prompt: text('and the docs') })
+    const infos = h.updates(sessionId).filter((u) => u.sessionUpdate === 'session_info_update')
+    // Once: the second turn left the title as it was.
+    expect(infos).toEqual([{ sessionUpdate: 'session_info_update', title: 'Rename the flag', updatedAt: expect.any(String) }])
+    await h.end()
+  })
+
+  it('compacts the stored chat on /compact and reloads it for the next prompt', async () => {
+    const compact = vi.fn(async (id: string) => {
+      h.stored.get(id)!.messages = [{ role: 'user', content: 'summary of earlier turns' }]
+      return { ok: true, summarized: 4 }
+    })
+    const h: Harness = harness({
+      run: async (req, send, _loop, onMessages) => {
+        onMessages?.([...req.messages, { role: 'assistant', content: 'ok' }])
+        send({ runId: req.runId, type: 'done', stopReason: 'end_turn' })
+      },
+      deps: { compact }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('first') })
+    await h.call('session/prompt', { sessionId, prompt: text('/compact') })
+    expect(compact).toHaveBeenCalledWith(sessionId, 'anthropic', 'claude-sonnet-4-5')
+    expect(replies(h, sessionId).at(-1)).toBe('Summarized 4 earlier messages.')
+    await h.call('session/prompt', { sessionId, prompt: text('next') })
+    expect(h.loop.requests.at(-1)!.messages).toEqual([
+      { role: 'user', content: 'summary of earlier turns' },
+      { role: 'user', content: 'next' }
+    ])
+    await h.end()
+  })
+
+  it('lists the workspace skills and agents, and the commands, as replies', async () => {
+    const h = harness({
+      run: done,
+      deps: {
+        skills: async () => [{ name: 'pdf', description: 'Work with PDFs' }],
+        agents: async () => []
+      }
+    })
+    const sessionId = await ready(h)
+    await h.call('session/prompt', { sessionId, prompt: text('/skills') })
+    expect(replies(h, sessionId).at(-1)).toBe('- pdf: Work with PDFs')
+    await h.call('session/prompt', { sessionId, prompt: text('/agents') })
+    expect(replies(h, sessionId).at(-1)).toMatch(/No agents in this workspace/)
+    await h.call('session/prompt', { sessionId, prompt: text('/help') })
+    expect(replies(h, sessionId).at(-1)).toContain('- /review: ')
+    expect(h.loop.requests).toHaveLength(0)
+    await h.end()
+  })
+})
+
+describe('ACP command helpers', () => {
+  it('keeps the built-ins over a same-named workspace command, and gives an input hint only for arguments', () => {
+    const cmds = acpCommands([{ name: 'review', description: 'mine', template: 'x' }, { name: 'ship', description: 'Ship', template: 'y' }])
+    expect(cmds.filter((c) => c.name === 'review')).toHaveLength(1)
+    expect(cmds.find((c) => c.name === 'review')?.template).toBe(REVIEW_TEMPLATE)
+    expect(cmds.map((c) => c.name)).toContain('ship')
+    for (const name of ACP_COMMAND_NAMES) expect(cmds.map((c) => c.name)).toContain(name)
+    const wire = acpAvailableCommands(cmds)
+    expect(wire.find((c) => c.name === 'review')).toEqual({ name: 'review', description: expect.any(String) })
+    expect(wire.find((c) => c.name === 'agent')?.input).toEqual({ hint: '<name> <task>' })
   })
 })
 

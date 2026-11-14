@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AppSettings } from './types'
+import type { AppSettings, Hook } from './types'
 import {
   exportPreferences,
   isModified,
@@ -91,6 +91,17 @@ describe('export and import', () => {
       error: expect.stringContaining('unknown field "acton"')
     })
     expect(parsePreferencesImport(file({ hooks: [{ event: 'Boot', matcher: '*', command: 'x' }] })).ok).toBe(false)
+    expect(parsePreferencesImport(file({ hooks: [{ event: 'Stop', matcher: '*', command: 'x', timeout: 'soon' }] })).ok).toBe(false)
+    expect(parsePreferencesImport(file({ hooks: [{ event: 'Stop', matcher: '*', command: 'x', timeout: 0 }] })).ok).toBe(false)
+  })
+
+  it('imports the newer hook events and a hook timeout', () => {
+    const hooks = [
+      { event: 'Notification', matcher: 'tool_*', command: 'n', timeout: 10 },
+      { event: 'SessionEnd', matcher: '*', command: 'e' }
+    ]
+    const res = parsePreferencesImport(exportPreferences(base({ hooks: hooks as Hook[] })))
+    expect(res.ok && res.settings).toMatchObject({ hooks })
   })
 
   it('rejects something that is not an export', () => {

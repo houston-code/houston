@@ -64,6 +64,11 @@ export interface SandboxRunOptions {
    * throws is ignored.
    */
   onOutput?: (chunk: string) => void
+  /**
+   * Text written to the command's stdin, which is then closed. Absent, stdin is
+   * /dev/null as before. Changes nothing about confinement.
+   */
+  stdin?: string
 }
 
 export interface SandboxRunResult {

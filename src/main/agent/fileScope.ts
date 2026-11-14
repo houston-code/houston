@@ -1,6 +1,7 @@
 import { lstatSync } from 'node:fs'
 import { Minimatch, type MinimatchOptions } from 'minimatch'
 import { hardenedGitArgs, runGitCapture } from './gitRead'
+import { isSensitivePath } from './sensitive-paths'
 
 /**
  * Which files the agent's discovery tools (search_files, glob, ast_grep, the
@@ -107,10 +108,35 @@ export async function gitTrackedIgnored(dir: string, hardening?: Promise<string[
   return res.ok ? [...new Set(splitZ(res.stdout))] : []
 }
 
+/** Pathspecs for every path with a dot-named segment: a hidden file, or anything under a hidden directory. */
+const HIDDEN_PATHSPECS = [':(glob)**/.*', ':(glob)**/.*/**']
+
+/**
+ * Whether a tracked hidden path is searched. Anything under a `.git` directory never
+ * is, and neither is a credential file (see isSensitivePath): those were out of
+ * reach while every hidden path was skipped, and a search that quotes their lines
+ * would sidestep the prompt read_file gives them.
+ */
+export function searchableTrackedHidden(rel: string): boolean {
+  return !rel.split('/').includes('.git') && !isSensitivePath(rel)
+}
+
+/**
+ * Tracked files with a dot-named segment (`.github/workflows/ci.yml`, `.husky/pre-commit`),
+ * relative to `dir`, minus the ones {@link searchableTrackedHidden} keeps out. The
+ * discovery tools skip hidden paths, but a tracked one is project content like any
+ * other, so these are searched too. Untracked hidden files stay skipped.
+ */
+export async function gitTrackedHidden(dir: string, hardening?: Promise<string[]>): Promise<string[]> {
+  const res = await runGitCapture(['ls-files', '--cached', '-z', '--', ...HIDDEN_PATHSPECS], dir, hardening)
+  if (!res.ok) return []
+  return [...new Set(splitZ(res.stdout))].filter((rel) => hasHiddenSegment(rel) && searchableTrackedHidden(rel))
+}
+
 /**
  * Whether a '/'-separated relative path has a dot-named segment. Search and glob
- * skip hidden files and directories (as ripgrep does without --hidden); `keep`
- * names basenames exempted from that.
+ * skip hidden files and directories (as ripgrep does without --hidden) unless git
+ * tracks them (see {@link gitTrackedHidden}); `keep` names basenames exempted from that.
  */
 export function hasHiddenSegment(rel: string, keep: ReadonlySet<string> = new Set()): boolean {
   const parts = rel.split('/')
@@ -129,7 +155,8 @@ export function hasHiddenSegment(rel: string, keep: ReadonlySet<string> = new Se
  *    files (e.g. a committed `build/`). Walking from inside an ignored directory
  *    would not apply the parent's rule, so search exactly git's listing instead.
  *
- * `explicit` paths are relative to `dir`, '/'-separated, and exclude hidden ones.
+ * `explicit` paths are relative to `dir`, '/'-separated, and include tracked hidden
+ * files (the walk skips hidden paths; see {@link gitTrackedHidden}) but no untracked ones.
  */
 export type ScopePlan = { kind: 'plain' } | { kind: 'git'; walk: boolean; explicit: string[] }
 
@@ -143,8 +170,13 @@ export async function planScope(dir: string): Promise<ScopePlan> {
   ])
   if (!inScope) return { kind: 'plain' }
   const underPattern = ignoredByPattern.code === 0
-  const explicit = underPattern ? ((await listFilesInScope(dir, [], h)) ?? []) : await gitTrackedIgnored(dir, h)
-  return { kind: 'git', walk: !underPattern, explicit: explicit.filter((rel) => !hasHiddenSegment(rel)) }
+  const [listed, hidden] = await Promise.all([
+    underPattern ? listFilesInScope(dir, [], h).then((l) => l ?? []) : gitTrackedIgnored(dir, h),
+    gitTrackedHidden(dir, h)
+  ])
+  // The walk skips hidden paths, so tracked ones are handed over explicitly too.
+  const explicit = new Set([...listed.filter((rel) => !hasHiddenSegment(rel)), ...hidden])
+  return { kind: 'git', walk: !underPattern, explicit: [...explicit] }
 }
 
 /**

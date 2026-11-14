@@ -28,6 +28,10 @@ describe('UsagePanel', () => {
     await waitFor(() => expect(screen.getByText('shop')).toBeInTheDocument())
     const row = screen.getByText('shop').closest('tr') as HTMLElement
     expect(within(row).getByText('$0.600')).toBeInTheDocument()
+    // The name truncates inside its own block (a table cell ignores max-width), with
+    // the full path on the row header.
+    expect(screen.getByText('shop')).toHaveClass('usage-view__project-name')
+    expect(screen.getByRole('rowheader', { name: 'shop' })).toHaveAttribute('title', '/code/shop')
     // Today's row (and the 30-day total) carry the dated reply's cost.
     expect(screen.getAllByText('$0.420')).toHaveLength(2)
     // The subagent share of the chat's spend is explained, not silently dropped.

@@ -20,6 +20,7 @@ import {
 import { isMacPlatform } from '../../../lib/shortcuts'
 import { HeadersField, ModelsField, SettingsSection } from '../fields'
 import { VerifySuggestion } from './verifySuggestion'
+import { SmallModelField } from './smallModelField'
 import type { SettingsCtx } from '../context'
 
 /** Configured providers: endpoint/region fields, the API key, and the model list. */
@@ -254,6 +255,24 @@ export function ProvidersSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
                 setFetchSummaries(({ [p.id]: _stale, ...rest }) => rest)
               }
               patchProvider(p.id, { models })
+            }}
+          />
+
+          <SmallModelField
+            provider={p}
+            onChange={(smallModel) => {
+              if (smallModel === undefined) {
+                setSettings((s) => ({
+                  ...s,
+                  providers: s.providers.map((q) => {
+                    if (q.id !== p.id) return q
+                    const { smallModel: _drop, ...rest } = q
+                    return rest
+                  })
+                }))
+              } else {
+                patchProvider(p.id, { smallModel })
+              }
             }}
           />
         </div>

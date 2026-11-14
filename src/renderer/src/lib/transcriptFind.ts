@@ -1,3 +1,5 @@
+import { scrollBehavior } from './motion'
+
 /**
  * Find-in-conversation backing logic. Matches are highlighted with the CSS Custom
  * Highlight API (`::highlight(...)`) rather than DOM mutation or text selection, so
@@ -7,7 +9,6 @@
  * `collectMatchRanges` is the pure, testable core; the highlight registry and
  * scrolling are feature-detected so they're a harmless no-op under jsdom.
  */
-import { scrollBehavior } from './motion'
 
 const ALL = 'houston-find'
 const ACTIVE = 'houston-find-active'
@@ -136,7 +137,10 @@ export function clearFindHighlights(): void {
   reg.delete(ACTIVE)
 }
 
-/** Scroll the element containing a match into view (centred). No-op under jsdom. */
+/**
+ * Scroll the element containing a match into view (centred), smoothly unless the OS
+ * prefers reduced motion. No-op under jsdom.
+ */
 export function scrollRangeIntoView(range: Range | undefined): void {
   range?.startContainer.parentElement?.scrollIntoView?.({ block: 'center', behavior: scrollBehavior() })
 }

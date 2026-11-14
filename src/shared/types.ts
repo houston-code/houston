@@ -193,6 +193,14 @@ export interface ProviderConfig {
   /** Known/curated model ids. Users can edit these or fetch live from the provider. */
   models: ModelOption[]
   defaultModel?: string
+  /**
+   * The model side requests run on: chat titles, compaction summaries, next-message
+   * suggestions, and the isolated reader for flagged web content. Absent means the
+   * provider's curated cheap sibling (`SMALL_MODELS` in model-facts.ts) when it is in
+   * `models` and cheaper than the chat's model; `''` means always the chat's model.
+   * A failed side request on it is retried on the chat's model. See `smallModelFor`.
+   */
+  smallModel?: string
   /** Whether the provider needs an API key at all (local endpoints often don't). */
   requiresKey: boolean
   /**
@@ -359,9 +367,22 @@ export interface McpServerStatus {
  * keep working. See src/main/agent/hooks.ts.
  */
 export interface Hook {
-  event: 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'SessionStart' | 'Stop' | 'PreCompact'
+  event:
+    | 'PreToolUse'
+    | 'PostToolUse'
+    | 'UserPromptSubmit'
+    | 'SessionStart'
+    | 'Stop'
+    | 'PreCompact'
+    | 'Notification'
+    | 'SessionEnd'
   matcher: string
   command: string
+  /**
+   * Seconds this hook may run before it is stopped. Absent means the default (60);
+   * a value is clamped to 1-600.
+   */
+  timeout?: number
 }
 
 /** The valid hook events, in display order — the one list validators and UIs share. */
@@ -371,7 +392,9 @@ export const HOOK_EVENTS: Hook['event'][] = [
   'UserPromptSubmit',
   'SessionStart',
   'Stop',
-  'PreCompact'
+  'PreCompact',
+  'Notification',
+  'SessionEnd'
 ]
 
 /**

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 import { DiffView } from './DiffView'
 import { diffLines, hunkDiff, type DiffLine } from '@shared/diff'
@@ -67,6 +67,28 @@ describe('DiffView', () => {
     const big: DiffLine[] = Array.from({ length: 400 }, (_, i) => ({ type: 'add', text: `l${i}` }))
     render(<DiffView diff={big} />)
     expect(screen.getByText(/100 more lines/)).toBeInTheDocument()
+  })
+
+  it('reveals the rest of a long diff one chunk at a time', () => {
+    const big: DiffLine[] = Array.from({ length: 700 }, (_, i) => ({ type: 'add', text: `l${i}` }))
+    const { container } = render(<DiffView diff={big} />)
+    expect(container.querySelectorAll('.diff__line')).toHaveLength(300)
+    expect(screen.getByText('400 hidden')).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: 'Show 300 more lines' }))
+    expect(container.querySelectorAll('.diff__line')).toHaveLength(600)
+    // The last chunk names what is actually left.
+    fireEvent.click(screen.getByRole('button', { name: 'Show 100 more lines' }))
+    expect(container.querySelectorAll('.diff__line')).toHaveLength(700)
+    expect(container.textContent).toContain('l699')
+    expect(screen.queryByRole('button', { name: /more line/ })).toBeNull()
+  })
+
+  it('renders past the cap through a line that must stay visible', () => {
+    const big: DiffLine[] = Array.from({ length: 700 }, (_, i) => ({ type: 'add', text: `l${i}` }))
+    const { container } = render(<DiffView diff={big} reveal={new Set(['new:450'])} />)
+    // Whole chunks: through line 450 means two of them.
+    expect(container.querySelectorAll('.diff__line')).toHaveLength(600)
+    expect(screen.getByText('100 hidden')).toBeInTheDocument()
   })
 
   it('renders an empty diff without falling over', () => {

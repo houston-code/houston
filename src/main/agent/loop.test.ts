@@ -3623,6 +3623,52 @@ describe('context management inside a long turn', () => {
     expect(shape(second.sends[0]).slice(0, last.length)).toEqual(shape(last))
   })
 
+  it('stubs stale reads on a large window long before the compaction threshold', async () => {
+    // A 1M-token model compacts near 800K; eviction starts at its own, much lower
+    // trigger. 30K-token reads: by the seventh the window is past 160K, and the reads
+    // older than the last few iterations go out as stubs with no summary at all.
+    delete h.settings.compactionThreshold
+    h.probeTools = [bigReadFile(120_000)]
+    const conv = createConversation({ workspace: ws, providerId: 'anthropic', model: 'claude-opus-4-8' })
+    const t = longTurn(7)
+    const r = await run({
+      provider: t.provider,
+      userText: REQUEST,
+      policy: 'full-auto',
+      conversationId: conv.id,
+      model: 'claude-opus-4-8'
+    })
+    expect(types(r)).not.toContain('compaction')
+    expect(t.summaries).toHaveLength(0)
+    expect(getConversation(conv.id)!.compaction!.evictBefore).toBeGreaterThan(0)
+    const last = t.sends.at(-1)!
+    expect(last.some((m) => m.role === 'tool' && m.content.startsWith('[earlier read_file result on src/f1.ts'))).toBe(true)
+    expect(last.at(-1)!.content.length).toBeGreaterThan(120_000) // the newest read is whole
+    expectValidWindow(last)
+  })
+
+  it('leaves the window whole below an explicit threshold', async () => {
+    // An explicit threshold governs eviction too: nothing is stubbed under it.
+    h.settings.compactionThreshold = 800_000
+    h.probeTools = [bigReadFile(120_000)]
+    const t = longTurn(7)
+    const r = await run({ provider: t.provider, userText: REQUEST, policy: 'full-auto', model: 'claude-opus-4-8' })
+    expect(types(r)).not.toContain('compaction')
+    for (const w of t.sends) expect(w.some((m) => m.content.startsWith('[earlier '))).toBe(false)
+  })
+
+  it('compacts under a model\'s long-context price tier rather than at 80% of its window', async () => {
+    // Haiku 5.5 has a 1M window but bills 5x past 100K: the window must be shrunk
+    // before it crosses that, not at 800K.
+    delete h.settings.compactionThreshold
+    h.probeTools = [bigReadFile(120_000)]
+    const t = longTurn(6)
+    await run({ provider: t.provider, userText: REQUEST, policy: 'full-auto', model: 'claude-haiku-5-5' })
+    const last = t.sends.at(-1)!
+    expect(last.some((m) => m.content.startsWith('[earlier ')) || t.summaries.length > 0).toBe(true)
+    expect(Math.ceil(chars(last) / 4)).toBeLessThan(100_000)
+    expectValidWindow(last)
+  })
 
   it('treats a summary cut off at its output cap as a failed compaction', async () => {
     // A thinking model can spend the whole cap before it writes the summary's end; a
@@ -5010,6 +5056,69 @@ describe('dispatch_writable_agent', () => {
     expect(approval && 'kind' in approval ? approval.kind : '').toBe('write')
     expect(existsSync(join(ws, 'out.txt'))).toBe(true)
     expect(readFileSync(join(ws, 'out.txt'), 'utf8')).toBe('from subagent')
+  })
+
+  it('follows the report with what the agent actually ran and changed', async () => {
+    h.sandboxed = false
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'fix', prompt: 'fix it' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [
+          { type: 'tool_call', call: { id: 'w1', name: 'write_file', arguments: { path: 'out.txt', content: 'x' } } },
+          { type: 'tool_call', call: { id: 's1', name: 'run_shell', arguments: { command: 'echo checked' } } },
+          { type: 'tool_call', call: { id: 's2', name: 'run_shell', arguments: { command: 'exit 3' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        // The report claims more than the tools show.
+        [{ type: 'text', text: 'Fixed it; all tests pass.' }, { type: 'done', stopReason: 'end_turn' }],
+        [{ type: 'text', text: 'main done' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto',
+      onApproval: (_id, decide) => decide('allow')
+    })
+    const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'dispatch_writable_agent')
+    const content = typeof toolMsg?.content === 'string' ? toolMsg.content : ''
+    expect(content).toContain('Fixed it; all tests pass.')
+    expect(content).toContain('Commands run: `echo checked` exited 0; `exit 3` exited 3.')
+    expect(content).toContain('Files changed: out.txt.')
+    // The evidence follows the report, ahead of the resume note.
+    expect(content.indexOf('Commands run:')).toBeGreaterThan(content.indexOf('Fixed it'))
+  })
+
+  it('says so when a writable agent ran no commands', async () => {
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_writable_agent', arguments: { description: 'x', prompt: 'do' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Done and tested.' }, { type: 'done', stopReason: 'end_turn' }],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto'
+    })
+    const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'dispatch_writable_agent')
+    const content = typeof toolMsg?.content === 'string' ? toolMsg.content : ''
+    expect(content).toContain('Commands run: none.\nFiles changed: none.')
+  })
+
+  it("leaves a research agent's report as it is", async () => {
+    const r = await run({
+      turns: [
+        [
+          { type: 'tool_call', call: { id: 'd1', name: 'dispatch_agent', arguments: { description: 'x', prompt: 'look' } } },
+          { type: 'done', stopReason: 'tool_use' }
+        ],
+        [{ type: 'text', text: 'Found it.' }, { type: 'done', stopReason: 'end_turn' }],
+        [{ type: 'text', text: 'ok' }, { type: 'done', stopReason: 'end_turn' }]
+      ],
+      policy: 'full-auto'
+    })
+    const toolMsg = r.messages.find((m) => m.role === 'tool' && m.toolName === 'dispatch_agent')
+    expect(typeof toolMsg?.content === 'string' && toolMsg.content).not.toContain('Commands run:')
   })
 
   it('rejects an unknown named agent without running it', async () => {
@@ -11094,6 +11203,144 @@ describe('isolated-reader (quarantine) cost', () => {
     expect(reader!.inputTokens).toBe(0)
     expect(reader!.model).toBe('claude-opus-4-8')
     expect(reader!.cost).toBeCloseTo(turnCostUsd('claude-opus-4-8', 3000, 70, { readTokens: 100 }), 10)
+  })
+})
+
+describe('side requests on the provider\'s small model', () => {
+  const readerTool = (): ToolDef => ({
+    kind: 'read',
+    summarize: () => 'probe read_file',
+    schema: {
+      name: 'read_file',
+      description: 'Read a file.',
+      parameters: { type: 'object', properties: { path: { type: 'string' } }, additionalProperties: false }
+    },
+    execute: async (_args, ctx) => ctx.quarantineExtract!({ content: 'page', source: 'https://x.test/' })
+  })
+
+  /** Reads one flagged page, then answers. `readerFails` names models whose reader call errors. */
+  function readOnce(readerModels: string[], readerFails: string[] = []): Provider {
+    let main = 0
+    return {
+      async *streamChat(req) {
+        if (req.system === QUARANTINE_SYSTEM_PROMPT) {
+          readerModels.push(req.model)
+          if (readerFails.includes(req.model)) {
+            yield { type: 'error', message: 'model not found', status: 404 }
+            return
+          }
+          yield { type: 'text', text: 'The page says hello.' }
+          yield { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 3000, outputTokens: 70 } }
+          return
+        }
+        if (main++ === 0) {
+          yield { type: 'tool_call', call: { id: 'q1', name: 'read_file', arguments: { path: 'a' } } }
+          yield { type: 'done', stopReason: 'tool_use' }
+        } else {
+          yield { type: 'text', text: 'done' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+    }
+  }
+
+  it('reads a flagged page on the small model and bills it there', async () => {
+    h.probeTools = [readerTool()]
+    h.providerModels = [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    const readerModels: string[] = []
+    const r = await run({ provider: readOnce(readerModels), policy: 'full-auto', model: 'claude-opus-5-5' })
+    expect(readerModels).toEqual(['claude-haiku-5-5'])
+    const reader = (r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]).find(
+      (u) => u.outputTokens === 70
+    )
+    expect(reader!.model).toBe('claude-haiku-5-5')
+    expect(reader!.cost).toBeCloseTo(turnCostUsd('claude-haiku-5-5', 3000, 70), 10)
+  })
+
+  it('falls back to the run\'s model when the small model fails', async () => {
+    h.probeTools = [readerTool()]
+    h.providerModels = [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    const readerModels: string[] = []
+    const r = await run({
+      provider: readOnce(readerModels, ['claude-haiku-5-5']),
+      policy: 'full-auto',
+      model: 'claude-opus-5-5'
+    })
+    expect(readerModels[0]).toBe('claude-haiku-5-5')
+    expect(readerModels.at(-1)).toBe('claude-opus-5-5')
+    const result = r.events.find((e) => e.type === 'tool_result' && e.name === 'read_file') as { output: string }
+    expect(result.output).toContain('The page says hello.')
+  })
+
+  it('keeps every side request on the run\'s model when set to', async () => {
+    h.probeTools = [readerTool()]
+    h.providerModels = [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    h.extraConfigs = {
+      anthropic: {
+        id: 'anthropic',
+        kind: 'anthropic',
+        label: 'A',
+        models: h.providerModels,
+        smallModel: '',
+        requiresKey: false,
+        hasKey: true,
+        builtIn: true
+      }
+    }
+    try {
+      const readerModels: string[] = []
+      await run({ provider: readOnce(readerModels), policy: 'full-auto', model: 'claude-opus-5-5' })
+      expect(readerModels).toEqual(['claude-opus-5-5'])
+    } finally {
+      h.extraConfigs = {}
+    }
+  })
+
+  it('writes the compaction summary on the small model, then the run\'s model if that fails', async () => {
+    const history: ChatMessage[] = []
+    for (let i = 0; i < 5; i++) {
+      history.push({ role: 'user', content: `question ${i} ${'x'.repeat(1200)}` }, { role: 'assistant', content: `answer ${i}` })
+    }
+    history.push({ role: 'user', content: 'current question' })
+    h.providerModels = [{ id: 'claude-opus-5-5' }, { id: 'claude-haiku-5-5' }]
+    const original = h.settings
+    for (const failSmall of [false, true]) {
+      h.settings = { ...original, compactionThreshold: 500 }
+      const summaryModels: string[] = []
+      const provider: Provider = {
+        async *streamChat(req) {
+          if (req.maxTokens != null) {
+            summaryModels.push(req.model)
+            if (failSmall && req.model === 'claude-haiku-5-5') {
+              yield { type: 'error', message: 'model not found', status: 404 }
+              return
+            }
+            yield { type: 'text', text: 'SUMMARY' }
+            yield { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 2000, outputTokens: 40 } }
+            return
+          }
+          yield { type: 'text', text: 'ok' }
+          yield { type: 'done', stopReason: 'end_turn' }
+        }
+      }
+      try {
+        const r = await run({ provider, messages: history, model: 'claude-opus-5-5' })
+        expect(types(r)).toContain('compaction')
+        expect(summaryModels[0]).toBe('claude-haiku-5-5')
+        const billed = (r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]).find(
+          (u) => u.outputTokens === 40
+        )
+        if (failSmall) {
+          expect(summaryModels.at(-1)).toBe('claude-opus-5-5')
+          expect(billed!.model).toBe('claude-opus-5-5')
+        } else {
+          expect(summaryModels).toEqual(['claude-haiku-5-5'])
+          expect(billed!.model).toBe('claude-haiku-5-5')
+        }
+      } finally {
+        h.settings = original
+      }
+    }
   })
 })
 

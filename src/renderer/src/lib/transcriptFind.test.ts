@@ -1,5 +1,11 @@
-import { describe, it, expect, afterEach } from 'vitest'
-import { MAX_FIND_MATCHES, collectMatchRanges, collectMatchRangesAcross, findMatches } from './transcriptFind'
+import { describe, it, expect, afterEach, vi } from 'vitest'
+import {
+  MAX_FIND_MATCHES,
+  collectMatchRanges,
+  collectMatchRangesAcross,
+  findMatches,
+  scrollRangeIntoView
+} from './transcriptFind'
 
 function root(html: string): HTMLElement {
   const el = document.createElement('div')
@@ -50,6 +56,25 @@ describe('collectMatchRanges', () => {
       'needle summary',
       'needle open'
     ])
+  })
+})
+
+describe('scrollRangeIntoView', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it.each([
+    [false, 'smooth'],
+    [true, 'auto']
+  ])('centres the match, reduced motion %s scrolls with %s', (reduce, behavior) => {
+    vi.stubGlobal('matchMedia', (query: string) => ({ matches: reduce && query.includes('reduce'), media: query }))
+    const el = root('<p>find me</p>')
+    const p = el.querySelector('p')!
+    const scrollIntoView = vi.fn()
+    p.scrollIntoView = scrollIntoView
+    scrollRangeIntoView(collectMatchRanges(el, 'me')[0])
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior })
   })
 })
 

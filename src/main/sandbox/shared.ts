@@ -637,14 +637,22 @@ export function runWithBackend(
     //
     // stdin is /dev/null: nothing ever writes to it, and an open pipe makes anything
     // that reads input (`npm init`, `cat`, a REPL, a y/n prompt) wait out the whole
-    // timeout instead of seeing end-of-input and exiting at once.
+    // timeout instead of seeing end-of-input and exiting at once. A caller that has
+    // input to give (a hook's JSON payload) gets a pipe that is written and then
+    // closed straight away, so a reader still sees end-of-input.
     const child = spawnFn(launch.file, launch.args, {
       cwd: opts.cwd,
       env: { ...sandboxEnv(baseEnv, { offline: runsOffline(backend, opts.allowNetwork) }), ...launch.env },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [opts.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       detached: launch.detached,
       windowsHide: launch.windowsHide
     })
+    if (opts.stdin !== undefined && child.stdin) {
+      // A command that exits without reading its input closes the pipe under the
+      // write (EPIPE); that is not a failure of the run.
+      child.stdin.on('error', () => {})
+      child.stdin.end(opts.stdin)
+    }
 
     const out = new CappedOutput()
     const err = new CappedOutput()

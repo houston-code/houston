@@ -4,6 +4,7 @@ import { useApplyTheme } from './useApplyTheme'
 
 afterEach(() => {
   delete document.documentElement.dataset.theme
+  localStorage.clear()
   vi.unstubAllGlobals()
 })
 
@@ -20,6 +21,27 @@ describe('useApplyTheme', () => {
     expect(document.documentElement.dataset.theme).toBe('dark')
     rerender({ t: 'light' })
     expect(document.documentElement.dataset.theme).toBe('light')
+  })
+
+  it('keeps the remembered theme until settings load, then applies and caches the saved one', () => {
+    localStorage.setItem('houston.theme', 'light')
+    const { rerender } = renderHook(
+      ({ t }: { t: 'dark' | 'light' | undefined }) => useApplyTheme(t, { remember: true }),
+      { initialProps: { t: undefined as 'dark' | 'light' | undefined } }
+    )
+    // Not the OS default (jsdom has no matchMedia, which reads as dark).
+    expect(document.documentElement.dataset.theme).toBe('light')
+    expect(localStorage.getItem('houston.theme')).toBe('light')
+    rerender({ t: 'dark' })
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(localStorage.getItem('houston.theme')).toBe('dark')
+  })
+
+  it('never caches a theme it was not asked to remember (the Settings preview)', () => {
+    localStorage.setItem('houston.theme', 'light')
+    renderHook(() => useApplyTheme('dark'))
+    expect(document.documentElement.dataset.theme).toBe('dark')
+    expect(localStorage.getItem('houston.theme')).toBe('light')
   })
 
   it('follows the OS preference and tracks changes while on "system"', () => {

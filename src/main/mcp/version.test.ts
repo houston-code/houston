@@ -10,6 +10,11 @@ import {
 } from './version'
 
 describe('MCP protocol-version negotiation', () => {
+  it('speaks 2025-11-25 and requests it', () => {
+    expect(LATEST_PROTOCOL_VERSION).toBe('2025-11-25')
+    expect(negotiatedProtocolVersion({ protocolVersion: '2025-11-25', capabilities: {} })).toBe('2025-11-25')
+  })
+
   it('requests the newest supported version', () => {
     expect(LATEST_PROTOCOL_VERSION).toBe(SUPPORTED_PROTOCOL_VERSIONS[0])
     expect([...SUPPORTED_PROTOCOL_VERSIONS].sort().reverse()).toEqual([...SUPPORTED_PROTOCOL_VERSIONS])
@@ -49,6 +54,7 @@ describe('MCP protocol-version negotiation', () => {
     expect(supportsElicitation('2024-11-05')).toBe(false)
     expect(supportsElicitation('2025-03-26')).toBe(false)
     expect(supportsElicitation('2025-06-18')).toBe(true)
+    expect(supportsElicitation('2025-11-25')).toBe(true)
   })
 
   it('declares elicitation only when asked, and sends the real app version', () => {

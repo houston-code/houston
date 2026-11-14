@@ -24,11 +24,15 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
           blocks it; <strong>PostToolUse</strong> runs after, and its output is shown to
           the agent. <strong>UserPromptSubmit</strong> / <strong>SessionStart</strong> /{' '}
           <strong>Stop</strong> / <strong>PreCompact</strong> run around the turn (a Stop
-          hook that exits non-zero makes the agent keep working). Context is in{' '}
+          hook that exits non-zero makes the agent keep working).{' '}
+          <strong>Notification</strong> runs when the agent waits for you (match a wait
+          type such as <code>tool_approval</code>) and <strong>SessionEnd</strong> when
+          a run ends; both only observe. Context is in{' '}
           <code>$HOUSTON_TOOL_NAME</code> / <code>$HOUSTON_TOOL_INPUT</code> /{' '}
           <code>$HOUSTON_USER_PROMPT</code> (a value over 16 KB is in a temp file named
-          by the same variable with <code>_FILE</code> added). A hook can also print a
-          JSON directive (
+          by the same variable with <code>_FILE</code> added), and as one JSON object on
+          stdin. Each hook gets 60 seconds unless you set its own timeout. A hook can also
+          print a JSON directive (
           <code>{'{ decision, reason, additionalContext, updatedInput }'}</code>) on
           stdout to steer the loop.
         </>
@@ -46,11 +50,13 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
             <option value="SessionStart">Session</option>
             <option value="Stop">Stop</option>
             <option value="PreCompact">Compact</option>
+            <option value="Notification">Notify</option>
+            <option value="SessionEnd">End</option>
           </select>
           <input
             list="tool-names"
             className="rule__tool"
-            placeholder="tool (or *)"
+            placeholder={h.event === 'Notification' ? 'wait type (or *)' : 'tool (or *)'}
             value={h.matcher}
             onChange={(e) => patchHook(i, { matcher: e.target.value.trim() })}
           />
@@ -59,6 +65,20 @@ export function HooksSection({ ctx }: { ctx: SettingsCtx }): JSX.Element {
             placeholder="shell command, e.g. npm run format"
             value={h.command}
             onChange={(e) => patchHook(i, { command: e.target.value })}
+          />
+          <input
+            type="number"
+            min={1}
+            max={600}
+            className="rule__timeout"
+            aria-label="Timeout in seconds"
+            title="Timeout in seconds (blank = 60)"
+            placeholder="60s"
+            value={h.timeout ?? ''}
+            onChange={(e) => {
+              const n = Number.parseInt(e.target.value, 10)
+              patchHook(i, { timeout: Number.isFinite(n) && n > 0 ? Math.min(600, n) : undefined })
+            }}
           />
           <button className="btn btn--sm btn--danger" onClick={() => removeHook(i)}>
             ✕
