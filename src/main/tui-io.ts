@@ -976,6 +976,19 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
         if (edited !== null) buf = edited.replace(/\n$/, '')
         restate()
       }
+      const showTranscript = async (): Promise<void> => {
+        teardown()
+        rawWrite('\n')
+        try {
+          await transcriptHandler?.('composer')
+        } catch {
+          /* the driver reports its own failures */
+        }
+        if (done) return
+        setup()
+        rawWrite(promptNow())
+        echo(buf)
+      }
       function onData(data: Buffer | string): void {
         const r = decodeInput(decodeChunk(data), dec)
         dec = r.state
@@ -1050,6 +1063,19 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
               if (!composer) break
               void externalEdit()
               return
+            case 'transcript':
+              // Ctrl-O: the driver prints the transcript as lines, then the prompt
+              // is stated again under it with the draft as it was.
+              if (!composer || !transcriptHandler) break
+              void showTranscript()
+              return
+            case 'cycle-thoughts':
+              if (!composer) break
+              rawWrite('\n')
+              cycleThoughtsHandler?.()
+              rawWrite(promptNow())
+              echo(buf)
+              break
             case 'enter':
               rawWrite('\n')
               finish(buf)
@@ -1569,7 +1595,14 @@ export function createTerminalIo(deps: TerminalIoDeps = {}): TuiIo {
    * closes. Resolves false when there is no terminal to open it on.
    */
   const pager = (source: PagerSource): Promise<boolean> => {
-    if (closed || pagerOpen || !stdin.isTTY || typeof stdin.setRawMode !== 'function') return Promise.resolve(false)
+    if (closed || pagerOpen) return Promise.resolve(false)
+    // Screen-reader mode: no alternate screen and no cursor positioning. The whole
+    // transcript is printed as plain lines, in order, for the reader to follow.
+    if (screenReader) {
+      out(`\n${source.plain().replace(/\n*$/, '')}\n\nend of transcript\n`)
+      return Promise.resolve(true)
+    }
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') return Promise.resolve(false)
     return new Promise<boolean>((resolve) => {
       stopTimer(true)
       stopInterruptWatch()

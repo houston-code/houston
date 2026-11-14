@@ -1525,6 +1525,19 @@ describe('synchronized output (DEC 2026)', () => {
     t.io.stopSpinner!()
   })
 
+  it('paints the reduced-motion spinner atomically too: the still mark, at the slow pace', () => {
+    const t = harness(true)
+    t.io.setAccessibility!({ reduceMotion: true })
+    t.io.startSpinner!('Working')
+    t.tick()
+    const out = t.text()
+    expect(out).toContain(`${SYNC_BEGIN}\r\x1b[2K`)
+    expect(out).toContain('• Working')
+    expect(out).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/)
+    expect(count(out, SYNC_BEGIN)).toBe(count(out, SYNC_END))
+    t.io.stopSpinner!()
+  })
+
   it('is off when the output is not the terminal', async () => {
     const t = harness()
     const read = t.io.readComposer!('> ')
@@ -1808,7 +1821,6 @@ describe('composer: drafts, images, rewind and suspend', () => {
   })
 })
 
-
 /**
  * Screen-reader mode: a screen reader follows text as it is written, so a redraw
  * (cursor up, erase, reprint) reads as noise on every key. Nothing in this mode may
@@ -1947,6 +1959,46 @@ describe('screen-reader mode', () => {
     expect(t.text()).not.toContain('also check docs')
     expect(t.text()).not.toMatch(REDRAW)
     t.io.stopSpinner!()
+  })
+
+  it('prints the transcript as plain lines instead of opening the full-screen viewer', async () => {
+    const t = harness()
+    const source: PagerSource = {
+      title: 'My chat',
+      render: () => ({ lines: ['\x1b[1mdoc line\x1b[0m'], prompts: [0] }),
+      plain: () => 'My chat\n\nyou: go\nhouston: done\n'
+    }
+    await expect(t.io.pager!(source)).resolves.toBe(true)
+    const text = t.text()
+    expect(text).toContain('you: go\nhouston: done\n\nend of transcript\n')
+    expect(text).not.toContain('[?1049h')
+    expect(text).not.toMatch(REDRAW)
+  })
+
+  it('Ctrl-O at the composer hands off to the driver, then states the prompt again with the draft', async () => {
+    const t = harness()
+    let opened = 0
+    t.io.onTranscript!(async (during) => {
+      expect(during).toBe('composer')
+      opened++
+      t.io.out('the transcript\n')
+    })
+    const read = t.io.readComposer!('you: ')
+    t.stdin.push('half')
+    t.tick()
+    t.stdin.push('\x0f')
+    await new Promise((r) => setImmediate(r))
+    expect(opened).toBe(1)
+    t.stdin.push(' done')
+    t.tick()
+    t.stdin.push('\r')
+    await expect(read).resolves.toBe('half done')
+    const text = t.text()
+    // Bracketed paste and modified keys go off for the handoff and back on after.
+    const modes = new RegExp(`${ESC}\\[[?>][0-9;]*[hlm]`, 'g')
+    expect(text.replace(modes, '')).toContain('you: half\nthe transcript\nyou: half done\n')
+    expect(text).not.toMatch(REDRAW)
+    expect(text).not.toContain('[?1049h')
   })
 
   it('clearLine writes nothing', () => {

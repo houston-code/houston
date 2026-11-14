@@ -4116,8 +4116,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   deps.io.onCycleThoughts?.(() => setReasoningDisplay(nextReasoningDisplay(reasoningDisplay)))
   // Ctrl-O and /transcript: the whole session full screen. Not while a turn runs:
   // the viewer would have to hold back the run's output and its approval prompts,
-  // so it says when it can open instead.
+  // so it says when it can open instead. In screen-reader mode there is no full
+  // screen: the transcript is printed as plain lines, in order, for the reader.
   const openTranscript = async (): Promise<void> => {
+    if (screenReader) {
+      const plainDoc = transcriptPlain([...messages], currentTitle() ?? 'Houston chat').replace(/\n*$/, '')
+      deps.io.out(`\n${plainDoc}\n\nend of transcript\n`)
+      return
+    }
     if (!deps.io.pager) {
       deps.io.out(paint('· the transcript viewer needs an interactive terminal; /export writes the chat to a file\n', 'dim'))
       return

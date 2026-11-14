@@ -6216,14 +6216,17 @@ describe('screen-reader mode', () => {
   })
 
   it('labels speakers, says tool calls as sentences, and prints no escapes even with color on', async () => {
-    const { d } = deps([
-      { runId: 'x', type: 'reasoning', delta: 'hmm' },
-      { runId: 'x', type: 'text', delta: 'Looking.\n\n' },
-      { runId: 'x', type: 'tool_start', callId: 'c', name: 'read_file', args: { path: 'src/a.ts' } },
-      { runId: 'x', type: 'tool_result', callId: 'c', name: 'read_file', ok: true, output: 'x' },
-      { runId: 'x', type: 'text', delta: 'Done.\n\n' },
-      { runId: 'x', type: 'done', stopReason: 'end_turn' }
-    ])
+    const { d } = deps(
+      [
+        { runId: 'x', type: 'reasoning', delta: 'hmm' },
+        { runId: 'x', type: 'text', delta: 'Looking.\n\n' },
+        { runId: 'x', type: 'tool_start', callId: 'c', name: 'read_file', args: { path: 'src/a.ts' } },
+        { runId: 'x', type: 'tool_result', callId: 'c', name: 'read_file', ok: true, output: 'x' },
+        { runId: 'x', type: 'text', delta: 'Done.\n\n' },
+        { runId: 'x', type: 'done', stopReason: 'end_turn' }
+      ],
+      { reasoningDisplay: 'show' }
+    )
     const t = fakeIo(['go', null])
     const applied: Array<{ screenReader?: boolean; reduceMotion?: boolean }> = []
     t.io.setAccessibility = (a) => applied.push(a)
@@ -6241,6 +6244,55 @@ describe('screen-reader mode', () => {
     expect(text).toMatch(/done in \d+s/)
     // The tool verb is not also announced as a spinner label.
     expect(t.spinner).toEqual(['start:Working', 'stop'])
+  })
+
+  it('follows /thoughts: summary says the one line under the label, hide says nothing', async () => {
+    const events: AgentEvent[] = [
+      { runId: 'x', type: 'reasoning', delta: 'Weighing the loader against the cache.' },
+      { runId: 'x', type: 'text', delta: 'Answer.\n\n' },
+      { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    ]
+    const summary = deps(events)
+    const t1 = fakeIo(['go', null])
+    summary.d.io = t1.io
+    await runTui(srOpts, summary.d)
+    const s1 = t1.text()
+    expect(s1).not.toContain(ESC)
+    expect(s1).toMatch(/houston, thinking:\n[^\n]*thought for \d+s[^\n]*Weighing the loader/)
+    expect(s1.indexOf('houston, thinking:')).toBeLessThan(s1.indexOf('houston:\n'))
+
+    const hide = deps(events, { reasoningDisplay: 'hide' })
+    const t2 = fakeIo(['go', null])
+    hide.d.io = t2.io
+    await runTui(srOpts, hide.d)
+    expect(t2.text()).not.toContain('houston, thinking:')
+    expect(t2.text()).not.toContain('Weighing')
+    expect(t2.text()).toContain('houston:\nAnswer.')
+  })
+
+  it('/transcript and Ctrl-O print the transcript as plain lines, never the full-screen viewer', async () => {
+    const done: AgentEvent = { runId: 'x', type: 'done', stopReason: 'end_turn' }
+    const { d } = deps([done], {}, (req) => [...req.messages, { role: 'assistant', content: 'Looked at it.' }])
+    const t = fakeIo(['go', '/transcript', null])
+    let ctrlO: ((during: 'composer' | 'run') => Promise<void>) | null = null
+    let pagerCalls = 0
+    d.io = {
+      ...t.io,
+      pager: async () => {
+        pagerCalls++
+        return true
+      },
+      onTranscript: (h) => (ctrlO = h)
+    }
+    await runTui(srOpts, d)
+    await ctrlO!('composer')
+    expect(pagerCalls).toBe(0)
+    const text = t.text()
+    expect(text.split('end of transcript').length).toBe(3)
+    expect(text).toContain('Looked at it.')
+    // No cursor movement, erase, or alternate screen: only lines.
+    expect(text).not.toMatch(new RegExp(`${ESC}\\[[0-9;?]*[ABCDEFGHJKSTfhlsu]|${ESC}[78]`))
+    expect(text).not.toContain(ESC)
   })
 
   it('says it is waiting, shows a write as a plain +/- diff, and takes a typed answer from the picker', async () => {

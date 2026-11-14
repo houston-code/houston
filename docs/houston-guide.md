@@ -905,7 +905,9 @@ launch. In this mode:
 - **Nothing is redrawn in place.** There is no spinner. What Houston is doing is
   printed once as a line ("working", "retrying", "waiting for approval", "done in 12s").
 - **Messages say who is speaking.** Your prompt is `you:`, and each stretch of reply
-  starts with `houston:` (`houston, thinking:` for its reasoning).
+  starts with `houston:` (`houston, thinking:` for its reasoning). Reasoning follows
+  `/thoughts`: `show` reads it as it arrives, `summary` (the default) reads one line
+  per thought under that label, and `hide` reads nothing.
 - **Tool calls are sentences**, such as `Using tool Read: src/app.ts`.
 - **Diffs are plain lines** marked `+` and `-`, with no color or line-number gutter.
 - **No color or decorative marks.** Meter bars, box lines and bullets are replaced
@@ -921,6 +923,8 @@ launch. In this mode:
   character. Pasting several lines still lands as one message. Up and Down, `Shift-Tab`
   and `Ctrl-U` print the prompt again on a new line with the text as it now stands.
   Ctrl-R search and in-line cursor movement are off in this mode.
+- **`Ctrl-O` and `/transcript` print the whole session** as plain lines, ending with
+  `end of transcript`, instead of opening the full-screen viewer.
 - **Typing while it works** is not drawn on screen; Enter says whether the line went to
   the running turn or was queued for after it.
 
