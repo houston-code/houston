@@ -1,4 +1,4 @@
-import { clusterWidth, graphemes, visibleWidth } from './tui-wrap'
+import { clusterWidth, graphemes, truncateVisible, truncateVisibleStart, visibleWidth } from './tui-wrap'
 import type { EditorKey } from './tui-keys'
 import type { Painter } from './tui'
 
@@ -497,9 +497,15 @@ export function renderEditor(
 ): EditorView {
   const width = Math.max(8, opts.width)
   if (s.search) {
-    const hit = s.search.index !== null ? s.history[s.search.index] : ''
-    const label = `(reverse-i-search)\`${s.search.query}': `
-    const row = opts.paint(label, 'dim') + (hit ?? '')
+    const hit = (s.search.index !== null ? s.history[s.search.index] : '') ?? ''
+    // One row, never wider than the screen: the redraw counts this as a single row,
+    // so a hit that wrapped (a long prompt, or a multi-line one with its newlines)
+    // left copies of itself behind on every keystroke. A long query keeps its end.
+    const query = truncateVisibleStart(s.search.query, Math.max(1, width - 24))
+    const label = `(reverse-i-search)\`${query}': `
+    const [first, ...more] = hit.split(/\r?\n/)
+    const shown = truncateVisible(more.length ? `${first} …` : first, Math.max(0, width - visibleWidth(label)))
+    const row = opts.paint(label, 'dim') + shown
     return { rows: [row], cursorRow: 0, cursorCol: Math.min(width - 1, visibleWidth(label)) }
   }
 
@@ -514,11 +520,18 @@ export function renderEditor(
     const lead = i === 0 ? promptWidth : contWidth
     const chunks = splitToWidth(line, width - lead)
     if (i === s.row) {
-      // Cursor: which chunk holds `col`, and where in it.
-      const before = visibleWidth(cpSlice(line, 0, s.col))
-      const chunkIndex = Math.min(Math.floor(before / Math.max(1, width - lead)), chunks.length - 1)
+      // Cursor: which chunk holds `col`, and where in it. Walked chunk by chunk rather
+      // than divided by the row width: a wide character is never split, so a row of
+      // them can hold a column less than the width, and the division then put the
+      // cursor ahead of where the text actually wraps.
+      let rest = visibleWidth(cpSlice(line, 0, s.col))
+      let chunkIndex = 0
+      while (chunkIndex < chunks.length - 1 && rest >= visibleWidth(chunks[chunkIndex])) {
+        rest -= visibleWidth(chunks[chunkIndex])
+        chunkIndex++
+      }
       cursorRow = rows.length + chunkIndex
-      cursorCol = lead + (before - chunkIndex * (width - lead))
+      cursorCol = lead + rest
       // A cursor exactly at the wrap boundary sits at the start of the next row.
       if (cursorCol >= width) {
         cursorRow += 1

@@ -175,6 +175,16 @@ describe('the @ mention dropdown', () => {
     expect(asked).toEqual(['gre'])
   })
 
+  it('paints its rows with the painter of each call, so a theme change reaches an open menu', async () => {
+    const menu = makeMentionMenu(async () => ['a.ts'], plain)
+    menu('@a', () => {})
+    await Promise.resolve()
+    await Promise.resolve()
+    const tagged = (s: string, ...styles: string[]): string => `<${styles.join(',')}>${s}`
+    expect(menu('@a', () => {}, tagged)?.join('\n')).toContain('<cyan>@a.ts')
+    expect(menu('@a', () => {})).toContain('  @a.ts')
+  })
+
   it('is not a mention menu outside an @ token', () => {
     const menu = makeMentionMenu(async () => ['x'], plain)
     expect(menu('plain words', () => {})).toBeNull()

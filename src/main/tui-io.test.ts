@@ -5,6 +5,20 @@ import { PassThrough } from 'node:stream'
 import { EventEmitter } from 'node:events'
 import { resolveColor, createTerminalIo, marksByLine, physicalCursorRow, pickerPhysicalRows, type ReadlineLike } from './tui-io'
 import { visibleWidth } from './tui-wrap'
+import { makePainter } from './tui'
+import { renderCommandMenu } from './tui-complete'
+
+// Built from a char code: a literal ESC in a regex trips eslint's no-control-regex.
+const ESC = String.fromCharCode(27)
+/** Cursor moves and carriage returns, which take no columns of their own. */
+const CSI_MOVES = new RegExp(`${ESC}\\[[0-9;?]*[A-Za-z]|\\r`, 'g')
+/** The picker's redraw: back to column 0, up over its rows, erase to the end. */
+const PICKER_REDRAW = new RegExp(`\\r${ESC}\\[\\d+A${ESC}\\[0J`)
+const CURSOR_UP = new RegExp(`${ESC}\\[(\\d+)A`, 'g')
+/** A foreground colour (standard, bright, or 256-colour); dim and bold are not colour. */
+const COLOUR = new RegExp(`${ESC}\\[(3[0-7]|9[0-7]|38;)`)
+/** Text with its SGR codes removed (for asserting on content). */
+const stripSgr = (s: string): string => s.replace(new RegExp(`${ESC}\\[[0-9;]*m`, 'g'), '')
 
 describe('resolveColor', () => {
   it('requires a TTY by default', () => {
@@ -297,6 +311,40 @@ describe('createTerminalIo spinner', () => {
     expect(h.text().indexOf('\x1b[2K')).toBeLessThan(h.text().indexOf('hello'))
   })
 
+  // Reasoning arrives in fragments that seldom end a line, and each frame used to
+  // start by erasing its line: "I need" / " to check how" left only the last word.
+  it('never erases a line of output that has not ended', () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    h.tick()
+    h.io.out('I need')
+    h.io.out(' to check how') // continues the line, no erase in between
+    expect(h.text()).toContain('I need to check how')
+    h.tick() // the next frame goes on a fresh line below it
+    const after = h.text().slice(h.text().indexOf('to check how') + 'to check how'.length)
+    expect(after.startsWith('\n')).toBe(true)
+    expect(after).toContain('Working')
+    // A line ended under a colour reset counts as ended: no blank line before the frame.
+    h.io.out('\x1b[2mdone.\n\x1b[0m')
+    const mark = h.text().length
+    h.tick()
+    expect(h.text().slice(mark).startsWith('\r\x1b[2K')).toBe(true)
+  })
+
+  it('leaves a half-written line on screen when the spinner stops or a prompt opens', async () => {
+    const h = spinnerHarness()
+    h.io.startSpinner?.('Working')
+    h.io.out('partial')
+    h.io.stopSpinner?.()
+    h.io.startSpinner?.('Working')
+    const p = h.io.readLine('> ')
+    const after = h.text().slice(h.text().indexOf('partial') + 'partial'.length)
+    expect(after).not.toContain('\x1b[2K')
+    expect(after).toBe('\n') // the prompt starts below it
+    h.f.submit('y')
+    await p
+  })
+
   it('leaves the spinner on screen when there is nothing to print', () => {
     const h = spinnerHarness()
     h.io.startSpinner?.('Working')
@@ -468,6 +516,32 @@ describe('readComposer (raw-mode composer)', () => {
     const finalEcho = out.slice(out.lastIndexOf('\x1b[0J') + '\x1b[0J'.length)
     expect(finalEcho).toContain('/changes')
     expect(finalEcho).not.toContain('What is different')
+  })
+
+  // A background session's notice lands whenever that session ends. Written into the
+  // open composer, it left the half-typed line above it looking sent, and an open menu
+  // erased part of it on the next keystroke.
+  it('prints output that arrives while it is open above it, and draws the draft again below', async () => {
+    const t = harness({ menuFor: (l) => (l.startsWith('/') ? ['  /help   list commands'] : []) })
+    const read = t.io.readComposer!('ask › ')
+    t.stdin.push('/he')
+    const mark = t.text().length
+    t.io.out('\n· background session "fix tests" finished. Resume it to see the result\n')
+    const after = t.text().slice(mark)
+    const notice = after.indexOf('· background session')
+    // The composer and its menu are erased before the notice is written...
+    expect(after.slice(0, notice)).toContain('\r\x1b[0J')
+    expect(after.slice(0, notice)).not.toContain('ask ›')
+    // ...and drawn again under it, draft and menu intact.
+    expect(after.slice(notice)).toContain('ask › /he')
+    expect(after.slice(notice)).toContain('/help   list commands')
+    t.tick()
+    t.stdin.push('lp\r')
+    await expect(read).resolves.toBe('/help')
+    // Once the composer is closed, output goes straight to the transcript again.
+    const closed = t.text().length
+    t.io.out('later\n')
+    expect(t.text().slice(closed)).toBe('later\n')
   })
 
   it('shows the ultrathink hint under the draft, and keeps it out of the scrollback', async () => {
@@ -937,6 +1011,22 @@ describe('mid-run input', () => {
     expect(last).toContain('yyyy')
   })
 
+  // A wrapped spinner line can't be erased in place: each frame left another copy of
+  // the row above it on screen.
+  it('cuts a long draft from the left, so the spinner line never wraps', () => {
+    const t = harness()
+    t.io.setMode!('auto-edit')
+    t.io.startSpinner!('Working')
+    for (const c of 'please also update the changelog and the readme when you are done with this') t.stdin.push(c)
+    const frames = t.text().split('\x1b[2K').slice(1)
+    expect(frames.length).toBeGreaterThan(70)
+    for (const f of frames) expect(visibleWidth(f.replace(CSI_MOVES, ''))).toBeLessThanOrEqual(79)
+    const last = frames.at(-1)!.replace(CSI_MOVES, '')
+    expect(last).toContain('› …') // the start is what goes
+    expect(last.endsWith('when you are done with this')).toBe(true) // the end, where you type, stays
+    expect(last).toContain('[auto-edit]')
+  })
+
   it('queues what is typed while a turn runs, and hands it over at the end', () => {
     const t = harness()
     t.io.startSpinner!('Working')
@@ -1051,6 +1141,23 @@ describe('the live command menu', () => {
     await read
   })
 
+  // The redraw moves up by the rows it drew; a menu row wider than the screen wrapped
+  // onto an extra row, and every keystroke then left a stale prompt line behind.
+  it('cuts a menu row wider than the screen to fit on one row', async () => {
+    const wide = `  /proposals  ${'List the sessions the agent proposed, '.repeat(3)}`
+    const t = harness((line) => (line.startsWith('/') ? [wide, '  /help   list commands'] : []))
+    const read = t.io.readComposer!('> ')
+    t.stdin.push('/p')
+    const region = t.text().slice(t.text().lastIndexOf('\x1b[0J') + '\x1b[0J'.length)
+    const rows = region.replace(CSI_MOVES, '').split('\n')
+    expect(rows).toHaveLength(3) // the prompt and the two menu rows, nothing wrapped
+    for (const r of rows) expect(visibleWidth(r)).toBeLessThanOrEqual(79)
+    expect(rows[1]).toContain('/proposals')
+    expect(rows[1].endsWith('…')).toBe(true)
+    t.stdin.push('\r')
+    await read
+  })
+
   it('keeps the menu out of the submitted message', async () => {
     const t = harness(() => ['  /help   list commands'])
     const read = t.io.readComposer!('> ')
@@ -1078,6 +1185,66 @@ describe('the live command menu', () => {
     await expect(read).resolves.toBe('plain')
   })
 })
+
+// The adapter draws the spinner, the picker, the composer's marks and the menus
+// itself. Its painter was always the default theme, so /theme mono (or light, or the
+// detected light background) never reached them, and mono still drew colour.
+describe('the session theme', () => {
+  /** Draw each part the adapter paints, returning what was written. */
+  async function drawEverything(setTheme?: 'mono') {
+    const stdin = fakeTty()
+    const written: string[] = []
+    let frame = (): void => {}
+    let clock = 1000
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 80,
+      rows: () => 24,
+      now: () => clock,
+      paint: makePainter(true),
+      schedule: (fn) => {
+        frame = fn
+        return () => {}
+      },
+      editorMode: () => 'vim',
+      menuFor: (line, _redraw, paint) =>
+        line.startsWith('/') ? renderCommandMenu([{ name: 'help', description: 'list commands' }], paint as never) : []
+    })
+    if (setTheme) io.setPaint!(makePainter(true, setTheme))
+    // The spinner, with a draft and a queued message.
+    io.startSpinner!('Working')
+    stdin.push('one\r')
+    stdin.push('two')
+    frame()
+    io.stopSpinner!()
+    // The composer: the ultrathink mark and hint, the vim marker in normal mode, the menu.
+    const read = io.readComposer!('> ', undefined, { ultrathinkEffect: () => 'raises' })
+    stdin.push('ultrathink')
+    clock += 500
+    stdin.push(ESC) // normal mode
+    stdin.push('cc') // change the whole line: back to insert, empty
+    stdin.push('/h')
+    stdin.push('\r')
+    await read
+    // The picker's highlighted option.
+    const picked = io.select!({ title: 'Choose:', options: [{ label: 'A', value: 'a' }] })
+    stdin.push('\r')
+    await picked
+    return written.join('')
+  }
+
+  it('draws in colour by default, and none of it once the theme is mono', async () => {
+    const coloured = await drawEverything()
+    expect(coloured).toMatch(COLOUR)
+    const mono = await drawEverything('mono')
+    expect(mono).not.toMatch(COLOUR)
+    // The same parts were drawn, just without colour.
+    for (const part of ['Working', '(1 queued)', 'ultrathink', 'N ', '/help', '› A']) expect(stripSgr(mono)).toContain(part)
+  })
+})
+
 
 describe('marksByLine', () => {
   it('maps ranges over the joined draft onto the line that holds them', () => {
@@ -1156,6 +1323,74 @@ describe('sub-prompts and the picker after the composer', () => {
     expect(written.join('')).toMatch(new RegExp(`\r${String.fromCharCode(27)}\\[\\d+A`))
     // readline's own listener is back for the next read.
     expect(stdin.listenerCount('keypress')).toBeGreaterThan(0)
+  })
+
+  function pickerHarness(rows = 12) {
+    const stdin = fakeTty()
+    const written: string[] = []
+    const io = createTerminalIo({
+      stdin,
+      createInterface: () => fakeRl().rl,
+      write: (s) => written.push(s),
+      columns: () => 60,
+      rows: () => rows,
+      now: () => 1000
+    })
+    return { io, stdin, written, text: () => written.join('') }
+  }
+  const models = Array.from({ length: 40 }, (_, i) => ({
+    label: i % 3 === 0 ? `gpt-${i}` : `claude-${i}`,
+    value: String(i),
+    description: i % 3 === 0 ? 'OpenAI' : 'Anthropic'
+  }))
+
+  // The redraw moves up over the picker, and can't move past the top of the screen: a
+  // list taller than the screen copied its top into the scrollback on every arrow press.
+  it('the picker scrolls a list taller than the screen in a window that fits it', async () => {
+    const t = pickerHarness(12)
+    const picked = t.io.select!({ title: 'Model:', options: models })
+    for (let i = 0; i < 15; i++) t.stdin.push('\x1b[B')
+    const frames = t.text().split(PICKER_REDRAW)
+    expect(frames).toHaveLength(16) // the first draw and one redraw per arrow
+    for (const f of frames) expect(f.split('\n').length - 1).toBeLessThanOrEqual(11)
+    for (const up of t.text().matchAll(CURSOR_UP)) expect(Number(up[1])).toBeLessThanOrEqual(11)
+    const last = frames.at(-1)!
+    expect(last).toContain('› gpt-15')
+    expect(last).toMatch(/↑ \d+ more/)
+    expect(last).toMatch(/↓ \d+ more/)
+    t.stdin.push('\r')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: '15' })
+  })
+
+  it('a filterable picker narrows as you type, where another hands off to typing', async () => {
+    const t = pickerHarness()
+    const picked = t.io.select!({ title: 'Model:', filterable: true, options: models })
+    t.stdin.push('g')
+    t.stdin.push('p')
+    t.stdin.push('t')
+    t.stdin.push('\x1b[B') // the second match
+    expect(t.text().split(PICKER_REDRAW).at(-1)).toContain('Model: gpt')
+    t.stdin.push('\r')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: '3' })
+
+    const t2 = pickerHarness()
+    const plain = t2.io.select!({ title: 'Choose:', options: models.slice(0, 3) })
+    t2.stdin.push('g')
+    await expect(plain).resolves.toEqual({ kind: 'type' })
+  })
+
+  it('prints output that arrives while the picker is open above it, and draws the picker again', async () => {
+    const t = pickerHarness()
+    const picked = t.io.select!({ title: 'Choose:', options: models.slice(0, 3) })
+    const mark = t.text().length
+    t.io.out('\n· background session "fix tests" finished\n')
+    const after = t.text().slice(mark)
+    const notice = after.indexOf('· background session')
+    // The picker (its footer wraps at 60 columns: six rows) is erased first.
+    expect(after.slice(0, notice).startsWith('\r\x1b[6A\x1b[0J')).toBe(true)
+    expect(after.slice(notice)).toContain('› gpt-0') // and drawn again below
+    t.stdin.push('\r')
+    await expect(picked).resolves.toEqual({ kind: 'commit', value: '0' })
   })
 
   it('the composer joins a character split across two reads', async () => {

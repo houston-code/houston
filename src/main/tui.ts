@@ -82,7 +82,7 @@ import type { ConversationSettingsPatch, ProposalState } from '@shared/agent'
 import { createFindingPrinter } from '@shared/reviewFindings'
 import { ASK_USER_TOOL, PRESENT_PLAN_TOOL } from '@shared/constants'
 import { PLAN_OUTCOME_LABEL, deniedPromptText, planOutcome, stoppedPromptText } from '@shared/promptOutcome'
-import { truncateVisible, stripControlChars, osc52Copy, osc8Link, visibleWidth, wrapAnsi } from './tui-wrap'
+import { truncateVisible, stripControlChars, osc52Copy, osc8Link, takeStreamedRows, visibleWidth, wrapAnsi } from './tui-wrap'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { SHOW_IMAGES_NAME, parseGalleryArgsSafe } from '@shared/gallery'
@@ -2592,6 +2592,12 @@ export interface TuiIo {
   /** Erase the current terminal line (the abandoned composer input on Ctrl-C). */
   clearLine?: () => void
   /**
+   * Draw the adapter's own parts (the spinner, the picker, the composer's marks and
+   * menus) with the session's theme. Called at startup and on `/theme`; absent in
+   * tests and off-TTY, where those parts are not drawn.
+   */
+  setPaint?: (paint: Painter) => void
+  /**
    * Read one line, showing `prompt`. Resolves null on end-of-input (Ctrl-D),
    * which ends the session. Used for the composer, approvals, and questions
    * alike — the driver only ever has one read outstanding at a time.
@@ -3143,12 +3149,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     deps.io.out(`${opts.usageError}\n`)
     return 2
   }
-  // Reassigned by /theme (takes effect from the next output); the spinner keeps
-  // the initial theme since its painter lives in the terminal adapter.
   const settings = deps.getSettings()
-  // Reassigned by /theme (takes effect from the next output); the spinner keeps the
-  // initial theme since its painter lives in the terminal adapter.
+  // Reassigned by /theme (takes effect from the next output). The terminal adapter
+  // draws the spinner, picker and menus itself, so it is handed the same painter.
   let paint = makePainter(opts.color, resolveTheme(settings.tuiTheme ?? '') ?? opts.detectedTheme ?? 'default')
+  deps.io.setPaint?.(paint)
   const newId = deps.newId ?? randomUUID
 
   // Trusted-folders gate: if this project's .houston/settings.json ELEVATES
@@ -4295,8 +4300,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }
         const r = await deps.io.select!({
           title: 'Model:',
+          // A fetched provider list runs to dozens of models: typing narrows it.
+          filterable: true,
           options: choices.map((c, i) => ({ label: c.label, value: String(i), description: c.description }))
         })
+        if (r.kind === 'cancel') deps.io.out(paint('· cancelled\n', 'dim'))
         if (r.kind !== 'commit') continue
         const picked = choices[Number(r.value)]
         if (!picked) continue
@@ -4324,6 +4332,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       }
       if (result.kind === 'set-theme') {
         paint = makePainter(opts.color, result.theme)
+        deps.io.setPaint?.(paint)
         // Persist it: a theme you have to re-pick on every launch is not a setting,
         // it is a party trick.
         deps.updateSettings?.({ tuiTheme: result.theme })
@@ -4645,7 +4654,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         roundShown = true
       }
     }
-    flushStreamedText = flushMd
+    // Reasoning streams in fragments that seldom end a line ("I need", " to check
+    // how"). Printed as they came, the spinner's next frame wiped the half-written
+    // line, and the reply ran on from the end of it. So the unfinished line is held
+    // and printed a row at a time, and whatever comes next prints it first.
+    let reasoningTail = ''
+    const flushReasoning = (): void => {
+      if (reasoningTail) deps.io.out(`${paint(reasoningTail, 'dim')}\n`)
+      reasoningTail = ''
+    }
+    flushStreamedText = () => {
+      flushReasoning()
+      flushMd()
+    }
     // Liveness while the agent works (relabelled per event; erased on any output).
     deps.io.setStatus?.(renderRunStatus({ model, branch, contextTokens }, paint))
     deps.io.startSpinner?.('Working')
@@ -4659,6 +4680,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // The title is ambient (it just describes the tab) so it is always set; the
       // bell + notification honor the user's existing "notify me" setting.
       if (sig) deps.io.signal?.(notifyEnabled ? sig : sig.title ? { title: sig.title } : {})
+      if (e.type !== 'reasoning') flushReasoning()
       if (e.type === 'text') {
         retryStreak = 0 // the request got through
         const s = md.push(e.delta)
@@ -4678,11 +4700,14 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         retryStreak = 0
       }
       switch (e.type) {
-        case 'reasoning':
+        case 'reasoning': {
           deps.io.setSpinnerLabel?.('Thinking')
-          deps.io.out(paint(e.delta, 'dim'))
+          const { rows, rest } = takeStreamedRows(reasoningTail + e.delta, columns())
+          reasoningTail = rest
+          if (rows) deps.io.out(paint(rows, 'dim'))
           roundShown = true
           break
+        }
         case 'turn_discarded':
           // What already reached the terminal can't be erased in line mode, so strike
           // it out in words; the retry or fallback line that follows says why.
@@ -5106,6 +5131,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // can't crash the run (a throw here has no catch on the startRun side).
       persistMessages(m)
     })
+    // A run that ended with no closing event still shows the last of its reasoning.
+    flushReasoning()
     flushStreamedText = () => {}
     deps.io.stopSpinner?.()
     // Drain any approval/question prompts still in flight before the next composer read.
