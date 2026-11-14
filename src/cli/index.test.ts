@@ -155,6 +155,34 @@ describe('cliArgvError', () => {
     }
     expect(USAGE).toContain('houston providers remove <id>')
   })
+
+  it('does not mark the flags an interactive session takes as one-shot only', () => {
+    const optionText = (flag: string): string => {
+      const lines = USAGE.split('\n')
+      const at = lines.findIndex((l) => new RegExp(`^\\s+(-\\w, )?${flag}\\b`).test(l))
+      expect(at).toBeGreaterThanOrEqual(0)
+      // The flag's own line plus its indented continuation lines.
+      const own = [lines[at]]
+      for (let i = at + 1; i < lines.length && /^\s{20,}\S/.test(lines[i]); i++) own.push(lines[i])
+      return own.join('\n')
+    }
+    for (const flag of ['--effort', '--allowed-tools', '--disallowed-tools', '--append-system-prompt', '--mcp-config', '--add-dir', '--name']) {
+      expect(optionText(flag)).not.toContain('(-p)')
+    }
+    expect(cliArgvError(['-i', '-n', 'Title', '--add-dir', '/x', '--add-dir=/y', '--effort', 'high'])).toBeNull()
+    expect(cliArgvError(['-i', '--name'])).toBe('--name needs a value')
+  })
+
+  it('takes -w with or without a branch name', () => {
+    expect(cliArgvError(['-w'])).toBeNull()
+    expect(cliArgvError(['-w', 'feature/x'])).toBeNull()
+    expect(cliArgvError(['--worktree=fix', '-p', 'go'])).toBeNull()
+    expect(cliArgvError(['-w', '-p', 'go'])).toBeNull()
+    expect(cliArgvError(['-p', '-w', '--json'])).toBeNull()
+    // One name only: a second word is still a stray one.
+    expect(cliArgvError(['-w', 'a', 'b'])).toContain('unexpected argument: "b"')
+    expect(USAGE).toMatch(/^ {2}-w, --worktree \[name\]/m)
+  })
 })
 
 describe('shortUsage', () => {

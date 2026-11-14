@@ -833,6 +833,21 @@ are never written back:
 A value a flag can't take (`--max-turns 0`, `--effort max`, an empty `--verify`)
 exits 2 before anything runs, rather than running without the budget you meant.
 
+**Session flags (also interactive).** `--effort`, `--allowed-tools`,
+`--disallowed-tools`, `--append-system-prompt`, and `--mcp-config` work the same in
+an interactive `-i` session, for the whole session (`--effort` is where the chat
+starts; `/reasoning` still changes it). Three more work in both modes:
+
+- `--add-dir <dir>`: another folder the agent may read and edit this session, on top
+  of the project folder and Settings' additional folders. Repeat it for more; each
+  must exist. Interactively, `/add-dir <dir>` adds one later.
+- `-n, --name <title>`: the chat's title, set at the start.
+- `-w, --worktree [name]`: start in a fresh git worktree on a new branch from the
+  current HEAD (`<repo>/.houston/worktrees/<name>`, a generated name by default). An
+  interactive session removes it on exit when it holds no changes or commits, and
+  otherwise asks whether to keep it; a `-p` run keeps it, prints its path to stderr,
+  and adds `"worktree"` to the `--json` init line.
+
 **`--json` output.** The first line describes the run, so a harness can check its
 setup and the contract version before reading anything else:
 

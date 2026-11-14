@@ -423,6 +423,20 @@ describe('removeWorktree', () => {
     expect(calls).toContainEqual(['branch', '-d', 'feat/x'])
   })
 
+  it('decides the branch on its own when asked: force-delete it, or keep unmerged commits under force', async () => {
+    const calls: string[][] = []
+    const exec = fakeGit({ 'worktree remove': () => '', 'branch -D': () => '', 'branch -d': () => '' }, calls)
+    await removeWorktree(wt, { branch: 'force' }, exec)
+    // The checkout removal stays safe (no --force), the branch goes regardless.
+    expect(calls).toContainEqual(['worktree', 'remove', wt.path])
+    expect(calls).toContainEqual(['branch', '-D', 'feat/x'])
+    calls.length = 0
+    await removeWorktree(wt, { force: true, branch: 'safe' }, exec)
+    expect(calls).toContainEqual(['worktree', 'remove', wt.path, '--force'])
+    expect(calls).toContainEqual(['branch', '-d', 'feat/x'])
+    expect(calls).not.toContainEqual(['branch', '-D', 'feat/x'])
+  })
+
   it('keeps a dirty worktree instead of forcing it, with a readable message', async () => {
     const calls: string[][] = []
     const exec: GitRun = async (args) => {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { promises as fsp, realpathSync, statSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
 import { isAbsolute, resolve as resolvePath } from 'node:path'
 import {
   APPROVAL_POLICIES,
@@ -9,9 +9,18 @@ import {
   type ApprovalPolicy,
   type ProviderConfig
 } from '@shared/types'
-import { loadProjectConfig, parseProjectMcpServers } from './agent/projectConfig'
-import { parseToolList } from './agent/toolScope'
-import { getTool } from './agent/tools'
+import { loadProjectConfig } from './agent/projectConfig'
+import {
+  parseSessionFlag,
+  readFlagFile,
+  sessionFlagConflict,
+  readSessionFile,
+  resolveSessionInputs,
+  scopeEntryText,
+  sessionFlagFields,
+  type SessionFlags,
+  type SessionInputs
+} from './sessionFlags'
 import { formatSchemaErrors, schemaProblems, validateJson, type JsonSchema } from '@shared/jsonSchema'
 import { stripControlChars, terminalText } from './tui-wrap'
 import { missingKeyHint } from '@shared/provider-keys'
@@ -24,7 +33,6 @@ import { createFindingPrinter } from '@shared/reviewFindings'
 import { formatCost } from '@shared/usage'
 import {
   isReasoningEffort,
-  REASONING_EFFORTS,
   systemNoteMessage,
   type AgentEvent,
   type AgentRunRequest,
@@ -37,12 +45,9 @@ import {
   type RunSettingsOverrides,
   type StopReason,
   type ToolApprovalDecision,
-  type ToolScope,
-  type ToolScopeEntry,
   retryProgress,
 } from '@shared/agent'
 import { throttleNotice } from '@shared/rateLimit'
-import type { McpServerConfig } from '@shared/types'
 import { SubagentTermLines } from '@shared/subagents'
 
 /**
@@ -135,6 +140,8 @@ export interface HeadlessInit {
   mcpServers?: string[]
   /** Whether the final answer must match an `--output-schema`. */
   outputSchema: boolean
+  /** The worktree `-w` created for this run (it is kept: `cwd` is its path). */
+  worktree?: { path: string; branch: string }
 }
 
 /**
@@ -208,7 +215,7 @@ export function isHeadlessApprovalMode(v: unknown): v is HeadlessApprovalMode {
   return typeof v === 'string' && (HEADLESS_APPROVAL_MODES as readonly string[]).includes(v)
 }
 
-export interface HeadlessOptions {
+export interface HeadlessOptions extends SessionFlags {
   prompt: string
   cwd: string
   providerId?: string
@@ -247,8 +254,6 @@ export interface HeadlessOptions {
    * `prompt` is empty until runHeadless reads it.
    */
   promptFromStdin?: boolean
-  /** `--effort`: the reasoning effort for this run, over settings.reasoningEffort. */
-  effort?: ReasoningEffort
   /** `--max-turns`: a hard step cap for this run, over settings.maxIterations. */
   maxTurns?: number
   /** `--max-cost`: the USD cost at which the run is stopped (maxCostUsd, a hard cap). */
@@ -265,22 +270,17 @@ export interface HeadlessOptions {
    * reads and checks it before anything runs.
    */
   outputSchema?: string
-  /** `--allowed-tools`: the only tools (or tool calls) the run may use. */
-  allowedTools?: ToolScopeEntry[]
-  /** `--disallowed-tools`: tools (or tool calls) the run may never use. Wins over allowed. */
-  disallowedTools?: ToolScopeEntry[]
-  /** `--append-system-prompt`, each as given: text, or `@` and an absolute file path. */
-  appendSystemPrompt?: string[]
-  /** `--mcp-config`: absolute paths of files listing MCP servers for this run only. */
-  mcpConfig?: string[]
-  /** `--add-dir`: absolute paths of extra directories the run may work in, like Settings' additional directories. */
-  addDirs?: string[]
   /**
    * A flag carried a value it can't take. runHeadless reports it and exits with
    * HEADLESS_EXIT.usage before anything runs, rather than silently running with
    * a budget or check the caller didn't ask for.
    */
   usageError?: string
+  /**
+   * The worktree the entry created for `-w` (and moved `cwd` into), reported on
+   * the `--json` init line. A one-shot run always keeps it.
+   */
+  createdWorktree?: { path: string; branch: string }
 }
 
 /** Facts about the process's stdin that decide whether a prompt can come from it. */
@@ -324,7 +324,11 @@ export const HEADLESS_FLAGS = new Set([
   '--disallowed-tools',
   '--append-system-prompt',
   '--mcp-config',
-  '--add-dir'
+  '-n',
+  '--name',
+  '--add-dir',
+  '-w',
+  '--worktree'
 ])
 
 /** Read a flag's value, supporting both `--flag value` and `--flag=value`. */
@@ -365,18 +369,13 @@ export function parseHeadlessArgs(
   let json = false
   let continueSession = false
   let resumeId: string | undefined
-  let effort: ReasoningEffort | undefined
+  const session: SessionFlags = {}
   let maxTurns: number | undefined
   let maxCostUsd: number | undefined
   let verifyCommand: string | undefined
   let noMemory = false
   let inputFormat: HeadlessInputFormat | undefined
   let outputSchema: string | undefined
-  let allowedTools: ToolScopeEntry[] | undefined
-  let disallowedTools: ToolScopeEntry[] | undefined
-  const appendSystemPrompt: string[] = []
-  const mcpConfig: string[] = []
-  const addDirs: string[] = []
   let usageError: string | undefined
   // Keep the first bad value: it's the one the caller reads about.
   const bad = (message: string): void => {
@@ -385,6 +384,12 @@ export function parseHeadlessArgs(
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
+    // The flags the interactive session takes too (effort, tool scope, MCP, title, …).
+    const sessionNext = parseSessionFlag(argv, i, defaultCwd, session, bad)
+    if (sessionNext !== null) {
+      i = sessionNext
+      continue
+    }
     if (name === '-p' || name === '--prompt') {
       promptFlag = true
       if (!argv[i].includes('=') && argv[i + 1] !== undefined && HEADLESS_FLAGS.has(nameOf(argv[i + 1]))) {
@@ -393,11 +398,6 @@ export function parseHeadlessArgs(
       }
       const { value, next } = flagValue(argv, i)
       prompt = value
-      i = next
-    } else if (name === '--effort') {
-      const { value, next } = flagValue(argv, i)
-      if (isReasoningEffort(value)) effort = value
-      else bad(`--effort must be one of ${REASONING_EFFORTS.join(', ')} (got ${quoted(value)})`)
       i = next
     } else if (name === '--max-turns') {
       const { value, next } = flagValue(argv, i)
@@ -427,33 +427,6 @@ export function parseHeadlessArgs(
       if (!v) bad('--output-schema needs a JSON Schema: a file path, or the schema itself as JSON')
       else if (outputSchema !== undefined) bad('--output-schema can be given only once')
       else outputSchema = v.startsWith('{') ? v : resolvePath(defaultCwd, v)
-      i = next
-    } else if (name === '--allowed-tools' || name === '--disallowed-tools') {
-      const { value, next } = flagValue(argv, i)
-      const parsed = parseToolList(value ?? '', name)
-      if ('error' in parsed) bad(parsed.error)
-      else if (name === '--allowed-tools') allowedTools = [...(allowedTools ?? []), ...parsed.entries]
-      else disallowedTools = [...(disallowedTools ?? []), ...parsed.entries]
-      i = next
-    } else if (name === '--append-system-prompt') {
-      const { value, next } = flagValue(argv, i)
-      if (value === undefined || !value.trim() || value.trim() === '@') {
-        bad('--append-system-prompt needs text, or @ and a file path, like --append-system-prompt @ci-rules.md')
-      } else {
-        appendSystemPrompt.push(value.startsWith('@') ? `@${resolvePath(defaultCwd, value.slice(1))}` : value)
-      }
-      i = next
-    } else if (name === '--mcp-config') {
-      const { value, next } = flagValue(argv, i)
-      if (value?.trim()) mcpConfig.push(resolvePath(defaultCwd, value.trim()))
-      else bad('--mcp-config needs the path of a JSON file listing MCP servers')
-      i = next
-    } else if (name === '--add-dir') {
-      const { value, next } = flagValue(argv, i)
-      const dir = value?.trim() ? resolvePath(defaultCwd, value.trim()) : undefined
-      if (!dir) bad('--add-dir needs the path of a directory, like --add-dir ../shared')
-      else if (!isDirectory(dir)) bad(`--add-dir: ${quoted(value)} is not a directory`)
-      else if (!addDirs.includes(dir)) addDirs.push(dir)
       i = next
     } else if (name === '--continue') {
       continueSession = true
@@ -502,6 +475,9 @@ export function parseHeadlessArgs(
     }
   }
 
+  const conflict = sessionFlagConflict(session, { continueSession, resumeId })
+  if (conflict) bad(conflict)
+
   // stream-json reads every prompt from stdin, one line per turn, so it is a
   // headless run on its own (no -p needed) and takes no -p prompt.
   if (inputFormat === 'stream-json') {
@@ -533,18 +509,13 @@ export function parseHeadlessArgs(
     continueSession,
     resumeId,
     ...(promptFromStdin ? { promptFromStdin } : {}),
-    ...(effort !== undefined ? { effort } : {}),
+    ...sessionFlagFields(session),
     ...(maxTurns !== undefined ? { maxTurns } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd } : {}),
     ...(verifyCommand !== undefined ? { verifyCommand } : {}),
     ...(noMemory ? { noMemory } : {}),
     ...(inputFormat !== undefined ? { inputFormat } : {}),
     ...(outputSchema !== undefined ? { outputSchema } : {}),
-    ...(allowedTools !== undefined ? { allowedTools } : {}),
-    ...(disallowedTools !== undefined ? { disallowedTools } : {}),
-    ...(appendSystemPrompt.length ? { appendSystemPrompt } : {}),
-    ...(mcpConfig.length ? { mcpConfig } : {}),
-    ...(addDirs.length ? { addDirs } : {}),
     ...(usageError !== undefined ? { usageError } : {})
   }
 }
@@ -552,15 +523,6 @@ export function parseHeadlessArgs(
 /** Runtime guard: true when `v` is a known `--input-format`. */
 export function isHeadlessInputFormat(v: unknown): v is HeadlessInputFormat {
   return typeof v === 'string' && (HEADLESS_INPUT_FORMATS as readonly string[]).includes(v)
-}
-
-/** Whether `path` is an existing directory (following symlinks, as a root does). */
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory()
-  } catch {
-    return false
-  }
 }
 
 /** A flag value as it appears in an error message. */
@@ -721,28 +683,14 @@ export interface HeadlessDeps {
      * interactively. The fresh-create path stores its settings via `create`.
      */
     setSettings: (id: string, patch: Pick<ConversationSettingsPatch, 'providerId' | 'model' | 'reasoningEffort'>) => void
+    /** Give the conversation the `--name` title (marked as chosen, so it is never auto-titled). */
+    rename?: (id: string, title: string) => void
   }
 }
 
-/** Most MCP servers `--mcp-config` may add, matching the cap on a project's own. */
-const MAX_RUN_MCP_SERVERS = 10
-
-/** Largest `--output-schema` / `--append-system-prompt` / `--mcp-config` file read, in bytes. */
-const MAX_INPUT_FILE_BYTES = 256 * 1024
-
-/** Read a flag's file, refusing an oversized one before loading it. */
-async function readFlagFile(path: string): Promise<string> {
-  const { size } = await fsp.stat(path)
-  if (size > MAX_INPUT_FILE_BYTES) throw new Error(`larger than ${MAX_INPUT_FILE_BYTES / 1024} KB`)
-  return fsp.readFile(path, 'utf8')
-}
-
 /** What runHeadless reads and checks from the flags that name files or JSON, before anything runs. */
-interface ResolvedInputs {
+interface ResolvedInputs extends SessionInputs {
   outputSchema?: Record<string, unknown>
-  appendSystemPrompt?: string
-  mcpServers?: McpServerConfig[]
-  toolScope?: ToolScope
 }
 
 /**
@@ -754,22 +702,11 @@ export async function resolveHeadlessInputs(
   opts: HeadlessOptions,
   readFile: (path: string) => Promise<string>
 ): Promise<ResolvedInputs | { error: string }> {
-  const read = async (path: string, flag: string): Promise<string | { error: string }> => {
-    try {
-      const text = await readFile(path)
-      if (Buffer.byteLength(text) > MAX_INPUT_FILE_BYTES) {
-        return { error: `${flag}: ${path} is larger than ${MAX_INPUT_FILE_BYTES / 1024} KB` }
-      }
-      return text
-    } catch (e) {
-      return { error: `${flag}: cannot read ${path} (${(e as NodeJS.ErrnoException).code ?? (e as Error).message})` }
-    }
-  }
   const out: ResolvedInputs = {}
 
   if (opts.outputSchema !== undefined) {
     const inline = opts.outputSchema.startsWith('{')
-    const text = inline ? opts.outputSchema : await read(opts.outputSchema, '--output-schema')
+    const text = inline ? opts.outputSchema : await readSessionFile(opts.outputSchema, '--output-schema', readFile)
     if (typeof text !== 'string') return text
     let schema: unknown
     try {
@@ -784,72 +721,12 @@ export async function resolveHeadlessInputs(
     out.outputSchema = schema as Record<string, unknown>
   }
 
-  if (opts.appendSystemPrompt?.length) {
-    const parts: string[] = []
-    for (const arg of opts.appendSystemPrompt) {
-      const text = arg.startsWith('@') ? await read(arg.slice(1), '--append-system-prompt') : arg
-      if (typeof text !== 'string') return text
-      if (!text.trim()) return { error: `--append-system-prompt: ${arg.startsWith('@') ? arg.slice(1) : 'the text'} is empty` }
-      parts.push(text.trim())
-    }
-    out.appendSystemPrompt = parts.join('\n\n')
-  }
-
-  if (opts.mcpConfig?.length) {
-    const servers: McpServerConfig[] = []
-    for (const path of opts.mcpConfig) {
-      const text = await read(path, '--mcp-config')
-      if (typeof text !== 'string') return text
-      let raw: unknown
-      try {
-        raw = JSON.parse(text)
-      } catch (e) {
-        return { error: `--mcp-config: ${path} is not valid JSON (${(e as Error).message})` }
-      }
-      const list = (raw as { mcpServers?: unknown } | null)?.mcpServers
-      if (!Array.isArray(list)) {
-        return { error: `--mcp-config: ${path} needs an "mcpServers" array, the same shape as .houston/settings.json` }
-      }
-      // The project-config parser is the validator (ids sanitized, a runnable target
-      // required, values typed); an entry it drops is reported rather than skipped.
-      for (const [i, entry] of list.entries()) {
-        const [server] = parseProjectMcpServers({ mcpServers: [entry] })
-        if (!server) {
-          return { error: `--mcp-config: ${path}: server ${i + 1} needs an "id" and a "command" or "url"` }
-        }
-        if (servers.some((s) => s.id === server.id)) {
-          return { error: `--mcp-config: two servers share the id "${server.id}"` }
-        }
-        servers.push(server)
-      }
-    }
-    if (servers.length > MAX_RUN_MCP_SERVERS) {
-      return { error: `--mcp-config: at most ${MAX_RUN_MCP_SERVERS} servers per run (got ${servers.length})` }
-    }
-    if (servers.length) out.mcpServers = servers
-  }
-
-  if (opts.allowedTools || opts.disallowedTools) {
-    // A misspelled name would quietly scope nothing: a disallowed typo denies no
-    // call, an allowed typo offers no tool. Built-in names are checked here; an MCP
-    // tool's name isn't known until its server connects, so `mcp__` names pass.
-    for (const [flag, list] of [
-      ['--allowed-tools', opts.allowedTools],
-      ['--disallowed-tools', opts.disallowedTools]
-    ] as const) {
-      const unknown = (list ?? []).find((e) => !e.tool.includes('*') && !e.tool.startsWith('mcp__') && !getTool(e.tool))
-      if (unknown) return { error: `${flag}: unknown tool "${unknown.tool}"` }
-    }
-    out.toolScope = {
-      ...(opts.allowedTools ? { allowed: opts.allowedTools } : {}),
-      ...(opts.disallowedTools ? { disallowed: opts.disallowedTools } : {})
-    }
-  }
-  return out
+  // The flags the interactive session shares: system prompt text, MCP servers,
+  // tool scope.
+  const session = await resolveSessionInputs(opts, { readFile })
+  if ('error' in session) return session
+  return { ...out, ...session }
 }
-
-/** A scope entry the way the flag spelled it, for the init line. */
-const scopeEntryText = (e: ToolScopeEntry): string => (e.match === '*' ? e.tool : `${e.tool}(${e.match})`)
 
 /**
  * The JSON value in a final answer: the whole text, else the body of a fenced code
@@ -1072,7 +949,8 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       ...(opts.allowedTools ? { allowedTools: opts.allowedTools.map(scopeEntryText) } : {}),
       ...(opts.disallowedTools ? { disallowedTools: opts.disallowedTools.map(scopeEntryText) } : {}),
       ...(inputs.mcpServers ? { mcpServers: inputs.mcpServers.map((s) => `run-${s.id}`) } : {}),
-      outputSchema: inputs.outputSchema !== undefined
+      outputSchema: inputs.outputSchema !== undefined,
+      ...(opts.createdWorktree ? { worktree: opts.createdWorktree } : {})
     }
     deps.out(`${JSON.stringify(init)}\n`)
     // Surface the conversation id so a script can capture it and later `--resume`
@@ -1157,6 +1035,15 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
     }
   }
 
+  // --name: the chat's title, chosen by the caller, so it is never auto-titled over.
+  if (conversationId && opts.title && deps.session?.rename) {
+    try {
+      deps.session.rename(conversationId, opts.title)
+    } catch {
+      // ignore: persistence is best-effort
+    }
+  }
+
   // Text mode gets the session id as a stderr marker, keeping stdout clean.
   if (conversationId && !opts.json) deps.err(`· session ${conversationId}\n`)
 
@@ -1216,6 +1103,9 @@ async function runHeadlessSession(inputOpts: HeadlessOptions, deps: HeadlessDeps
       ...(opts.disallowedTools ? [`disallowed: ${opts.disallowedTools.map(scopeEntryText).join(', ')}`] : [])
     ]
     deps.err(`· tools scoped for this run (${parts.join('; ')})\n`)
+  }
+  if (opts.addDirs?.length && !opts.json) {
+    deps.err(`· extra directories for this run: ${opts.addDirs.map(stripControlChars).join(', ')}\n`)
   }
 
   // Say once that approved shell commands run offline, the first time a prompt says so.

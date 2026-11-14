@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { UnreadOutcome } from '@shared/chatStatus'
-import { realpathSync, statSync } from 'node:fs'
+import { realpathSync } from 'node:fs'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_LABEL,
@@ -173,6 +173,15 @@ import { parseMemoryAction, runMemoryCommand, type MemoryAction, type MemoryComm
 import type { MemoryStore } from './agent/memoryStore'
 import { buildDoctorReport, renderDoctor, type DoctorFacts } from './tui-doctor'
 import { flagValue, nameOf, resolveHeadlessModel } from './headless'
+import {
+  parseSessionFlag,
+  resolveAddDir,
+  scopeEntryText,
+  sessionFlagConflict,
+  sessionFlagFields,
+  type SessionFlags,
+  type SessionInputs
+} from './sessionFlags'
 import { isSubagentTool, splitSubagentReport, SubagentTermLines } from '@shared/subagents'
 import { formatElapsed } from '@shared/elapsed'
 import {
@@ -200,7 +209,7 @@ import { stripInvisible, invisibleNote } from '@shared/invisibleChars'
  * the real terminal I/O when an interactive flag is present.
  */
 
-export interface TuiOptions {
+export interface TuiOptions extends SessionFlags {
   cwd: string
   providerId?: string
   model?: string
@@ -227,8 +236,6 @@ export interface TuiOptions {
    * used only while no theme is saved: a `/theme` choice always wins.
    */
   detectedTheme?: ThemeName
-  /** `--add-dir`: extra directories (absolute) the session's runs may work in; `/add-dir` adds more. */
-  addDirs?: string[]
   /**
    * Reduced motion for this session: the entry point resolves it from
    * HOUSTON_REDUCE_MOTION and the saved setting; /reduce-motion changes it.
@@ -244,6 +251,13 @@ export interface TuiOptions {
    * with a usage error before anything runs, rather than silently ignoring it.
    */
   usageError?: string
+  /**
+   * What the session flags that name files or tools resolved to
+   * (`--append-system-prompt`, `--mcp-config`, `--allowed-tools`/`--disallowed-tools`),
+   * read and checked by the entry before the session starts. Every
+   * turn of the session carries them.
+   */
+  sessionInputs?: SessionInputs
 }
 
 /**
@@ -271,11 +285,20 @@ export function parseTuiArgs(
   let continueSession = false
   let resumeId: string | undefined
   let usageError: string | undefined
-  const addDirs: string[] = []
   let screenReader = false
+  const session: SessionFlags = {}
+  const bad = (message: string): void => {
+    usageError ??= message
+  }
 
   for (let i = 0; i < argv.length; i++) {
     const name = nameOf(argv[i])
+    // The flags a one-shot run takes too (effort, tool scope, MCP, title, …).
+    const sessionNext = parseSessionFlag(argv, i, defaultCwd, session, bad)
+    if (sessionNext !== null) {
+      i = sessionNext
+      continue
+    }
     if (name === '-i' || name === '--interactive' || name === '--tui') {
       interactive = true
     } else if (name === '-C' || name === '--cwd') {
@@ -296,9 +319,11 @@ export function parseTuiArgs(
       const { value, next } = flagValue(argv, i)
       if (isApprovalPolicy(value)) approvalPolicy = value
       else
-        usageError ??= `--approval must be one of ${APPROVAL_POLICIES.join(', ')} (got ${
-          value === undefined ? 'nothing' : JSON.stringify(value)
-        })`
+        bad(
+          `--approval must be one of ${APPROVAL_POLICIES.join(', ')} (got ${
+            value === undefined ? 'nothing' : JSON.stringify(value)
+          })`
+        )
       i = next
     } else if (name === '--full-auto') {
       approvalPolicy = 'full-auto'
@@ -310,16 +335,12 @@ export function parseTuiArgs(
       const { value, next } = flagValue(argv, i)
       resumeId = value
       i = next
-    } else if (name === '--add-dir') {
-      const { value, next } = flagValue(argv, i)
-      const added = resolveAddDir(value, defaultCwd)
-      if ('error' in added) usageError ??= `--add-dir: ${added.error}`
-      else if (!addDirs.includes(added.dir)) addDirs.push(added.dir)
-      i = next
     }
   }
 
   if (!interactive && !defaultInteractive) return null
+  const conflict = sessionFlagConflict(session, { continueSession, resumeId })
+  if (conflict) bad(conflict)
   return {
     cwd,
     providerId,
@@ -328,7 +349,7 @@ export function parseTuiArgs(
     color: true,
     ...(continueSession ? { continueSession } : {}),
     ...(resumeId ? { resumeId } : {}),
-    ...(addDirs.length ? { addDirs } : {}),
+    ...sessionFlagFields(session),
     ...(screenReader ? { screenReader } : {}),
     ...(usageError !== undefined ? { usageError } : {})
   }
@@ -353,19 +374,41 @@ export function applyAddDir(dirs: string[], path: string, base: string): string 
 }
 
 /**
- * A directory for `--add-dir` or `/add-dir`, resolved against `base` (where the
- * command was typed, or the session's folder) and checked to exist.
+ * The run-request fields every turn of an interactive session carries from its
+ * launch flags (the same request fields a one-shot run sets). Pure.
  */
-export function resolveAddDir(value: string | undefined, base: string): { dir: string } | { error: string } {
-  const v = value?.trim()
-  if (!v) return { error: 'needs the path of a directory, like ../shared' }
-  const dir = isAbsolute(v) ? v : resolvePath(base, v)
-  try {
-    if (statSync(dir).isDirectory()) return { dir }
-  } catch {
-    // reported below
+export function sessionRunRequestFields(
+  inputs: SessionInputs | undefined
+): Pick<AgentRunRequest, 'toolScope' | 'appendSystemPrompt' | 'extraMcpServers'> {
+  if (!inputs) return {}
+  return {
+    ...(inputs.toolScope ? { toolScope: inputs.toolScope } : {}),
+    ...(inputs.appendSystemPrompt !== undefined ? { appendSystemPrompt: inputs.appendSystemPrompt } : {}),
+    ...(inputs.mcpServers ? { extraMcpServers: inputs.mcpServers } : {})
   }
-  return { error: `${JSON.stringify(v)} is not a directory` }
+}
+
+/** The startup lines that say which launch flags shape this session. Pure. */
+export function sessionInputLines(
+  opts: Pick<TuiOptions, 'sessionInputs' | 'allowedTools' | 'disallowedTools' | 'addDirs'>
+): string[] {
+  const inputs = opts.sessionInputs ?? {}
+  const lines: string[] = []
+  if (inputs.toolScope) {
+    const parts = [
+      ...(opts.allowedTools ? [`allowed: ${opts.allowedTools.map(scopeEntryText).join(', ')}`] : []),
+      ...(opts.disallowedTools ? [`disallowed: ${opts.disallowedTools.map(scopeEntryText).join(', ')}`] : [])
+    ]
+    lines.push(`tools scoped for this session (${stripControlChars(parts.join('; '))})`)
+  }
+  if (inputs.appendSystemPrompt !== undefined) lines.push('extra system prompt instructions for this session')
+  if (inputs.mcpServers?.length) {
+    lines.push(`extra MCP servers for this session: ${inputs.mcpServers.map((m) => stripControlChars(m.id)).join(', ')}`)
+  }
+  if (opts.addDirs?.length) {
+    lines.push(`extra directories for this session: ${opts.addDirs.map(stripControlChars).join(', ')}`)
+  }
+  return lines
 }
 
 // --- Rendering ---------------------------------------------------------------
@@ -3842,6 +3885,11 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   // the elevation off; the session proceeds either way.
   await promptFolderTrust(opts.cwd, deps, paint)
 
+  // The launch flags that shape every turn of this session: tool scope, appended
+  // system prompt text, extra MCP servers, extra folders. Said once, up front.
+  const sessionRunFields = sessionRunRequestFields(opts.sessionInputs)
+  for (const line of sessionInputLines(opts)) deps.io.out(paint(`· ${line}\n`, 'dim'))
+
   // Mutable session state. providerId/model may be null until a provider is set up:
   // an interactive session never ejects for a missing key (see below).
   // Directories added for this session (`--add-dir`, `/add-dir`), sent with every run.
@@ -3882,7 +3930,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
   const memoryState: MemoryCommandState = {}
   // This chat's own reasoning effort: starts at the default, changed by /reasoning,
   // restored on /resume. The default changes only with `/reasoning <effort> --default`.
-  let effort: ReasoningEffort = deps.getSettings().reasoningEffort ?? DEFAULT_REASONING_EFFORT
+  // `--effort` sets where this session's chats start; /reasoning still changes it.
+  let effort: ReasoningEffort = opts.effort ?? deps.getSettings().reasoningEffort ?? DEFAULT_REASONING_EFFORT
   let messages: ChatMessage[] = []
   let activeRunId: string | null = null
   // A /compact in flight: Ctrl-C or Esc cancels it and returns the prompt.
@@ -3906,6 +3955,19 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       return deps.persist.list(opts.cwd).find((c) => c.id === conversationId)?.title ?? null
     } catch {
       return null
+    }
+  }
+  // `--name`: the title the session's chat starts with. Applied once, to the chat the
+  // launch opens (a resumed one, or the first one created), never to later /new chats.
+  let launchTitlePending = opts.title !== undefined
+  const applyLaunchTitle = (): void => {
+    if (!launchTitlePending || !conversationId || !opts.title) return
+    launchTitlePending = false
+    if (!deps.persist?.rename) return
+    try {
+      deps.persist.rename(conversationId, opts.title)
+    } catch (e) {
+      deps.io.out(paint(`· couldn't set the chat title: ${(e as Error).message}\n`, 'yellow'))
     }
   }
   // Persist the running message log, best-effort. A store failure (disk full, bad
@@ -4332,8 +4394,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       adoptChatSettings({
         ...rest,
         ...(opts.providerId || opts.model ? {} : { providerId: conv.providerId, model: conv.model }),
-        ...(opts.approvalPolicy ? {} : { approvalPolicy: conv.approvalPolicy })
+        ...(opts.approvalPolicy ? {} : { approvalPolicy: conv.approvalPolicy }),
+        ...(opts.effort ? { reasoningEffort: opts.effort } : {})
       })
+      applyLaunchTitle()
     } else if (wanted) {
       deps.io.out(paint(`· no saved session "${wanted}" in this folder; starting fresh\n`, 'yellow'))
     } else {
@@ -5767,6 +5831,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
         }).id
         // create() stored these, so the meta already matches — no sync needed below.
         persistedSettings = settingsKey()
+        applyLaunchTitle()
       } catch (e) {
         if (!warnedPersistFail) {
           warnedPersistFail = true
@@ -5797,7 +5862,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
       // show_images results print as clickable file links (see renderImageLinks).
       imageLinks: true,
       ...(sessionAddDirs.length ? { addDirs: [...sessionAddDirs] } : {}),
-      ...(wakeTurn ? { wake: true } : {})
+      ...(wakeTurn ? { wake: true } : {}),
+      ...sessionRunFields
     }
     // Serialize interactive prompts (approvals/questions) so two readLine calls
     // never overlap on the single input stream.

@@ -1,4 +1,4 @@
-import { isSafeGitRef } from '@shared/git'
+import { isSafeGitRef, suggestBranch } from '@shared/git'
 import type { RepoInfo } from '@shared/agent'
 
 /**
@@ -79,24 +79,11 @@ export function defaultBaseBranch(info: RepoInfo): string {
   return info.currentBranch ?? ''
 }
 
-const ADJECTIVES = ['swift', 'bright', 'calm', 'bold', 'keen', 'brave', 'lucid', 'eager']
-const NOUNS = ['otter', 'falcon', 'maple', 'comet', 'harbor', 'cedar', 'quartz', 'meadow']
-const SUFFIX_CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789'
-
 /**
- * A friendly, editable default branch name like `swift-otter-78dj6e`. The
- * 6-char random suffix keeps suggestions unique so two new chats don't collide
- * on the same branch/worktree.
+ * A friendly, editable default branch name like `swift-otter-78dj6e`; shared with
+ * the terminal's `--worktree` so both clients name worktrees the same way.
  */
-export function suggestBranch(): string {
-  const a = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)]
-  const n = NOUNS[Math.floor(Math.random() * NOUNS.length)]
-  const suffix = Array.from(
-    { length: 6 },
-    () => SUFFIX_CHARS[Math.floor(Math.random() * SUFFIX_CHARS.length)]
-  ).join('')
-  return `${a}-${n}-${suffix}`
-}
+export { suggestBranch }
 
 /**
  * Why the given new-branch name can't be used, or null if it's fine. `branches`

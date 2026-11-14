@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseHeadlessArgs } from './headless'
-import { applyAddDir, parseSlashCommand, parseTuiArgs, resolveAddDir } from './tui'
+import { applyAddDir, parseSlashCommand, parseTuiArgs } from './tui'
+import { resolveAddDir } from './sessionFlags'
 import { defaultSettings } from '@shared/defaults'
 
 let base: string
