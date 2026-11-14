@@ -6,6 +6,12 @@ export interface ProcessRow {
   pid: number
   ppid: number
   command: string
+  /**
+   * When it started, as a Windows file time, on Windows only. A Windows process keeps
+   * the PID of a parent that has exited, and that PID can be reused, so a child counts
+   * only if it started after its parent.
+   */
+  started?: number
 }
 
 /**
@@ -21,15 +27,15 @@ export function processTable(): ProcessRow[] {
         '-NoProfile',
         '-NonInteractive',
         '-Command',
-        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.CommandLine)" }'
+        'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$(if ($_.CreationDate) { $_.CreationDate.ToFileTimeUtc() } else { 0 })`t$($_.CommandLine)" }'
       ],
       { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true }
     )
     return out
       .split(/\r?\n/)
       .map((line) => line.split('\t'))
-      .filter((f) => f.length >= 2 && /^\d+$/.test(f[0]))
-      .map((f) => ({ pid: Number(f[0]), ppid: Number(f[1]), command: f.slice(2).join('\t') }))
+      .filter((f) => f.length >= 3 && /^\d+$/.test(f[0]))
+      .map((f) => ({ pid: Number(f[0]), ppid: Number(f[1]), started: Number(f[2]) || undefined, command: f.slice(3).join('\t') }))
   }
   const out = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,command='], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
   return out
@@ -47,12 +53,16 @@ export function descendants(pid: number, table = processTable()): ProcessRow[] {
     if (list) list.push(row)
     else byParent.set(row.ppid, [row])
   }
+  const byPid = new Map(table.map((row) => [row.pid, row]))
   const out: ProcessRow[] = []
   const seen = new Set<number>([pid])
   const queue = [pid]
   while (queue.length) {
+    const parent = byPid.get(queue[0])
     for (const row of byParent.get(queue.shift()!) ?? []) {
       if (seen.has(row.pid)) continue
+      // A child of an earlier process that had this PID, not of this one (Windows).
+      if (parent?.started && row.started && row.started < parent.started) continue
       seen.add(row.pid)
       out.push(row)
       queue.push(row.pid)
