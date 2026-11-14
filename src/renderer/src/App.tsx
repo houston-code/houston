@@ -1743,12 +1743,19 @@ export default function App(): JSX.Element {
   const togglePreview = useCallback(() => toggleDockTab('preview'), [toggleDockTab])
   const toggleChanges = useCallback(() => toggleDockTab('changes'), [toggleDockTab])
   // A dev server the agent started in this chat showed its address: open the Preview
-  // once per chat (not persisted, so the next launch keeps the user's own choice).
+  // once per chat (not persisted, so the next launch keeps the user's own choice). A
+  // side panel that is already open keeps its tab (see useAutoOpenPreview).
   const autoOpenPreview = useCallback(() => {
     setDockTabState('preview')
     setPreviewOpen(true)
   }, [])
-  useAutoOpenPreview(allPreviewServers, currentId, settings?.previewAutoOpen !== false, autoOpenPreview)
+  useAutoOpenPreview(
+    allPreviewServers,
+    currentId,
+    settings?.previewAutoOpen !== false,
+    autoOpenPreview,
+    previewOpen
+  )
   const toggleTasks = useCallback(() => toggleDockTab('tasks'), [toggleDockTab])
   const closeDock = useCallback(() => {
     setPreviewOpen(false)
@@ -3745,6 +3752,8 @@ export default function App(): JSX.Element {
                 workspace={workspace}
                 conversationId={currentId}
                 running={chat.running}
+                // Kept mounted behind the other tabs; it reads git only while it shows.
+                active={dockTab === 'changes'}
                 onShip={canChat ? onShip : undefined}
                 creating={chat.running}
                 commitForm
@@ -3763,6 +3772,8 @@ export default function App(): JSX.Element {
                   initialLine={filesLine}
                   onClose={closeDock}
                   docked
+                  running={chat.running}
+                  active={dockTab === 'files'}
                 />
                 </ItemBoundary>
               ) : undefined

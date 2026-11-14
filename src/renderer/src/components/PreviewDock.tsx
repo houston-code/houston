@@ -8,9 +8,9 @@ import { describeShell } from '../lib/taskLabel'
 /**
  * The right-hand dock. With `onTabChange` it has tabs: Tasks (the background-tasks
  * list, passed in as `tasks`) and Preview always, plus Changes, Files and Plan review
- * when their content is given; without, it is Preview-only. Changes renders only while
- * it shows (it reads git); Files and Plan review are mounted the first time they show
- * and then kept (hidden) so their state survives a switch.
+ * when their content is given; without, it is Preview-only. Changes, Files and Plan
+ * review are mounted the first time they show and then kept (hidden) so their state
+ * survives a switch (Changes is told whether it shows, and reads git only then).
  *
  * Preview: a resizable right-hand panel that shows the dev servers the
  * agent started (each one's loopback URL, auto-detected from its output) as live,
@@ -35,6 +35,20 @@ const TAB_LABEL: Record<DockTab, string> = {
   changes: 'Changes',
   files: 'Files',
   plan: 'Plan review'
+}
+
+/**
+ * What the user set up in Preview that outlives the dock: the addresses they added by
+ * hand and the server panes they closed. Hiding the side panel unmounts the dock, and
+ * reopening it shouldn't bring back closed panes or drop added ones. Kept for this
+ * window's session only.
+ */
+const remembered: { manualUrls: string[]; closed: ReadonlySet<string> } = { manualUrls: [], closed: new Set() }
+
+/** Forget the remembered Preview setup (tests start each case clean). */
+export function resetPreviewMemory(): void {
+  remembered.manualUrls = []
+  remembered.closed = new Set()
 }
 
 /**
@@ -75,7 +89,7 @@ export function PreviewDock({
   onTabChange?: (tab: DockTab) => void
   /** The Tasks tab's content (the TasksPanel). */
   tasks?: ReactNode
-  /** The Changes tab's content. Rendered only while that tab shows (it reads git). */
+  /** The Changes tab's content. Kept mounted once shown, like Files. */
   changes?: ReactNode
   /** The Files tab's content (the docked FilesPanel); no tab without it. */
   files?: ReactNode
@@ -95,19 +109,23 @@ export function PreviewDock({
   const tabRefs = useRef<Partial<Record<DockTab, HTMLButtonElement | null>>>({})
   const content: Partial<Record<DockTab, ReactNode>> = { tasks, changes, files, plan }
   const tabs = DOCK_TABS.filter((id) => id === 'tasks' || id === 'preview' || content[id] !== undefined)
-  // Files and Plan review stay mounted (hidden) once they have shown.
+  // Changes, Files and Plan review stay mounted (hidden) once they have shown.
   const [visited, setVisited] = useState<ReadonlySet<DockTab>>(() => new Set([tab]))
   useEffect(() => {
     setVisited((v) => (v.has(tab) ? v : new Set(v).add(tab)))
   }, [tab])
-  const [manualUrls, setManualUrls] = useState<string[]>([])
+  const [manualUrls, setManualUrls] = useState<string[]>(() => remembered.manualUrls)
   const [draft, setDraft] = useState('')
   const [draftError, setDraftError] = useState(false)
   // Which of a server's printed URLs each pane shows, when the user switched it.
   const [chosen, setChosen] = useState<Record<string, string>>({})
   // Servers whose pane the user closed. The server keeps running (Tasks stops it); its
   // pane just stops taking a slot until reopened.
-  const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
+  const [closed, setClosed] = useState<ReadonlySet<string>>(() => remembered.closed)
+  useEffect(() => {
+    remembered.manualUrls = manualUrls
+    remembered.closed = closed
+  }, [manualUrls, closed])
   // The pane whose URL was just copied, for a moment of "Copied" feedback.
   const [copied, setCopied] = useState<string | null>(null)
   const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -476,8 +494,7 @@ export function PreviewDock({
               aria-labelledby={`dock-tab-${id}`}
               hidden={tab !== id}
             >
-              {/* Changes reads git, so it renders only while it shows. */}
-              {(tab === id || (id !== 'changes' && visited.has(id))) && content[id]}
+              {(tab === id || visited.has(id)) && content[id]}
             </div>
           ))}
     </aside>

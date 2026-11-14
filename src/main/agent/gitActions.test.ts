@@ -158,6 +158,28 @@ describe('pushBranch and branchSync', () => {
   )
 
   maybe(
+    'counts only the commits a first push would send for a branch with no upstream',
+    async () => {
+      const remote = tmp('ga-remote-')
+      execFileSync('git', ['init', '-q', '--bare', remote])
+      const r = repo()
+      for (const n of ['two', 'three']) {
+        writeFileSync(join(r, 'a.txt'), `${n}\n`)
+        git(r, 'commit', '-qam', n)
+      }
+      git(r, 'remote', 'add', 'origin', remote)
+      git(r, 'push', '-q', 'origin', 'main')
+      // A new branch off the pushed main: nothing of its own yet, then one commit.
+      git(r, 'switch', '-q', '-c', 'feat')
+      expect(await branchSync(r)).toEqual({ branch: 'feat', upstream: null, ahead: 0, remote: 'origin' })
+      writeFileSync(join(r, 'a.txt'), 'feat\n')
+      git(r, 'commit', '-qam', 'Feat')
+      expect(await branchSync(r)).toMatchObject({ upstream: null, ahead: 1 })
+    },
+    TIMEOUT
+  )
+
+  maybe(
     'refuses with no remote, and when the repository sets its own ssh command',
     async () => {
       const r = repo()
