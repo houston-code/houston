@@ -5365,6 +5365,9 @@ body.is-resizing .preview-dock__resizer::after {
 .tasks__status--error {
   color: var(--danger);
 }
+.tasks__status--stopped {
+  color: var(--text-dim);
+}
 .tasks__status--leftover {
   color: var(--warn);
 }

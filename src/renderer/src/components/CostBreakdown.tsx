@@ -41,8 +41,14 @@ export function CostBreakdown({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  // Open only on a bump made while the chip is on screen. The counter never resets, so
+  // a chip that mounts later (a new chat's first reply) must not read an old request
+  // as a new one.
+  const seenSignal = useRef(openSignal)
   useEffect(() => {
-    if (openSignal > 0) setOpen(true)
+    if (openSignal === seenSignal.current) return
+    seenSignal.current = openSignal
+    setOpen(true)
   }, [openSignal])
 
   // One row per model, plus one for whatever the per-model tallies don't cover (usage

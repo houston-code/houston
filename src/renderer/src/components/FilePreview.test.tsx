@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { FilePreview as FilePreviewData } from '@shared/files'
 import { FilePreview } from './FilePreview'
@@ -99,6 +99,21 @@ describe('FilePreview', () => {
     render(<FilePreview workspace="/repo" path="src/a.ts" onOpen={onOpen} />)
     fireEvent.click(await screen.findByRole('button', { name: 'Open' }))
     expect(onOpen).toHaveBeenCalledWith('src/a.ts')
+  })
+
+  it('re-reads the same file in place when asked, keeping the chosen view', async () => {
+    const { readWorkspaceFile } = installApi({ kind: 'text', text: '# Old', truncated: false, bytes: 5 })
+    const { rerender } = render(<FilePreview workspace="/repo" path="README.md" onOpen={vi.fn()} reloadSignal={0} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Source' }))
+    let resolve: (d: FilePreviewData) => void = () => {}
+    readWorkspaceFile.mockImplementation(() => new Promise((r) => (resolve = r)))
+    rerender(<FilePreview workspace="/repo" path="README.md" onOpen={vi.fn()} reloadSignal={1} />)
+    // The old content stays up while the read is in flight: no "Loading…" flash.
+    expect(screen.getByText('# Old', { exact: false })).toBeInTheDocument()
+    expect(screen.queryByText('Loading…')).not.toBeInTheDocument()
+    await act(async () => resolve({ kind: 'text', text: '# New', truncated: false, bytes: 5 }))
+    expect(screen.getByText('# New', { exact: false })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Preview' })).toBeInTheDocument() // still the source view
   })
 })
 
