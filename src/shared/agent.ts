@@ -343,6 +343,13 @@ export interface ProviderWebSearchRequest {
   /** Most hits to return (already clamped to 1 to 10 by the caller). */
   maxResults: number
   signal?: AbortSignal
+  /**
+   * Called with what each search request billed, when the API reported it, before
+   * its reply is parsed: a search-tool error arrives inside a billed 200 reply, so
+   * the usage is reported even when the search then fails. The search runs a full
+   * model request on the run's model, so the loop folds this into the run's cost.
+   */
+  onUsage?: (usage: ProviderWebSearchUsage) => void
 }
 
 /** What a provider-run search found, normalized across providers. */
@@ -350,11 +357,6 @@ export interface ProviderWebSearchResult {
   /** The model's short summary of the results, when it wrote one. */
   answer?: string
   hits: Array<{ title?: string; url?: string; content?: string }>
-  /**
-   * What the side request billed, when the API reported it. The search runs a full
-   * model request on the run's model, so the loop folds this into the run's cost.
-   */
-  usage?: ProviderWebSearchUsage
 }
 
 /** Token usage of one provider-run search request. */

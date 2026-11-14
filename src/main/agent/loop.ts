@@ -12,8 +12,8 @@ import type {
   PlanPayload,
   MessageUsage,
   Provider,
-  ProviderWebSearchUsage,
   QuestionOption,
+  TokenUsage,
   AgentQuestion,
   ReasoningBlock,
   ReasoningEffort,
@@ -339,7 +339,7 @@ interface Route extends SelectedModel {
 export function nativeWebSearchFor(
   route: Pick<Route, 'provider' | 'model' | 'providerId'>,
   signal: AbortSignal,
-  onUsage?: (usage: ProviderWebSearchUsage, model: string) => void
+  onUsage?: (usage: TokenUsage, model: string) => void
 ): Pick<ToolContext, 'nativeWebSearch'> {
   const { provider, model } = route
   if (!provider.webSearch) return {}
@@ -347,13 +347,14 @@ export function nativeWebSearchFor(
     nativeWebSearch: {
       label: getProvider(route.providerId)?.label ?? 'the model provider',
       search: async (query, maxResults) => {
-        const found = await withProviderRetry(() => provider.webSearch!({ model, query, maxResults, signal }), {
-          signal
-        })
-        // The search is a full model request on `model`; report what it billed so the
-        // run's cost (and its cost ceiling) counts it.
-        if (found.usage && onUsage) onUsage(found.usage, model)
-        return found
+        // The search is a full model request on `model`; report what each attempt billed
+        // (a failed search can still be a billed reply) so the run's cost and its cost
+        // ceiling count it.
+        const report = onUsage ? (u: TokenUsage) => onUsage(u, model) : undefined
+        return withProviderRetry(
+          () => provider.webSearch!({ model, query, maxResults, signal, ...(report ? { onUsage: report } : {}) }),
+          { signal }
+        )
       }
     }
   }
@@ -1885,20 +1886,23 @@ export async function startRun(
     // This run's review_changes rounds: bounds repeat reviews and carries findings forward.
     // (A literal, not createReviewHistory(): tests mock ./review down to reviewWorkspaceChanges.)
     const reviewHistory: ReviewHistory = { rounds: 0, reviewed: new Set(), previous: [] }
-    // A provider-run web search is a side request on the run's model: price it there and
-    // fold it into the conversation's usage like a subagent's. inputTokens: 0 keeps the
-    // context-size meter on the main turn (the search has its own, throwaway context).
-    // No per-search fee is added: the pricing tables carry token rates only.
-    const recordNativeSearchUsage = (
-      u: ProviderWebSearchUsage,
-      searchModel: string,
-      caps: ModelCaps | undefined = providerConfig.models.find((m) => m.id === searchModel)?.caps
+    // A side request on a model (a provider-run web search, the isolated reader for
+    // flagged content): price it on that model and fold it into the conversation's usage
+    // like a subagent's. inputTokens: 0 keeps the context-size meter on the main turn
+    // (the request has its own, throwaway context). No per-search fee is added for a
+    // search: the pricing tables carry token rates only.
+    const recordSideRequestUsage = (
+      u: TokenUsage,
+      sideModel: string,
+      caps: ModelCaps | undefined = providerConfig.models.find((m) => m.id === sideModel)?.caps
     ): void => {
-      if (!u.inputTokens && !u.outputTokens) return
+      const input = u.inputTokens ?? 0
+      const output = u.outputTokens ?? 0
+      if (!input && !output) return
       const cost = turnCostUsd(
-        searchModel,
-        u.inputTokens,
-        u.outputTokens,
+        sideModel,
+        input,
+        output,
         { readTokens: u.cacheReadTokens, writeTokens: u.cacheWriteTokens },
         caps
       )
@@ -1906,9 +1910,9 @@ export async function startRun(
       emit({
         type: 'usage',
         inputTokens: 0,
-        outputTokens: u.outputTokens,
+        outputTokens: output,
         cost,
-        model: searchModel,
+        model: sideModel,
         ...(u.cacheReadTokens ? { cacheReadTokens: u.cacheReadTokens } : {}),
         ...(u.cacheWriteTokens ? { cacheWriteTokens: u.cacheWriteTokens } : {})
       })
@@ -2562,7 +2566,7 @@ export async function startRun(
           ...nativeWebSearchFor(
             { provider: primaryRoute.provider, providerId: req.providerId, model },
             abort.signal,
-            recordNativeSearchUsage
+            recordSideRequestUsage
           ),
           collectSecrets: () => knownSecrets
         },
@@ -2825,7 +2829,7 @@ export async function startRun(
       // the fallback route like quarantineExtract: it runs on whichever model is
       // serving the run now, billed to that provider's key.
       // Priced with the route's own caps: after a hop the backup's provider may differ.
-      ...nativeWebSearchFor(route, abort.signal, (u, m) => recordNativeSearchUsage(u, m, route.caps)),
+      ...nativeWebSearchFor(route, abort.signal, (u, m) => recordSideRequestUsage(u, m, route.caps)),
       // Reads flagged web content on the run's own model, but with no tools and no
       // history — so the page has nothing to act through and nothing to override.
       // Follows the fallback route (provider and model move together here, like the
@@ -2837,7 +2841,9 @@ export async function startRun(
           content,
           source,
           query,
-          signal: abort.signal
+          signal: abort.signal,
+          // The reader runs a request on the run's model; count it in the run's cost.
+          onUsage: (u) => recordSideRequestUsage(u, route.model, route.caps)
         }),
       askUser: (q) => askRunUser(callId, q),
       // Route an MCP server's mid-call elicitation to this run's user and block

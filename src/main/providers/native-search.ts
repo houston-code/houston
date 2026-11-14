@@ -160,9 +160,10 @@ export async function anthropicWebSearch(
     },
     { signal: req.signal }
   )
-  const result = parseAnthropicSearch(res.content, req.maxResults)
+  // Reported before parsing: a search-tool error throws below, but the reply was billed.
   const usage = anthropicSearchUsage(res.usage)
-  return usage ? { ...result, usage } : result
+  if (usage) req.onUsage?.(usage)
+  return parseAnthropicSearch(res.content, req.maxResults)
 }
 
 /**
@@ -275,7 +276,9 @@ export async function responsesWebSearch(
     },
     { signal: req.signal }
   )
-  const result = parseResponsesSearch(res.output, req.maxResults)
+  // Reported before parsing, like the Claude path. A failed or incomplete response is
+  // still a 200 with its usage, and parses to no hits rather than throwing.
   const usage = responsesSearchUsage(res.usage, res.output)
-  return usage ? { ...result, usage } : result
+  if (usage) req.onUsage?.(usage)
+  return parseResponsesSearch(res.output, req.maxResults)
 }

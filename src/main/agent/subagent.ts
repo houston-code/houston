@@ -486,7 +486,9 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
               content,
               source,
               query,
-              signal
+              signal,
+              // Billed on the subagent's model, so it joins the subagent's own usage.
+              ...(opts.onUsage ? { onUsage: opts.onUsage } : {})
             })
         }
       : {})
