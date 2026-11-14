@@ -12,7 +12,7 @@ import {
   type KeyboardEvent
 } from 'react'
 import { Icon, type IconName } from './Icon'
-import { isMacPlatform } from '../lib/shortcuts'
+import { isMacPlatform, shortcutHint } from '../lib/shortcuts'
 import { ComposerPrBar } from './ComposerPrBar'
 import type { PrStatus } from '@shared/gitActions'
 import type { WorkingTreeStats } from '../hooks/useWorkingTreeStats'
@@ -124,7 +124,12 @@ const KIND_ICON: Record<ContextKind, IconName> = {
  * Enter mid-run steers. Exported for the placeholder test.
  */
 export function runningPlaceholder(mac: boolean): string {
-  return `↵ steers now, ${mac ? '⌘' : 'Ctrl'}+↵ queues for after this run.`
+  return `${keyFor('send-message', mac)} steers now, ${keyFor('queue-message', mac)} queues for after this run.`
+}
+
+/** A composer key as the shortcut sheet spells it (`⌘↵`, `Ctrl+↵`). */
+function keyFor(id: 'send-message' | 'queue-message' | 'insert-newline', mac: boolean): string {
+  return shortcutHint(id, mac) ?? ''
 }
 
 /**
@@ -133,8 +138,14 @@ export function runningPlaceholder(mac: boolean): string {
  * the placeholder test.
  */
 export function answeringPlaceholder(mac: boolean): string {
-  return `↵ answers the agent's question, ${mac ? '⌘' : 'Ctrl'}+↵ queues for after this run.`
+  return `${keyFor('send-message', mac)} answers the agent's question, ${keyFor('queue-message', mac)} queues for after this run.`
 }
+
+/** The image formats the picker takes, for the Upload images hint ("PNG, JPEG, GIF, WebP"). */
+const imageTypesHint = SUPPORTED_IMAGE_TYPES.map((t) => {
+  const sub = t.split('/')[1] ?? t
+  return sub === 'webp' ? 'WebP' : sub.toUpperCase()
+}).join(', ')
 
 /** One row in the `+` attachment menu. */
 function AttachItem({
@@ -601,7 +612,11 @@ export function Composer({
       focusEnd(start + clip.length)
       added = true
     }
-    if (!added) flashNotice(image ? 'Image copied. Switch to a vision model to attach it.' : 'The clipboard is empty.')
+    if (!added) {
+      flashNotice(
+        image ? 'The clipboard holds an image. Switch to a vision model to attach it.' : 'The clipboard is empty.'
+      )
+    }
   }
 
   const confirmLink = (): void => {
@@ -1095,6 +1110,9 @@ export function Composer({
   }
 
   const sendDisabled = disabled || (!text.trim() && images.length === 0 && context.length === 0)
+  // A disabled box shows why in its placeholder, which a draft hides: say it here then.
+  const blockedNotice = disabled && text.trim() && disabledReason ? disabledReason.replace(/…$/, '.') : null
+  const mac = isMacPlatform()
 
   return (
     <div className={`composer${attention ? ' composer--attention' : ''}`}>
@@ -1301,7 +1319,7 @@ export function Composer({
                   <AttachItem
                     icon="image"
                     label="Upload images"
-                    hint="PNG, JPG"
+                    hint={imageTypesHint}
                     onClick={() => {
                       closeAttach()
                       pickImages()
@@ -1348,7 +1366,9 @@ export function Composer({
                     : runningPlaceholder(isMacPlatform())
                   : suggestion
                     ? `${suggestion}   (Tab to use)`
-                    : 'Ask Houston anything…  (@ for files, / for commands, + for attachments)'
+                    : onShellEscape
+                      ? 'Ask Houston anything…  (@ for files, / for commands, ! for the terminal, + for attachments)'
+                      : 'Ask Houston anything…  (@ for files, / for commands, + for attachments)'
             }
             value={text}
             disabled={disabled}
@@ -1377,7 +1397,10 @@ export function Composer({
             </div>
           )}
         </div>
-        {notice && <div className="composer__notice">{notice}</div>}
+        {/* Always mounted, so a screen reader announces each notice as it appears. */}
+        <div className="composer__notice composer__notice--live" role="status">
+          {notice ?? blockedNotice}
+        </div>
         {ultrathink && (
           <div className="composer__notice" role="status">
             {ultrathinkHint(ultrathinkEffect ?? 'raises')}
@@ -1432,7 +1455,7 @@ export function Composer({
                   type="button"
                   className="composer__send composer__queue"
                   aria-label="Queue"
-                  title={`Queue (${isMacPlatform() ? '⌘' : 'Ctrl'}+↵): sent when this run finishes`}
+                  title={`Queue (${keyFor('queue-message', mac)}): sent when this run finishes`}
                   onClick={submit}
                   disabled={sendDisabled}
                 >
@@ -1444,8 +1467,8 @@ export function Composer({
                   aria-label={answering ? 'Answer' : 'Steer'}
                   title={
                     answering
-                      ? "Answer (↵): sends this as your answer to the agent's question"
-                      : 'Steer (↵): the agent reads this before its next step'
+                      ? `Answer (${keyFor('send-message', mac)}): sends this as your answer to the agent's question`
+                      : `Steer (${keyFor('send-message', mac)}): the agent reads this before its next step`
                   }
                   onClick={() => (text.trim() ? steer() : ref.current?.focus())}
                   disabled={disabled}
@@ -1467,7 +1490,7 @@ export function Composer({
                 type="button"
                 className="composer__send"
                 aria-label="Send"
-                title="Send (Enter · Shift+Enter for a new line)"
+                title={`Send (${keyFor('send-message', mac)} · ${keyFor('insert-newline', mac)} for a new line)`}
                 onClick={submit}
                 disabled={sendDisabled}
               >

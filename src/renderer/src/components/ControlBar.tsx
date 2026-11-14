@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useId, useRef, useState } from 'react'
 import {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_HINT,
@@ -137,6 +137,7 @@ export function ControlBar({
   const canWorktree = showWorktreeEditor && canCreateWorktree(repoInfo)
   const worktreeOn = canWorktree && worktreeMode
   const branchError = worktreeOn ? branchNameError(branchName, repoInfo.branches) : null
+  const branchErrorId = useId()
 
   // Always label the folder control with the repo (main worktree) name, never the
   // per-chat worktree directory — so it reads "myrepo", not "houston/feat-x".
@@ -256,6 +257,7 @@ export function ControlBar({
                     title={branchError ?? 'New branch / worktree name'}
                     aria-label="New branch name"
                     aria-invalid={branchError !== null}
+                    aria-describedby={branchError ? branchErrorId : undefined}
                     onChange={(e) => onChangeBranchName(e.target.value)}
                   />
                 )}
@@ -334,6 +336,13 @@ export function ControlBar({
         <button className="control control--warn" onClick={onOpenSettings}>
           ⚠︎ Set API key
         </button>
+      )}
+
+      {branchError && (
+        // The composer is off until the name is valid; say why where it can be read.
+        <p id={branchErrorId} className="control-bar__note control-bar__note--error" role="status">
+          New worktree: {branchError}
+        </p>
       )}
 
       {worktreeOn && settings.newChatWorktree === undefined && (

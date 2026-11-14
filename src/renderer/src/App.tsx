@@ -2228,7 +2228,7 @@ export default function App(): JSX.Element {
       if (!run) return
       shellEscapes.current.delete(id)
       if (!run.conversationId) {
-        chat.notify('Ran in the terminal. Its output is in the chat only once a chat has started.')
+        chat.notify("Ran in the terminal. Its output wasn't added because this chat hasn't started yet.")
         return
       }
       void window.api
