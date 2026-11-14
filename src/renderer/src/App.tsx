@@ -105,6 +105,7 @@ import {
   lastUserText,
   rewindTargets,
   showsHandoff,
+  type DisplayItem,
   type RewindItemTarget
 } from './lib/items'
 import { Sidebar, type ConversationStatusFilter } from './components/Sidebar'
@@ -252,6 +253,41 @@ function notNowFor(
   return () => {
     if (workspace) set((s) => new Set(s).add(workspace))
   }
+}
+
+/**
+ * `derive(items)`, recomputed when the transcript changes. The memo lives in this hook,
+ * not in App, so App's own closures never reference the transcript (see `chatItems`).
+ * `derive` must be a module-level function.
+ */
+function useFromItems<T>(items: DisplayItem[], derive: (items: DisplayItem[]) => T): T {
+  return useMemo(() => derive(items), [items, derive])
+}
+
+function subagentSpendIn(items: DisplayItem[]): ReturnType<typeof subagentSpend> {
+  return subagentSpend(items.flatMap((it) => (it.kind === 'tool' && it.records ? it.records : [])))
+}
+
+function writeLandedIn(items: DisplayItem[]): boolean {
+  return items.some((it) => it.kind === 'tool' && it.toolKind === 'write' && it.status === 'done')
+}
+
+/** The last turn the user sent, as the retry-last rewind target, or null. */
+function lastUserTurnIn(items: DisplayItem[]): { target: RewindItemTarget; item: Extract<DisplayItem, { kind: 'user' }> } | null {
+  const targets = rewindTargets(items)
+  const target = targets[targets.length - 1]
+  if (!target) return null
+  const item = items.find((it) => it.id === target.id)
+  return item?.kind === 'user' ? { target, item } : null
+}
+
+/** The latest `ask_user` question with no answer yet, or null. */
+function openQuestionIn(items: DisplayItem[]): Extract<DisplayItem, { kind: 'question' }> | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]
+    if (it.kind === 'question' && it.answer === undefined) return it
+  }
+  return null
 }
 
 export default function App(): JSX.Element {
@@ -408,7 +444,13 @@ export default function App(): JSX.Element {
     if (plan) roots.push(plan)
     return roots
   }, [])
-  const chat = useChat(currentId)
+  // The transcript is kept apart from `chat`, and no closure in App may reference it:
+  // read it in render, or derive from it through useFromItems. V8 keeps every variable
+  // any closure of a render uses in one scope shared by all of that render's closures,
+  // and some outlive the render (an effect's cleanup whose deps have not changed, a
+  // memoized handler). Had one of them reached the transcript, a chat's every row would
+  // stay in memory after the user left it, until that closure was next replaced.
+  const { items: chatItems, ...chat } = useChat(currentId)
   // The open conversation, readable from an async continuation that must not act on
   // a chat the user has since navigated away from.
   const currentIdRef = useRef(currentId)
@@ -419,11 +461,8 @@ export default function App(): JSX.Element {
 
   // What each subagent in this chat spent, for the cost breakdown.
   // The chat's current todo list, pinned above the message box while it matters.
-  const todos = useMemo(() => currentTodos(chat.items), [chat.items])
-  const subagentSpendRows = useMemo(
-    () => subagentSpend(chat.items.flatMap((it) => (it.kind === 'tool' && it.records ? it.records : []))),
-    [chat.items]
-  )
+  const todos = useFromItems(chatItems, currentTodos)
+  const subagentSpendRows = useFromItems(chatItems, subagentSpendIn)
 
   // Dev servers the agent started (auto-detected loopback URLs) — drives the Preview dock.
   // Only the open chat's: another chat's servers stay out of its Preview and Tasks.
@@ -746,13 +785,7 @@ export default function App(): JSX.Element {
   // (any write), not a count, so rapid multi-file writes don't stack. `status: 'done'`
   // excludes a write that was proposed-then-denied or errored (nothing hit disk) and
   // one still in flight. Drives the first-write git-init banner.
-  const writeHappened = useMemo(
-    () =>
-      chat.items.some(
-        (it) => it.kind === 'tool' && it.toolKind === 'write' && it.status === 'done'
-      ),
-    [chat.items]
-  )
+  const writeHappened = useFromItems(chatItems, writeLandedIn)
   const onGitInitNotNow = useMemo(() => notNowFor(workspace, setGitInitNotNow), [workspace])
   // Session-only "Not now" for the trusted-folders consent banner (per workspace).
   const [trustNotNow, setTrustNotNow] = useState<ReadonlySet<string>>(() => new Set())
@@ -2080,13 +2113,7 @@ export default function App(): JSX.Element {
   // message the user sent (the files are left as they are), then send it again, so
   // the new reply replaces the old one. Same rewind the message menu does, without
   // its confirmation: what goes away is only the reply being retried.
-  const lastTurn = useMemo(() => {
-    const targets = rewindTargets(chat.items)
-    const target = targets[targets.length - 1]
-    if (!target) return null
-    const item = chat.items.find((it) => it.id === target.id)
-    return item?.kind === 'user' ? { target, item } : null
-  }, [chat.items])
+  const lastTurn = useFromItems(chatItems, lastUserTurnIn)
   const onRetryLast = useCallback(async () => {
     const id = currentId
     if (!id || !lastTurn || chat.running) return
@@ -2264,14 +2291,8 @@ export default function App(): JSX.Element {
 
   // The agent's open `ask_user` question, if it is waiting on one. While it is, the
   // run can't read a steer (it is blocked on the answer), so Enter answers it instead.
-  const openQuestion = useMemo(() => {
-    if (!chat.running) return null
-    for (let i = chat.items.length - 1; i >= 0; i--) {
-      const it = chat.items[i]
-      if (it.kind === 'question' && it.answer === undefined) return it
-    }
-    return null
-  }, [chat.running, chat.items])
+  const latestQuestion = useFromItems(chatItems, openQuestionIn)
+  const openQuestion = chat.running ? latestQuestion : null
 
   // Enter mid-run: answer the open question, or else steer the running turn (the
   // model reads it before its next step). Main decides steer vs queue against the
@@ -3196,7 +3217,7 @@ export default function App(): JSX.Element {
   const awaitingFirstTask =
     showChecklist && !connectOpen && checklistFacts.modelReady && checklistFacts.hasWorkspace
   const tipsRelevant = relevantTips({
-    readyToSend: launchSettled && chat.items.length === 0 && canChat && !chat.running,
+    readyToSend: launchSettled && chatItems.length === 0 && canChat && !chat.running,
     afterEdit: Boolean(chat.checkpoint && !chat.checkpoint.reverted && !chat.running),
     touring: onboarding.touring
   })
@@ -3349,7 +3370,7 @@ export default function App(): JSX.Element {
 
         {!launchSettled ? (
           <div className="welcome" aria-busy="true" />
-        ) : chat.items.length === 0 ? (
+        ) : chatItems.length === 0 ? (
           <div className="welcome">
             <h1>Houston</h1>
             <p>A model-agnostic, sandboxed coding agent. Decoupled from your model bill.</p>
@@ -3415,7 +3436,7 @@ export default function App(): JSX.Element {
             // One per chat: a new chat opens at its latest message (or its "New"
             // divider), not at the scroll position the last chat was left at.
             key={currentId ?? 'new'}
-            items={chat.items}
+            items={chatItems}
             onApprove={onApproveTool}
             onAnswer={chat.answerQuestion}
             onElicit={chat.answerElicitation}
@@ -3672,7 +3693,7 @@ export default function App(): JSX.Element {
             commands={commands}
             vision={visionSupported}
             ultrathinkEffect={ultrathinkOnSend}
-            lastUserMessage={lastUserText(chat.items)}
+            lastUserMessage={lastUserText(chatItems)}
             changes={workspace ? workingTreeStats : undefined}
             pr={workspace ? prStatus : null}
             onShowChanges={showChanges}
@@ -3691,7 +3712,7 @@ export default function App(): JSX.Element {
             prefill={composerPrefill?.conversationId === currentId ? composerPrefill : undefined}
             onRewindPicker={currentId ? () => setRewindPickerOpen(true) : undefined}
           />
-          {canChat && chat.items.length === 0 && (
+          {canChat && chatItems.length === 0 && (
             <KeyHints
               hints={keyHintList({
                 palette: shortcutHint('command-palette', mac, shortcuts),
@@ -3703,7 +3724,7 @@ export default function App(): JSX.Element {
 
         <footer className="statusbar">
           <span className={`statusbar__dot${chat.running ? ' statusbar__dot--busy' : ''}`} />
-          <span className="statusbar__state">{statusText(chat.items, chat.running)}</span>
+          <span className="statusbar__state">{statusText(chatItems, chat.running)}</span>
           <RunMeterText meter={chat.meter} />
           <TerminalChip
             tabCount={terminals.tabs.length}
@@ -3867,7 +3888,7 @@ export default function App(): JSX.Element {
 
         {rewindPickerOpen && (
           <RewindPicker
-            targets={rewindTargets(chat.items)}
+            targets={rewindTargets(chatItems)}
             onClose={() => setRewindPickerOpen(false)}
             onPick={(target) => {
               setRewindPickerOpen(false)
