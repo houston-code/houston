@@ -976,6 +976,13 @@ describe('formatSessionCost', () => {
     expect(at(0.0042)).toBe('1+1 tok · $0.0042')
     expect(at(12.3456)).toBe('1+1 tok · $12.35')
   })
+
+  it('says the cost is unknown for a model with no known price', () => {
+    expect(formatSessionCost({ inputTokens: 1, outputTokens: 1, cost: 0, costUnknown: true })).toBe('1+1 tok · cost unknown')
+    expect(formatSessionCost({ inputTokens: 1, outputTokens: 1, cost: 2, costUnknown: true })).toBe(
+      '1+1 tok · $2.00 + unknown'
+    )
+  })
 })
 
 describe('formatRelativeTime', () => {

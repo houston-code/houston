@@ -427,6 +427,21 @@ export function modelPricing(model: string): ModelPricing | null {
   )
 }
 
+/**
+ * USD a provider bills per search its own web search tool runs, on top of the request's
+ * tokens, keyed by provider kind. Both list $10 per 1,000 searches (OpenAI's rate for its
+ * current models). Approximate, like the token prices above.
+ */
+const NATIVE_WEB_SEARCH_FEE_USD: Readonly<Record<string, number>> = {
+  anthropic: 0.01,
+  openai: 0.01
+}
+
+/** The per-search fee for a provider kind's built-in web search; 0 when it has none. */
+export function nativeWebSearchFeeUsd(providerKind: string | undefined): number {
+  return (providerKind && NATIVE_WEB_SEARCH_FEE_USD[providerKind]) || 0
+}
+
 /** Best-effort context window in tokens, or null for unknown ids (the UI then shows the
  *  raw count). */
 export function contextWindowFor(model: string): number | null {

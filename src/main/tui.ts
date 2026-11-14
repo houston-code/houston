@@ -66,7 +66,7 @@ import { buildElicitationContent } from '@shared/mcp'
 import type { ImageAttachment } from '@shared/images'
 import { isReasoningEffort, REASONING_EFFORTS, retryProgress, SYSTEM_NOTE_PREFIX } from '@shared/agent'
 import { throttleNotice } from '@shared/rateLimit'
-import { contextWindowFor, contextPercent, accumulateModelUsage, formatUsd, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
+import { contextWindowFor, contextPercent, accumulateModelUsage, formatCost, formatTokens, longContextTierAbove, modelCapabilities } from '@shared/usage'
 import { ultrathinkEffect, type UltrathinkEffect } from '@shared/ultrathink'
 import { providerSendsXhigh } from '@shared/model-facts'
 import type { ContextParts, ModelUsage, RunLimitReason } from '@shared/agent'
@@ -753,6 +753,8 @@ export interface SessionCost {
   inputTokens: number
   outputTokens: number
   cost: number
+  /** Part of the spend came from a model with no known price (see formatCost). */
+  costUnknown?: boolean
 }
 
 /**
@@ -790,11 +792,11 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
       : ''
     const written = t.cacheWriteTokens ? paint(`  (${n(t.cacheWriteTokens)} cache write)`, 'dim') : ''
     lines.push(
-      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatUsd(t.cost)}`
+      `  ${paint(t.model.padEnd(width), 'cyan')}  ${n(t.inputTokens)}+${n(t.outputTokens)} tok${cached}${written}  ${formatCost(t.cost, t.costUnknown)}`
     )
   }
   if (tallies.length > 1) {
-    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatUsd(total.cost)}`, 'dim'))
+    lines.push(paint(`  ${'total'.padEnd(width)}  ${n(total.inputTokens)}+${n(total.outputTokens)} tok  ${formatCost(total.cost, tallies.some((t) => t.costUnknown))}`, 'dim'))
   }
   return lines.join('\n')
 }
@@ -802,7 +804,7 @@ export function renderCostReport(tallies: ModelCost[], paint: Painter): string {
 /** Format a cost total, e.g. "1,234+567 tok · $0.012" (amounts as the desktop shows them). */
 export function formatSessionCost(c: SessionCost): string {
   const n = (v: number): string => v.toLocaleString('en-US')
-  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatUsd(c.cost)}`
+  return `${n(c.inputTokens)}+${n(c.outputTokens)} tok · ${formatCost(c.cost, c.costUnknown)}`
 }
 
 /** Status marker for a subagent row, printed as a discrete line in line mode. */
@@ -916,7 +918,7 @@ export function renderStatusLine(s: StatusState, width: number, paint: Painter):
     paint(shortCwd(s.cwd), 'dim')
   ]
   if (s.branch) parts.push(paint(s.branch, 'magenta'))
-  parts.push(formatUsd(s.cost.cost))
+  parts.push(formatCost(s.cost.cost, s.cost.costUnknown))
   const ctx = renderContextUsage(s.contextTokens, s.model, paint)
   if (ctx) parts.push(ctx)
   return truncateVisible(parts.join(paint(' · ', 'dim')), Math.max(0, width))
@@ -4624,6 +4626,7 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
     let turnInputTokens = 0
     let turnOutputTokens = 0
     let turnCost = 0
+    let turnCostUnknown = false
     // Assistant text streams through a markdown renderer that emits whole blocks
     // as they finalize. Any non-text event flushes the pending block first, so
     // text always renders before the tool line / prompt that follows it.
@@ -4970,6 +4973,10 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
           turnInputTokens += e.inputTokens
           turnOutputTokens += e.outputTokens
           turnCost += e.cost
+          if (e.costUnknown) {
+            sessionCost.costUnknown = true
+            turnCostUnknown = true
+          }
           // Current context size ≈ the last MAIN round's input tokens; feeds the
           // status line. Subagent usage events carry inputTokens: 0, so guard
           // against them resetting the meter to zero mid-turn.
@@ -5012,7 +5019,8 @@ export async function runTui(opts: TuiOptions, deps: TuiDeps): Promise<number> {
             const turnTally: SessionCost = {
               inputTokens: turnInputTokens,
               outputTokens: turnOutputTokens,
-              cost: turnCost
+              cost: turnCost,
+              ...(turnCostUnknown ? { costUnknown: true } : {})
             }
             deps.io.out(
               paint(

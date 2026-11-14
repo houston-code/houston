@@ -49,8 +49,10 @@ import { PINNED_MEMORY_PREFIX } from './workingMemory'
 import { SILENT_CHECK_IN, SILENT_ITERATION_LIMIT } from './stall'
 import { MAX_PROVIDER_RETRIES } from './retry'
 import { SUBAGENT_COST_LANDING_NOTE } from './subagent'
+import { COST_CAP_FALLBACK, COST_CAP_NOTE, costCapUnenforceableNotice } from './budget'
 import { ULTRATHINK_NOTE, ULTRATHINK_NOTICE } from '@shared/ultrathink'
 import { turnCostUsd } from '@shared/usage'
+import { nativeWebSearchFeeUsd } from '@shared/model-facts'
 import { QUARANTINE_SYSTEM_PROMPT } from './untrusted'
 import Anthropic from '@anthropic-ai/sdk'
 import { createMessagesProvider } from '../providers/anthropic'
@@ -11068,7 +11070,8 @@ describe('nativeWebSearchFor', () => {
     await entry.nativeWebSearch!.search('q', 3)
     await entry.nativeWebSearch!.search('q', 3)
     expect(onUsage).toHaveBeenCalledTimes(1)
-    expect(onUsage).toHaveBeenCalledWith(usage, 'claude-x')
+    // The provider's per-search fee rides along: one search on the Claude API.
+    expect(onUsage).toHaveBeenCalledWith(usage, 'claude-x', 0.01)
   })
 })
 
@@ -11116,8 +11119,9 @@ describe('provider-run web search cost', () => {
     expect(search!.inputTokens).toBe(0)
     expect(search!.cacheReadTokens).toBe(2000)
     expect(search!.model).toBe('claude-opus-4-8')
+    // Tokens plus the provider's fee for the one search it ran.
     expect(search!.cost).toBeCloseTo(
-      turnCostUsd('claude-opus-4-8', 20000, 400, { readTokens: 2000 }),
+      turnCostUsd('claude-opus-4-8', 20000, 400, { readTokens: 2000 }) + nativeWebSearchFeeUsd('anthropic'),
       10
     )
     expect(search!.cost).toBeGreaterThan(0)
@@ -11531,5 +11535,112 @@ describe('background news delivery', () => {
       () => {}
     )
     expect(wakeBlocker('conv-bg-streak')).toBe('held')
+  })
+})
+
+describe('hard cost limit (maxCostUsd)', () => {
+  /** A provider that records each request and replays `turns` in order. */
+  const recording = (turns: ProviderStreamEvent[][], seen: ChatMessage[][]): Provider => {
+    let i = 0
+    return {
+      async *streamChat(req) {
+        seen.push(req.messages.map((m) => ({ ...m })))
+        for (const ev of turns[i++] ?? [{ type: 'done', stopReason: 'end_turn' }]) yield ev
+      }
+    }
+  }
+  const listDir = (id: string, inputTokens: number): ProviderStreamEvent[] => [
+    { type: 'tool_call', call: { id, name: 'list_dir', arguments: { path: '.' } } },
+    { type: 'done', stopReason: 'tool_use', usage: { inputTokens, outputTokens: 10 } }
+  ]
+  const textTurn = (text: string): ProviderStreamEvent[] => [
+    { type: 'text', text },
+    { type: 'done', stopReason: 'end_turn', usage: { inputTokens: 5, outputTokens: 5 } }
+  ]
+  const noted = (msgs: ChatMessage[], note: string): boolean =>
+    msgs.some((m) => m.role === 'user' && m.content.endsWith(note))
+  const limits = (r: RunResult): string[] => r.events.flatMap((e) => (e.type === 'limit' ? [e.reason] : []))
+  const toolRuns = (r: RunResult): number => r.events.filter((e) => e.type === 'tool_result').length
+  const usageEvents = (r: RunResult): Extract<AgentEvent, { type: 'usage' }>[] =>
+    r.events.filter((e) => e.type === 'usage') as Extract<AgentEvent, { type: 'usage' }>[]
+
+  it('makes the step after the limit is reached the last, with tools off, and ends the run', async () => {
+    const seen: ChatMessage[][] = []
+    const r = await run({
+      // One step over $1 on its own, then a model that tries to keep working.
+      provider: recording([listDir('a', 1_000_000), listDir('b', 10), listDir('c', 10)], seen),
+      policy: 'full-auto',
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(turnCostUsd('claude-opus-4-8', 1_000_000, 10)).toBeGreaterThan(1)
+    expect(seen).toHaveLength(2)
+    expect(noted(seen[0], COST_CAP_NOTE)).toBe(false)
+    expect(noted(seen[1], COST_CAP_NOTE)).toBe(true)
+    // Only the first step's tool ran; the capped step's call was dropped.
+    expect(toolRuns(r)).toBe(1)
+    expect(limits(r)).toEqual(['max-cost'])
+    expect(r.events.at(-1)).toMatchObject({ type: 'done', stopReason: 'end_turn' })
+    const last = r.messages.at(-1)!
+    expect(last.role).toBe('assistant')
+    expect(last.content).toBe(COST_CAP_FALLBACK)
+    expect(last.toolCalls).toBeUndefined()
+  })
+
+  it('still ends at the limit when the capped step replies in text', async () => {
+    const r = await run({
+      provider: recording([listDir('a', 1_000_000), textTurn('Did the first half.')], []),
+      policy: 'full-auto',
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(limits(r)).toEqual(['max-cost'])
+    expect(r.messages.at(-1)!.content).toBe('Did the first half.')
+  })
+
+  it('tells the model to wrap up before the limit, and never stops a run under it', async () => {
+    const seen: ChatMessage[][] = []
+    // About 85% of the $1 limit: past the reminder, short of the stop.
+    const tokens = Math.round(0.85 / turnCostUsd('claude-opus-4-8', 1, 0))
+    const r = await run({
+      provider: recording([listDir('a', tokens), textTurn('ok')], seen),
+      policy: 'full-auto',
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(limits(r)).toEqual([])
+    expect(seen[1].some((m) => m.role === 'user' && /cost budget/.test(m.content))).toBe(true)
+    expect(noted(seen[1], COST_CAP_NOTE)).toBe(false)
+  })
+
+  it('says once that a model with no known price cannot be held to the limit, and marks its cost unknown', async () => {
+    const r = await run({
+      provider: recording([listDir('a', 5_000_000), listDir('b', 5_000_000), textTurn('ok')], []),
+      policy: 'full-auto',
+      model: 'my-local-model',
+      overrides: { maxCostUsd: 0.01 }
+    })
+    const notices = r.events.filter(
+      (e) => e.type === 'notice' && e.message === costCapUnenforceableNotice('my-local-model')
+    )
+    expect(notices).toHaveLength(1)
+    // Its spend counts as nothing, so it is not stopped, and that is said rather than hidden.
+    expect(limits(r)).toEqual([])
+    const usage = usageEvents(r)
+    expect(usage.length).toBe(3)
+    expect(usage.every((u) => u.cost === 0 && u.costUnknown === true)).toBe(true)
+  })
+
+  it('warns about nothing without a limit, and marks nothing unknown on a priced model', async () => {
+    const unlimited = await run({ provider: recording([textTurn('ok')], []), model: 'my-local-model' })
+    expect(unlimited.events.some((e) => e.type === 'notice' && /cost limit/.test(e.message))).toBe(false)
+    expect(usageEvents(unlimited)[0].costUnknown).toBe(true)
+    const priced = await run({
+      provider: recording([textTurn('ok')], []),
+      model: 'claude-opus-4-8',
+      overrides: { maxCostUsd: 1 }
+    })
+    expect(usageEvents(priced)[0].costUnknown).toBeUndefined()
+    expect(priced.events.some((e) => e.type === 'notice' && /cost limit/.test(e.message))).toBe(false)
   })
 })

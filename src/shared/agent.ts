@@ -190,7 +190,7 @@ export interface MessageUsage {
 }
 
 /** Why a run stopped short of finishing (the `limit` event's reason). */
-export type RunLimitReason = 'max-steps' | 'max-output' | 'stalled'
+export type RunLimitReason = 'max-steps' | 'max-output' | 'stalled' | 'max-cost'
 
 /** Why one run ended other than by finishing (see {@link ChatMessage.runEnds}). */
 export interface RunEndRecord {
@@ -593,6 +593,8 @@ export interface ModelUsage {
   cacheReadTokens: number
   /** Portion of `inputTokens` that wrote a new cache entry (bills slightly above). */
   cacheWriteTokens: number
+  /** Set once a round on this model could not be priced: `cost` leaves it out. */
+  costUnknown?: boolean
 }
 
 /** Token usage persisted with a conversation so it survives reloads/restarts. */
@@ -975,6 +977,8 @@ export interface RunSettingsOverrides {
   maxIterations?: number
   /** `costCeilingUsd`: the cost at which the run is told to wrap up. */
   costCeilingUsd?: number
+  /** `maxCostUsd`: the cost at which the run is stopped (the headless `--max-cost` flag). */
+  maxCostUsd?: number
   /** Turns the end-of-run verification gate on with this command (`verifyOnStop` + `verifyCommand`). */
   verifyCommand?: string
   /** `memoryEnabled`: false runs without saved memories (the headless `--no-memory` flag). */
@@ -1558,6 +1562,11 @@ export type AgentEvent =
       inputTokens: number
       outputTokens: number
       cost: number
+      /**
+       * Set when the model that billed this round has no known price, so `cost` is 0
+       * because it is unknown, not because the round was free.
+       */
+      costUnknown?: boolean
       /** The model that billed this round; absent on older events. */
       model?: string
       /** Portion of `inputTokens` served from the prompt cache (bills lower). */

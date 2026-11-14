@@ -194,7 +194,7 @@ with code 2 before anything runs.
 | --- | --- |
 | `--effort <off\|low\|medium\|high\|xhigh>` | reasoning effort |
 | `--max-turns <n>` | caps the model steps (a hard cap that never auto-extends) |
-| `--max-cost <usd>` | the agent wraps up once the run's estimated cost reaches this (a soft ceiling: the step in flight still finishes) |
+| `--max-cost <usd>` | a hard cost limit: once the run's estimated cost reaches this, the agent gets one last step without tools to summarize, then the run stops (`limitReason` `max-cost`, exit 3). It is told to wrap up at 80% of the limit. The step that crosses the limit still finishes, so a run can end slightly above it |
 | `--verify <command>` | runs this command when the agent stops after editing files, and sends a failure back for a bounded fix-up pass (needs a policy that can edit, such as `--full-auto`) |
 | `--no-memory` | runs without the memories saved in earlier sessions (a headless run reads memories but never saves them) |
 
@@ -262,7 +262,7 @@ repository.
 | 0 | the agent finished on its own |
 | 1 | an error or aborted run, a stalled agent, or a call refused under `--on-approval fail` |
 | 2 | a usage error (a bad flag value, an unreadable flag file, or an empty prompt on stdin; nothing ran), or a bad stream-json input line |
-| 3 | the run hit a budget before finishing (its step cap or the model's output limit) |
+| 3 | the run hit a budget before finishing (its step cap, its `--max-cost` limit, or the model's output limit) |
 | 4 | the final answer still didn't match `--output-schema` after the corrective round |
 | 5 | the agent finished, but the last `--verify` check it ran still failed (its fix-up passes ran out) |
 | 129, 130, 143 | stopped by SIGHUP, SIGINT (Ctrl-C), or SIGTERM: the run is cancelled, its commands are stopped, the chat is saved, and `--json` still gets a result line (`status` `aborted`); a second signal exits at once |
@@ -589,8 +589,8 @@ back to the model provider's own web search where the provider offers one:
 The search runs as a short extra request on the chat's current model, so it is billed
 to the model key you already set: the provider's per-search fee plus the tokens of the
 results. Each call runs one search. Its tokens count toward the chat's usage and cost
-display and toward a cost ceiling (`--max-cost`); the per-search fee isn't included in
-Houston's estimate, so check the provider's billing for it. Other providers (Gemini, Bedrock, Vertex, Azure,
+display and toward a cost limit (`--max-cost`), along with the per-search fee (about
+$0.01 a search on both, an estimate like the token prices). Other providers (Gemini, Bedrock, Vertex, Azure,
 Foundry, Ollama and other compatible servers) still need a search key. A search key,
 once set, is always used first. Approvals and the untrusted-content fence work the same
 either way.
@@ -1468,6 +1468,29 @@ bottom shows the git branch the chat's folder has checked out and the approval m
 bill far below the base input rate, so a big number there is why a long conversation
 costs less than its token count suggests.
 
+**A model with no known price** (most local models, and hosts that list none) shows
+"cost unknown" in the terminal and headless output rather than $0.00, and "$1.23 +
+unknown" when only part of the session was priced. Headless `--json` sets
+`costUnknown: true` on the result line.
+
+### Limiting what a turn costs
+
+Two settings under Settings → *Agent Behavior* → *Loop control* cap spending per turn
+(one run of the agent, subagents and provider-run searches included):
+
+- **Cost reminder** (`costCeilingUsd`): once the estimate crosses it, the model is told
+  once to wrap up. It can ignore that.
+- **Cost limit** (`maxCostUsd`, or `--max-cost` for one headless run): once the estimate
+  reaches it, the next step is the last. Tools are off for it, the model summarizes
+  what it finished and what is left, and the turn stops with "Reached the cost limit".
+  Send a message to continue. With no lower reminder set, the reminder fires at 80% of
+  the limit. Cost is checked between steps, so the step that crosses the limit still
+  finishes and a turn can end slightly above it.
+
+Both use Houston's estimate, not the provider's bill. A model with no known price
+counts as nothing toward either, so the limit can't hold it: Houston says so once per
+turn when that happens.
+
 ### What fills the context (/context)
 
 `/context` shows what the most recent request sent to the model was made of:
@@ -1990,8 +2013,9 @@ own approval too.
 
 **Cost.** Tokens a subagent spends roll into the conversation's usage meter, priced
 at the model it actually ran on, one request at a time like the main agent's. They
-count toward the run's cost ceiling (`--max-cost`) as they're spent, so a subagent
-working when the run reaches it is told to wrap up too.
+count toward the run's cost reminder and cost limit (`--max-cost`) as they're spent, so
+a subagent working when the run reaches one is told to wrap up too, and at the limit its
+next step is its last.
 
 ### Seeing what a subagent did
 

@@ -28,7 +28,7 @@ host caps: -
 reasoning: effort=medium capable=- summary=- verbosity=-
 explicitCacheControl: false
 tools: 20
-usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4997},"cost":0,"inputTokens":1000,"model":"llama3.3","outputTokens":100}
+usage event: usage {"context":{"conversation":6,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4997},"cost":0,"costUnknown":true,"inputTokens":1000,"model":"llama3.3","outputTokens":100}
 system prompt vs claude-sonnet-5 baseline:
 + 
 + You are running on a local model: prefer concise, deliberate tool use, one focused call at a time over many speculative ones.

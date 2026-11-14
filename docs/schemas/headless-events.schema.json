@@ -269,7 +269,8 @@
           "enum": [
             "max-steps",
             "max-output",
-            "stalled"
+            "stalled",
+            "max-cost"
           ]
         },
         "turns": {
@@ -279,6 +280,10 @@
         "costUsd": {
           "type": "number",
           "minimum": 0
+        },
+        "costUnknown": {
+          "type": "boolean",
+          "description": "True when part of the run was on a model with no known price: costUsd leaves that part out, and --max-cost could not be enforced for it."
         },
         "inputTokens": {
           "type": "integer",
@@ -1060,7 +1065,8 @@
           "enum": [
             "max-steps",
             "max-output",
-            "stalled"
+            "stalled",
+            "max-cost"
           ]
         }
       }
@@ -1183,6 +1189,10 @@
         },
         "cost": {
           "type": "number"
+        },
+        "costUnknown": {
+          "type": "boolean",
+          "description": "The model that billed this round has no known price, so cost is 0 because it is unknown."
         },
         "model": {
           "type": "string"

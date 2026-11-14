@@ -40,6 +40,7 @@ import {
 import {
   isDiscoveryTool,
   isFinalStep,
+  overCostCap,
   PROGRESS_TOOLS,
   resolveBudgetLimits,
   resolveExtensionLimits,
@@ -383,6 +384,11 @@ export interface SubAgentOptions {
      * it the agent gets the wrap-up reminder, as the main loop does at its own ceiling.
      */
     costCeilingUsd?: number
+    /**
+     * The dispatching run's hard cost cap (USD; unset or 0: none). Once `spentUsd` reaches
+     * it the agent's next step is its last, so it ends on a report.
+     */
+    maxCostUsd?: number
   }
   /**
    * What the dispatching run has spent so far in USD, this agent's own turns included,
@@ -603,7 +609,8 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
   const budget = resolveBudgetLimits({
     maxIterations: hardCap ?? opts.budget?.maxIterations,
     landingMargin: 2,
-    costCeilingUsd: opts.budget?.costCeilingUsd
+    costCeilingUsd: opts.budget?.costCeilingUsd,
+    maxCostUsd: opts.budget?.maxCostUsd
   })
   const extension = resolveExtensionLimits(budget, {
     autoExtend: hardCap === undefined && opts.budget?.autoExtend !== false,
@@ -760,8 +767,10 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         )
       )
     }
-    // The last step can't run tools, so the agent spends it on its report.
-    const finalStep = isFinalStep(iter, budget)
+    // The last step can't run tools, so the agent spends it on its report. The run's
+    // hard cost cap, once reached, makes the step about to run the last as well.
+    const costCapped = overCostCap(opts.spentUsd?.() ?? 0, budget)
+    const finalStep = isFinalStep(iter, budget) || costCapped
     if (finalStep) messages.push(systemNoteMessage(SUBAGENT_FINAL_STEP_NOTE))
 
     let text = ''
@@ -877,8 +886,8 @@ export async function runSubAgent(opts: SubAgentOptions): Promise<string> {
         const report = answer.trim() || lastText.trim()
         return finish(
           report
-            ? `${report}\n\n[subagent stopped at its step limit; this is what it had]`
-            : '[subagent reached its step limit without a final answer]',
+            ? `${report}\n\n[subagent stopped at ${costCapped ? "the run's cost" : 'its step'} limit; this is what it had]`
+            : `[subagent reached ${costCapped ? "the run's cost" : 'its step'} limit without a final answer]`,
           'step-limit'
         )
       }

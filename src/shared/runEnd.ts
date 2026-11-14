@@ -12,6 +12,8 @@ export function limitNoticeText(reason: RunLimitReason): string {
       return 'Stopped: I appeared to be repeating myself without making progress. Send a message with more direction to continue.'
     case 'max-output':
       return 'The reply was cut off at the model’s output limit. Ask me to continue it.'
+    case 'max-cost':
+      return 'Reached the cost limit for one turn and stopped. Send a message to have me continue, or raise the limit.'
   }
 }
 
@@ -72,6 +74,8 @@ export function runOutcomePhrase(o: Pick<RunOutcome, 'outcome' | 'limit'>): stri
         ? 'stalled without making progress'
         : o.limit === 'max-output'
           ? 'hit the model’s output limit'
-          : 'hit the step limit'
+          : o.limit === 'max-cost'
+            ? 'hit the cost limit'
+            : 'hit the step limit'
   }
 }
