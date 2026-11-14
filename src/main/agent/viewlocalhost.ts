@@ -31,6 +31,17 @@ export { isLoopbackHost, isBlockedSubresourceHost, validateLocalhostUrl }
 export const VIEWPORT = { width: 1280, height: 800 }
 /** How long to wait for the page to finish loading before screenshotting anyway. */
 const LOAD_TIMEOUT_MS = 30_000
+/**
+ * Longest one step may run. A step bounds its own waits (a click waits up to 15s for
+ * the navigation it started, a `wait_for` up to 10s), so only a page whose main
+ * thread stopped answering reaches this.
+ */
+export const STEP_TIMEOUT_MS = 30_000
+/**
+ * Longest any other call into the page (measure a selector, screenshot, read its
+ * text) may take. Each is quick on a live page; a blocked renderer never answers.
+ */
+export const PAGE_CALL_TIMEOUT_MS = 30_000
 /** Cap on console lines returned, so a chatty page can't flood the transcript. */
 const MAX_CONSOLE_LINES = 200
 
@@ -252,6 +263,64 @@ function throwIfAborted(signal?: AbortSignal): void {
 }
 
 /**
+ * A call into the page did not settle in time or the run was stopped. Unlike a
+ * page-level step failure, this ends the capture: the caller's `finally` closes the
+ * session, and destroying the window is what ends the call still pending inside it.
+ */
+class CaptureInterrupted extends Error {}
+
+/**
+ * Race one call into the page against a timer and the run's abort signal. A page
+ * whose main thread blocks never answers `executeJavaScript`, so without this a
+ * capture would hang past Stop and leak its offscreen window.
+ */
+function withPageDeadline<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+  what: string,
+  signal?: AbortSignal
+): Promise<T> {
+  // The abandoned call rejects once the window is destroyed; nobody awaits it then.
+  work.catch(() => {})
+  return new Promise<T>((resolve, reject) => {
+    let settled = false
+    const finish = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      fn()
+    }
+    const onAbort = (): void => finish(() => reject(new CaptureInterrupted('Capture was cancelled.')))
+    const timer = setTimeout(
+      () => {
+        const msg = `The page stopped responding: ${what} did not finish within ${timeoutMs / 1000}s.`
+        finish(() => reject(new CaptureInterrupted(msg)))
+      },
+      timeoutMs
+    )
+    if (signal) {
+      if (signal.aborted) return onAbort()
+      signal.addEventListener('abort', onAbort, { once: true })
+    }
+    work.then(
+      (v) => finish(() => resolve(v)),
+      (e) => finish(() => reject(e instanceof Error ? e : new Error(String(e))))
+    )
+  })
+}
+
+/** Page text, or null when it can't be read in time: the screenshot is still worth returning. */
+async function pageTextWithin(session: CaptureSession, signal?: AbortSignal): Promise<string | null> {
+  try {
+    return await withPageDeadline(session.pageText(), PAGE_CALL_TIMEOUT_MS, 'reading the page text', signal)
+  } catch (e) {
+    if (signal?.aborted) throw e
+    return null
+  }
+}
+
+/**
  * Wait for the page to load, but never hang: a page that never fires
  * `did-finish-load` (a long-polling SPA, a wedged server) resolves with a
  * timeout warning so we still screenshot whatever rendered. Rejects only on a
@@ -348,14 +417,19 @@ export async function captureLocalhost(
     let rect: Rect | undefined
     let selectorMissed = false
     if (input.selector) {
-      const found = await session.rectForSelector(input.selector)
+      const found = await withPageDeadline(
+        session.rectForSelector(input.selector),
+        PAGE_CALL_TIMEOUT_MS,
+        'measuring the selector',
+        input.signal
+      )
       if (found) rect = found
       else selectorMissed = true
     }
 
-    const png = await session.screenshot(rect)
+    const png = await withPageDeadline(session.screenshot(rect), PAGE_CALL_TIMEOUT_MS, 'the screenshot', input.signal)
     const secrets = session.typedSecrets()
-    const raw = await session.pageText()
+    const raw = await pageTextWithin(session, input.signal)
     const page = raw === null ? undefined : formatPageText(raw, secrets)
     const consoleEntries = session.consoleEntries().map((e) => ({ ...e, text: scrubTypedPasswords(e.text, secrets) }))
     return {
@@ -407,17 +481,27 @@ async function captureVariants(
       let rect: Rect | undefined
       let selectorMissed = false
       if (input.selector) {
-        const found = await session.rectForSelector(input.selector)
+        const found = await withPageDeadline(
+          session.rectForSelector(input.selector),
+          PAGE_CALL_TIMEOUT_MS,
+          'measuring the selector',
+          input.signal
+        )
         if (found) rect = found
         else selectorMissed = true
       }
       let shot: { png: Buffer; width: number; height: number; truncated?: boolean }
       if (v.fullPage && !rect) {
-        const full = await session.screenshotFullPage(MAX_FULL_PAGE_HEIGHT)
+        const full = await withPageDeadline(
+          session.screenshotFullPage(MAX_FULL_PAGE_HEIGHT),
+          PAGE_CALL_TIMEOUT_MS,
+          'the full-page screenshot',
+          input.signal
+        )
         shot = { png: full.png, width: v.width, height: full.height, ...(full.truncated ? { truncated: true } : {}) }
       } else {
         shot = {
-          png: await session.screenshot(rect),
+          png: await withPageDeadline(session.screenshot(rect), PAGE_CALL_TIMEOUT_MS, 'the screenshot', input.signal),
           width: rect ? rect.width : v.width,
           height: rect ? rect.height : v.height
         }
@@ -426,7 +510,7 @@ async function captureVariants(
       const secrets = session.typedSecrets()
       consoleEntries.push(...session.consoleEntries().map((e) => ({ ...e, text: scrubTypedPasswords(e.text, secrets) })))
       if (!first) {
-        const raw = await session.pageText()
+        const raw = await pageTextWithin(session, input.signal)
         const page = raw === null ? undefined : formatPageText(raw, secrets)
         first = {
           title: session.title(),
@@ -572,7 +656,8 @@ export async function runSteps(
   steps: CaptureStep[],
   signal?: AbortSignal,
   budgetMs: number = STEPS_BUDGET_MS,
-  now: () => number = Date.now
+  now: () => number = Date.now,
+  stepTimeoutMs: number = STEP_TIMEOUT_MS
 ): Promise<StepResult[]> {
   const results: StepResult[] = []
   const deadline = now() + budgetMs
@@ -585,8 +670,10 @@ export async function runSteps(
     }
     let outcome: { ok: true } | { ok: false; error: string }
     try {
-      outcome = await session.runStep(step)
+      outcome = await withPageDeadline(session.runStep(step), stepTimeoutMs, `the step ${label}`, signal)
     } catch (e) {
+      // A step that hung or was stopped ends the capture; anything else is that step failing.
+      if (e instanceof CaptureInterrupted) throw e
       outcome = { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
     results.push(outcome.ok ? { step: label, ok: true } : { step: label, ok: false, error: outcome.error })

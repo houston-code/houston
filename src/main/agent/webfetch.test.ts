@@ -1,6 +1,6 @@
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import type { Transport, TransportRequest } from './webfetch'
 import {
   fetchUrlAsText,
@@ -248,6 +248,37 @@ describe('fetchUrlAsText', () => {
     await expect(
       fetchUrlAsText('https://empty.example/', { transport, resolveHost: async () => [] })
     ).rejects.toThrow(/resolves to no addresses/)
+  })
+
+  it('times out a DNS lookup that never answers, without connecting', async () => {
+    const transport = vi.fn()
+    const resolveHost = (): Promise<string[]> => new Promise<string[]>(() => {})
+    await expect(
+      fetchUrlAsText('https://stuck.example/', { transport, resolveHost, timeoutMs: 50 })
+    ).rejects.toThrow(/timed out or was cancelled/)
+    expect(transport).not.toHaveBeenCalled()
+  })
+
+  it('ends a fetch stuck in DNS when the run is stopped, without connecting', async () => {
+    const transport = vi.fn()
+    const ac = new AbortController()
+    const resolveHost = (): Promise<string[]> => {
+      setTimeout(() => ac.abort(), 0)
+      return new Promise<string[]>(() => {})
+    }
+    await expect(
+      fetchUrlAsText('https://stuck.example/', { transport, resolveHost, signal: ac.signal, timeoutMs: 60_000 })
+    ).rejects.toThrow(/timed out or was cancelled/)
+    expect(transport).not.toHaveBeenCalled()
+  })
+
+  it('still refuses a private address that a slow resolver returns before the timeout', async () => {
+    const transport = vi.fn()
+    const resolveHost = (): Promise<string[]> => new Promise((r) => setTimeout(() => r(['10.0.0.5']), 10))
+    await expect(
+      fetchUrlAsText('https://slow.example/', { transport, resolveHost, timeoutMs: 5_000 })
+    ).rejects.toThrow(/private or loopback/)
+    expect(transport).not.toHaveBeenCalled()
   })
 })
 
