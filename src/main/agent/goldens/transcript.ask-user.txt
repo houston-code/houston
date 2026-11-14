@@ -20,10 +20,10 @@ messages (3):
      -> calls ask_user#c1 {"options":[{"label":"Red"},{"description":"calmer","label":"Blue"}],"question":"Which color for the banner?"}
 3. tool[ask_user#c1]: "Blue"
 --- events ---
-usage {"context":{"conversation":9,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":4995},"cost":0.0028,"inputTokens":1200,"model":"claude-sonnet-5","outputTokens":40}
+usage {"context":{"conversation":9,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":0,"tools":5004},"cost":0.0028,"inputTokens":1200,"model":"claude-sonnet-5","outputTokens":40}
 tool_start {"args":{"options":[{"label":"Red"},{"description":"calmer","label":"Blue"}],"question":"Which color for the banner?"},"callId":"c1","kind":"read","name":"ask_user"}
 tool_question {"callId":"c1","options":[{"label":"Red"},{"description":"calmer","label":"Blue"}],"question":"Which color for the banner?"}
 tool_result {"callId":"c1","name":"ask_user","ok":true,"output":"Blue"}
 text {"delta":"Blue it is."}
-usage {"context":{"conversation":43,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":5,"tools":4995},"cost":0.00272,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
+usage {"context":{"conversation":43,"instructions":0,"memory":0,"system":"<system prompt estimate>","toolResults":5,"tools":5004},"cost":0.00272,"inputTokens":1300,"model":"claude-sonnet-5","outputTokens":12}
 done {"stopReason":"end_turn"}

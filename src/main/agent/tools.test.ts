@@ -2378,7 +2378,7 @@ describe('web_fetch untrusted-content handling', () => {
     url: 'https://example.test/page',
     text,
     truncated: false,
-    maxBytes: 1000
+    truncatedAt: ''
   })
 
   const CLEAN = 'The rate limit is 100 requests per minute. Pass your API key in the header.'
